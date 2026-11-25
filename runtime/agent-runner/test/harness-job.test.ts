@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { basename, join } from "@std/path";
 
 import {
@@ -15,6 +14,12 @@ import { FileHarnessProviderSettingsStore } from "@commonfabric/cf-harness/auth/
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { CfcReadCeilingError } from "@commonfabric/runner/cfc";
 import { renderCellReference } from "@commonfabric/runner/shared";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   HARNESS_JOB_GRANT_ENV_KEYS,

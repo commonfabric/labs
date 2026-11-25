@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type {
   AnyBrandedCell,
@@ -7,6 +6,7 @@ import type {
   OpaqueCell,
   UnwrapCell,
 } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** `true` where `T` is `any`, and `false` for every other type. */
 type IsAny<T> = 0 extends (1 & T) ? true : false;

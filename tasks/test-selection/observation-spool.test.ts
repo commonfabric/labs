@@ -1,11 +1,11 @@
 /** Verifies replay order, payload storage, and temporary-file cleanup. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
 import { ObservationSpool } from "./observation-spool.ts";
 import type { Observation } from "./score.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** One execution with a distinct name and the given start time. */
 function observation(name: string, startedAt: string): Observation {

@@ -3,7 +3,6 @@
 // docs/specs/server-side-execution/builtins.md §5, and untouched with the
 // flag off (the OFF arm is today's behavior byte-for-byte).
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -12,6 +11,12 @@ import type { createBuilder } from "../src/builder/factory.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { setPatternEnvironment } from "../src/env.ts";
 import { defer } from "@commonfabric/async/defer";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const signer = await Identity.fromPassphrase("test stream-data flag");
 const space = signer.did();

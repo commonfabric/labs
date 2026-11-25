@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
@@ -19,6 +18,12 @@ import {
   publishReportLines,
 } from "../lib/pattern-publish.ts";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { FakePatternIndex } from "../../pattern-index/test/fake-pattern-index.ts";
 
 const ADDRESS = "742 Evergreen Terrace";
@@ -280,6 +285,62 @@ describe("pattern-publish", () => {
         undefined,
       ]);
       expect(first.remixedFrom).toBe("pat-theirs");
+    });
+
+    it("sends `standalone` on every version it publishes when it is stated, and never when it is not", async () => {
+      dirty = undefined;
+      await publishedReport(
+        { entry, slot: "cf-path:stands", standalone: false },
+        depsWith(scripted([FAIL, PASS], [REWRITE])),
+      );
+      const stated = index.calls.filter((c) => c.fn === "publishPattern");
+      expect(stated.map((c) => c.body.standalone)).toEqual([false, false]);
+
+      index.calls.length = 0;
+      await publishedReport({ entry }, depsWith(undefined));
+      const unstated = index.calls.filter((c) => c.fn === "publishPattern");
+      expect(stated.length).toBe(2);
+      expect(unstated).toHaveLength(1);
+      expect(Object.hasOwn(unstated[0].body, "standalone")).toBe(false);
+    });
+
+    it("names the input that keeps a pattern published as standalone a part", async () => {
+      const deps = depsWith(undefined);
+      const compile = deps.compileEntry;
+      const report = await publishedReport({ entry, standalone: true }, {
+        ...deps,
+        compileEntry: async (path, program) => ({
+          ...await compile(path, program),
+          argumentSchema: {
+            type: "object",
+            properties: { home: { type: "string" } },
+            required: ["home"],
+          },
+        }),
+      });
+
+      expect(report.standalone).toBe(false);
+      expect(report.standaloneFloor).toBe("home");
+      expect(publishReportLines(report)).toContain(
+        "Offered only as a part, not on its own: its input home is required and has no default. Give it a default to offer the pattern on its own.",
+      );
+    });
+
+    it("says the index did not record --part when it answers no standalone", async () => {
+      const deps = depsWith(undefined);
+      const client = deps.client as PatternIndexClient;
+      const publish = client.publishPattern.bind(client);
+      // An index that predates the field: it answers without `standalone`.
+      client.publishPattern = async (request) => {
+        const { standalone: _, ...answer } = await publish(request);
+        return answer;
+      };
+      const report = await publishedReport({ entry, standalone: false }, deps);
+
+      expect(report.standaloneNotRecorded).toBe(true);
+      expect(publishReportLines(report)).toContain(
+        "The index did not record whether it stands alone: it predates --standalone and --part.",
+      );
     });
 
     it("keeps the source as a version before a rewrite it writes over uncommitted edits with allowDirty", async () => {

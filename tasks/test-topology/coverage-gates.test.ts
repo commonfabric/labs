@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { fromFileUrl } from "@std/path";
 import {
   COVERAGE_GATE_SUITE,
@@ -10,6 +9,7 @@ import {
 } from "./coverage-gates.ts";
 import { claimsFor, loadTopology } from "../test-topology.ts";
 import type { MeasuredSet, Suite } from "./suite.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const root = fromFileUrl(new URL("../..", import.meta.url)).replace(/\/$/, "");
 

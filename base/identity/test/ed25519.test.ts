@@ -13,6 +13,7 @@ import {
 import { didToBytes, isNativeEd25519Supported } from "../src/ed25519/utils.ts";
 import { DIDKey } from "../src/interface.ts";
 import { bytesEqual } from "./utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
 type SignerImpl<ID extends DIDKey> =
   | NativeEd25519Signer<ID>
@@ -68,11 +69,11 @@ const TEST_PRIVATE_KEY = new Uint8Array([
 ]);
 const TEST_DID = "did:key:z6MkjosLwWEobyT9T6RqLTdaEhFrXAZUNkRZJuUae2ukgfEa";
 
-Deno.test("ed25519 is supported in this environment", async () => {
+test("ed25519 is supported in this environment", async () => {
   assert(await isNativeEd25519Supported());
 });
 
-Deno.test("rejects did:key values with unsupported multicodec tags", () => {
+test("rejects did:key values with unsupported multicodec tags", () => {
   const unsupportedDid =
     "did:key:z6DtMrg4Kv51UMAM8vJcCLcRywJfEB4dpHVxPCR6qm6hSV3N" as DIDKey;
 
@@ -83,7 +84,7 @@ Deno.test("rejects did:key values with unsupported multicodec tags", () => {
   );
 });
 
-Deno.test("has same results in both impls when generating from noble", async () => {
+test("has same results in both impls when generating from noble", async () => {
   // Use @noble/ed25519 directly, otherwise the private key isn't accessible.
   const privateKey = ed25519.utils.randomSecretKey();
   const noble = await NobleEd25519Signer.fromRaw(privateKey);
@@ -152,7 +153,7 @@ testBothImpls(
   },
 );
 
-Deno.test("each implementation refuses the key pair state it cannot sign with", async () => {
+test("each implementation refuses the key pair state it cannot sign with", async () => {
   const material = (await NobleEd25519Signer.fromRaw(TEST_PRIVATE_KEY)).keyPair;
   assertThrows(
     () => new NativeEd25519Signer(material, TEST_DID),
@@ -175,10 +176,10 @@ function testBothImpls(
   name: string,
   fn: (signer: SignerClass, verifier: VerifierClass) => void | Promise<void>,
 ) {
-  Deno.test(`(native) ${name}`, async () => {
+  test(`(native) ${name}`, async () => {
     return await fn(NativeEd25519Signer, NativeEd25519Verifier);
   });
-  Deno.test(`(noble) ${name}`, async () => {
+  test(`(noble) ${name}`, async () => {
     return await fn(NobleEd25519Signer, NobleEd25519Verifier);
   });
 }

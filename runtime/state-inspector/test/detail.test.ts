@@ -12,12 +12,17 @@
  * `regime === "legacy"` branches in `model.ts` and `detail.ts`.
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
 import { openSpace, type SpaceDb } from "../db.ts";
 import { buildAllDetails, type EntityDetail } from "../detail.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (

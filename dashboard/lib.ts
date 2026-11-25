@@ -142,6 +142,53 @@ export interface GitHubRequestOptions {
    * does are given there; a run list requested without this is refused.
    */
   runListAccess?: typeof RUN_LIST_ACCESS;
+
+  /**
+   * GitHub's earlier answers to `GET` requests, which make a request asked
+   * again conditional: it carries the answer's ETag, and GitHub's reply that
+   * nothing has changed, which does not count against the token's rate
+   * limit, returns the answer held.
+   */
+  answers?: GitHubAnswers;
+}
+
+/**
+ * GitHub's latest answers to the `GET` requests of a reader, with their
+ * ETags, by path, for conditional requests. It holds the `most` asked for
+ * most recently.
+ */
+export class GitHubAnswers {
+  #answers = new Map<string, { etag: string; page: GitHubPage<unknown> }>();
+  #most: number;
+
+  /** Constructs an instance that holds at most `most` answers. */
+  constructor(most = 1000) {
+    this.#most = most;
+  }
+
+  /** How many answers it holds. */
+  get size(): number {
+    return this.#answers.size;
+  }
+
+  /** Returns the answer held for `path`, and its ETag, if any. */
+  get(path: string): { etag: string; page: GitHubPage<unknown> } | undefined {
+    const answer = this.#answers.get(path);
+    if (answer === undefined) return undefined;
+    this.#answers.delete(path);
+    this.#answers.set(path, answer);
+    return answer;
+  }
+
+  /** Holds `page` as the answer for `path`, with its ETag, forgetting the oldest beyond `most`. */
+  set(path: string, etag: string, page: GitHubPage<unknown>): void {
+    this.#answers.delete(path);
+    this.#answers.set(path, { etag, page });
+    for (const oldest of this.#answers.keys()) {
+      if (this.#answers.size <= this.#most) break;
+      this.#answers.delete(oldest);
+    }
+  }
 }
 
 /**
@@ -381,14 +428,15 @@ function githubRequest(
   withTimeout: boolean,
   apiVersion = "2022-11-28",
   body?: string,
+  etag?: string,
 ): Promise<Response> {
-  const init: RequestInit = {
-    headers: {
-      authorization: `Bearer ${token}`,
-      accept: "application/vnd.github+json",
-      "x-github-api-version": apiVersion,
-    },
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${token}`,
+    accept: "application/vnd.github+json",
+    "x-github-api-version": apiVersion,
   };
+  if (etag !== undefined) headers["if-none-match"] = etag;
+  const init: RequestInit = { headers };
   if (body !== undefined) {
     init.method = "POST";
     init.body = body;
@@ -428,6 +476,7 @@ async function githubResponse(
   performance: boolean,
   withTimeout: boolean,
   options: GitHubRequestOptions,
+  etag?: string,
 ): Promise<GitHubResponseResult> {
   const normalizedPath = path.replace(/^\//, "");
   if (
@@ -467,6 +516,7 @@ async function githubResponse(
       withTimeout,
       options.apiVersion,
       options.body,
+      etag,
     );
     if (response.status === 401) credential.refused(token);
   } catch (error) {
@@ -518,13 +568,22 @@ async function githubJson<T>(
   performance: boolean,
   options: GitHubRequestOptions,
 ): Promise<GitHubPage<T>> {
+  const held = options.body === undefined
+    ? options.answers?.get(path.replace(/^\//, ""))
+    : undefined;
   const { response: res, operation } = await githubResponse(
     path,
     credential,
     performance,
     true,
     options,
+    held?.etag,
   );
+  if (res.status === 304 && held !== undefined) {
+    await res.body?.cancel();
+    finishGitHubOperation(operation, res, false);
+    return { value: held.page.value as T, next: held.page.next };
+  }
   if (!res.ok) {
     const reportHttpError = !options.ignoreStatuses?.includes(res.status);
     const body = await githubErrorResponseBody(
@@ -556,7 +615,12 @@ async function githubJson<T>(
   try {
     const value = await res.json() as T;
     finishGitHubOperation(operation, res, false);
-    return { value, next: nextPagePath(res.headers.get("link")) };
+    const page = { value, next: nextPagePath(res.headers.get("link")) };
+    const etag = res.headers.get("etag");
+    if (options.answers !== undefined && options.body === undefined && etag !== null) {
+      options.answers.set(operation.path, etag, page);
+    }
+    return page;
   } catch (error) {
     console.error(
       `GitHub API operation ${operation.id} for ${operation.path} could not read valid JSON ` +

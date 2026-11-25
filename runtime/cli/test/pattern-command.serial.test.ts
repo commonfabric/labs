@@ -5,7 +5,6 @@
  * answered from the LLM client's process-wide mock catalog.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { stub } from "@std/testing/mock";
@@ -26,6 +25,12 @@ import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { delegationsCause } from "../../runner/src/runtime.ts";
 import {
   history,
@@ -377,6 +382,22 @@ describe("pattern", () => {
       );
       expect(Deno.exitCode).toBe(savedExitCode);
       expect(disposed).toBe(1);
+    });
+
+    it("sends standalone for --standalone, a part for --part, and nothing for neither", async () => {
+      await share(
+        options({ skipLocalCheck: true, standalone: true }),
+        entry,
+        deps(),
+      );
+      await share(options({ skipLocalCheck: true, part: true }), entry, deps());
+      await share(options({ skipLocalCheck: true }), entry, deps());
+
+      const sent = index.calls.filter((call) => call.fn === "publishPattern")
+        .map((call) =>
+          Object.hasOwn(call.body, "standalone") ? call.body.standalone : "-"
+        );
+      expect(sent).toEqual([true, false, "-"]);
     });
 
     it("shares the version it kept on beta, by link only, and asks for no listing", async () => {

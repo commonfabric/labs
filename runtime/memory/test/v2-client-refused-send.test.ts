@@ -5,12 +5,12 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { decodeMemoryBoundary } from "../v2.ts";
 import { connect, loopback, type Transport } from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("client refused sends", () => {
   it("drops the pending entry of a request whose send the transport refused", async () => {

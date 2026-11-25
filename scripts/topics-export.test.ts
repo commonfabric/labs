@@ -18,11 +18,11 @@
  * cannot cover the space refused rather than written out as if it had.
  */
 
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import { fromFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 
 import type { TopicsExport } from "./topics-rehearsal-lib.ts";
 

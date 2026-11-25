@@ -379,12 +379,24 @@ export type ServingLoopStats = {
      * found: `no-record`, `marked`, `other-epoch` (the root's piece), and
      * `unvouched-instance`, `absent-owned`,
      * `owner-not-clean` (a demanded instance of the piece or of one beneath
-     * it). */
+     * it). A `skip` loop adds `stale-upstream`: the roots a judgment found
+     * stale only through what is upstream of them, which it loads as it
+     * loads a refused root and a `start-upstream` loop would have held. No
+     * other mode counts under that reason. */
     refused: Record<string, number>;
 
-    /** Roots left unloaded and unstarted on that judgment, which only the
-     * `skip` mode does, counted once each time a root is first left. */
+    /** Roots left unloaded and unstarted on that judgment, which the `skip`
+     * and `start-upstream` modes do, counted once each time a root is first
+     * left. */
     servedFromStore: number;
+
+    /** Roots a judgment found to be documents a structure load starts no
+     * piece from: no `computed:` id, and a stored space instance that is
+     * absent or carries neither a `result` field nor a pattern pointer.
+     * Counted at each judgment that found it so, under every mode. The
+     * `skip` and `start-upstream` modes park each one as that load would,
+     * without the load; `record` loads it. */
+    plainRoots: number;
 
     /** Roots a judgment had left unloaded that were then loaded: an input
      * marked the piece, or a session's demand reached an instance the
@@ -419,17 +431,19 @@ export type ServingLoopStats = {
     /** Rows of carried demand the space they were sent to refused. */
     carriedRefused: number;
 
-    /** Roots a `skip` loop left unloaded because what the store held of
-     * them was stale only through what is upstream: starting their own
-     * piece would not have made them current, so the loop started the
-     * pieces upstream instead (serving-loop.md §1). */
+    /** Roots a `start-upstream` loop left unloaded because what the store
+     * held of them was stale only through what is upstream: starting their
+     * own piece would not have made them current, so the loop started the
+     * pieces upstream instead (serving-loop.md §1). Zero under `skip` and
+     * under `record`. */
     heldUpstream: number;
 
     /** Pieces, each one whose slices hold a root or one that runs, that
      * the loop gave up waiting on what is upstream of: no piece named for
      * one could be started, or each ran and was recorded and it was stale
      * still. A root is loaded as a refused one is once every piece that
-     * holds it was given up on. */
+     * holds it was given up on. Zero under `skip`, which waits on nothing
+     * upstream. */
     upstreamAbandoned: number;
   };
 
@@ -528,6 +542,13 @@ export type ServingLoopStats = {
      * that grows without `processed` settling names a drain copy that
      * never completes. */
     drainInFlightSkips: number;
+
+    /** Events whose handler's run held the thread of a serving worker the
+     * pool ended, which the drain sealed with the error as their
+     * consequence instead of running the handler again (events.md §5).
+     * Counted at the decision, so a seal whose wave is refused counts again
+     * when the next pass seals it. */
+    failedWithWorker: number;
 
     /** OW45 arm-B round: entries stuck at the drain's PRE-QUEUE
      * deferral barrier (a lagging sidecar view, a failing sidecar
@@ -861,13 +882,39 @@ export type ServingLoopStats = {
    * already serving another space because the pool was at its cap, and
    * `heapLimited` the workers, among the `failed` ones, that reached their
    * heap limit. `heapStopped` is how many spaces are on no worker now because
-   * a worker they were alone on reached its heap limit.
+   * a worker they were alone on reached its heap limit. `running` lists the
+   * workers whose run beacon showed a run holding the thread at the
+   * watchdog's last check (serving-loop.md §2, "The watchdog").
    */
   workers: {
     serving: number;
     spare: number;
     parked: number;
     heapUsed: number;
+
+    /** One entry per worker whose thread a run held at the last check. */
+    running: Array<{
+      /** The spaces placed on the worker. */
+      spaces: string[];
+
+      /**
+       * The space whose runtime runs it, the scheduler's id for the action
+       * (the key of its row in `actions`), the action's module or pattern
+       * name and its piece where known, and the event of a served handler's
+       * run; absent until the worker's notice naming the run has arrived.
+       */
+      space?: string;
+      action?: string;
+      name?: string;
+      piece?: string;
+      eventId?: string;
+
+      /** How many of the watchdog's checks in a row have found the run. */
+      checks: number;
+
+      /** The reads the run had made at the last check. */
+      reads: number;
+    }>;
     started: number;
     retired: number;
     evicted: number;
@@ -876,6 +923,70 @@ export type ServingLoopStats = {
     heapLimited: number;
     heapStopped: number;
   };
+
+  /**
+   * The actions that have cost the serving runtimes the most wall time, most
+   * expensive first, as `action-costs.ts` keeps them. A listed action's time
+   * is counted from the run that gave it a row. A row is unlisted because the
+   * list is bounded or because a host stopped tracking it. An action whose
+   * run is still going has no row yet.
+   */
+  actions: {
+    /** The listed actions, most total wall time first. */
+    entries: ServingActionCost[];
+
+    /**
+     * How many action rows are not listed: rows a host gave up for a costlier
+     * action, and rows past the list's bound.
+     */
+    dropped: number;
+
+    /** The wall time of the unlisted actions and of runs no row took. */
+    droppedMs: number;
+  };
+};
+
+/**
+ * What one action has cost the serving runtimes of one space. The times are
+ * wall times in milliseconds, from the start of a run to the end of its
+ * last await.
+ */
+export type ServingActionCost = {
+  /** The space whose serving runtime ran the action. */
+  space: string;
+
+  /** The scheduler's id for the action. */
+  action: string;
+
+  /** The result cell of the piece the action belongs to. */
+  piece?: string;
+
+  /** The name of the pattern the action belongs to. */
+  pattern?: string;
+
+  /** The name of the module the action runs. */
+  module?: string;
+
+  /** Where the action is authored, as `cf:module/<identity>/<path>:<l>:<c>`. */
+  src?: string;
+
+  /** How many of the action's runs have ended. */
+  runs: number;
+
+  /**
+   * How many of those runs a change to the action's inputs caused, a retry of
+   * such a run included.
+   */
+  inputRuns: number;
+
+  /** The wall time of all those runs together. */
+  totalMs: number;
+
+  /** The wall time of the longest of those runs. */
+  longestMs: number;
+
+  /** The wall time of the latest of those runs. */
+  lastMs: number;
 };
 
 /** How many rows each of the bounded settle series keeps. */
@@ -940,6 +1051,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     servable: 0,
     refused: {},
     servedFromStore: 0,
+    plainRoots: 0,
     rearmed: 0,
     indexWakes: 0,
     expiryWakes: 0,
@@ -957,6 +1069,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     coalescedPerWaveMax: 0,
     skippedIdempotent: 0,
     drainInFlightSkips: 0,
+    failedWithWorker: 0,
     preQueueDeferralStuck: 0,
     visibilityBarriers: 0,
     visibilityRecoveries: 0,
@@ -1015,6 +1128,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     spare: 0,
     parked: 0,
     heapUsed: 0,
+    running: [],
     started: 0,
     retired: 0,
     evicted: 0,
@@ -1023,6 +1137,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     heapLimited: 0,
     heapStopped: 0,
   },
+  actions: { entries: [], dropped: 0, droppedMs: 0 },
 });
 
 type ActiveDeliveryCheckpointStat = {
@@ -1101,12 +1216,13 @@ export const bumpDerivedCommits = (
 };
 
 /** The counters without the settle blocks, whose series cost about as much
- * to post as a wave commit. A serving worker posts these ahead of each wave
+ * to post as a wave commit, and without the action costs, which are ranked
+ * when they are read. A serving worker posts these ahead of each wave
  * commit, so a client that has seen the commit reads counts that include
  * what the wave counted before its commit. */
 export type ServingLoopCounters = Omit<
   ServingLoopStats,
-  "settle" | "settleAdvances"
+  "settle" | "settleAdvances" | "actions"
 >;
 
 // One provider per process (the ExecutorHost registers itself); the

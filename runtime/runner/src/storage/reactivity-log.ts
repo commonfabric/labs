@@ -141,12 +141,13 @@ export const mergeableOpRead: Metadata = {
 /**
  * Marks the reads the write machinery makes of the region it is about to
  * write: the stream-marker probe that chooses between an event send and a
- * stored write, the diff's read of each destination path, and the append's
- * destination snapshot that supplies storage positions. Each answer
- * decides how and whether to write, never what is written, and where a
- * stored link sends the write somewhere else the walk reads that slot again
- * without this marker. CFC flow-label derivation excludes these from the
- * transaction's join (spec §18.6.2,
+ * stored write, the diff's read of each destination path, and the
+ * destination snapshot an append or an add-unique takes, which supplies
+ * storage positions and, for an add-unique, which candidates are already
+ * present. Each answer decides how and whether to write, never what is
+ * written, and where a stored link sends the write somewhere else the walk
+ * reads that slot again without this marker. CFC flow-label derivation
+ * excludes these from the transaction's join (spec §18.6.2,
  * `docs/specs/cfc-write-destination-reads.md`). Scheduling, conflict
  * detection and the attempted-write record are unaffected, and the same
  * stream-marker probe made outside the write path carries no marker.

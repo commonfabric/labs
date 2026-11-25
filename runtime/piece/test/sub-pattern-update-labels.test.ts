@@ -11,7 +11,6 @@
  * entry at an update that sets the sub-pattern up again without reading it.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
@@ -32,6 +31,12 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import { cfcLabelViewForResolvedCell } from "@commonfabric/runner/cfc";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { readStoredCfcMetadata } from "../../runner/src/cfc/metadata.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,

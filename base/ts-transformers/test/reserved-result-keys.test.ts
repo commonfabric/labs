@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import ts from "typescript";
@@ -8,6 +7,7 @@ import { reportOpaqueReservedResultKeys } from "../src/transformers/reserved-res
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { parseModule, patternSchemas } from "./transformed-ast.ts";
 import { validateSource } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const DIAGNOSTIC_TYPE = "pattern-result:opaque-reserved-key";
 

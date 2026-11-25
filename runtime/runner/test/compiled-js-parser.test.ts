@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   findTopLevelArrow,
@@ -12,6 +11,7 @@ import {
   trimRange,
   tryParseCallExpression,
 } from "../src/sandbox/compiled-js-parser.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("findTopLevelEquals()", () => {
   it("ignores compound assignments at the top level", () => {

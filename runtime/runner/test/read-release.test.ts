@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
+import { describe, it } from "@commonfabric/test-support/test";
 
 interface Report {
   transactions: number;

@@ -2,7 +2,6 @@
 // for the lines that read its members.
 import { assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { captureLogsForTestingOnly } from "@commonfabric/logger/for-testing-only";
 
@@ -22,6 +21,7 @@ import {
   linkRefFrom,
   linkRefPayloadFromString,
 } from "@commonfabric/runner/shared";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   $conn,

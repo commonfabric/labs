@@ -5,7 +5,6 @@
  * distinction between an unreadable document and a readable wrong value.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import {
@@ -16,6 +15,12 @@ import {
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const signer = await Identity.fromPassphrase("setsrc cold argument");
 

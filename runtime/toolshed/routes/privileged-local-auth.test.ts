@@ -1,7 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import env from "@/env.ts";
 import { createTestApp } from "@/lib/create-app.ts";
 import webReadRouter from "@/routes/agent-tools/web-read/web-read.index.ts";

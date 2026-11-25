@@ -233,6 +233,7 @@ import {
   type WaveWriteAnnotation,
 } from "./wave.ts";
 import { servingLocalStore } from "./serving-context.ts";
+import { type RunEvent, runEventKey } from "./run-beacon.ts";
 import { DemandMirror } from "./demand-mirror.ts";
 import { engineReadThrough } from "./engine-read-through.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
@@ -465,18 +466,26 @@ export type SpaceServerPolicy = {
    * it. `record` loads every root regardless and counts the roots the store
    * could have served, and the pieces a judgment was wrong about
    * (`currency.falseClean`). `skip` leaves a root the store can serve
-   * unloaded and its piece unstarted, until an input marks the piece or a
-   * session's demand reaches an instance it does not vouch for (§1), and
-   * runs as `record` unless `currencyEpoch` is set. Unset, nothing is
-   * recorded or judged. The toolshed bootstrap reads
+   * unloaded and its piece unstarted, until an input marks the piece, a
+   * slice that read a clock expires (`currency.expiryWakes`), or a session's
+   * demand reaches an instance it does not vouch for (§1), and starts
+   * nothing else on the index's account: a root that is stale only through
+   * what is upstream of it is loaded as a refused one is. `start-upstream`
+   * does what `skip` does and starts the pieces upstream of such a root, and
+   * of a running piece that is stale the same way, holding the watermark
+   * meanwhile (§1, "A root stale upstream"). Unset, nothing is recorded or
+   * judged. The toolshed bootstrap reads
    * SERVER_EXECUTION_CURRENCY_INDEX.
    */
   currencyIndex?: CurrencyIndexMode;
 
   /**
-   * Names the build whose records the currency index trusts: a piece
-   * recorded under another epoch is started. A deployment changes it when a
-   * release can change what a stored output would be computed as.
+   * The epoch the currency index records under and trusts: a piece recorded
+   * under another epoch is started. Unset, it is `DEFAULT_CURRENCY_EPOCH`,
+   * under which the records of every build are trusted, including one that
+   * computed a stored output as this build would not. Naming a new epoch is
+   * how an operator stops trusting every record stored so far. The toolshed
+   * bootstrap reads SERVER_EXECUTION_CURRENCY_EPOCH.
    */
   currencyEpoch?: string;
 };
@@ -555,10 +564,28 @@ export type RuntimeFactoryContext = {
   route?: RouteOptions;
 };
 
+/**
+ * A space's events whose handler's run held the thread of a serving worker
+ * the pool ended (serving-loop.md §2, "The watchdog"), each with the reason
+ * its consequence states, keyed by its stream entry (`runEventKey()`).
+ */
+export type FailedEvents = Map<
+  string,
+  { readonly event: RunEvent; readonly reason: string }
+>;
+
 export type SpaceServerOptions = {
   space: MemorySpace;
   server: HostMemoryServer;
   engine: Engine.Engine;
+
+  /**
+   * The events of the space whose handlers are not run (events.md §5): the
+   * drain writes each one's reason as its consequence instead, and removes it
+   * from here once that consequence has committed. The host shares the map
+   * across the space's tenures.
+   */
+  failedEvents?: FailedEvents;
 
   /** The service identity (DID) the DR1 holder is minted from — also the
    * loopback session's principal, which is what the read-row admission
@@ -689,6 +716,17 @@ export type SpaceServerOptions = {
 
 /** The flush deadline a policy that names none takes (serving-loop.md §3). */
 export const DEFAULT_FLUSH_DEADLINE_MS = 100;
+
+/**
+ * The currency epoch a policy that names none takes
+ * (`SpaceServerPolicy.currencyEpoch`). It is one fixed value, the same for
+ * every build and every process, so a serving loop trusts the records of
+ * each loop that ran under it, whichever build that was. A record names its
+ * epoch by value: a change to this one leaves every record stored under it
+ * of another epoch, for every deployment at once.
+ */
+export const DEFAULT_CURRENCY_EPOCH = "default";
+
 const DEFAULT_IDLE_PARK_MS = 30_000;
 const DEFAULT_PARK_DISPOSE_TIMEOUT_MS = 5_000;
 
@@ -2311,23 +2349,12 @@ export class SpaceServer implements TransactionSealDestination {
 
     const currencyIndex = this.#options.policy?.currencyIndex;
     if (currencyIndex !== undefined) {
-      const epoch = this.#options.policy?.currencyEpoch;
-      // A record is trusted across builds only by the epoch it names, so
-      // leaving pieces unstarted on one takes a named epoch.
-      if (currencyIndex === "skip" && epoch === undefined) {
-        logger.warn("currency-skip-without-epoch", () => [
-          `space ${space}: the currency index is asked to leave current ` +
-          "pieces unstarted with no epoch named " +
-          "(`SpaceServerPolicy.currencyEpoch`); it records and judges, " +
-          "and starts every piece",
-        ]);
-      }
       runtime.scheduler.trackChangedPieces();
       this.#currency = new StoreCurrency({
         space,
         server: this.#options.server,
-        mode: epoch === undefined ? "record" : currencyIndex,
-        epoch: epoch ?? "",
+        mode: currencyIndex,
+        epoch: this.#options.policy?.currencyEpoch ?? DEFAULT_CURRENCY_EPOCH,
         serviceIdentity: this.#options.serviceIdentity,
         stats: this.#options.stats,
         onOwed: () => {
@@ -5272,6 +5299,38 @@ export class SpaceServer implements TransactionSealDestination {
           this.#sealEventConsequenceNotice(runtime, entry, streamEntry);
           continue;
         }
+        const failedEvents = this.#options.failedEvents;
+        const failed = failedEvents === undefined || failedEvents.size === 0
+          ? undefined
+          : failedEvents.get(runEventKey(streamEntryAddress));
+        if (failed !== undefined) {
+          // events.md §5: the handler's run held the thread of a worker the
+          // pool ended, so the error is the event's consequence and the
+          // handler does not run for it again. The error completes the event
+          // at its arrival position (§2), so while an entry this pass queued
+          // or found in flight ahead of it is still pending, it waits with
+          // the later arrivals for the pass that entry's committed
+          // consequence, or its deferral's rescan, starts. As a terminal
+          // notice it holds the later arrivals until its wave commits, whose
+          // outcome removes it from `failedEvents` and re-arms the scan for
+          // them; a seal or a wave that fails releases the guard, and the
+          // next pass seals it again.
+          if (this.#anyStreamEntryPending(ahead, ahead.length)) break;
+          if (!this.#drainInFlight.has(entry.eventId)) {
+            this.#drainInFlight.set(entry.eventId, {
+              phase: "marked",
+              wave: undefined,
+            });
+            this.#options.stats.events.failedWithWorker += 1;
+            this.#sealEventConsequenceNotice(
+              runtime,
+              entry,
+              streamEntry,
+              { kind: "error", message: failed.reason },
+            );
+          }
+          break;
+        }
         const pendingCheckpoint = this.#pendingDeliveryCheckpointWrites.get(
           entry.eventId,
         );
@@ -6289,11 +6348,26 @@ export class SpaceServer implements TransactionSealDestination {
       const root = this.#demandRootAddresses.get(key);
       if (root !== undefined) rootKeys.set(key, root);
     }
+    // ONE changed-doc collection for the whole pass, opened BEFORE the
+    // judgment and the pull below rather than per root inside it. A root the
+    // judgment found a load starts no piece from is parked on what the store
+    // held when it was judged. The pull is what registers each root's watch,
+    // and a registered watch is what lets the traversal read from the
+    // replica instead of fetching, so between the two a root's reading is
+    // only as current as frame delivery has made it. The terminal arm's
+    // invalidation check has to test the span either reading was taken over,
+    // and that span starts here.
+    const changedDocs = new Map<string, number>();
+    this.#structureLoadChangedDocs = changedDocs;
+    // The roots parked below as plain, whose documents the pull below still
+    // brings into the replica, as their loads would have.
+    const parked = new Map<string, { id: string; scope: CellScope }>();
     // The roots the store can serve as they stand (serving-loop.md §1):
-    // under `skip` they are neither loaded nor started, and stay awaiting a
-    // first load, so each later pass judges them again. A root, or a piece
-    // that runs, that is stale only through what is upstream of it is
-    // judged with them, for the pieces to start upstream.
+    // where the loop skips they are neither loaded nor started, and stay
+    // awaiting a first load, so each later pass judges them again. A root,
+    // or a piece that runs, that is stale only through what is upstream of
+    // it is judged with them, for the pieces to start upstream, which a
+    // `skip` loop starts none of.
     if (
       this.#currency !== undefined &&
       (rootKeys.size > 0 || this.#currency.staleUpstream)
@@ -6337,6 +6411,10 @@ export class SpaceServer implements TransactionSealDestination {
           this.#rearmSeqsUnderRetry.delete(key);
           this.#rearmSeqsAwaitingFollow.delete(key);
         }
+        for (const key of judged.plain) {
+          const root = this.#parkPlainRoot(key, rootKeys, changedDocs);
+          if (root !== undefined) parked.set(key, root);
+        }
       }
       this.#armCurrencyExpiry();
       // The instances that keep something stale upstream are demanded
@@ -6351,17 +6429,8 @@ export class SpaceServer implements TransactionSealDestination {
         this.#pendingDemandWake = true;
       }
     }
-    // ONE changed-doc collection for the whole pass, opened BEFORE the pull
-    // below rather than per root inside it. The pull is what registers each
-    // root's watch, and a registered watch is what lets the traversal read
-    // from the replica instead of fetching, so between the two a root's
-    // reading is only as current as frame delivery has made it. The terminal
-    // arm's invalidation check has to test the span the reading was taken
-    // over, and that span starts here.
-    const changedDocs = new Map<string, number>();
-    this.#structureLoadChangedDocs = changedDocs;
     try {
-      await this.#loadStructureRootDocs(runtime, rootKeys);
+      await this.#loadStructureRootDocs(runtime, rootKeys, parked);
       // The STRUCTURE LOAD, per watch ROOT and per row marked as a piece's
       // (flag 4), unchanged in mechanism (stage P2-F, the OW19 terminal
       // state, the commit-triggered re-arm); only the demand-walk install is
@@ -6847,14 +6916,24 @@ export class SpaceServer implements TransactionSealDestination {
    * root this pulls that the pass then skips is one a client demands either
    * way, and a root this misses is one its traversal fetches as it always
    * did.
+   *
+   * The roots of `parked`, which this pass parked as plain without a load,
+   * are pulled too: the sync is the one step of the load that is not about
+   * finding a piece, and it is what puts a demanded document in the
+   * replica, where a later read of it that does not sync finds it. A parked
+   * root has no traversal to sync it again, so one whose sync rejects, and
+   * that no commit re-armed meanwhile, is taken out of its park and added to
+   * `rootKeys`, owed a load: this pass loads it, and its traversal's sync
+   * and failure arm then treat it as any other root's.
    */
   async #loadStructureRootDocs(
     runtime: Runtime,
-    rootKeys: ReadonlyMap<string, { id: string; scope?: CellScope }>,
+    rootKeys: Map<string, { id: string; scope: CellScope }>,
+    parked: ReadonlyMap<string, { id: string; scope: CellScope }>,
   ): Promise<void> {
     const pending: Promise<unknown>[] = [];
-    for (const [key, root] of rootKeys) {
-      if (this.#terminalStructureLoads.has(key)) continue;
+    for (const [key, root] of [...rootKeys, ...parked]) {
+      if (!parked.has(key) && this.#terminalStructureLoads.has(key)) continue;
       if (neverAPieceRootId(root.id)) continue;
       const scope = root.scope ?? "space";
       // A scoped demand that reads meta-less falls back to the SPACE
@@ -6873,8 +6952,17 @@ export class SpaceServer implements TransactionSealDestination {
         });
         // A sync that rejects is not this pass's to report: the root's own
         // traversal issues the same sync a moment later and its failure arm
-        // counts and logs what went wrong.
-        pending.push(cell.sync().catch(() => {}));
+        // counts and logs what went wrong. A parked root is loaded for that.
+        pending.push(
+          cell.sync().catch(() => {
+            if (!parked.has(key) || !this.#terminalStructureLoads.has(key)) {
+              return;
+            }
+            this.#terminalStructureLoads.delete(key);
+            this.#pendingStructureLoads.add(key);
+            rootKeys.set(key, root);
+          }),
+        );
       }
     }
     if (pending.length === 0) return;
@@ -7391,6 +7479,37 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /**
+   * Helper for `#loadDemandedStructure()`, which parks the space-scoped root
+   * `key` that a judgment found to be a document a structure load starts no
+   * piece from, as that load would park it: terminal, watching the document
+   * alone, so that any commit to the document, by a client or by another
+   * serving loop, re-arms the load. The load reads the same document through
+   * the replica, finds no back-link to follow and no pattern pointer, and
+   * parks it watching that document alone. A commit to the document
+   * admitted since the pass opened `changedDocs` may postdate what the
+   * judgment read, and leaves the root in `rootKeys` to be loaded.
+   *
+   * @returns The root parked, whose document the pass still pulls into the
+   * replica (`#loadStructureRootDocs()`), or `undefined` where it was left
+   * to be loaded.
+   */
+  #parkPlainRoot(
+    key: string,
+    rootKeys: Map<string, { id: string; scope: CellScope }>,
+    changedDocs: ReadonlyMap<string, number>,
+  ): { id: string; scope: CellScope } | undefined {
+    const root = rootKeys.get(key);
+    if (root === undefined || changedDocs.has(root.id)) return undefined;
+    rootKeys.delete(key);
+    this.#demandedRoots.add(key);
+    this.#rootsAwaitingFirstLoad.delete(key);
+    this.#pendingStructureLoads.delete(key);
+    this.#structureLoadDeferralStreaks.delete(key);
+    this.#terminalStructureLoads.set(key, new Set([root.id]));
+    return root;
+  }
+
+  /**
    * Helper for `#loadDemandedStructure()`, which returns the lowest seq of an
    * input a verdict reached over `observedDocIds` during the current pass may
    * have missed: a change to one of them admitted during the pass, by
@@ -7537,11 +7656,12 @@ export class SpaceServer implements TransactionSealDestination {
    * (`carriedRowsOf()`). This space is sent, the same way, the instances
    * that keep a root or a running piece of it stale upstream, and those a
    * run here is withdrawn for until their writer produces them
-   * (serving-loop.md §1, "A root stale upstream").
+   * (serving-loop.md §1, "A root stale upstream"). A loop whose index mode
+   * carries no demand (`StoreCurrency.carriesDemand`) sends none.
    */
   #syncCarriedDemand(): void {
     const currency = this.#currency;
-    if (currency === undefined) return;
+    if (currency === undefined || !currency.carriesDemand) return;
     const reads = [
       ...[...currency.foreignReads.values()].flat(),
       ...currency.upstreamReads,
@@ -9013,6 +9133,25 @@ export class SpaceServer implements TransactionSealDestination {
     for (const eventId of outcome.committedEventIds) {
       if (releasedBy(eventId)) this.#drainInFlight.delete(eventId);
       this.#requeueCatchUp.delete(eventId);
+    }
+    // A failed event's record goes once its own entry has its consequence.
+    // The outcome names events by id alone, which another stream's pending
+    // entry may carry too (events.md §4), so the store says which entry it
+    // was.
+    const failedEvents = this.#options.failedEvents;
+    if (failedEvents !== undefined && failedEvents.size > 0) {
+      const committed = new Set(outcome.committedEventIds);
+      for (const [key, { event }] of failedEvents) {
+        if (!committed.has(event.eventId)) continue;
+        const stored = this.#storedStreamEntry(
+          event.sidecarId,
+          event.eventId,
+          event.seq,
+        );
+        if (stored === undefined || stored.consequenced === true) {
+          failedEvents.delete(key);
+        }
+      }
     }
     for (const eventId of outcome.requeuedEventIds) {
       if (releasedBy(eventId)) this.#drainInFlight.delete(eventId);

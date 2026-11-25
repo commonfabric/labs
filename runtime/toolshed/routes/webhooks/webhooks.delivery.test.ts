@@ -5,7 +5,6 @@
  * stream through `sendToStream`.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
@@ -14,6 +13,12 @@ import {
   type JSONSchema,
   linkRefPayloadToString,
 } from "@commonfabric/runner/shared";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { sendToStream } from "./webhooks.utils.ts";
 
 const STREAM_SCHEMA: JSONSchema = {

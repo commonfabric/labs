@@ -20,6 +20,7 @@ import { assertEquals, assertStrictEquals } from "@std/assert";
 import ts from "typescript";
 
 import { numberFromExpression } from "../../src/typescript/numeric-expression.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * Build a checker over a single synthetic file. No default library is
@@ -80,7 +81,7 @@ function evaluateExpr(expr: string): number | undefined {
   return evaluate(`const v = ${expr};`, "v");
 }
 
-Deno.test("numberFromExpression: unsigned literals", () => {
+test("numberFromExpression: unsigned literals", () => {
   assertStrictEquals(evaluateExpr("5"), 5);
   assertStrictEquals(evaluateExpr("0"), 0);
   assertStrictEquals(evaluateExpr("1.5"), 1.5);
@@ -88,7 +89,7 @@ Deno.test("numberFromExpression: unsigned literals", () => {
   assertStrictEquals(evaluateExpr("1e3"), 1000);
 });
 
-Deno.test("numberFromExpression: signed literals", () => {
+test("numberFromExpression: signed literals", () => {
   assertStrictEquals(evaluateExpr("-5"), -5);
   assertStrictEquals(evaluateExpr("-1"), -1);
   assertStrictEquals(evaluateExpr("-0.5"), -0.5);
@@ -98,7 +99,7 @@ Deno.test("numberFromExpression: signed literals", () => {
   assertStrictEquals(evaluateExpr("-+-5"), 5);
 });
 
-Deno.test("numberFromExpression: signed zero keeps its sign", () => {
+test("numberFromExpression: signed zero keeps its sign", () => {
   // The whole point of the value model: -0 and 0 are distinct stored values.
   assertEquals(Object.is(evaluateExpr("-0"), -0), true);
   assertEquals(Object.is(evaluateExpr("0"), 0), true);
@@ -106,7 +107,7 @@ Deno.test("numberFromExpression: signed zero keeps its sign", () => {
   assertEquals(Object.is(evaluateExpr("- -0"), 0), true);
 });
 
-Deno.test("numberFromExpression: non-finite globals", () => {
+test("numberFromExpression: non-finite globals", () => {
   assertEquals(Number.isNaN(evaluateExpr("NaN")), true);
   assertStrictEquals(evaluateExpr("Infinity"), Infinity);
   assertStrictEquals(evaluateExpr("-Infinity"), -Infinity);
@@ -114,7 +115,7 @@ Deno.test("numberFromExpression: non-finite globals", () => {
   assertEquals(Number.isNaN(evaluateExpr("-NaN")), true);
 });
 
-Deno.test("numberFromExpression: shadowed non-finite globals do not fold", () => {
+test("numberFromExpression: shadowed non-finite globals do not fold", () => {
   // A local binding named `NaN` denotes 111 here, not the global. Folding it
   // to the global would be silently wrong, so the helper declines instead.
   assertStrictEquals(
@@ -131,7 +132,7 @@ Deno.test("numberFromExpression: shadowed non-finite globals do not fold", () =>
   );
 });
 
-Deno.test("numberFromExpression: sees through parentheses", () => {
+test("numberFromExpression: sees through parentheses", () => {
   // Parentheses can wrap the whole expression or sit inside it; `-(1)` is the
   // case no unwrapping by the caller could reach.
   assertStrictEquals(evaluateExpr("(1)"), 1);
@@ -157,7 +158,7 @@ Deno.test("numberFromExpression: sees through parentheses", () => {
   );
 });
 
-Deno.test("numberFromExpression: sees through type-only wrappers", () => {
+test("numberFromExpression: sees through type-only wrappers", () => {
   // `as`, `satisfies` and the angle-bracket assertion change no value. They are
   // transparent at the caller's outermost level already; these are the nested
   // positions only this function can reach.
@@ -171,7 +172,7 @@ Deno.test("numberFromExpression: sees through type-only wrappers", () => {
   assertStrictEquals(evaluateExpr("-(Infinity as number)"), -Infinity);
 });
 
-Deno.test("numberFromExpression: declines non-numeric expressions", () => {
+test("numberFromExpression: declines non-numeric expressions", () => {
   assertStrictEquals(evaluateExpr(`"5"`), undefined);
   assertStrictEquals(evaluateExpr("true"), undefined);
   assertStrictEquals(evaluateExpr("null"), undefined);
@@ -180,7 +181,7 @@ Deno.test("numberFromExpression: declines non-numeric expressions", () => {
   assertStrictEquals(evaluateExpr("f()"), undefined);
 });
 
-Deno.test("numberFromExpression: declines non-sign prefix operators", () => {
+test("numberFromExpression: declines non-sign prefix operators", () => {
   assertStrictEquals(evaluateExpr("~5"), undefined);
   assertStrictEquals(evaluateExpr("!5"), undefined);
   assertStrictEquals(evaluateExpr(`-"5"`), undefined);

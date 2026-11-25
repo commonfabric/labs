@@ -14,10 +14,10 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import type { FabricValue } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { MultiRuntimeHarness } from "./multi-runtime-harness.ts";
 
 const PROGRAM_PATH = join(

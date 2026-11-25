@@ -1,0 +1,47 @@
+# Copyright 2019 The gVisor Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Ensure a strong hash function.
+startup --host_jvm_args=-Dbazel.DigestFunction=SHA256
+
+# Build with C++17.
+# com_google_protobuf is compiled with a few warnings.
+build --cxxopt=-std=c++17 --cxxopt=-Wno-error=maybe-uninitialized
+build --host_cxxopt=-std=c++17 --host_cxxopt=-Wno-error=maybe-uninitialized
+
+# Display the current git revision in the info block.
+build --stamp --workspace_status_command tools/workspace_status.sh
+
+build:race --@io_bazel_rules_go//go/config:race --@io_bazel_rules_go//go/config:pure=false
+test:race --@io_bazel_rules_go//go/config:race --@io_bazel_rules_go//go/config:pure=false
+
+build --@io_bazel_rules_go//go/config:pure
+test --@io_bazel_rules_go//go/config:pure
+
+# Set bazel_rule as non-pure when cgo is used.
+build:plugin-tldk --@io_bazel_rules_go//go/config:pure=false --define=plugin_tldk=true --define=network_plugins=true
+
+# By default, exclude nogo targets from building. They will still be included
+# by default for all tests.
+build --build_tag_filters=-nogo
+
+# Set flags for x86_64.
+build:x86_64 --crosstool_top=@crosstool//:toolchains
+build:x86_64 --cpu=k8
+build:x86_64 --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64
+
+# Set flags for aarch64.
+build:aarch64 --crosstool_top=@crosstool//:toolchains
+build:aarch64 --cpu=aarch64
+build:aarch64 --platforms=@io_bazel_rules_go//go/toolchain:linux_arm64

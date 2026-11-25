@@ -10,12 +10,12 @@
  * are different promises.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@";
 import { BaseFabricCodec, type LiveEnvironment } from "@/codec-common";
 import { FabricEpochDay } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Minimal concrete `BaseFabricCodec` for exercising the base class's own

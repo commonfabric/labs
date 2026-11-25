@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -9,6 +8,7 @@ import {
   taggedHashStringOf,
 } from "@";
 import { ValueHasher } from "@/value-hash/ValueHasher.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("value-hash/impl", () => {
   describe("hashOf()", () => {

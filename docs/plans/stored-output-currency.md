@@ -2,7 +2,8 @@
 
 Status: In progress. Stages 1 to 5 are built, with the index kept per viewer
 slice, and a toolshed runs `skip` unless `SERVER_EXECUTION_CURRENCY_INDEX`
-says otherwise. Stage 3 measured a
+says otherwise; stage 5 runs only under `start-upstream` and `record`
+("The modes", below). Stage 3 measured a
 synthetic Topics board and a counter in the browser
 ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md));
 a deployed space and the production board are not measured, and stage 5 is
@@ -35,6 +36,46 @@ The rule throughout: a start that was not needed is acceptable, and a stored
 value served as current when it is not is the failure to design out. Every
 case the record cannot decide starts the piece, as today.
 
+The rule has one exception, a document the index cannot account for. A
+document is either kept up to date by the recorded pieces that write it,
+or written by something no record names: a computation of a piece with no
+record, one that writes outside its declared surface, a setup run, a
+handler. A slice that read a document of the second kind treats it as an
+input. Its readers are marked when it changes, through their read rows, and
+not because its writer might run again: a reader may serve what it derived
+from such a document while the document's writer has not run since an
+input of that writer changed, and that is accepted, in preference to
+starting pieces to catch it ("Known limits"). One case of it is still held
+stale, so that a reader does not pass on what a piece's setup left before
+the piece ran: a cell of a piece the index holds no record of.
+
+## The modes
+
+`SERVER_EXECUTION_CURRENCY_INDEX` on a toolshed, or
+`SpaceServerPolicy.currencyIndex`, selects what a serving loop does with the
+index. The names are `CURRENCY_INDEX_MODES` in
+`runtime/runner/src/executor/store-currency.ts`, and a toolshed's default is
+`DEFAULT_CURRENCY_INDEX` in `runtime/toolshed/lib/server-execution.ts`.
+
+- `off`: no index. Every demanded piece starts.
+- `record`: the loop records and judges, and starts every demanded piece
+  ("Checking it before relying on it").
+- `skip`, a toolshed's default: the loop leaves unstarted a root the record
+  proves current ("What the demand pass does with it"), does nothing else
+  on a judgment, and carries no demand, into another space or its own. This
+  answers the first of the two problems above and not the second.
+- `start-upstream`: a root the record proves current is left unstarted, as
+  under `skip`. Where a root is stale only through what is upstream of it,
+  the loop leaves it unloaded and starts the pieces upstream, and it does
+  the same for a running piece that is stale that way ("Starting what is
+  stale upstream"). This answers the second problem too.
+
+The two levels differ in the upstream starts and in the demand the loop
+carries, so a deployment can run `skip` without either. Under `skip` a root that is stale only upstream
+is treated as a root the judgment refuses: its piece starts, and derives
+from what the store holds of the pieces upstream, as a loop with no index
+derives it. "Known limits" says what that leaves.
+
 ## The design
 
 ### What is recorded
@@ -57,7 +98,7 @@ The index holds identifiers and sequence numbers, and for a slice that read
 a clock the time it expires at, overwritten in place. The slice leads every
 key, so reading one viewer's slices reads no other viewer's rows:
 
-- **The slice**: a mark, and the epoch of the build that recorded it. Every
+- **The slice**: a mark, and the epoch it was recorded under. Every
   recorded piece has a `space` slice.
 - **What a slice read**: one row per document instance, `(input space, input
   id, scope key)`, with the sequence number the slice saw that instance at. A
@@ -85,11 +126,33 @@ The write rows are what let a mark travel through a document no session
 demands: they say which pieces a stale piece makes stale, and which absent
 document a piece would write.
 
-A record replaces the slices it names and the piece's write rows, and leaves
-every other slice of the piece as it is. A serving runtime holds the runs of
-the viewers demanding the piece now, so a record taken while one viewer is
-present names the `space` slice and that viewer's, and another viewer's
-slices keep what their last visit recorded.
+A record names the slices a live computation of the piece ran at when it was
+taken. It replaces those slices and the piece's write rows, and leaves every
+other viewer's slice of the piece as it is. A serving runtime holds the runs
+of the viewers demanding the piece now, so a record taken while one viewer is
+present names that viewer's slice, and the `space` slice where a computation
+every viewer shares is live, and another viewer's slices keep what their last
+visit recorded.
+
+A record that names no `space` slice is one taken while no live computation
+ran at the space's key. A runtime takes such a record of a piece it holds and
+does not run. An enclosing piece's start instantiates every piece beneath
+it, and the computations of one of those are live only while a session
+demands what they write or a live computation reads it: a viewer of the
+enclosing piece who demands nothing of the inner one leaves it without one,
+and so does a viewer who left before the loop reached it. The record has
+nothing to put in the slice's place, so:
+
+- a `space` slice that is clean and of the recording epoch is left as it is,
+  where the record is vouched for. Its rows are the ones a clean run left,
+  and a change to an instance it read or vouches for marks it from then on
+  as it marks the slice of a viewer who is away, so keeping it makes nothing
+  servable that the rows do not prove;
+- any other `space` slice is replaced by one that read nothing and vouches
+  for nothing, and a piece with no record is given such a slice. A slice
+  that is marked or of another epoch passes no judgment, and left in place
+  it would stay so, with its piece started on each demand, for as long as no
+  session demands what its computations wrote.
 
 ### When a record is taken
 
@@ -231,10 +294,16 @@ inputs is stale, and `0` otherwise. An input is stale when:
 
 - a slice that decides it is marked, a broader slice of the same piece
   included;
-- it is a derived document no recorded piece writes. A document whose only
-  writer names no piece, and which the slice answers for, is not one of
-  these: the slice took over what that writer read, and records the
-  document as an input;
+- it is a derived document no recorded piece writes that no computation
+  may have produced yet: the store holds no instance of it, or it is a cell
+  of a piece the index holds no record of, by the `result` back-link its
+  piece's setup writes. Setup writes a piece's cells before its
+  computations run, a default into some, and only the piece's record,
+  whose write rows name the cells its computations write, tells those from
+  the rest. Any other derived document no recorded piece writes is an input
+  like any other, and marks its readers when it changes. A
+  document whose only writer names no piece, and which the slice answers
+  for, is an input too: the slice took over what that writer read;
 - a recorded piece computes it and no piece vouches for the instance read. A
   record taken while a computation was not running drops its vouches, and
   marks `1` each clean slice that read one of those instances. A viewer's
@@ -260,8 +329,39 @@ it, and a load of that root starts the piece its `result` back-links lead to.
 The judgment follows the same links to the piece, and reads a computed
 document as the one piece the index records as writing it where there is
 one. A computed document is judged at any scope, so a viewer's own instance
-of one can pass, and a root that passes is left unstarted under `skip` as
-below. The store can serve a root when:
+of one can pass, and a root that passes is left unstarted under `skip` and
+`start-upstream` as below.
+
+A space-scoped root that is no `computed:` document, and whose stored
+document is absent or carries neither a `result` field nor a pattern
+pointer, is one a load starts no piece from: the load reads that document,
+finds no back-link to follow and no pattern pointer, and parks the root
+watching the document. The elements and views a list renders are such
+documents. The judgment tests the pattern pointer with the function the
+load tests it with (`asPatternIdentityRef()`), and returns such a root as
+**plain**, whatever writes it. Under `skip` and `start-upstream` the loop
+parks a plain root as that load would, without the load: terminal, watching
+the document, so that a commit to it, one that gives it a back-link or a
+pattern pointer among them, brings the load. The pass still syncs the
+document into the serving replica with the roots it loads, as the load's
+first step would, since a read on the serving runtime that does not sync
+finds only what the replica holds; a root whose sync fails is loaded in the
+same pass. A commit admitted while the
+judgment ran leaves it to be loaded at once. Under `record` it is loaded.
+`currency.plainRoots` counts such roots under every mode. A root demanded
+at a scope narrower than the space is not judged so and is loaded, since its
+load reads the instance at that scope before the space's.
+
+Since no load of a plain root starts a piece, whether its stored value is
+current changes nothing the loop does for it, and the judgment does not
+ask. A document a recorded piece maintains is brought up to date when that
+piece runs. One written by something the index cannot account for, such as
+a client or a lift's write through `Writable.for(...).set()`, is read as the
+store holds it until its writer runs for some other reason: that staleness
+is accepted in preference to the work of finding and starting a writer for
+each such document.
+
+The store can serve a root when:
 
 - the piece's `space` slice is clean and was recorded under the current
   epoch;
@@ -310,7 +410,10 @@ fails the second condition, so the piece starts and seeds it.
 A root that is stale only through what is upstream of it is not made current
 by starting its piece, which would derive from what the store holds. The
 judgment tells such a root from one whose own piece is behind, and names what
-to start for it.
+to start for it. The judgment is the same in every mode. What this section
+says the loop does with it holds under `start-upstream`, and under `record`
+for a piece that runs; "Under `skip`", at the end of the section, says what
+a `skip` loop does instead.
 
 A slice marked `1` is stale only upstream when each read that keeps it stale
 is of an instance another recorded piece is to bring up to date. That is an
@@ -318,17 +421,19 @@ instance a piece behind on its own rows decides, reached through any number of
 slices marked `1` between, or an instance a recorded piece writes and none
 vouches for, as a viewer's own instance is before that piece has run for the
 viewer. A slice kept stale by anything else is not: a derived document no
-recorded piece writes, an instance of another space, a read that names no one
+recorded piece writes and no computation may have produced, an instance of
+another space, a read that names no one
 instance, or an instance of a piece whose record was stored not vouched for.
 That last piece has run and been recorded, and a further run is recorded the
 same way, so starting it clears nothing; the index keeps, for each slice,
 whether its record was stored not vouched for. A root that would pass but for slices stale only upstream is
 **held**, whether those are slices of its own piece or of a piece beneath it
 that a demanded instance is resolved under, and the judgment names the pieces
-whose slices hold it. Under `skip` it is left unloaded, as a root the store
-can serve is, and is judged again when a slice's record expires as such a
-root is, as is a piece that runs and is stale upstream. Under `record` it is loaded, and each of those pieces is then one
-that runs and is stale upstream.
+whose slices hold it. Under `start-upstream` it is left unloaded, as a root
+the store can serve is, and is judged again when a slice's record expires as
+such a root is, as is a piece that runs and is stale upstream. Under `record`
+it is loaded, and each of those pieces is then one that runs and is stale
+upstream.
 
 The loop demands the instances those reads name, for the pairs the reads were
 made for. It does so as demand carried into its own space: the rows stand in
@@ -385,6 +490,22 @@ started this way stays running and is no longer demanded for the reader's
 viewers. The next change upstream of it is found through the index again,
 which takes a cycle or two in which the watermark can pass the change before
 the reader is found stale.
+
+**Under `skip`.** The loop takes none of the reads a judgment names. A held
+root is loaded and its piece started, as a root the judgment refuses is, and
+`currency.refused` counts it under `stale-upstream`, a reason of the loop's
+own that the memory server's judgment does not return. No instance is
+demanded for it, so no piece upstream starts on its account, the watermark
+is not held, and nothing is waited on or given up on:
+`currency.heldUpstream` and `currency.upstreamAbandoned` stay zero. A piece
+that runs and is found stale upstream is left as it is, and the loop does
+not advance the cursor on its account. In the chain A, B, C, a demand for C after a
+change to A's input starts C alone, and C's session reads what C derives
+from the `b` the store holds. The record of C that follows is stored marked
+`1`, since its input is still stale, so the store serves no root that rests
+on it, and the next cold demand for C starts it again. A root is left
+unstarted on the same judgment in both modes: `skip` changes only what the
+loop does with a root the judgment does not pass.
 
 ### An instance a run at another key decides
 
@@ -504,18 +625,25 @@ against the session's slice. And a slot rewritten by a run for a viewer the
 recording runtime holds no run for is checked against no slice, since a
 record names only the slices of the runs the runtime holds.
 
-`skip` acts on the
-judgment, and only under an epoch: a record is trusted across builds only by
-the epoch it names, so a serving loop asked to skip with no epoch named runs
-as `record` and logs a warning. A toolshed's epoch is
-`SERVER_EXECUTION_CURRENCY_EPOCH`, or else the commit baked into a compiled
-binary, or else one made up for the process, since a source run's checkout
-can change under the commit it names.
+`skip` and `start-upstream` act on the
+judgment, under the loop's epoch: a record of another epoch refuses its
+root, so its piece starts. A toolshed's epoch is
+`SERVER_EXECUTION_CURRENCY_EPOCH`, or else the default epoch
+(`DEFAULT_CURRENCY_EPOCH` in `runtime/runner/src/executor/space-server.ts`),
+which a serving loop whose policy names no epoch takes too. The default is
+one fixed value that no build and no process decides, so a deployment trusts
+the records its earlier builds stored, and a toolshed run from source trusts
+those of its earlier runs. Setting the variable to a value no record carries
+is how an operator stops trusting every record stored so far: each piece
+then starts on its next demand and is recorded under the new epoch.
 
 A toolshed runs `skip` by default. `falseClean` is still counted there, for
 each piece that does start, and `SERVER_EXECUTION_CURRENCY_INDEX=record` on a
 deployment starts every piece and counts every judgment that would have been
-wrong.
+wrong. `record` starts what is upstream of a running piece that is stale, as
+`start-upstream` does, so its counts are of that level and not of `skip`.
+Under `skip`, `currency.refused["stale-upstream"]` counts the roots
+`start-upstream` would have held.
 
 ## What changes in the specifications
 
@@ -535,11 +663,77 @@ wrong.
 
 ## Known limits
 
+- **A document no record accounts for is read as an input.** A derived
+  document no recorded piece writes is current for its readers until it
+  changes, unless the store holds no instance of it or it is a cell of a
+  piece the index holds no record of, both of which stay stale ("How a mark
+  is cleared"). Where its writer, a computation writing outside its
+  declared surface or a handler, would write another value after inputs
+  changed while it did not run, its readers serve what they derived from
+  the value the store holds, until that writer runs for another reason and
+  writes.
+- **`skip` starts nothing upstream of a stale piece.** Under the default
+  mode a piece that is stale only through a piece upstream of it, in its own
+  space, derives from what the store holds of that piece, and its session
+  reads the result with the watermark past the change: the second problem
+  this plan opens with stands as it does with no index. A stored value is
+  not served as current on that account, since the piece starts and its
+  record stays marked. `start-upstream` lifts the limit. `skip` carries no
+  demand either, so two more things stand as they do with no index. A
+  started piece's reads in another space demand nothing there
+  ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)):
+  the piece that writes what was read starts only for a demand of its own,
+  and the reading piece derives from what that store holds, which the
+  reading space's judgment then holds stale. And a run withdrawn for a
+  scoped instance its writer has not produced for the run's viewer demands
+  nothing: the writer produces the instance only for a demand of its own,
+  and until it does, the run stays withdrawn and the viewer reads what the
+  store holds of the run's output.
+- **Under `start-upstream`, a running piece that is refused for good is
+  judged and given up on repeatedly.** When every record of a running piece
+  leaves it stale and no piece upstream can clear it, the loop judges it and
+  gives up on what is upstream of it, and does so again at each later
+  round. Nothing in the tree is known to cause it. `skip` arms none of that.
+- **A record outlives the build that stored it.** The default epoch is the
+  same for every build, and nothing else in the index says which build
+  stored a record. Three things a build can change therefore do not reach a
+  recorded piece until one of its inputs changes or the operator names a
+  new epoch. The first is what an unchanged pattern computes from unchanged
+  inputs, as a fix to the runtime, to a builtin or to the compiler changes
+  it: the stored outputs stay judged current, and they are what a client
+  reads. The second is what a record holds, as a fix to the recording
+  changes it: a record stored with a read or a vouch row wrong stays
+  trusted as it is. The third is what a row means. The index carries no
+  version, and a store's records are dropped when it is opened only where
+  the tables' shapes show an earlier layout
+  (`dropUnslicedCurrencyTables()` and `dropCurrencyRecordsBeforeDecides()`
+  in `runtime/memory/v2/engine.ts`). A build that changes what a row means
+  and keeps the tables' shapes would read the rows of earlier builds under
+  the new meaning, so such a change drops the records at open or changes
+  the value of the default epoch. Two builds that serve one store, as
+  during a deployment, trust each other's records in the same way, and so
+  does a toolshed run from source across an edit to the runtime. Under
+  `record`, a piece whose stored output the running build computes
+  otherwise is counted in `currency.falseClean` when the record of the
+  cycle that started it is stored.
 - **A piece is recorded only after a cycle that ran it settled.** A piece
-  served before the index was on starts on its first demand.
+  served before the index was on starts on its first demand. A cycle does
+  not settle while the pass that loads the demanded roots is under way, so a
+  space whose every root is loaded at once has nothing recorded until that
+  pass ends, and a tenure that parks before then, as one does when its last
+  session leaves, has recorded nothing.
+- **A piece beneath a started one runs, whether or not its own root is left
+  unstarted.** An enclosing piece's start instantiates the pieces beneath
+  it, and the writer of an instance a session demands is live from the
+  moment it is registered, so it runs. Leaving such a root unloaded saves
+  its structure load alone: where a board's own piece starts, every demanded
+  computation of the pieces it lists runs again, and `servedFromStore`
+  counts the roots that were not loaded, not the pieces that did not run.
 - **A slice is marked whole.** A computation that is not live when a record
   is taken contributes no reads and no vouch, so an undemanded part of a
-  piece does not keep it marked. A computation that was live then, and that
+  piece does not keep it marked. Where that leaves a live computation at the
+  slice's key, the record drops what the other one vouched for, and a later
+  demand for it starts the piece. A computation that was live then, and that
   no session demands since, still has its reads in its slice: a change to
   one of them marks the slice, whose viewers start the piece once on their
   next cold demand, and the record that start leaves no longer holds them.
@@ -553,13 +747,24 @@ wrong.
 - **A piece whose result document each viewer holds an instance of, one of
   which records a source origin, always starts.** An origin is followed
   through one result document.
+- **A document a load starts no piece from is brought up to date only by
+  a start of its writer or of a piece that encloses its writer.** Its root
+  is plain and parked, and nothing starts the writer for it. Where the
+  writer's own result is demanded, or the writer is beneath a demanded
+  root, as each row of a board is beneath the board, a change to the
+  writer's inputs refuses that root and its start runs the writer. Where
+  neither is demanded, a client reads what the store holds of the document,
+  with the index or without it.
 - **A piece with no computation of its own has no record.** A pattern that
   only instantiates others registers no computation under its own result
   document, so no snapshot is taken of it, and a root that leads to it is
   loaded.
 - **A write a computation makes outside its declared surface is not in the
   write rows.** A document written that way reads as an input nothing
-  computes.
+  computes. The documents a lift writes through `Writable.for(...).set()`,
+  one for each element of the list it returns, are written that way, and a
+  root that names one is plain. The run's own writes cannot supply the rows, since a run that computes
+  what a document already holds writes nothing to it.
   [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
   under "Computations that run without demand", is the plan for it and for
   a materializer's envelope.
@@ -607,7 +812,8 @@ wrong.
 4. **Not starting a current piece.** `skip` mode: the demand pass leaves a
    servable root unloaded, re-judges it, and re-arms it when it is marked.
 5. **Starting stale producers.** Built, as "Starting what is stale upstream"
-   says: a judgment holds a root that is stale only upstream and names the
+   says, and run under `start-upstream`, which no deployment runs by
+   default: a judgment holds a root that is stale only upstream and names the
    instances to demand, and the loop demands them in its own space the way
    it carries demand into another
    ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
@@ -678,7 +884,7 @@ write:
 For stage 5, all of which exist in
 `runtime/runner/test/executor/space-server-currency-upstream.test.ts`, over
 a chain in which A derives `a` from an input, B derives `b` from `a`, and C
-derives `c` from `b`:
+derives `c` from `b`. Tests 17 and 18 run under `start-upstream`:
 
 17. With all three recorded and none running, a change to A's input
     followed by a demand for C alone starts A and B, and C's session reads
@@ -687,11 +893,19 @@ derives `c` from `b`:
 18. In that case, when A's recomputation leaves `a` equal, neither B nor C
     is started, and all three are left clean.
 
-The same file holds three cases beside them. The watermark does not reach
+The same file holds three cases beside them under `start-upstream` or
+`record`. The watermark does not reach
 a change to A's input before the store holds what C derives from it. A C
 that runs already, under `record`, is brought the new value. And a viewer B
 never ran for, who demands C alone with nothing changed, has B started for
 them.
+
+It holds two cases under `skip`. A change to A's input followed by a demand
+for C alone starts C and neither A nor B: C's session reads the value
+derived from the `b` the store holds, the watermark passes the change, the
+root is counted under `stale-upstream`, C is recorded marked `1`, and
+`heldUpstream`, `upstreamAbandoned` and the carried rows stay zero. And a
+further change to A's input while C runs starts neither A nor B.
 
 For slices, in the index tests and in `space-server-currency.test.ts`, all
 of which exist:
@@ -699,7 +913,10 @@ of which exist:
 19. A change to one viewer's instance marks the slices that read it and no
     other viewer's, and a change to a shared instance marks every slice that
     read it.
-20. A record leaves a slice it does not name with its rows and its mark.
+20. A record leaves a viewer's slice it does not name with its rows and its
+    mark. One that names no `space` slice leaves a clean `space` slice of its
+    epoch with its rows, and replaces a marked one, or one of another epoch,
+    with a slice that read nothing.
 21. A root is judged servable for a viewer whose slices are clean while
     another viewer's slice is marked, and refused for that other viewer.
 22. A piece recorded for one viewer, then started and recorded for a second,
@@ -717,6 +934,22 @@ of which exist:
     piece is left unstarted within the interval and started once it has
     passed, for a session that runs nothing itself
     (`space-server-currency-wish.test.ts`).
+27. A snapshot names the slices a live computation ran at, and none for a
+    piece whose computations are registered and not live
+    (`runtime/runner/test/scheduler/piece-currency.test.ts`).
+28. A piece that an enclosing piece's start instantiates for a viewer who
+    demands nothing of it keeps its record, and the store can still serve
+    its root to the viewer it was recorded for.
+29. A root that is no `computed:` document and whose stored document is
+    absent or carries neither a `result` field nor a pattern pointer is
+    returned as plain, whether nothing derives it, a serving loop's
+    derivation wrote it, or one recorded piece writes it, marked or not; a
+    `computed:` root never is (`runtime/memory/test/v2-server-currency.test.ts`).
+    Under `skip` the loop parks a plain root unloaded, including an element
+    a lift writes whose recorded writer is marked and a document the space
+    holds no instance of; loads it once a client commits to it, and at once
+    where that commit was admitted while the judgment ran; and loads a root
+    demanded at a narrower scope (`space-server-currency.test.ts`).
 
 ## Related
 

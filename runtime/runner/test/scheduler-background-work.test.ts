@@ -10,10 +10,10 @@
  * is what tracking such work as a background task fixes.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 
 const signer = await Identity.fromPassphrase("scheduler background work");

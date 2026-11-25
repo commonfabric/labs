@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   applyPullExecuteContinuation,
   type ExecuteContinuationState,
 } from "../../src/scheduler/continuation.ts";
 import type { QueuedEvent } from "../../src/scheduler/types.ts";
 import type { PullSchedulingState } from "../../src/scheduler/work-oracle.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("continuation", () => {
   it("takes the rerun a pass that deferred to a parked head was asked for, and starts no pass of its own", () => {

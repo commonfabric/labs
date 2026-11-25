@@ -14,8 +14,10 @@ import { type GitHubCredential, staticGitHubCredential } from "./github-auth.ts"
 import {
   friendlyError,
   github,
+  GitHubAnswers,
   githubDownload,
   githubOperationsInProgress,
+  githubPage,
   GitHubStatusError,
   inParallel,
   memo,
@@ -24,6 +26,7 @@ import {
   runArtifactId,
 } from "./lib.ts";
 import { performanceGitHubRateLimit } from "./github-rate-limit.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // Run `fn` with fetch replaced by `stub`, handing `fn` the calls made so far.
 async function withFetch(
@@ -75,7 +78,7 @@ async function withTokens(env: Record<string, string>, fn: () => Promise<void>) 
 
 const auth = (c: { init: RequestInit }) => (c.init.headers as Record<string, string>).authorization;
 
-Deno.test("github: no token -> a 'set GH_TOKEN' error, and no request is attempted", async () => {
+test("github: no token -> a 'set GH_TOKEN' error, and no request is attempted", async () => {
   await withTokens({}, async () => {
     await withFetch(() => Response.json({}), async (calls) => {
       const e = await assertRejects(() => github("repos/o/r"), Error);
@@ -92,7 +95,7 @@ Deno.test("github: no token -> a 'set GH_TOKEN' error, and no request is attempt
   });
 });
 
-Deno.test("github: a workflow run list asked for without run list access is refused before any request", async () => {
+test("github: a workflow run list asked for without run list access is refused before any request", async () => {
   const credential = staticGitHubCredential("t");
   await withFetch(() => Response.json({ workflow_runs: [] }), async (calls) => {
     for (
@@ -126,7 +129,7 @@ Deno.test("github: a workflow run list asked for without run list access is refu
   });
 });
 
-Deno.test("github: non-OK -> throws with the status; the error body is not returned as data", async () => {
+test("github: non-OK -> throws with the status; the error body is not returned as data", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     await withFetch(() => Response.json({ message: "Not Found" }, { status: 404 }), async () => {
       const e = await assertRejects(() => github("repos/o/missing"), Error);
@@ -159,7 +162,7 @@ Deno.test("github: non-OK -> throws with the status; the error body is not retur
   });
 });
 
-Deno.test("github: an HTTP failure logs the endpoint and GitHub response context", async () => {
+test("github: an HTTP failure logs the endpoint and GitHub response context", async () => {
   await withTokens({ GH_TOKEN: "secret-token" }, async () => {
     await captureConsole("error", async (messages) => {
       await withFetch(
@@ -194,7 +197,7 @@ Deno.test("github: an HTTP failure logs the endpoint and GitHub response context
   });
 });
 
-Deno.test("github: response header details are bounded and single-line", async () => {
+test("github: response header details are bounded and single-line", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     await captureConsole("error", async (messages) => {
       const unsafe = `request-\x1b[31m${"x".repeat(500)}`;
@@ -218,7 +221,7 @@ Deno.test("github: response header details are bounded and single-line", async (
   });
 });
 
-Deno.test("github: a request failure logs its endpoint, stage, and elapsed time", async () => {
+test("github: a request failure logs its endpoint, stage, and elapsed time", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     await captureConsole("error", async (messages) => {
       await withFetch(
@@ -236,7 +239,7 @@ Deno.test("github: a request failure logs its endpoint, stage, and elapsed time"
   });
 });
 
-Deno.test("github: request failure details are bounded and single-line", async () => {
+test("github: request failure details are bounded and single-line", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     await captureConsole("error", async (messages) => {
       const unsafe = `connection\nclosed\x1b[31m${"x".repeat(500)}`;
@@ -256,7 +259,7 @@ Deno.test("github: request failure details are bounded and single-line", async (
   });
 });
 
-Deno.test("github: unreadable JSON logs the endpoint and response context", async () => {
+test("github: unreadable JSON logs the endpoint and response context", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     await captureConsole("error", async (messages) => {
       await withFetch(
@@ -276,7 +279,7 @@ Deno.test("github: unreadable JSON logs the endpoint and response context", asyn
   });
 });
 
-Deno.test("github: a failed error body preserves the known HTTP failure", async () => {
+test("github: a failed error body preserves the known HTTP failure", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     await captureConsole("error", async (messages) => {
       await withFetch(
@@ -309,7 +312,7 @@ Deno.test("github: a failed error body preserves the known HTTP failure", async 
   });
 });
 
-Deno.test("github: a large error keeps a bounded prefix and cancels the body", async () => {
+test("github: a large error keeps a bounded prefix and cancels the body", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     await captureConsole("error", async (messages) => {
       let sent = false;
@@ -343,7 +346,7 @@ Deno.test("github: a large error keeps a bounded prefix and cancels the body", a
   });
 });
 
-Deno.test("github: error response reader setup and cancellation failures are logged", async () => {
+test("github: error response reader setup and cancellation failures are logged", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     await captureConsole("error", async (messages) => {
       const unreadable = {
@@ -393,7 +396,7 @@ Deno.test("github: error response reader setup and cancellation failures are log
   });
 });
 
-Deno.test("github: an ignored status does not hide transport failures", async () => {
+test("github: an ignored status does not hide transport failures", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     await captureConsole("error", async (messages) => {
       await withFetch(
@@ -449,7 +452,7 @@ Deno.test("github: an ignored status does not hide transport failures", async ()
   });
 });
 
-Deno.test("github: an in-progress request reports what it is waiting on", async () => {
+test("github: an in-progress request reports what it is waiting on", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     let requestStarted = () => {};
     const started = new Promise<void>((resolve) => requestStarted = resolve);
@@ -476,7 +479,7 @@ Deno.test("github: an in-progress request reports what it is waiting on", async 
   });
 });
 
-Deno.test("github: JSON stays active while its response body is read", async () => {
+test("github: JSON stays active while its response body is read", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
     let bodyRead = () => {};
@@ -509,7 +512,7 @@ Deno.test("github: JSON stays active while its response body is read", async () 
   });
 });
 
-Deno.test("github: a download stays active while its response body is read", async () => {
+test("github: a download stays active while its response body is read", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
     let bodyRead = () => {};
@@ -544,7 +547,7 @@ Deno.test("github: a download stays active while its response body is read", asy
   });
 });
 
-Deno.test("github: an abandoned download has already completed its body", async () => {
+test("github: an abandoned download has already completed its body", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     const response = new Response("archive");
     await withFetch(
@@ -558,7 +561,7 @@ Deno.test("github: an abandoned download has already completed its body", async 
   });
 });
 
-Deno.test("github: a failed download cancels its body and logs response context", async () => {
+test("github: a failed download cancels its body and logs response context", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     await captureConsole("error", async (messages) => {
       const response = Response.json(
@@ -592,7 +595,7 @@ Deno.test("github: a failed download cancels its body and logs response context"
   });
 });
 
-Deno.test("github: a failed download does not wait for body cleanup", async () => {
+test("github: a failed download does not wait for body cleanup", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     await captureConsole("error", async (messages) => {
       let cancelled = false;
@@ -624,7 +627,7 @@ Deno.test("github: a failed download does not wait for body cleanup", async () =
   });
 });
 
-Deno.test("github: download response edge cases finish or log their operation", async () => {
+test("github: download response edge cases finish or log their operation", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     await captureConsole("error", async (messages) => {
       await withFetch(
@@ -696,7 +699,7 @@ Deno.test("github: download response edge cases finish or log their operation", 
   });
 });
 
-Deno.test("github: performance reservation completion failures are logged", async () => {
+test("github: performance reservation completion failures are logged", async () => {
   const originalReserve = performanceGitHubRateLimit.reserve;
   performanceGitHubRateLimit.reserve = () =>
     Promise.resolve({
@@ -727,7 +730,7 @@ Deno.test("github: performance reservation completion failures are logged", asyn
   }
 });
 
-Deno.test("github: an ignored download status does not hide cleanup or transport failures", async () => {
+test("github: an ignored download status does not hide cleanup or transport failures", async () => {
   await withTokens({ GH_TOKEN: "t" }, async () => {
     await captureConsole("error", async (messages) => {
       const response = new Response("missing", { status: 404 });
@@ -787,7 +790,7 @@ Deno.test("github: an ignored download status does not hide cleanup or transport
   });
 });
 
-Deno.test("github: a slow successful operation logs response context", async () => {
+test("github: a slow successful operation logs response context", async () => {
   const realNow = Date.now;
   let now = realNow();
   Date.now = () => now;
@@ -816,7 +819,7 @@ Deno.test("github: a slow successful operation logs response context", async () 
   }
 });
 
-Deno.test("github: parsed JSON from api.github.com, with the auth and version headers", async () => {
+test("github: parsed JSON from api.github.com, with the auth and version headers", async () => {
   await withTokens({ GH_TOKEN: "env-token" }, async () => {
     await withFetch(() => Response.json({ login: "octocat", id: 1 }), async (calls) => {
       const body = await github<{ login: string; id: number }>("/user");
@@ -833,7 +836,7 @@ Deno.test("github: parsed JSON from api.github.com, with the auth and version he
   });
 });
 
-Deno.test("github: an endpoint can select a newer REST API version", async () => {
+test("github: an endpoint can select a newer REST API version", async () => {
   await withTokens({ GH_TOKEN: "env-token" }, async () => {
     await withFetch(() => Response.json({}), async (calls) => {
       await github("enterprises/acme/settings/billing/usage", undefined, {
@@ -845,7 +848,7 @@ Deno.test("github: an endpoint can select a newer REST API version", async () =>
   });
 });
 
-Deno.test("github: each request carries the token its credential hands out when the request starts", async () => {
+test("github: each request carries the token its credential hands out when the request starts", async () => {
   let issued = 0;
   const refused: string[] = [];
   const credential: GitHubCredential = {
@@ -865,7 +868,7 @@ Deno.test("github: each request carries the token its credential hands out when 
   );
 });
 
-Deno.test("github: a credential whose token the rate-limit check is refused hears of it", async () => {
+test("github: a credential whose token the rate-limit check is refused hears of it", async () => {
   const refused: string[] = [];
   const credential: GitHubCredential = {
     allowance: `refused-preflight-${crypto.randomUUID()}`,
@@ -881,7 +884,7 @@ Deno.test("github: a credential whose token the rate-limit check is refused hear
   );
 });
 
-Deno.test("friendlyError: names the GitHub App variable a credential is missing", () => {
+test("friendlyError: names the GitHub App variable a credential is missing", () => {
   assertEquals(
     friendlyError("set GH_APP_PRIVATE_KEY to authenticate as the GitHub App"),
     "set GH_APP_PRIVATE_KEY",
@@ -892,7 +895,7 @@ Deno.test("friendlyError: names the GitHub App variable a credential is missing"
   );
 });
 
-Deno.test("github: an explicit token wins over the env; GITHUB_TOKEN backs up GH_TOKEN", async () => {
+test("github: an explicit token wins over the env; GITHUB_TOKEN backs up GH_TOKEN", async () => {
   await withFetch(() => Response.json({}), async (calls) => {
     await withTokens({ GH_TOKEN: "gh", GITHUB_TOKEN: "github" }, async () => {
       await github("x", staticGitHubCredential("explicit"));
@@ -905,7 +908,100 @@ Deno.test("github: an explicit token wins over the env; GITHUB_TOKEN backs up GH
   });
 });
 
-Deno.test("memo: a result is reused within the ttl, refetched past it", async () => {
+// Each conditional-request case answers its requests in turn from `replies`,
+// and reads what each request asked with `ifNoneMatch`.
+const ifNoneMatch = (call: { init: RequestInit }) => new Headers(call.init.headers).get("if-none-match");
+const replies = (...answers: Response[]) => () => answers.shift() ?? Response.json({});
+const notModified = () => new Response(null, { status: 304 });
+const tagged = (value: unknown, etag: string, link?: string) =>
+  Response.json(value, { headers: { etag, ...(link === undefined ? {} : { link }) } });
+
+test("github: a request is conditional only on an answer held for its path, and a 304 returns that answer and its next page", async () => {
+  const credential = staticGitHubCredential("t");
+  const answers = new GitHubAnswers();
+  const link = '<https://api.github.com/repos/o/r/jobs?page=2>; rel="next"';
+  await withFetch(
+    replies(tagged({ n: 1 }, '"a"', link), notModified(), tagged({ n: 2 }, '"b"'), Response.json({ n: 3 })),
+    async (calls) => {
+      const first = await githubPage("repos/o/r/jobs", credential, { answers });
+      const again = await githubPage("/repos/o/r/jobs", credential, { answers });
+      await github("repos/o/other", credential, { answers });
+      await github("repos/o/r/jobs", credential);
+
+      assertEquals(first, { value: { n: 1 }, next: "/repos/o/r/jobs?page=2" });
+      assertEquals(again, first);
+      assertEquals(calls.map(ifNoneMatch), [null, '"a"', null, null]);
+      assertEquals(answers.size, 2);
+    },
+  );
+});
+
+test("github: a 200 to a conditional request replaces the answer held", async () => {
+  const credential = staticGitHubCredential("t");
+  const answers = new GitHubAnswers();
+  await withFetch(
+    replies(tagged({ n: 1 }, '"a"'), tagged({ n: 2 }, '"b"'), notModified()),
+    async (calls) => {
+      assertEquals(await github("repos/o/r", credential, { answers }), { n: 1 });
+      assertEquals(await github("repos/o/r", credential, { answers }), { n: 2 });
+      assertEquals(await github("repos/o/r", credential, { answers }), { n: 2 });
+      assertEquals(calls.map(ifNoneMatch), [null, '"a"', '"b"']);
+    },
+  );
+});
+
+test("github: an answer without an ETag is not held", async () => {
+  const credential = staticGitHubCredential("t");
+  const answers = new GitHubAnswers();
+  await withFetch(replies(Response.json({ n: 1 }), Response.json({ n: 2 })), async (calls) => {
+    await github("repos/o/r", credential, { answers });
+    assertEquals(await github("repos/o/r", credential, { answers }), { n: 2 });
+    assertEquals(calls.map(ifNoneMatch), [null, null]);
+    assertEquals(answers.size, 0);
+  });
+});
+
+test("github: a request with a body is neither conditional nor held", async () => {
+  const credential = staticGitHubCredential("t");
+  const answers = new GitHubAnswers();
+  answers.set("graphql", '"held"', { value: { held: true }, next: undefined });
+  await withFetch(replies(tagged({ n: 1 }, '"new"')), async (calls) => {
+    assertEquals(await github("graphql", credential, { answers, body: "{}" }), { n: 1 });
+    assertEquals(calls.map(ifNoneMatch), [null]);
+    assertEquals(answers.get("graphql"), { etag: '"held"', page: { value: { held: true }, next: undefined } });
+  });
+});
+
+test("github: a 304 with no answer held fails as a 304", async () => {
+  const credential = staticGitHubCredential("t");
+  await captureConsole("error", async () => {
+    await withFetch(notModified, async () => {
+      const e = await assertRejects(() => github("repos/o/r", credential, { answers: new GitHubAnswers() }), Error);
+      assertEquals(e.message, "GitHub API repos/o/r failed: HTTP 304");
+      assert(e instanceof GitHubStatusError && e.status === 304);
+    });
+  });
+});
+
+test("GitHubAnswers: holds the most recently used, forgetting the least recently used beyond its limit", () => {
+  const answers = new GitHubAnswers(2);
+  const page = (n: number) => ({ value: n, next: undefined });
+  answers.set("a", "1", page(1));
+  answers.set("b", "2", page(2));
+  answers.set("a", "3", page(3));
+  assertEquals(answers.size, 2);
+  assertEquals(answers.get("a"), { etag: "3", page: page(3) });
+
+  answers.get("b");
+  answers.set("c", "4", page(4));
+  assertEquals(answers.size, 2);
+  assertEquals(answers.get("a"), undefined);
+  assertEquals(answers.get("b"), { etag: "2", page: page(2) });
+  assertEquals(answers.get("c"), { etag: "4", page: page(4) });
+  assertEquals(new GitHubAnswers().get("a"), undefined);
+});
+
+test("memo: a result is reused within the ttl, refetched past it", async () => {
   let n = 0;
   const get = memo(60_000, () => Promise.resolve(++n));
   assertEquals(await get(), 1);
@@ -918,7 +1014,7 @@ Deno.test("memo: a result is reused within the ttl, refetched past it", async ()
   assertEquals(await fresh(), 2);
 });
 
-Deno.test("memo: a rejection is not cached -> the next call retries", async () => {
+test("memo: a rejection is not cached -> the next call retries", async () => {
   let n = 0;
   const get = memo(60_000, () => {
     n++;
@@ -932,7 +1028,7 @@ Deno.test("memo: a rejection is not cached -> the next call retries", async () =
   assertEquals(n, 2);
 });
 
-Deno.test("memo: concurrent callers share the one in-flight call", async () => {
+test("memo: concurrent callers share the one in-flight call", async () => {
   let n = 0;
   let release: (v: string) => void = () => {};
   const get = memo(60_000, () => {
@@ -973,7 +1069,7 @@ const uploaded = (id: number, name: string, expired = false) => ({
   expired,
 });
 
-Deno.test("runArtifactId: asks the listing for the one name, and returns its id", async () => {
+test("runArtifactId: asks the listing for the one name, and returns its id", async () => {
   // The run's other jobs upload far more than a page of the listing holds, so
   // an answer covering them all would not reach the one being looked for.
   const listing = artifactListing([
@@ -994,7 +1090,7 @@ Deno.test("runArtifactId: asks the listing for the one name, and returns its id"
   assertStringIncludes(listing.paths[0], "name=perf-metrics");
 });
 
-Deno.test("runArtifactId: a run with no artifact of the name -> undefined", async () => {
+test("runArtifactId: a run with no artifact of the name -> undefined", async () => {
   const listing = artifactListing([uploaded(7, "logs")]);
   assertEquals(
     await runArtifactId({
@@ -1007,7 +1103,7 @@ Deno.test("runArtifactId: a run with no artifact of the name -> undefined", asyn
   );
 });
 
-Deno.test("runArtifactId: a re-run job's newer artifact wins over the first attempt's", async () => {
+test("runArtifactId: a re-run job's newer artifact wins over the first attempt's", async () => {
   const listing = artifactListing([
     uploaded(9, "perf-metrics"),
     uploaded(7, "perf-metrics"),
@@ -1023,7 +1119,7 @@ Deno.test("runArtifactId: a re-run job's newer artifact wins over the first atte
   );
 });
 
-Deno.test("runArtifactId: an expired artifact is passed over for an older one that is not", async () => {
+test("runArtifactId: an expired artifact is passed over for an older one that is not", async () => {
   const listing = artifactListing([
     uploaded(9, "perf-metrics", true),
     uploaded(7, "perf-metrics"),
@@ -1039,7 +1135,7 @@ Deno.test("runArtifactId: an expired artifact is passed over for an older one th
   );
 });
 
-Deno.test("runArtifactId: a listing naming no artifacts at all -> undefined", async () => {
+test("runArtifactId: a listing naming no artifacts at all -> undefined", async () => {
   const paths: string[] = [];
   const github = {
     json: <T>(path: string): Promise<T> => {
@@ -1059,7 +1155,7 @@ Deno.test("runArtifactId: a listing naming no artifacts at all -> undefined", as
   assertEquals(paths.length, 1);
 });
 
-Deno.test("inParallel: returns results in the order of the tasks, with at most the limit in flight", async () => {
+test("inParallel: returns results in the order of the tasks, with at most the limit in flight", async () => {
   let running = 0;
   let most = 0;
   const waits = [3, 1, 2, 0, 1].map((ticks, index) => async () => {
@@ -1073,7 +1169,7 @@ Deno.test("inParallel: returns results in the order of the tasks, with at most t
   assertEquals(most, 2);
 });
 
-Deno.test("inParallel: starts no task after one rejects, and rejects with its error", async () => {
+test("inParallel: starts no task after one rejects, and rejects with its error", async () => {
   const started: number[] = [];
   const tasks = [0, 1, 2, 3].map((index) => async () => {
     started.push(index);

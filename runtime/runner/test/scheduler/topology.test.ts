@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { NodeRegistry } from "../../src/scheduler/node-record.ts";
 import { topologicalSort } from "../../src/scheduler/topology.ts";
 import type { Action } from "../../src/scheduler/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A registry that counts how often the sort reads an action's parent, which

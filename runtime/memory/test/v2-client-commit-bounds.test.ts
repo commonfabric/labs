@@ -1,13 +1,24 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { type ClientCommit, decodeMemoryBoundary } from "../v2.ts";
+import type { FabricValue } from "@commonfabric/api";
+
+import {
+  type ClientCommit,
+  decodeMemoryBoundary,
+  MAX_UNTRUSTED_MESSAGE_SLOTS,
+} from "../v2.ts";
 import { connect, loopback, type Transport } from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-client-commit-bounds";
 
@@ -88,5 +99,78 @@ describe("SpaceSession", () => {
         await client.close();
       }
     });
+
+    for (
+      const [name, untrustedMessageSlots, sent] of [
+        ["the default slot limit", undefined, false],
+        ["a slot limit it raised", MAX_UNTRUSTED_MESSAGE_SLOTS * 2, true],
+      ] as const
+    ) {
+      it(
+        `${
+          sent ? "sends" : "does not send"
+        } a commit past the default slot limit to a server holding clients to ${name}`,
+        async () => {
+          const held = new Server({
+            ...testSessionOpenServerOptions,
+            store: new URL(
+              `memory://client-commit-bounds-${crypto.randomUUID()}`,
+            ),
+            subscriptionRefreshDelayMs: 0,
+            ...(untrustedMessageSlots === undefined
+              ? {}
+              : { untrustedMessageSlots }),
+          });
+          const inner = loopback(held);
+          let transacts = 0;
+          const client = await connect({
+            transport: {
+              ...inner,
+              send: (payload: string) => {
+                if (payload.includes('"transact"')) transacts++;
+                return inner.send(payload);
+              },
+              close: () => inner.close(),
+              setReceiver: (receiver: (payload: string) => void) =>
+                inner.setReceiver(receiver),
+            },
+          });
+          try {
+            const session = await client.mount(
+              SPACE,
+              {},
+              testSessionOpenAuthFactory,
+            );
+            // One value more than the default limit, written out.
+            const items: FabricValue[] = new Array(MAX_UNTRUSTED_MESSAGE_SLOTS)
+              .fill(0);
+            const commit: ClientCommit = {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: "of:wide",
+                value: { value: items },
+              }],
+            };
+
+            if (sent) {
+              await session.transact(commit);
+              const stored = (await held.readDocument(SPACE, "of:wide"))
+                ?.value as FabricValue[] | undefined;
+              expect(stored?.length).toBe(MAX_UNTRUSTED_MESSAGE_SLOTS);
+            } else {
+              await expect(session.transact(commit)).rejects.toMatchObject({
+                name: "MessageTooLargeError",
+              });
+            }
+            expect(transacts).toBe(sent ? 1 : 0);
+          } finally {
+            await client.close();
+            await held.close();
+          }
+        },
+      );
+    }
   });
 });

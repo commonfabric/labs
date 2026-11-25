@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import type { DID } from "@commonfabric/identity";
 import {
@@ -7,6 +6,7 @@ import {
   replaceNavigation,
   updatePageTitle,
 } from "@commonfabric/navigation";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 // Host-embedding contract seam 3 (docs/features/host-embedding.md §3): a host
 // embeds by listening on `globalThis` for the navigation CustomEvents these

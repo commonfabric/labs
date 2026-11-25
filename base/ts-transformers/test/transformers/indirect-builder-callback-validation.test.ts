@@ -11,11 +11,11 @@
  * says about callback-ness here is what it says about a real pattern.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { validateFiles, validateSource } from "../utils.ts";
 import type { TransformationDiagnostic } from "../../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function indirectCallbackErrors(
   diagnostics: readonly TransformationDiagnostic[],

@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { Database } from "@db/sqlite";
 
@@ -11,6 +10,7 @@ import {
   close,
   open,
 } from "@commonfabric/memory/v2/engine";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { verifyCompaction } from "../compaction.ts";
 

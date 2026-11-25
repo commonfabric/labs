@@ -33,9 +33,9 @@ import type { Suite } from "./test-topology/suite.ts";
 export type {
   Enumeration,
   Invocation,
-  JUnitOutput,
   LocatableRecord,
   Location,
+  RecordedAs,
   RecordSurface,
   Suite,
   Unavailable,

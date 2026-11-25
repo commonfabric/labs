@@ -4,11 +4,16 @@
 //  (2) provider path — when the db declares column `ifc`, the server returns each
 //      result column's TRUE origin (resolving aliases); unlabeled dbs return none.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import { labelResultSchema } from "../src/builtins/sqlite-builtins.ts";
 import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";

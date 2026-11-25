@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { exists } from "@std/fs/exists";
 import type { JSONSchema } from "@commonfabric/runner";
 import { recordsSpooledBy } from "@commonfabric/test-support/records";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { CommandOutput } from "./command-output.ts";
 import type { AcceptedContractBreak } from "./pattern-compat-accepted-breaks.ts";
 import {
@@ -74,6 +79,7 @@ describe("pattern-compat", () => {
       baselinesDir,
       acceptedBreaks: [],
       unevaluable: new Set(),
+      pendingStandaloneRenames: new Set(),
       evaluate: (file) => {
         const module = modules[file];
         return module instanceof Error
@@ -98,6 +104,68 @@ describe("pattern-compat", () => {
     writeBaseline(baselinesDir, key, contract, RECORDED_AT);
 
   describe("judgeCompatibility()", () => {
+    describe("a main.tsx entry", () => {
+      const NEEDS_IDS: PatternContract = {
+        argumentSchema: {
+          type: "object",
+          properties: { ids: { type: "array" } },
+          required: ["ids"],
+        },
+        resultSchema: RESULT_WITH_TITLE,
+      };
+
+      it("fails when it requires an input with no default, naming the input", async () => {
+        await record("demo/main.tsx", NEEDS_IDS);
+
+        const shown = await judge({
+          "patterns/demo/main.tsx": patternModule(NEEDS_IDS),
+        });
+
+        expect(shown.code).toBe(1);
+        expect(shown.err).toContain(
+          "demo/main.tsx\n  is a main.tsx entry, which is offered as " +
+            "standalone, but requires ids with no default",
+        );
+      });
+
+      it("passes for the same contract in a file of another name, or outside patterns/", async () => {
+        await record("demo/part.tsx", NEEDS_IDS);
+        await record("agent-sessions-debug/main.tsx", NEEDS_IDS);
+
+        const shown = await judge({
+          "patterns/demo/part.tsx": patternModule(NEEDS_IDS),
+          "connectors/agents/debug-view/main.tsx": patternModule(NEEDS_IDS),
+        });
+
+        expect({ code: shown.code, err: shown.err })
+          .toEqual({ code: 0, err: undefined });
+      });
+
+      it("passes while its rename is pending, and fails once it runs alone", async () => {
+        await record("demo/main.tsx", NEEDS_IDS);
+        const pending = {
+          pendingStandaloneRenames: new Set(["demo/main.tsx"]),
+        };
+
+        const waiting = await judge(
+          { "patterns/demo/main.tsx": patternModule(NEEDS_IDS) },
+          pending,
+        );
+        await record("demo/main.tsx", WITH_TITLE);
+        const stale = await judge(
+          { "patterns/demo/main.tsx": patternModule(WITH_TITLE) },
+          pending,
+        );
+
+        expect(waiting.code).toBe(0);
+        expect(stale.code).toBe(1);
+        expect(stale.err).toContain(
+          "demo/main.tsx\n  runs alone now. Remove it from " +
+            "PENDING_STANDALONE_RENAMES",
+        );
+      });
+    });
+
     describe("a pattern with no baseline", () => {
       it("fails, naming the contract and the command that records it", async () => {
         const sink: RecordSink = { records: [] };

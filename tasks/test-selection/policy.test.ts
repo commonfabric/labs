@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import * as policy from "./policy.ts";
 import { packageDirOf } from "../package-layout.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // A dial nobody documented is a number that decides what runs and cannot
 // be found, so the two halves of this module are held to each other.

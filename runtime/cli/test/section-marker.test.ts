@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 import { refuseSectionMarker } from "../lib/section-marker.ts";
 import { pieceDataCommand } from "../commands/piece.ts";
 import { wish } from "../commands/wish.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * `--` closes a callable's section. A command without one sets every word

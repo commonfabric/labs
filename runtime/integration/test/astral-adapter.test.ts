@@ -7,6 +7,7 @@ import {
 } from "@std/assert";
 import { Browser } from "../browser.ts";
 import { Page } from "../page.ts";
+import { test } from "@commonfabric/test-support/test";
 
 async function closeTestBrowser(
   page: Page,
@@ -58,12 +59,12 @@ async function waitForSelectorStateInstallation(page: Page): Promise<void> {
   });
 }
 
-Deno.test("Browser closes a published Astral browser", async () => {
+test("Browser closes a published Astral browser", async () => {
   const browser = await Browser.launch();
   await browser.close();
 });
 
-Deno.test("pierce waits reject when their page closes", async () => {
+test("pierce waits reject when their page closes", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
 
@@ -83,7 +84,7 @@ Deno.test("pierce waits reject when their page closes", async () => {
   }
 });
 
-Deno.test("ElementHandle pierce waits observe their own shadow root", async () => {
+test("ElementHandle pierce waits observe their own shadow root", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
 
@@ -126,7 +127,7 @@ Deno.test("ElementHandle pierce waits observe their own shadow root", async () =
   }
 });
 
-Deno.test("pierce selectors resolve light-DOM elements", async () => {
+test("pierce selectors resolve light-DOM elements", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
 
@@ -196,7 +197,7 @@ Deno.test("pierce selectors resolve light-DOM elements", async () => {
   }
 });
 
-Deno.test("method observers use writable locked descriptors", async () => {
+test("method observers use writable locked descriptors", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
 
@@ -279,7 +280,7 @@ Deno.test("method observers use writable locked descriptors", async () => {
   }
 });
 
-Deno.test("method observers cover submit-button validity", async () => {
+test("method observers cover submit-button validity", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
 
@@ -353,7 +354,7 @@ Deno.test("method observers cover submit-button validity", async () => {
   }
 });
 
-Deno.test("method observers cover custom-element validity", async () => {
+test("method observers cover custom-element validity", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
 
@@ -445,7 +446,7 @@ Deno.test("method observers cover custom-element validity", async () => {
   }
 });
 
-Deno.test("method observers cover custom-element definition", async () => {
+test("method observers cover custom-element definition", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
 
@@ -520,7 +521,7 @@ Deno.test("method observers cover custom-element definition", async () => {
   }
 });
 
-Deno.test("method observers cover custom-element states", async () => {
+test("method observers cover custom-element states", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
 
@@ -603,7 +604,7 @@ Deno.test("method observers cover custom-element states", async () => {
   }
 });
 
-Deno.test("property observers cover programmatic file selection", async () => {
+test("property observers cover programmatic file selection", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
 
@@ -661,7 +662,7 @@ Deno.test("property observers cover programmatic file selection", async () => {
   }
 });
 
-Deno.test("root events cover shadow selector state", async () => {
+test("root events cover shadow selector state", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
 
@@ -793,7 +794,7 @@ Deno.test("root events cover shadow selector state", async () => {
   }
 });
 
-Deno.test("method observers cover explicit custom-element upgrades", async () => {
+test("method observers cover explicit custom-element upgrades", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
 
@@ -870,7 +871,7 @@ Deno.test("method observers cover explicit custom-element upgrades", async () =>
   }
 });
 
-Deno.test("retained selector state reconciles displaced observers", async () => {
+test("retained selector state reconciles displaced observers", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
 
@@ -1009,7 +1010,7 @@ Deno.test("retained selector state reconciles displaced observers", async () => 
   }
 });
 
-Deno.test("Page preserves Common Fabric behavior on published Astral", async () => {
+test("Page preserves Common Fabric behavior on published Astral", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
   const astralPage = page.astralPage;
@@ -1548,7 +1549,7 @@ Deno.test("Page preserves Common Fabric behavior on published Astral", async () 
   }
 });
 
-Deno.test("Page clicks the part of an element that lies inside the page", async () => {
+test("Page clicks the part of an element that lies inside the page", async () => {
   // An element can reach past the edge of the page it is drawn on: a surface
   // positioned towards the right of a narrow viewport, a control wider than the
   // column it sits in. The middle of such an element's box is a point the page
@@ -1610,7 +1611,7 @@ Deno.test("Page clicks the part of an element that lies inside the page", async 
   }
 });
 
-Deno.test("Page reports an element with no part of it inside the page", async () => {
+test("Page reports an element with no part of it inside the page", async () => {
   // Every point on the element is outside the page, so there is nowhere to aim
   // that a click can reach. Saying so is the only honest answer: a click
   // dispatched past the edge of the page reaches nothing, and returning from

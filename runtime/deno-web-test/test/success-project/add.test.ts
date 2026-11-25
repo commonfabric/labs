@@ -1,3 +1,4 @@
+// deno-lint-ignore-file cf-test/registration -- a fixture testing the browser harness's own `Deno.test`
 import { assert } from "@std/assert";
 
 import { add } from "./mod.ts";

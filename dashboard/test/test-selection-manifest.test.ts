@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import {
   sampleManifest,
   serializeManifest,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   newestManifest,

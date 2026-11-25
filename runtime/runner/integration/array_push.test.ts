@@ -6,6 +6,7 @@
  */
 
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 
 import app from "../../toolshed/app.ts";
 import { type JSONSchema, Runtime } from "../src/index.ts";
@@ -165,7 +166,7 @@ async function runTest(base: URL) {
   }
 }
 
-Deno.test({
+test({
   name: "array push test",
   fn: async () => {
     const server = Deno.serve({ port: 0 }, app.fetch);

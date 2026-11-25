@@ -6,10 +6,10 @@
  * are covered separately by enum-schema-rows.test.ts.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import { getTypeFromCode } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 async function generate(code: string, typeName: string) {
   const generator = new SchemaGenerator();

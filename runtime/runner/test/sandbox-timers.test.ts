@@ -1,5 +1,3 @@
-/// <reference path="./clock.d.ts" />
-
 /**
  * The SES pattern compartment endows no timers (part of the structural barrier
  * pinned by security-timing.test.ts). Code that wants a delay in both a host
@@ -11,13 +9,14 @@
  * that the guard resolves immediately there.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   ensureSESLockdown,
   evaluateFunctionSourceInSES,
 } from "../src/sandbox/ses-runtime.ts";
 import { createModuleCompartmentGlobals } from "../src/sandbox/compartment-globals.ts";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 // A backoff guarded by a member-access read of `setTimeout`, which yields
 // `undefined` in a compartment rather than raising a ReferenceError.

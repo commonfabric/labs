@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { dirname, fromFileUrl, join } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { test } from "@commonfabric/test-support/test";
 import {
   compareVersions,
   findProblems,
@@ -39,22 +40,22 @@ function alignedFiles() {
   };
 }
 
-Deno.test("parseMisePin extracts the pinned version", () => {
+test("parseMisePin extracts the pinned version", () => {
   assertEquals(parseMisePin('[tools]\ndeno = "2.8.1"\n'), "2.8.1");
 });
 
-Deno.test("parseMisePin returns undefined when there is no pin", () => {
+test("parseMisePin returns undefined when there is no pin", () => {
   assertEquals(parseMisePin('[tools]\nnode = "22.0.0"\n'), undefined);
 });
 
-Deno.test("parseMisePin returns undefined when the pin is defined twice", () => {
+test("parseMisePin returns undefined when the pin is defined twice", () => {
   assertEquals(
     parseMisePin('[tools]\ndeno = "2.8.1"\ndeno = "2.8.1"\n'),
     undefined,
   );
 });
 
-Deno.test("parseMisePins returns every pin in order", () => {
+test("parseMisePins returns every pin in order", () => {
   assertEquals(parseMisePins('[tools]\ndeno = "2.8.1"\n'), ["2.8.1"]);
   assertEquals(parseMisePins('[tools]\nnode = "22.0.0"\n'), []);
   assertEquals(
@@ -63,7 +64,7 @@ Deno.test("parseMisePins returns every pin in order", () => {
   );
 });
 
-Deno.test("findProblems flags a Deno pin defined twice", () => {
+test("findProblems flags a Deno pin defined twice", () => {
   // TOML rejects a key defined twice even when both values agree, so mise fails
   // to load the file. Reading only the first pin would report the toolchain as
   // aligned while `mise install` — the documented way to get it — is broken.
@@ -80,7 +81,7 @@ Deno.test("findProblems flags a Deno pin defined twice", () => {
   }
 });
 
-Deno.test("parseDockerfileDenoVersions finds every FROM line", () => {
+test("parseDockerfileDenoVersions finds every FROM line", () => {
   assertEquals(
     parseDockerfileDenoVersions(
       alignedFiles().dockerfiles["dashboard/Dockerfile"],
@@ -95,7 +96,7 @@ Deno.test("parseDockerfileDenoVersions finds every FROM line", () => {
   );
 });
 
-Deno.test("parseDockerfileDenoVersions reads past flags and a lowercase FROM", () => {
+test("parseDockerfileDenoVersions reads past flags and a lowercase FROM", () => {
   assertEquals(
     parseDockerfileDenoVersions(
       "FROM --platform=linux/amd64 denoland/deno:2.5.0 AS builder\n" +
@@ -105,31 +106,31 @@ Deno.test("parseDockerfileDenoVersions reads past flags and a lowercase FROM", (
   );
 });
 
-Deno.test("parseDockerfileDenoVersions drops a digest", () => {
+test("parseDockerfileDenoVersions drops a digest", () => {
   assertEquals(
     parseDockerfileDenoVersions("FROM denoland/deno:2.8.1@sha256:abc123\n"),
     ["2.8.1"],
   );
 });
 
-Deno.test("parseCheckShRange extracts min and max", () => {
+test("parseCheckShRange extracts min and max", () => {
   assertEquals(parseCheckShRange(alignedFiles().checkSh), {
     min: "2.8.0",
     max: "2.10.0",
   });
 });
 
-Deno.test("parseCheckShRange returns undefined when a bound is missing", () => {
+test("parseCheckShRange returns undefined when a bound is missing", () => {
   assertEquals(parseCheckShRange('DENO_VERSION_MIN="2.8.0"\n'), undefined);
 });
 
-Deno.test("compareVersions compares components numerically", () => {
+test("compareVersions compares components numerically", () => {
   assert(compareVersions("2.10.0", "2.9.0") > 0);
   assert(compareVersions("2.9.0", "2.10.0") < 0);
   assertEquals(compareVersions("2.8.1", "2.8.1"), 0);
 });
 
-Deno.test("compareVersions rejects a version that is not exact", () => {
+test("compareVersions rejects a version that is not exact", () => {
   // Reading only the leading components would compare "2.8.0.1" as "2.8.0" and
   // answer as though the trailing component were not there.
 
@@ -147,7 +148,7 @@ Deno.test("compareVersions rejects a version that is not exact", () => {
   }
 });
 
-Deno.test("isExactVersion accepts only MAJOR.MINOR.PATCH", () => {
+test("isExactVersion accepts only MAJOR.MINOR.PATCH", () => {
   assert(isExactVersion("2.8.1"));
   assert(isExactVersion("10.0.100"));
   assert(!isExactVersion("2.8"));
@@ -156,28 +157,28 @@ Deno.test("isExactVersion accepts only MAJOR.MINOR.PATCH", () => {
   assert(!isExactVersion("latest"));
 });
 
-Deno.test("versionInRange includes the minimum and excludes the maximum", () => {
+test("versionInRange includes the minimum and excludes the maximum", () => {
   assert(versionInRange("2.8.0", "2.8.0", "2.9.0"));
   assert(versionInRange("2.8.1", "2.8.0", "2.9.0"));
   assert(!versionInRange("2.9.0", "2.8.0", "2.9.0"));
   assert(!versionInRange("2.7.9", "2.8.0", "2.9.0"));
 });
 
-Deno.test("findProblems accepts aligned files", () => {
+test("findProblems accepts aligned files", () => {
   assertEquals(findProblems(alignedFiles()), []);
 });
 
-Deno.test("findProblems flags a missing pin", () => {
+test("findProblems flags a missing pin", () => {
   const files = { ...alignedFiles(), miseToml: "[tools]\n" };
   assertEquals(findProblems(files).length, 1);
 });
 
-Deno.test("findProblems flags a non-exact pin", () => {
+test("findProblems flags a non-exact pin", () => {
   const files = { ...alignedFiles(), miseToml: '[tools]\ndeno = "2.8"\n' };
   assertEquals(findProblems(files).length, 1);
 });
 
-Deno.test("findProblems flags a mismatched Dockerfile image", () => {
+test("findProblems flags a mismatched Dockerfile image", () => {
   for (const path of Object.keys(alignedFiles().dockerfiles)) {
     const files = {
       ...alignedFiles(),
@@ -193,7 +194,7 @@ Deno.test("findProblems flags a mismatched Dockerfile image", () => {
   }
 });
 
-Deno.test("findProblems flags a Dockerfile without deno images", () => {
+test("findProblems flags a Dockerfile without deno images", () => {
   const files = {
     ...alignedFiles(),
     dockerfiles: {
@@ -204,7 +205,7 @@ Deno.test("findProblems flags a Dockerfile without deno images", () => {
   assertEquals(findProblems(files).length, 1);
 });
 
-Deno.test("findProblems flags a range bound that is not exact", () => {
+test("findProblems flags a range bound that is not exact", () => {
   // check.sh reads the bounds with shell arithmetic, which aborts on a bound
   // carrying anything beyond MAJOR.MINOR.PATCH. Comparing such a bound
   // loosely would report "aligned" for a range that makes check.sh fail for
@@ -234,7 +235,7 @@ Deno.test("findProblems flags a range bound that is not exact", () => {
   }
 });
 
-Deno.test("findProblems flags both range bounds when both are malformed", () => {
+test("findProblems flags both range bounds when both are malformed", () => {
   const problems = findProblems({
     ...alignedFiles(),
     checkSh: alignedFiles().checkSh
@@ -244,7 +245,7 @@ Deno.test("findProblems flags both range bounds when both are malformed", () => 
   assertEquals(problems.length, 2);
 });
 
-Deno.test("findProblems flags a range that excludes the pin", () => {
+test("findProblems flags a range that excludes the pin", () => {
   const files = {
     ...alignedFiles(),
     checkSh: alignedFiles().checkSh
@@ -256,7 +257,7 @@ Deno.test("findProblems flags a range that excludes the pin", () => {
   assert(problems[0].includes("range"));
 });
 
-Deno.test("findProblems flags an action that stops reading mise.toml", () => {
+test("findProblems flags an action that stops reading mise.toml", () => {
   // The name mise.toml stays in the action's description and comments after the
   // read is replaced by a literal, so this fixture is what a "just inline the
   // version" refactor actually leaves behind.
@@ -273,7 +274,7 @@ Deno.test("findProblems flags an action that stops reading mise.toml", () => {
   assert(problems[0].includes("does not read"));
 });
 
-Deno.test("findProblems flags a check.sh that stops reading mise.toml", () => {
+test("findProblems flags a check.sh that stops reading mise.toml", () => {
   const files = {
     ...alignedFiles(),
     checkSh: "# The exact Deno version is pinned in mise.toml.\n" +
@@ -284,7 +285,7 @@ Deno.test("findProblems flags a check.sh that stops reading mise.toml", () => {
   assert(problems[0].includes("does not read"));
 });
 
-Deno.test("findProblems flags a Dockerfile stage stale behind a flag", () => {
+test("findProblems flags a Dockerfile stage stale behind a flag", () => {
   const files = {
     ...alignedFiles(),
     dockerfiles: {
@@ -298,7 +299,7 @@ Deno.test("findProblems flags a Dockerfile stage stale behind a flag", () => {
   assert(problems[0].includes("2.5.0"));
 });
 
-Deno.test("findProblems accepts a digest-pinned image on the pin", () => {
+test("findProblems accepts a digest-pinned image on the pin", () => {
   const files = {
     ...alignedFiles(),
     dockerfiles: {
@@ -311,7 +312,7 @@ Deno.test("findProblems accepts a digest-pinned image on the pin", () => {
   assertEquals(findProblems(files), []);
 });
 
-Deno.test("findProblems flags a mismatched literal in the action", () => {
+test("findProblems flags a mismatched literal in the action", () => {
   const files = {
     ...alignedFiles(),
     denoSetupAction: alignedFiles().denoSetupAction +
@@ -322,7 +323,7 @@ Deno.test("findProblems flags a mismatched literal in the action", () => {
   assert(problems[0].includes("2.7.9"));
 });
 
-Deno.test("findProblems accepts a literal in the action equal to the pin", () => {
+test("findProblems accepts a literal in the action equal to the pin", () => {
   const files = {
     ...alignedFiles(),
     denoSetupAction: alignedFiles().denoSetupAction +
@@ -331,7 +332,7 @@ Deno.test("findProblems accepts a literal in the action equal to the pin", () =>
   assertEquals(findProblems(files), []);
 });
 
-Deno.test("findProblems flags a check.sh with no range at all", () => {
+test("findProblems flags a check.sh with no range at all", () => {
   const problems = findProblems({
     ...alignedFiles(),
     checkSh: "# The exact Deno version is pinned in mise.toml.\n" +
@@ -384,7 +385,7 @@ async function captureConsole(
   return { out: out.join("\n"), err: err.join("\n") };
 }
 
-Deno.test("main reports the pin and returns 0 on aligned files", async () => {
+test("main reports the pin and returns 0 on aligned files", async () => {
   const root = await fixtureTree(alignedFiles());
   try {
     let code = -1;
@@ -398,7 +399,7 @@ Deno.test("main reports the pin and returns 0 on aligned files", async () => {
   }
 });
 
-Deno.test("main reports each problem and returns 1 when misaligned", async () => {
+test("main reports each problem and returns 1 when misaligned", async () => {
   const root = await fixtureTree({
     ...alignedFiles(),
     dockerfiles: {
@@ -424,13 +425,13 @@ Deno.test("main reports each problem and returns 1 when misaligned", async () =>
   }
 });
 
-Deno.test("the repository's pins are aligned", async () => {
+test("the repository's pins are aligned", async () => {
   // The repository's actual files must be aligned; this is the same check CI
   // runs via `deno task check-deno-pins`.
   assertEquals(await main(), 0);
 });
 
-Deno.test("running the script as a command reports the aligned pin", async () => {
+test("running the script as a command reports the aligned pin", async () => {
   // Runs the script the way `deno task check-deno-pins` does, which the calls
   // to main() above do not: they would still pass if the entry point never ran
   // it, or if the task's declared permissions were too narrow to read the

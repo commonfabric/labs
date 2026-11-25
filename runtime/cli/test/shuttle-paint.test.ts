@@ -12,7 +12,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   above,
@@ -25,6 +24,7 @@ import {
   takingScreen,
 } from "../lib/shuttle/paint.ts";
 import { glyphFor } from "../lib/view/display.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The width every case below draws at, unless it says otherwise. */
 const WIDTH = 10;

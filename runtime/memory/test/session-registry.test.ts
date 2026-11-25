@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { SessionRegistry } from "../v2/session-registry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("session-registry", () => {
   it("refuses to resume a session opened with `elidedVerdicts` for a client that does not advertise it", () => {

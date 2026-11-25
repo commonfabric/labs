@@ -33,7 +33,10 @@ export const proguardLanguage: Language = {
     // Qt project files and Prolog also use `.pro`, and a Qt project's
     // continuation lines can start with compiler flags. A rules file has a line
     // that starts with one of ProGuard's options.
-    sharedExtensions: [{ extension: ".pro", content: PROGUARD_OPTION_LINE }],
+    sharedExtensions: [{
+      extension: ".pro",
+      content: (text) => PROGUARD_OPTION_LINE.test(text),
+    }],
   },
 
   parseDocument: (text) => proguardDocument(text),

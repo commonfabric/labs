@@ -1,7 +1,7 @@
 import { ChangeSet, Text } from "@codemirror/state";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { TextChange } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   applyTextChanges,
   codeMirrorTextChangesPayload,

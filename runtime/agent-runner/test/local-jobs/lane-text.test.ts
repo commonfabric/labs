@@ -1,8 +1,13 @@
 /** Exercises persisted text and usage over the API with the real harness loop. */
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { readHarnessRunArtifacts } from "@commonfabric/cf-harness/artifacts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { createLocalJobApi } from "../../src/local-jobs/api.ts";
 import { LocalJobLane } from "../../src/local-jobs/lane.ts";

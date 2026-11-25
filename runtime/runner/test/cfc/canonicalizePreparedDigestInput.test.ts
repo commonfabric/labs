@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { canonicalizePreparedDigestInput } from "../../src/cfc/canonical.ts";
 import type {

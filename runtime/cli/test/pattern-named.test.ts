@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity, issueDelegation } from "@commonfabric/identity";
 import { indexProofs } from "@commonfabric/pattern-index/membership";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   chooseProfile,
   NamingError,

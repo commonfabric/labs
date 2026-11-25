@@ -12,7 +12,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
@@ -21,6 +20,7 @@ import type {
   SqliteNativeRow,
   SqliteResultColumn,
 } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { Cell } from "../src/cell.ts";
 import { ExecutorHost } from "../src/executor/host.ts";

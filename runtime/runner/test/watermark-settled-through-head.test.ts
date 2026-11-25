@@ -4,11 +4,17 @@
  * watermark write and W rests below it.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import type { ServingLoopHandle } from "../src/executor/serving-worker-host.ts";
 import {
   type ServingMemoryServer,
@@ -22,6 +28,12 @@ import {
 import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
+
+// This file runs on the real clock because it runs the serving loop in a real
+// Worker, whose heartbeat timer ticks on the real clock. Auto-advance would run
+// the watchdog's timer at once, and it would kill a healthy worker for the
+// silence.
+useRealClock();
 
 const space = (await Identity.fromPassphrase("settled through head space"))
   .did() as MemorySpace;

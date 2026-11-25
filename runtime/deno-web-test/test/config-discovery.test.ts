@@ -5,6 +5,7 @@ import {
   readConfigIfExists,
   resolveWorkspacePackageImports,
 } from "../utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
 async function withTempDir(
   fn: (dir: string) => Promise<void>,
@@ -17,7 +18,7 @@ async function withTempDir(
   }
 }
 
-Deno.test("findDenoConfigPath prefers deno.json, matching Deno's own resolution", async () => {
+test("findDenoConfigPath prefers deno.json, matching Deno's own resolution", async () => {
   await withTempDir(async (dir) => {
     await Deno.writeTextFile(join(dir, "deno.json"), "{}");
     await Deno.writeTextFile(join(dir, "deno.jsonc"), "{}");
@@ -25,27 +26,27 @@ Deno.test("findDenoConfigPath prefers deno.json, matching Deno's own resolution"
   });
 });
 
-Deno.test("findDenoConfigPath falls back to deno.jsonc when only it exists", async () => {
+test("findDenoConfigPath falls back to deno.jsonc when only it exists", async () => {
   await withTempDir(async (dir) => {
     await Deno.writeTextFile(join(dir, "deno.jsonc"), "{}");
     assertEquals(await findDenoConfigPath(dir), join(dir, "deno.jsonc"));
   });
 });
 
-Deno.test("findDenoConfigPath returns deno.json when only it exists", async () => {
+test("findDenoConfigPath returns deno.json when only it exists", async () => {
   await withTempDir(async (dir) => {
     await Deno.writeTextFile(join(dir, "deno.json"), "{}");
     assertEquals(await findDenoConfigPath(dir), join(dir, "deno.json"));
   });
 });
 
-Deno.test("findDenoConfigPath returns undefined when no config is present", async () => {
+test("findDenoConfigPath returns undefined when no config is present", async () => {
   await withTempDir(async (dir) => {
     assertEquals(await findDenoConfigPath(dir), undefined);
   });
 });
 
-Deno.test("readConfigIfExists parses a JSONC config, comments and all", async () => {
+test("readConfigIfExists parses a JSONC config, comments and all", async () => {
   await withTempDir(async (dir) => {
     const configPath = join(dir, "deno.jsonc");
     await Deno.writeTextFile(
@@ -63,7 +64,7 @@ Deno.test("readConfigIfExists parses a JSONC config, comments and all", async ()
   });
 });
 
-Deno.test("readConfigIfExists returns undefined for a missing path", async () => {
+test("readConfigIfExists returns undefined for a missing path", async () => {
   await withTempDir(async (dir) => {
     assertEquals(
       await readConfigIfExists(join(dir, "deno.jsonc")),
@@ -72,11 +73,11 @@ Deno.test("readConfigIfExists returns undefined for a missing path", async () =>
   });
 });
 
-Deno.test("readConfigIfExists returns undefined when given no path", async () => {
+test("readConfigIfExists returns undefined when given no path", async () => {
   assertEquals(await readConfigIfExists(undefined), undefined);
 });
 
-Deno.test("findDenoConfigPath rethrows errors that are not NotFound", async () => {
+test("findDenoConfigPath rethrows errors that are not NotFound", async () => {
   await withTempDir(async (dir) => {
     // A regular file in a config-name position makes `stat` fail with
     // NotADirectory rather than NotFound, which must propagate.
@@ -86,14 +87,14 @@ Deno.test("findDenoConfigPath rethrows errors that are not NotFound", async () =
   });
 });
 
-Deno.test("readConfigIfExists rethrows errors that are not NotFound", async () => {
+test("readConfigIfExists rethrows errors that are not NotFound", async () => {
   await withTempDir(async (dir) => {
     // Reading a directory as a file fails with something other than NotFound.
     await assertRejects(() => readConfigIfExists(dir));
   });
 });
 
-Deno.test("resolveWorkspacePackageImports maps member names, exports, and imports", async () => {
+test("resolveWorkspacePackageImports maps member names, exports, and imports", async () => {
   await withTempDir(async (root) => {
     const writeMember = async (
       name: string,

@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { authenticatedOwnerFromLabel } from "./owner-predicate.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("authenticatedOwnerFromLabel", () => {
   it("matches the acting principal to one persisted originator attestation", () => {

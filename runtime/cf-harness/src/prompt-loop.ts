@@ -395,6 +395,13 @@ export interface RunHarnessPromptOptions {
   /** Trusted driver marker for research before a new root task. */
   openingResearchTask?: string;
   systemPrompt?: string;
+  /**
+   * System messages that follow `systemPrompt`, ordered from the most widely
+   * shared to the most specific to this run. A provider that caches through
+   * message ends reuses an earlier run's cache through every leading message
+   * the two runs share (`toResponsesInput`).
+   */
+  systemPromptLayers?: readonly string[];
   contextMessages?: readonly string[];
   imageAttachments?: readonly HarnessImageAttachment[];
   maxModelTurns?: number;
@@ -3835,6 +3842,9 @@ export class CfHarnessPromptLoop {
         ...(options.systemPrompt !== undefined
           ? [{ role: "system", content: options.systemPrompt } as const]
           : []),
+        ...(options.systemPromptLayers ?? []).map((
+          content,
+        ) => ({ role: "system", content } as const)),
         ...(options.contextMessages ?? []).map((
           content,
         ) => ({ role: "user", content } as const)),

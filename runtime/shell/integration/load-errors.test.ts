@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { type DID, Identity, legacySpaceDid } from "@commonfabric/identity";
 import {
@@ -18,6 +17,7 @@ import {
   withServerExecutionDefault,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import "../src/globals.ts";
 

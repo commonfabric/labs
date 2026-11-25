@@ -6,7 +6,6 @@
  * closes the turn follows.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
@@ -39,6 +38,7 @@ import {
   SPACE_DB_DID,
 } from "./support/space-db.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A sandbox that answers the capability probe and nothing else. */
 class FakeSandboxRuntime implements SandboxRuntime {

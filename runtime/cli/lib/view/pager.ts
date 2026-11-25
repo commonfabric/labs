@@ -18,9 +18,9 @@ import {
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { CSI, term } from "./ansi.ts";
 import {
-  IN_PLACE_PARSE_BUDGET,
   type ParseJob,
   type ParseOutcome,
+  recolorBatch,
   workerParser,
 } from "./backgroundparse.ts";
 import { type BlameRunner, blameRunner } from "./blame.ts";
@@ -57,6 +57,7 @@ import {
   watchForPullRequest,
 } from "./pullrequest.ts";
 import {
+  defaultBranch,
   describePush,
   type GitQuery,
   openPage,
@@ -110,6 +111,13 @@ export type PagerOptions = SessionOptions & {
   /** Whole-file parses the view left for the pager to finish while it takes
    * keys, whose file sides it shows as plain text until then. */
   readonly parses?: readonly ParseJob[];
+
+  /**
+   * Called once the pager stops finishing `parses` while it is open: after it
+   * has parsed the document again with the last of them, or when opening
+   * another file or a failure stops them early.
+   */
+  readonly parsesEnded?: () => void;
 };
 
 /** Why `error` happened, to follow a colon in the task dialog, with the
@@ -479,15 +487,21 @@ export async function runPager(
   // The complete files whose parses the view left are shown as plain text,
   // and parse in the background while keys keep arriving, while the status
   // bar shows how much of their source has been parsed. The document is
-  // parsed again and drawn each time the source parsed in the background has
-  // at least doubled, and grown by at least the in-place budget, since the
-  // document was last parsed again, and once more when every parse has ended. The parses stop when the
-  // viewer closes, or when opening another file ends the progress.
+  // parsed again and drawn each time a batch of source has finished parsing
+  // since it was last parsed again, and once more when every parse has ended.
+  // Parsing it again builds only the file sections whose parses finished, so
+  // the batch bounds how long that takes. The parses stop when the viewer
+  // closes, or when opening another file ends the progress. Once they end,
+  // other than by the viewer closing, `parsesEnded` lets the view forget
+  // their results.
   const parses = options.parses ?? [];
   let stopParses: (() => void) | undefined;
+  let parsesEnded = options.parsesEnded;
   const endParses = (message?: string) => {
     stopParses?.();
     stopParses = undefined;
+    parsesEnded?.();
+    parsesEnded = undefined;
     session.showHighlightProgress(null);
     if (message !== undefined) session.showMessage(message);
   };
@@ -496,6 +510,7 @@ export async function runPager(
     let parsed = 0;
     let shown = 0;
     let unfinished = parses.length;
+    const batch = recolorBatch(session.doc.text.length);
     const failures: string[] = [];
     const deliver = (outcomes: readonly ParseOutcome[]) => {
       if (cleanedUp) return;
@@ -518,7 +533,7 @@ export async function runPager(
         if (unfinished > 0) {
           session.showHighlightProgress(parsed / Math.max(1, total));
           // The spinner's next frame draws the gauge.
-          if (parsed - shown < Math.max(IN_PLACE_PARSE_BUDGET, shown)) return;
+          if (parsed - shown < batch) return;
           shown = parsed;
           session.reparse({ force: true });
         } else {
@@ -853,8 +868,17 @@ export async function runPager(
           pullRequest(open.number, open.url)
         } is open: ${link(open.url)}`;
       }
-      const { title, body } = pullRequestText(deps.git, target);
-      const { repository, head, base } = target;
+      const { repository, head, remote } = target;
+      const asking = step(say`Asking ${remote} which branch is its default`);
+      const base = await defaultBranch(
+        deps.pushIo(taskOutput, signal).queryAsync,
+        remote,
+      );
+      if (base === null) {
+        throw new Error(`${remote}'s default branch is unknown`);
+      }
+      asking();
+      const { title, body } = pullRequestText(deps.git, target, base);
       const creating = step(
         say`Creating a pull request in ${repository} from ${head} into ${base}`,
       );
@@ -925,13 +949,21 @@ export async function runPager(
   };
 
   // A push that fails, unless the server refused it, can be tried again, as
-  // when the network failed it. The push dialog's output goes on from how
-  // the failed push ended.
-  const pushFailed = (output: string) => {
+  // when the network failed it, asking first as the failed push would have,
+  // and keeping to the default branch it kept to. The push dialog's output
+  // goes on from how the failed push ended.
+  const pushFailed = (output: string, confirmed: boolean, main?: string) => {
     if (!pushRefused(output)) {
-      retry = { label: RETRY_PUSH, run: () => startBranchPush(true) };
+      retry = {
+        label: RETRY_PUSH,
+        run: () => startBranchPush(true, confirmed, main),
+      };
     }
   };
+
+  // The default branch origin named before the push dialog asked whether to
+  // push, which the push the dialog confirms keeps to.
+  let confirmedMain: string | undefined;
 
   // Pushing a branch that origin already has asks first, saying what the
   // push would do, and which pull request is open from the branch, if one
@@ -940,8 +972,10 @@ export async function runPager(
   const askToPush = async (
     branch: string,
     remote: PushedBranch,
+    main: string,
     signal: AbortSignal,
   ): Promise<null> => {
+    confirmedMain = main;
     let open: TaskText;
     try {
       const { found } = await lookForPullRequest(branch, signal);
@@ -960,8 +994,13 @@ export async function runPager(
   };
 
   // Once the push dialog has asked, or a push has failed, pushing again
-  // continues the dialog, and asks nothing.
-  const startBranchPush = async (again = false) => {
+  // continues the dialog. A push the user has confirmed asks nothing, and
+  // keeps to `main` as origin's default branch when given one.
+  const startBranchPush = async (
+    again = false,
+    confirmed = again,
+    main?: string,
+  ) => {
     session.branchPushRequested = false;
     session.pushConfirmed = false;
     // A watch is for the push whose dialog it outlived.
@@ -978,10 +1017,12 @@ export async function runPager(
         io,
         controller.signal,
         (branch, url) => pushed(io, branch, url, controller.signal),
-        pushFailed,
-        again
+        (output, learned) => pushFailed(output, confirmed, learned),
+        confirmed
           ? undefined
-          : (branch, remote) => askToPush(branch, remote, controller.signal),
+          : (branch, remote, main) =>
+            askToPush(branch, remote, main, controller.signal),
+        main,
       );
     } catch (error) {
       summary = say`Push failed: ${failure(error)}`;
@@ -1117,7 +1158,7 @@ export async function runPager(
 
   const startRequested = () => {
     if (session.branchPushRequested) startBranchPush();
-    if (session.pushConfirmed) startBranchPush(true);
+    if (session.pushConfirmed) startBranchPush(true, true, confirmedMain);
     if (session.retryRequested) {
       session.retryRequested = false;
       retry?.run();
@@ -1136,10 +1177,10 @@ export async function runPager(
     );
     draw();
     if (parses.length > 0) startParses();
-    // Warm the TypeScript program after the first frame is on screen, while the
-    // user is reading it and before any keypress arrives, so the first info card
-    // does not pay the one-time build cost on the interactive path.
-    if (semantics) deps.setTimer(() => semantics.prewarm(), 0);
+    // Start building the TypeScript program in a worker once the first frame
+    // is on screen, so that keys are answered while it builds and the first
+    // info card does not pay the one-time build cost.
+    semantics?.prewarm();
     while (!session.quit) {
       // A read that quitting interrupts is left unfinished, for the viewer is
       // closing.
@@ -1201,6 +1242,7 @@ export async function runPager(
       if (session.needsReparse) scheduleReparse();
     }
   } finally {
+    semantics?.dispose();
     stopParserListener();
     stopReveal();
     stopExpiry();

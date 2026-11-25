@@ -1,6 +1,5 @@
 import { join } from "@std/path";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { sgr, stripAnsi, term } from "../lib/view/ansi.ts";
 import type { EditableSource } from "../lib/view/editsource.ts";
@@ -45,13 +44,29 @@ import {
   pullRequestPayload,
   relayFrame,
 } from "./view-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
-/** Query answers for a checkout of `feature` whose `origin` has `main` as its
- * default branch. */
+/** The question that asks `origin`'s server which branch is its default. */
+const ASK_ORIGIN_DEFAULT = "ls-remote --symref origin HEAD";
+
+/** The step that asks `origin`'s server which branch is its default. */
+const ASKED_ORIGIN = "Asking origin which branch is its default";
+
+/** What `git ls-remote --symref` prints for a repository whose default
+ * branch is `branch`. */
+function symrefListing(branch: string): string {
+  return `ref: refs/heads/${branch}\tHEAD\n0123456789abcdef\tHEAD\n`;
+}
+
+/** Query answers for a checkout of `feature` whose `origin` and `upstream`
+ * have `main` as their default branch, on their servers and, for `origin`, as
+ * git cached it on cloning. */
 const FEATURE_CHECKOUT: Readonly<Record<string, string | null>> = {
   "rev-parse --absolute-git-dir": "/work/.git\n",
   "symbolic-ref --quiet HEAD": "refs/heads/feature\n",
   "symbolic-ref --quiet refs/remotes/origin/HEAD": "refs/remotes/origin/main\n",
+  [ASK_ORIGIN_DEFAULT]: symrefListing("main"),
+  "ls-remote --symref upstream HEAD": symrefListing("main"),
 };
 
 const PUSH_FEATURE = "push --force-with-lease --force-if-includes --progress " +
@@ -102,6 +117,11 @@ function fakeIo(options: FakeIoOptions = {}) {
   const done: string[] = [];
   const io: PushIo = {
     query: (args) => answers[args.join(" ")] ?? null,
+    queryAsync: (args) => {
+      const answer = answers[args.join(" ")] ?? null;
+      if (answer === null) shown.push(`fatal: no answer to git ${args[0]}\n`);
+      return Promise.resolve(answer);
+    },
     run: (args) => {
       ran.push(args.join(" "));
       return Promise.resolve({
@@ -121,6 +141,17 @@ function fakeIo(options: FakeIoOptions = {}) {
     },
   };
   return { io, ran, opened, shown, done };
+}
+
+/** `io`, with `controller` aborting as its push starts. */
+function abortingPush(io: PushIo, controller: AbortController): PushIo {
+  return {
+    ...io,
+    run: (args) => {
+      controller.abort();
+      return io.run(args);
+    },
+  };
 }
 
 const decoder = new TextDecoder();
@@ -239,8 +270,6 @@ const QUITTING = {
  * whose branch's first commit that `upstream`'s `main` lacks is `c1`. */
 const UPSTREAM: Readonly<Record<string, string | null>> = {
   "remote get-url upstream": "https://github.com/octo/repo.git\n",
-  "symbolic-ref --quiet refs/remotes/upstream/HEAD":
-    "refs/remotes/upstream/main\n",
   [
     "rev-list --reverse --no-merges --right-only --cherry-pick " +
     "--end-of-options refs/remotes/upstream/main...HEAD --"
@@ -502,7 +531,10 @@ describe("view-push", () => {
         },
       });
 
-      expect(shownWhenRun).toEqual(["Pushing feature to origin..."]);
+      expect(shownWhenRun).toEqual([
+        `${ASKED_ORIGIN}...`,
+        "Pushing feature to origin...",
+      ]);
     });
 
     it("shows the step that pushes done once git succeeds, and only then", async () => {
@@ -518,31 +550,39 @@ describe("view-push", () => {
           },
         });
 
-        expect(doneWhenRun).toEqual([]);
+        expect(doneWhenRun).toEqual([ASKED_ORIGIN]);
         expect(done).toEqual(
-          pushSucceeds ? ["Pushing feature to origin"] : [],
+          pushSucceeds
+            ? [ASKED_ORIGIN, "Pushing feature to origin"]
+            : [ASKED_ORIGIN],
         );
       }
     });
 
     it("hands what git printed to its failure callback when the push fails or is aborted", async () => {
-      for (const signal of [undefined, AbortSignal.abort()]) {
-        const handed: string[] = [];
-        const failed = (output: string) => {
-          handed.push(output);
+      for (const abort of [false, true]) {
+        const handed: Array<[string, string | undefined]> = [];
+        const failed = (output: string, main?: string) => {
+          handed.push([output, main]);
         };
+        const controller = new AbortController();
+        const { io } = fakeIo({
+          pushSucceeds: false,
+          pushOutput: "fatal: no network",
+          answers: { [ASK_ORIGIN_DEFAULT]: symrefListing("trunk") },
+        });
 
         const summary = await pushBranch(
-          fakeIo({ pushSucceeds: false, pushOutput: "fatal: no network" }).io,
-          signal,
+          abort ? abortingPush(io, controller) : io,
+          controller.signal,
           undefined,
           failed,
         );
 
         expect(plainText(summary)).toBe(
-          signal ? "Push aborted." : "Pushing feature to origin failed.",
+          abort ? "Push aborted." : "Pushing feature to origin failed.",
         );
-        expect(handed).toEqual(["fatal: no network"]);
+        expect(handed).toEqual([["fatal: no network", "trunk"]]);
       }
     });
 
@@ -591,19 +631,26 @@ describe("view-push", () => {
     });
 
     it("says the push was aborted when it failed after its signal aborted", async () => {
-      const { io } = fakeIo({ pushSucceeds: false });
+      const controller = new AbortController();
+      const { io, ran } = fakeIo({ pushSucceeds: false });
 
-      expect(plainText(await pushBranch(io, AbortSignal.abort()))).toBe(
-        "Push aborted.",
-      );
+      expect(
+        plainText(
+          await pushBranch(abortingPush(io, controller), controller.signal),
+        ),
+      ).toBe("Push aborted.");
+      expect(ran).toEqual([PUSH_FEATURE]);
     });
 
     it("says the branch was pushed when the push succeeded although its signal aborted", async () => {
+      const controller = new AbortController();
       const { io } = fakeIo();
 
-      expect(plainText(await pushBranch(io, AbortSignal.abort()))).toBe(
-        "Pushed feature to origin.",
-      );
+      expect(
+        plainText(
+          await pushBranch(abortingPush(io, controller), controller.signal),
+        ),
+      ).toBe("Pushed feature to origin.");
     });
 
     it("reports a failed push and opens nothing", async () => {
@@ -656,12 +703,11 @@ describe("view-push", () => {
       expect(ran).toEqual([]);
     });
 
-    it("runs nothing on the branch origin names as its default", async () => {
+    it("runs nothing on the branch origin's server names as its default, whatever git cached on cloning", async () => {
       const { io, ran } = fakeIo({
         answers: {
           "symbolic-ref --quiet HEAD": "refs/heads/trunk\n",
-          "symbolic-ref --quiet refs/remotes/origin/HEAD":
-            "refs/remotes/origin/trunk\n",
+          [ASK_ORIGIN_DEFAULT]: symrefListing("trunk"),
         },
       });
 
@@ -671,27 +717,104 @@ describe("view-push", () => {
       expect(ran).toEqual([]);
     });
 
-    it("runs nothing when origin names no default branch", async () => {
+    it("pushes the branch git cached as origin's default once origin's server names another", async () => {
       const { io, ran } = fakeIo({
-        answers: { "symbolic-ref --quiet refs/remotes/origin/HEAD": null },
+        answers: {
+          "symbolic-ref --quiet HEAD": "refs/heads/main\n",
+          [ASK_ORIGIN_DEFAULT]: symrefListing("trunk"),
+        },
+      });
+
+      expect(plainText(await pushBranch(io))).toBe("Pushed main to origin.");
+      expect(ran).toEqual([
+        "push --force-with-lease --force-if-includes --progress " +
+        "origin HEAD:refs/heads/main",
+      ]);
+    });
+
+    it("runs nothing when origin's server names no default branch, even when git cached one", async () => {
+      const { io, ran } = fakeIo({
+        answers: { [ASK_ORIGIN_DEFAULT]: "0123456789abcdef\tHEAD\n" },
       });
 
       expect(plainText(await pushBranch(io))).toBe(
-        "Not pushing: origin's default branch is unknown. " +
-          "`git remote set-head origin --auto` finds it.",
+        "Not pushing: origin's default branch is unknown.",
       );
       expect(ran).toEqual([]);
     });
 
-    it("returns what `ask` returns, given how origin's branch stands, and runs nothing, when origin already has the branch", async () => {
-      const { io, ran, shown } = fakeIo({ answers: FEATURE_PUSHED });
-      const asked: Array<[string, PushedBranch]> = [];
+    it("runs nothing, showing what git printed, leaving the step that asks unfinished, and calling `onFailed` with nothing, when git cannot ask origin's server", async () => {
+      const { io, ran, shown, done } = fakeIo({
+        answers: { [ASK_ORIGIN_DEFAULT]: null },
+      });
+      const handed: string[] = [];
+
+      expect(
+        plainText(
+          await pushBranch(io, undefined, undefined, (o) => handed.push(o)),
+        ),
+      ).toBe(
+        "Not pushing: origin's default branch is unknown.",
+      );
+      expect(shown).toEqual([
+        `${ASKED_ORIGIN}...`,
+        "fatal: no answer to git ls-remote\n",
+      ]);
+      expect(done).toEqual([]);
+      expect(handed).toEqual([""]);
+      expect(ran).toEqual([]);
+    });
+
+    it("says the push was aborted, running nothing, calling `onFailed` with nothing and not calling `ask`, when an abort follows origin's answer", async () => {
+      const controller = new AbortController();
+      const { io, ran } = fakeIo({ answers: FEATURE_PUSHED });
+      const handed: string[] = [];
+      let asks = 0;
+
+      const summary = await pushBranch(
+        {
+          ...io,
+          queryAsync: (args) => {
+            controller.abort();
+            return io.queryAsync(args);
+          },
+        },
+        controller.signal,
+        undefined,
+        (output) => handed.push(output),
+        () => Promise.resolve(say`asked ${String(++asks)}`),
+      );
+
+      expect(plainText(summary)).toBe("Push aborted.");
+      expect(asks).toBe(0);
+      expect(handed).toEqual([""]);
+      expect(ran).toEqual([]);
+    });
+
+    it("says the push was aborted, running nothing, when asking origin's server stops for an abort", async () => {
+      const { io, ran } = fakeIo({ answers: { [ASK_ORIGIN_DEFAULT]: null } });
+
+      expect(plainText(await pushBranch(io, AbortSignal.abort()))).toBe(
+        "Push aborted.",
+      );
+      expect(ran).toEqual([]);
+    });
+
+    it("returns what `ask` returns, given how origin's branch stands and origin's default branch, and runs nothing, when origin already has the branch", async () => {
+      const { io, ran, shown } = fakeIo({
+        answers: {
+          ...FEATURE_PUSHED,
+          [ASK_ORIGIN_DEFAULT]: symrefListing("trunk"),
+        },
+      });
+      const asked: Array<[string, PushedBranch, string]> = [];
 
       const summary = await pushBranch(io, undefined, undefined, undefined, (
         branch,
         pushed,
+        main,
       ) => {
-        asked.push([branch, pushed]);
+        asked.push([branch, pushed, main]);
         return Promise.resolve("asked");
       });
 
@@ -700,10 +823,95 @@ describe("view-push", () => {
         ["feature", {
           commit: "0123456789abcdef",
           counts: { removed: 1, added: 2 },
-        }],
+        }, "trunk"],
       ]);
       expect(ran).toEqual([]);
-      expect(shown).toEqual([]);
+      expect(shown).toEqual([`${ASKED_ORIGIN}...`]);
+    });
+
+    it("refuses the branch origin names as its default without calling `ask`, even when origin has it", async () => {
+      const { io, ran } = fakeIo({
+        answers: {
+          "symbolic-ref --quiet HEAD": "refs/heads/main\n",
+          "rev-parse --verify --quiet refs/remotes/origin/main":
+            "0123456789abcdef\n",
+          "rev-list --left-right --count refs/remotes/origin/main...HEAD":
+            "0\t1\n",
+        },
+      });
+      let asks = 0;
+
+      const summary = await pushBranch(
+        io,
+        undefined,
+        undefined,
+        undefined,
+        () => Promise.resolve(say`asked ${String(++asks)}`),
+      );
+
+      expect(plainText(summary)).toBe(
+        "Rename the branch first. You were about to push your main branch.",
+      );
+      expect(asks).toBe(0);
+      expect(ran).toEqual([]);
+    });
+
+    it("keeps to the default branch it is given, asking origin's server nothing", async () => {
+      for (const branch of ["main", "trunk"]) {
+        const asked: string[] = [];
+        const { io, ran, shown } = fakeIo({
+          answers: { "symbolic-ref --quiet HEAD": `refs/heads/${branch}\n` },
+        });
+
+        const summary = await pushBranch(
+          {
+            ...io,
+            queryAsync: (args) => {
+              asked.push(args.join(" "));
+              return io.queryAsync(args);
+            },
+          },
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          "trunk",
+        );
+
+        expect(asked).toEqual([]);
+        expect(shown).not.toContain(`${ASKED_ORIGIN}...`);
+        expect(plainText(summary)).toBe(
+          branch === "trunk"
+            ? "Rename the branch first. You were about to push your trunk branch."
+            : "Pushed main to origin.",
+        );
+        expect(ran).toHaveLength(branch === "trunk" ? 0 : 1);
+      }
+    });
+
+    it("asks origin's server which branch is its default once, before pushing or refusing to", async () => {
+      for (const branch of ["feature", "main"]) {
+        const asked: string[] = [];
+        const { io, ran } = fakeIo({
+          answers: { "symbolic-ref --quiet HEAD": `refs/heads/${branch}` },
+        });
+
+        const summary = await pushBranch({
+          ...io,
+          queryAsync: (args) => {
+            asked.push(args.join(" "));
+            return io.queryAsync(args);
+          },
+        });
+
+        expect(asked).toEqual([ASK_ORIGIN_DEFAULT]);
+        expect(plainText(summary)).toBe(
+          branch === "main"
+            ? "Rename the branch first. You were about to push your main branch."
+            : "Pushed feature to origin.",
+        );
+        expect(ran).toHaveLength(branch === "main" ? 0 : 1);
+      }
     });
 
     it("pushes without asking when origin does not have the branch, or there is no `ask`", async () => {
@@ -941,6 +1149,52 @@ describe("view-push", () => {
   });
 
   describe("realPushIo()", () => {
+    it("starts no git once its signal has aborted", async () => {
+      const { root, env, origin, work } = repositories();
+      try {
+        const written: string[] = [];
+        const io = realPushIo({
+          step: NO_STEP,
+          cwd: work,
+          env,
+          signal: AbortSignal.abort(),
+          write: (text) => written.push(text),
+        });
+
+        expect(await io.run(["push", "origin", "HEAD:refs/heads/feature"]))
+          .toEqual({ success: false, output: "" });
+        expect(await io.queryAsync(["ls-remote", "origin"])).toBeNull();
+        expect(git(origin, env, "branch", "--list", "feature")).toBe("");
+        expect(io.query(["--version"])).toMatch(/^git version /);
+      } finally {
+        Deno.removeSync(root, { recursive: true });
+      }
+    });
+
+    it("resolves `queryAsync` with git's output, showing nothing, or with null, showing git's error output, when git fails", async () => {
+      const { root, env, work } = repositories();
+      try {
+        const written: string[] = [];
+        const io = realPushIo({
+          step: NO_STEP,
+          cwd: work,
+          env,
+          write: (text) => written.push(text),
+        });
+
+        expect(
+          await io.queryAsync(["ls-remote", "--symref", "origin", "HEAD"]),
+        ).toMatch(/^ref: refs\/heads\/main\tHEAD\n[0-9a-f]+\tHEAD\n$/);
+        expect(written).toEqual([]);
+        expect(await io.queryAsync(["ls-remote", "nowhere"])).toBeNull();
+        expect(written.join("")).toMatch(
+          /^fatal: 'nowhere' does not appear to be a git repository\n/,
+        );
+      } finally {
+        Deno.removeSync(root, { recursive: true });
+      }
+    });
+
     it("pushes the branch to origin and opens the offered page", async () => {
       const { root, env, origin, work } = repositories();
       try {
@@ -972,6 +1226,8 @@ describe("view-push", () => {
         );
 
         expect(steps).toEqual([
+          `${ASKED_ORIGIN}...`,
+          `${ASKED_ORIGIN} ✓`,
           "Pushing feature to origin...",
           "Pushing feature to origin ✓",
         ]);
@@ -1136,6 +1392,43 @@ describe("view-push", () => {
           "Pushing feature to origin failed.",
         );
         expect(git(origin, env, "rev-parse", "feature")).toBe(theirs);
+      } finally {
+        Deno.removeSync(root, { recursive: true });
+      }
+    });
+
+    it("refuses the branch origin's server names as its default once that changes, pushes the one git cached on cloning, and leaves the cache as it was", async () => {
+      const { root, env, origin, work } = repositories();
+      try {
+        const io = realPushIo({
+          step: NO_STEP,
+          cwd: work,
+          env,
+          opener: "true",
+          write() {},
+        });
+        const main = git(origin, env, "rev-parse", "main");
+        git(origin, env, "branch", "trunk", "main");
+        git(origin, env, "symbolic-ref", "HEAD", "refs/heads/trunk");
+        git(work, env, "branch", "trunk", "main");
+        git(work, env, "switch", "--quiet", "trunk");
+
+        expect(plainText(await pushBranch(io))).toBe(
+          "Rename the branch first. You were about to push your trunk branch.",
+        );
+        git(work, env, "switch", "--quiet", "main");
+        Deno.writeTextFileSync(join(work, "more.txt"), "more\n");
+        git(work, env, "add", "more.txt");
+        git(work, env, "commit", "--quiet", "-m", "more");
+        expect(plainText(await pushBranch(io, undefined, () => []))).toBe(
+          "Pushed main to origin.",
+        );
+        expect(git(origin, env, "rev-parse", "main")).toBe(
+          git(work, env, "rev-parse", "HEAD"),
+        );
+        expect(git(origin, env, "rev-parse", "trunk")).toBe(main);
+        expect(git(work, env, "symbolic-ref", "refs/remotes/origin/HEAD"))
+          .toBe("refs/remotes/origin/main");
       } finally {
         Deno.removeSync(root, { recursive: true });
       }
@@ -2377,16 +2670,50 @@ describe("view-push", () => {
 
       await harness.run(["P", () => opened, () => closable, "c"]);
 
-      const first = harness.writes.find((text) => text.includes(" Push "))!;
+      const first = harness.writes.find((text) =>
+        text.includes("Pushing feature to origin")
+      )!;
       expect(first).toContain("Pushing feature to origin... ◐");
       expect(first).not.toContain("Writing objects");
+    });
+
+    it("offers Retry push when git cannot ask origin which branch is its default, which asks again and pushes", async () => {
+      let asks = 0;
+      const harness = pagerHarness(() => {
+        const { io } = fakeIo();
+        return {
+          ...io,
+          queryAsync: (args) =>
+            asks++ === 0 ? Promise.resolve(null) : io.queryAsync(args),
+        };
+      });
+      const failed = harness.frame((text) => text.includes("P Retry push"));
+      const pushed = harness.frame((text) =>
+        text.includes("Pushed feature to origin.")
+      );
+
+      await harness.run(["P", () => failed, "p", () => pushed, "c"]);
+
+      expect(asks).toBe(2);
+      const retrying = harness.writes.find((text) =>
+        text.includes("P Retry push")
+      )!;
+      expect(retrying).toContain(`${ASKED_ORIGIN}... ✗`);
+      expect(retrying).toContain(
+        "Not pushing: origin's default branch is unknown. To retry, press",
+      );
     });
 
     it("offers Retry push when the push fails or is aborted, which pushes again continuing the dialog's output", async () => {
       for (const abort of [false, true]) {
         let pushes = 0;
+        let asks = 0;
         const harness = pagerHarness((signal) => ({
           ...fakeIo().io,
+          queryAsync: (args) => {
+            asks++;
+            return fakeIo().io.queryAsync(args);
+          },
           run: () => {
             if (pushes++ > 0) {
               return Promise.resolve({ success: true, output: "" });
@@ -2421,6 +2748,8 @@ describe("view-push", () => {
         ]);
 
         expect(pushes).toBe(2);
+        // The retry keeps to the default branch the failed push learned.
+        expect(asks).toBe(1);
         const retrying = harness.writes.find((text) =>
           text.includes(" Abort ") && text.includes("To retry") &&
           text.includes("Pushing feature to origin...")
@@ -2596,16 +2925,22 @@ describe("view-push", () => {
       };
 
       /** Drives the viewer over a checkout of `feature` that `origin`
-       * already has, recording each push in `ran`. */
+       * already has, recording each push in `ran`, and each question to a
+       * server in `asked`. */
       function pushedHarness(
         options: Partial<Pick<PagerDeps, "git" | "github">> = {},
       ) {
         const ran: string[] = [];
+        const asked: string[] = [];
         const harness = pagerHarness(
           () => {
             const fake = fakeIo({ answers: FEATURE_PUSHED });
             return {
               ...fake.io,
+              queryAsync: (args) => {
+                asked.push(args.join(" "));
+                return fake.io.queryAsync(args);
+              },
               run: (args) => {
                 ran.push(args.join(" "));
                 return fake.io.run(args);
@@ -2614,8 +2949,79 @@ describe("view-push", () => {
           },
           { git: viewerGit({}, UPSTREAM), github: findingGitHub, ...options },
         );
-        return { ...harness, ran };
+        return { ...harness, ran, asked };
       }
+
+      it("asks again whether to push when Retry push follows a failure to ask origin which branch is its default", async () => {
+        let asks = 0;
+        const ran: string[] = [];
+        const harness = pagerHarness(() => {
+          const { io } = fakeIo({ answers: FEATURE_PUSHED });
+          return {
+            ...io,
+            queryAsync: (args) =>
+              asks++ === 0 ? Promise.resolve(null) : io.queryAsync(args),
+            run: (args) => {
+              ran.push(args.join(" "));
+              return io.run(args);
+            },
+          };
+        }, { git: viewerGit({}, UPSTREAM), github: findingGitHub });
+        const failed = harness.frame((text) => text.includes("P Retry push"));
+        const settled = harness.frame((text) =>
+          text.includes(" Cancel ") || text.includes("Pushed feature")
+        );
+
+        await harness.run(["P", () => failed, "p", () => settled, "c"]);
+
+        expect(asks).toBe(2);
+        expect(ran).toEqual([]);
+        expect(harness.writes.some((text) => text.includes(" Cancel "))).toBe(
+          true,
+        );
+      });
+
+      it("pushes again without asking whether to push, or asking origin's server again for its default branch, when Retry push follows a confirmed push that failed", async () => {
+        let asks = 0;
+        const ran: string[] = [];
+        const harness = pagerHarness(() => {
+          const { io } = fakeIo({ answers: FEATURE_PUSHED });
+          return {
+            ...io,
+            queryAsync: (args) => {
+              asks++;
+              return io.queryAsync(args);
+            },
+            run: (args) => {
+              ran.push(args.join(" "));
+              return Promise.resolve({ success: ran.length > 1, output: "" });
+            },
+          };
+        }, { git: viewerGit({}, UPSTREAM), github: findingGitHub });
+        const asked = harness.frame((text) => text.includes(" Cancel "));
+        const failed = harness.frame((text) => text.includes("P Retry push"));
+        let settled = Promise.resolve();
+
+        await harness.run([
+          "P",
+          () => asked,
+          "u",
+          () => failed,
+          () => {
+            settled = harness.frame((text) =>
+              text.includes(" Cancel ") ||
+              text.includes("Pushed feature to origin.")
+            );
+            return Promise.resolve();
+          },
+          "p",
+          () => settled,
+          "c",
+        ]);
+
+        expect(ran).toEqual([PUSH_FEATURE, PUSH_FEATURE]);
+        expect(asks).toBe(1);
+      });
 
       it("says what pushing would do and which pull request is open, pushing nothing until Push, which continues the dialog", async () => {
         const harness = pushedHarness();
@@ -2639,6 +3045,9 @@ describe("view-push", () => {
 
         expect(ranWhenAsked).toEqual([]);
         expect(harness.ran).toEqual([PUSH_FEATURE]);
+        // Origin's server is asked for its default branch before the question,
+        // and the push the question confirms keeps to that answer.
+        expect(harness.asked).toEqual([ASK_ORIGIN_DEFAULT]);
         // The push that asked, and the one Push started; the second `P`
         // started none.
         expect(harness.signals).toHaveLength(2);
@@ -3299,6 +3708,90 @@ describe("view-push", () => {
         expect(harness.writes.at(-1)).toMatch(
           new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
         );
+      });
+
+      it("creates it into the branch upstream's server names as its default, titled as the first commit that branch lacks, whatever git cached on cloning", async () => {
+        const created: CreateRequest[] = [];
+        const harness = pagerHarness(
+          () =>
+            fakeIo({
+              pushOutput: GITHUB_OFFER,
+              answers: {
+                "ls-remote --symref upstream HEAD": symrefListing("trunk"),
+              },
+            }).io,
+          {
+            git: viewerGit({ "cf-view.pullRequestTool": "api" }, {
+              ...UPSTREAM,
+              "symbolic-ref --quiet refs/remotes/upstream/HEAD":
+                "refs/remotes/upstream/main\n",
+              [
+                "rev-list --reverse --no-merges --right-only --cherry-pick " +
+                "--end-of-options refs/remotes/upstream/trunk...HEAD --"
+              ]: "c2\n",
+              "-c log.showSignature=false log -1 --format=%s%x00%b c2 --":
+                "Add the widget\0",
+            }),
+            github: {
+              ...unusedGitHub,
+              create: (request) => {
+                created.push(request);
+                return Promise.resolve(OCTO_PULL_REQUEST);
+              },
+            },
+          },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        expect(created).toEqual([{
+          repository: "octo/repo",
+          head: "fork:feature",
+          base: "trunk",
+          title: "Add the widget",
+          body: "",
+        }]);
+      });
+
+      it("fails, offering to retry, when upstream's server names no default branch or cannot be asked", async () => {
+        for (const listing of ["0123456789abcdef\tHEAD\n", null]) {
+          const created: CreateRequest[] = [];
+          const harness = pagerHarness(
+            () =>
+              fakeIo({
+                pushOutput: GITHUB_OFFER,
+                answers: { "ls-remote --symref upstream HEAD": listing },
+              }).io,
+            {
+              git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+              github: {
+                ...unusedGitHub,
+                create: (request) => {
+                  created.push(request);
+                  return Promise.resolve(OCTO_PULL_REQUEST);
+                },
+              },
+            },
+          );
+          const closable = harness.frame((text) => text.includes(" Close "));
+
+          await harness.run(["P", () => closable, "c"]);
+
+          expect(created).toEqual([]);
+          const shown = harness.writes.find((text) =>
+            text.includes(" Close ")
+          )!;
+          expect(shown).toContain(
+            "Asking upstream which branch is its default... ✗",
+          );
+          expect(shown).toContain(
+            "Creating the pull request failed: upstream's",
+          );
+          expect(shown).toContain(
+            "default branch is unknown. To retry, press Create PR.",
+          );
+        }
       });
 
       it("gives the created pull request's address in the dialog, saying it is quitting, for two seconds before it quits", async () => {

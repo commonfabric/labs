@@ -10,6 +10,7 @@ import {
   generateCfcTypes,
   withExport,
 } from "./generate-cfc-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * Tests for the `commonfabric/cfc` type generator.
@@ -78,7 +79,7 @@ function exportedDeclarationNames(source: ts.SourceFile): Set<string> {
   return names;
 }
 
-Deno.test("generated cfc types expose exactly the public authoring surface", () => {
+test("generated cfc types expose exactly the public authoring surface", () => {
   const authored = reExportedNames(parseFile(AUTHORING_URL));
   const generated = exportedDeclarationNames(parseFile(GENERATED_URL));
 
@@ -90,7 +91,7 @@ Deno.test("generated cfc types expose exactly the public authoring surface", () 
   );
 });
 
-Deno.test("generated cfc types are self-contained", () => {
+test("generated cfc types are self-contained", () => {
   const source = parseFile(GENERATED_URL);
   // The in-memory compiler serves this module as a single text and cannot
   // follow relative imports, so there must be no imports or re-exports.
@@ -106,7 +107,7 @@ Deno.test("generated cfc types are self-contained", () => {
   }
 });
 
-Deno.test("generated cfc types are declaration-only", () => {
+test("generated cfc types are declaration-only", () => {
   const source = parseFile(GENERATED_URL);
   for (const statement of source.statements) {
     if (ts.isVariableStatement(statement)) {
@@ -128,7 +129,7 @@ Deno.test("generated cfc types are declaration-only", () => {
   }
 });
 
-Deno.test("generated cfc pattern constructors retain their public types", () => {
+test("generated cfc pattern constructors retain their public types", () => {
   const generated = Deno.readTextFileSync(GENERATED_URL);
   assert(
     generated.includes(
@@ -138,7 +139,7 @@ Deno.test("generated cfc pattern constructors retain their public types", () => 
   );
 });
 
-Deno.test("generateCfcTypes reproduces the checked-in module", async () => {
+test("generateCfcTypes reproduces the checked-in module", async () => {
   const generated = await generateCfcTypes();
   assertEquals(
     generated,
@@ -147,7 +148,7 @@ Deno.test("generateCfcTypes reproduces the checked-in module", async () => {
   );
 });
 
-Deno.test("findEmitted throws when no emitted file matches", () => {
+test("findEmitted throws when no emitted file matches", () => {
   assertThrows(
     () => findEmitted(new Map(), "missing.d.ts"),
     Error,
@@ -155,7 +156,7 @@ Deno.test("findEmitted throws when no emitted file matches", () => {
   );
 });
 
-Deno.test("assertNoEmitErrors throws on error diagnostics", () => {
+test("assertNoEmitErrors throws on error diagnostics", () => {
   assertNoEmitErrors([]);
   assertThrows(
     () =>
@@ -172,16 +173,16 @@ Deno.test("assertNoEmitErrors throws on error diagnostics", () => {
   );
 });
 
-Deno.test("withExport throws on an unsupported declaration kind", () => {
+test("withExport throws on an unsupported declaration kind", () => {
   const statement = parse("doThing();").statements[0];
   assertThrows(() => withExport(statement, true), Error, "Unsupported");
 });
 
-Deno.test("declarationName returns undefined for a non-declaration", () => {
+test("declarationName returns undefined for a non-declaration", () => {
   assertEquals(declarationName(parse("doThing();").statements[0]), undefined);
 });
 
-Deno.test("flatten preserves public declaration-only functions", () => {
+test("flatten preserves public declaration-only functions", () => {
   const body = flatten(
     "export declare function make<T>(value: T): Box<T>;\ninterface Box<T> { value: T }\n",
     "x.d.ts",
@@ -192,7 +193,7 @@ Deno.test("flatten preserves public declaration-only functions", () => {
   assert(!body.includes("export interface Box<T>"));
 });
 
-Deno.test("flatten skips non-declarations and drops unreferenced types", () => {
+test("flatten skips non-declarations and drops unreferenced types", () => {
   const body = flatten(
     "doThing();\nexport type Keep = string;\ntype Drop = number;\n",
     "x.d.ts",
@@ -205,7 +206,7 @@ Deno.test("flatten skips non-declarations and drops unreferenced types", () => {
   assert(!body.includes("Drop"), "unreferenced helper must be dropped");
 });
 
-Deno.test("flatten throws when a public export has no declaration", () => {
+test("flatten throws when a public export has no declaration", () => {
   assertThrows(
     () => flatten("export type A = string;\n", "x.d.ts", new Set(["Missing"])),
     Error,
@@ -213,7 +214,7 @@ Deno.test("flatten throws when a public export has no declaration", () => {
   );
 });
 
-Deno.test("formatTypeScript rejects input that deno fmt cannot parse", async () => {
+test("formatTypeScript rejects input that deno fmt cannot parse", async () => {
   await assertRejects(
     () => formatTypeScript("const = ;\n"),
     Error,

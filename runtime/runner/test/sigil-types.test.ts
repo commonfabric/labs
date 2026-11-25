@@ -11,9 +11,9 @@
  * a type that lies.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assertWebhookCellLinkRefPayload } from "../src/sigil-types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("assertWebhookCellLinkRefPayload", () => {
   it("accepts an addressing payload with valid fields", () => {

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -15,6 +14,12 @@ import {
 } from "@commonfabric/runner";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 import { vetSpace } from "../../src/ops/space-vetting.ts";
 import { installCustomRoot } from "../install-custom-root.ts";

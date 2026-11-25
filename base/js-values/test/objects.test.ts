@@ -16,13 +16,13 @@
  * answer to bound anything.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   constructorOfObject,
   constructorOfPrototype,
   isInertPlainObject,
 } from "@commonfabric/js-values/objects";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("objects", () => {
   describe("isInertPlainObject()", () => {

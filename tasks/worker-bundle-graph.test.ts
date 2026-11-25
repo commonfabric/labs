@@ -14,6 +14,7 @@
 // exposes and this walk follows.
 
 import { assert, assertEquals } from "@std/assert";
+import { test } from "@commonfabric/test-support/test";
 
 const WORKER_ENTRY = "runtime/runtime-client/src/backends/web-worker/index.ts";
 
@@ -77,7 +78,7 @@ const codeReachable = (graph: DenoInfoGraph): Set<string> => {
   return reached;
 };
 
-Deno.test("the client worker's code-reachable module set holds no server-only module (and really reaches the runtime graph)", async () => {
+test("the client worker's code-reachable module set holds no server-only module (and really reaches the runtime graph)", async () => {
   const repoRoot = new URL("../", import.meta.url);
   const command = new Deno.Command(Deno.execPath(), {
     args: ["info", "--no-lock", "--json", WORKER_ENTRY],

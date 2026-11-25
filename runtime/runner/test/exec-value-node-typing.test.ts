@@ -17,9 +17,9 @@
  * differential rather than a restatement.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { FabricExecValue, JSONValue, Node } from "../src/builder/types.ts";
 
 describe("serialized node binding typing", () => {

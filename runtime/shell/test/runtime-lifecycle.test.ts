@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { shouldRecreateRuntime } from "../src/lib/runtime-lifecycle.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("shouldRecreateRuntime", () => {
   // One runtime per (identity, host). A space/view change must NOT recreate the

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import {
@@ -9,6 +8,7 @@ import {
 } from "../src/doc-utils.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import { asObjectSchema, createTestProgram, getTypeFromCode } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The symbol of property `name` of the interface `Root` in `code`. */
 async function propertyOf(code: string, name: string) {

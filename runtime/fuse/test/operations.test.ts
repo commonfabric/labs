@@ -1,10 +1,15 @@
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import type { PieceController } from "@commonfabric/piece/ops";
 import { linkRefFrom } from "@commonfabric/runner/shared";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { CfcProjectionAnnotator } from "../annotations.ts";
 import {

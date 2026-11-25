@@ -43,13 +43,15 @@ export interface DiffCounts {
 
 /**
  * What the diff view knows about one file beyond the diff text: the languages
- * of its sides, and complete file text to resolve syntax across omitted diff
- * lines.
+ * of its sides, and the highlighted lines of each complete side to resolve
+ * syntax across omitted diff lines. A side's lines may be computed afresh on
+ * each call, so a caller asks for them once per file and keeps them only while
+ * it reads that file.
  */
 export interface DiffCountFileContext {
   readonly languages: DiffFileLanguages;
-  readonly oldLines?: readonly Line[];
-  readonly newLines?: readonly Line[];
+  oldLines?(): readonly Line[] | undefined;
+  newLines?(): readonly Line[] | undefined;
 }
 
 interface ChangedLine {
@@ -172,7 +174,7 @@ export function commentOnlyFiles(
     const [hunk] = file.hunks;
     const context = contexts[fileIndex];
     if (
-      !hunk || !context?.oldLines || !context.newLines ||
+      !hunk || !context ||
       file.oldObject === undefined || file.newObject === undefined ||
       file.oldPath !== file.newPath ||
       !raw.slice(file.headerLine, hunk.headerLine).every((line) =>
@@ -181,17 +183,20 @@ export function commentOnlyFiles(
     ) {
       return false;
     }
-    const oldMark = byteOrderMark(context.oldLines, file.oldObject);
+    const oldLines = context.oldLines?.();
+    const newLines = oldLines && context.newLines?.();
+    if (!oldLines || !newLines) return false;
+    const oldMark = byteOrderMark(oldLines, file.oldObject);
     if (
       oldMark === undefined ||
-      oldMark !== byteOrderMark(context.newLines, file.newObject)
+      oldMark !== byteOrderMark(newLines, file.newObject)
     ) {
       return false;
     }
     const { oldLanguage, newLanguage } = context.languages;
-    const oldCode = sideCode(context.oldLines, oldLanguage);
+    const oldCode = sideCode(oldLines, oldLanguage);
     return oldCode !== undefined &&
-      oldCode === sideCode(context.newLines, newLanguage);
+      oldCode === sideCode(newLines, newLanguage);
   });
 }
 
@@ -433,22 +438,24 @@ function fallbackCommentLines(
   if (!oldSyntax && !newSyntax) return new Map();
 
   const result = new Map<number, string>();
+  const oldLines = oldSyntax && context?.oldLines?.();
+  const newLines = newSyntax && context?.newLines?.();
   const firstLine = (side: "oldStart" | "newStart") =>
     file.hunks[0]?.[side] === 1;
   const oldState: CommentState = {
-    inStep: Boolean(context?.oldLines) || firstLine("oldStart"),
+    inStep: Boolean(oldLines) || firstLine("oldStart"),
   };
   const newState: CommentState = {
-    inStep: Boolean(context?.newLines) || firstLine("newStart"),
+    inStep: Boolean(newLines) || firstLine("newStart"),
   };
   let oldNextLine = 0;
   let newNextLine = 0;
   for (const [hunkIndex, hunk] of file.hunks.entries()) {
     const oldStart = sideStart(hunk.oldStart, hunk.oldCount);
     const newStart = sideStart(hunk.newStart, hunk.newCount);
-    if (context?.oldLines && oldSyntax) {
+    if (oldSyntax && oldLines) {
       scanCompleteLines(
-        context.oldLines,
+        oldLines,
         oldNextLine,
         oldStart,
         oldSyntax,
@@ -467,9 +474,9 @@ function fallbackCommentLines(
         "old",
       );
     }
-    if (context?.newLines && newSyntax) {
+    if (newSyntax && newLines) {
       scanCompleteLines(
-        context.newLines,
+        newLines,
         newNextLine,
         newStart,
         newSyntax,
@@ -875,7 +882,6 @@ function commentSyntaxFor(path: string, language: Language): CommentSyntax {
     addLine("//");
     addBlock("/*", "*/");
   }
-  if (/\.css$/.test(lower)) addBlock("/*", "*/");
   if (/\.(?:html?|xml|svg|md|markdown|mdown|mkd|mdx|vue|svelte)$/.test(lower)) {
     addBlock("<!--", "-->");
   }

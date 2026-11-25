@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { Pattern } from "../src/builder/types.ts";
 import { filter, FILTER_INPUT_SCHEMA } from "../src/builtins/filter.ts";

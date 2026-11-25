@@ -5,12 +5,17 @@
  * plain `deno test` runs.
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { DID, Identity } from "@commonfabric/identity";
 import { env, type Page } from "@commonfabric/integration";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   seedIdentity,

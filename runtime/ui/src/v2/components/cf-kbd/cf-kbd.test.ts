@@ -2,8 +2,8 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { CFKbd } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 describe("CFKbd", () => {
   afterEach(() => document.body.replaceChildren());

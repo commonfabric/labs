@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { NULL_LIVE_ENVIRONMENT } from "@/codec-common";
 import { newProbeEngine, ProbeEncodeAct } from "./probe-engine.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Returns a fresh encode act in the probe format, which has entered nothing. */
 function newAct(): ProbeEncodeAct {

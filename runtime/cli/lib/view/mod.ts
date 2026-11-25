@@ -37,6 +37,7 @@ import {
   languageNames,
   prepareLanguages,
   type Semantics,
+  TEMPLATE_LANGUAGE_NAMES,
 } from "./languages/language.ts";
 import type { DecodedLanguageSource } from "./languages/decoder.ts";
 import {
@@ -101,13 +102,14 @@ export async function viewMain(options: ViewOptions): Promise<void> {
     }
     return;
   }
-  const { doc, semantics, editSource, parses } = await buildPreparedView(
-    input,
-    options.file,
-    options.diff,
-    selection,
-    interactive,
-  );
+  const { doc, semantics, editSource, parses, parsesEnded } =
+    await buildPreparedView(
+      input,
+      options.file,
+      options.diff,
+      selection,
+      interactive,
+    );
   if (!editSource.allowsEmptyInput && doc.text.trim().length === 0) {
     throw new ViewError(
       options.file
@@ -126,6 +128,7 @@ export async function viewMain(options: ViewOptions): Promise<void> {
         showLineNumbers: options.lineNumbers,
         viewMode: options.rendered ? "rendered" : undefined,
         parses,
+        parsesEnded,
       },
       semantics(),
       editSource,
@@ -165,7 +168,7 @@ function pipedSelection(options: ViewOptions): SourceSelection {
     throw new ViewError(
       `cf view: unknown language "${options.language}". Available languages: ${
         languageNames().join(", ")
-      }`,
+      }. ${TEMPLATE_LANGUAGE_NAMES}`,
     );
   }
   return { language, fileName: options.filename };
@@ -232,7 +235,9 @@ export function buildView(
  * Build a view after loading the parsers its languages need. With
  * `deferParses`, a diff parses only as much of its complete files as
  * {@link PendingParses} parses at once, shows the rest as plain text, and
- * returns the parses it left in `parses`, for the pager to finish.
+ * returns the parses it left in `parses`, for the pager to finish, and in
+ * `parsesEnded` what forgets their results once the pager has built the view
+ * from the last of them.
  */
 export async function buildPreparedView(
   input: string | Uint8Array | ViewByteInput,
@@ -245,6 +250,7 @@ export async function buildPreparedView(
   semantics: () => Semantics | undefined;
   editSource: EditableSource;
   parses: readonly ParseJob[];
+  parsesEnded: () => void;
 }> {
   const selected = selectView(input, file, forceDiff, selection);
   await prepareLanguages(selected.languages);
@@ -257,7 +263,11 @@ export async function buildPreparedView(
     pending = deferParses ? new PendingParses() : undefined;
     view = builtView(selected, pending);
   }
-  return { ...view, parses: pending?.take() ?? [] };
+  return {
+    ...view,
+    parses: pending?.take() ?? [],
+    parsesEnded: () => pending?.keepOnly(new Set()),
+  };
 }
 
 /**

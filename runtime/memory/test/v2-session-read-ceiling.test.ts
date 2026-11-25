@@ -7,8 +7,13 @@
 
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import type { FabricPlainObject } from "@commonfabric/api";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Server } from "../v2/server.ts";
 import {
   encodeMemoryBoundary,

@@ -729,11 +729,15 @@ The API gateway's default cache mode remains the provider's implicit mode.
 Explicit mode pins a breakpoint to the first user-message prefix, which is
 stable while the harness appends assistant and tool messages. Use identical
 prompts and tool surfaces when comparing modes, since exact prefix identity is
-required for a cache hit. The ChatGPT/Codex subscription backend rejects the API
-`prompt_cache_options` field, so `--prompt-cache-mode` is not supported with
-`--model-provider openai-codex`; that provider continues to use implicit caching
-with stable affinity and reports the resulting cache usage. OpenAI documents the
-current cache fields and semantics in its
+required for a cache hit. In implicit mode a later request reuses a prompt only
+through the end of a whole message: the Responses providers send the first
+system message as `instructions` and each later one as its own developer
+message, and a batch run's result schema is the last of them, so runs that
+differ only in schema share the prompt before it. The ChatGPT/Codex subscription
+backend rejects the API `prompt_cache_options` field, so `--prompt-cache-mode`
+is not supported with `--model-provider openai-codex`; that provider continues
+to use implicit caching with stable affinity and reports the resulting cache
+usage. OpenAI documents the current cache fields and semantics in its
 [prompt caching guide](https://developers.openai.com/api/docs/guides/prompt-caching).
 
 ChatGPT/Codex subscription mode is a separate, explicit provider. It does not

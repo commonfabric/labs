@@ -1,8 +1,13 @@
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { command, PORT_IN_USE_EXIT } from "./cli.ts";
 

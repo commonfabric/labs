@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import type { EventHandler } from "../src/scheduler.ts";
 import {
   EventHandlerNotRunError,
@@ -12,6 +11,12 @@ import {
   type SchedulerTestRuntime,
   space,
 } from "./scheduler-test-utils.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const NOT_RUN_REASON = "action argument is undefined (test)";
 

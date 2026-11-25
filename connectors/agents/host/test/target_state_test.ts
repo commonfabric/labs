@@ -5,8 +5,9 @@ import {
   defaultTargetLedgerPath,
   parseAgentFabricApiUrl,
 } from "../src/target-state.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("target ledger paths use the canonical API and resolved space", async () => {
+test("target ledger paths use the canonical API and resolved space", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const first = await defaultTargetLedgerPath(
@@ -42,14 +43,14 @@ Deno.test("target ledger paths use the canonical API and resolved space", async 
   }
 });
 
-Deno.test("XDG_STATE_HOME selects the durable agent host state directory", () => {
+test("XDG_STATE_HOME selects the durable agent host state directory", () => {
   const directory = defaultAgentsHostStateDirectory((key) =>
     key === "XDG_STATE_HOME" ? "/state" : undefined
   );
   assertEquals(directory, join("/state", "commonfabric", "agents-host"));
 });
 
-Deno.test("HOME selects the platform agent host state directory", () => {
+test("HOME selects the platform agent host state directory", () => {
   const home = (key: string) => key === "HOME" ? "/users/operator" : undefined;
   assertEquals(
     defaultAgentsHostStateDirectory(home, "darwin"),
@@ -72,7 +73,7 @@ Deno.test("HOME selects the platform agent host state directory", () => {
   );
 });
 
-Deno.test("LOCALAPPDATA selects the Windows agent host state directory", () => {
+test("LOCALAPPDATA selects the Windows agent host state directory", () => {
   assertEquals(
     defaultAgentsHostStateDirectory(
       (key) => key === "LOCALAPPDATA" ? " C:\\Users\\operator " : undefined,
@@ -91,7 +92,7 @@ Deno.test("LOCALAPPDATA selects the Windows agent host state directory", () => {
   );
 });
 
-Deno.test("API URL parsing removes the input from failures", () => {
+test("API URL parsing removes the input from failures", () => {
   const secret = "credential-that-must-not-appear";
   const error = assertThrows(
     () => parseAgentFabricApiUrl(`https://operator:${secret}@[invalid`),

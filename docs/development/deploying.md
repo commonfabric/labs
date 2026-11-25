@@ -51,19 +51,27 @@ reviewers approves each run before it starts. Concurrent Estuary runs serialize
 without cancelling an in-progress run.
 
 After deployment, or immediately in verification-only mode, the workflow uses
-the existing bastion connection to read `/api/meta` from all 21 Estuary workers
-on ports 8001–8021 and from `https://estuary.saga-castor.ts.net/api/meta`. Every
-response must be HTTP 200 at the requested URL and report the selected SHA.
-The verification makes one request per endpoint and fails on an unavailable or
-mismatched endpoint.
+the existing bastion connection to read `/api/meta` from every Estuary worker
+and from `https://estuary.saga-castor.ts.net/api/meta`. Which workers those are
+comes from the host: infra records the Toolshed layout Estuary last completed
+in `/opt/cf/releases/toolshed-capacity.json`, as an object of `api` and
+`storage` instance counts, and the workers listen on consecutive ports from
+8001. Only the two layouts infra supports are accepted: 5 API and 16 storage
+instances (ports 8001–8021), which a host without the file runs, and 4 API and
+12 storage instances (ports 8001–8016), which server-side execution selects.
+Any other recorded layout fails the verification. Every response must be HTTP
+200 at the requested URL and report the selected SHA. The verification makes
+one request per endpoint and fails on an unavailable or mismatched endpoint.
 
 Successful verification uploads `receipt.json` in the GitHub artifact
 `estuary-deployment-<run_id>-<run_attempt>`. It records `repository`,
 `workflow_sha`, `run_id`, `run_attempt`, `verify_only`, `labs_sha`,
-`verified_at`, `expected_workers`, `workers`, and `https`.
-Each worker has `host`, `port`, and `git_sha`; `https` has `url` and `git_sha`.
-The receipt is uploaded only after the complete worker set and HTTPS result
-have been validated.
+`verified_at`, `capacity`, `expected_workers`, `workers`, and `https`.
+`capacity` is the layout the host recorded, with `api` and `storage`. Each
+worker has `host`, `port`, and `git_sha`; `https` has `url` and `git_sha`.
+The receipt is uploaded only after its layout has been checked against the
+supported ones and the complete worker set for that layout and the HTTPS
+result have been validated.
 
 ## Coordinated Rapids releases
 
@@ -72,7 +80,7 @@ Labs CI publishes binaries and attestations on green pushes to `main`.
 paired `producer=commonfabric/labs` and `run_id` hints:
 
 - `commonfabric/infra`: `rapids.yml`, which reconciles the release candidate.
-- `commonfabric/loom`: `rapids-dependencies.yml`, which integrates verified
+- `commonfabric/cfs`: `rapids-dependencies.yml`, which integrates verified
   producer dependencies and resolves their revisions independently.
 
 Each notification uses a separate repository-scoped Actions-write token from
@@ -130,8 +138,8 @@ command has a 45-minute limit. The receiver performs these steps in order:
    `rapids-deployment-<run_id>-<run_attempt>`, retained for 90 days. A failed
    validation or deployment stops this sequence before proof is uploaded.
 
-The evidence token is read-only for contents and Actions in `infra`, `loom`,
-`labs`, `commonfabric-weaver`, and `gvisor`. The bastion receives that token,
+The evidence token is read-only for contents and Actions in `infra`, `cfs`,
+`labs`, `weaver`, and `gvisor`. The bastion receives that token,
 `INFRA_SHA`, and the Labs orchestrator's `GITHUB_SHA`, `GITHUB_REPOSITORY`,
 `GITHUB_RUN_ID`, and `GITHUB_RUN_ATTEMPT`.
 
@@ -336,7 +344,7 @@ on infra's `main`. It checks out and runs nothing on the runner. On the bastion,
 `/opt/cf/deploy-replica-service.sh` checks the commit against infra's `main`
 again, runs infra's play from a clean worktree of that commit, and the play
 verifies the build's checksum and provenance before it touches Estuary. The
-bastion receives a short-lived token that reads `infra` and `loom` contents,
+bastion receives a short-lived token that reads `infra` and `cfs` contents,
 because the play asks whether the pinned Loom commit is on Loom's `main`.
 
 It has a concurrency group of its own, so an install runs independently of

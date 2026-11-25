@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as path from "@std/path";
 import {
@@ -6,6 +5,7 @@ import {
   coverageFiguresOf,
   readSpool,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   collectReports,
   main,

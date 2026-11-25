@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { spy } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import type { Source } from "@commonfabric/js-compiler";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import * as compiler from "../../src/harness/compiler-stack.ts";
 import { ensureCompilerStack } from "../../src/harness/deferred-compiler-stack.ts";

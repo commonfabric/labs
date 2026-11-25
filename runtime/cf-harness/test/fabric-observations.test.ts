@@ -5,11 +5,10 @@
  * that defer nothing, and sequence-scoped windows.
  */
 
-import { describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import { type Runtime, RuntimeTelemetry } from "@commonfabric/runner";
 import type { CfcRefusalDetail } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   comparableEntityHash,
   fabricRuntimeObservations,

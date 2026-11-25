@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
 import { firstHandshakeFailedError } from "@commonfabric/memory/v2/client";
 import { CompilerStackLoadError } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { NotificationType, RuntimeErrorCode } from "@/protocol/mod.ts";
 import {

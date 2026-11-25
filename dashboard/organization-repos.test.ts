@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { staticGitHubCredential } from "./github-auth.ts";
-import { GITHUB_ORGANIZATION } from "./lib.ts";
+import { GitHubAnswers, GITHUB_ORGANIZATION } from "./lib.ts";
 import { organizationRepos } from "./organization-repos.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const credential = staticGitHubCredential("organization-repos-test");
 
@@ -54,6 +54,28 @@ describe("organizationRepos()", () => {
     expect(wire.requested).toEqual([1, 2].map((page) =>
       `/orgs/${GITHUB_ORGANIZATION.name}/repos?per_page=100&page=${page}`
     ));
+  });
+
+  it("makes each request with the options given, so that one asked again is conditional", async () => {
+    const asked: (string | null)[] = [];
+    using _fetch = stub(globalThis, "fetch", (_input, init) => {
+      const etag = new Headers(init?.headers).get("if-none-match");
+      asked.push(etag);
+      return Promise.resolve(
+        etag === null
+          ? Response.json([repo("fresh")], { headers: { etag: '"listing"' } })
+          : new Response(null, { status: 304 }),
+      );
+    });
+    const answers = new GitHubAnswers();
+
+    const first = await organizationRepos(credential, { answers });
+    const again = await organizationRepos(credential, { answers });
+    await organizationRepos(credential);
+
+    expect(again).toEqual(first);
+    expect(first.map((held) => held.name)).toEqual([`${GITHUB_ORGANIZATION.name}/fresh`]);
+    expect(asked).toEqual([null, '"listing"', null]);
   });
 
   it("throws when the listing is not an array", async () => {

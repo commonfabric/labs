@@ -1,7 +1,6 @@
 import { toFileUrl } from "@std/path";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   fabricFromJsonValue,
   jsonFromFabricValue,
@@ -18,6 +17,12 @@ import {
   setServerExecutionConfig,
 } from "@commonfabric/memory/v2";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 

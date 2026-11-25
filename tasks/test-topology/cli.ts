@@ -330,11 +330,7 @@ function cliDenoSuite(): Suite {
     parts: [{
       packageDir: "runtime/cli",
       flags: ["-A"],
-      junit: {
-        kind: "integration",
-        scope: "cli",
-        filePrefix: "runtime/cli",
-      },
+      records: { kind: "integration", scope: "cli" },
       files: ["runtime/cli/test/piece-integration.test.ts"],
     }],
   });

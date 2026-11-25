@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert, assertEquals } from "@std/assert";
 import ts from "typescript";
@@ -11,6 +10,7 @@ import {
   isOptionalMemberSymbol,
   setParentPointers,
 } from "../../src/ast/utils.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 function createProgram(source: string): {
   sourceFile: ts.SourceFile;
@@ -64,7 +64,7 @@ function findFirst<T extends ts.Node>(
   return found;
 }
 
-Deno.test("getMemberSymbol resolves a property access through the base type", () => {
+test("getMemberSymbol resolves a property access through the base type", () => {
   const { sourceFile, checker } = createProgram(
     `interface Config { title: string }
      declare const config: Config;
@@ -76,7 +76,7 @@ Deno.test("getMemberSymbol resolves a property access through the base type", ()
   assertEquals(symbol.getName(), "title");
 });
 
-Deno.test(
+test(
   "getMemberSymbol resolves a string-literal element access through the base type",
   () => {
     const { sourceFile, checker } = createProgram(
@@ -91,7 +91,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "getMemberSymbol returns undefined for an unknown element-access key",
   () => {
     const { sourceFile, checker } = createProgram(
@@ -105,7 +105,7 @@ Deno.test(
   },
 );
 
-Deno.test("isOptionalMemberSymbol reflects the optional property flag", () => {
+test("isOptionalMemberSymbol reflects the optional property flag", () => {
   const { sourceFile, checker } = createProgram(
     `interface Config { maybe?: string; required: string }
      declare const config: Config;
@@ -124,7 +124,7 @@ Deno.test("isOptionalMemberSymbol reflects the optional property flag", () => {
   assertEquals(isOptionalMemberSymbol(required, checker), false);
 });
 
-Deno.test("getVariableInitializer returns the initializer of a const binding", () => {
+test("getVariableInitializer returns the initializer of a const binding", () => {
   const { sourceFile, checker } = createProgram(
     `const seed = 41 + 1; const used = seed;`,
   );
@@ -140,7 +140,7 @@ Deno.test("getVariableInitializer returns the initializer of a const binding", (
   assert(ts.isBinaryExpression(initializer));
 });
 
-Deno.test(
+test(
   "getVariableInitializer returns undefined for a non-identifier expression",
   () => {
     const { sourceFile, checker } = createProgram(`const value = 1 + 2;`);
@@ -149,7 +149,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "getTypeAtLocationWithFallback prefers a registered synthetic type",
   () => {
     const { sourceFile, checker } = createProgram(`declare const x: unknown;`);
@@ -166,7 +166,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "getTypeAtLocationWithFallback falls back to a better-typed initializer for an any binding",
   () => {
     // `raw` has no annotation and an `any`-typed initializer at the checker
@@ -194,7 +194,7 @@ Deno.test(
   },
 );
 
-Deno.test("setParentPointers wires parent links on a synthetic subtree", () => {
+test("setParentPointers wires parent links on a synthetic subtree", () => {
   const inner = ts.factory.createIdentifier("inner");
   const call = ts.factory.createCallExpression(inner, undefined, []);
   const statement = ts.factory.createExpressionStatement(call);
@@ -203,7 +203,7 @@ Deno.test("setParentPointers wires parent links on a synthetic subtree", () => {
   assertEquals(inner.parent, call);
 });
 
-Deno.test("getNodeText prints a synthetic node that has no source file", () => {
+test("getNodeText prints a synthetic node that has no source file", () => {
   const identifier = ts.factory.createIdentifier("synthetic");
   assertEquals(getNodeText(identifier), "synthetic");
 });

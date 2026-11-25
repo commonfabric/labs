@@ -9,7 +9,6 @@
 // calling `Deno.exit(1)` — the same failure, minus the process exit and the
 // help spew.
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 import { Identity } from "@commonfabric/identity";
@@ -17,6 +16,12 @@ import { decode } from "@commonfabric/text/utf8";
 import { ingest } from "../commands/ingest.ts";
 import { resolveSpaceDid } from "../lib/ingest-channels.ts";
 import { linkRefPayloadToString } from "@commonfabric/runner/shared";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { stripAnsi, withEnv } from "./utils.ts";
 
 const API_URL = "http://ingest-command-test.invalid:9999";

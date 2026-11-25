@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { findSectionPassage } from "../../src/docs-corpus/sections.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const section = (text: string) => ({
   path: "docs/collections.md",

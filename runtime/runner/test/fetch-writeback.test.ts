@@ -1,5 +1,3 @@
-/// <reference path="./clock.d.ts" />
-
 /**
  * What the fetch builtins report when a completion writeback cannot be
  * written, which is two different things.
@@ -23,10 +21,16 @@
  * the operation fails") carries the reasoning.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { Runtime } from "../src/runtime.ts";
 import { createBuilder } from "../src/builder/factory.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";

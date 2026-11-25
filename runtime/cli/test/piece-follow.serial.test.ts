@@ -2,10 +2,15 @@
  * The exit status `cf piece follow` sets when no setter is supplied.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { followPieceSourceAction } from "../commands/piece.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const TARGET = {
   apiUrl: "http://127.0.0.1:8000",

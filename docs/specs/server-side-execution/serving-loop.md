@@ -153,6 +153,15 @@ execution observer and decides which worker serves which space:
   left to serve, which also clears its count. Spaces whose heaps reach the
   limit only taken together are separated the same way and stay separate
   until then.
+
+  A thread with a heap limit that runs out of memory in a served handler's
+  run has that run's event failed as a watchdog kill fails one (§2, "The
+  watchdog"): its run beacon shows the run it ended in, and the worker the
+  space is placed on next writes the error as the event's consequence. The
+  event would otherwise be the earliest pending one in its space, and run
+  first on every placement. A worker the pool ends for the heap its
+  heartbeat reports fails no event, since the heartbeat's timer runs only
+  between runs, and whatever run the beacon shows then started after it.
 - The workers' runtimes compile in compile workers the process holds, not
   each worker its own: `SERVER_EXECUTION_COMPILE_WORKERS` of them in the
   toolshed (default 1), each started at its first compile. They read and put
@@ -376,13 +385,31 @@ the ruled flows subscribes to setup docs before activation.
 
 **A root the store can serve.** *(AMENDED 2026-11-19; behind
 `SpaceServerPolicy.currencyIndex`, which a toolshed sets to `skip` unless
-SERVER_EXECUTION_CURRENCY_INDEX says otherwise.)* Where the policy keeps
-the currency index (§3b) in its `skip` mode, the demand pass asks the memory
-server, for each root awaiting its first structure load whose piece is not
+SERVER_EXECUTION_CURRENCY_INDEX says otherwise.)* The policy keeps the
+currency index (§3b) in one of three modes: `record`, `skip`, and
+`start-upstream`, which does what `skip` does and what "A root stale
+upstream" below adds. Where the mode is `skip` or `start-upstream`, the
+demand pass asks the memory server, for each root awaiting its first structure load whose piece is not
 running, whether the store can serve it as it stands. A root that is no
 result document is judged as the piece its `result` back-links lead to,
 which is the piece a load of it would start, and a `computed:` root that
 one recorded piece writes is judged as that piece with no back-link read.
+A space-scoped root that is no `computed:` document, and whose stored
+document is absent or carries neither a `result` field nor a pattern
+pointer (tested as the load tests it, `asPatternIdentityRef()`), starts no
+piece when loaded, whatever writes it, and is **plain**. Under `skip` and
+`start-upstream` a plain root is parked as its load would park it, terminal
+and watching the document (a commit to it re-arms it, §3), without the
+load, unless a commit to the document was admitted while the judgment ran.
+Its document is still synced into the serving replica, as the load's first
+step syncs it, and a root whose sync fails is loaded in the same pass.
+Whether a plain root's stored value is current is not judged, since a load
+would not change it: a document a recorded piece maintains is current once
+that piece runs, and one written by something the index cannot account
+for, a client or a lift's write through `Writable.for(...).set()`, is read
+as the store holds it until its writer runs for another reason. That
+staleness is accepted in preference to starting a writer for each such
+document. A root demanded at a narrower scope is loaded.
 The store can serve a root
 when the piece's `space` slice is clean and of the current epoch, and every
 demand row of every session whose id the piece writes or owns, or a recorded
@@ -416,8 +443,12 @@ are loaded as before. A `computed:` root narrower than the space is judged
 as a space-scoped one is: its instance is one of the demand rows the piece
 that writes it has to vouch for. In the
 `record` mode the same judgment is made and counted, and every root is
-loaded; a loop whose policy names `skip` and no epoch
-(`SpaceServerPolicy.currencyEpoch`) runs in it. Impl: `StoreCurrency` in `runtime/runner/src/executor/store-currency.ts`,
+loaded. A root the judgment does not pass is loaded in every mode but one
+case: `start-upstream` holds a root that is stale only upstream, as the
+next paragraphs say. The epoch is the one the loop's policy names
+(`SpaceServerPolicy.currencyEpoch`), and one fixed value shared by every
+build where it names none, so a record is trusted by a later build until an
+input marks it or the policy names another epoch. Impl: `StoreCurrency` in `runtime/runner/src/executor/store-currency.ts`,
 `judgeCurrencyRoots()` in `runtime/memory/v2/currency-index.ts`; pinned in
 `runtime/runner/test/executor/space-server-currency.test.ts`.
 
@@ -438,7 +469,8 @@ pattern's index entry goes with the release, and so do the watches of the
 documents only the stopped pieces read: the release asks for the pass a stop
 asks for (`docs/features/document-release.md`).
 
-**A root stale upstream.** *(Behind `SpaceServerPolicy.currencyIndex`.)* A
+**A root stale upstream.** *(Behind `SpaceServerPolicy.currencyIndex`, and
+acted on in its `start-upstream` and `record` modes.)* A
 root whose piece is stale only through what is upstream of it is not made
 current by starting that piece: the piece would derive from what the store
 holds. The judgment tells such a root apart. A slice marked `1` is stale only
@@ -452,7 +484,21 @@ slice that read its output is stale for a reason no start clears
 (`currency_slice.unvouched`). A root that passes but for such slices is held,
 whether they are slices of its own piece or of a piece beneath it that a
 demanded instance is resolved under, and the judgment names the pieces whose
-slices hold it. Under `skip` it is neither loaded nor started, and stays
+slices hold it. That judgment is the same in every mode. Under `skip` the
+loop acts on none of it: the root is loaded and its piece started, as a root
+the judgment refuses is, so the piece derives from what the store holds of
+the pieces upstream, as it does where no index is kept. The loop counts the
+root under the reason `stale-upstream` (§7), demands no instance for it,
+holds W for nothing, and leaves a piece that runs and is stale upstream as it
+is; the record of the started piece is stored marked, so the store serves no
+root that rests on it. A `skip` loop carries no demand at all (§3b), so a run
+withdrawn for a scoped instance its writer has not produced for the run's
+viewer (§3d) demands nothing either: as where no index is kept, the writer
+produces the instance only for a demand of its own, and until it does the
+run stays withdrawn and the viewer reads what the store holds of the run's
+output. The rest of this paragraph is what a `start-upstream`
+loop does, and a `record` loop for a piece that runs. Under `start-upstream`
+the root is neither loaded nor started, and stays
 among the roots awaiting a first load; under `record` it is loaded, and each
 of those pieces is then one that runs and is stale upstream. The loop demands the instances those reads
 name, in its own space, for the pairs the reads were made for, as demand it
@@ -783,6 +829,53 @@ the lease:
   process that was suspended, fires it once on waking.
 - The count starts at the worker's first message. Until its modules have loaded
   a worker has no timer to post from and no lease to release.
+- Each worker has a run beacon, which the pool hands it at its start: three
+  slots of a `SharedArrayBuffer` that its thread shares with the main thread
+  (`run-beacon.ts`). The worker's schedulers write it around the body of
+  every action run, a derivation's and a handler's alike: `epoch` counts the
+  starts and ends of runs, so it is odd while a run's body holds the thread
+  (a body that returns a promise has let go of the thread once it returns);
+  `run` holds the number the worker gave the run; and `reads` counts the
+  reads the run has made at the read sites (`read-stats.ts`), so a count that
+  moves tells a run doing work from one in a loop of its own. Only the
+  outermost of runs started inside one another is marked. The worker numbers
+  an action the first time it runs it, and a served handler's run for an
+  event afresh for each run, and posts what a number stands for once, before
+  the run's body starts: the space, the scheduler's id for the action (the key
+  §7's `actions` lists it under), its module or pattern name and its piece
+  where known, and for a handler's run the event's stream entry. The post
+  reaches the main thread without the worker's thread yielding, so it arrives
+  while the run holds the thread, and a post per run, which would make every
+  run a message the watchdog counts, is not made. Once the worker's realm has collected an
+  action, the worker posts its number as forgotten, with the others collected
+  in the same turn (`worker.runsForgotten`), and the pool drops what it kept
+  for it, so that what the pool keeps of a worker's numbers is bounded by the
+  actions the worker can still run. Each of the watchdog's checks reads the
+  beacon (`Atomics.load`), reading `epoch` again after the run's number and
+  discarding a reading whose `epoch` moved, since the run may have ended and
+  another started while the slots were read. It counts the checks in a row
+  that find the same odd `epoch`; `workers.running` reports that, with the
+  run's name, without asking the worker (§7). Pattern code cannot reach the
+  buffer: `SharedArrayBuffer` and `Atomics` are withheld from pattern
+  compartments.
+- A kill names, in its log line, the run its worker's beacon showed. When
+  that run is a served handler's run for an event, the event is failed and
+  not run again: the pool hands it to the worker the space is placed on
+  next, ahead of anything else it sends that worker for the space
+  (`host.failEvent`), and that worker's drain writes the error as the event's
+  consequence in place of running the handler (events.md §5), at the event's
+  arrival position: an earlier event that is still pending, including one the
+  same drain pass has just queued, holds it (events.md §2, "Terminal
+  positions"). The error says
+  that the handler held its worker's thread until the watchdog ended the
+  worker, and it is the outcome the event's sender reads. Like every terminal
+  notice it holds the space's later arrivals until its wave commits. Every
+  other pending event, and the space's placement, go on as for any failed
+  worker. The pool hands the event to that one worker, which holds it until
+  the wave carrying the error commits; a worker that fails before then
+  leaves the event pending for the next, which runs it, and so does a process
+  restarted between the kill and that commit. A kill whose worker was in a
+  derivation's run, or in no run, fails no event.
 - A long stretch of work on the worker's thread silences the heartbeat too, since
   the heartbeat is a timer on that thread. So a serving runtime runs the
   type-check, transform and emit step of a compile in the compile workers its
@@ -1292,9 +1385,19 @@ executing:
   The loop records at the end of a cycle whose settle did not exhaust its
   deadline, with the scheduler idle and no effect outstanding, for the
   pieces a computation of which changed, once the wave has committed every
-  contribution. A record names the slices of the runs the serving runtime
-  holds, which are those of the viewers demanding the piece then, and
-  replaces them; a slice it does not name keeps its rows and its mark. A
+  contribution. A record names the slices a live computation of the piece
+  ran at, which are those of the viewers demanding the piece then, and
+  replaces them; a viewer's slice it does not name keeps its rows and its
+  mark. A record that names no `space` slice was taken while nothing live
+  ran at the space's key, as a runtime takes of a piece an enclosing start
+  instantiated while no session demands what it writes. Where the record
+  is vouched for, it leaves a `space` slice that is clean and of the
+  recording epoch with its rows, which a later change to an instance they
+  name marks as it marks an absent viewer's. It replaces any other, the
+  held slice of a record that is not vouched for among them, or the missing
+  one of a piece with no record, with a slice that read nothing: a slice that passes no judgment
+  would otherwise stand until a session demands what its computations
+  wrote. A
   slice is stored marked when a live computation that ran at its key is not
   clean, or read a document in another space at no one instance or at a
   seq its replica cannot name, or one whose writer names
@@ -1317,8 +1420,12 @@ executing:
   keeps, for each registered instance, the spaces that read it and what it
   last told them, the instance's head and whether a piece there computes
   it and does not answer for it at present, and the reading index keeps
-  what it was last told. A slice is stored
-  marked `2` where its read is behind that head or the space cannot be
+  what it was last told. A document no recorded piece writes is an input
+  to its readers, in the space and across spaces, marking them only when
+  it changes, unless no computation may have produced it yet: a derived
+  document the store holds no instance of, or a cell of a piece (its
+  `result` back-link names the piece) the index holds no record of. A
+  slice is stored marked `2` where its read is behind that head or the space cannot be
   asked, and `1` where the instance is stale there. A judgment that may rest
   on such a slice first pulls, from each space the slices its demand rows
   are resolved under read, what changed since its last pull, and the space
@@ -1334,8 +1441,9 @@ executing:
   time a slice of the space pulled from expires at, or that space's own
   arming with a space it reads runs out: a judgment after that time pulls
   again, the time a judgment returns for its loop to judge again at is that
-  one for its own space, and a record that makes the time earlier tells each
-  space armed for longer. A trigger carries the number of the
+  one for its own space, and a record that makes the time earlier shortens
+  the arming of each space armed for longer to that time and tells it,
+  which leaves it armed. A trigger carries the number of the
   change it leads back to, one with no trigger behind it, and how many
   triggers lead from that change. The same change reaching a space through
   more triggers than before has come round a circle of spaces, and at
@@ -1351,8 +1459,11 @@ executing:
   demanding in the loop's space for a run in the `space` slice, a user's
   pairs for one in that user's slice, and the one pair for one in a
   session's slice. It finds the reads in the records it takes, so a loop
-  that keeps no index carries nothing. The set is replaced when it changes
-  and withdrawn at a park. The memory server admits a row only for a live
+  that keeps no index carries nothing. A loop in the `skip` mode (§1)
+  carries nothing either: its pieces derive from what the source holds,
+  and its judgment holds a slice that read an instance there stale until
+  the source's index proves the instance current. The set is replaced when
+  it changes and withdrawn at a park. The memory server admits a row only for a live
   client session on it that names an actor. Where that actor holds READ on
   the space carried into, by the check a named scoped read passes
   (protocol.md §2), the row is the actor's pair's. Where the actor does
@@ -1383,7 +1494,8 @@ executing:
   reached it with no pair is carried on with its origin for the reads made
   in the `space` slice, and the memory
   server drops every row of an origin session when that session ends. A
-  space's own loop offers rows the same way for what keeps one of its roots
+  space's own loop offers rows the same way, in every mode but `skip`, for
+  what keeps one of its roots
   or running pieces stale upstream (§1, "A root stale upstream"): each of
   those rows stands, since its own index named the instance, and a session
   of the space is carried as a pair without the access list being asked. A
@@ -2752,12 +2864,12 @@ demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
 demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
 structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, currency:
 {recordsStored, unvouched, judged, servable, refused, servedFromStore,
-rearmed, indexWakes, expiryWakes, falseClean, carried, carriedRefused,
-heldUpstream, upstreamAbandoned},
+plainRoots, rearmed, indexWakes, expiryWakes, falseClean, carried,
+carriedRefused, heldUpstream, upstreamAbandoned},
 settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
-drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
+drainInFlightSkips, failedWithWorker, visibilityBarriers, visibilityRecoveries,
 visibilityDeferrals, deferredRescansArmed, deferredRescansFired,
 lt1LeftoversPurged, lt1LateSealsRefused, orphanDeliveriesRefused,
 handlerNotRunDeferrals, handlerNotRunWaits, staleReadRequeues,
@@ -2770,8 +2882,8 @@ needsAttentionSealFailures, deliveryCheckpointWriteFailures, explicitRetries,
 dropped}, memo: {hits, misses, inflight}, outbox: {queued, completed, failed,
 budgetDeferrals}, lease: {held, lost}, parkedRuntimes: {retained, reused,
 discarded, held}, workers: {serving, spare, parked, heapUsed, heapStopped,
-started, retired, evicted, failed, shared, heapLimited}, push:
-{prioritizedSessions,
+running, started, retired, evicted, failed, shared, heapLimited}, actions:
+{entries, dropped, droppedMs}, push: {prioritizedSessions,
 followerSessions, mixedFlushes} }`
 (where the loop runs in workers, the block is every worker's counters taken
 together with the last counters of each worker that has closed
@@ -2789,7 +2901,24 @@ while parked for the parked-worker cap or the heap budget, and failed or
 killed; `shared` counts placements that joined a worker already serving
 another space at the cap; `heapLimited` counts the workers, among the
 failed, that reached their heap limit, and `heapStopped` is how many spaces
-are on no worker now because a worker they were alone on did; §1's Workers;
+are on no worker now because a worker they were alone on did; `running` lists
+each worker whose run beacon showed a run holding its thread at the
+watchdog's last check: its spaces; where the worker has named the run, the
+run's space, its action id (the key `actions` lists the action under), its
+name and piece, and the event of a served handler's run; how many checks in
+a row found it; and the reads it had made (§2, "The watchdog"). A run still
+going, which `actions` has no row for yet, shows there; §1's Workers;
+`actions` lists up to 50 of the actions the serving runtimes spent the most
+wall time on, fed from each completed run's `scheduler.run.complete` marker and
+ranked by total time: a host tracks at most 512, a run of an action with no row
+takes the cheapest action's row only if it alone took longer than that
+action's total, an action that loses its row starts a new one when it runs
+again, and each host reports every row it tracks, so the bound of 50 applies
+once, to the process, after the rows of one action of one space from several
+workers are taken together; `dropped` counts the rows given up and the rows
+past the bound, and `droppedMs` their time and that of runs no row took
+(`action-costs.ts`); a run is counted when it ends, so an action whose run is
+still going has no row;
 `parkedRuntimes` counts the runtimes idle parks kept, those a successor
 tenure served with, and those disposed unused — expired, evicted, tainted,
 or turned down at activation because the store head moved — with `held`
@@ -2938,10 +3067,16 @@ store; `unvouched` how many of those were of a piece the loop could not
 vouch for, by reason (§3b); `judged` the roots put to a judgment; `servable`
 the roots a judgment found the store could serve (§1), and `refused` the
 ones it could not, by the first reason found;
-`servedFromStore` the roots the `skip` mode left unloaded on it, once each
-time a root is first left; `rearmed` the roots so left that were then
+`refused` holds one reason the judgment does not return, `stale-upstream`:
+the roots a `skip` loop loaded that a judgment found stale only upstream,
+which a `start-upstream` loop would have held (§1), counted under no other
+mode;
+`servedFromStore` the roots the `skip` and `start-upstream` modes left
+unloaded on it, once each time a root is first left; `rearmed` the roots so left that were then
 loaded, because an input marked the piece or a session's demand reached an
-instance it does not vouch for; `falseClean` the pieces the index held
+instance it does not vouch for; `plainRoots` the roots a judgment found
+plain (§1), under every mode, which the `skip` and `start-upstream` modes
+park without a load and `record` loads; `falseClean` the pieces the index held
 clean that wrote an instance they answered for again, to a value other than
 the one it held, with no input of theirs changed, each one a judgment that
 would have served a stale value. An instance a slice vouches for at its own
@@ -2953,11 +3088,13 @@ the loop was woken to judge a root it had left unloaded, or a piece that
 runs and is stale upstream, because the index changed from outside the loop
 or a slice's record expired; `carried` the
 rows of demand the loops offer to carry into other spaces now, and
-`carriedRefused` the rows a space they were sent to refused (§3b);
-`heldUpstream` the roots a `skip` loop left unloaded because what the store
-held of them was stale only upstream, once each time a root is first held,
-and `upstreamAbandoned` the pieces, each one whose slices hold a root or
-one that runs, that the loop gave up waiting on what is upstream of (§1).
+`carriedRefused` the rows a space they were sent to refused (§3b), both
+zero under `skip`;
+`heldUpstream` the roots a `start-upstream` loop left unloaded because what
+the store held of them was stale only upstream, once each time a root is
+first held, and `upstreamAbandoned` the pieces, each one whose slices hold a
+root or one that runs, that the loop gave up waiting on what is upstream of
+(§1); both stay zero under `skip`.
 `ownedDefaultSeeds` the (piece root, demanding pair) seedings the passes
 completed — the ARRIVAL SEED: a pattern-owned cell declaring a default at a
 scope narrower than its result (scoped-cell-instances.md, "A pattern-owned
@@ -3026,6 +3163,10 @@ completed-run sentence; stage C tuning + stage-C design build W3,
 2026-08-19): `drainInFlightSkips` — re-drains that found the entry's
 earlier drain copy still queued, held, running, or marked into an
 uncommitted wave and did not queue it again (the drain against itself);
+`failedWithWorker` — entries whose handler's run held the thread of a worker
+the pool ended, which the drain sealed with the error as their consequence
+in place of running the handler (§2, "The watchdog"; events.md §5), counted
+at the decision, so a seal whose wave is refused counts again;
 `lt1LeftoversPurged` — LT1 same-space in-process copies the flush
 deadline found still QUEUED and purged synchronously at the deadline
 decision (their durable entry stays pending; the next drain delivers it

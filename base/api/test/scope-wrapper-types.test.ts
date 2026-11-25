@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { PerSpace, PerUser } from "../index.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("scope-wrapper-types", () => {
   // These cases are type-checked by `deno task check`; each also runs, so a

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   attestedPrincipalsAt,
@@ -43,6 +42,12 @@ import {
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
 import { getLogger } from "@commonfabric/logger";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // The routes those refs resolve to. A system pattern is still SERVED at, and
 // its modules still NAMED by, the route path; the `system:` ref is what a

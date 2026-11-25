@@ -9,10 +9,10 @@
  * is the claim check's own `StorageTransactionInconsistent`.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { FabricValue } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import type {
   IMemorySpaceAddress,

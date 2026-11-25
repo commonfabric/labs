@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { parseArgs } from "@std/cli/parse-args";
 
@@ -13,6 +12,7 @@ import {
   undeclaredFlagMessage,
 } from "../src/cli-flags.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Every TypeScript source under `directory`, tests and built pages aside. */
 async function* walkSources(directory: string): AsyncGenerator<string> {

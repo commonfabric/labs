@@ -1,7 +1,6 @@
 /** Scoped conflict addresses survive the server response and client decoding. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { type CellScope, toDocumentPath } from "../v2.ts";
 import { connect, loopback } from "../v2/client.ts";
@@ -10,6 +9,7 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("v2-conflict-scope", () => {
   for (const scope of ["space", "user", "session"] as const) {

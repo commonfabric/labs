@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { pressKey } from "@commonfabric/deno-web-test/commands";
 import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import {
@@ -132,7 +133,7 @@ async function pressTake(element: CFSuggestions, index = 0): Promise<void> {
   await pressKey("Enter");
 }
 
-Deno.test("cf-suggestions draws only the cards anchored at about, in rank order", async () => {
+test("cf-suggestions draws only the cards anchored at about, in rank order", async () => {
   using page = await mount([
     { id: "anchored", anchor: here },
     { id: "anchored-elsewhere", anchor: elsewhere },
@@ -152,7 +153,7 @@ Deno.test("cf-suggestions draws only the cards anchored at about, in rank order"
   ]);
 });
 
-Deno.test("cf-suggestions draws by a card's own anchor ahead of what it is about", async () => {
+test("cf-suggestions draws by a card's own anchor ahead of what it is about", async () => {
   using page = await mount([
     { id: "anchored-here", anchor: here, about: aboutOf(elsewhere) },
     { id: "anchored-elsewhere", anchor: elsewhere, about: aboutOf(here) },
@@ -160,12 +161,12 @@ Deno.test("cf-suggestions draws by a card's own anchor ahead of what it is about
   expect(drawnIds(page.element)).toEqual(["anchored-here"]);
 });
 
-Deno.test("cf-suggestions draws a handle on the same cell as about", async () => {
+test("cf-suggestions draws a handle on the same cell as about", async () => {
   using page = await mount([{ id: "same-cell", anchor: piece("here") }]);
   expect(drawnIds(page.element)).toEqual(["same-cell"]);
 });
 
-Deno.test("cf-suggestions draws the cards anchored at the thing a map element links to", async () => {
+test("cf-suggestions draws the cards anchored at the thing a map element links to", async () => {
   const { element } = mapElementLinkingTo(here);
   using page = await mount([
     { id: "anchored", anchor: here },
@@ -174,7 +175,7 @@ Deno.test("cf-suggestions draws the cards anchored at the thing a map element li
   expect(drawnIds(page.element)).toEqual(["anchored"]);
 });
 
-Deno.test("cf-suggestions draws nothing until about has resolved", async () => {
+test("cf-suggestions draws nothing until about has resolved", async () => {
   const resolution = Promise.withResolvers<void>();
   const { element } = mapElementLinkingTo(here, {
     resolution: resolution.promise,
@@ -195,7 +196,7 @@ Deno.test("cf-suggestions draws nothing until about has resolved", async () => {
   }
 });
 
-Deno.test("cf-suggestions draws the cards of the thing about's link moves to", async () => {
+test("cf-suggestions draws the cards of the thing about's link moves to", async () => {
   const { element, publish } = mapElementLinkingTo(here);
   using page = await mount([
     { id: "here", anchor: here },
@@ -207,7 +208,7 @@ Deno.test("cf-suggestions draws the cards of the thing about's link moves to", a
   expect(drawnIds(page.element)).toEqual(["elsewhere"]);
 });
 
-Deno.test("cf-suggestions draws only cards carrying one of its tags, when it has tags", async () => {
+test("cf-suggestions draws only cards carrying one of its tags, when it has tags", async () => {
   using page = await mount([
     { id: "tagged", anchor: here, tags: JSON.stringify(["food", "travel"]) },
     { id: "other-tag", anchor: here, tags: JSON.stringify(["work"]) },
@@ -217,13 +218,13 @@ Deno.test("cf-suggestions draws only cards carrying one of its tags, when it has
   expect(drawnIds(page.element)).toEqual(["tagged"]);
 });
 
-Deno.test("cf-suggestions hides itself while it draws no card", async () => {
+test("cf-suggestions hides itself while it draws no card", async () => {
   using page = await mount([{ id: "elsewhere", anchor: elsewhere }]);
   expect(page.element.hasAttribute("empty")).toBe(true);
   expect(getComputedStyle(page.element).display).toBe("none");
 });
 
-Deno.test("cf-suggestions announces a card seen once it is shown, and only once", async () => {
+test("cf-suggestions announces a card seen once it is shown, and only once", async () => {
   const items: SuggestionCard[] = [
     { id: "one", card_revision: "r1", anchor: here },
     { id: "two", anchor: here },
@@ -265,7 +266,7 @@ Deno.test("cf-suggestions announces a card seen once it is shown, and only once"
   }
 });
 
-Deno.test("cf-suggestions announces no card seen while it is off screen", async () => {
+test("cf-suggestions announces no card seen while it is off screen", async () => {
   using page = await mount([{ id: "hidden", anchor: here }], {
     hidden: true,
   });
@@ -274,7 +275,7 @@ Deno.test("cf-suggestions announces no card seen while it is off screen", async 
   expect(drawnIds(page.element)).toEqual(["hidden"]);
 });
 
-Deno.test("cf-suggestions announces a take on a trusted click of a shown card", async () => {
+test("cf-suggestions announces a take on a trusted click of a shown card", async () => {
   const items: SuggestionCard[] = [
     { id: "one", anchor: here },
     { id: "two", card_revision: "r2", anchor: here },
@@ -290,7 +291,7 @@ Deno.test("cf-suggestions announces a take on a trusted click of a shown card", 
   }]);
 });
 
-Deno.test("cf-suggestions announces no take for a scripted click", async () => {
+test("cf-suggestions announces no take for a scripted click", async () => {
   using page = await mount([{ id: "one", anchor: here }]);
   page.element.accessForTestingOnly.minimumShownMs = 0;
   await page.element.accessForTestingOnly.nextReport();
@@ -305,7 +306,7 @@ Deno.test("cf-suggestions announces no take for a scripted click", async () => {
   expect(page.taken).toEqual([]);
 });
 
-Deno.test("cf-suggestions announces no take for a trusted click on a card off screen", async () => {
+test("cf-suggestions announces no take for a trusted click on a card off screen", async () => {
   using page = await mount([{ id: "hidden", anchor: here }], {
     hidden: true,
   });
@@ -315,7 +316,7 @@ Deno.test("cf-suggestions announces no take for a trusted click on a card off sc
   expect(page.taken).toEqual([]);
 });
 
-Deno.test("cf-suggestions announces a faded card seen but takes nothing from it", async () => {
+test("cf-suggestions announces a faded card seen but takes nothing from it", async () => {
   using page = await mount([{ id: "faded", anchor: here }], { faded: true });
   page.element.accessForTestingOnly.minimumShownMs = 0;
   await page.element.accessForTestingOnly.nextReport();
@@ -324,7 +325,7 @@ Deno.test("cf-suggestions announces a faded card seen but takes nothing from it"
   expect(page.taken).toEqual([]);
 });
 
-Deno.test("cf-suggestions takes nothing from a card shown for less than half a second", async () => {
+test("cf-suggestions takes nothing from a card shown for less than half a second", async () => {
   using page = await mount([{ id: "one", anchor: here }]);
   await page.element.accessForTestingOnly.nextReport();
   expect(page.element.accessForTestingOnly.isTakeable("one")).toBe(true);
@@ -332,7 +333,7 @@ Deno.test("cf-suggestions takes nothing from a card shown for less than half a s
   expect(page.taken).toEqual([]);
 });
 
-Deno.test("cf-suggestions makes a rewritten card wait for a fresh report before it can be taken", async () => {
+test("cf-suggestions makes a rewritten card wait for a fresh report before it can be taken", async () => {
   using page = await mount([{ id: "one", title: "Plant", anchor: here }]);
   await page.element.accessForTestingOnly.nextReport();
   const access = page.element.accessForTestingOnly;
@@ -344,7 +345,7 @@ Deno.test("cf-suggestions makes a rewritten card wait for a fresh report before 
   expect(access.isTakeable("one")).toBe(true);
 });
 
-Deno.test("cf-suggestions makes a moved card wait for a fresh report before it can be taken", async () => {
+test("cf-suggestions makes a moved card wait for a fresh report before it can be taken", async () => {
   const one: SuggestionCard = { id: "one", anchor: here };
   const two: SuggestionCard = { id: "two", anchor: here };
   using page = await mount([one, two]);

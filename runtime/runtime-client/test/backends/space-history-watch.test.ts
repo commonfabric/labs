@@ -5,11 +5,11 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { WorkerClient } from "@/backends/worker-client.ts";
 import { NotificationType, RequestType } from "@/protocol/mod.ts";
 import { buildProcessor } from "./build-processor.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const space = "did:key:z6Mk-history-watch-space";
 const otherSpace = "did:key:z6Mk-history-watch-other";

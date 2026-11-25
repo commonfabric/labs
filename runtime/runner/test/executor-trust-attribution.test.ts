@@ -33,13 +33,19 @@
 //   writer and no gesture, reached by another handler's `send()` from a plain
 //   fire, mints the entry's actor.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type { StreamEventsDocValue } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime, type ServerRunInfo } from "../src/runtime.ts";
@@ -54,6 +60,16 @@ import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { awaitAdmitted } from "./support/serving-waits.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
+import {
+  type StoredDocumentReader,
+  storedLabelEntries,
+} from "./cfc-stored-labels.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("trust attribution space");
 const space = spaceSigner.did() as MemorySpace;
@@ -206,10 +222,14 @@ type LabelMapEntry = {
  * The export names of the implementations a stored doc RECORD's labels say
  * wrote it: the `symbol` of each `TransformedBy` atom, once each.
  */
-const transformedBySymbols = (record: unknown): string[] => {
-  const entries =
-    (record as { cfc?: { labelMap?: { entries?: LabelMapEntry[] } } })
-      ?.cfc?.labelMap?.entries ?? [];
+const transformedBySymbols = (
+  record: unknown,
+  read: StoredDocumentReader,
+): string[] => {
+  const entries = storedLabelEntries<LabelMapEntry>(
+    (record as { cfc?: unknown } | undefined)?.cfc,
+    read,
+  );
   const symbols = new Set<string>();
   for (const entry of entries) {
     for (const atom of entry.label?.integrity ?? []) {
@@ -233,10 +253,12 @@ const transformedBySymbols = (record: unknown): string[] => {
 const principalSubjects = (
   record: unknown,
   kind: "authored-by" | "represents-principal",
+  read: StoredDocumentReader,
 ): string[] => {
-  const entries =
-    (record as { cfc?: { labelMap?: { entries?: LabelMapEntry[] } } })
-      ?.cfc?.labelMap?.entries ?? [];
+  const entries = storedLabelEntries<LabelMapEntry>(
+    (record as { cfc?: unknown } | undefined)?.cfc,
+    read,
+  );
   const subjects: string[] = [];
   for (const entry of entries) {
     for (const atom of entry.label?.integrity ?? []) {
@@ -473,17 +495,39 @@ describe("executor-trust-attribution", () => {
         // THE PIN (INV-A / INV-D): the durable subjects are the ACTING
         // user from the entry's server-stamped firedAt. At base both
         // were the service DID (FLAG-5; rootcause §2a's store shape).
-        expect(principalSubjects(record, "authored-by")).toEqual([
+        expect(
+          principalSubjects(
+            record,
+            "authored-by",
+            (id) => Engine.read(engine, { id }),
+          ),
+        ).toEqual([
           aliceSigner.did(),
         ]);
-        expect(principalSubjects(record, "represents-principal")).toEqual([
+        expect(
+          principalSubjects(
+            record,
+            "represents-principal",
+            (id) => Engine.read(engine, { id }),
+          ),
+        ).toEqual([
           aliceSigner.did(),
         ]);
-        expect(principalSubjects(record, "authored-by")).not.toContain(
+        expect(
+          principalSubjects(
+            record,
+            "authored-by",
+            (id) => Engine.read(engine, { id }),
+          ),
+        ).not.toContain(
           serviceSigner.did(),
         );
         expect(
-          principalSubjects(record, "represents-principal"),
+          principalSubjects(
+            record,
+            "represents-principal",
+            (id) => Engine.read(engine, { id }),
+          ),
         ).not.toContain(serviceSigner.did());
       } finally {
         cancelProbe();
@@ -607,6 +651,7 @@ describe("executor-trust-attribution", () => {
           principalSubjects(
             Engine.read(engine, { id: targetId }),
             "authored-by",
+            (id) => Engine.read(engine, { id }),
           ),
         ).toEqual([aliceSigner.did()]);
 
@@ -628,6 +673,7 @@ describe("executor-trust-attribution", () => {
           principalSubjects(
             Engine.read(engine, { id: targetId }),
             "authored-by",
+            (id) => Engine.read(engine, { id }),
           ),
         ).toEqual([aliceSigner.did()]);
       } finally {
@@ -691,7 +737,12 @@ describe("executor-trust-attribution", () => {
           server,
           () => Engine.read(engine, { id: docId })?.value === "xx",
         );
-        expect(transformedBySymbols(Engine.read(engine, { id: docId })))
+        expect(
+          transformedBySymbols(
+            Engine.read(engine, { id: docId }),
+            (id) => Engine.read(engine, { id }),
+          ),
+        )
           .toEqual(["advance"]);
       } finally {
         cancelProbe();
@@ -784,17 +835,41 @@ describe("executor-trust-attribution", () => {
         );
         const aliceDoc = Engine.read(engine, { id: aliceDocId });
         const bobDoc = Engine.read(engine, { id: bobDocId });
-        expect(principalSubjects(aliceDoc, "authored-by")).toEqual([
+        expect(
+          principalSubjects(
+            aliceDoc,
+            "authored-by",
+            (id) => Engine.read(engine, { id }),
+          ),
+        ).toEqual([
           aliceSigner.did(),
         ]);
-        expect(principalSubjects(bobDoc, "authored-by")).toEqual([
+        expect(
+          principalSubjects(
+            bobDoc,
+            "authored-by",
+            (id) => Engine.read(engine, { id }),
+          ),
+        ).toEqual([
           bobSigner.did(),
         ]);
         // No contamination in either direction.
-        expect(principalSubjects(aliceDoc, "authored-by")).not.toContain(
+        expect(
+          principalSubjects(
+            aliceDoc,
+            "authored-by",
+            (id) => Engine.read(engine, { id }),
+          ),
+        ).not.toContain(
           bobSigner.did(),
         );
-        expect(principalSubjects(bobDoc, "authored-by")).not.toContain(
+        expect(
+          principalSubjects(
+            bobDoc,
+            "authored-by",
+            (id) => Engine.read(engine, { id }),
+          ),
+        ).not.toContain(
           aliceSigner.did(),
         );
       } finally {
@@ -861,10 +936,22 @@ describe("executor-trust-attribution", () => {
           () => Engine.read(engine, { id: docId })?.value !== undefined,
         );
         const minted = Engine.read(engine, { id: docId });
-        expect(principalSubjects(minted, "authored-by")).toEqual([
+        expect(
+          principalSubjects(
+            minted,
+            "authored-by",
+            (id) => Engine.read(engine, { id }),
+          ),
+        ).toEqual([
           aliceSigner.did(),
         ]);
-        expect(principalSubjects(minted, "represents-principal")).toEqual([
+        expect(
+          principalSubjects(
+            minted,
+            "represents-principal",
+            (id) => Engine.read(engine, { id }),
+          ),
+        ).toEqual([
           aliceSigner.did(),
         ]);
 
@@ -1242,7 +1329,11 @@ describe("executor-trust-attribution", () => {
           () => Engine.read(engine, { id: docId })?.value !== undefined,
         );
         expect(
-          principalSubjects(Engine.read(engine, { id: docId }), "authored-by"),
+          principalSubjects(
+            Engine.read(engine, { id: docId }),
+            "authored-by",
+            (id) => Engine.read(engine, { id }),
+          ),
         ).toEqual([seen]);
       } finally {
         cancelProbe();
@@ -1288,7 +1379,13 @@ describe("executor-trust-attribution", () => {
         expect(errors()).toEqual([]);
         const note = Engine.read(engine, { id: noteIds()[0] });
         expect(note?.value).toEqual({ text: "hello" });
-        expect(principalSubjects(note, "authored-by")).toEqual([
+        expect(
+          principalSubjects(
+            note,
+            "authored-by",
+            (id) => Engine.read(engine, { id }),
+          ),
+        ).toEqual([
           aliceSigner.did(),
         ]);
       } finally {

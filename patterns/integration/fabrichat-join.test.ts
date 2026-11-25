@@ -23,8 +23,8 @@ import type { DID } from "@commonfabric/identity";
 import { Identity } from "@commonfabric/identity";
 import { env, type Page, waitForCondition } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import {
   clickCfButton,
   clickTrustedAction,

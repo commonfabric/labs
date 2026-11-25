@@ -2,6 +2,7 @@ import { assert, assertEquals } from "@std/assert";
 import { transformSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { emittedSchemas, parseModule } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 //
 // Targeted coverage for schema-injection branches that ran in CI only through
@@ -9,7 +10,7 @@ import { emittedSchemas, parseModule } from "./transformed-ast.ts";
 // argument detection that skips injection when two schemas are already present.
 //
 
-Deno.test("schema injection reads the session scope from a `new X.perSession(...)` constructor", async () => {
+test("schema injection reads the session scope from a `new X.perSession(...)` constructor", async () => {
   const source = [
     'import { Writable as WritableConstructor } from "commonfabric";',
     "export default function Test() {",
@@ -29,7 +30,7 @@ Deno.test("schema injection reads the session scope from a `new X.perSession(...
   assertEquals(scoped.type, "string");
 });
 
-Deno.test("schema injection skips a pattern that already supplies input and result schemas", async () => {
+test("schema injection skips a pattern that already supplies input and result schemas", async () => {
   const source = [
     'import { pattern } from "commonfabric";',
     "export default pattern(",

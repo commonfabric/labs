@@ -12,8 +12,9 @@ import type {
   CommandExecutionOptions,
   PromptInput,
 } from "../src/types.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("command worker claims before execution and deduplicates command ids", async () => {
+test("command worker claims before execution and deduplicates command ids", async () => {
   const dir = await Deno.makeTempDir();
   const ledger = await CommandLedger.open(`${dir}/ledger.json`);
   const statuses: string[] = [];
@@ -72,7 +73,7 @@ Deno.test("command worker claims before execution and deduplicates command ids",
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("command worker keeps the same command ID apart across producer queues", async () => {
+test("command worker keeps the same command ID apart across producer queues", async () => {
   const dir = await Deno.makeTempDir();
   const ledger = await CommandLedger.open(`${dir}/ledger.json`);
   const published: Array<[string | undefined, string]> = [];
@@ -142,7 +143,7 @@ Deno.test("command worker keeps the same command ID apart across producer queues
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("command worker ignores commands for another owner", async () => {
+test("command worker ignores commands for another owner", async () => {
   const dir = await Deno.makeTempDir();
   const ledger = await CommandLedger.open(`${dir}/ledger.json`);
   let renameCalls = 0;
@@ -194,7 +195,7 @@ Deno.test("command worker ignores commands for another owner", async () => {
   }
 });
 
-Deno.test("commands run concurrently across sessions and cancel bypasses the session queue", async () => {
+test("commands run concurrently across sessions and cancel bypasses the session queue", async () => {
   const dir = await Deno.makeTempDir();
   const ledger = await CommandLedger.open(`${dir}/ledger.json`);
   const started = new Set<string>();
@@ -269,7 +270,7 @@ Deno.test("commands run concurrently across sessions and cancel bypasses the ses
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("cancel waits for an earlier admitted prompt to become active", async () => {
+test("cancel waits for an earlier admitted prompt to become active", async () => {
   const dir = await Deno.makeTempDir();
   const ledger = await CommandLedger.open(`${dir}/ledger.json`);
   const invocations: string[] = [];
@@ -340,7 +341,7 @@ Deno.test("cancel waits for an earlier admitted prompt to become active", async 
   }
 });
 
-Deno.test("cancel reaches a prompt while provider metadata is pending", async () => {
+test("cancel reaches a prompt while provider metadata is pending", async () => {
   const dir = await Deno.makeTempDir();
   const ledger = await CommandLedger.open(`${dir}/ledger.json`);
   const lookupStarted = Promise.withResolvers<void>();
@@ -429,7 +430,7 @@ Deno.test("cancel reaches a prompt while provider metadata is pending", async ()
   }
 });
 
-Deno.test("prompt commands publish session state while running and after completion", async () => {
+test("prompt commands publish session state while running and after completion", async () => {
   const dir = await Deno.makeTempDir();
   const ledger = await CommandLedger.open(`${dir}/ledger.json`);
   let active = false;
@@ -515,7 +516,7 @@ Deno.test("prompt commands publish session state while running and after complet
   }
 });
 
-Deno.test("failed prompts publish terminal session state", async () => {
+test("failed prompts publish terminal session state", async () => {
   const dir = await Deno.makeTempDir();
   const ledger = await CommandLedger.open(`${dir}/ledger.json`);
   let active = false;
@@ -585,7 +586,7 @@ Deno.test("failed prompts publish terminal session state", async () => {
   }
 });
 
-Deno.test("in-flight commands from a prior process become unknown", async () => {
+test("in-flight commands from a prior process become unknown", async () => {
   const dir = await Deno.makeTempDir();
   const path = `${dir}/ledger.json`;
   const ledger = await CommandLedger.open(path);
@@ -610,7 +611,7 @@ Deno.test("in-flight commands from a prior process become unknown", async () => 
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("terminal receipts that failed to publish are replayed after restart", async () => {
+test("terminal receipts that failed to publish are replayed after restart", async () => {
   const dir = await Deno.makeTempDir();
   const path = `${dir}/ledger.json`;
   try {
@@ -699,7 +700,7 @@ Deno.test("terminal receipts that failed to publish are replayed after restart",
   }
 });
 
-Deno.test("overlapping ledger writes all survive reopen", async () => {
+test("overlapping ledger writes all survive reopen", async () => {
   const dir = await Deno.makeTempDir();
   const path = `${dir}/ledger.json`;
   const ledger = await CommandLedger.open(path);
@@ -728,7 +729,7 @@ Deno.test("overlapping ledger writes all survive reopen", async () => {
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("command ledger rejects an unknown schema", async () => {
+test("command ledger rejects an unknown schema", async () => {
   const dir = await Deno.makeTempDir();
   const path = `${dir}/ledger.json`;
   try {
@@ -750,7 +751,7 @@ Deno.test("command ledger rejects an unknown schema", async () => {
   }
 });
 
-Deno.test("command ledger validates receipt keys and contents", async () => {
+test("command ledger validates receipt keys and contents", async () => {
   const dir = await Deno.makeTempDir();
   const path = `${dir}/ledger.json`;
   try {
@@ -808,7 +809,7 @@ Deno.test("command ledger validates receipt keys and contents", async () => {
   }
 });
 
-Deno.test("command receipts require canonical identities and timestamps", () => {
+test("command receipts require canonical identities and timestamps", () => {
   const receipt: AgentSessionCommandReceipt = {
     schema: AGENT_CONNECTOR_SCHEMAS.commandReceipt,
     ownerDid: "did:key:test-owner",
@@ -848,7 +849,7 @@ Deno.test("command receipts require canonical identities and timestamps", () => 
   );
 });
 
-Deno.test("command ledger writes private files in a private directory", async () => {
+test("command ledger writes private files in a private directory", async () => {
   const root = await Deno.makeTempDir();
   const directory = `${root}/state`;
   const path = `${directory}/ledger.json`;
@@ -871,7 +872,7 @@ Deno.test("command ledger writes private files in a private directory", async ()
   }
 });
 
-Deno.test("a published receipt prevents execution with a fresh local ledger", async () => {
+test("a published receipt prevents execution with a fresh local ledger", async () => {
   const directory = await Deno.makeTempDir();
   try {
     let renameCalls = 0;
@@ -943,7 +944,7 @@ Deno.test("a published receipt prevents execution with a fresh local ledger", as
   }
 });
 
-Deno.test("equivalent target receipts do not depend on object key order", async () => {
+test("equivalent target receipts do not depend on object key order", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const receipt: AgentSessionCommandReceipt = {
@@ -1005,7 +1006,7 @@ Deno.test("equivalent target receipts do not depend on object key order", async 
   }
 });
 
-Deno.test("commands reject control characters before creating a claim", async () => {
+test("commands reject control characters before creating a claim", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const ledger = await CommandLedger.open(`${directory}/ledger.json`);
@@ -1042,7 +1043,7 @@ Deno.test("commands reject control characters before creating a claim", async ()
   }
 });
 
-Deno.test("commands reject non-record payloads before claiming", async () => {
+test("commands reject non-record payloads before claiming", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const ledger = await CommandLedger.open(`${directory}/ledger.json`);
@@ -1082,7 +1083,7 @@ Deno.test("commands reject non-record payloads before claiming", async () => {
   }
 });
 
-Deno.test("commands reject malformed envelopes before claiming", async () => {
+test("commands reject malformed envelopes before claiming", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const ledger = await CommandLedger.open(`${directory}/ledger.json`);
@@ -1120,7 +1121,7 @@ Deno.test("commands reject malformed envelopes before claiming", async () => {
   }
 });
 
-Deno.test("shared in-flight receipts become unknown", async () => {
+test("shared in-flight receipts become unknown", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const ledger = await CommandLedger.open(`${directory}/ledger.json`);
@@ -1171,7 +1172,7 @@ Deno.test("shared in-flight receipts become unknown", async () => {
   }
 });
 
-Deno.test("shared receipt identities must match the submitted command", async () => {
+test("shared receipt identities must match the submitted command", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const ledger = await CommandLedger.open(`${directory}/ledger.json`);
@@ -1214,7 +1215,7 @@ Deno.test("shared receipt identities must match the submitted command", async ()
   }
 });
 
-Deno.test("synchronous driver failures publish a terminal receipt", async () => {
+test("synchronous driver failures publish a terminal receipt", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const ledger = await CommandLedger.open(`${directory}/ledger.json`);
@@ -1271,7 +1272,7 @@ Deno.test("synchronous driver failures publish a terminal receipt", async () => 
   }
 });
 
-Deno.test("receipt ownership compares `FabricValue`s", async () => {
+test("receipt ownership compares `FabricValue`s", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const ledger = await CommandLedger.open(`${directory}/ledger.json`);
@@ -1312,7 +1313,7 @@ Deno.test("receipt ownership compares `FabricValue`s", async () => {
   }
 });
 
-Deno.test("command ledger preserves Fabric receipt results across reopen", async () => {
+test("command ledger preserves Fabric receipt results across reopen", async () => {
   const directory = await Deno.makeTempDir();
   const path = `${directory}/ledger.json`;
   try {
@@ -1341,7 +1342,7 @@ Deno.test("command ledger preserves Fabric receipt results across reopen", async
   }
 });
 
-Deno.test("command receipt parsing rejects every malformed boundary field", () => {
+test("command receipt parsing rejects every malformed boundary field", () => {
   const receipt: AgentSessionCommandReceipt = {
     schema: AGENT_CONNECTOR_SCHEMAS.commandReceipt,
     ownerDid: "did:key:test-owner",
@@ -1392,7 +1393,7 @@ Deno.test("command receipt parsing rejects every malformed boundary field", () =
   );
 });
 
-Deno.test("command worker covers unavailable sources and control commands", async () => {
+test("command worker covers unavailable sources and control commands", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const ledger = await CommandLedger.open(`${directory}/ledger.json`);
@@ -1487,7 +1488,7 @@ Deno.test("command worker covers unavailable sources and control commands", asyn
   }
 });
 
-Deno.test("command worker persists and reports publication failures", async () => {
+test("command worker persists and reports publication failures", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const claimLedger = await CommandLedger.open(`${directory}/claim.json`);
@@ -1574,7 +1575,7 @@ Deno.test("command worker persists and reports publication failures", async () =
   }
 });
 
-Deno.test("command worker dispatches `start` with its payload and refreshes the new session", async () => {
+test("command worker dispatches `start` with its payload and refreshes the new session", async () => {
   const dir = await Deno.makeTempDir();
   const ledger = await CommandLedger.open(`${dir}/ledger.json`);
   const statuses: string[] = [];
@@ -1656,7 +1657,7 @@ Deno.test("command worker dispatches `start` with its payload and refreshes the 
   }
 });
 
-Deno.test("command worker passes a start's surface through and skips the refresh of a session the driver says does not exist yet", async () => {
+test("command worker passes a start's surface through and skips the refresh of a session the driver says does not exist yet", async () => {
   const dir = await Deno.makeTempDir();
   const ledger = await CommandLedger.open(`${dir}/ledger.json`);
   const statuses: string[] = [];
@@ -1746,7 +1747,7 @@ Deno.test("command worker passes a start's surface through and skips the refresh
   }
 });
 
-Deno.test("command worker refreshes the session after a start that failed", async () => {
+test("command worker refreshes the session after a start that failed", async () => {
   const dir = await Deno.makeTempDir();
   const ledger = await CommandLedger.open(`${dir}/ledger.json`);
   const statuses: string[] = [];

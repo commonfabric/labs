@@ -1,6 +1,5 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type EntityRef,
@@ -8,6 +7,7 @@ import {
   resetModernCellRepConfig,
   setModernCellRepConfig,
 } from "@commonfabric/data-model/cell-rep";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   acquireServerExecutionEnabler,

@@ -7,6 +7,7 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import type { Ctx } from "../types.ts";
 import { METADATA_TOKEN_URL } from "../gcp.ts";
 import { gcpSpend } from "./gcp-spend.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function ctx(env: Record<string, string> = {}): Ctx {
   return {
@@ -120,7 +121,7 @@ const earlyMonthRows = (credit: (day: string) => number = () => 0) =>
     (day) => day === "2026-01-10" ? PART_DAY : FULL_DAY,
   );
 
-Deno.test(
+test(
   "cloud spend: no GCP_BILLING_TABLE is gray and names the setting",
   async () => {
     const view = await gcpSpend.collect(ctx({}));
@@ -130,7 +131,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: an unsafe table id is refused before any query",
   async () => {
     const { result, calls } = await withFetch(
@@ -149,7 +150,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: projects a month from MTD and the prior tail, with that window highlighted",
   async () => {
     const { result, calls } = await withFetch(
@@ -217,7 +218,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: credits come off every figure the tile reports",
   async () => {
     // A quarter off every day: $20 days cost $15, $10 days cost $7.50, and
@@ -255,7 +256,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: the monthly estimate is judged against the configured daily rate",
   async () => {
     const at = async (dailyBudget?: string) =>
@@ -277,7 +278,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: the first day of a month estimates entirely from the prior fortnight",
   async () => {
     const { result } = await withFetch(
@@ -316,7 +317,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: a short export history does not invent earlier zero-cost days",
   async () => {
     const { result } = await withFetch(
@@ -336,7 +337,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: no returned days means billing data has not arrived",
   async () => {
     const { result } = await withFetch(
@@ -349,7 +350,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: a single exported day is one the export has not finished",
   async () => {
     // Nothing later has been written, so the export may still be adding to it.
@@ -363,7 +364,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: days the export is still adding to stay out of the rate",
   async () => {
     const { result } = await withFetch(
@@ -389,7 +390,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: a full day the export has not had long enough with waits",
   async () => {
     // Every day here holds a full day's billable time, so how much of each day
@@ -414,7 +415,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: a fleet that shrinks for good stops reading as unfinished",
   async () => {
     // Two thirds of the fleet goes away on 2026-01-05 and never comes back.
@@ -443,7 +444,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: an export that has finished nothing for days is gray",
   async () => {
     const { result } = await withFetch(
@@ -456,7 +457,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: malformed history is gray and never becomes a figure",
   async () => {
     for (
@@ -488,7 +489,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cloud spend: an unreachable source is gray",
   async () => {
     const denied = await withFetch(

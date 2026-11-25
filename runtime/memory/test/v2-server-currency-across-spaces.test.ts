@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type Stub, stub } from "@std/testing/mock";
 import {
@@ -10,6 +9,12 @@ import { resolveScopeKey } from "../v2.ts";
 import { connect, loopback } from "../v2/client.ts";
 import { applyCommit } from "../v2/engine.ts";
 import { getCurrencyDelivery, Server } from "../v2/server.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-server-currency-test-space";
 const SOURCE = "did:key:z6Mk-server-currency-test-source";
@@ -1074,6 +1079,89 @@ describe("v2-server-currency-across-spaces", () => {
           await recordBoth();
 
           expect(await servable(SOURCE, "of:back")).toBe(true);
+        });
+
+        describe("and a slice of `SOURCE` that expires", () => {
+          // Each space may be rested on only until the slice expires: the
+          // slice's own space, and the space that reads it, which the first
+          // reads back. Nothing in either moves, so neither is to ask the
+          // other anything before then.
+
+          /** The time `SOURCE`'s slice expires at. */
+          const EXPIRES = 1_700_000_060_000;
+
+          /**
+           * Records `of:clock` of `SOURCE` as computing `computed:tick` until
+           * `EXPIRES`.
+           */
+          const storeClock = async () =>
+            await store(
+              {
+                piece: "of:clock",
+                under: [],
+                vouched: true,
+                writes: ["computed:tick"],
+                owned: [],
+                slices: [{
+                  key: "space",
+                  vouched: true,
+                  reads: [],
+                  vouches: ["computed:tick"],
+                  expiresAt: EXPIRES,
+                }],
+              },
+              SOURCE,
+            );
+
+          it("tells each space of that time, and leaves each armed with the other without asking either anything", async () => {
+            told = [];
+            const { pulls } = server.currencyDelivery();
+
+            await storeClock();
+
+            expect(told).toEqual([SPACE, SOURCE]);
+            expect(server.currencyDelivery().pulls).toBe(pulls);
+            expect(server.currencyReadersArmedOn(SOURCE)).toEqual([SPACE]);
+            expect(server.currencyReadersArmedOn(SPACE)).toEqual([SOURCE]);
+          });
+
+          it("asks neither space anything at a judgment before that time", async () => {
+            await storeClock();
+            await armBoth();
+            const { pulls } = server.currencyDelivery();
+
+            await armBoth();
+
+            expect(server.currencyDelivery().pulls).toBe(pulls);
+          });
+
+          it("asks neither space anything at a second judgment before that time, once a change has disarmed both", async () => {
+            await storeClock();
+            await change(SOURCE, "of:far");
+            await servable();
+            const { pulls } = server.currencyDelivery();
+
+            await armBoth();
+
+            expect(server.currencyDelivery().pulls).toBe(pulls);
+            expect(server.currencyReadersArmedOn(SOURCE)).toEqual([SPACE]);
+            expect(server.currencyReadersArmedOn(SPACE)).toEqual([SOURCE]);
+          });
+
+          it("returns that time to each space as the time to judge it again", async () => {
+            await storeClock();
+
+            const judged = await Promise.all(
+              [[SPACE, "of:piece"], [SOURCE, "of:back"]].map(([space, root]) =>
+                server.judgeCurrencyRoots(space, [root], { epoch: EPOCH })
+              ),
+            );
+
+            expect(judged.map(({ nextExpiry }) => nextExpiry)).toEqual([
+              EXPIRES,
+              EXPIRES,
+            ]);
+          });
         });
       });
     });

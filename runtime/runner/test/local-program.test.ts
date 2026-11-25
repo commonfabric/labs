@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import type { ProgramResolver } from "@commonfabric/js-compiler";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import {
   attachDataFiles,

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { hashOf } from "@commonfabric/data-model";
@@ -19,6 +18,12 @@ import {
   EmulatedStorageManager,
   namesInstancesByDefault,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { RuntimeProcessor } from "../../src/backends/runtime-processor.ts";
 import { RequestType } from "../../src/protocol/mod.ts";

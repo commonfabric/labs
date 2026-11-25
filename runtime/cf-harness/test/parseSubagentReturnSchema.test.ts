@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   validateSchemaDefinition,
   validateStructuredResultValue,
 } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   getHarnessSubagentProfileConfig,
   HARNESS_SUBAGENT_PROFILES,

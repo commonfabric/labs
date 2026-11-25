@@ -515,47 +515,63 @@ uses this fixture mechanism at both postures.
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
-Swift, Kotlin, Rust, TOML, HCL, Lean, C, C++, CUDA, shell, makefile, Java
-properties, INI, ProGuard, XML, and Org mode files use their own highlighting. A
-lowercase `.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`,
-`.h++`, `.tcc`, and an uppercase `.C` select C++; and `.cu` and `.cuh` select
-CUDA. C++ and CUDA share one grammar, which colors CUDA's qualifiers, such as
-`__global__`, as keywords. C and C++ both write `.h` headers, so a `.h` file is
-colored in a mode that claims neither dialect, using the C++ grammar, which
-reads the declarations C headers usually make; a C header that uses one of C++'s
-keywords, such as `new`, as a name is colored as C when piped with
-`--language
-c`. HCL covers OpenTofu and Terraform configuration named `.tf` or
-`.tofu`, variable definitions files named `.tfvars`, backend configuration files
-named `.tfbackend`, and other `.hcl` files, such as dependency lock files. A
-string's interpolations and template directives are colored as code inside the
-string. Shell covers Bash and POSIX shell scripts named `.sh`, `.bash`, or
-`.command`, and Bash's startup files, such as `.bashrc` and `.profile`. A
-heredoc's body is colored as a string, with the expansions its delimiter allows.
-The makefile language reads GNU make's syntax in files named `Makefile`,
-`makefile`, `GNUmakefile`, or `.mk`. Make passes recipe lines to the shell, so
-they are colored as shell. The same is true of the command in a `!=` assignment
-and the argument of the `shell` function. Make's own variable references and
-function calls are colored inside that shell text. A Swift package manifest is
-Swift source under its `.swift` extension, and a module's `.swiftinterface` is
-Swift as well. Gradle build and settings scripts are Kotlin scripts under the
-`.kts` extension. Gradle version catalogs and Cargo manifests are TOML, as are
-Cargo lock files. The ProGuard language covers the keep rules that ProGuard and
-R8 read: `proguard-rules.pro` and `consumer-rules.pro` select it by name, and
-another `.pro` file uses it when one of its lines starts with one of ProGuard's
-option names, because Qt project files and Prolog use that suffix as well. XML
-covers Android manifests, resources, and layouts, SVG images, and Apple property
-lists, entitlements, and privacy manifests. Web manifests, TLDraw documents,
-Deno lock files, editor workspace files, and Swift package resolutions use the
-JSON highlighting their suffixes do not announce. A `.cfg` file uses JSON
-highlighting when the source in view opens a JSON object; that suffix is shared
-with unrelated syntaxes, so its name alone leaves it as plain text. Transformed
-compiler output piped without a filename keeps TypeScript highlighting when its
-module header identifies it. Python interpreter shebangs select Python for
-otherwise unrecognized names, `swift` and `xcrun swift` shebangs select Swift,
-and `kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs
-select shell, which covers Git hooks and other extensionless programs. `make`
-and `gmake` shebangs select the makefile language. Node, Deno, and Bun shebangs
+Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, C, C++, CUDA, CSS,
+HTML, shell, makefile, Dockerfile, Java properties, INI, dotenv, Graphviz DOT,
+ProGuard, XML, Org mode, CSV, TSV, assembly, and SQL files use their own
+highlighting. A lowercase `.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`,
+`.hpp`, `.hxx`, `.h++`, `.tcc`, and an uppercase `.C` select C++; and `.cu` and
+`.cuh` select CUDA. C++ and CUDA share one grammar, which colors CUDA's
+qualifiers, such as `__global__`, as keywords. C and C++ both write `.h`
+headers, so a `.h` file is colored in a mode that claims neither dialect, using
+the C++ grammar, which reads the declarations C headers usually make; a C header
+that uses one of C++'s keywords, such as `new`, as a name is colored as C when
+piped with `--language
+c`. HCL covers OpenTofu and Terraform configuration named
+`.tf` or `.tofu`, variable definitions files named `.tfvars`, backend
+configuration files named `.tfbackend`, and other `.hcl` files, such as
+dependency lock files. A string's interpolations and template directives are
+colored as code inside the string. Starlark covers Bazel's build files, named
+`BUILD`, `BUILD.bazel`, or with a `.BUILD` suffix, its module, repository, and
+workspace files, `.bzl` extension files, and other `.star` files. Its structure
+tree lists functions, each name that a statement outside functions assigns a
+value to on its own, and the target that each rule call outside functions
+declares when its `name` argument is a string literal. The Bazel rc language
+covers `.bazelrc` and other files named with that suffix, and lists the files an
+rc file imports and the configurations it defines, such as `race` in
+`build:race`. `.bazelversion` is plain text. CSS covers style sheets named
+`.css`, with a structure tree of rule sets, at-rules, and custom property
+declarations. HTML covers pages named `.html` or `.htm`, with a structure tree
+of elements. A `script` element's text is colored as JavaScript, or as JSON for
+an import map or a JSON data block, as its `type` and `language` attributes say,
+and an event handler attribute's value as JavaScript. A `style` element's text
+and a `style` attribute's value are colored as CSS. Shell covers Bash and POSIX
+shell scripts named `.sh`, `.bash`, or `.command`, and Bash's startup files,
+such as `.bashrc` and `.profile`. A heredoc's body is colored as a string, with
+the expansions its delimiter allows. The makefile language reads GNU make's
+syntax in files named `Makefile`, `makefile`, `GNUmakefile`, or `.mk`. Make
+passes recipe lines to the shell, so they are colored as shell. The same is true
+of the command in a `!=` assignment and the argument of the `shell` function.
+Make's own variable references and function calls are colored inside that shell
+text. A Swift package manifest is Swift source under its `.swift` extension, and
+a module's `.swiftinterface` is Swift as well. Gradle build and settings scripts
+are Kotlin scripts under the `.kts` extension. Gradle version catalogs and Cargo
+manifests are TOML, as are Cargo lock files. The ProGuard language covers the
+keep rules that ProGuard and R8 read: `proguard-rules.pro` and
+`consumer-rules.pro` select it by name, and another `.pro` file uses it when one
+of its lines starts with one of ProGuard's option names, because Qt project
+files and Prolog use that suffix as well. XML covers Android manifests,
+resources, and layouts, SVG images, and Apple property lists, entitlements, and
+privacy manifests. Web manifests, TLDraw documents, Deno lock files, editor
+workspace files, and Swift package resolutions use the JSON highlighting their
+suffixes do not announce. A `.cfg` file uses JSON highlighting when the source
+in view opens a JSON object; that suffix is shared with unrelated syntaxes, so
+its name alone leaves it as plain text. Transformed compiler output piped
+without a filename keeps TypeScript highlighting when its module header
+identifies it. Python interpreter shebangs select Python for otherwise
+unrecognized names, `swift` and `xcrun swift` shebangs select Swift, and
+`kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs select
+shell, which covers Git hooks and other extensionless programs. `make` and
+`gmake` shebangs select the makefile language. Node, Deno, and Bun shebangs
 select the TypeScript and JavaScript language family. For an otherwise
 unrecognized name, source that starts with an XML declaration (`<?xml`), after
 any byte order mark, selects XML, which covers Interface Builder documents,
@@ -579,6 +595,10 @@ and inductive types inside them. A project's `lean-toolchain` file, which names
 the Lean release the project builds with, colors the repository that publishes
 the release and the release's name.
 
+Assembly covers `.s` and `.S` files in the Go assembler's dialect and in the GNU
+assembler's, including GNU assembler source that the C preprocessor reads first.
+Linker scripts named `.lds.S` are not assembly.
+
 INI covers `.ini` files, which include Ansible inventories with that suffix,
 Ansible's `ansible.cfg` and `.ansible.cfg`, and the configuration files of
 Python tools such as `setup.cfg`, `.coveragerc`, `.flake8`, `pylintrc`, and
@@ -587,6 +607,54 @@ lines and comments heads a section whose name does not start the way a JSON
 array's first value does. A line in an Ansible inventory that names a host and
 then sets `name=value` variables colors the host and each variable. The
 structure tree lists sections with the keys and hosts in each.
+
+Dotenv covers the environment files that programs, Docker Compose, and shell
+scripts read variables from. `.env` selects it, as does a name that continues
+`.env` with a further suffix, such as `.env.local` or `.env.example`, unless
+that suffix is another language's extension, as `.env.json` is. An example copy
+of an environment file, such as `config.env.example` or `deploy-env.sample`,
+selects it as well, through an `.example`, `.sample`, `.template`, or `.dist`
+suffix. Another name ending in `.env` is dotenv when its first line other than
+blank lines and `#` comments sets a variable, because Ansible Vault files and
+Skip's Xcode-style app configuration use that suffix too. A value that opens
+with a quote runs to the matching quote, across lines, and is read as an
+unquoted value when no quote matches it. A `#` that follows white space starts a
+comment after a value. References to other variables, such as `$NAME` and
+`${NAME:-default}`, are colored in unquoted and double-quoted values, and `$$`
+is a dollar sign, as Docker Compose reads it. The structure tree lists the
+variables the file sets.
+
+Tables color each unquoted field that reads as a decimal number as a number,
+every other field that holds more than white space as a string, and each
+separator as punctuation. `.csv` files are comma-separated values as RFC 4180
+defines them, so a quoted field can hold commas, doubled quotes, and line
+breaks. `.tsv` files are tab-separated values, which have no quoting, and a line
+in one that starts with `#` is a comment. The `.dat` suffix names data of every
+kind, so a `.dat` file is shown as a table only when its first line other than
+blank lines and comments, or the next such line, is a row of two or more
+numbers. Spaces and tabs separate the fields of such a table, as gnuplot and
+PGFPlots read it, and a line whose first character other than spaces and tabs is
+`#`, or `%` as PGFPlots also accepts, is a comment. Tables have no structure
+tree.
+
+The Dockerfile language reads the syntax of BuildKit's Dockerfile frontend in
+files named `Dockerfile`, `dockerfile`, `Containerfile`, or `containerfile`, in
+names that add a dot and a suffix to `Dockerfile` or `Containerfile`, in any
+case, such as `Dockerfile.x86_64`, and in `.dockerfile` and `.containerfile`
+files. A suffix that is an extension another language claims whatever the source
+holds, as shell claims `.sh`, selects that language. The ignore file BuildKit
+pairs with a Dockerfile, such as `Dockerfile.build.dockerignore`, is not a
+Dockerfile. The shell form of `RUN`, `CMD`, `ENTRYPOINT`, and a health check's
+command is colored as shell, unless a `SHELL` instruction earlier in the build
+stage, or in the stage it is built from, names a shell other than `sh`, `bash`,
+`dash`, or `ash`. The exec form is colored as a JSON array of strings. The body
+of a `RUN` whose command is a single heredoc is a script, colored as shell when
+its shebang names one of those shells or, without a shebang, when the shell form
+is. The bodies of `COPY` and `ADD` heredocs are colored as strings. A
+continuation line skips blank lines and comments, as BuildKit does, and an
+`escape` parser directive can make the backtick the escape character. The
+structure tree lists build stages and the variables that `ARG` and `ENV` set in
+each.
 
 Org mode covers `.org` files. Headlines, keywords, blocks, comments, drawers,
 tables, lists, links, code, and timestamps are colored, and the structure tree
@@ -663,6 +731,95 @@ expressions follow Go's rules, where only `^` negates one. `.bazelignore` lists
 directories for Bazel to leave out, one literal path to a line, so `*` and `!`
 have no meaning there. In all of them, a line that starts with `#` is a comment.
 
+Go source named `.go` has syntax highlighting as well, and a structure tree of
+the package clause, types, functions, methods, package-level constants and
+variables, and the fields and methods each type declares. Go module and
+workspace files, `go.mod` and `go.work`, have a language of their own, whose
+structure tree lists each directive and the lines of its block. So do Go
+checksum files, `go.sum` and `go.work.sum`, whose structure tree lists each
+module over the lines that name it.
+
+Graphviz DOT covers graph descriptions named `.dot` or `.gv`. The DOT that
+`cf inspect graph --dot` and `cf piece map --format dot` print can be piped into
+`cf view --language dot`. Each ID is colored by what it names: a graph, an
+attribute, an attribute's value, a port, or a node. The structure tree lists
+graphs and subgraphs, with the nodes that node statements declare in each. A
+node that only an edge names is not listed.
+
+Git configuration files use their own syntax highlighting as well. The language
+covers `.gitmodules`, user and system configuration named `.gitconfig` or
+`gitconfig`, a worktree's `config.worktree`, other files whose names end in
+`.gitconfig`, and Git LFS's `.lfsconfig`. The structure tree lists sections with
+the variables in each.
+
+SQL covers `.sql` files in PostgreSQL's lexical syntax, which SQLite's follows,
+or in MySQL's, for a file that holds syntax only MySQL reads, such as a
+statement that starts with a `#` comment, an executed comment such as
+`/*!40101 … */`, or a `DELIMITER` command, or one whose strings PostgreSQL's
+syntax leaves open at its end and MySQL's closes, as it does for `'it\'s'`. In
+MySQL's syntax, `#` starts a comment anywhere, `"…"` is a string, a backslash in
+a string escapes the next character, executed comments are colored as
+statements, and a `DELIMITER` command sets the text that ends a statement. A
+PostgreSQL dollar quote that follows `AS`, `DO`, or a `LANGUAGE` clause holds a
+function's or a block's body, which is colored as SQL when the statement names
+no language or names `sql` or `plpgsql`, and the variables its `declare` section
+names are colored as declarations. Any other dollar quote is a string, and so
+are the lines of data that pg_dump writes after a `COPY … FROM stdin` statement,
+and a line that starts with `\` is a psql command. The structure tree lists each
+`create` statement, labeled with the kind of thing it creates and the name it
+declares, and each `alter table` statement, with the columns each defines, apart
+from one inside a MySQL executed comment that adds no columns.
+
+The linker script language covers the scripts that tell GNU `ld` how to lay out
+its output, named `.ld` or `.lds`, and those named `.lds.S` or `.ld.S`, which
+pass through the C preprocessor before `ld` reads them, as do scripts with a
+line that opens with `#include`, `#include_next`, or `#import` followed by `<`
+or `"`, or with `#define`, `#undef`, `#ifdef`, or `#ifndef`, or with `#else` or
+`#endif` and nothing after it but a comment. In such a script, the `#` and name
+that open a preprocessor directive are colored as a directive, every branch of a
+conditional directive is colored with only the first listed in the structure
+tree, and `//` starts a comment. Elsewhere, `#` starts a comment, as it does for
+`ld`. The structure tree lists the `SECTIONS`, `MEMORY`, `PHDRS`, and `VERSION`
+blocks, the output sections, memory regions, program headers, and version nodes
+each one declares, and the symbols the script assigns.
+
+The pager also highlights systemd unit files named `.service`, `.socket`,
+`.timer`, `.target`, `.mount`, `.automount`, `.swap`, `.path`, or `.slice`, and
+a `.conf` drop-in whose first line other than blank lines and comments heads a
+section that units hold, such as `[Service]`. It reads them as systemd does. A
+line that ends in an odd number of backslashes continues on the next line that
+is not a comment, and the first `=` on the joined line separates a key from its
+value. Booleans, numbers, time spans, and `%` specifiers are colored as such.
+The value of a setting that runs commands, such as `ExecStart`, is colored as a
+command line, with its prefix characters, its program, and the environment
+variable expansions systemd performs marked. The structure tree lists sections
+with the keys in each.
+
+OpenSSH authorized keys files, named `authorized_keys` or `authorized_keys2` or
+with a name ending in either after `_`, `-`, or `.`, and `.pub` public key files
+use their own syntax highlighting, which colors each key's options, type, data,
+and comment. The structure tree lists each key by its comment, or by its type
+when it has none.
+
+A Jinja template, named with a `.j2`, `.jinja`, or `.jinja2` suffix, is colored
+as the file it produces, whose language the rest of the name selects, with
+Jinja's expressions, tags, and comments colored inside it. `deploy.sh.j2` is
+shell. When the rest of the name selects no language, a shebang can select one,
+and otherwise, as for `nginx-logrotate.j2`, the file is plain text. The
+structure tree is that of the file the template produces. With `--language`,
+`jinja` selects Jinja over plain text, and `jinja-` followed by another text
+language's identifier or alias, as in `jinja-shell`, selects Jinja over that
+language.
+
+A Terraform template, the file OpenTofu's `templatefile` function reads, named
+with a `.tftpl` suffix, is colored in the same way, so `startup-script.sh.tftpl`
+is colored as shell, with its interpolations and directives colored as HCL code.
+In the escapes `$${` and `%%{`, the first character is colored as the
+template's, and the `${` or `%{` that the escape produces is colored as the
+file's. With `--language`, `terraform-template` selects it over plain text, and
+`terraform-template-` followed by another text language's identifier or alias,
+as in `terraform-template-shell`, selects it over that language.
+
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each
@@ -683,10 +840,10 @@ and TypeScript semantic lookup.
 Automatic content detection is limited to binary input, structurally identified
 raw unified diffs, and standard Git commit output. A raw diff starts at the
 first nonblank line. Recognized shebangs, XML declarations, and transformed
-compiler headers remain explicit selectors. A shared extension such as `.cfg`
-consults the source for the pattern each language's metadata pairs with it.
-JSON-, YAML-, Markdown-, Python-, and other language-shaped source is otherwise
-not guessed from its syntax.
+compiler headers remain explicit selectors. A shared extension such as `.cfg` or
+`.dat` consults the source for the evidence each language's metadata pairs with
+it. JSON-, YAML-, Markdown-, Python-, and other language-shaped source is
+otherwise not guessed from its syntax.
 
 A diff shows its whole-diff change totals at the top right corner of its first
 line: the added line count and the removed line count, colored like additions
@@ -696,11 +853,11 @@ A diff colors its lines from the complete files on both sides of each change,
 and parsing large files can take seconds. The interactive pager parses up to
 131,072 characters of those files before it shows the diff, and shows the lines
 of the rest as plain text. It parses them in the background while it takes keys,
-and colors the files that have finished each time the source parsed in the
-background has at least doubled, and grown by at least 131,072 characters, since
-it last colored them, and again once every parse has ended, so the files parsed
-last can stay plain until every parse has ended. Meanwhile, the status bar shows
-a spinner and a gauge of how much of their source has been parsed, before the
+and colors the files that have finished each time source as long as a sixteenth
+of the diff, and at least 131,072 characters, has finished parsing since it last
+colored them, and again once every parse has ended. A file stays plain until
+both of its sides have finished parsing. Meanwhile, the status bar shows a
+spinner and a gauge of how much of their source has been parsed, before the
 current file's name, with the word "Highlighting" when there is room. Key hints
 make way for the gauge, except the first two, Help and Quit. When files cannot
 be parsed, the status line says so, with the reason the first one failed, and
@@ -819,10 +976,16 @@ that summary in the status line. Quit (`Q`) closes the viewer, first offering to
 save any unsaved edits. Git asks nothing on the terminal while the viewer holds
 it; a question such as a key's passphrase goes to the program `SSH_ASKPASS`
 names, and fails when it names none. `P` refuses to push `origin`'s default
-branch, and refuses when `origin` names no default branch
-(`git remote set-head origin --auto` finds it). It also refuses a checkout not
-on a branch, and refuses when git started the viewer as its pager for a
-different repository.
+branch, and refuses when `origin` names no default branch or cannot be asked
+which it is. It asks `origin`'s server which branch that is, with
+`git ls-remote --symref`, when a push starts, before any question below, and
+shows what git prints only when that fails. The push that the question confirms,
+and any retry of it, uses that answer rather than asking again. Asking is a
+connection to `origin` of its own, which can mean one more passphrase prompt or
+security key touch. The viewer asks the server because the
+`refs/remotes/origin/HEAD` that git sets when it clones stays as it is when the
+default branch changes. It also refuses a checkout not on a branch, and refuses
+when git started the viewer as its pager for a different repository.
 
 The push and land dialogs draw what the viewer says in bright text, and the
 names it mentions, such as a branch, a repository, a commit, or a pull request's
@@ -852,9 +1015,12 @@ button is the default, so Enter does nothing until a button has the focus, and
 pressing `P` again does not push.
 
 When git fails to push or is aborted, as it can when the network is unreliable,
-a Retry push button (`P`) pushes again, unless git says the push was rejected,
-or GitHub says the account has no permission to push, which pushing again cannot
-change. Each later push's output follows the earlier one's in the same dialog.
+or does not learn which branch is `origin`'s default, a Retry push button (`P`)
+starts the push again, unless git says the push was rejected, or GitHub says the
+account has no permission to push, which pushing again cannot change. The retry
+asks before pushing, as `P` does, unless the question had confirmed the push
+that failed. Each later push's output follows the earlier one's in the same
+dialog.
 
 Once the push succeeds, the settings say what happens next, and the radio
 buttons under "Pull requests" choose one of the four ways below. The first and
@@ -865,10 +1031,10 @@ succeeds, including one that had nothing new to push, unless the branch already
 has an open pull request, which they look for as `L` does, below. The pull
 request goes to the GitHub repository of the remote named `upstream`, `github`,
 or `origin`, whichever is the first to name one, and merges into that remote's
-default branch, from the branch on `origin`. Its title and description are the
-subject and the rest of the message of the branch's oldest commit that the
-default branch, as last fetched, does not have, leaving out merges and commits
-whose changes that branch already has.
+default branch, as its server names it then, from the branch on `origin`. Its
+title and description are the subject and the rest of the message of the
+branch's oldest commit that the default branch, as last fetched, does not have,
+leaving out merges and commits whose changes that branch already has.
 
 - "Just push, and link to them": the summary gives the page's address, which the
   status line makes a link for terminals that open links.
@@ -3340,6 +3506,14 @@ from that container directly. An address-only selection can therefore return a
 stored child link without loading the child. The verb's declared result remains
 available for cycle bounding; it does not replace the selection's source schema.
 
+A selection that names fields beside an address loads no more than it names. A
+source with no schema of its own is read through the positions the selection
+selects, with no claim about the shape at any of them: a named field is loaded
+with what it links to, and every other child is left unloaded. What a read loads
+is what the runtime's session goes on watching, and a serving runtime keeps
+current every value a session watches, so a process that makes many calls keeps
+only what their selections named.
+
 Root links, instances, scalars, and receipts read through an explicit schema are
 materialized before selection. A root link can resolve to an absent value, so
 its stored existence alone does not establish a result. Tool calls also
@@ -3708,14 +3882,21 @@ predecessor (`priorPatternId`), so the new version keeps the old one's standing.
 A file `cf piece getsrc` wrote from a piece that `cf piece new --from-index`
 created is published as a remix of that pattern (`remixedFrom`), or as a new
 version of it when it was the caller's own; `--remixed-from` names the source
-where `cf` has no record. Sharing then shares that version on **beta**: once the
-index's check passes it becomes the lineage's next numbered shared version (1,
-2, 3…), which anyone with its link can open, and nobody finds in search or a
-listing. Past the index's daily limit it says when the limit resets, and running
-the same command then shares it again. The next step it prints is deploying the
-pattern with `cf piece new --from-index <id>`, or opening it in a loom with
-`/deploy index:<id>`. Once stable, a listed pattern moves from Unvetted to Main
-once its author opens it in a loom.
+where `cf` has no record. `--standalone` offers the pattern to a person choosing
+what to place, on its own at the top of a loom; `--part` offers it only as a
+part other patterns build from. With neither, the index decides: a new version
+keeps its predecessor's answer, a remix its source's, and any other first
+version stands alone when its entry file is `main.tsx`. A pattern with a
+required input and no default is a part whatever was asked, and the command
+names that input. Sharing then shares that version on **beta**: once the index's
+check passes it becomes the lineage's next numbered shared version (1, 2, 3…),
+which anyone with its link can open, and nobody finds in search or a listing.
+Source unchanged since the version already shared makes no new version, and the
+command says `Already shared`. Past the index's daily limit it says when the
+limit resets, and running the same command then shares it again. The next step
+it prints is deploying the pattern with `cf piece new --from-index <id>`, or
+opening it in a loom with `/deploy index:<id>`. Once stable, a listed pattern
+moves from Unvetted to Main once its author opens it in a loom.
 
 `cf pattern stable <entry>` makes the newest shared version **stable**: what
 search, listings and a plain link give. It passed the check when it was shared,

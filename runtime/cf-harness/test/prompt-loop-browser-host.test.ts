@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
-import { describe, it } from "@std/testing/bdd";
 
 import type {
   BrowserHostOperation,
@@ -10,6 +9,7 @@ import type {
 import { CfHarnessEngine } from "../src/engine.ts";
 import { createHarnessRunState } from "../src/run-state.ts";
 import { CFC_ATOM_TYPE, CFC_CONCEPT_KIND } from "@commonfabric/api/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import type {

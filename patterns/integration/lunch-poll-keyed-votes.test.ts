@@ -61,12 +61,17 @@
  */
 
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
 } from "./multi-runtime-harness.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const ROOT_PATH = join(import.meta.dirname!, "..");
 const PROGRAM_PATH = join(

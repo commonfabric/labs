@@ -1,13 +1,14 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   listObjects,
   listObjectSizes,
+  listObjectTimes,
   parseReportGroups,
   readObject,
 } from "./store-reader.ts";
 import { buildObjectBody, type RunContext, type TestRecord } from "./schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const RECORD: TestRecord = {
   line: "record",
@@ -134,6 +135,37 @@ describe("store-reader", () => {
         prefix: "labs/test-records/",
         fetch: listing([{ name: "a", size: "17" }, { name: "b" }]),
       })).rejects.toThrow("gave no size for b");
+    });
+  });
+
+  describe("listObjectTimes()", () => {
+    const listing = (items: unknown[]): typeof fetch =>
+      (() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ items }), { status: 200 }),
+        )) as typeof fetch;
+
+    it("gives each object's creation time", async () => {
+      const listed = await listObjectTimes({
+        bucket: "cf-ci-metadata",
+        prefix: "labs/test-records/",
+        fetch: listing([
+          { name: "a", timeCreated: "2026-11-24T10:00:00.000Z" },
+        ]),
+      });
+      expect(listed).toEqual([
+        { name: "a", createdAt: "2026-11-24T10:00:00.000Z" },
+      ]);
+    });
+
+    it("throws for an object listed with no usable creation time", async () => {
+      for (const item of [{ name: "b" }, { name: "b", timeCreated: "soon" }]) {
+        await expect(listObjectTimes({
+          bucket: "cf-ci-metadata",
+          prefix: "labs/test-records/",
+          fetch: listing([item]),
+        })).rejects.toThrow("gave no usable creation time for b");
+      }
     });
   });
 

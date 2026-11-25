@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type {
   CHIP_UI as CHIP_UI_TYPE,
@@ -18,6 +17,7 @@ import type {
   VNode,
   Writable,
 } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The assertions in this file are made when it is type-checked (tasks/check.sh
 // runs `deno check` over base/api), not when it runs. `pattern` and the

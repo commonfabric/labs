@@ -20,6 +20,7 @@ import type {
   HarnessPromptLoopResult,
 } from "../src/prompt-loop.ts";
 import type { RunHarnessInteractiveChatStdioOptions } from "../src/interactive-chat-stdio.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const providerStore = (state: HarnessProviderSettingsState) => ({
   inspect: () => Promise.resolve(state),
@@ -137,7 +138,7 @@ const localRunArtifacts = (options: {
   };
 };
 
-Deno.test("local Loom host sends authenticated Codex traffic and never gateway traffic", async () => {
+test("local Loom host sends authenticated Codex traffic and never gateway traffic", async () => {
   const home = await Deno.makeTempDir();
   const workspace = await Deno.makeTempDir();
   const credentials = new InMemoryHarnessCredentialStore();
@@ -230,7 +231,7 @@ Deno.test("local Loom host sends authenticated Codex traffic and never gateway t
   assertEquals(io.stderr, []);
 });
 
-Deno.test("local Loom host rejects explicit gateway cache options for Codex before traffic", async () => {
+test("local Loom host rejects explicit gateway cache options for Codex before traffic", async () => {
   const home = await Deno.makeTempDir();
   let requests = 0;
   const io = ioBuffers();
@@ -254,7 +255,7 @@ Deno.test("local Loom host rejects explicit gateway cache options for Codex befo
   assertEquals(JSON.parse(io.stderr.join("")).error.code, "provider-mismatch");
 });
 
-Deno.test("local Loom host blocks disconnected Codex before all provider traffic", async () => {
+test("local Loom host blocks disconnected Codex before all provider traffic", async () => {
   const home = await Deno.makeTempDir();
   let requests = 0;
   const io = ioBuffers();
@@ -277,7 +278,7 @@ Deno.test("local Loom host blocks disconnected Codex before all provider traffic
   assertEquals(JSON.stringify(failure).includes(home), false);
 });
 
-Deno.test("local Loom host blocks reconnect-required Codex before all provider traffic", async () => {
+test("local Loom host blocks reconnect-required Codex before all provider traffic", async () => {
   const home = await Deno.makeTempDir();
   const credentials = new InMemoryHarnessCredentialStore();
   await credentials.updateRecord("local", "openai-codex", () => ({
@@ -313,7 +314,7 @@ Deno.test("local Loom host blocks reconnect-required Codex before all provider t
   );
 });
 
-Deno.test("local Loom host leaves refresh to the resolver immediately before Codex traffic", async () => {
+test("local Loom host leaves refresh to the resolver immediately before Codex traffic", async () => {
   const home = await Deno.makeTempDir();
   const workspace = await Deno.makeTempDir();
   const credentials = new InMemoryHarnessCredentialStore();
@@ -376,7 +377,7 @@ Deno.test("local Loom host leaves refresh to the resolver immediately before Cod
   );
 });
 
-Deno.test("local Loom host requires valid persistent provider configuration", async () => {
+test("local Loom host requires valid persistent provider configuration", async () => {
   for (
     const state of [
       { state: "missing" } as const,
@@ -405,7 +406,7 @@ Deno.test("local Loom host requires valid persistent provider configuration", as
   }
 });
 
-Deno.test("local Loom host pins a symlinked home to one real directory", async () => {
+test("local Loom host pins a symlinked home to one real directory", async () => {
   const root = await Deno.makeTempDir();
   const first = `${root}/first`;
   const second = `${root}/second`;
@@ -459,7 +460,7 @@ Deno.test("local Loom host pins a symlinked home to one real directory", async (
   assertEquals(io.stderr, []);
 });
 
-Deno.test("local Loom host sends explicit gateway traffic only for persisted gateway", async () => {
+test("local Loom host sends explicit gateway traffic only for persisted gateway", async () => {
   const home = await Deno.makeTempDir();
   let gatewayRequests = 0;
   let credentialReads = 0;
@@ -513,7 +514,7 @@ Deno.test("local Loom host sends explicit gateway traffic only for persisted gat
   assertEquals(io.stderr, []);
 });
 
-Deno.test("local Loom interactive host uses the same fixed Codex binding", async () => {
+test("local Loom interactive host uses the same fixed Codex binding", async () => {
   const home = await Deno.makeTempDir();
   const credentials = new InMemoryHarnessCredentialStore();
   await credentials.set("local", "openai-codex", {
@@ -562,7 +563,7 @@ Deno.test("local Loom interactive host uses the same fixed Codex binding", async
   );
 });
 
-Deno.test("local Loom host rejects resume binding switches before provider traffic", async () => {
+test("local Loom host rejects resume binding switches before provider traffic", async () => {
   const home = await Deno.makeTempDir();
   let requests = 0;
   const io = ioBuffers();
@@ -628,7 +629,7 @@ Deno.test("local Loom host rejects resume binding switches before provider traff
   assertEquals(JSON.parse(io.stderr.join("")).error.code, "provider-mismatch");
 });
 
-Deno.test("local Loom host resumes one exact artifact snapshot with its recorded gateway auth", async () => {
+test("local Loom host resumes one exact artifact snapshot with its recorded gateway auth", async () => {
   const home = await Deno.makeTempDir();
   const workspace = await Deno.makeTempDir();
   const identityHost = await createLoomLocalCfHarnessHost({
@@ -687,7 +688,7 @@ Deno.test("local Loom host resumes one exact artifact snapshot with its recorded
   assertEquals(io.stderr, []);
 });
 
-Deno.test("local Loom host positively resumes an authenticated Codex binding", async () => {
+test("local Loom host positively resumes an authenticated Codex binding", async () => {
   const home = await Deno.makeTempDir();
   const credentials = new InMemoryHarnessCredentialStore();
   await credentials.set("local", "openai-codex", {
@@ -754,7 +755,7 @@ Deno.test("local Loom host positively resumes an authenticated Codex binding", a
   assertEquals(io.stderr, []);
 });
 
-Deno.test("local Loom host positively resumes a gateway API-key binding", async () => {
+test("local Loom host positively resumes a gateway API-key binding", async () => {
   const home = await Deno.makeTempDir();
   const identityHost = await createLoomLocalCfHarnessHost({
     harnessHome: home,
@@ -810,7 +811,7 @@ Deno.test("local Loom host positively resumes a gateway API-key binding", async 
   assertEquals(io.stderr, []);
 });
 
-Deno.test("local Loom host rejects resumed gateway auth overrides before provider traffic", async () => {
+test("local Loom host rejects resumed gateway auth overrides before provider traffic", async () => {
   const home = await Deno.makeTempDir();
   const identityHost = await createLoomLocalCfHarnessHost({
     harnessHome: home,
@@ -852,7 +853,7 @@ Deno.test("local Loom host rejects resumed gateway auth overrides before provide
   assertEquals(JSON.parse(io.stderr.join("")).error.code, "provider-mismatch");
 });
 
-Deno.test("local Loom host ignores literal binding flags after the option terminator", async () => {
+test("local Loom host ignores literal binding flags after the option terminator", async () => {
   const home = await Deno.makeTempDir();
   const credentials = new InMemoryHarnessCredentialStore();
   await credentials.set("local", "openai-codex", {
@@ -920,7 +921,7 @@ Deno.test("local Loom host ignores literal binding flags after the option termin
   assertEquals(io.stderr, []);
 });
 
-Deno.test("local Loom host rejects inconsistent recorded bindings before provider traffic", async () => {
+test("local Loom host rejects inconsistent recorded bindings before provider traffic", async () => {
   const home = await Deno.makeTempDir();
   const identityHost = await createLoomLocalCfHarnessHost({
     harnessHome: home,
@@ -1072,7 +1073,7 @@ Deno.test("local Loom host rejects inconsistent recorded bindings before provide
   }
 });
 
-Deno.test("local Loom host rejects every incomplete recorded binding before provider traffic", async () => {
+test("local Loom host rejects every incomplete recorded binding before provider traffic", async () => {
   const home = await Deno.makeTempDir();
   const identityHost = await createLoomLocalCfHarnessHost({
     harnessHome: home,
@@ -1133,7 +1134,7 @@ Deno.test("local Loom host rejects every incomplete recorded binding before prov
   }
 });
 
-Deno.test("local Loom host fails closed for legacy resume artifacts without a binding", async () => {
+test("local Loom host fails closed for legacy resume artifacts without a binding", async () => {
   const home = await Deno.makeTempDir();
   const identityHost = await createLoomLocalCfHarnessHost({
     harnessHome: home,
@@ -1167,7 +1168,7 @@ Deno.test("local Loom host fails closed for legacy resume artifacts without a bi
   assertEquals(JSON.parse(io.stderr.join("")).error.code, "provider-mismatch");
 });
 
-Deno.test("local Loom host classifies invalid, internal, and unavailable failures", async () => {
+test("local Loom host classifies invalid, internal, and unavailable failures", async () => {
   const invalidIo = ioBuffers();
   let invalidRequests = 0;
   const invalidHome = await Deno.makeTempDir();
@@ -1253,7 +1254,7 @@ Deno.test("local Loom host classifies invalid, internal, and unavailable failure
   assertEquals(JSON.stringify(unavailableFailure).includes("secret"), false);
 });
 
-Deno.test("interactive startup blockers use the chat protocol", async () => {
+test("interactive startup blockers use the chat protocol", async () => {
   const request = JSON.stringify({
     type: "cf-harness.chat.request",
     protocolVersion: 1,
@@ -1282,7 +1283,7 @@ Deno.test("interactive startup blockers use the chat protocol", async () => {
   assertEquals(response.error.code, "provider-auth-required");
 });
 
-Deno.test("only an unreachable provider marks a startup blocker retryable", async () => {
+test("only an unreachable provider marks a startup blocker retryable", async () => {
   // `retryable` reads as `Retry-After` does: waiting alone can clear this one.
   // A blocker that needs a provider connected, configured, or matched does not
   // become true because an operator could go and do that.
@@ -1344,7 +1345,7 @@ Deno.test("only an unreachable provider marks a startup blocker retryable", asyn
   }
 });
 
-Deno.test("local Loom interactive entrypoint returns missing config on stdout protocol", async () => {
+test("local Loom interactive entrypoint returns missing config on stdout protocol", async () => {
   const home = await Deno.makeTempDir();
   const request = JSON.stringify({
     type: "cf-harness.chat.request",
@@ -1386,7 +1387,7 @@ Deno.test("local Loom interactive entrypoint returns missing config on stdout pr
   assertEquals(new TextDecoder().decode(result.stderr), "");
 });
 
-Deno.test("local Loom host rejects non-canonical credential homes and provider overrides", async () => {
+test("local Loom host rejects non-canonical credential homes and provider overrides", async () => {
   const root = await Deno.makeTempDir();
   const file = `${root}/not-a-directory`;
   await Deno.writeTextFile(file, "not a directory");
@@ -1417,7 +1418,7 @@ Deno.test("local Loom host rejects non-canonical credential homes and provider o
   );
 });
 
-Deno.test("local Loom host classifies malformed binding options before configuration or traffic", async () => {
+test("local Loom host classifies malformed binding options before configuration or traffic", async () => {
   const home = await Deno.makeTempDir();
   const cases: Array<{ args: readonly string[]; message: string }> = [
     { args: ["--model="], message: "--model requires a value" },
@@ -1500,7 +1501,7 @@ Deno.test("local Loom host classifies malformed binding options before configura
   }
 });
 
-Deno.test("local Loom host refuses a dotted flag in a batch as an invalid request, without the value it would have quoted", async () => {
+test("local Loom host refuses a dotted flag in a batch as an invalid request, without the value it would have quoted", async () => {
   const home = await Deno.makeTempDir();
   try {
     const io = ioBuffers();
@@ -1530,7 +1531,7 @@ Deno.test("local Loom host refuses a dotted flag in a batch as an invalid reques
   }
 });
 
-Deno.test("local Loom host validates gateway environment and credential-store availability", async () => {
+test("local Loom host validates gateway environment and credential-store availability", async () => {
   const home = await Deno.makeTempDir();
   const invalidGatewayIo = ioBuffers();
   const invalidGatewayHost = await createLoomLocalCfHarnessHost({
@@ -1572,7 +1573,7 @@ Deno.test("local Loom host validates gateway environment and credential-store av
   assertEquals(await defaultIoHost.runBatch(["--model-provider"]), 1);
 });
 
-Deno.test("interactive startup failure protocol handles malformed requests and bounded internal errors", async () => {
+test("interactive startup failure protocol handles malformed requests and bounded internal errors", async () => {
   const input = new Response(
     `\nnot-json\n${JSON.stringify({ requestId: 42 })}\n${
       JSON.stringify({ requestId: "known" })

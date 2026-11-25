@@ -1,6 +1,5 @@
 /** Exercises the host and guest ends of the explicit capability protocol. */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
 import {
@@ -9,6 +8,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { defer } from "@commonfabric/async/defer";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   BRIDGE_READ_REFUSED,

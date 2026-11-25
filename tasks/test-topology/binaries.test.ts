@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { serverExecutionCiLane } from "../server-execution-ci.ts";
 import { loadBinarySuites } from "./binaries.ts";
 import type { Suite } from "./suite.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const suites = loadBinarySuites();
 const byId = (id: string): Suite => suites.find((s) => s.id === id)!;

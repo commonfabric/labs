@@ -11,11 +11,16 @@
  * survives; the drill exercises real disposal against a real server.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, type DID, Identity } from "@commonfabric/identity";
 import { Runtime, setPatternSource } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   programEntryIdentity,

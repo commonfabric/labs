@@ -20,6 +20,8 @@ export const tomlLanguage: Language = {
 
   commentLinesAreInert: true,
 
+  literalValues: true,
+
   input: { kind: "text", decoder: utf8Decoder },
 
   metadata: {

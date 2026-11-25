@@ -17,6 +17,7 @@ import {
   ciGanttOptions,
   ciGanttProgressResponse,
   ciHistoryDays,
+  ciHistorySource,
   type CiHistorySample,
   type CiHistorySource,
   type CiJobFetchProgress,
@@ -49,8 +50,8 @@ import { CiGanttDetailStore, ganttDetailDirectory } from "./ci-gantt-detail.ts";
 import {
   CI_RUNS_MAX,
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   REPO,
 } from "./config.ts";
 import {
@@ -61,6 +62,7 @@ import { github } from "./lib.ts";
 import { GitHubRateLimitBudgetError } from "./github-rate-limit.ts";
 import { PERFORMANCE_VIEW_STYLES, progressPanel } from "./performance-views.ts";
 import { runList } from "./test/run-list.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // Existing collector tests exercise history and persistence behavior against
 // precise request stubs. The rate-budget implementation has its own tests.
@@ -177,7 +179,7 @@ function historySamples(): CiHistorySample[] {
   }));
 }
 
-Deno.test("CI job history keeps every eligible build below the point target", () => {
+test("CI job history keeps every eligible build below the point target", () => {
   const sameWindowOld = workflowRun(1, NOW - HOUR * 2);
   const sameWindowNew = workflowRun(2, NOW - HOUR);
   const previousWindow = workflowRun(3, NOW - HOUR * 14);
@@ -197,7 +199,7 @@ Deno.test("CI job history keeps every eligible build below the point target", ()
   );
 });
 
-Deno.test("CI Gantt options retain valid selected run attempts", () => {
+test("CI Gantt options retain valid selected run attempts", () => {
   const parameters = new URLSearchParams();
   parameters.append("run", "8101:1");
   parameters.append("run", "not-a-run");
@@ -217,7 +219,7 @@ Deno.test("CI Gantt options retain valid selected run attempts", () => {
   });
 });
 
-Deno.test("CI Gantt limits exact run selections before collecting", async () => {
+test("CI Gantt limits exact run selections before collecting", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-selection-limit-test-",
   });
@@ -264,7 +266,7 @@ Deno.test("CI Gantt limits exact run selections before collecting", async () => 
   }
 });
 
-Deno.test("CI job history keeps every eligible build at the point target", () => {
+test("CI job history keeps every eligible build at the point target", () => {
   const runs = Array.from(
     { length: CI_HISTORY_POINT_TARGET },
     (_, index) => workflowRun(2_000 + index, NOW - HOUR - index * 1_000),
@@ -276,11 +278,11 @@ Deno.test("CI job history keeps every eligible build at the point target", () =>
   );
 });
 
-Deno.test("CI job history sampling matches the main tile run limit", () => {
+test("CI job history sampling matches the main tile run limit", () => {
   assertEquals(CI_HISTORY_POINT_TARGET, CI_RUNS_MAX);
 });
 
-Deno.test("CI job history keeps the exact target across clustered builds", () => {
+test("CI job history keeps the exact target across clustered builds", () => {
   const clustered = Array.from(
     { length: CI_HISTORY_POINT_TARGET + 1 },
     (_, index) => workflowRun(1_000 + index, NOW - HOUR - index * 1_000),
@@ -293,7 +295,7 @@ Deno.test("CI job history keeps the exact target across clustered builds", () =>
   assertEquals(sampled.at(-1)?.id, 1_000);
 });
 
-Deno.test("CI job history keeps a similar point count when the window gets shorter", () => {
+test("CI job history keeps a similar point count when the window gets shorter", () => {
   const denseRuns = (days: number, firstId: number) =>
     Array.from(
       { length: CI_HISTORY_POINT_TARGET * 2 + 1 },
@@ -327,7 +329,7 @@ Deno.test("CI job history keeps a similar point count when the window gets short
   assertEquals(ciHistoryDays("100"), CI_HISTORY_DAYS);
 });
 
-Deno.test("CI job history groups concurrent suffix jobs and keeps every shard", () => {
+test("CI job history groups concurrent suffix jobs and keeps every shard", () => {
   const snapshot = buildCiJobHistory(historySamples());
 
   assertEquals(snapshot.runCount, 8);
@@ -365,7 +367,7 @@ Deno.test("CI job history groups concurrent suffix jobs and keeps every shard", 
   );
 });
 
-Deno.test("CI job history preserves changing shard layouts and labels maximum concurrency", () => {
+test("CI job history preserves changing shard layouts and labels maximum concurrency", () => {
   const snapshot = buildCiJobHistory([
     {
       runId: 1,
@@ -400,7 +402,7 @@ Deno.test("CI job history preserves changing shard layouts and labels maximum co
   );
 });
 
-Deno.test("CI job history page shows the slowest shard, every shard, and unsharded jobs", () => {
+test("CI job history page shows the slowest shard, every shard, and unsharded jobs", () => {
   const html = ciJobHistoryPage(
     buildCiJobHistory(
       historySamples(),
@@ -473,7 +475,7 @@ Deno.test("CI job history page shows the slowest shard, every shard, and unshard
   assertEquals([...html.matchAll(/class="crow /g)].length, 6);
 });
 
-Deno.test("CI history graphs ignore two values at each end when twenty are shown", () => {
+test("CI history graphs ignore two values at each end when twenty are shown", () => {
   const seconds = [
     102,
     11,
@@ -513,7 +515,7 @@ Deno.test("CI history graphs ignore two values at each end when twenty are shown
   assertEquals(points.filter((point) => point > 26).length, 2);
 });
 
-Deno.test("CI job history trend sort is flat and includes groups and exact job names", () => {
+test("CI job history trend sort is flat and includes groups and exact job names", () => {
   const html = ciJobHistoryPage(buildCiJobHistory(historySamples()), "trend");
 
   assert(!html.includes("<h2>"));
@@ -526,7 +528,7 @@ Deno.test("CI job history trend sort is flat and includes groups and exact job n
   );
 });
 
-Deno.test("CI job history duration sort puts the longest latest value first", () => {
+test("CI job history duration sort puts the longest latest value first", () => {
   const html = ciJobHistoryPage(
     buildCiJobHistory(historySamples()),
     "duration",
@@ -559,28 +561,36 @@ Deno.test("CI job history duration sort puts the longest latest value first", ()
   );
 });
 
-Deno.test("CI job history page can select the loom workflow", () => {
+test("CI job history reads `cfs` and the repository's former name, `loom`, as cfs, and anything else as labs", () => {
+  assertEquals(ciHistorySource("cfs"), CI_HISTORY_SOURCES.cfs);
+  assertEquals(ciHistorySource("loom"), CI_HISTORY_SOURCES.cfs);
+  for (const value of ["labs", "loom-scripts", "weaver", null]) {
+    assertEquals(ciHistorySource(value), CI_HISTORY_SOURCES.labs);
+  }
+});
+
+test("CI job history page can select the cfs workflow", () => {
   const html = ciJobHistoryPage(
     buildCiJobHistory(historySamples()),
     "job",
     undefined,
     {
-      source: CI_HISTORY_SOURCES.loom,
+      source: CI_HISTORY_SOURCES.cfs,
       days: 14,
     },
   );
 
-  assertStringIncludes(html, `${LOOM_REPO} · ${LOOM_CI_WORKFLOW}`);
-  assertStringIncludes(html, '<option value="loom" selected>loom</option>');
+  assertStringIncludes(html, `${CFS_REPO} · ${CFS_CI_WORKFLOW}`);
+  assertStringIncludes(html, '<option value="cfs" selected>cfs</option>');
   assertStringIncludes(html, 'value="14"');
   assertStringIncludes(html, "selected 14-day trend");
   assertStringIncludes(
     html,
-    'href="/bench?view=gantt&amp;repo=loom&amp;days=14&amp;sort=job&amp;stat=p99">CI run Gantt</a>',
+    'href="/bench?view=gantt&amp;repo=cfs&amp;days=14&amp;sort=job&amp;stat=p99">CI run Gantt</a>',
   );
 });
 
-Deno.test("CI job history page exposes live collection progress without disabling controls", () => {
+test("CI job history page exposes live collection progress without disabling controls", () => {
   const progress: CiJobFetchProgress = {
     id: "labs-14-progress",
     source: "labs",
@@ -655,10 +665,10 @@ Deno.test("CI job history page exposes live collection progress without disablin
   assert(!html.includes("section:not(:has(.crow:not(.good)))"));
 });
 
-Deno.test("CI job history page reports workflow discovery requests", () => {
+test("CI job history page reports workflow discovery requests", () => {
   const progress: CiJobFetchProgress = {
     id: "loom-discovery",
-    source: "loom",
+    source: "cfs",
     days: 45,
     phase: "discovering",
     discoveryRequestsMade: 3,
@@ -679,7 +689,7 @@ Deno.test("CI job history page reports workflow discovery requests", () => {
     updatedAt: NOW,
   };
   const html = ciJobHistoryPage(null, "job", undefined, {
-    source: CI_HISTORY_SOURCES.loom,
+    source: CI_HISTORY_SOURCES.cfs,
     days: 45,
     progress,
   });
@@ -700,11 +710,11 @@ Deno.test("CI job history page reports workflow discovery requests", () => {
   });
 });
 
-Deno.test("CI fetch progress panel retains a completed collection warning", () => {
+test("CI fetch progress panel retains a completed collection warning", () => {
   const html = progressPanel(
     {
     id: "gantt-cached-warning",
-    source: "loom",
+    source: "cfs",
     days: 45,
     phase: "complete",
     discoveryRequestsMade: 1,
@@ -737,7 +747,7 @@ Deno.test("CI fetch progress panel retains a completed collection warning", () =
   );
 });
 
-Deno.test("CI fetch progress panel retains the last failed collection", () => {
+test("CI fetch progress panel retains the last failed collection", () => {
   const html = progressPanel(
     {
     id: "ci-failed",
@@ -779,7 +789,7 @@ Deno.test("CI fetch progress panel retains the last failed collection", () => {
   assert(!html.includes("No requests in progress."));
 });
 
-Deno.test("CI job history response keeps a remembered failure in its idle panel", async () => {
+test("CI job history response keeps a remembered failure in its idle panel", async () => {
   const cached = buildCiJobHistory(historySamples());
   const provider = {
     cached: () => Promise.resolve(cached),
@@ -804,7 +814,7 @@ Deno.test("CI job history response keeps a remembered failure in its idle panel"
   );
 });
 
-Deno.test("CI job history response uses a refresh that completed after its cache read", async () => {
+test("CI job history response uses a refresh that completed after its cache read", async () => {
   const cached = buildCiJobHistory([{
     runId: 7_101,
     runUrl: "https://example.test/runs/7101",
@@ -849,11 +859,11 @@ Deno.test("CI job history response uses a refresh that completed after its cache
   assert(!fragment.includes('<form class="controls"'));
 });
 
-Deno.test("CI job history update check uses the selected repository and window", async () => {
+test("CI job history update check uses the selected repository and window", async () => {
   const cached = buildCiJobHistory(historySamples());
   const progress: CiJobFetchProgress = {
     id: "loom-9-check",
-    source: "loom",
+    source: "cfs",
     days: 9,
     phase: "discovering",
     discoveryRequestsMade: 0,
@@ -894,7 +904,7 @@ Deno.test("CI job history update check uses the selected repository and window",
   );
   const state = await response.json();
 
-  assertEquals(selected?.source, CI_HISTORY_SOURCES.loom);
+  assertEquals(selected?.source, CI_HISTORY_SOURCES.cfs);
   assertEquals(selected?.days, 9);
   assertEquals(state.progress, progress);
   assertEquals(state.lastRequestError, null);
@@ -902,7 +912,7 @@ Deno.test("CI job history update check uses the selected repository and window",
   assertEquals(response.headers.get("cache-control"), "no-store");
 });
 
-Deno.test("CI job history update checks freshness-gate a failed collection", async () => {
+test("CI job history update checks freshness-gate a failed collection", async () => {
   const test = await temporaryCollector();
   const originalFetch = globalThis.fetch;
   let calls = 0;
@@ -974,7 +984,7 @@ Deno.test("CI job history update checks freshness-gate a failed collection", asy
   }
 });
 
-Deno.test("CI history retains a failed request until replacement data is persisted", async () => {
+test("CI history retains a failed request until replacement data is persisted", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-job-history-failure-persistence-",
   });
@@ -1045,7 +1055,7 @@ Deno.test("CI history retains a failed request until replacement data is persist
   }
 });
 
-Deno.test("CI job history page escapes job names and labels a short series as new", () => {
+test("CI job history page escapes job names and labels a short series as new", () => {
   const snapshot = buildCiJobHistory([{
     runId: 999,
     runUrl: "https://example.test/?a=1&b=2",
@@ -1097,7 +1107,7 @@ async function temporaryCollector(): Promise<{
   };
 }
 
-Deno.test("CI duration history never loads the Gantt step detail", async () => {
+test("CI duration history never loads the Gantt step detail", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-duration-detail-" });
   const file = `${directory}/history.json`;
   const reads: number[] = [];
@@ -1172,7 +1182,7 @@ Deno.test("CI duration history never loads the Gantt step detail", async () => {
   }
 });
 
-Deno.test("the Gantt renderer's input file holds every run of the chart", async () => {
+test("the Gantt renderer's input file holds every run of the chart", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-gantt-input-" });
   const destination = `${directory}/input.json`;
   const runs = [workflowRun(15_001, NOW), workflowRun(15_000, NOW - HOUR)];
@@ -1219,7 +1229,7 @@ Deno.test("the Gantt renderer's input file holds every run of the chart", async 
   }
 });
 
-Deno.test("a selected run whose detail goes missing mid-chart is an error", async () => {
+test("a selected run whose detail goes missing mid-chart is an error", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-gantt-vanish-" });
   const file = `${directory}/history.json`;
   const store = new CiJobHistoryStore(file);
@@ -1289,7 +1299,7 @@ Deno.test("a selected run whose detail goes missing mid-chart is an error", asyn
   }
 });
 
-Deno.test("a run whose detail goes missing mid-chart is left out of it", async () => {
+test("a run whose detail goes missing mid-chart is left out of it", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-gantt-omit-" });
   const file = `${directory}/history.json`;
   const runs = [workflowRun(15_301, NOW), workflowRun(15_300, NOW - HOUR)];
@@ -1337,7 +1347,7 @@ Deno.test("a run whose detail goes missing mid-chart is left out of it", async (
   }
 });
 
-Deno.test("a chart is served even when its detail cannot be pruned", async () => {
+test("a chart is served even when its detail cannot be pruned", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-gantt-prune-fail-" });
   const file = `${directory}/history.json`;
   const run = workflowRun(15_200, NOW);
@@ -1377,7 +1387,7 @@ Deno.test("a chart is served even when its detail cannot be pruned", async () =>
   }
 });
 
-Deno.test("a chart of no runs is still a readable input file", async () => {
+test("a chart of no runs is still a readable input file", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-gantt-empty-" });
   const destination = `${directory}/input.json`;
   const collector = new RateLimitedCiJobHistoryCollector(
@@ -1398,7 +1408,7 @@ Deno.test("a chart of no runs is still a readable input file", async () => {
   }
 });
 
-Deno.test("pruning keeps the detail of every attempt the run index holds", async () => {
+test("pruning keeps the detail of every attempt the run index holds", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-prune-invariant-" });
   const file = `${directory}/history.json`;
   const store = new CiJobHistoryStore(file);
@@ -1477,7 +1487,7 @@ Deno.test("pruning keeps the detail of every attempt the run index holds", async
   }
 });
 
-Deno.test("CI Gantt collects an attempt whose detail cannot be read", async () => {
+test("CI Gantt collects an attempt whose detail cannot be read", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-gantt-unreadable-" });
   const file = `${directory}/history.json`;
   const store = new CiJobHistoryStore(file);
@@ -1544,7 +1554,7 @@ Deno.test("CI Gantt collects an attempt whose detail cannot be read", async () =
   }
 });
 
-Deno.test("walking the range slider past the snapshot cache costs no requests or writes", async () => {
+test("walking the range slider past the snapshot cache costs no requests or writes", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-snapshot-cache-" });
   const file = `${directory}/history.json`;
   class CountingStore extends CiJobHistoryStore {
@@ -1600,7 +1610,7 @@ Deno.test("walking the range slider past the snapshot cache costs no requests or
   }
 });
 
-Deno.test("a discovered workflow run keeps every field and nothing else", () => {
+test("a discovered workflow run keeps every field and nothing else", () => {
   // What GitHub actually sends with every entry: the repository, the head
   // repository, the whole head commit, and both actors, around fifty times the
   // size of what a chart reads. A window is thousands of runs held for half an
@@ -1635,7 +1645,7 @@ Deno.test("a discovered workflow run keeps every field and nothing else", () => 
   assertEquals(Object.keys(projected).filter((key) => key in surplus), []);
 });
 
-Deno.test("a slow run does not hold up the runs behind it", async () => {
+test("a slow run does not hold up the runs behind it", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-in-flight-" });
   const now = Date.now();
   // More runs than can be outstanding at once, so the collector has to keep
@@ -1695,7 +1705,7 @@ Deno.test("a slow run does not hold up the runs behind it", async () => {
   }
 });
 
-Deno.test("a window still collecting keeps its snapshot through an eviction", async () => {
+test("a window still collecting keeps its snapshot through an eviction", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-snapshot-inflight-" });
   const now = Date.now();
   const runs = Array.from(
@@ -1767,7 +1777,7 @@ Deno.test("a window still collecting keeps its snapshot through an eviction", as
   }
 });
 
-Deno.test("CI job history reports shared workflow discovery progress", async () => {
+test("CI job history reports shared workflow discovery progress", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-job-discovery-test-",
   });
@@ -1896,7 +1906,7 @@ Deno.test("CI job history reports shared workflow discovery progress", async () 
   }
 });
 
-Deno.test("CI job history reports progress and persists wider-window responses after a slider change", async () => {
+test("CI job history reports progress and persists wider-window responses after a slider change", async () => {
   const test = await temporaryCollector();
   const now = Date.now();
   const oldRun = workflowRun(8_901, now - 30 * DAY);
@@ -2052,7 +2062,7 @@ Deno.test("CI job history reports progress and persists wider-window responses a
   }
 });
 
-Deno.test("CI job history reloads a short page when a wider collection populated its cache", async () => {
+test("CI job history reloads a short page when a wider collection populated its cache", async () => {
   const test = await temporaryCollector();
   const now = Date.now();
   const firstRun = workflowRun(8_911, now - 2 * DAY);
@@ -2117,7 +2127,7 @@ Deno.test("CI job history reloads a short page when a wider collection populated
   }
 });
 
-Deno.test("CI job history rebuilds a fresh short range after a wider range repairs its cache", async () => {
+test("CI job history rebuilds a fresh short range after a wider range repairs its cache", async () => {
   const test = await temporaryCollector();
   const now = Date.now();
   const stableRun = workflowRun(8_916, now - 2 * DAY);
@@ -2179,7 +2189,7 @@ Deno.test("CI job history rebuilds a fresh short range after a wider range repai
   }
 });
 
-Deno.test("CI job history joins a wider repair before taking the short-range freshness path", async () => {
+test("CI job history joins a wider repair before taking the short-range freshness path", async () => {
   const test = await temporaryCollector();
   const now = Date.now();
   const stableRun = workflowRun(8_918, now - 2 * DAY);
@@ -2270,7 +2280,7 @@ Deno.test("CI job history joins a wider repair before taking the short-range fre
   }
 });
 
-Deno.test("CI job history keeps labs fresh while loom has a pending cache write", async () => {
+test("CI job history keeps labs fresh while cfs has a pending cache write", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-job-history-source-cache-test-",
   });
@@ -2306,7 +2316,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
   const collector = new CiJobHistoryCollector(store);
   const labsRun = workflowRun(8_926, Date.now() - DAY);
   const loomRun = workflowRun(8_927, Date.now() - DAY, {
-    html_url: `https://github.com/${LOOM_REPO}/actions/runs/8927`,
+    html_url: `https://github.com/${CFS_REPO}/actions/runs/8927`,
   });
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
@@ -2318,7 +2328,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
     }
     if (
       url.includes(
-        `/repos/${LOOM_REPO}/actions/workflows/${LOOM_CI_WORKFLOW}/runs?`,
+        `/repos/${CFS_REPO}/actions/workflows/${CFS_CI_WORKFLOW}/runs?`,
       )
     ) {
       return Promise.resolve(Response.json(runList([loomRun])));
@@ -2332,7 +2342,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
     }
     if (
       url.includes(
-        `/repos/${LOOM_REPO}/actions/runs/${loomRun.id}/attempts/1/jobs`,
+        `/repos/${CFS_REPO}/actions/runs/${loomRun.id}/attempts/1/jobs`,
       )
     ) {
       return Promise.resolve(Response.json({ jobs: [apiJob("Loom", 70)] }));
@@ -2351,7 +2361,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
 
     const loom = collector.startRefresh(
       staticGitHubCredential("source-token"),
-      CI_HISTORY_SOURCES.loom,
+      CI_HISTORY_SOURCES.cfs,
       7,
     );
     pending.push(loom.result);
@@ -2388,7 +2398,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
   }
 });
 
-Deno.test("CI job history persists a shared job response once across active windows", async () => {
+test("CI job history persists a shared job response once across active windows", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-job-history-save-test-",
   });
@@ -2473,7 +2483,7 @@ Deno.test("CI job history persists a shared job response once across active wind
   }
 });
 
-Deno.test("CI job history joins persistence when a range starts after the response", async () => {
+test("CI job history joins persistence when a range starts after the response", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-job-history-late-range-test-",
   });
@@ -2564,7 +2574,7 @@ Deno.test("CI job history joins persistence when a range starts after the respon
   }
 });
 
-Deno.test("CI job history fetches selected runs once and filters unusable jobs", async () => {
+test("CI job history fetches selected runs once and filters unusable jobs", async () => {
   using time = new FakeTime();
   const test = await temporaryCollector();
   const runs = [
@@ -2660,7 +2670,7 @@ Deno.test("CI job history fetches selected runs once and filters unusable jobs",
   }
 });
 
-Deno.test("CI job history reloads completed attempts from its server cache", async () => {
+test("CI job history reloads completed attempts from its server cache", async () => {
   const test = await temporaryCollector();
   const run = workflowRun(9_101, NOW);
   let runCalls = 0;
@@ -2721,7 +2731,7 @@ Deno.test("CI job history reloads completed attempts from its server cache", asy
   }
 });
 
-Deno.test("CI job history reuses a fresh completed collection after a dashboard restart", async () => {
+test("CI job history reuses a fresh completed collection after a dashboard restart", async () => {
   const test = await temporaryCollector();
   const now = Date.now();
   const run = workflowRun(9_103, now);
@@ -2838,7 +2848,7 @@ Deno.test("CI job history reuses a fresh completed collection after a dashboard 
   }
 });
 
-Deno.test("CI job history does not rebuild a matching persisted manifest", async () => {
+test("CI job history does not rebuild a matching persisted manifest", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   class CachedReadCollector extends CiJobHistoryCollector {
     cachedReads = 0;
@@ -2877,7 +2887,7 @@ Deno.test("CI job history does not rebuild a matching persisted manifest", async
   }
 });
 
-Deno.test("CI job history does not bless a preserved legacy sample", async () => {
+test("CI job history does not bless a preserved legacy sample", async () => {
   const test = await temporaryCollector();
   const now = Date.now();
   const first = workflowRun(9_106, now - HOUR);
@@ -2948,7 +2958,7 @@ Deno.test("CI job history does not bless a preserved legacy sample", async () =>
   }
 });
 
-Deno.test("CI job history does not bless a preserved manifestless sample", async () => {
+test("CI job history does not bless a preserved manifestless sample", async () => {
   const test = await temporaryCollector();
   const now = Date.now();
   const first = workflowRun(9_107, now - HOUR);
@@ -3016,7 +3026,7 @@ Deno.test("CI job history does not bless a preserved manifestless sample", async
   }
 });
 
-Deno.test("CI job history preserves an all-failed refresh warning and retries after restart", async () => {
+test("CI job history preserves an all-failed refresh warning and retries after restart", async () => {
   const test = await temporaryCollector();
   const now = Date.now();
   const run = workflowRun(9_104, now - HOUR);
@@ -3091,7 +3101,7 @@ Deno.test("CI job history preserves an all-failed refresh warning and retries af
   }
 });
 
-Deno.test("CI job history preserves current sampling provenance after an all-failed refresh", async () => {
+test("CI job history preserves current sampling provenance after an all-failed refresh", async () => {
   const test = await temporaryCollector();
   const now = Date.now();
   let clock = now;
@@ -3174,7 +3184,7 @@ Deno.test("CI job history preserves current sampling provenance after an all-fai
   }
 });
 
-Deno.test("CI job history does not mark a rate-limited collection fresh", async () => {
+test("CI job history does not mark a rate-limited collection fresh", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-rate-limited-" });
   const file = `${directory}/history.json`;
   const store = new CiJobHistoryStore(file);
@@ -3265,7 +3275,7 @@ Deno.test("CI job history does not mark a rate-limited collection fresh", async 
   }
 });
 
-Deno.test("CI job history can replace an in-process future refresh", async () => {
+test("CI job history can replace an in-process future refresh", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-future-refresh-" });
   const file = `${directory}/history.json`;
   const store = new CiJobHistoryStore(file);
@@ -3329,7 +3339,7 @@ Deno.test("CI job history can replace an in-process future refresh", async () =>
   }
 });
 
-Deno.test("CI Gantt reuses and reloads the CI history job cache", async () => {
+test("CI Gantt reuses and reloads the CI history job cache", async () => {
   const test = await temporaryCollector();
   const now = Date.now();
   const run = workflowRun(9_105, now, { name: "CI" });
@@ -3407,7 +3417,7 @@ Deno.test("CI Gantt reuses and reloads the CI history job cache", async () => {
   }
 });
 
-Deno.test("a selected-run Gantt reads only its run and then reuses the disk cache", async () => {
+test("a selected-run Gantt reads only its run and then reuses the disk cache", async () => {
   const test = await temporaryCollector();
   const run = workflowRun(9_115, NOW, {
     name: "CI",
@@ -3488,7 +3498,7 @@ Deno.test("a selected-run Gantt reads only its run and then reuses the disk cach
   }
 });
 
-Deno.test("a selected-run Gantt reuses fresh run metadata after a job failure", async () => {
+test("a selected-run Gantt reuses fresh run metadata after a job failure", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-selected-metadata-test-",
   });
@@ -3558,7 +3568,7 @@ Deno.test("a selected-run Gantt reuses fresh run metadata after a job failure", 
   }
 });
 
-Deno.test("selected-run metadata keeps only the most recent Gantt selection", async () => {
+test("selected-run metadata keeps only the most recent Gantt selection", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-selected-metadata-limit-test-",
   });
@@ -3725,7 +3735,7 @@ async function overfillGanttProgressRecords(
   }
 }
 
-Deno.test("CI Gantt retains a bounded set of completed progress records", () =>
+test("CI Gantt retains a bounded set of completed progress records", () =>
   overfillGanttProgressRecords(
     "ci-gantt-progress-limit-test-",
     () => true,
@@ -3750,7 +3760,7 @@ Deno.test("CI Gantt retains a bounded set of completed progress records", () =>
     },
   ));
 
-Deno.test("CI Gantt trimming spares the progress record handed out last", () =>
+test("CI Gantt trimming spares the progress record handed out last", () =>
   overfillGanttProgressRecords(
     "ci-gantt-progress-newest-test-",
     // Holding every collection but the newest makes the newest the first to
@@ -3771,7 +3781,7 @@ Deno.test("CI Gantt trimming spares the progress record handed out last", () =>
     },
   ));
 
-Deno.test("a selected-run Gantt repairs cached responses with no drawable jobs", async () => {
+test("a selected-run Gantt repairs cached responses with no drawable jobs", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-selected-empty-jobs-test-",
   });
@@ -3883,7 +3893,7 @@ Deno.test("a selected-run Gantt repairs cached responses with no drawable jobs",
   }
 });
 
-Deno.test("a selected-run Gantt expands a collapsed rerun cache", async () => {
+test("a selected-run Gantt expands a collapsed rerun cache", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-selected-rerun-cache-test-",
   });
@@ -4009,7 +4019,7 @@ Deno.test("a selected-run Gantt expands a collapsed rerun cache", async () => {
   }
 });
 
-Deno.test("a selected-run Gantt validates the commit and workflow before fetching jobs", async () => {
+test("a selected-run Gantt validates the commit and workflow before fetching jobs", async () => {
   const mismatches = [
     { head_sha: "b".repeat(40), path: `.github/workflows/${CI_WORKFLOW}` },
     { head_sha: HEAD_SHA, path: ".github/workflows/other.yml" },
@@ -4069,7 +4079,7 @@ Deno.test("a selected-run Gantt validates the commit and workflow before fetchin
   }
 });
 
-Deno.test("a selected-run Gantt requires a valid commit SHA", async () => {
+test("a selected-run Gantt requires a valid commit SHA", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-selected-sha-test-",
   });
@@ -4101,7 +4111,7 @@ Deno.test("a selected-run Gantt requires a valid commit SHA", async () => {
   }
 });
 
-Deno.test("a selected-run Gantt enriches a shared cached attempt with its commit", async () => {
+test("a selected-run Gantt enriches a shared cached attempt with its commit", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-selected-cache-commit-test-",
   });
@@ -4178,7 +4188,7 @@ Deno.test("a selected-run Gantt enriches a shared cached attempt with its commit
   }
 });
 
-Deno.test("selected and aggregate Gantt requests do not join different job queries", async () => {
+test("selected and aggregate Gantt requests do not join different job queries", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-selected-request-mode-test-",
   });
@@ -4249,7 +4259,7 @@ Deno.test("selected and aggregate Gantt requests do not join different job queri
   }
 });
 
-Deno.test("a selected-run Gantt rejects timings outside cache retention", async () => {
+test("a selected-run Gantt rejects timings outside cache retention", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-selected-retention-test-",
   });
@@ -4298,7 +4308,7 @@ Deno.test("a selected-run Gantt rejects timings outside cache retention", async 
   }
 });
 
-Deno.test("a selected-run Gantt keeps each workflow attempt distinct", async () => {
+test("a selected-run Gantt keeps each workflow attempt distinct", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-selected-attempt-test-",
   });
@@ -4372,7 +4382,7 @@ Deno.test("a selected-run Gantt keeps each workflow attempt distinct", async () 
   }
 });
 
-Deno.test("a selected-run Gantt does not render an incomplete cached selection", async () => {
+test("a selected-run Gantt does not render an incomplete cached selection", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-selected-partial-cache-test-",
   });
@@ -4440,7 +4450,7 @@ Deno.test("a selected-run Gantt does not render an incomplete cached selection",
   }
 });
 
-Deno.test("selected-run discovery settles a failed batch before stopping", async () => {
+test("selected-run discovery settles a failed batch before stopping", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-selected-discovery-batch-test-",
   });
@@ -4566,7 +4576,7 @@ Deno.test("selected-run discovery settles a failed batch before stopping", async
   }
 });
 
-Deno.test("CI Gantt reports shared discovery and job-fetch progress", async () => {
+test("CI Gantt reports shared discovery and job-fetch progress", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-progress-test-",
   });
@@ -4685,7 +4695,7 @@ Deno.test("CI Gantt reports shared discovery and job-fetch progress", async () =
   }
 });
 
-Deno.test("CI Gantt reuses a run cached while collection is starting", async () => {
+test("CI Gantt reuses a run cached while collection is starting", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-concurrent-cache-test-",
   });
@@ -4769,7 +4779,7 @@ Deno.test("CI Gantt reuses a run cached while collection is starting", async () 
   }
 });
 
-Deno.test("CI Gantt progress endpoint streams collection failures", async () => {
+test("CI Gantt progress endpoint streams collection failures", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-progress-response-test-",
   });
@@ -4780,7 +4790,7 @@ Deno.test("CI Gantt progress endpoint streams collection failures", async () => 
     const response = ciGanttProgressResponse(
       new Request("http://dashboard/bench/gantt-progress"),
       new URL(
-        "http://dashboard/bench/gantt-progress?repo=loom&limit=12&mainOnly=1&allConclusions=1",
+        "http://dashboard/bench/gantt-progress?repo=cfs&limit=12&mainOnly=1&allConclusions=1",
       ),
       collector,
       undefined,
@@ -4788,7 +4798,7 @@ Deno.test("CI Gantt progress endpoint streams collection failures", async () => 
     assertEquals(response.headers.get("content-type"), "text/event-stream");
     const events = await response.text();
     assertStringIncludes(events, "event: progress");
-    assertStringIncludes(events, '"source":"loom"');
+    assertStringIncludes(events, '"source":"cfs"');
     assertStringIncludes(events, '"phase":"error"');
     assertStringIncludes(events, '"error":"set GH_TOKEN"');
   } finally {
@@ -4796,7 +4806,7 @@ Deno.test("CI Gantt progress endpoint streams collection failures", async () => 
   }
 });
 
-Deno.test("CI Gantt progress reports a cached discovery fallback", async () => {
+test("CI Gantt progress reports a cached discovery fallback", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-cached-warning-test-",
   });
@@ -4855,7 +4865,7 @@ Deno.test("CI Gantt progress reports a cached discovery fallback", async () => {
   }
 });
 
-Deno.test("CI Gantt progress reports partial job responses and rate limits", async () => {
+test("CI Gantt progress reports partial job responses and rate limits", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-partial-warning-test-",
   });
@@ -4920,7 +4930,7 @@ Deno.test("CI Gantt progress reports partial job responses and rate limits", asy
   }
 });
 
-Deno.test("CI Gantt preserves the quota error when no run can be rendered", async () => {
+test("CI Gantt preserves the quota error when no run can be rendered", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-quota-error-test-",
   });
@@ -4967,7 +4977,7 @@ Deno.test("CI Gantt preserves the quota error when no run can be rendered", asyn
   }
 });
 
-Deno.test("CI Gantt preserves a specific job error when no run can be rendered", async () => {
+test("CI Gantt preserves a specific job error when no run can be rendered", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-job-error-test-",
   });
@@ -5010,7 +5020,7 @@ Deno.test("CI Gantt preserves a specific job error when no run can be rendered",
   }
 });
 
-Deno.test("CI Gantt persists a completed response before a discovery fallback reuses it", async () => {
+test("CI Gantt persists a completed response before a discovery fallback reuses it", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-gantt-cache-write-test-",
   });
@@ -5071,7 +5081,7 @@ Deno.test("CI Gantt persists a completed response before a discovery fallback re
   }
 });
 
-Deno.test("CI Gantt includes failed main pushes when all conclusions are selected", async () => {
+test("CI Gantt includes failed main pushes when all conclusions are selected", async () => {
   const test = await temporaryCollector();
   const failed = workflowRun(9_108, NOW, { conclusion: "failure" });
   const runQueries: URL[] = [];
@@ -5113,7 +5123,7 @@ Deno.test("CI Gantt includes failed main pushes when all conclusions are selecte
   }
 });
 
-Deno.test("CI Gantt reads the run list only as far as its 150th run", async () => {
+test("CI Gantt reads the run list only as far as its 150th run", async () => {
   const test = await temporaryCollector();
   // Every run but the 150th is still in progress. Each was read with the list
   // it came on, so none is read again by its id.
@@ -5168,7 +5178,7 @@ Deno.test("CI Gantt reads the run list only as far as its 150th run", async () =
   }
 });
 
-Deno.test("CI history rejects cache rows without run provenance", async () => {
+test("CI history rejects cache rows without run provenance", async () => {
   const test = await temporaryCollector();
   await Deno.writeTextFile(
     test.file,
@@ -5200,7 +5210,7 @@ Deno.test("CI history rejects cache rows without run provenance", async () => {
   }
 });
 
-Deno.test("CI history excludes pull request runs cached by the Gantt", async () => {
+test("CI history excludes pull request runs cached by the Gantt", async () => {
   const test = await temporaryCollector();
   const pullRequest = workflowRun(9_106, NOW, {
     event: "pull_request",
@@ -5238,7 +5248,7 @@ Deno.test("CI history excludes pull request runs cached by the Gantt", async () 
   }
 });
 
-Deno.test("CI job history recomputes shard concurrency as layouts age out", async () => {
+test("CI job history recomputes shard concurrency as layouts age out", async () => {
   const test = await temporaryCollector();
   const oldRun = workflowRun(9_111, NOW - 6 * DAY);
   const recentRun = workflowRun(9_112, NOW);
@@ -5288,7 +5298,7 @@ Deno.test("CI job history recomputes shard concurrency as layouts age out", asyn
   }
 });
 
-Deno.test("CI job history keeps a newer partial refresh ahead of its disk cache", async () => {
+test("CI job history keeps a newer partial refresh ahead of its disk cache", async () => {
   const test = await temporaryCollector();
   const runId = 9_121;
   const stableRun = workflowRun(9_122, NOW - DAY);
@@ -5350,7 +5360,7 @@ Deno.test("CI job history keeps a newer partial refresh ahead of its disk cache"
   }
 });
 
-Deno.test("CI job history reports a cache write failure and retries without refetching jobs", async () => {
+test("CI job history reports a cache write failure and retries without refetching jobs", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-job-history-write-test-",
   });
@@ -5453,10 +5463,10 @@ Deno.test("CI job history reports a cache write failure and retries without refe
   }
 });
 
-Deno.test("CI job history reads loom when that repository is selected", async () => {
+test("CI job history reads cfs when that repository is selected", async () => {
   const test = await temporaryCollector();
   const run = workflowRun(9_151, NOW, {
-    html_url: `https://github.com/${LOOM_REPO}/actions/runs/9151`,
+    html_url: `https://github.com/${CFS_REPO}/actions/runs/9151`,
   });
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
@@ -5465,14 +5475,14 @@ Deno.test("CI job history reads loom when that repository is selected", async ()
     calls.push(url);
     if (
       url.includes(
-        `/repos/${LOOM_REPO}/actions/workflows/${LOOM_CI_WORKFLOW}/runs?`,
+        `/repos/${CFS_REPO}/actions/workflows/${CFS_CI_WORKFLOW}/runs?`,
       )
     ) {
       return Promise.resolve(Response.json(runList([run])));
     }
     if (
       url.includes(
-        `/repos/${LOOM_REPO}/actions/runs/${run.id}/attempts/1/jobs`,
+        `/repos/${CFS_REPO}/actions/runs/${run.id}/attempts/1/jobs`,
       )
     ) {
       return Promise.resolve(Response.json({ jobs: [apiJob("Tests", 75)] }));
@@ -5484,10 +5494,10 @@ Deno.test("CI job history reads loom when that repository is selected", async ()
     const snapshot = await test.collector.collect(
       staticGitHubCredential("loom-token"),
       NOW,
-      CI_HISTORY_SOURCES.loom,
+      CI_HISTORY_SOURCES.cfs,
     );
     assertEquals(snapshot.jobs[0].name, "Tests");
-    assert(calls.every((call) => call.includes(`/repos/${LOOM_REPO}/`)));
+    assert(calls.every((call) => call.includes(`/repos/${CFS_REPO}/`)));
   } finally {
     globalThis.fetch = originalFetch;
     await test.cleanup();
@@ -5514,7 +5524,7 @@ function servingRunList(
   }) as typeof fetch;
 }
 
-Deno.test("CI job history takes main's successful pushes out of the whole run list", async () => {
+test("CI job history takes main's successful pushes out of the whole run list", async () => {
   // Runs on other branches, pull request runs, and failed runs lie between
   // main's successful pushes on the list. A re-run counts at its latest
   // attempt.
@@ -5549,7 +5559,7 @@ Deno.test("CI job history takes main's successful pushes out of the whole run li
   }
 });
 
-Deno.test("CI job history reads the run list back to a day before its window", async () => {
+test("CI job history reads the run list back to a day before its window", async () => {
   // Pull request runs every four hours, among them four pushes to main: one a
   // day old, two created in the day before the window opened but started
   // inside it, and one from further back still.
@@ -5596,7 +5606,7 @@ Deno.test("CI job history reads the run list back to a day before its window", a
   }
 });
 
-Deno.test("CI job history stops at a quiet workflow's first run before its window", async () => {
+test("CI job history stops at a quiet workflow's first run before its window", async () => {
   const test = await temporaryCollector();
   const pages: string[] = [];
   const originalFetch = globalThis.fetch;
@@ -5621,7 +5631,7 @@ Deno.test("CI job history stops at a quiet workflow's first run before its windo
   }
 });
 
-Deno.test("CI job history reads a busy window's runs past the first thousand", async () => {
+test("CI job history reads a busy window's runs past the first thousand", async () => {
   // GitHub stops a filtered run list at 1,000 runs, but not the whole list.
   // Pull request runs every half hour, with a push to main at each end.
   const test = await temporaryCollector();
@@ -5646,7 +5656,7 @@ Deno.test("CI job history reads a busy window's runs past the first thousand", a
   }
 });
 
-Deno.test("CI Gantt picks main's pushes out of the unfiltered run list", async () => {
+test("CI Gantt picks main's pushes out of the unfiltered run list", async () => {
   const test = await temporaryCollector();
   const main = workflowRun(9_321, NOW, { conclusion: "failure" });
   const pages: URL[] = [];
@@ -5686,7 +5696,7 @@ Deno.test("CI Gantt picks main's pushes out of the unfiltered run list", async (
   }
 });
 
-Deno.test("CI Gantt leaves out runs past the history window on the last page it reads", async () => {
+test("CI Gantt leaves out runs past the history window on the last page it reads", async () => {
   const test = await temporaryCollector();
   const recent = workflowRun(9_341, NOW);
   const old = workflowRun(9_340, NOW - (CI_HISTORY_DAYS + 5) * DAY);
@@ -5715,7 +5725,7 @@ Deno.test("CI Gantt leaves out runs past the history window on the last page it 
   }
 });
 
-Deno.test("CI Gantt counts a run two pages repeat once toward its limit", async () => {
+test("CI Gantt counts a run two pages repeat once toward its limit", async () => {
   // A run landing after the first read moves every run a place down the list,
   // so the pages read after it repeat runs already read.
   const test = await temporaryCollector();
@@ -5755,7 +5765,7 @@ Deno.test("CI Gantt counts a run two pages repeat once toward its limit", async 
   }
 });
 
-Deno.test("CI Gantt stops walking the unfiltered run list at the history window", async () => {
+test("CI Gantt stops walking the unfiltered run list at the history window", async () => {
   const test = await temporaryCollector();
   // Pull request runs, a hundred at a time, each hundred twenty days older
   // than the one before, so the third reaches past the history window.
@@ -5802,7 +5812,7 @@ Deno.test("CI Gantt stops walking the unfiltered run list at the history window"
   }
 });
 
-Deno.test("CI job history refreshes the complete latest job set after a subset rerun", async () => {
+test("CI job history refreshes the complete latest job set after a subset rerun", async () => {
   using time = new FakeTime();
   const test = await temporaryCollector();
   const runId = 9_201;
@@ -5872,7 +5882,7 @@ Deno.test("CI job history refreshes the complete latest job set after a subset r
   }
 });
 
-Deno.test("CI Gantt keeps every execution of a rerun job", async () => {
+test("CI Gantt keeps every execution of a rerun job", async () => {
   const test = await temporaryCollector();
   const runId = 9_205;
   const firstStart = NOW - HOUR;
@@ -5969,7 +5979,7 @@ Deno.test("CI Gantt keeps every execution of a rerun job", async () => {
   }
 });
 
-Deno.test("CI job history keeps the higher attempt when requests finish out of order", async () => {
+test("CI job history keeps the higher attempt when requests finish out of order", async () => {
   const test = await temporaryCollector();
   const runId = 9_211;
   let releaseLower!: (response: Response) => void;
@@ -6049,7 +6059,7 @@ Deno.test("CI job history keeps the higher attempt when requests finish out of o
   }
 });
 
-Deno.test("CI job history keeps successful samples when another run cannot be read", async () => {
+test("CI job history keeps successful samples when another run cannot be read", async () => {
   const test = await temporaryCollector();
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (input) => {
@@ -6116,7 +6126,7 @@ Deno.test("CI job history keeps successful samples when another run cannot be re
   }
 });
 
-Deno.test("CI job history keeps the last snapshot when every refreshed attempt fails", async () => {
+test("CI job history keeps the last snapshot when every refreshed attempt fails", async () => {
   using time = new FakeTime();
   const test = await temporaryCollector();
   const previousRunId = 9_400;
@@ -6203,7 +6213,7 @@ Deno.test("CI job history keeps the last snapshot when every refreshed attempt f
   }
 });
 
-Deno.test("CI job history sorts named shard suffixes and formats hour-long jobs", () => {
+test("CI job history sorts named shard suffixes and formats hour-long jobs", () => {
   const snapshot = buildCiJobHistory([{
     runId: 9_501,
     runUrl: "https://example.test/runs/9501",
@@ -6221,7 +6231,7 @@ Deno.test("CI job history sorts named shard suffixes and formats hour-long jobs"
   assertStringIncludes(ciJobHistoryPage(snapshot, "job"), "1h 01m");
 });
 
-Deno.test("CI job history ignores invalid job times and uses a timed rerun in the Gantt", async () => {
+test("CI job history ignores invalid job times and uses a timed rerun in the Gantt", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   const run = workflowRun(10_200, NOW, { run_attempt: 2 });
   const collector = new RateLimitedCiJobHistoryCollector(
@@ -6267,7 +6277,7 @@ Deno.test("CI job history ignores invalid job times and uses a timed rerun in th
   }
 });
 
-Deno.test("CI job history removes progress listeners that throw", async () => {
+test("CI job history removes progress listeners that throw", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   let resolveRuns: (value: unknown) => void = () => {};
   const pending = new Promise<unknown>((resolve) => resolveRuns = resolve);
@@ -6298,7 +6308,7 @@ Deno.test("CI job history removes progress listeners that throw", async () => {
   }
 });
 
-Deno.test("CI job history quarantines a future refresh when reading cached data", async () => {
+test("CI job history quarantines a future refresh when reading cached data", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   const file = `${directory}/history.json`;
   const store = new CiJobHistoryStore(file);
@@ -6345,7 +6355,7 @@ Deno.test("CI job history quarantines a future refresh when reading cached data"
   }
 });
 
-Deno.test("CI Gantt reports missing credentials and includes cached failed main runs", async () => {
+test("CI Gantt reports missing credentials and includes cached failed main runs", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   const store = new CiJobHistoryStore(`${directory}/history.json`);
   const collector = new RateLimitedCiJobHistoryCollector(store);
@@ -6400,7 +6410,7 @@ Deno.test("CI Gantt reports missing credentials and includes cached failed main 
   }
 });
 
-Deno.test("the production CI Gantt wrapper writes the file it is given", async () => {
+test("the production CI Gantt wrapper writes the file it is given", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-gantt-wrapper-" });
   const file = `${directory}/history.json`;
   // The wrapper takes no clock of its own, so the run has to be recent.
@@ -6432,7 +6442,7 @@ Deno.test("the production CI Gantt wrapper writes the file it is given", async (
   }
 });
 
-Deno.test("the production CI Gantt wrapper forwards a source with no cached data", async () => {
+test("the production CI Gantt wrapper forwards a source with no cached data", async () => {
   const source: CiHistorySource = {
     ...CI_HISTORY_SOURCES.labs,
     repo: `uncached/repo-${crypto.randomUUID()}`,
@@ -6459,7 +6469,7 @@ Deno.test("the production CI Gantt wrapper forwards a source with no cached data
   }
 });
 
-Deno.test("CI job history detects when its exact stale snapshot cannot be retained", async () => {
+test("CI job history detects when its exact stale snapshot cannot be retained", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   const store = new CiJobHistoryStore(`${directory}/history.json`);
   let failJobs = false;
@@ -6488,7 +6498,7 @@ Deno.test("CI job history detects when its exact stale snapshot cannot be retain
   }
 });
 
-Deno.test("CI Gantt reuses recent discovery and reports discovery failure without cache", async () => {
+test("CI Gantt reuses recent discovery and reports discovery failure without cache", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   const run = workflowRun(10_600, NOW);
   let workflowRequests = 0;
@@ -6532,7 +6542,7 @@ Deno.test("CI Gantt reuses recent discovery and reports discovery failure withou
   }
 });
 
-Deno.test("CI Gantt reports job failures and falls back to an older cached attempt", async () => {
+test("CI Gantt reports job failures and falls back to an older cached attempt", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   const options = { limit: 1, mainOnly: true, allConclusions: false };
   try {
@@ -6608,7 +6618,7 @@ Deno.test("CI Gantt reports job failures and falls back to an older cached attem
   }
 });
 
-Deno.test("CI job history joins an active refresh for the same window", async () => {
+test("CI job history joins an active refresh for the same window", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   let resolveRuns: (value: unknown) => void = () => {};
   const runs = new Promise<unknown>((resolve) => resolveRuns = resolve);
@@ -6634,7 +6644,7 @@ Deno.test("CI job history joins an active refresh for the same window", async ()
   }
 });
 
-Deno.test("CI job history restores its prior manifest when the manifest write fails", async () => {
+test("CI job history restores its prior manifest when the manifest write fails", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   class FailManifestSaveStore extends CiJobHistoryStore {
     saveCalls = 0;
@@ -6680,7 +6690,7 @@ Deno.test("CI job history restores its prior manifest when the manifest write fa
   }
 });
 
-Deno.test("CI job history rejects a missing persisted refresh manifest", async () => {
+test("CI job history rejects a missing persisted refresh manifest", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   const store = new CiJobHistoryStore(`${directory}/history.json`);
   store.refresh = (() => undefined) as typeof store.refresh;
@@ -6699,7 +6709,7 @@ Deno.test("CI job history rejects a missing persisted refresh manifest", async (
   }
 });
 
-Deno.test("CI job history reloads when concurrent persistence changes its manifest", async () => {
+test("CI job history reloads when concurrent persistence changes its manifest", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   const store = new CiJobHistoryStore(`${directory}/history.json`);
   const readRefresh = store.refresh.bind(store);
@@ -6723,7 +6733,7 @@ Deno.test("CI job history reloads when concurrent persistence changes its manife
   }
 });
 
-Deno.test("CI job history completes when a persisted manifest is immediately invalidated", async () => {
+test("CI job history completes when a persisted manifest is immediately invalidated", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   const store = new CiJobHistoryStore(`${directory}/history.json`);
   store.freshRefresh = (() => undefined) as typeof store.freshRefresh;
@@ -6738,7 +6748,7 @@ Deno.test("CI job history completes when a persisted manifest is immediately inv
   }
 });
 
-Deno.test("CI job history reports persistence failure while recording a rate limit", async () => {
+test("CI job history reports persistence failure while recording a rate limit", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   const store = new CiJobHistoryStore(`${directory}/missing/history.json`);
   const collector = new RateLimitedCiJobHistoryCollector(
@@ -6756,7 +6766,7 @@ Deno.test("CI job history reports persistence failure while recording a rate lim
   }
 });
 
-Deno.test("CI job history progress responses close completed streams", async () => {
+test("CI job history progress responses close completed streams", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   const collector = new RateLimitedCiJobHistoryCollector(
     new CiJobHistoryStore(`${directory}/history.json`),
@@ -6791,7 +6801,7 @@ Deno.test("CI job history progress responses close completed streams", async () 
   }
 });
 
-Deno.test("CI job history progress streams ignore duplicate terminal updates", async () => {
+test("CI job history progress streams ignore duplicate terminal updates", async () => {
   const complete: CiJobFetchProgress = {
     id: "duplicate-terminal",
     source: "labs",
@@ -6832,7 +6842,7 @@ Deno.test("CI job history progress streams ignore duplicate terminal updates", a
   assertStringIncludes(await response.text(), '"phase":"complete"');
 });
 
-Deno.test("CI history endpoints handle immediate and background refreshes", async () => {
+test("CI history endpoints handle immediate and background refreshes", async () => {
   const cached = buildCiJobHistory(historySamples());
   const progress: CiJobFetchProgress = {
     id: "background",

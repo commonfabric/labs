@@ -1,4 +1,5 @@
 import type { RuntimeClient } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { CFCustodySeal } from "./index.ts";
@@ -68,7 +69,7 @@ async function mountSeal(overrides: Partial<{
   return { element, calls, sealed };
 }
 
-Deno.test("cf-custody-seal presents the room and readers the worker checked apart from the answers the terms list", async () => {
+test("cf-custody-seal presents the room and readers the worker checked apart from the answers the terms list", async () => {
   const { element } = await mountSeal();
   try {
     expect(element).toBeInstanceOf(CFCustodySeal);
@@ -116,7 +117,7 @@ Deno.test("cf-custody-seal presents the room and readers the worker checked apar
   }
 });
 
-Deno.test("cf-custody-seal rejects synthetic confirmation clicks", async () => {
+test("cf-custody-seal rejects synthetic confirmation clicks", async () => {
   const { element, calls, sealed } = await mountSeal();
   try {
     await element.accessForTestingOnly.prepare();
@@ -131,7 +132,7 @@ Deno.test("cf-custody-seal rejects synthetic confirmation clicks", async () => {
   }
 });
 
-Deno.test("cf-custody-seal does nothing once the dialog is closed", async () => {
+test("cf-custody-seal does nothing once the dialog is closed", async () => {
   const canceled: string[] = [];
   const { element, calls, sealed } = await mountSeal({
     cancelCustodySeal: (id) => {
@@ -155,7 +156,7 @@ Deno.test("cf-custody-seal does nothing once the dialog is closed", async () => 
   }
 });
 
-Deno.test("cf-custody-seal invalidates the review when a bound cell changes", async () => {
+test("cf-custody-seal invalidates the review when a bound cell changes", async () => {
   const { element, calls } = await mountSeal();
   try {
     await element.accessForTestingOnly.prepare();
@@ -170,7 +171,7 @@ Deno.test("cf-custody-seal invalidates the review when a bound cell changes", as
   }
 });
 
-Deno.test("cf-custody-seal states no bound for terms that list no answers", async () => {
+test("cf-custody-seal states no bound for terms that list no answers", async () => {
   const { element } = await mountSeal({
     prepareCustodySeal: () =>
       Promise.resolve({

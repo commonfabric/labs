@@ -1,9 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import { encodeBase64 } from "@std/encoding/base64";
 import { normalize } from "@std/path/posix";
 import { CFC_ATOM_TYPE, CFC_CONCEPT_KIND } from "@commonfabric/api/cfc";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type {
   BrowserHostOperation,

@@ -4,6 +4,7 @@ import {
   readDenoConfig,
   runDenoCheckWithTemporaryConfig,
 } from "@commonfabric/test-support/isolated-deno";
+import { test } from "@commonfabric/test-support/test";
 
 const ROOT = join(import.meta.dirname!, "..", "..", "..");
 
@@ -11,7 +12,7 @@ function decode(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
-Deno.test("shell entrypoint type-checks under standard decorators", async () => {
+test("shell entrypoint type-checks under standard decorators", async () => {
   const rootConfig = await readDenoConfig(join(ROOT, "deno.jsonc"));
   rootConfig.compilerOptions ??= {};
   rootConfig.compilerOptions.experimentalDecorators = false;

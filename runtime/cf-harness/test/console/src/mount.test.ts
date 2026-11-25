@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   consoleMount,
@@ -6,6 +5,7 @@ import {
   liveCanonicalRedirect,
   pageMount,
 } from "../../../console/src/mount.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("console/src/mount", () => {
   describe("consoleMount()", () => {

@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { AboutTarget } from "./about-target.ts";

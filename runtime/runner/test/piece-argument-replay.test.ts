@@ -24,11 +24,11 @@
  * where the bound content is realized at a narrower scope.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   type PieceAddress,
@@ -39,6 +39,7 @@ import { isPrimitiveCellLink, parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("piece argument replay");
 const space = signer.did();
@@ -529,16 +530,17 @@ describe("piece argument replay", () => {
           type: "https://commonfabric.org/cfc/atom/PersonalSpace",
           owner: signer.did(),
         };
-        const storedLabels = (id: string) =>
-          (storageManager.open(space).replica as unknown as {
-            getDocument(id: string): {
-              cfc?: {
-                labelMap?: {
-                  entries: { label: { confidentiality?: unknown[] } }[];
-                };
-              };
-            } | undefined;
-          }).getDocument(id)?.cfc?.labelMap?.entries ?? [];
+        const storedLabels = (id: string) => {
+          const replica = storageManager.open(space).replica as unknown as {
+            getDocument(id: string): { cfc?: unknown } | undefined;
+          };
+          return storedLabelEntries<
+            { label: { confidentiality?: unknown[] } }
+          >(
+            replica.getDocument(id)?.cfc,
+            (labelId) => replica.getDocument(labelId),
+          );
+        };
         try {
           const { cell } = await startedPiece(
             runtime,

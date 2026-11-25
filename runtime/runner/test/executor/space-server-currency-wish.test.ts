@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
@@ -6,12 +5,20 @@ import { scopeOfScopeKey } from "@commonfabric/memory/v2";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { selectCurrencyPiece } from "@commonfabric/memory/v2/currency-index";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { ExecutorHost } from "../../src/executor/host.ts";
 import type { CurrencyIndexMode } from "../../src/executor/store-currency.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
+import { resolveEntryIdentity } from "../../src/index.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
-import { Runtime } from "../../src/runtime.ts";
+import { Runtime, type RuntimeFetch } from "../../src/runtime.ts";
 import type {
   PieceCurrencySlice,
   PieceCurrencySnapshot,
@@ -87,6 +94,42 @@ const SIDE_WRITER_PROGRAM: RuntimeProgram = {
   }],
 };
 
+/** Where a serving runtime fetches the source of a home space's root. */
+const HOME_PATH = "/api/patterns/system/home/home.tsx";
+
+/**
+ * The root a serving loop creates in a home space: a list of favorites,
+ * which setup writes, and one derived output, so that the piece has a
+ * computation to record.
+ */
+const HOME_SOURCE = [
+  "import { computed, pattern, Writable } from 'commonfabric';",
+  "export default pattern<Record<string, never>, { favorites: unknown[]; marker: string }>(() => ({",
+  "  favorites: Writable.of<unknown[]>([]),",
+  "  marker: computed(() => 'home'),",
+  "}));",
+  "",
+].join("\n");
+
+/**
+ * Serves `HOME_SOURCE` at `HOME_PATH`, and its identity where the path is
+ * asked for one, and fetches anything else as `fetch()` does.
+ */
+const homeFetch: RuntimeFetch = (input, init) => {
+  const url = new URL(
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.href
+      : input.url,
+  );
+  if (url.pathname !== HOME_PATH) return fetch(input, init);
+  return url.searchParams.has("identity")
+    ? resolveEntryIdentity(HOME_PATH, () => Promise.resolve(HOME_SOURCE))
+      .then((identity) => new Response(identity))
+    : Promise.resolve(new Response(HOME_SOURCE));
+};
+
 /**
  * Longer than the memory server keeps the session of a client that left.
  */
@@ -156,6 +199,7 @@ describe("SpaceServer", () => {
           storageManager: manager,
           servingPosture: true,
           experimental: { serverExecution: true },
+          fetch: homeFetch,
         });
         servingRuntimes.push(runtime);
         return Promise.resolve({
@@ -506,6 +550,114 @@ describe("SpaceServer", () => {
         );
         await host.whenQuiescent();
         expect(serves(root)).toBe(false);
+      });
+    });
+
+    describe("recording a piece whose wish reads a home space its serving loop created", () => {
+      // The loop that serves alice's home space makes its root, from
+      // `HOME_SOURCE`, in a setup run, and starts and records the root's
+      // piece: the root document, the piece's result and its list of
+      // favorites are written in the loop's commit, and no computation
+      // writes them. The wish reads those three.
+
+      /**
+       * Gives alice's home space an access list that names her its owner,
+       * which is what has its serving loop create the root, and resolves
+       * with alice's runtime once the home space's index holds a record of
+       * the root's piece, and with that piece's result.
+       */
+      const createHome = async () => {
+        await server.writeDocument(home, aclDocId(home), {
+          [aliceSigner.did()]: "OWNER",
+        });
+        const alice = openRuntime(aliceSigner, true);
+        const slot = alice.getCell(home, home).key("defaultPattern");
+        await slot.sync();
+        slot.sink(() => {});
+        await waitForCellValue(
+          alice,
+          slot,
+          (value: unknown) => value !== undefined,
+          { stuckLabel: "alice's home space to hold a root" },
+        );
+        const piece = slot.resolveAsCell();
+        await awaitEach(
+          cycles,
+          async () =>
+            selectCurrencyPiece(await server.engineForSpace(home), {
+              piece: piece.getAsNormalizedFullLink().id,
+              slice: "space",
+            }) !== undefined,
+        );
+        return { alice, piece };
+      };
+
+      /**
+       * Serves a piece that wishes for `#favorites` until alice's slice of
+       * it has read her home space and the loop is quiescent, and returns
+       * the piece's root and that slice's key.
+       */
+      const serveReader = async () => {
+        const { root } = await watch(wishProgram("{ query: '#favorites' }"));
+        await awaitEach(
+          cycles,
+          () =>
+            slicesAt(snapshotOf(root), "user").some((slice) =>
+              slice.reads.some((read) => read.space === home)
+            ),
+        );
+        await host!.whenQuiescent();
+        const [viewer] = slicesAt(snapshotOf(root), "user");
+        return { root, viewer };
+      };
+
+      it("stores clean the viewer's slice that read what the setup run wrote", async () => {
+        host = newHost("skip");
+        await createHome();
+
+        const { root, viewer } = await serveReader();
+
+        expect(otherSpacesReadBy(viewer)).toEqual([home]);
+        expect(await recordOf(root, viewer.key)).toEqual({
+          mark: 0,
+          epoch: EPOCH,
+        });
+      });
+
+      it("leaves the piece unstarted for that viewer while the home space has not changed, under `skip`", async () => {
+        host = newHost("skip");
+        await createHome();
+        const { root } = await serveReader();
+        await host.spaceServer(space)!.park("test-park");
+
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore > 0,
+        );
+        await host.whenQuiescent();
+
+        expect(serves(root)).toBe(false);
+        expect(host.stats().currency.refused["owner-not-clean"])
+          .toBeUndefined();
+      });
+
+      it("starts the piece once the list the setup run wrote changed while nothing served it, under `skip`", async () => {
+        host = newHost("skip");
+        const { alice, piece } = await createHome();
+        const { root } = await serveReader();
+        await host.spaceServer(space)!.park("test-park");
+
+        const tx = alice.edit();
+        piece.withTx(tx).key("favorites").set([]);
+        piece.withTx(tx).key("favorites").push({ name: "a favorite" });
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await alice.storageManager.synced();
+        await touchSpace();
+        await awaitEach(cycles, () => serves(root));
+        await host.whenQuiescent();
+
+        expect(host.stats().currency.servedFromStore).toBe(0);
       });
     });
 

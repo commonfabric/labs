@@ -4,10 +4,10 @@
  * every key of the generations it keeps, and nothing of the ones it dropped.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { GenerationalWeakSet } from "@/GenerationalWeakSet.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("GenerationalWeakSet", () => {
   describe("has()", () => {

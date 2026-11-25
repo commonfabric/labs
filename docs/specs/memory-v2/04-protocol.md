@@ -145,6 +145,24 @@ If the server does not support the requested version or the required data-model
 flags do not match what it implements, it returns a typed error response and
 does not mark the connection ready.
 
+A server given a limit on client messages other than the default also sends
+`messageSlots` in `hello.ok`: the most slots it reads in one message from this
+connection's client. A slot is a place a value fills or leaves absent, an array
+counting as its length and a record as its number of members, and the default
+is 1,000,000. A direct client holds each request to the advertised limit in
+place of the default: it stages a watch set in parts that fit it, and refuses,
+unsent, a commit that does not. The client measures a request by the values it
+writes out, and the server by the slots those values stand for, and the two
+counts differ. The client counts values that fill no slot, the request's root
+among them, so it can refuse a dense request at the limit that the server would
+read. A sparse array's absent places count for the server alone, so a commit
+whose array holds few values at indices past the limit passes the client and is
+refused by the server on receipt. A client that does not read the field keeps
+to the default, which a server's limit is never below. A `messageSlots` that is
+not a safe integer at or above the default fails the handshake. A routed
+connection takes its bounds from the router instead (`routerFrameSlots`,
+[routed Mode A](routed-mode-a.md)).
+
 `stableExpressionResultIds` declares the expression result identity contract:
 `ifElse`, `when`, and `unless` key their result stores on the owning piece and
 output spot. It is inherent to the build, and an absent marker means false.
@@ -2911,22 +2929,37 @@ enforced through the catch-up marker and CLIENT-side verdict parking (CT-1927):
   The frame includes a doc unless the session provably holds it (CT-1965,
   decided per doc by the LAST op the session's accepted commit applied):
   own `set`- and `delete`-produced heads are elided — the writer supplied
-  the bytes (or the absence), and the verdict plus marker promote them —
-  while own `patch`-produced heads are delivered as full post-apply
-  documents, since merged state is truth the writer cannot extrapolate. A
-  head moved past the session's own write, and all foreign novelty, is
-  delivered in full. REJECTED commits' docs are staged origin-less, so
-  repair frames DO cover them, and a frame lost in flight re-stages its
-  docs origin-less, so the retry delivers full documents.
+  the bytes (or the absence), and the verdict plus marker promote them. An
+  own `patch`-produced head can hold merged state the writer cannot
+  extrapolate, so it is delivered as the full post-apply document unless
+  every condition below holds, in which case it is elided:
+  - the commit wrote the document once, by a `patch` the engine applied
+    exactly as the session sent it. A patch the engine rewrote first, as it
+    stamps an appended event, is not one, and neither is any write of a
+    commit that carries an `apply-op`
+  - every revision between the one the session holds and the head is such a
+    patch of the session's own, each applied over the one before. The
+    session holds the revision the server last sent it or last elided for
+    it, and its own `set` or `delete` earlier in the same fan-out batch
+  - no other session's write to the document shares the fan-out batch
+
+  The writer's replay of the patches it sent, over the revision it holds, is
+  then the head: the client and the engine apply a patch with the same
+  function. A head moved past the session's own write, and all foreign
+  novelty, is delivered in full. REJECTED commits' docs are staged
+  origin-less, so repair frames DO cover them, and a frame lost in flight
+  re-stages its docs origin-less, so the retry delivers full documents.
 - the CLIENT MUST NOT apply a verdict's state effects ahead of the marker
   that covers it: an accept's promotion (pending overlay to confirmed
   mirror, removing the pending local copy) is PARKED until
   `caughtUpLocalSeq` reaches its localSeq. For an elided `set` head the
   promotion installs the client's own value; for a `patch` head the
-  covering frame has already delivered the post-apply document, so
-  promotion retires the overlay against delivered truth. Extrapolating the
-  post-apply state from the client's own ops remains the fallback where no
-  frame channel exists — unwatched docs, servers that still suppress; a
+  covering frame has delivered the post-apply document, so promotion
+  retires the overlay against delivered truth, or has left the document
+  out, and promotion replays the commit's patches over the confirmed
+  document. That replay is exact for a head the server elided under the
+  conditions above, and it remains the fallback where no frame channel
+  exists — unwatched docs, servers that still suppress; a
   conflict rejection's drop/revert is held by the read-repair gate
   (`finalizeRejection`, with a timeout backstop for lost connections).
   Visible state is unaffected by parking — the pending overlay already

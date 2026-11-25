@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { isRegexSafe } from "../../../apps/self-improving-classifier/classifier-logic.ts";
@@ -13,6 +12,7 @@ import {
   ruleSetCostRefusal,
   stableHash,
 } from "./rule-grammar.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * `n` alternatives, each `piece` followed by a different letter, or two

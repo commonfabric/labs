@@ -145,12 +145,20 @@ export function invokeReactiveAction(state: {
     // Track executing action for parent-child relationship tracking.
     state.setExecutingAction(args.action, args.actionId);
     logger.timeStart("scheduler", "run", "action");
+    const body = () => {
+      state.runtime.scheduler.prepareViewAction(args.tx, args.action);
+      state.runtime.scheduler.beginViewAction(args.action);
+      return args.action(args.tx);
+    };
+    // A serving worker's runtime marks the body on its worker's run beacon
+    // (serving-loop.md §2, "The watchdog").
+    const beacon = state.runtime.runBeacon;
     return Promise.resolve(
-      state.runtime.harness.invoke(() => {
-        state.runtime.scheduler.prepareViewAction(args.tx, args.action);
-        state.runtime.scheduler.beginViewAction(args.action);
-        return args.action(args.tx);
-      }),
+      beacon === undefined ? state.runtime.harness.invoke(body) : beacon.hold(
+        args.action,
+        args.actionId,
+        () => state.runtime.harness.invoke(body),
+      ),
     )
       .then((actionResult) => {
         logger.timeEndDetailed(measureDetail, "scheduler", "run", "action");
@@ -1121,19 +1129,19 @@ function finalizeSchedulerAction(
     args.actionEndTime,
     args.reads,
   );
+  const annotated = args.action as Partial<TelemetryAnnotations>;
+  const src = getAuthoredDebugSource(annotated.module?.implementation)?.src;
+  const piece = annotated.schedulerObservationIdentity?.pieceRootId;
   state.runtime.telemetry.submit({
     type: "scheduler.run.complete",
     actionId: args.actionId,
     actionInfo: state.getActionTelemetryInfo(args.action),
     durationMs: elapsed,
-    ...(args.reads
-      ? {
-        reads: args.reads,
-        src: getAuthoredDebugSource(
-          (args.action as Partial<TelemetryAnnotations>).module?.implementation,
-        )?.src,
-      }
-      : {}),
+    inputDriven: args.invalidCauses !== undefined &&
+      args.invalidCauses.length > 0,
+    ...(piece === undefined ? {} : { piece }),
+    ...(src === undefined ? {} : { src }),
+    ...(args.reads ? { reads: args.reads } : {}),
     ...(args.error !== undefined
       ? { error: args.error instanceof Error ? args.error.message : "error" }
       : {}),

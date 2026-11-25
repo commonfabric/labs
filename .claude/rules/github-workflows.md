@@ -98,7 +98,7 @@ continuous integration runs the lanes" in `docs/development/test-selection.md`.
 The lanes ship the records. Each lane gathers and marks its batches' records
 itself and ends with a `📤 Ship test records` step using the
 `./.github/actions/test-records-ship` composite action, `if: always()`, with no
-`variant` and no `junit` input. The contract is `docs/specs/test-records.md`.
+`variant` input. The contract is `docs/specs/test-records.md`.
 
 No workflow step records a test by hand. A step that wraps a command in `deno
 task run-recorded <kind> <scope> <name>` records one of two things. Either it

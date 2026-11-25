@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type {
   NativeStorageCommit,
@@ -12,7 +13,7 @@ const signer = await Identity.fromPassphrase("memory-v2-commit-rejection");
 const space = signer.did();
 const type = "application/json" as const;
 
-Deno.test("commitNative rejection is caught and surfaced as Result error", async () => {
+test("commitNative rejection is caught and surfaced as Result error", async () => {
   const storage = StorageManager.emulate({
     as: signer,
   });

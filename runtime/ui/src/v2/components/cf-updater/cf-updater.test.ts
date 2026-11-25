@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { CFUpdater } from "./index.ts";
 import { resetRetiredElementWarnings } from "../../core/retired-element.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("CFUpdater (retired)", () => {
   it("is still registered under its tag", () => {

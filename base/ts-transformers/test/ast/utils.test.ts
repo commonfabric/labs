@@ -13,6 +13,7 @@ import {
   setParentPointers,
   visitEachChildWithJsx,
 } from "../../src/ast/utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function createProgram(source: string): {
   sourceFile: ts.SourceFile;
@@ -134,7 +135,7 @@ function findElementAccess(
   return found;
 }
 
-Deno.test("AST utils print source and synthetic nodes safely", () => {
+test("AST utils print source and synthetic nodes safely", () => {
   const { sourceFile } = createProgram("const value = source.member;");
   const access = findPropertyAccess(sourceFile, "member");
   const synthetic = ts.factory.createPropertyAccessExpression(
@@ -147,7 +148,7 @@ Deno.test("AST utils print source and synthetic nodes safely", () => {
   assertEquals(getExpressionText(synthetic), "state.count");
 });
 
-Deno.test("AST utils prefer registered synthetic initializer types", () => {
+test("AST utils prefer registered synthetic initializer types", () => {
   const { sourceFile, checker } = createProgram(`
     declare function unknownFactory(): any;
     const value = unknownFactory();
@@ -181,7 +182,7 @@ Deno.test("AST utils prefer registered synthetic initializer types", () => {
   );
 });
 
-Deno.test("AST utils resolve variable initializers through shorthand properties", () => {
+test("AST utils resolve variable initializers through shorthand properties", () => {
   const { sourceFile, checker } = createProgram(`
     const source = { value: 1 };
     const wrapper = { source };
@@ -202,7 +203,7 @@ Deno.test("AST utils resolve variable initializers through shorthand properties"
   );
 });
 
-Deno.test("AST utils resolve member symbols and optional members", () => {
+test("AST utils resolve member symbols and optional members", () => {
   const { sourceFile, checker } = createProgram(`
     interface Item {
       required: string;
@@ -228,7 +229,7 @@ Deno.test("AST utils resolve member symbols and optional members", () => {
   assertEquals(isOptionalMemberSymbol(optional, checker), true);
 });
 
-Deno.test("AST utils set synthetic parent pointers for method-call helpers", () => {
+test("AST utils set synthetic parent pointers for method-call helpers", () => {
   const call = ts.factory.createCallExpression(
     ts.factory.createPropertyAccessExpression(
       ts.factory.createPropertyAccessExpression(
@@ -259,7 +260,7 @@ Deno.test("AST utils set synthetic parent pointers for method-call helpers", () 
   );
 });
 
-Deno.test("visitEachChildWithJsx traverses elements, self-closing tags, and fragments", () => {
+test("visitEachChildWithJsx traverses elements, self-closing tags, and fragments", () => {
   const source =
     `const elem = <div a={oldName}><span b={oldName} />{oldName}</div>;\n` +
     `const frag = <>{oldName} trailing</>;`;

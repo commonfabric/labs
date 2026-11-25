@@ -9,11 +9,11 @@
  * cover both, including the ones where padding must NOT be added.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { backtickFence, backtickQuote } from "../src/markdown.ts";
 import { parseCodeSpan } from "./parse-code-span.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("markdown", () => {
   describe("backtickQuote()", () => {

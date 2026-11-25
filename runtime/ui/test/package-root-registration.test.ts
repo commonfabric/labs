@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { join, relative, toFileUrl } from "@std/path";
+import { test } from "@commonfabric/test-support/test";
 
 const UI_ROOT = join(import.meta.dirname!, "..");
 const COMPONENTS_ROOT = join(UI_ROOT, "src", "v2", "components");
@@ -107,7 +108,7 @@ function decode(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
-Deno.test("package root exports every component registrar", async () => {
+test("package root exports every component registrar", async () => {
   const registrations = await collectComponentRegistrations();
   const packageSource = await Deno.readTextFile(PACKAGE_ENTRYPOINT);
   const v2Source = await Deno.readTextFile(V2_ENTRYPOINT);
@@ -130,7 +131,7 @@ Deno.test("package root exports every component registrar", async () => {
   assertEquals(missingExports, []);
 });
 
-Deno.test("README component list matches registered cf elements", async () => {
+test("README component list matches registered cf elements", async () => {
   const registrations = await collectComponentRegistrations();
   const expectedTags = registrations.map(({ tag }) => tag);
   const readme = await Deno.readTextFile(README);
@@ -149,13 +150,13 @@ Deno.test("README component list matches registered cf elements", async () => {
   assertEquals(documentedTags, expectedTags);
 });
 
-Deno.test("component files do not self-register with customElement decorators", async () => {
+test("component files do not self-register with customElement decorators", async () => {
   const decoratorFiles = await collectRegistrationDecorators(COMPONENTS_ROOT);
 
   assertEquals(decoratorFiles, []);
 });
 
-Deno.test("package root registers every exported cf element", async () => {
+test("package root registers every exported cf element", async () => {
   const registrations = await collectComponentRegistrations();
   const expectedTags = registrations.map(({ tag }) => tag);
   const entrypointUrl = toFileUrl(PACKAGE_ENTRYPOINT).href;

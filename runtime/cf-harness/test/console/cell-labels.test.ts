@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -15,6 +14,7 @@ import {
   type HarnessCellLabelRecord,
   type HarnessCellLabels,
 } from "../../src/contracts/cell-labels.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TRANSFORMED_BY = "https://commonfabric.org/cfc/atom/TransformedBy";
 const SCHEMA_HASH = "fid1:C4ajDsLKcfdMDDs3lbNShZBcQCVA4qhVo5mRoBcgpB0";

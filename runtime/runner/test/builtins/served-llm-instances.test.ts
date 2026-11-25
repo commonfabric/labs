@@ -1,10 +1,15 @@
 /** Verifies served effect requests distinguish the selected scope instance. */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { generateObject, generateText, llm } from "../../src/builtins/llm.ts";
 import type { Cell } from "../../src/cell.ts";

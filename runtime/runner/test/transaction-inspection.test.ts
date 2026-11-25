@@ -1,11 +1,11 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { toDocumentPath } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { NormalizedFullLink } from "../src/link-utils.ts";
 import { writeChokepointMark } from "../src/storage/write-chokepoint.ts";

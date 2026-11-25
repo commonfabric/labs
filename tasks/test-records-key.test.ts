@@ -1,5 +1,4 @@
 import { encodeBase64 } from "@std/encoding/base64";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -23,6 +22,12 @@ import {
   recipientFingerprint,
   seal,
 } from "./test-records-crypto.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** A key file whose private key can actually sign, as a real one does. */
 async function signingKey(): Promise<string> {

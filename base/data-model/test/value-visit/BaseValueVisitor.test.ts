@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { BaseValueVisitor, type VisitResult } from "@/value-visit";
 import { VisitInProgress } from "@/value-visit/VisitInProgress.ts";
 
 import { Recorder } from "./Recorder.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("BaseValueVisitor", () => {
   /** The least a concrete subclass has to supply. */

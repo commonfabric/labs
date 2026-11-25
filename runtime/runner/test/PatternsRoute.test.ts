@@ -1,10 +1,10 @@
 /** Tests the patterns route over a directory of files it does not know. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { Engine } from "../src/harness/engine.ts";
 import { resolveEntryIdentity } from "../src/harness/entry-identity.ts";
 import {

@@ -2,7 +2,6 @@
  * live halves are exercised by the rehearsal drill
  * (`runtime/cli/integration/topics-restore-drill.sh`). */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   buildRestoreDocument,
@@ -24,6 +23,7 @@ import {
   WHOLE_VALUE,
   withoutKeys,
 } from "./topics-rehearsal-lib.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("topics-rehearsal-lib", () => {
   describe("retiredKeys", () => {

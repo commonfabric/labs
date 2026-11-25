@@ -6,12 +6,12 @@
  * itself is in `serving-memory-server.test.ts`.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import { createClientInfo } from "@commonfabric/memory/v2/client-info";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   policyFromEnvironment,
   type ServingMemoryServer,
@@ -79,7 +79,7 @@ describe("serving-memory-server", () => {
       ).toBeUndefined();
     });
 
-    it("takes the currency index mode from the literals `record` and `skip` alone", () => {
+    it("takes the currency index mode from the literals `record` and `skip`, and none from a value that names no mode", () => {
       expect(
         policyFromEnvironment(
           undefined,
@@ -104,6 +104,21 @@ describe("serving-memory-server", () => {
           environment({ SERVER_EXECUTION_CURRENCY_INDEX: "skip" }),
         ),
       ).toEqual({ currencyIndex: "record" });
+    });
+
+    it("takes the `start-upstream` currency index mode from that literal", () => {
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({ SERVER_EXECUTION_CURRENCY_INDEX: "start-upstream" }),
+        ),
+      ).toEqual({ currencyIndex: "start-upstream" });
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({ SERVER_EXECUTION_CURRENCY_INDEX: "start_upstream" }),
+        ),
+      ).toBeUndefined();
     });
 
     it("takes the currency epoch from the environment where a currency mode is set and the policy names none", () => {

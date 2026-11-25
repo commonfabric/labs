@@ -3,29 +3,30 @@ import { CompilerError, TransformerError } from "@commonfabric/js-compiler";
 import { IndexedPatternError } from "@commonfabric/pattern-index/deploy";
 import { SlugAssignedError } from "@commonfabric/piece";
 import { SlugResolutionError } from "@commonfabric/runner";
+import { test } from "@commonfabric/test-support/test";
 import { ValidationError } from "@cliffy/command";
 import { renderCliError } from "../lib/cli-error.ts";
 import { IdentityKeyfileError } from "../lib/identity.ts";
 
-Deno.test("renderCliError prints a TransformerError's message, not its stack", () => {
+test("renderCliError prints a TransformerError's message, not its stack", () => {
   const e = new TransformerError([], new Map());
   assertEquals(renderCliError(e), e.message);
   assert(renderCliError(e) !== e.stack);
 });
 
-Deno.test("renderCliError prints a CompilerError's message, not its stack", () => {
+test("renderCliError prints a CompilerError's message, not its stack", () => {
   const e = new CompilerError([]);
   assertEquals(renderCliError(e), e.message);
   assert(renderCliError(e) !== e.stack);
 });
 
-Deno.test("renderCliError prints a ValidationError's message, not its stack", () => {
+test("renderCliError prints a ValidationError's message, not its stack", () => {
   const e = new ValidationError("bad option");
   assertEquals(renderCliError(e), e.message);
   assert(renderCliError(e) !== e.stack);
 });
 
-Deno.test("renderCliError prints a SlugResolutionError's message, not its stack", () => {
+test("renderCliError prints a SlugResolutionError's message, not its stack", () => {
   // Every one of these says what a name in the space points at, or does not:
   // a sentence a person acts on, buried by a stack over it.
   const e = new SlugResolutionError("no member 999 in top", "missing-member");
@@ -33,7 +34,7 @@ Deno.test("renderCliError prints a SlugResolutionError's message, not its stack"
   assert(renderCliError(e) !== e.stack);
 });
 
-Deno.test("renderCliError prints a SlugAssignedError's message, not its stack", () => {
+test("renderCliError prints a SlugAssignedError's message, not its stack", () => {
   // A refusal to take a name someone holds says what it points at and how to
   // take it anyway. Without this the class falls through to the plain-Error
   // arm below and every such refusal reaches the operator as a stack.
@@ -42,7 +43,7 @@ Deno.test("renderCliError prints a SlugAssignedError's message, not its stack", 
   assert(renderCliError(e) !== e.stack);
 });
 
-Deno.test("renderCliError prints an IdentityKeyfileError's message, not its stack", () => {
+test("renderCliError prints an IdentityKeyfileError's message, not its stack", () => {
   // The message names the keyfile's path, what is wrong with it, and what to
   // do; a stack over it buries the one line the operator acts on.
   const e = new IdentityKeyfileError(
@@ -66,12 +67,12 @@ const renderAtLogLevel = (e: unknown, level: string): unknown => {
   }
 };
 
-Deno.test("renderCliError prints an IndexedPatternError's message, not its stack", () => {
+test("renderCliError prints an IndexedPatternError's message, not its stack", () => {
   const e = new IndexedPatternError("lookup", 'no program for "pat-1"');
   assertEquals(renderAtLogLevel(e, "warn"), e.message);
 });
 
-Deno.test("renderCliError withholds an IndexedPatternError's detail below debug", () => {
+test("renderCliError withholds an IndexedPatternError's detail below debug", () => {
   // The detail can quote indexed source, and a deployer may relay what the
   // command printed to a model that never wrote that source.
   const e = new IndexedPatternError("compile", "did not compile", "SECRET");
@@ -81,7 +82,7 @@ Deno.test("renderCliError withholds an IndexedPatternError's detail below debug"
   assert(!text.includes("SECRET"));
 });
 
-Deno.test("renderCliError prints an IndexedPatternError's detail at debug", () => {
+test("renderCliError prints an IndexedPatternError's detail at debug", () => {
   const e = new IndexedPatternError("compile", "did not compile", "SECRET");
   assertEquals(
     renderAtLogLevel(e, "debug"),
@@ -89,18 +90,18 @@ Deno.test("renderCliError prints an IndexedPatternError's detail at debug", () =
   );
 });
 
-Deno.test("renderCliError prints a plain Error's stack", () => {
+test("renderCliError prints a plain Error's stack", () => {
   const e = new Error("boom");
   assertEquals(renderCliError(e), e.stack);
 });
 
-Deno.test("renderCliError falls back to the message when an Error has no stack", () => {
+test("renderCliError falls back to the message when an Error has no stack", () => {
   const e = new Error("boom");
   e.stack = undefined;
   assertEquals(renderCliError(e), "boom");
 });
 
-Deno.test("renderCliError passes a non-Error value through unchanged", () => {
+test("renderCliError passes a non-Error value through unchanged", () => {
   assertEquals(renderCliError("oops"), "oops");
   assertEquals(renderCliError(42), 42);
 });

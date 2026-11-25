@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { walkSync } from "@std/fs";
 import { fromFileUrl, toFileUrl } from "@std/path";
 
 import { treeSitterGrammars } from "../../../../../lib/view/languages/treesitter/grammars.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Whether a module export has the shape of a Tree-sitter grammar. */
 function isGrammar(value: unknown): boolean {

@@ -6,7 +6,6 @@
  * what the visitor's writes reach decides what the owner sees afterwards.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { isFabricArray, isFabricPlainObject } from "@commonfabric/data-model";
 import { decodeDelegation, Identity } from "@commonfabric/identity";
@@ -15,6 +14,12 @@ import * as Engine from "@commonfabric/memory/v2/engine";
 import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";

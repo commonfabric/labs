@@ -14,12 +14,12 @@
 
 import { expect } from "@std/expect";
 import * as Path from "@std/path";
-import { afterAll, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { resolveSpaceStoreUrl } from "@commonfabric/memory/v2/storage-path";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
+import { afterAll, describe, it } from "@commonfabric/test-support/test";
 import { Database } from "@db/sqlite";
 
 const SQLITE_MAGIC = "SQLite format 3\0";

@@ -1,7 +1,6 @@
 import { expect } from "@std/expect";
 import { encodeHex } from "@std/encoding/hex";
 import { join, resolve, toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   canonicalizeMountLookupPath,
@@ -18,6 +17,12 @@ import {
   readMountState,
   writeMountState,
 } from "../lib/fuse.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 function entry(mountpoint: string): MountStateEntry {
   return {

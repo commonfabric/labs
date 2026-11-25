@@ -15,7 +15,6 @@
  * in circulation happens to be frozen. Cycles are handled rather than refused.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -33,6 +32,7 @@ import {
 import { FabricError } from "@/fabric-instances";
 import { FabricBytes, FabricEpochNsec } from "@/fabric-primitives";
 import { LAYER_CORPUS, PlainClass } from "../fabric-value-corpus.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("validation", () => {
   describe("isValidFabricValueLayer()", () => {

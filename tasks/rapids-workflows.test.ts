@@ -4,12 +4,12 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { parse } from "@std/yaml";
 
 import { z } from "zod";
 
 import { commandWords } from "./ci-workflow.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const stepSchema = z.object({
   id: z.string().optional(),
@@ -170,7 +170,7 @@ describe("rapids-workflows", () => {
     ).not.toBe(0);
   });
 
-  it("collects all 21 workers and HTTPS and uploads only a complete bound Estuary receipt", async () => {
+  it("collects the workers of the host's recorded Toolshed layout and HTTPS and uploads only a complete bound Estuary receipt", async () => {
     const { steps } =
       (await workflow("deploy-production.yml")).jobs["deploy-estuary"];
     const remote = oneStep(steps, (step) => step.id === "evidence");
@@ -179,12 +179,20 @@ describe("rapids-workflows", () => {
     const script = z.string().parse(remote.with.script);
     expect(script).toContain("deploy@estuary.saga-castor.ts.net python3 -");
     const python = script.split("<<'PY'\n")[1].split("\nPY")[0];
-    const collect = (fault: string) =>
+    // The script reads the marker infra writes on the host; `undefined` stands
+    // for a host that has none.
+    const collect = (fault: string, marker?: string) =>
       runStep(
         {
           ...remote,
           run: `python3 - <<'PY'\n${
-            `import io, json, sys, urllib.request\nsys.argv = ["verify", "${infraSha}"]\n` +
+            `import builtins, io, json, sys, urllib.request\nsys.argv = ["verify", "${infraSha}"]\n` +
+            `def open(path, *args, **kwargs):\n` +
+            `    if path != "/opt/cf/releases/toolshed-capacity.json": return builtins.open(path, *args, **kwargs)\n` +
+            `    if ${
+              marker === undefined ? "True" : "False"
+            }: raise FileNotFoundError(path)\n` +
+            `    return io.StringIO(${JSON.stringify(marker ?? "")})\n` +
             `class Response(io.StringIO):\n` +
             `    status = 200\n` +
             `    def __init__(self, url):\n` +
@@ -203,6 +211,20 @@ describe("rapids-workflows", () => {
     for (const fault of ["sha", "https", "redirect"]) {
       expect((await collect(fault)).code).not.toBe(0);
     }
+    for (
+      const marker of [
+        '{"api": 5, "storage": 12}\n',
+        '{"api": 4, "storage": 12, "spare": 1}\n',
+        "[]\n",
+      ]
+    ) {
+      const refused = await collect("", marker);
+      expect(refused.code).not.toBe(0);
+      expect(refused.stderr).toContain(
+        "records an unsupported Toolshed layout",
+      );
+    }
+    expect((await collect("", "not json")).code).not.toBe(0);
     const save = oneStep(
       steps,
       (step) => step.run?.includes("base64.b64decode") ?? false,
@@ -220,6 +242,32 @@ describe("rapids-workflows", () => {
       GITHUB_RUN_ID: "123",
       GITHUB_RUN_ATTEMPT: "2",
     };
+    const ports = (count: number) =>
+      Array.from({ length: count }, (_, index) => 8001 + index);
+    for (
+      const [marker, capacity] of [
+        [undefined, { api: 5, storage: 16 }],
+        ['{"api": 5, "storage": 16}\n', { api: 5, storage: 16 }],
+        ['{\n  "api": 4,\n  "storage": 12\n}\n', { api: 4, storage: 12 }],
+      ] as const
+    ) {
+      const layout = await collect("", marker);
+      expect(layout.code).toBe(0);
+      const saved = await runStep(
+        run,
+        { ...env, REMOTE_OUTPUT: layout.stdout },
+        {},
+      );
+      expect(saved.code).toBe(0);
+      const receipt = JSON.parse(saved.stdout);
+      const expected = ports(capacity.api + capacity.storage);
+      expect(receipt.capacity).toEqual(capacity);
+      expect(receipt.expected_workers).toEqual({
+        "estuary.saga-castor.ts.net": expected,
+      });
+      expect(receipt.workers.map((worker: { port: number }) => worker.port))
+        .toEqual(expected);
+    }
     const saved = await runStep(run, env, {});
     expect(saved.code).toBe(0);
     const receipt = JSON.parse(saved.stdout);
@@ -254,6 +302,24 @@ describe("rapids-workflows", () => {
         0,
       );
     }
+    // A receipt is held to the layout it records, and only to a known one.
+    const mismatched = "ESTUARY_RECEIPT:" +
+      btoa(JSON.stringify({ ...receipt, capacity: { api: 4, storage: 12 } }));
+    expect(
+      (await runStep(run, { ...env, REMOTE_OUTPUT: mismatched }, {})).code,
+    ).not.toBe(0);
+    const unknown = ports(17);
+    const REMOTE_OUTPUT = "ESTUARY_RECEIPT:" + btoa(JSON.stringify({
+      ...receipt,
+      capacity: { api: 5, storage: 12 },
+      expected_workers: { "estuary.saga-castor.ts.net": unknown },
+      workers: unknown.map((port) => ({ ...receipt.workers[0], port })),
+    }));
+    const refused = await runStep(run, { ...env, REMOTE_OUTPUT }, {});
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain(
+      "Receipt records an unsupported Toolshed layout",
+    );
     const upload = oneStep(
       steps,
       (step) => step.uses?.startsWith("actions/upload-artifact@") ?? false,
@@ -388,7 +454,7 @@ describe("rapids-workflows", () => {
       "app-id": "${{ vars.RAPIDS_APP_ID }}",
       "private-key": "${{ secrets.RAPIDS_APP_PRIVATE_KEY }}",
       owner: "commonfabric",
-      repositories: "infra,loom,labs,commonfabric-weaver,gvisor",
+      repositories: "infra,cfs,labs,weaver,gvisor",
       "permission-contents": "read",
       "permission-actions": "read",
     });
@@ -569,7 +635,7 @@ describe("rapids-workflows", () => {
       "app-id": "${{ vars.RAPIDS_APP_ID }}",
       "private-key": "${{ secrets.RAPIDS_APP_PRIVATE_KEY }}",
       owner: "commonfabric",
-      repositories: "infra,loom",
+      repositories: "infra,cfs",
       "permission-contents": "read",
     });
     const deploy = oneStep(steps, (step) => step.id === "deploy");
@@ -701,7 +767,7 @@ describe("rapids-workflows", () => {
     });
   });
 
-  it("notifies infra of every main deployment outcome and Loom only of green main CI", async () => {
+  it("notifies infra of every main deployment outcome and cfs only of green main CI", async () => {
     const notify = await workflow("notify-rapids.yml");
     expect(notify.permissions).toEqual({});
     expect(notify.on).toEqual({
@@ -722,7 +788,7 @@ describe("rapids-workflows", () => {
       head_branch: "main",
       head_repository: { full_name: "commonfabric/labs" },
     };
-    for (const target of ["infra", "loom"]) {
+    for (const target of ["infra", "cfs"]) {
       const job = notify.jobs[`notify-${target}`];
       // These guards use the shared boolean/property subset of Actions and JS.
       const accepts = new Function(
@@ -777,7 +843,7 @@ describe("rapids-workflows", () => {
 
   it("sends paired producer hints for CI and an empty-input reconciliation for deployment", async () => {
     const notify = await workflow("notify-rapids.yml");
-    for (const target of ["infra", "loom"]) {
+    for (const target of ["infra", "cfs"]) {
       const job = notify.jobs[`notify-${target}`];
       const send = oneStep(
         job.steps,

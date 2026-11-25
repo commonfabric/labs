@@ -239,15 +239,17 @@ measured would be arithmetic over an invented figure.
 
 Whichever way it gets its answer, it answers no more than `LANES_MAX`, or
 `FULL_LANES_MAX` for the run on the default branch and a pull request
-labelled `ci: full`, so that one run leaves runners for the runs waiting
-behind it. A run that needs
-more takes that many and says on the error stream that it needs more. A
-change's tests chosen by score then get what room is left, which it also
-says. In the run on the default branch every test still runs. A test whose
-repeated runs fit in no lane runs fewer times, down to once, and a test
-that fits nowhere even once goes into the lane it leaves shortest, so the
-lanes run past their budget instead. A full run that needs more is the sign
-to raise `FULL_LANES_MAX`.
+labelled `ci: full`. Other pull requests take at most thirty lanes. Full runs
+may use up to GitHub's matrix limit of 256 lanes, with at most forty running
+at once per run. The remaining lanes queue. Concurrent runs share the
+organization's sixty runners; this limit does not reserve runners across runs.
+
+A run that needs more lanes than its cap takes the capped count and says on the
+error stream that it needs more. A change's tests chosen by score then get
+what room is left, which it also says. In the run on the default branch
+every test still runs. A test whose repeated runs fit in no lane runs fewer
+times, down to once, and a test that fits nowhere even once goes into the
+lane it leaves shortest, so the lanes run past their budget instead.
 
 ## How continuous integration runs the lanes
 
@@ -309,13 +311,10 @@ workflow. A run's lanes come from two jobs.
   it. GitHub stops a step that reaches its bound by sending SIGINT to the
   step's own process, and SIGTERM a few seconds later, and a shell waiting on a
   command passes neither on. The lane passes each signal on to the command it
-  is running and starts nothing more, a rerun included. `deno test` told to stop names the tests
-  it was in the middle of and writes its report, so the lane keeps the records
-  of the tests it finished, and the test that held it up is recorded as skipped:
-  a cancelled run sends the same signal, and a test it interrupts has not
-  failed. A test `deno test` reports as cancelled in a run the lane did not
-  signal is one an error it did not catch stopped, and is recorded as failed.
-  The lane then prints the end of each server's log, keeps its working
+  is running and starts nothing more, a rerun included. Each test writes its
+  result into the spool as it finishes, so the lane keeps the records of the
+  tests that finished, and the test that held it up has no record: a cancelled
+  run sends the same signal, and a test it interrupts has not failed. The lane then prints the end of each server's log, keeps its working
   directory for the job to upload, and exits
   without converting its coverage, which takes longer than GitHub waits. Its
   closing summary says which pass it was running and which batches it did not
@@ -787,7 +786,7 @@ measurement to look at rather than a setting to fix.
 | `FULL_LANE_BUDGET_SECONDS` | 1730 | seconds | derived | Nothing edits this. It is the full run's bound less the same prologue and safety margin a pull request's lane pays, since a lane of either run is the same job doing the same setup on the same runner. |
 | `DISCRETIONARY_SECONDS` | 575 | seconds | chosen | Up when regressions reach the default branch past pull requests that did not run the test chosen by score that would have caught them; down when pull requests take more lanes than runner minutes allow. A pull request whose mandatory work fits in five lanes with room to spare most often takes five at this figure. The label `ci: <n>x` multiplies it by n for one pull request. |
 | `LANES_MAX` | 30 | lanes | chosen | The most lanes a run other than the full run takes. Up when the lane-count job says such a run needs more lanes than this, and the organization's runner limit has room; down when one run crowds out the runs behind it. A pull request needing more lanes than this takes this many, and then runs fewer tests chosen by score, and its mandatory work may put its lanes past their budget. |
-| `FULL_LANES_MAX` | 40 | lanes | chosen | `LANES_MAX` for the full run. Up when the lane-count job says the full run needs more lanes than this and its lanes near the lane step's bound, and the organization's runner limit has room; down when one full run crowds out the runs behind it. |
+| `FULL_LANES_MAX` | 256 | lanes | chosen | The full run may use up to GitHub's job-matrix limit. Concurrency per run is limited by the workflow's `max-parallel`, independently of how many lanes the work needs. |
 | `FULL_RUN_LABEL` | ci: full | a label | chosen | Not a quantity. Change it only if the label collides with one the repository already uses for something else. |
 | `UNMEASURED_COST_SECONDS` | 1 | seconds | chosen | Up when a lane holding new tests runs long; down when it finishes early. It is reached for only by a suite with no measured unit at all, since a suite that has any charges an unmeasured one the larger of its units' mean and their ninetieth percentile. |
 | `VALUE_FLOOR` | 0.05 | score | chosen | Up when the cheap tail is not being swept up; down when it crowds out tests with a record of new real test failures. |
@@ -1473,13 +1472,11 @@ named and the rest are counted, so that reading the count does not mean
 reproducing the publisher against the store by hand.
 
 What decides an identity's unit is its own records. Where a suite's units
-are files, the answer is the file on the record, and a record has one when
-the report it came from could name one: the registration preload captures
-which module registered each test and leaves that map beside the report,
-and ingestion otherwise reads the file from the report's own class names,
-which needs the working directory the test process ran in. A report that
-supplies neither has no file on any of its records, and neither does a
-name that two files in one report both report. Where a suite's units are
+are files, the answer is the file on the record. The test module,
+`@commonfabric/test-support/test`, names the repository-relative file
+beside every result it writes, so every record of a test registered through
+it has one. A record from another producer has a file only where that
+producer wrote one. Where a suite's units are
 not files — a dispatch arm, a pattern key — the answer is the recorded
 name instead, and a name no suite recognizes leaves the identity without a
 unit the same way. What
@@ -1503,13 +1500,13 @@ how many passes it made, and a fifth that the fit does not read: what the
 packer charged the lane for the batch, which [When the cost model
 breaks](#when-the-cost-model-breaks) reads with the three a lane writes once
 about its work as a whole. None of the first four can be recovered from the
-records the batch produced: a reader of a report cannot tell which of its
-records came from which batch. The second, third and fourth are what the
+records the batch produced: a reader of those records cannot tell which of
+them came from which batch. The second, third and fourth are what the
 correction, the per-unit charge and the per-pass charge are fitted to, and a
 batch missing any of them is not read. [What a lane is
 charged](../specs/test-selection.md#what-a-lane-is-charged) says how. A lane
 also writes one record for each time a pass opened a unit whose hooks its
-report timed, `ci-lane hooks <suite> in <unit>`, which is where each unit's
+results timed, `ci-lane hooks <suite> in <unit>`, which is where each unit's
 hooks are read from.
 
 The second counts the records the suite places in one of its units, which are
@@ -1524,14 +1521,14 @@ and a shared phase once for each unit that runs it.
 
 A unit's hooks are the setup and teardown its `describe`s declare around
 their tests, such as a `beforeAll` that deploys a pattern and opens a page.
-Deno's JUnit report times them only inside the case it writes for each
-`describe`, and that case holds every test beneath it a second time, so
+The test module times them only inside the result it writes for each
+`describe`, and that result holds every test beneath it a second time, so
 ingestion records it only where it failed on its own account or the manifest
-already knows it, and then with the time it spent outside the cases directly
-inside it. What the lane reads is the time each outermost such case took that
+already knows it, and then with the time it spent outside the results directly
+inside it. What the lane reads is the time each outermost such group took that
 no record holds, which is the hooks of the `describe`s nested in it too, and
-for a `Deno.test` whose leaves are steps, what its own body took around them,
-less whatever a recorded container among them holds. The second figure
+for a `test` whose leaves are steps, what its own body took around them, less
+whatever a recorded group among them holds. The second figure
 counts that, since the packer charges a unit's hooks through the same
 correction as its tests, and the publisher keeps what each unit's hooks took,
 counted by bucket as a test's durations are. They differ from unit to unit far more than a figure
@@ -1586,11 +1583,10 @@ bootstrap is not the tool for it, and refuses over a store holding an
 aggregate in any case: the count falls on its own.
 
 What to check is that surface's wiring, which
-[the record guide](test-records.md#covering-a-new-test-surface) covers: the
-JUnit output the suite's command declares, the `--preload` naming
-`base/test-support/src/records/preload.ts` where the surface is `deno test`,
-and the working directory that relative class names are joined onto. Where the
-records do have a file, the file is one no suite has a unit for, and the answer
+[the record guide](test-records.md#covering-a-new-test-surface) covers: whether
+its tests register through `@commonfabric/test-support/test`, which names each
+test's file, and whether the run hands that module a spool through
+`CF_TEST_RECORDS_DIR`. Where the records do have a file, the file is one no suite has a unit for, and the answer
 is in the topology.
 
 ### When the cost model is empty
@@ -1901,20 +1897,20 @@ rate excuses has told the run nothing it should stop for, and a runner that
 exited zero having run none of its unit has. So a unit that a pass of its batch
 recorded nothing for fails the lane, and an excusal holds only where every pass
 accounted for every identity it was asked to run that the tree holds. Each pass
-is judged on its own records and its own name maps. A repeated unit whose second
-pass stopped part way is not accounted for by the first pass, which ran it to
-the end. The lane reads what the tree holds from the name maps the registration
-preload leaves in the spool. An identity a unit's processes did not register,
-nor any test inside it, is absent where everything the map holds that encloses
-it is a `describe`, known as one by a leaf the map holds inside it. Such an
-identity is one the manifest carries for a test the tree no longer holds,
-such as one renamed since the manifest, and the lane's job summary lists it apart from the identities that withdraw an excusal.
-A registered test records the steps its body names as it runs, which no map
-holds, so an identity beneath a registered test shows nothing; so does one
-beneath a `describe` the map holds no leaf inside, and any identity of a unit
-whose processes left no name map. A name map the preload marked as interrupted,
-because an `error` or `unhandledrejection` event reached its file before the
-file's hooks and tests began, shows nothing either. An identity any of those
+is judged on its own records and on the names its own processes registered. A
+repeated unit whose second pass stopped part way is not accounted for by the
+first pass, which ran it to the end. The lane reads what the tree holds from
+the `registered` lines the test module writes into the spool once a test file
+has loaded, which name every test and every `describe` the file declared. An
+identity a unit's processes did not register, nor any test inside it, is absent
+where every registered name that encloses it is a `describe`, known as one by a
+registered name inside it. Such an identity is one the manifest carries for a
+test the tree no longer holds, such as one renamed since the manifest, and the
+lane's job summary lists it apart from the identities that withdraw an
+excusal. A registered test records the steps its body names as it runs, which
+no registration names, so an identity beneath a registered test shows nothing;
+so does one beneath a `describe` with nothing registered inside it, and any
+identity of a unit whose processes registered nothing. An identity any of those
 leaves unrecorded withdraws the excusal. A package's browser tests, which run as
 one unit, are read from the mark the browser test runner leaves once it has
 loaded every file and run every test.
@@ -2138,23 +2134,20 @@ record of them.
 A `describe()` that fails as a whole, for example in its `beforeAll`, is
 recorded under its own title. The outermost `describe()` of a file
 registers a single `Deno.test` under its title, so ignoring that title
-ignores every test inside it. Where a file declares a hook outside every
-`describe()`, that outermost one is the `global` suite the runner
-invents. A lane therefore never lists the title of a `describe()`
-holding a test the lane runs. A `describe()` a lane chose runs its hooks
-with the tests inside it ignored. A lane running a test inside a
+ignores every test inside it. A lane therefore never lists the title of a
+`describe()` holding a test the lane runs. A `describe()` none of whose
+tests will run does not run its `beforeAll` or `afterAll`. A lane running a test inside a
 `describe()` runs that `describe()`'s hooks too, on every run of the unit,
 whether or not it chose the `describe()` itself, so the packer charges it
 the `describe()`'s own cost for each of those runs, once however many tests
-inside it the lane holds. Ingestion records the case a
-`describe()` reports for itself in two separate cases: whenever it fails
-on its own account, and on every run, pass or fail, once the manifest
-holds its title in the unit that ran and no other case in the report has
-that title. A record of any test inside a
+inside it the lane holds. Ingestion records the result a
+`describe()` reports for itself in two cases: whenever it fails on its
+own account, and on every run, pass or fail, once the manifest holds its
+title in the unit that ran. A record of any test inside a
 `describe()` also accounts for it, ignored or not, including one the
 lane's own skip list named and does not ship.
 A `describe()` whose `beforeAll` fails reports no test inside it, so its
-own failing case is the record that stands.
+own failing result is the record that stands.
 
 Some units hold more than one test and cannot be split. These are a
 workspace member whose test task takes no file list, a member's browser
@@ -2171,8 +2164,8 @@ four kinds above hold several. A unit's shape does not tell you which kind it
 is, because two of the four kinds are paths.
 
 `tasks/test-topology.test.ts` checks `whole` in both directions. Every unit
-outside it has to be a test file in the tree, because the preload looks a
-skip list up under the file that registered the test, and a skip list for
+outside it has to be a test file in the tree, because the test module looks
+a skip list up under the file that registered the test, and a skip list for
 anything else matches nothing. Every unit in it has to be one its suite
 writes no skip list for, and one of the suite's own units.
 
@@ -2206,9 +2199,8 @@ neither to a path named on its command line, so a file a lane hands over
 would otherwise run in spite of being excluded.
 
 A lane runs a member that runs whole through the member's own task,
-with no record preload and no report path. A `deno test` that task
-starts records nothing there, unless a runner of the member's own
-writes records. The topology therefore refuses to load when it cannot
+and reads no results from it. A `deno test` that task starts records
+nothing there, unless a runner of the member's own writes records. The topology therefore refuses to load when it cannot
 point a member's task at files, unless `RUNS_WHOLE` in
 `tasks/test-topology/unit.ts` lists the member with the reason. It also
 refuses an entry there for a member whose task it can point at files,
@@ -2219,17 +2211,17 @@ different flags stays splittable. Its `--serial` option names files that cannot
 run beside another test file in one process, and those run in a `deno test`
 without `--parallel`, one file at a time. Its `--all-access` option names files
 that need every permission, and those run under `--allow-all`. The runner runs
-each group as a `deno test` of its own and merges their JUnit reports into the
-one path it was handed. A lane groups the files it selects the same way, with a
-report for each group. The topology refuses a `--serial` or `--all-access`
+each group as a `deno test` of its own, and the tests of every group write their
+results into the one spool the run names. A lane groups the files it selects the
+same way. The topology refuses a `--serial` or `--all-access`
 pattern that names no test file, and so does the runner, which also refuses such
 an `--ignore`. `runtime/cli` uses both options, and `dashboard` uses
 `--all-access`.
 
 ## A case that fails only when its siblings do not run
 
-A lane runs part of a file: the cases it holds run, and the registration
-preload registers the rest as ignored. So a case that passes in a
+A lane runs part of a file: the cases it holds run, and the test module
+registers the rest as ignored. So a case that passes in a
 full-file run and fails when a lane selects it on its own is reading
 state that another case in the same file establishes — a process-wide
 initialization, a global something else installs, a cache another case
@@ -2240,10 +2232,9 @@ it.
 [The record guide](test-records.md#the-environment-surface) describes the
 variable; the file it names is keyed by repository-relative test file and
 holds the names this invocation is not to run. A name is a case's whole
-`describe` chain, joined with ` > `, which is the name the report carries.
-A file whose hooks sit outside every `describe` has a root suite the bdd
-runner invents, named `global`, and every name in that file opens with
-it. A name that matches nothing is skipped over in silence, so a case
+`describe` chain, joined with ` > `, which is the name its record carries.
+A name that names a `describe` skips every case inside it. A name that
+matches nothing is skipped over in silence, so a case
 that goes on running is as likely to be a misspelled name as an
 independent case:
 
@@ -2255,15 +2246,13 @@ independent case:
 }
 ```
 
-`base/test-support/src/records/preload.ts` is what reads the list, so
-the invocation adds it to whatever preloads and variables the package's
-own test task already passes, and runs from that package's directory.
-Deno resolves `--preload` as a path rather than through the import map,
-so it is absolute:
+The test module, `@commonfabric/test-support/test`, is what reads the
+list, so the invocation needs only the variable beside whatever preloads
+and flags the package's own test task already passes, and runs from that
+package's directory:
 
 ```bash
 CF_TEST_SKIP_LIST=/tmp/skips.json deno test --no-check --allow-all \
-  --preload="$(git rev-parse --show-toplevel)/base/test-support/src/records/preload.ts" \
   test/glaze.test.ts
 ```
 
@@ -2302,7 +2291,7 @@ does not hold and that encloses nothing it does, and a new test runs in the
 first pass alone. A new test beside one whose flake rate asks for ten runs
 would otherwise run ten times with none of them charged, and a few tests of a
 few minutes each are then enough to run a lane past its step's bound. A unit
-that runs whole, or whose first pass left no name map, runs every pass as it
+that runs whole, or whose first pass registered nothing, runs every pass as it
 ran the first.
 
 [Running a failure again](#running-a-failure-again) is the exception. A rerun

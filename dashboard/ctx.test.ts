@@ -14,8 +14,8 @@ import {
   CI_RUNS_MAX,
   CI_RUNS_MAX_AGE_DAYS,
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   REPO,
 } from "./config.ts";
 import type { GitHubRun } from "./github-runs.ts";
@@ -23,6 +23,7 @@ import { GitHubWebhooks } from "./github-webhooks.ts";
 import { GreenBranch } from "./green-branch.ts";
 import { pushPayload, workflowRunPayload } from "./test/webhook-relay.ts";
 import { type Ctx, runSource } from "./types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const DAY_MS = 86_400_000;
 
@@ -126,7 +127,7 @@ async function withGithub(
 
 const pages = (requests: URL[]) => requests.filter(isPage);
 
-Deno.test("runs(): labs main-branch runs of the CI workflow, each tagged with its repo", async () => {
+test("runs(): labs main-branch runs of the CI workflow, each tagged with its repo", async () => {
   await withGithub({
     lists: {
       [REPO]: [
@@ -149,7 +150,7 @@ Deno.test("runs(): labs main-branch runs of the CI workflow, each tagged with it
   });
 });
 
-Deno.test("runs(): a second read within the TTL is served from the cache, not refetched", async () => {
+test("runs(): a second read within the TTL is served from the cache, not refetched", async () => {
   await withGithub({ lists: { [REPO]: runs(2) } }, async (ctx, requests) => {
     const first = await ctx.runs();
     const made = requests.length;
@@ -166,32 +167,32 @@ Deno.test("runs(): a second read within the TTL is served from the cache, not re
   });
 });
 
-Deno.test("runsFor: each repo and workflow is cached separately", async () => {
+test("runsFor: each repo and workflow is cached separately", async () => {
   await withGithub({
-    lists: { [REPO]: [run({ id: 11 })], [LOOM_REPO]: [run({ id: 77 })] },
+    lists: { [REPO]: [run({ id: 11 })], [CFS_REPO]: [run({ id: 77 })] },
   }, async (ctx, requests) => {
     const labs = await ctx.runsFor(runSource(REPO, CI_WORKFLOW, "main"));
     const loom = await ctx.runsFor(
-      runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"),
+      runSource(CFS_REPO, CFS_CI_WORKFLOW, "main"),
     );
     // A second repo must not be handed the first repo's cached runs.
     assertEquals(labs.map((r) => r.id), [11]);
     assertEquals(loom.map((r) => r.id), [77]);
-    assertEquals(loom[0].repo, LOOM_REPO);
+    assertEquals(loom[0].repo, CFS_REPO);
     assert(
       pages(requests).some((url) =>
         url.pathname ===
-          `/repos/${LOOM_REPO}/actions/workflows/${LOOM_CI_WORKFLOW}/runs`
+          `/repos/${CFS_REPO}/actions/workflows/${CFS_CI_WORKFLOW}/runs`
       ),
       requests.join(" "),
     );
     const made = requests.length;
-    await ctx.runsFor(runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"));
+    await ctx.runsFor(runSource(CFS_REPO, CFS_CI_WORKFLOW, "main"));
     assertEquals(requests.length, made);
   });
 });
 
-Deno.test("runsFor: a workflow's main and pull request runs are separate sources", async () => {
+test("runsFor: a workflow's main and pull request runs are separate sources", async () => {
   await withGithub({
     lists: {
       [REPO]: [
@@ -214,7 +215,7 @@ Deno.test("runsFor: a workflow's main and pull request runs are separate sources
   });
 });
 
-Deno.test("runs(): pages accumulate in order until the list ends", async () => {
+test("runs(): pages accumulate in order until the list ends", async () => {
   // Pull request runs fill most of the list, so the main runs a source wants
   // are spread over several pages.
   const list = runs(250, TOP, (id) =>
@@ -231,14 +232,14 @@ Deno.test("runs(): pages accumulate in order until the list ends", async () => {
   });
 });
 
-Deno.test("runs(): an empty first page stops the walk rather than asking for the next", async () => {
+test("runs(): an empty first page stops the walk rather than asking for the next", async () => {
   await withGithub({ lists: {} }, async (ctx, requests) => {
     assertEquals(await ctx.runs(), []);
     assertEquals(pages(requests).length, 1);
   });
 });
 
-Deno.test("runs(): the stream is capped at CI_RUNS_MAX, mid-page if need be", async () => {
+test("runs(): the stream is capped at CI_RUNS_MAX, mid-page if need be", async () => {
   await withGithub(
     { lists: { [REPO]: runs(CI_RUNS_MAX + 150) } },
     async (ctx, requests) => {
@@ -253,7 +254,7 @@ Deno.test("runs(): the stream is capped at CI_RUNS_MAX, mid-page if need be", as
   );
 });
 
-Deno.test("runs(): a run past the age cutoff ends the stream", async () => {
+test("runs(): a run past the age cutoff ends the stream", async () => {
   const at = (id: number, daysAgo: number) => {
     const time = new Date(Date.now() - daysAgo * DAY_MS).toISOString();
     return run({ id, created_at: time, run_started_at: time });
@@ -273,7 +274,7 @@ Deno.test("runs(): a run past the age cutoff ends the stream", async () => {
   });
 });
 
-Deno.test("runs(): a run with an unreadable start time is kept, not read as ancient", async () => {
+test("runs(): a run with an unreadable start time is kept, not read as ancient", async () => {
   await withGithub({
     lists: { [REPO]: [run({ id: TOP, run_started_at: "" }), run({ id: 9 })] },
   }, async (ctx) => {
@@ -281,7 +282,7 @@ Deno.test("runs(): a run with an unreadable start time is kept, not read as anci
   });
 });
 
-Deno.test("runs(): a response without workflow_runs reads as no runs", async () => {
+test("runs(): a response without workflow_runs reads as no runs", async () => {
   const realFetch = globalThis.fetch;
   const realToken = Deno.env.get("GH_TOKEN");
   Deno.env.set("GH_TOKEN", "test-token");
@@ -300,7 +301,7 @@ Deno.test("runs(): a response without workflow_runs reads as no runs", async () 
   }
 });
 
-Deno.test("env(): reads the process environment, undefined when unset", () => {
+test("env(): reads the process environment, undefined when unset", () => {
   const key = "DASHBOARD_CTX_TEST_KEY";
   const ctx = makeCtx();
   Deno.env.set(key, "set-by-the-test");
@@ -312,7 +313,7 @@ Deno.test("env(): reads the process environment, undefined when unset", () => {
   assertEquals(ctx.env(key), undefined);
 });
 
-Deno.test("runs(): a run keeps only the fields tiles read", async () => {
+test("runs(): a run keeps only the fields tiles read", async () => {
   // What GitHub actually sends with every entry. The repository, head
   // repository, whole head commit, and both actors are around fifty times the
   // size of the fields a tile reads, and the snapshot is held between
@@ -337,7 +338,7 @@ Deno.test("runs(): a run keeps only the fields tiles read", async () => {
   });
 });
 
-Deno.test("runs(): the newest page brings in runs the listing lags behind", async () => {
+test("runs(): the newest page brings in runs the listing lags behind", async () => {
   // GitHub's list filtered to main answers from an index weeks behind: it
   // knows only the oldest run, and shows it failing as it once was.
   await withGithub({
@@ -360,7 +361,7 @@ Deno.test("runs(): the newest page brings in runs the listing lags behind", asyn
   });
 });
 
-Deno.test("runs(): a filtered list that shows a run as it stood earlier cannot turn it back", async () => {
+test("runs(): a filtered list that shows a run as it stood earlier cannot turn it back", async () => {
   const later = new Date(Date.now() - 60_000).toISOString();
   const earlier = new Date(Date.now() - 600_000).toISOString();
   await withGithub({
@@ -383,7 +384,7 @@ Deno.test("runs(): a filtered list that shows a run as it stood earlier cannot t
   });
 });
 
-Deno.test("runs(): a main run started again since it was read is read again by its id", async () => {
+test("runs(): a main run started again since it was read is read again by its id", async () => {
   using time = new FakeTime();
   // The run started again sits below the top page of the list, which a later
   // read of the top does not reach.
@@ -415,7 +416,7 @@ Deno.test("runs(): a main run started again since it was read is read again by i
   });
 });
 
-Deno.test("runsFor: the pull request source takes pull request runs from the newest page", async () => {
+test("runsFor: the pull request source takes pull request runs from the newest page", async () => {
   await withGithub({
     lists: {
       [REPO]: [
@@ -432,7 +433,7 @@ Deno.test("runsFor: the pull request source takes pull request runs from the new
   });
 });
 
-Deno.test("runsFor: a workflow's sources share a read of its newest page", async () => {
+test("runsFor: a workflow's sources share a read of its newest page", async () => {
   await withGithub({ lists: { [REPO]: runs(30) } }, async (ctx, requests) => {
     await ctx.runsFor(runSource(REPO, CI_WORKFLOW, "main"));
     await ctx.runsFor(runSource(REPO, CI_WORKFLOW, "pull requests"));
@@ -440,7 +441,7 @@ Deno.test("runsFor: a workflow's sources share a read of its newest page", async
   });
 });
 
-Deno.test("runs(): a failed read of the newest page fails the fetch", async () => {
+test("runs(): a failed read of the newest page fails the fetch", async () => {
   await withGithub({
     lists: { [REPO]: runs(3) },
     fails: (url) => url.searchParams.get("page") === "1",
@@ -449,7 +450,7 @@ Deno.test("runs(): a failed read of the newest page fails the fetch", async () =
   });
 });
 
-Deno.test("runs(): a failed read of a later unfiltered page fails the fetch", async () => {
+test("runs(): a failed read of a later unfiltered page fails the fetch", async () => {
   const list = runs(250, TOP, (id) =>
     id % 5 === 0
       ? run({ id })
@@ -462,14 +463,14 @@ Deno.test("runs(): a failed read of a later unfiltered page fails the fetch", as
   });
 });
 
-Deno.test("runsFor: a run on main carries what its repo's green branch says of its commit, and a pull request's run does not", async () => {
+test("runsFor: a run on main carries what its repo's green branch says of its commit, and a pull request's run does not", async () => {
   const current = "c".repeat(40);
   const former = "d".repeat(40);
   const recently = new Date(Date.now() - 3_600_000).toISOString();
-  const loom = new GreenBranch(LOOM_REPO, "main-green");
+  const loom = new GreenBranch(CFS_REPO, "main-green");
   await withGithub({
     lists: {
-      [LOOM_REPO]: [
+      [CFS_REPO]: [
         run({ id: TOP, head_sha: current }),
         run({ id: TOP - 1, head_sha: former }),
         run({ id: TOP - 2, head_sha: "e".repeat(40) }),
@@ -482,14 +483,14 @@ Deno.test("runsFor: a run on main carries what its repo's green branch says of i
       ],
     },
     activity: {
-      [LOOM_REPO]: [
+      [CFS_REPO]: [
         { id: 902, after: current, timestamp: recently },
         { id: 901, after: former, timestamp: recently },
       ],
     },
   }, async (ctx, requests) => {
     const main = await ctx.runsFor(
-      runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"),
+      runSource(CFS_REPO, CFS_CI_WORKFLOW, "main"),
     );
     assertEquals(main.map((r) => r.green), [
       { branch: "main-green", current: true },
@@ -497,7 +498,7 @@ Deno.test("runsFor: a run on main carries what its repo's green branch says of i
       undefined,
     ]);
     const pulls = await ctx.runsFor(
-      runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "pull requests"),
+      runSource(CFS_REPO, CFS_CI_WORKFLOW, "pull requests"),
     );
     assertEquals(pulls.map((r) => r.green), [undefined]);
     // Only the main source reads the branch, and labs has none.
@@ -506,12 +507,12 @@ Deno.test("runsFor: a run on main carries what its repo's green branch says of i
       requests.filter((url) => url.pathname.endsWith("/activity")).map((url) =>
         url.pathname
       ),
-      [`/repos/${LOOM_REPO}/activity`],
+      [`/repos/${CFS_REPO}/activity`],
     );
-  }, (repo) => repo === LOOM_REPO ? loom : undefined);
+  }, (repo) => repo === CFS_REPO ? loom : undefined);
 });
 
-Deno.test("changesRunSource: a delivered run of the source's workflow, in its scope, changes it", () => {
+test("changesRunSource: a delivered run of the source's workflow, in its scope, changes it", () => {
   const main = runSource(REPO, CI_WORKFLOW, "main");
   const pulls = runSource(REPO, CI_WORKFLOW, "pull requests");
   const delivered = (over: Partial<GitHubRun>, repo = REPO, file = CI_WORKFLOW) => ({
@@ -528,16 +529,16 @@ Deno.test("changesRunSource: a delivered run of the source's workflow, in its sc
   const pull = delivered({ event: "pull_request", head_branch: "feature" });
   assert(changesRunSource(pulls, pull));
   assert(!changesRunSource(main, pull));
-  assert(!changesRunSource(main, delivered({}, LOOM_REPO)));
-  assert(!changesRunSource(main, delivered({}, REPO, LOOM_CI_WORKFLOW)));
+  assert(!changesRunSource(main, delivered({}, CFS_REPO)));
+  assert(!changesRunSource(main, delivered({}, REPO, CFS_CI_WORKFLOW)));
   assert(changesRunSource(main, delivered({}, REPO.toUpperCase())));
 });
 
-Deno.test("changesRunSource: a push to the green branch changes the repository's main runs, and no other push does", () => {
-  const green = new GreenBranch(LOOM_REPO, "main-green", new GitHubWebhooks());
-  const greenOf = (repo: string) => repo === LOOM_REPO ? green : undefined;
-  const main = runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main");
-  const pushed = (ref: string, repo = LOOM_REPO) => ({
+test("changesRunSource: a push to the green branch changes the repository's main runs, and no other push does", () => {
+  const green = new GreenBranch(CFS_REPO, "main-green", new GitHubWebhooks());
+  const greenOf = (repo: string) => repo === CFS_REPO ? green : undefined;
+  const main = runSource(CFS_REPO, CFS_CI_WORKFLOW, "main");
+  const pushed = (ref: string, repo = CFS_REPO) => ({
     event: "push",
     payload: pushPayload(repo, ref),
   });
@@ -546,7 +547,7 @@ Deno.test("changesRunSource: a push to the green branch changes the repository's
   assert(!changesRunSource(main, pushed("refs/heads/main"), greenOf));
   assert(
     !changesRunSource(
-      runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "pull requests"),
+      runSource(CFS_REPO, CFS_CI_WORKFLOW, "pull requests"),
       pushed("refs/heads/main-green"),
       greenOf,
     ),

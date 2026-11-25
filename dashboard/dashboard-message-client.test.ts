@@ -1,12 +1,13 @@
 import { assertEquals } from "@std/assert";
 import { paintDashboardMessageInput } from "./dashboard-message-client.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const input = (value: string) => ({
   value,
   style: { opacity: "" },
 }) as HTMLInputElement;
 
-Deno.test("message painter fades saved text and preserves drafts", () => {
+test("message painter fades saved text and preserves drafts", () => {
   const visibleMs = 10;
   const fadeMs = 20;
   const saved = {

@@ -19,9 +19,14 @@
 // Sibling of the same bug class in the query-result proxy's
 // `getOwnPropertyDescriptor` trap (#5357).
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import "@commonfabric/test-support/equal-ignoring-symbols";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { JSONSchema } from "../src/builder/types.ts";

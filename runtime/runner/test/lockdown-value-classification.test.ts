@@ -6,7 +6,6 @@
  * code.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -15,6 +14,7 @@ import {
   VALUE_TAGS,
 } from "@commonfabric/data-model";
 import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { createModuleCompartmentGlobals } from "../src/sandbox/compartment-globals.ts";
 import {

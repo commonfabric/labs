@@ -9,6 +9,7 @@ import { assert } from "@std/assert";
 
 import { CFThemeProvider } from "../cf-theme/index.ts";
 import { CFCodeEditor } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const DOCUMENT = [
   "Meeting notes",
@@ -58,7 +59,7 @@ function isLight(color: string): boolean {
 for (const scheme of ["light", "dark"] as const) {
   const light = scheme === "light";
 
-  Deno.test(`a prose editor in a ${scheme} theme draws code backgrounds ${scheme}`, async () => {
+  test(`a prose editor in a ${scheme} theme draws code backgrounds ${scheme}`, async () => {
     const { editor, done } = await mount(scheme);
     try {
       for (const selector of [".cm-prose-codeblock", ".cm-prose-inline-code"]) {
@@ -73,7 +74,7 @@ for (const scheme of ["light", "dark"] as const) {
     }
   });
 
-  Deno.test(`a prose editor in a ${scheme} theme draws quote ink readable on its surface`, async () => {
+  test(`a prose editor in a ${scheme} theme draws quote ink readable on its surface`, async () => {
     const { editor, done } = await mount(scheme);
     try {
       const ink = drawn(editor, ".cm-prose-blockquote", "color");

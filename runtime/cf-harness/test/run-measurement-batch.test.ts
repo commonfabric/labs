@@ -1,4 +1,3 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { copy } from "@std/fs";
 import { fromFileUrl } from "@std/path";
@@ -30,6 +29,7 @@ import { emptyTotals as emptyMeasurementTotals } from "../scripts/measure-runs.t
 import observedStatus from "./support/measurement-console-status.json" with {
   type: "json",
 };
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURE_ROOT = fromFileUrl(
   new URL("./support/measure-runs/runs", import.meta.url),

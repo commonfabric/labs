@@ -8,7 +8,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { SchemaPathSelector } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -19,6 +18,7 @@ import type {
   URI,
 } from "@commonfabric/memory/interface";
 import { getLogger, getLoggerCountsBreakdown } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";

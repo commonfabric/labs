@@ -4,10 +4,11 @@
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { maxOf, minOf } from "@commonfabric/collections/math";
+import { test } from "@commonfabric/test-support/test";
 import { budgetStatus, ciDurationSub, clampInt, compactSpan, concDot, daysLabel, durationTag, escapeHtml, friendlyError, groupDigits, humanDur, humanSpan, jsonFromZip, landingHref, lighten, median, multiSparkline, pullRequestLinks, readBudget, sparkline, strip, thin, usd } from "./lib.ts";
 import { artifactZip, bytes, makeZip } from "./test/artifact-zip.ts";
 
-Deno.test("pullRequestLinks: each (#N) links to its PR, the rest to the given href", () => {
+test("pullRequestLinks: each (#N) links to its PR, the rest to the given href", () => {
   const link = (attributes: string, href: string, text: string) =>
     `<a${attributes} href="${href}" target="_blank" rel="noopener">${text}</a>`;
   assertEquals(
@@ -23,33 +24,33 @@ Deno.test("pullRequestLinks: each (#N) links to its PR, the rest to the given hr
   );
 });
 
-Deno.test("pullRequestLinks: a #N without parentheses stays part of the text", () => {
+test("pullRequestLinks: a #N without parentheses stays part of the text", () => {
   assertEquals(
     pullRequestLinks("fix: follow-ups from #4401 <review>", "o/r", "https://run"),
     `<a href="https://run" target="_blank" rel="noopener">fix: follow-ups from #4401 &lt;review&gt;</a>`,
   );
 });
 
-Deno.test("landingHref: squash-merge trailing (#N) -> the PR", () => {
+test("landingHref: squash-merge trailing (#N) -> the PR", () => {
   assertEquals(
     landingHref("base/ts-transformers tests (#4435)", "sha", "commonfabric/labs"),
     "https://github.com/commonfabric/labs/pull/4435",
   );
 });
 
-Deno.test("landingHref: merge commit -> the PR", () => {
+test("landingHref: merge commit -> the PR", () => {
   assertEquals(landingHref("Merge pull request #12 from x/y", "sha", "o/r"), "https://github.com/o/r/pull/12");
 });
 
-Deno.test("landingHref: a mid-message #ref does NOT mislink -> commit page", () => {
+test("landingHref: a mid-message #ref does NOT mislink -> commit page", () => {
   assertEquals(landingHref("fix: follow-ups from #4401 review", "sha1", "o/r"), "https://github.com/o/r/commit/sha1");
 });
 
-Deno.test("landingHref: parses only the first line", () => {
+test("landingHref: parses only the first line", () => {
   assertEquals(landingHref("title (#7)\n\nbody mentioning (#999)", "sha", "o/r"), "https://github.com/o/r/pull/7");
 });
 
-Deno.test("concDot: only genuine failures are red", () => {
+test("concDot: only genuine failures are red", () => {
   assertEquals(concDot("success", 1), "green");
   assertEquals(concDot("success", 2), "gray"); // passed only on retry
   assertEquals(concDot("failure", 1), "red");
@@ -58,7 +59,7 @@ Deno.test("concDot: only genuine failures are red", () => {
   assertEquals(concDot(null, 1), "gray");
 });
 
-Deno.test("compactSpan: minutes, then hours, then days", () => {
+test("compactSpan: minutes, then hours, then days", () => {
   assertEquals(compactSpan(0), "0m");
   assertEquals(compactSpan(12 * 60_000), "12m");
   assertEquals(compactSpan(3_600_000), "1h");
@@ -68,7 +69,7 @@ Deno.test("compactSpan: minutes, then hours, then days", () => {
   assertEquals(compactSpan(-5_000), "0m");
 });
 
-Deno.test("groupDigits: separates thousands, rounding first", () => {
+test("groupDigits: separates thousands, rounding first", () => {
   assertEquals(groupDigits(78101), "78,101");
   assertEquals(groupDigits(999), "999");
   assertEquals(groupDigits(1000), "1,000");
@@ -77,7 +78,7 @@ Deno.test("groupDigits: separates thousands, rounding first", () => {
   assertEquals(groupDigits(30.6), "31");
 });
 
-Deno.test("ciDurationSub: counts the runs in the time window or the most recent ones", () => {
+test("ciDurationSub: counts the runs in the time window or the most recent ones", () => {
   assertEquals(ciDurationSub(25, 6), "median of 25 PR runs in 6h");
   assertEquals(ciDurationSub(1, 6), "median of 1 PR run in 6h");
   assertEquals(ciDurationSub(20), "median of last 20 PR runs");
@@ -86,13 +87,13 @@ Deno.test("ciDurationSub: counts the runs in the time window or the most recent 
   assertEquals(ciDurationSub(0, 6), "no passing PR runs");
 });
 
-Deno.test("daysLabel: consistent 'x days' text", () => {
+test("daysLabel: consistent 'x days' text", () => {
   assertEquals(daysLabel(5), "5 days");
   assertEquals(daysLabel(1), "1 day");
   assertEquals(daysLabel(0), "<1 day");
 });
 
-Deno.test("humanSpan: days, else hours, else minutes", () => {
+test("humanSpan: days, else hours, else minutes", () => {
   assertEquals(humanSpan(5 * 86_400_000), "5 days"); // >= 1 day -> daysLabel
   assertEquals(humanSpan(86_400_000), "1 day");
   assertEquals(humanSpan(8 * 3_600_000), "8 hours"); // sub-day -> hours
@@ -101,13 +102,13 @@ Deno.test("humanSpan: days, else hours, else minutes", () => {
   assertEquals(humanSpan(0), "1 min");
 });
 
-Deno.test("humanDur", () => {
+test("humanDur", () => {
   assertEquals(humanDur(5 * 60_000), "5m");
   assertEquals(humanDur(90 * 60_000), "1h 30m");
   assertEquals(humanDur(26 * 3_600_000), "1d 2h");
 });
 
-Deno.test("clampInt: clamps to bounds and falls back on empty/invalid", () => {
+test("clampInt: clamps to bounds and falls back on empty/invalid", () => {
   assertEquals(clampInt("50", 60, 10, 150), 50);
   assertEquals(clampInt("500", 60, 10, 150), 150);
   assertEquals(clampInt("5", 60, 10, 150), 10);
@@ -116,7 +117,7 @@ Deno.test("clampInt: clamps to bounds and falls back on empty/invalid", () => {
   assertEquals(clampInt("abc", 60, 10, 150), 60);
 });
 
-Deno.test("friendlyError: raw errors become short calm phrases", () => {
+test("friendlyError: raw errors become short calm phrases", () => {
   assertEquals(
     friendlyError("GitHub API repos/o/r/actions/workflows/deno.yml/runs failed: error connecting to api"),
     "source unreachable",
@@ -129,7 +130,7 @@ Deno.test("friendlyError: raw errors become short calm phrases", () => {
   assertEquals(friendlyError("something weird"), "temporarily unavailable");
 });
 
-Deno.test("budgetStatus / readBudget: good ≤ budget, warn ≤ 1.25×, bad beyond; unset never alarms", () => {
+test("budgetStatus / readBudget: good ≤ budget, warn ≤ 1.25×, bad beyond; unset never alarms", () => {
   assertEquals(budgetStatus(50, 100), "good");
   assertEquals(budgetStatus(100, 100), "good");
   assertEquals(budgetStatus(125, 100), "warn");
@@ -141,7 +142,7 @@ Deno.test("budgetStatus / readBudget: good ≤ budget, warn ≤ 1.25×, bad beyo
   assertEquals(readBudget("100"), 100);
 });
 
-Deno.test("usd: whole dollars, or cents under a dollar", () => {
+test("usd: whole dollars, or cents under a dollar", () => {
   assertEquals(usd(0), "$0");
   assertEquals(usd(0.45), "45¢");
   assertEquals(usd(0.05), "5¢");
@@ -152,11 +153,11 @@ Deno.test("usd: whole dollars, or cents under a dollar", () => {
   assertEquals(usd(1955.4), "$1955");
 });
 
-Deno.test("escapeHtml", () => {
+test("escapeHtml", () => {
   assertEquals(escapeHtml(`<a href="x">&`), "&lt;a href=&quot;x&quot;&gt;&amp;");
 });
 
-Deno.test("sparkline: highlight overdraws the trailing count on the same scale", () => {
+test("sparkline: highlight overdraws the trailing count on the same scale", () => {
   const vals = Array.from({ length: 50 }, (_, i) => i); // strictly increasing
   const svg = sparkline(vals, "#111", { count: 10, color: "#eee" });
   const lines = [...svg.matchAll(/<polyline points="([^"]*)" fill="none" stroke="([^"]*)"/g)];
@@ -171,7 +172,7 @@ Deno.test("sparkline: highlight overdraws the trailing count on the same scale",
   assertEquals(tail[0], base[base.length - 10]); // starts at the 10th-from-last point
 });
 
-Deno.test("sparkline: scale normalizes to the recent runs, clipping old spikes", () => {
+test("sparkline: scale normalizes to the recent runs, clipping old spikes", () => {
   const y = (pt: string) => parseFloat(pt.split(",")[1]);
   const ysOf = (svg: string) => svg.match(/<polyline points="([^"]*)"/)![1].trim().split(" ").map(y);
   // One huge old run, then four modest recent runs.
@@ -184,7 +185,7 @@ Deno.test("sparkline: scale normalizes to the recent runs, clipping old spikes",
   assertEquals(clean.slice(1), recent);
 });
 
-Deno.test("sparkline: a trimmed scale ignores ranked extremes without reordering points", () => {
+test("sparkline: a trimmed scale ignores ranked extremes without reordering points", () => {
   const values = [101, 10, 0, 25, 100, 11, 1, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
   const scale = { trim: 2, minValues: 20 };
   const svg = sparkline(values, "#111", undefined, undefined, undefined, scale);
@@ -203,7 +204,7 @@ Deno.test("sparkline: a trimmed scale ignores ranked extremes without reordering
   );
 });
 
-Deno.test("sparkline: highlight scaleAll keeps the whole series in view, still drawing the tail", () => {
+test("sparkline: highlight scaleAll keeps the whole series in view, still drawing the tail", () => {
   const y = (pt: string) => parseFloat(pt.split(",")[1]);
   const polys = (svg: string) => [...svg.matchAll(/<polyline points="([^"]*)"/g)].map((m) => m[1].trim().split(" ").map(y));
   // Same one-huge-old / modest-recent data, but scaleAll scales to every point.
@@ -216,7 +217,7 @@ Deno.test("sparkline: highlight scaleAll keeps the whole series in view, still d
   assertEquals(tail.length, 4); // the tail still covers the trailing 4 points
 });
 
-Deno.test("durationTag renders an auto-formatted span; sparkline itself has no label", () => {
+test("durationTag renders an auto-formatted span; sparkline itself has no label", () => {
   const tag = durationTag(25 * 86_400_000);
   assert(tag.includes(">25 days</span>"), "the ms duration is auto-formatted to '25 days'");
   assert(/position:absolute[^"]*left:1px[^"]*bottom:0/.test(tag), "pinned to the bottom-left corner");
@@ -227,7 +228,7 @@ Deno.test("durationTag renders an auto-formatted span; sparkline itself has no l
   assert([...svg.matchAll(/<polyline/g)].length === 2, "the line + highlight are still drawn");
 });
 
-Deno.test("sparklines share one rendered height", () => {
+test("sparklines share one rendered height", () => {
   const single = sparkline([1, 2], "#111");
   const multi = multiSparkline([{ vals: [1, 2], color: "#111" }]);
   const labeled = multiSparkline([{
@@ -242,7 +243,7 @@ Deno.test("sparklines share one rendered height", () => {
   assert(labeled.includes("height:28px"));
 });
 
-Deno.test("sparkline: fades to base color at the highlight edge", () => {
+test("sparkline: fades to base color at the highlight edge", () => {
   const svg = sparkline(
     [30, 20, 10, 11, 12, 13],
     "#727882",
@@ -281,7 +282,7 @@ Deno.test("sparkline: fades to base color at the highlight edge", () => {
   );
 });
 
-Deno.test("sparkline: fade handoff follows the shared x axis", () => {
+test("sparkline: fade handoff follows the shared x axis", () => {
   const partial = sparkline(
     [30, 20, 10, 11, 12, 13],
     "#727882",
@@ -311,7 +312,7 @@ Deno.test("sparkline: fade handoff follows the shared x axis", () => {
   );
 });
 
-Deno.test("multiSparkline: overlaid lines on one shared scale; < 2 points is empty", () => {
+test("multiSparkline: overlaid lines on one shared scale; < 2 points is empty", () => {
   const svg = multiSparkline([
     { vals: [1, 2, 3], color: "#0a0" },
     { vals: [4, 5, 6], color: "#00a" },
@@ -337,7 +338,7 @@ Deno.test("multiSparkline: overlaid lines on one shared scale; < 2 points is emp
   assert(/right:0[^"]*color:#00a[^"]*">6<\/span>/.test(labeled), "visitor label at right, in the line color");
 });
 
-Deno.test("multiSparkline: a trimmed shared scale pools series and centers a flat interior", () => {
+test("multiSparkline: a trimmed shared scale pools series and centers a flat interior", () => {
   const scale = { trim: 2, minValues: 20 };
   const lines = [
     { vals: [101, 10, 0, 25, 100, 11, 1, 12, 13, 14], color: "#0a0" },
@@ -369,7 +370,7 @@ Deno.test("multiSparkline: a trimmed shared scale pools series and centers a fla
   assertEquals(flatYs.filter((y) => y === 17).length, 16);
 });
 
-Deno.test("multiSparkline: a highlighted scale lets older extremes leave the chart", () => {
+test("multiSparkline: a highlighted scale lets older extremes leave the chart", () => {
   const lines = [
     { vals: [100, 1, 2, 3], color: "#0a0" },
     { vals: [-50, 4, 5, 6], color: "#00a" },
@@ -410,7 +411,7 @@ Deno.test("multiSparkline: a highlighted scale lets older extremes leave the cha
   );
 });
 
-Deno.test("multiSparkline: fades each line from its transparent color", () => {
+test("multiSparkline: fades each line from its transparent color", () => {
   const svg = multiSparkline(
     [
       { vals: [1, 2, 3], color: "#0a0", label: "3" },
@@ -443,7 +444,7 @@ Deno.test("multiSparkline: fades each line from its transparent color", () => {
   );
 });
 
-Deno.test("multiSparkline: overlapping end-labels are spread apart, not stacked", () => {
+test("multiSparkline: overlapping end-labels are spread apart, not stacked", () => {
   // Both lines end at the same value -> same natural label height -> must separate.
   const svg = multiSparkline([
     { vals: [5, 5, 0], color: "#0a0", label: "$100" },
@@ -474,7 +475,7 @@ Deno.test("multiSparkline: overlapping end-labels are spread apart, not stacked"
   );
 });
 
-Deno.test("lighten: blends a color toward white; non-hex is left alone", () => {
+test("lighten: blends a color toward white; non-hex is left alone", () => {
   assertEquals(lighten("#000000", 0.5), "#808080"); // halfway to white
   assertEquals(lighten("#ffffff", 0.5), "#ffffff"); // already white
   assertEquals(lighten("#000", 0.5), "#808080"); // 3-digit shorthand expands
@@ -484,7 +485,7 @@ Deno.test("lighten: blends a color toward white; non-hex is left alone", () => {
   assert(parseInt(lit.slice(1, 3), 16) > 0x10, "each channel moves toward white");
 });
 
-Deno.test("multiSparkline: highlight redraws the trailing slice in a lighter tint", () => {
+test("multiSparkline: highlight redraws the trailing slice in a lighter tint", () => {
   const svg = multiSparkline(
     [{ vals: [1, 2, 3, 4, 5], color: "#10a37f", label: "5" }],
     { highlight: { count: 2 }, fade: true },
@@ -503,7 +504,7 @@ Deno.test("multiSparkline: highlight redraws the trailing slice in a lighter tin
   assertEquals([...plain.matchAll(/<polyline/g)].length, 1);
 });
 
-Deno.test("multiSparkline: a series can supply a theme-aware highlight", () => {
+test("multiSparkline: a series can supply a theme-aware highlight", () => {
   const svg = multiSparkline(
     [{
       vals: [1, 2, 3],
@@ -515,7 +516,7 @@ Deno.test("multiSparkline: a series can supply a theme-aware highlight", () => {
   assert(svg.includes('stroke="light-dark(#063e30,#a0dcca)"'));
 });
 
-Deno.test("a slice covering the whole series leaves the line in its own color", () => {
+test("a slice covering the whole series leaves the line in its own color", () => {
   // A window at least as long as the series marks nothing off, so drawing it would
   // repaint the whole line in the tint and lose the line's own color.
   const whole = multiSparkline(
@@ -556,7 +557,7 @@ Deno.test("a slice covering the whole series leaves the line in its own color", 
   );
 });
 
-Deno.test("multiSparkline: every base is drawn before any tint", () => {
+test("multiSparkline: every base is drawn before any tint", () => {
   // Interleaving base and tint per series lets a later line's base paint over an
   // earlier line's tint wherever the two cross inside the window.
   const svg = multiSparkline([
@@ -567,7 +568,7 @@ Deno.test("multiSparkline: every base is drawn before any tint", () => {
   assertEquals(strokes, ["#10a37f", "#d97757", lighten("#10a37f"), lighten("#d97757")]);
 });
 
-Deno.test("multiSparkline: shared axes and per-line highlights", () => {
+test("multiSparkline: shared axes and per-line highlights", () => {
   const svg = multiSparkline([
     {
       vals: [1, 2, 3],
@@ -623,7 +624,7 @@ Deno.test("multiSparkline: shared axes and per-line highlights", () => {
   );
 });
 
-Deno.test("multiSparkline: one-point markers are explicit", () => {
+test("multiSparkline: one-point markers are explicit", () => {
   const svg = multiSparkline([
     {
       vals: [5],
@@ -640,7 +641,7 @@ Deno.test("multiSparkline: one-point markers are explicit", () => {
   assertEquals([...svg.matchAll(/<polyline/g)].length, 0);
 });
 
-Deno.test("multiSparkline: large horizontal gaps split paths without losing points", () => {
+test("multiSparkline: large horizontal gaps split paths without losing points", () => {
   const svg = multiSparkline([{
     vals: [1, 2, 3, 4, 5],
     color: "#d97757",
@@ -688,7 +689,7 @@ Deno.test("multiSparkline: large horizontal gaps split paths without losing poin
   assertEquals([...offsetBoundary.matchAll(/<circle/g)].length, 0);
 });
 
-Deno.test("multiSparkline: disconnected paths share one chart-axis fade", () => {
+test("multiSparkline: disconnected paths share one chart-axis fade", () => {
   const svg = multiSparkline([{
     vals: [1, 2, 3, 4],
     color: "#d97757",
@@ -715,7 +716,7 @@ Deno.test("multiSparkline: disconnected paths share one chart-axis fade", () => 
   );
 });
 
-Deno.test("multiSparkline: isolated markers use the tint only inside the highlighted tail", () => {
+test("multiSparkline: isolated markers use the tint only inside the highlighted tail", () => {
   const color = "#d97757";
   const svg = multiSparkline([{
     vals: [1, 2, 3, 4, 5, 6],
@@ -731,7 +732,7 @@ Deno.test("multiSparkline: isolated markers use the tint only inside the highlig
   assertEquals(fills, [color, lighten(color)]);
 });
 
-Deno.test("sparkline: xs place points on a shared axis", () => {
+test("sparkline: xs place points on a shared axis", () => {
   const coords = (svg: string) => svg.match(/<polyline points="([^"]*)"/)![1].trim().split(" ");
   const x0 = (p: string[]) => parseFloat(p[0].split(",")[0]);
   const xLast = (p: string[]) => parseFloat(p[p.length - 1].split(",")[0]);
@@ -747,7 +748,7 @@ Deno.test("sparkline: xs place points on a shared axis", () => {
   assertEquals(x0(coords(sparkline([1, 2, 3], "#111"))), 0);
 });
 
-Deno.test("thin: caps length, keeps the first and last, evenly spaced", () => {
+test("thin: caps length, keeps the first and last, evenly spaced", () => {
   assertEquals(thin([1, 2, 3], 5), [1, 2, 3]); // already within max -> unchanged
   const t = thin(Array.from({ length: 1000 }, (_, i) => i), 100);
   assertEquals(t.length, 100);
@@ -757,7 +758,7 @@ Deno.test("thin: caps length, keeps the first and last, evenly spaced", () => {
   assert(t.every((v, i) => i === 0 || v > t[i - 1]), "evenly spaced, no repeats");
 });
 
-Deno.test("strip: each cell links to that run's CI results in a new tab", () => {
+test("strip: each cell links to that run's CI results in a new tab", () => {
   const html = strip([
     { outcome: "green", href: "https://github.com/o/r/actions/runs/1" },
     { outcome: "red", href: "https://github.com/o/r/actions/runs/2" },
@@ -773,14 +774,14 @@ Deno.test("strip: each cell links to that run's CI results in a new tab", () => 
   assertEquals(strip([]), ""); // empty -> nothing
 });
 
-Deno.test("sparkline: no highlight is a single line; a short series is empty", () => {
+test("sparkline: no highlight is a single line; a short series is empty", () => {
   assertEquals([...sparkline([1, 2, 3], "#111").matchAll(/<polyline/g)].length, 1);
   // A degenerate highlight (< 2 points) adds no second line.
   assertEquals([...sparkline([1, 2, 3], "#111", { count: 1, color: "#eee" }).matchAll(/<polyline/g)].length, 1);
   assertEquals(sparkline([5], "#111"), "");
 });
 
-Deno.test("median: an even count takes the mean of the two middle values", () => {
+test("median: an even count takes the mean of the two middle values", () => {
   // The ci-duration window is 20 runs, so even is the normal case. Taking the
   // upper middle alone reports a value no sample had, and always the higher of
   // the pair.
@@ -793,13 +794,13 @@ Deno.test("median: an even count takes the mean of the two middle values", () =>
   assertEquals(median(twenty), 10.5); // not 11
 });
 
-Deno.test("median: sorts its input, and leaves the caller's array alone", () => {
+test("median: sorts its input, and leaves the caller's array alone", () => {
   const values = [9, 1, 5];
   assertEquals(median(values), 5);
   assertEquals(values, [9, 1, 5]);
 });
 
-Deno.test("jsonFromZip: reads a stored json member, ignoring a text member beside it", async () => {
+test("jsonFromZip: reads a stored json member, ignoring a text member beside it", async () => {
   const zip = makeZip([
     { name: "notes.txt", method: 0, data: bytes("not the report") },
     { name: "results.json", method: 0, data: bytes(`{"benches":[]}`) },
@@ -807,12 +808,12 @@ Deno.test("jsonFromZip: reads a stored json member, ignoring a text member besid
   assertEquals(await jsonFromZip(zip), `{"benches":[]}`);
 });
 
-Deno.test("jsonFromZip: inflates a deflated json member", async () => {
+test("jsonFromZip: inflates a deflated json member", async () => {
   const json = `{"metrics":[{"name":"coverage-debt: tasks uncovered lines"}]}`;
   assertEquals(await jsonFromZip(await artifactZip("perf-metrics.json", json)), json);
 });
 
-Deno.test("jsonFromZip: a zip with no json member -> null", async () => {
+test("jsonFromZip: a zip with no json member -> null", async () => {
   const zip = makeZip([{
     name: "notes.txt",
     method: 0,
@@ -821,17 +822,17 @@ Deno.test("jsonFromZip: a zip with no json member -> null", async () => {
   assertEquals(await jsonFromZip(zip), null);
 });
 
-Deno.test("jsonFromZip: bytes with no end-of-central-directory record -> null", async () => {
+test("jsonFromZip: bytes with no end-of-central-directory record -> null", async () => {
   assertEquals(await jsonFromZip(new Uint8Array(10)), null); // shorter than the record itself
   assertEquals(await jsonFromZip(new Uint8Array(200)), null);
 });
 
-Deno.test("jsonFromZip: a central directory shorter than its own count stops instead of reading past it", async () => {
+test("jsonFromZip: a central directory shorter than its own count stops instead of reading past it", async () => {
   const zip = makeZip([{ name: "notes.txt", method: 0, data: bytes("x") }], 2);
   assertEquals(await jsonFromZip(zip), null);
 });
 
-Deno.test("jsonFromZip: a member whose local header the central directory does not point at -> null", async () => {
+test("jsonFromZip: a member whose local header the central directory does not point at -> null", async () => {
   const zip = makeZip([{
     name: "results.json",
     method: 0,
@@ -841,7 +842,7 @@ Deno.test("jsonFromZip: a member whose local header the central directory does n
   assertEquals(await jsonFromZip(zip), null);
 });
 
-Deno.test("jsonFromZip: a compression method we cannot read -> null, not garbage", async () => {
+test("jsonFromZip: a compression method we cannot read -> null, not garbage", async () => {
   const zip = makeZip([{
     name: "results.json",
     method: 99,

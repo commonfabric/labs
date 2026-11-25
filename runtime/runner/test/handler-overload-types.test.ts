@@ -20,7 +20,6 @@
  * silently. These assertions fail if that happens.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type {
   Cell,
@@ -29,6 +28,7 @@ import type {
   Stream,
 } from "@commonfabric/api";
 import type { Equal, MustBeTrue, Same } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import { handler } from "../src/builder/module.ts";
 
 interface AddTopic {

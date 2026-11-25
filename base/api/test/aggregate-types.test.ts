@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type {
   Cell,
   JSONObject,
   PatternFactory,
   Writable,
 } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function checkReceivers(
   numbers: Cell<number[]>,

@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { encodePointer, prefixPointers } from "../../v2/path.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("prefixPointers()", () => {
   it("returns the pointer of each prefix, the root's first and the path's own last", () => {

@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { ChangeSet } from "@codemirror/state";
 
@@ -23,6 +22,7 @@ import {
 } from "../v2/operation-codec.ts";
 import { Server, SessionRegistry } from "../v2/server.ts";
 import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-watch-remove-release-space";
 const OTHER_SPACE = "did:key:z6Mk-watch-remove-release-other";

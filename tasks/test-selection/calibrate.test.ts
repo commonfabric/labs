@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { TestRecord } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import { maxOf } from "@commonfabric/collections/math";
 import {
   type BatchObservation,

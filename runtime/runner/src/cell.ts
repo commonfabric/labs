@@ -113,6 +113,7 @@ import {
   nextMaintenanceRevision,
   projectMember,
 } from "./builtins/indexed-collection/maintenance.ts";
+import { listIndexedCollection } from "./builtins/indexed-collection/registry.ts";
 import { encodeCellToSigilString } from "./builtins/sqlite/cf-link-codec.ts";
 import { sqliteQueryNodeFactory } from "./builtins/sqlite/query-node.ts";
 import { checkSqliteRowLabelWrite } from "./builtins/sqlite/row-label-write.ts";
@@ -2472,6 +2473,18 @@ export class CellImpl<T extends FabricValue>
     }
     const rows = projectMember(this.#tx, kind, descriptor, cell);
     addMemberRows(this, descriptor, rows);
+    // A runtime that maintains the collections of spaces whose declaring
+    // piece it never loaded finds this one in the registry, so the commit
+    // that gives the collection a member lists it.
+    const value: unknown = this.getRaw({ lastNode: "value" });
+    if (isSqliteDbRef(value)) {
+      listIndexedCollection(
+        this.#runtime,
+        this.#tx,
+        this.withTx(this.#tx).resolveAsCell(),
+        value.id,
+      );
+    }
     // A piece the calling handler has just made is set up only if something
     // the handler writes refers to it, and a row is not such a write. The
     // handle is written by every `exec()` already, so it carries the
@@ -3611,8 +3624,14 @@ export class CellImpl<T extends FabricValue>
       resolvedLink,
       resolvedLink.schema ?? this.schema,
     );
+    // The destination snapshot decides only whether each candidate is
+    // appended, and where, as `push()`'s does: what is written is the
+    // caller's candidates, and nothing returns to the caller. So it joins
+    // neither observed labels nor conflict preconditions. Resolving an
+    // existing element's link to compare it reads that element's document
+    // as an ordinary observation, and explicit handler reads retain theirs.
     let currentValue = this.#tx.readValueOrThrow(resolvedLink, {
-      meta: mergeableOpRead,
+      meta: Object.freeze({ ...mergeableOpRead, ...writeDestinationRead }),
     });
     const cause = this.#frame?.cause;
     const stored = Array.isArray(currentValue);

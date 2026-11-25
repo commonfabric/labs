@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { test } from "@commonfabric/test-support/test";
 import {
   commitSubjects,
   findCommitMessages,
@@ -12,7 +13,7 @@ import {
   shellQuote,
 } from "./view-commitmsg-test-helpers.ts";
 
-Deno.test("findCommitMessages: a Merge header line is skipped", () => {
+test("findCommitMessages: a Merge header line is skipped", () => {
   const lines = [
     "commit abcdef1234567",
     "Merge: 111 222",
@@ -28,12 +29,12 @@ Deno.test("findCommitMessages: a Merge header line is skipped", () => {
   assertEquals(msgs[0].end, 5);
 });
 
-Deno.test("commitSubjects: a commit with no discernible subject is absent", () => {
+test("commitSubjects: a commit with no discernible subject is absent", () => {
   const lines = ["commit deadbeef", "Author: A", "", "diff --git a/f b/f"];
   assertEquals(commitSubjects(lines).has("deadbeef"), false);
 });
 
-Deno.test({
+test({
   name: "realGit: preserves an explicitly empty core.hooksPath",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -70,7 +71,7 @@ Deno.test({
   },
 });
 
-Deno.test("realGit: amends reftable commits in a linked worktree", async () => {
+test("realGit: amends reftable commits in a linked worktree", async () => {
   const parent = await Deno.makeTempDir();
   const root = `${parent}/repository`;
   const linked = `${parent}/linked`;
@@ -104,7 +105,7 @@ Deno.test("realGit: amends reftable commits in a linked worktree", async () => {
   }
 });
 
-Deno.test("realGit: amends selected files and preserves unrelated staged changes", async () => {
+test("realGit: amends selected files and preserves unrelated staged changes", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -145,7 +146,7 @@ Deno.test("realGit: amends selected files and preserves unrelated staged changes
   }
 });
 
-Deno.test("realGit: preserves assume-unchanged and skip-worktree index flags", async () => {
+test("realGit: preserves assume-unchanged and skip-worktree index flags", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -178,7 +179,7 @@ Deno.test("realGit: preserves assume-unchanged and skip-worktree index flags", a
   }
 });
 
-Deno.test({
+test({
   name: "realGit: reflog ownership distinguishes a hook's replacement commit",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -256,7 +257,7 @@ Deno.test({
   },
 });
 
-Deno.test("realGit: rejects both multi-stage and lone unmerged index entries", async () => {
+test("realGit: rejects both multi-stage and lone unmerged index entries", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -310,7 +311,7 @@ Deno.test("realGit: rejects both multi-stage and lone unmerged index entries", a
   }
 });
 
-Deno.test({
+test({
   name:
     "realGit: follows a marked journal chain when rolling back nested commits",
   ignore: Deno.build.os === "windows",

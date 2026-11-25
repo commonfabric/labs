@@ -2,9 +2,9 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFToast, CFToastProvider } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A toast, open or not, as a page would add it to the provider. */
 function toast(open: boolean): CFToast {

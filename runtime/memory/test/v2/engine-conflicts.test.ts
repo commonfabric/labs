@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
 import {
@@ -27,6 +26,12 @@ import {
   read,
 } from "../../v2/engine.ts";
 import { encodePointer } from "../../v2/path.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** Returns a path with a hole in it, which the wire decodes as encoded. */
 const holeyPath = (): DocumentPath => {

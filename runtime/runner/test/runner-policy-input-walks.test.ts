@@ -5,13 +5,18 @@
  * which refuses a `FabricInstance` in the argument it projects.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import type { FabricValue } from "@commonfabric/data-model";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { JSONSchema, Pattern } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";

@@ -10,14 +10,9 @@
  * does, so a carriage return before one is part of the line.
  */
 
-import type { Document, Line, StructureNode, TokenClass } from "../../model.ts";
-import { flattenStructure } from "../../model.ts";
+import type { Document, Line, TokenClass } from "../../model.ts";
 import { linesFromClasses } from "../classes.ts";
-import {
-  type LocatedEntry,
-  structureNode,
-  structureSource,
-} from "../structure.ts";
+import { type LocatedEntry, scannedDocument } from "../structure.ts";
 
 const SPACE = /[ \t\f]*/y;
 const LINE_END = /\r?\n/y;
@@ -125,15 +120,5 @@ export function propertiesLines(text: string): Line[] {
 /** Color `text` and list the keys it sets. */
 export function propertiesDocument(text: string): Document {
   const scanner = new Scanner(text);
-  const source = structureSource(text);
-  const structure: StructureNode[] = scanner.entries.map((entry) =>
-    structureNode(source, entry, 0, () => [])
-  );
-  return {
-    text,
-    lines: linesFromClasses(text, scanner.classes, source.lineStarts),
-    structure,
-    flatStructure: flattenStructure(structure),
-    definitions: source.definitions,
-  };
+  return scannedDocument(text, scanner.classes, scanner.entries);
 }

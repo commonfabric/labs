@@ -1089,10 +1089,10 @@ export const DEFAULT_CFC_DECOMPOSED_ENVELOPES: CfcDecomposedEnvelopes = false;
  * Whether the envelope persist path stores version-2 envelopes, whose
  * labels above the inline limit are references to content-addressed label
  * documents (`docs/specs/content-addressed-cfc-labels.md`). Off stores
- * version 1, every label inline. Reading resolves either version. Ships
- * behind a flag because a reader that predates version 2 fails closed on
- * it, which is correct and also unusable: every deployed reader must
- * interpret version 2 before any space sees one.
+ * version 1, every label inline. Reading resolves either version. A
+ * `Runtime` writes version 2 unless told otherwise
+ * (`RUNTIME_CFC_DIAL_DEFAULTS`); the constant below is the floor of a
+ * transaction no runtime configured, which keeps version 1.
  */
 export type CfcContentAddressedLabels = boolean;
 

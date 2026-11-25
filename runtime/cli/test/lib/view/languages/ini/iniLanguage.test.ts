@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -7,6 +6,7 @@ import {
 } from "../../../../../lib/view/languages/language.ts";
 import { iniLanguage } from "../../../../../lib/view/languages/ini/language.ts";
 import type { Line, TokenClass } from "../../../../../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The source each colored line reconstructs. */
 function verbatim(lines: readonly Line[]): string {
@@ -107,6 +107,18 @@ describe("iniLanguage", () => {
     expect(languageForSource("a.conf", "[1, 2]").id).toBe("plain-text");
     expect(languageForFile("images/certs/server.conf").id).toBe("plain-text");
     expect(languageForSource("a.cfg", "\f; note\r\n\f[a]\n").id).toBe("ini");
+  });
+
+  it("selects a `.cfg` file from behind millions of blank and comment lines", () => {
+    const blank = "\n".repeat(4_000_000);
+    const comments = "# c\n".repeat(1_000_000);
+    expect(languageForSource("a.cfg", `${blank}${comments}[a]\n`).id)
+      .toBe("ini");
+    expect(languageForSource("a.cfg", `${comments}${blank}key=1\n`).id)
+      .toBe("plain-text");
+    expect(languageForSource("a.cfg", `${comments}${blank}`).id).toBe(
+      "plain-text",
+    );
   });
 
   it("colors comments, sections, keys, separators, and values", () => {

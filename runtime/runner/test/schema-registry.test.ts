@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
@@ -19,6 +18,7 @@ import {
   SchemaDocumentHashMismatchError,
 } from "../src/schema-registry.ts";
 import { getLogger } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   type DecomposedSchema,
   decomposeSchema,

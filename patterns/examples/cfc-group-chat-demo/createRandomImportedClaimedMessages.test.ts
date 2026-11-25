@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   createRandomImportedClaimedMessages,
   type ParticipantClaim,
   type PlainChatMessage,
 } from "./logic.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A random source that answers `values` in order. */
 const scripted = (...values: number[]) => () => {

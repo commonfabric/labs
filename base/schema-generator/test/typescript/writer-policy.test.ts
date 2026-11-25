@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -10,6 +9,7 @@ import {
   writerPolicyHeldWithin,
 } from "../../src/typescript/writer-policy.ts";
 import { createTestProgram } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const DECLARATIONS = `
   type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };

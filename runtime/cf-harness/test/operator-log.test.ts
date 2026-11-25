@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { escapeForOperatorLog } from "../src/operator-log.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The `\uXXXX` escape of a code point of the Basic Multilingual Plane. */
 const escapeOf = (codePoint: number): string =>

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import { expect } from "@std/expect";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
@@ -19,6 +18,7 @@ import {
 } from "../../console/health-probes.ts";
 import type { RunscSandboxConfig } from "../../src/sandbox/runsc.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import { join } from "@std/path";
 import { ConsoleHealth } from "../../console/health.ts";
 

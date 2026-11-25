@@ -5,7 +5,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { ValidationError } from "@cliffy/command";
 
@@ -21,6 +20,7 @@ import {
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   type AgentRunnerCommandConfig,

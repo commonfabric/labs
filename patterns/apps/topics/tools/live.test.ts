@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { followBoard } from "./live.ts";
@@ -13,6 +12,12 @@ import {
   link,
   SPACE,
 } from "./board-fixture.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("followBoard()", () => {
   let board: BoardServer;

@@ -2581,7 +2581,7 @@ PR):
   dispatch-only deferral, the sqlite-query LOCAL exemption, and
   drop-on-park. Pins: `executor-outbox-budget.test.ts` (cap + FIFO
   drain, local exemption, token pacing, close-drops — real-clock,
-  listed in the preload). NEW implementation surfaces below spec
+  through `useRealClock()`). NEW implementation surfaces below spec
   granularity, FLAGGED in the Phase-6 PR rather than silently
   normative: (i) the LOCAL_EFFECT_KINDS exemption set (sqlite-query
   is the one shipped non-egress effect kind); (ii) the 16-outstanding
@@ -3094,9 +3094,12 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   service-nowhere / commit-#1-is-the-ACL shape).
   (c) **the READ posture** — the OWNER blanket is RETIRED:
   `memoryServiceDidsFor` became `memoryAclPrincipalsFor`
-  (`serviceDids` = the operator list verbatim on BOTH arms — the
-  absolute pin "under ON the process identity is not an OWNER-class
-  service DID by default" is in `server-execution-flag.test.ts`;
+  (`serviceDids` = ON: the operator list verbatim — the absolute pin
+  "under ON the process identity is not an OWNER-class service DID by
+  default" is in `server-execution-flag.test.ts`; OFF: the operator list
+  with the process identity added, for the loopback sessions of the
+  indexed-collection host, which is the OFF arm's one write path into
+  users' spaces ([indexed collections](../../features/indexed-collections.md#which-runtime-maintains));
   `delegatingDids` = ON: the process identity, OFF: empty). A serving
   manager's session mounts carry `actingAs: "space-owner"` (signed
   into the session.open descriptor); the memory server admits the
@@ -3334,14 +3337,16 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   carried actor counts as that actor's demand in the foreign space. The
   demand names the actor and is not the reading space's own, since a
   per-actor derivation of the foreign space runs only for a demand that
-  names its actor. BUILT for a loop that keeps the currency index, where
-  one memory server holds both spaces (serving-loop.md §3b;
+  names its actor. BUILT for a loop that keeps the currency index in the
+  `record` or `start-upstream` mode, where one memory server holds both
+  spaces (serving-loop.md §3b;
   `Server.setCarriedDemand`, `SpaceServer`'s `#syncCarriedDemand`; pinned
   in `runtime/memory/test/v2-server-carried-demand.test.ts` and, for a
   foreign per-actor instance read under two actors who hold no session
   in the foreign space, in
   `runtime/runner/test/executor/space-server-carried-demand.test.ts`).
-  Owed: a loop that keeps no index, and a foreign space another memory
+  Owed: a loop that keeps no index or keeps it in the `skip` mode, which
+  is the toolshed default, and a foreign space another memory
   server holds (`docs/plans/stored-output-currency-across-spaces.md`,
   "Demand across spaces", step 5). Trigger for both: the first pattern whose
   correctness rests on a revocation taking effect without a re-pull, or
@@ -4139,6 +4144,36 @@ Delta 2026-11-01 — stage L (the lease in memory,
   stops a real worker's thread holding a lease and serves the space from a
   fresh worker; a stand-in cannot show that nothing waits for a stalled thread's
   teardown, which Deno does not finish.
+- §2's run beacon: `executor/run-beacon.test.ts` (a beacon marked around a
+  body, cleared after a throw, numbering an action once and a served handler's
+  run for an event each time, marking the outermost of nested runs, counting
+  the reads the read sites record, a reading discarded when its run ended and
+  another started while it read, the numbers of collected actions posted
+  together once per turn, through a helper that collects with `--expose-gc`
+  too, and a runtime's scheduler marking a derivation's run and a handler's);
+  `executor/serving-thread.test.ts` (the
+  buffer shared with both kinds of thread, and the post a run makes taken
+  while its body holds the thread); `executor/serving-worker-recovery.test.ts`
+  ("reading the worker's run beacon" under "the watchdog", over stand-in
+  workers and the fake clock: the run on `workers.running` with its checks,
+  the kill naming the run, the event of a handler's run handed to the space's
+  next worker ahead of its other notices and to no later one, a number the
+  worker forgot dropped from what the pool keeps, and no event
+  failed for a derivation's run or no run; under "a worker whose heap reaches
+  its limit", the event of the run a thread ran out of memory in failed, and
+  none for a heap a heartbeat reported).
+  `executor/space-server-event-drain-arms.test.ts` ("writes the error of an
+  event its pool failed only once every event that arrived before it has its
+  consequence") holds that error behind an earlier event whose served copy
+  deferred, and its next case fails only the one of two pending entries that
+  carry one event id. `executor/host.test.ts` ("failEvent()") keeps an
+  event's record for a later tenure and no empty map past a tenure, and
+  `executor-serving-loop.test.ts` drops a deleted space's records when it
+  refuses the space. `serving-worker.test.ts` ("writes the
+  error as the consequence of the event whose handler ran past the watchdog
+  …") runs a handler that never returns in a real worker: the sender's commit
+  callback reads the error naming the watchdog, and no second worker is
+  ended.
 - §1's Workers: `executor/ServingWorkerPool.test.ts` (stand-in workers and a
   stand-in memory server): a space placed on a worker of its own by the
   admission-side criteria and by nothing less, its events routed to that

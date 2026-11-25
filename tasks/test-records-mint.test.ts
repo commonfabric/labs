@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -17,6 +16,12 @@ import {
 } from "./test-records-mint.ts";
 import { generateIdentity, open } from "./test-records-crypto.ts";
 import { parsePersonalKeyFile } from "./test-records-config.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 function sequenceFetch(
   responses: { status: number; json?: unknown }[],

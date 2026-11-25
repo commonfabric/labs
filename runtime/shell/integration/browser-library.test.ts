@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { env } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("browser-library", () => {
   const shell = new ShellIntegration();

@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   crossrefTargets,
   DEFAULT_CITING_TOPICS,
   topicTitle,
 } from "./topic-board-fixture.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The board these describe is built by the four-hourly benchmark workflow, so
 // a break here would otherwise surface a scheduled run later, on a chart rather

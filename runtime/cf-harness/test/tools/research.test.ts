@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/data-model";
 import type { IFCLabel } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
 import {

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
@@ -7,6 +6,8 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import { describe, it } from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import type { Cell } from "../src/cell.ts";
 import type { ExecutorHost } from "../src/executor/host.ts";
 import {
@@ -16,6 +17,11 @@ import {
 } from "../src/executor/serving-memory-server.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
+
+// This file runs on the real clock because it asks what a live ExecutorHost has
+// finished, among it what real-time timers hold back: a rescan backstop, a
+// wave's flush deadline. Auto-advance would fire them as they arm.
+useRealClock();
 
 const owner = await Identity.fromPassphrase("executor quiescence owner");
 

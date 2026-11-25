@@ -1,0 +1,11 @@
+#!/bin/bash
+set -euo pipefail
+
+ARTIFACT_PATH=$1
+SIG_PATH=$2
+PUBLIC_KEY="{{ release_base_dir }}/2025-03-25-commontools-codesigning-publickey.pem"
+
+if [[ ! -f "$ARTIFACT_PATH" || ! -f "$SIG_PATH" ]]; then
+  echo "ERROR: Artifact or signature file not found"
+  exit 1
+fi

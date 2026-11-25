@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { terminateChildProcess } from "../src/child-process.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("terminateChildProcess()", () => {
   it("sends `SIGTERM` to a process that is still running", () => {

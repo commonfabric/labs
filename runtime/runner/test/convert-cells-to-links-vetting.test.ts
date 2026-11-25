@@ -14,10 +14,10 @@
  * conversion input in its own right.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { convertCellsToLinks } from "../src/cell.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A class with no fabric representation. */
 class PlainClass {}

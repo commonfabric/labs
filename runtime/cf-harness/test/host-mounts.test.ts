@@ -1,11 +1,16 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   formatHostMountSpec,
   parseHostMountSpecs,
 } from "../src/host-mounts.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("host-mounts", () => {
   let root: string;

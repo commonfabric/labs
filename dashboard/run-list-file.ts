@@ -17,13 +17,16 @@
  * it, so the runs from there down are read from GitHub again. A head whose own
  * fields cannot be used, or that records a time later than the present, is
  * dropped. Fields this version does not know are ignored, and are not written
- * back. A file that cannot be read at all is replaced.
+ * back. A file that cannot be read at all is replaced. A head held under a
+ * name its repository had before is read as the head of the repository's
+ * list under the name it has now.
  */
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { GitHubRun } from "./github-runs.ts";
 import { CacheFile } from "./history-files.ts";
+import { currentRepoName } from "./repository-names.ts";
 
 /** The head of one workflow's run list, as the file holds it. */
 export interface SavedHead {
@@ -210,7 +213,7 @@ function savedHead(value: unknown, now: number): SavedHead | undefined {
   if (kept.length === 0) return undefined;
   const whole = kept.length === runs.length;
   return {
-    repo,
+    repo: currentRepoName(repo),
     workflow,
     runs: kept,
     complete: false,

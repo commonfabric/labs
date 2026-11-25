@@ -9,9 +9,9 @@
  * stripped.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stripUndefinedProps } from "@commonfabric/js-values/strip-undefined-props";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("stripUndefinedProps()", () => {
   it("returns an empty object given an empty object", () => {

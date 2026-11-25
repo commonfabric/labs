@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { readZip } from "./test-records-zip.ts";
 import { buildZip } from "./zip-testing.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("test-records-zip", () => {
   describe("readZip()", () => {

@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -13,6 +13,7 @@ import { Runtime } from "../src/runtime.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-trigger-cid");
 
@@ -27,11 +28,12 @@ const replicaEntries = (
   id: string,
 ): StoredEntry[] => {
   const replica = storageManager.open(signer.did()).replica as unknown as {
-    getDocument(id: string): {
-      cfc?: { labelMap?: { entries: StoredEntry[] } };
-    } | undefined;
+    getDocument(id: string): { cfc?: unknown } | undefined;
   };
-  return replica.getDocument(id)?.cfc?.labelMap?.entries ?? [];
+  return storedLabelEntries<StoredEntry>(
+    replica.getDocument(id)?.cfc,
+    (labelId) => replica.getDocument(labelId),
+  );
 };
 
 describe("CFC trigger reads: cid: exclusion", () => {

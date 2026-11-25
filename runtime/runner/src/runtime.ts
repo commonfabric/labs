@@ -53,7 +53,10 @@ import type {
   Pattern,
   Schema,
 } from "./builder/types.ts";
-import { IndexedCollectionMaintainer } from "./builtins/indexed-collection/maintainer.ts";
+import {
+  IndexedCollectionMaintainer,
+  type IndexedCollectionMaintenance,
+} from "./builtins/indexed-collection/maintainer.ts";
 import { registerBuiltins } from "./builtins/index.ts";
 import type { Cancel } from "./cancel.ts";
 import {
@@ -118,6 +121,7 @@ import {
   memoryHostForForeignOrigin,
 } from "./deployment-meta.ts";
 import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
+import type { SpaceRunBeacon } from "./executor/run-beacon.ts";
 import {
   type DelegatedCarriage,
   waveRunActorOf,
@@ -784,6 +788,27 @@ export interface RuntimeOptions {
    */
   servingPosture?: boolean;
 
+  /**
+   * Where this runtime's scheduler marks the body of each action run while it
+   * holds the thread: the run beacon of the serving worker this runtime
+   * serves a space in (`executor/run-beacon.ts`; serving-loop.md §2, "The
+   * watchdog"). Absent, the scheduler marks nothing.
+   */
+  runBeacon?: SpaceRunBeacon;
+
+  /**
+   * Which indexed collections this runtime keeps current: every collection
+   * the registries of the spaces it hears of list, as well as those it
+   * declares or writes (`"listed"`); only those it declares or writes
+   * (`"own"`); or none (`"none"`). Unset, a runtime in the serving posture
+   * maintains `"listed"`, any other runtime under server execution `"none"`,
+   * and the rest `"own"`. One runtime maintains a space's collections, so
+   * the presets for a runtime that talks to a deployed toolshed set
+   * `"none"`: the toolshed's serving runtime, or its `IndexedCollectionHost`
+   * while server execution is off, maintains them.
+   */
+  indexedCollectionMaintenance?: IndexedCollectionMaintenance;
+
   /** Rollout mode for commit-boundary CFC enforcement. Defaults to `enforce-strict`. */
   cfcEnforcementMode?: CfcEnforcementMode;
 
@@ -843,7 +868,7 @@ export interface RuntimeOptions {
   cfcDecomposedEnvelopes?: CfcDecomposedEnvelopes;
 
   /**
-   * Defaults to `false`. When true, the envelope persist path stores
+   * Defaults to `true`. When true, the envelope persist path stores
    * version-2 envelopes: each label above the inline limit is a reference
    * to a content-addressed label document shared by every envelope that
    * carries the label (`docs/specs/content-addressed-cfc-labels.md`). Off
@@ -1600,6 +1625,12 @@ export class Runtime {
   readonly spaceHostMap?: Record<string, string>;
 
   /**
+   * The deployment this runtime's patterns talk to, where its host named one
+   * ({@link RuntimeOptions.patternEnvironment}); see {@link llmEndpointFor}.
+   */
+  readonly #patternApiUrl?: URL;
+
+  /**
    * The memory URL Memory opens on, when it is not `apiUrl`
    * ({@link RuntimeOptions.memoryUrl}).
    */
@@ -1711,6 +1742,9 @@ export class Runtime {
    * value).
    */
   #serverExecutionRelease: (() => void) | undefined;
+
+  /** Where the scheduler marks each run's body (`RuntimeOptions.runBeacon`). */
+  readonly #runBeacon: SpaceRunBeacon | undefined;
 
   /** Serving posture (RuntimeOptions.servingPosture): true only for the
    * SpaceServer's own runtime. Gates the Phase-2 speculation-overlay
@@ -2224,6 +2258,7 @@ export class Runtime {
     this.experimental.serverExecution = this.#explicitServerExecution ??
       getServerExecutionConfig();
     this.servingPosture = options.servingPosture === true;
+    this.#runBeacon = options.runBeacon;
     // Everything below can throw (URL parsing, host validation, engine
     // construction). The enabler claimed above is process-global state,
     // so a THROWING construction must roll it back — a leaked enabler
@@ -2235,6 +2270,9 @@ export class Runtime {
 
       this.id = options.storageManager.id;
       this.apiUrl = new URL(options.apiUrl);
+      this.#patternApiUrl = options.patternEnvironment
+        ? new URL(options.patternEnvironment.apiUrl)
+        : undefined;
       this.memoryUrl = parseMemoryUrl(options.memoryUrl, this.apiUrl);
       // Validate eagerly, mirroring the storage layer's resolver: a
       // malformed host should fail at configuration time naming the
@@ -2406,7 +2444,15 @@ export class Runtime {
 
       // Register built-in modules with runtime injection
       registerBuiltins(this);
-      this.indexedCollections = new IndexedCollectionMaintainer(this);
+      this.indexedCollections = new IndexedCollectionMaintainer(
+        this,
+        options.indexedCollectionMaintenance ??
+          (this.servingPosture
+            ? "listed"
+            : this.experimental.serverExecution === true
+            ? "none"
+            : "own"),
+      );
 
       // Set this runtime as the current runtime for global cell compatibility
       // Removed setCurrentRuntime call - no longer using singleton pattern
@@ -3231,6 +3277,14 @@ export class Runtime {
     eventId: string,
   ): void {
     this.#speculationDestination()?.trackIntent(space, sidecarId, eventId);
+  }
+
+  /**
+   * Where the scheduler marks the body of each action run while it holds the
+   * thread (`RuntimeOptions.runBeacon`); `undefined` off a serving worker.
+   */
+  get runBeacon(): SpaceRunBeacon | undefined {
+    return this.#runBeacon;
   }
 
   /** The client-effect channel of a flag-ON non-serving runtime
@@ -5607,7 +5661,8 @@ export class Runtime {
    * "no per-space fact" — callers choose their own default (storage
    * uses the host it was opened on, which for a deployed client is
    * `memoryUrl` where one is set and apiUrl otherwise; hostForSpace uses
-   * apiUrl; LLM/fetch keep their module-level defaults, which may
+   * apiUrl; LLM calls use the pattern-facing deployment through
+   * llmEndpointFor; fetch keeps its module-level default; the last two may
    * deliberately differ from apiUrl).
    */
   mappedHostFor(space: MemorySpace): string | undefined {
@@ -5615,13 +5670,28 @@ export class Runtime {
   }
 
   /**
-   * The host that serves a space's space-bound work (LLM, fetch, blob).
-   * A mapped space resolves to its host; everything else to the
-   * default `apiUrl`. The single compute-side analog of the storage
-   * layer's per-space address resolver.
+   * The host that serves a space's space-bound work other than its model
+   * calls (fetch, blob; LLM calls go through {@link llmEndpointFor}, whose
+   * fallback is the pattern-facing deployment). A mapped space resolves to
+   * its host; everything else to the default `apiUrl`. The compute-side
+   * analog of the storage layer's per-space address resolver.
    */
   hostForSpace(space: MemorySpace): URL {
     return new URL(this.mappedHostFor(space) ?? this.apiUrl);
+  }
+
+  /**
+   * The LLM endpoint a pattern in `space` sends its model calls to: the
+   * space's mapped host where it has one, else the deployment this runtime's
+   * patterns talk to ({@link RuntimeOptions.patternEnvironment}, which the
+   * deployment-facing presets set from their `apiUrl`). Undefined for a
+   * runtime whose host named neither, whose calls go to the process's
+   * default (`setLLMUrl`). Not `apiUrl`: a deployment may serve memory on a
+   * different host than the one its patterns talk to.
+   */
+  llmEndpointFor(space: MemorySpace): URL | undefined {
+    const host = this.mappedHostFor(space) ?? this.#patternApiUrl;
+    return host === undefined ? undefined : new URL("/api/ai/llm", host);
   }
 
   /**

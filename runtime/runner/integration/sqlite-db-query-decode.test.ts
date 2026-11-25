@@ -10,6 +10,7 @@
  */
 
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 
 import app from "../../toolshed/app.ts";
 import { Runtime } from "../src/index.ts";
@@ -124,7 +125,7 @@ async function runTest(base: URL) {
   }
 }
 
-Deno.test({
+test({
   name: "sqlite db.query<Row> _cf_link decode (end to end)",
   fn: async () => {
     const server = Deno.serve({ port: 0 }, app.fetch);

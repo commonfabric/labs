@@ -1,8 +1,13 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { stageOwnerPolicyAdoption } from "../src/cfc/owner-adoption.ts";
 import { loadStoredCfcEnvelope } from "../src/cfc/prepare.ts";

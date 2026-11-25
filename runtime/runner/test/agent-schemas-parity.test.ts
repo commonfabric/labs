@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { AGENT_RUN_ERROR_CODES } from "../src/agent-error-codes.ts";
@@ -17,6 +16,7 @@ import {
   AgentQueueIndexSchema,
   AgentRunRecordSchema,
 } from "../src/builtins/agent-schemas.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const read = (path: string): string =>
   Deno.readTextFileSync(new URL(path, import.meta.url));

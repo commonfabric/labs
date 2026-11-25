@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/data-model";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
@@ -7,6 +6,7 @@ import { Identity } from "@commonfabric/identity";
 import type { OperationFieldSnapshot } from "@commonfabric/memory/v2";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { CellHandle } from "@/cell-handle.ts";
 import { type CellRef, NotificationType, RequestType } from "@/protocol/mod.ts";

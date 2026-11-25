@@ -9,10 +9,15 @@
 import { createTestSpace, env } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { type DID, Identity } from "@commonfabric/identity";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   initializePiecesController,
   PieceController,

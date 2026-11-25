@@ -688,7 +688,7 @@ export interface Surface {
 /**
  * How an identity is grouped, until the topology says. A record's kind
  * and scope name the surface that produced it, and the file the
- * registration preload captured names what a runner can be pointed at; an
+ * record names is what a runner can be pointed at; an
  * identity with no file is its own invocation unit, which is what every
  * suite outside the unit tests already is.
  */

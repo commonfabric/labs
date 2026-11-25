@@ -1,7 +1,12 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../../src/builder/types.ts";
 import { wildcardPolicyMatchesValue } from "../../src/cfc/prepare.ts";

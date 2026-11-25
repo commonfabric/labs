@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -13,6 +12,7 @@ import {
   NotificationType,
   RequestType,
 } from "@/protocol/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("guards", () => {
   describe("isIPCClientRequest()", () => {

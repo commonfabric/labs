@@ -3,7 +3,6 @@
  * the deployed profile pattern, starting from the legacy inbox contract.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -14,6 +13,7 @@ import {
 } from "@commonfabric/runner";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { PiecesController } from "@commonfabric/piece/ops";
+import { describe, it } from "@commonfabric/test-support/test";
 import { followPieceSource } from "../lib/piece.ts";
 
 // Frozen source from the parent of #7730 (a909b4660^), so the test keeps

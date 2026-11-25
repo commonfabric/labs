@@ -1,6 +1,11 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { runPatternScenario } from "../pattern-harness.ts";
 import type { PatternIntegrationScenario } from "../pattern-harness.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // CT-1334: fetchJson() + computed() projection inside sub-pattern causes
 // callback:error

@@ -10,7 +10,6 @@
 
 import { expect } from "@std/expect";
 import { join, toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import type { HarnessChatSessionStore } from "../src/session-store.ts";
 import {
@@ -48,6 +47,7 @@ import {
   type DescribeHandleToolOutput,
 } from "../src/tools/describe-handle.ts";
 import type { HarnessToolContext } from "../src/tools/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A sandbox the engine can be built over; nothing here runs in it. */
 class FakeSandboxRuntime implements SandboxRuntime {

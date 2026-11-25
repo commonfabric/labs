@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { StagedMap } from "../src/staged-map.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("StagedMap", () => {
   describe("instance members", () => {

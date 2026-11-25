@@ -244,14 +244,20 @@ writes its rows there, so a member and its rows commit together. It also
 records the member's reference on the handle, as the member added last. A
 piece the calling handler has just made is set up only when something the
 handler writes refers to it, and a row is not such a write; the handle is
-written by every `add()` already.
+written by every `add()` already. And it lists the collection in its space's
+registry when the collection is not listed yet, so the commit that gives a
+collection its first member makes it known to a runtime that never loaded the
+declaring piece.
 
 After that the member is followed by the `IndexedCollectionMaintainer` in
 `runtime/runner/src/builtins/indexed-collection/maintainer.ts`:
 
 1. It hears of every committed write: from the runtime's storage
-   notifications, and in a serving runtime also from the space server's commit
-   feed, which reports writes to documents that runtime never loaded.
+   notifications, and in a runtime that maintains listed collections also
+   from the memory server's admitted commits, which report writes to
+   documents that runtime never loaded. A serving runtime hears them from its
+   space server's commit feed, and the toolshed's `IndexedCollectionHost`
+   from the memory server's `watchAdmittedCommits()`.
 2. It asks `member_deps` which members were read from the written documents,
    and selects the rows those members have now.
 3. It queues an event whose handler re-reads those members in a scheduler-run
@@ -282,7 +288,11 @@ These properties follow from the design, and each is a thing to preserve:
   is durable.** Inside the creating transaction a new piece's result is not
   written yet, and its reference has not resolved to the cell other members
   will link to. The re-read fills its columns and moves its rows to the
-  resolved reference.
+  resolved reference. A maintainer in the handler's own runtime re-reads the
+  member once the commit lands. A maintainer elsewhere hears of the commit,
+  which writes the new piece's documents. The member's `member_deps` rows
+  name its own document from the start, though none of the documents the
+  piece is made of, so that commit finds it.
 - **A member is stored under an address and nothing else.** The reference
   holds the space, id, scope and path of the cell a link resolves to. A link's
   other parts, which differ with where the link came from, stay out of it, so
@@ -292,17 +302,45 @@ These properties follow from the design, and each is a thing to preserve:
   shared by every reader of the space, and such a value differs by who reads
   it. `add()` throws when a mirrored field is read through one, and a re-read
   that reaches one leaves the member's rows as they were and logs it.
-- **Only a runtime that executes what it stores maintains.** A client under
-  server execution maintains nothing. A serving runtime commits writes only
-  from scheduler runs, which is why maintenance is an event handler and not a
-  direct edit.
+- **One runtime maintains a space's collections.** Which one is the next
+  section's subject. A serving runtime commits writes only from scheduler
+  runs, which is why maintenance is an event handler and not a direct edit.
 
-Each space lists its collections in a registry cell, so a serving runtime
-that never loaded the declaring piece still maintains them. The first
-time a serving runtime's maintainer hears of a write to a space, it asks
-whether that space has a registry, without loading the document, and reads it
-only if it does. A
-space that holds no collection therefore takes on no watch of one.
+Each space lists its collections in a registry cell, so a runtime that
+maintains listed collections maintains them without having loaded the
+declaring piece. The first time such a runtime's maintainer hears of a write
+to a space, it asks whether that space has a registry, without loading the
+document, and reads it only if it does. A space that holds no collection
+therefore takes on no watch of one. A write to the registry has the
+maintainer read it again, which is how it adopts a collection listed after
+its first read.
+
+### Which runtime maintains
+
+`RuntimeOptions.indexedCollectionMaintenance` says which collections a runtime
+keeps current: every collection the registries of the spaces it hears of list,
+as well as those it declares or writes (`"listed"`); only those it declares or
+writes (`"own"`); or none (`"none"`). Unset, a runtime in the serving posture
+maintains `"listed"`, any other runtime under server execution `"none"`, and
+the rest `"own"`. The presets for runtimes that talk to a deployed toolshed
+(`productionServer`, `remoteClient` and `browserWorker`) pin `"none"`.
+
+- **Under server execution,** a space's serving runtime maintains its
+  collections, and clients maintain none.
+- **With server execution off,** toolshed runs an `IndexedCollectionHost`
+  (`runtime/runner/src/builtins/indexed-collection/host.ts`), whose one
+  runtime maintains `"listed"` for every space the process holds. It reaches
+  the memory server over loopback sessions signed by the toolshed's identity,
+  which the memory server lists as a service principal on this arm, so it
+  reads member documents and writes collection databases in users' spaces. It
+  starts no piece. The host hands that runtime the writes of a space only once
+  it knows the space lists a collection: a commit that writes the space's
+  registry document marks the space, and for any other space the host reads
+  the registry document once, from the store, and keeps the answer. The
+  runtime is constructed on the first commit to a space that lists a
+  collection, so a toolshed whose spaces list none builds none.
+- **In a process with no server,** such as `cf test` or a unit test over
+  emulated storage, the one runtime maintains its own collections.
 
 ## Queries
 
@@ -424,11 +462,21 @@ requires.
 
 ## Changing a declaration
 
+A collection's handle, and so its database, is keyed on where the pattern
+declares the collection rather than on what the declaration says
+([03.1](../specs/sqlite-builtin/03-database-sources.md#031-cell-derived-default)).
+An update of the pattern's source keeps both, whether or not it changes the
+declaration. An update that gives the declaration another place, by
+renumbering it among the pattern's anonymous cells, gives the collection a new
+database, which holds no members.
+
 A collection's database records the declaration its tables were last brought
 up to, in `collection_meta`. When a runtime first learns of a collection, by
 declaring it, writing it, or reading it from the registry, it compares that
 record with the collection's declaration, and where they differ it brings the
-tables up to date:
+tables up to date. A runtime that already maintains the collection does the
+same once the collection's handle, which carries the declaration, is written
+with another declaration than the one it last brought the tables up to:
 
 1. A first write creates whatever table or index the declaration has gained,
    and adds the columns an existing table has gained.
@@ -463,8 +511,9 @@ until the first step has run, and then re-runs.
   as kinds of one collection.
 - Every commit to a space costs one `member_deps` lookup per collection in
   that space, coalesced while a lookup is in flight. The registry of
-  collections only grows, so a collection whose declaring piece is gone still
-  costs that lookup.
+  collections only grows, so a collection whose declaring piece is gone, or
+  whose declaration moved to another place in its pattern, still costs that
+  lookup.
 - Adding a member costs several database writes, each of which pays the
   per-statement cost of `exec()`.
 - Reading a reference resolves the cell it names, so a member's rows depend
@@ -481,5 +530,12 @@ until the first step has run, and then re-runs.
   it, and a query that wants only current members joins against the kind's table.
 - Nothing rebuilds a collection whose database was lost: the database is the
   only record of which cells are members. Nothing re-reads members written
-  while no runtime was serving their space and whose commits the serving
-  runtime never saw, short of a change to the declaration.
+  while no runtime maintained their space, and whose commits the maintaining
+  runtime therefore never heard of, short of a change to the declaration.
+- With server execution off, the toolshed's maintenance runtime keeps a
+  session, and the replicas of the members it re-read, for every space that
+  lists a collection and that it has heard a commit to since the process
+  started, for as long as the process runs.
+- A client that maintains `"none"`, as the presets for runtimes talking to a
+  deployed toolshed do, keeps nothing current when the toolshed neither
+  serves its space nor runs an `IndexedCollectionHost`.

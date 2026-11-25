@@ -1,0 +1,29 @@
+digraph {
+  subgraph {
+    App;
+  }
+  subgraph {
+    Syscall;
+    SyscallEnter;
+    SyscallInvoke;
+    SyscallExit;
+    subgraph cluster_execve_and_its_creds_mutex {
+      style = dotted;
+      // execve itself
+      ExecveAfterExecveCredsLock; // creds mutex acquired
+      ExecveAfterSiblingExitStop; // siblings have all exited
+    }
+  }
+
+  // Syscalls
+  App -> Syscall;
+  Syscall -> SyscallEnter;
+  SyscallEnter -> SyscallInvoke;
+  SyscallInvoke -> SyscallExit;
+  SyscallExit -> App;
+
+  // execve
+  SyscallInvoke -> ExecveAfterExecveCredsLock;
+  ExecveAfterExecveCredsLock -> ExecveAfterSiblingExitStop;
+  ExecveAfterSiblingExitStop -> App; // fatal signal pending
+}

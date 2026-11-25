@@ -51,7 +51,7 @@ import {
   FragmentWriter,
   loadAliasResolver,
   NAME_SEPARATOR,
-  readRegistrations,
+  readRegistered,
   readWholeRuns,
   recordsDir,
   type TestIdentity,
@@ -911,10 +911,6 @@ export function batchesOf(
 /** What running one invocation came to. */
 interface Outcome {
   ok: boolean;
-
-  /** Whether the lane passed a signal on to the invocation. */
-  interrupted: boolean;
-
   seconds: number;
 }
 
@@ -925,14 +921,12 @@ interface Outcome {
  * A job stops a step that reaches its bound by sending it SIGINT, and
  * SIGTERM if it is still running a few seconds later. The lane passes
  * each signal on to the commands it is running and starts nothing more.
- * A test runner told to stop names the tests it was in the middle of and
- * writes its report before it exits, so a lane cut off by its bound keeps
- * the records of what it finished and says what held it up.
+ * A test writes its result as it finishes, so a lane cut off by its bound
+ * keeps the records of what it finished.
  */
 export class LaneStop {
   #signal: Deno.Signal | undefined;
   #running = new Set<Deno.ChildProcess>();
-  #signalled = new WeakSet<Deno.ChildProcess>();
 
   /** The first signal the lane was sent, or undefined if none was. */
   get signal(): Deno.Signal | undefined {
@@ -947,18 +941,14 @@ export class LaneStop {
 
   /**
    * Waits for `child` to exit, passing on whatever the lane is sent
-   * meanwhile, and says whether it passed anything on. A child that
-   * starts after the lane was told to stop is sent the first signal the
-   * lane was sent.
+   * meanwhile. A child that starts after the lane was told to stop is sent
+   * the first signal the lane was sent.
    */
-  async wait(
-    child: Deno.ChildProcess,
-  ): Promise<{ status: Deno.CommandStatus; interrupted: boolean }> {
+  async wait(child: Deno.ChildProcess): Promise<Deno.CommandStatus> {
     if (this.#signal !== undefined) this.#passOn(child, this.#signal);
     this.#running.add(child);
     try {
-      const status = await child.status;
-      return { status, interrupted: this.#signalled.has(child) };
+      return await child.status;
     } finally {
       this.#running.delete(child);
     }
@@ -968,7 +958,6 @@ export class LaneStop {
   #passOn(child: Deno.ChildProcess, signal: Deno.Signal): void {
     try {
       child.kill(signal);
-      this.#signalled.add(child);
     } catch {
       // Deno refuses to signal a child that has exited, and one that has
       // exited has nothing left to stop.
@@ -984,7 +973,7 @@ export async function runInvocation(
 ): Promise<Outcome> {
   const [command, ...args] = invocation.command;
   const startedAt = performance.now();
-  const { status, interrupted } = await stop.wait(
+  const status = await stop.wait(
     new Deno.Command(command!, {
       args,
       cwd: invocation.cwd,
@@ -996,7 +985,6 @@ export async function runInvocation(
   );
   return {
     ok: status.success,
-    interrupted,
     seconds: (performance.now() - startedAt) / 1000,
   };
 }
@@ -1249,7 +1237,7 @@ export interface Execution {
 
   /**
    * The names the pass's test processes registered, by unit. A unit that
-   * is one file is here by the names `readRegistrations()` reads for that
+   * is one file is here by the names `readRegistered()` reads for that
    * file. A unit of several files that one process runs, such as a
    * package's browser tests, is here by the mark its runner leaves on
    * running every test of every file. A unit whose processes said neither
@@ -1343,13 +1331,13 @@ export async function runBatch(
     const batchSpool = path.join(outputDir, "spool");
     await Deno.mkdir(batchSpool, { recursive: true });
     opened += requests.length;
-    // The tests a unit's skip list named, by unit and name. Each is a test
-    // the plan gave another lane, or none, or one the manifest does not hold
-    // that the first pass ran already, so the skip its process registers is
-    // a fact about this lane's share rather than about the test, and it
-    // ships no record. A skip the test registers itself is not on this list
-    // and ships.
-    const skipped = new Set(
+    // The tests a unit's skip list named for the plan, by unit and name.
+    // Each is a test the plan gave another lane, or none, or one the
+    // manifest does not hold that the first pass ran already, so the skip
+    // its process registers is a fact about this lane's share rather than
+    // about the test. The list's other entries are the leaves a
+    // configuration declares unavailable, whose skips this lane records.
+    const shared = new Set(
       requests.flatMap((request) =>
         request.skip.map((name) => `${request.unit}\t${name}`)
       ),
@@ -1397,15 +1385,9 @@ export async function runBatch(
       if (!outcome.ok) ok = false;
       const collected = await collectRecords({
         spoolDir: batchSpool,
-        interrupted: outcome.interrupted,
-        junit: (invocation.junit ?? []).map((output) => ({
-          kind: output.kind,
-          scope: output.scope,
-          glob: output.path,
-          ...(output.filePrefix === undefined
-            ? {}
-            : { prefix: output.filePrefix }),
-        })),
+        ...(invocation.results === undefined
+          ? {}
+          : { results: invocation.results }),
         surfaces: batch.suite.recordSurfaces,
         ...(batch.suite.variant === undefined
           ? {}
@@ -1427,14 +1409,21 @@ export async function runBatch(
       ) {
         unexplained += 1;
       }
-      for (const record of collected.records) {
+      // A skip of the plan's ships no record, and says only that the file
+      // reached the test. A skip the test registers itself ships, and so
+      // does one a configuration declares.
+      for (const record of collected.listed) {
         execution.records.push(record);
         const location = batch.suite.locate(record);
-        if (location?.level === "unit") {
-          if (
-            record.outcome === "skip" &&
-            skipped.has(`${location.unit}\t${record.test.n}`)
-          ) continue;
+        const planned = location?.level === "unit" &&
+          [record.test.n, ...enclosingNames(record.test.n)].some((name) =>
+            shared.has(`${location.unit}\t${name}`)
+          );
+        if (!planned) records.push(record);
+      }
+      for (const record of collected.records) {
+        execution.records.push(record);
+        if (batch.suite.locate(record)?.level === "unit") {
           ran += record.durationMs / 1000;
         }
         records.push(record);
@@ -1443,7 +1432,7 @@ export async function runBatch(
       for (const [record, message] of collected.failures) {
         failures.set(record, message);
       }
-      for (const [file, names] of await readRegistrations(batchSpool)) {
+      for (const [file, names] of await readRegistered(batchSpool)) {
         register(file, names);
       }
       for (const marked of await readWholeRuns(batchSpool)) {
@@ -1704,7 +1693,7 @@ export interface Missed {
  * missing record says nothing about whether an invocation stopped, so it is
  * set apart as absent and an excusal stands beside it. Where the pass's
  * registrations say nothing about a unit, as for a suite whose processes
- * leave no name map or a process that stopped before leaving one, the
+ * write no results or a process whose module never loaded, the
  * identity stays unaccounted for.
  */
 export function accountFor(
@@ -1785,18 +1774,14 @@ export function accountFor(
  * holds no test named `name`. No registration at all shows nothing.
  *
  * A name is held where it was registered, and where it encloses a name
- * that was: the bdd re-export records each leaf's whole chain and not the
- * `describe` blocks along it, so a nested `describe` is known by the
- * leaves inside it.
+ * that was.
  *
  * A name is shown absent only where everything registered that encloses
  * it is a `describe`, which a registered name is where another
  * registered name lies inside it. A registered test holds more than its
  * registration says: the steps its body names as it runs are recorded
- * beneath it and registered nowhere. And a `describe` registered with
- * nothing inside it reads as such a test, which is right, since that is
- * what a process whose bdd re-export recorded no leaves leaves behind,
- * and a leaf missing from it says nothing.
+ * beneath it and registered nowhere. A `describe` registered with nothing
+ * inside it reads as such a test, and a name missing from it says nothing.
  */
 function registersNoSuchTest(
   registered: ReadonlySet<string> | undefined,
@@ -3659,10 +3644,6 @@ export function stopOnSignals(
   return stop;
 }
 
-// `Deno.exitCode` rather than `Deno.exit`, which would end the process
-// before the unload handlers run — and one of those is what writes a
-// test run's name map into its spool.
-//
 // The seed is settled before any invocation is built, so that every
 // command this lane builds and every task it starts shuffles the same
 // way.

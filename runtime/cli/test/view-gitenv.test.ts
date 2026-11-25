@@ -4,11 +4,11 @@
  * what happens when git cannot say what to leave out.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import { repositoryEnv, repositoryIndependentEnv } from "../lib/view/gitenv.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A directory holding a `git` that prints `message` and fails. */
 function brokenGit(message: string): string {

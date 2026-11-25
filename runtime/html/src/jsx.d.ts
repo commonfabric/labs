@@ -3943,8 +3943,6 @@ interface CFCheckboxAttributes<T> extends CFHTMLAttributes<T> {
   "checked"?: boolean;
   "disabled"?: boolean;
   "indeterminate"?: boolean;
-  "name"?: string;
-  "value"?: string;
   "oncf-change"?: EventHandler<any>;
 }
 
@@ -4282,8 +4280,6 @@ interface CFSwitchAttributes<T> extends CFHTMLAttributes<T> {
   "checked"?: boolean | CellLike<boolean>;
   "$checked"?: CellLike<boolean>;
   "disabled"?: boolean | CellLike<boolean>;
-  "name"?: string | CellLike<string>;
-  "value"?: string | CellLike<string>;
   "oncf-change"?: EventHandler<{ checked: boolean }>;
 }
 
@@ -4317,7 +4313,6 @@ interface CFRadioAttributes<T> extends CFHTMLAttributes<T> {
   "checked"?: boolean | CellLike<boolean>;
   "disabled"?: boolean | CellLike<boolean>;
   "value"?: string | CellLike<string>;
-  "name"?: string | CellLike<string>;
   "oncf-change"?: EventHandler<{ checked: boolean; value: string }>;
 }
 

@@ -8,7 +8,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
@@ -25,6 +24,7 @@ import {
   slugIdForSpace,
 } from "@commonfabric/runner";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { RuntimeProcessor } from "@/backends/mod.ts";
 import { RuntimeClients } from "@/backends/client-registry.ts";

@@ -1,10 +1,10 @@
 /** Model-facing `run_pattern` text: a contract, and rules kept beside it. */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { RUN_PATTERN_GUIDANCE } from "../src/tool-guidance.ts";
 import { runPatternToolDescriptor } from "../src/tools/run-pattern.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("run-pattern description", () => {
   it("states what the tool takes and returns and no rule for using it", () => {

@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const REPO_ROOT = fromFileUrl(new URL("../../..", import.meta.url));
 const MAIN = join(REPO_ROOT, "runtime/cf-harness/src/main.ts");

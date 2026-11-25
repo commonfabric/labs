@@ -17,7 +17,6 @@
 //   class + holder (self-echo, §3): the wave counter stabilizes;
 // - an idle space with no live sessions parks per IDLE_PARK_MS (§1).
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
@@ -33,6 +32,13 @@ import type { NormalizedFullLink } from "../src/link-utils.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import {
   ArrivalLog,
   awaitAdmitted,
@@ -53,6 +59,13 @@ import type { JSONSchema } from "../src/builder/types.ts";
 import { getLogger } from "@commonfabric/logger";
 import { flushMicrotasks } from "./speculation-intent-test-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up. The test waits on watermark and
+// subscription edges.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("serving loop space");
 const space = spaceSigner.did() as MemorySpace;
@@ -2124,6 +2137,26 @@ describe("stage F serving loop", () => {
     warmNotice(engine, "deleted-kept-warm");
     await refused();
     expect(host.stats().parkedRuntimes.held).toBe(0);
+  });
+
+  it("drops the events failed for a deleted space when it refuses the space", async () => {
+    const engine = await server.engineForSpace(space);
+    writeDeletionTombstone(engine, space, spaceSigner.did());
+    host = newHost();
+    host.failEvent(
+      space,
+      {
+        sidecarId: "of:deleted-failed-sidecar",
+        eventId: "deleted-failed",
+        seq: 1,
+      },
+      "ended",
+    );
+    expect(host.accessForTestingOnly.failedEvents.has(space)).toBe(true);
+
+    warmNotice(engine, "deleted-failed-warm");
+    await refused();
+    expect(host.accessForTestingOnly.failedEvents.has(space)).toBe(false);
   });
 
   it("ends a tenure for good on the host's notice that its space's access list became a deletion tombstone", async () => {

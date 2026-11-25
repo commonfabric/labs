@@ -8,6 +8,7 @@
 import { expect } from "@std/expect";
 
 import { CFCFCAuthorship } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** A label whose root says its value was written by `sender`. */
 const authoredByLabel = (sender: string) => ({
@@ -42,7 +43,7 @@ async function mount(
   return element;
 }
 
-Deno.test("the badge's host carries the state it shows as data-state", async () => {
+test("the badge's host carries the state it shows as data-state", async () => {
   const verified = await mount("alice");
   const unverified = await mount("mallory");
   try {
@@ -54,7 +55,7 @@ Deno.test("the badge's host carries the state it shows as data-state", async () 
   }
 });
 
-Deno.test("a badge reads `loading` on its host before its labels arrive", async () => {
+test("a badge reads `loading` on its host before its labels arrive", async () => {
   const element = new CFCFCAuthorship();
   element.author = "alice";
   element.value = { getCfcLabel: () => new Promise(() => {}) };
@@ -77,7 +78,7 @@ for (
     },
   ]
 ) {
-  Deno.test(`a ${state} badge draws its border in the theme's ${token}`, async () => {
+  test(`a ${state} badge draws its border in the theme's ${token}`, async () => {
     const host = document.createElement("div");
     host.style.setProperty(token, "rgb(1, 2, 3)");
     document.body.append(host);

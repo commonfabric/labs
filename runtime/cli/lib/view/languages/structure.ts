@@ -5,7 +5,15 @@
  * declared name for definition peeks.
  */
 
-import type { Definition, StructureKind, StructureNode } from "../model.ts";
+import type {
+  Definition,
+  Document,
+  StructureKind,
+  StructureNode,
+  TokenClass,
+} from "../model.ts";
+import { flattenStructure } from "../model.ts";
+import { linesFromClasses } from "./classes.ts";
 import {
   codePointColumns,
   type ColumnOf,
@@ -122,5 +130,35 @@ export function structureNode(
     depth,
     children: children(depth + 1),
     astKinds: [entry.astKind],
+  };
+}
+
+/** A located entry and the entries inside it. */
+export interface TreeEntry extends LocatedEntry {
+  readonly children?: readonly TreeEntry[];
+}
+
+/**
+ * The document a scanner describes from the token class of each character of
+ * `text` and the entries it found, each placed with the entries inside it.
+ */
+export function scannedDocument(
+  text: string,
+  classes: readonly (TokenClass | undefined)[],
+  entries: readonly TreeEntry[],
+): Document {
+  const source = structureSource(text);
+  const structure = structureTree(
+    source,
+    entries,
+    (entry) => entry,
+    (entry) => entry.children ?? [],
+  );
+  return {
+    text,
+    lines: linesFromClasses(text, classes, source.lineStarts),
+    structure,
+    flatStructure: flattenStructure(structure),
+    definitions: source.definitions,
   };
 }

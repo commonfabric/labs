@@ -1,6 +1,12 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Source } from "@commonfabric/js-compiler";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { getTopFrame, popFrame, pushFrame } from "../src/builder/pattern.ts";
 import type { Frame } from "../src/builder/types.ts";
 import { isDeterministicCompileFailure } from "../src/harness/compile-failure.ts";

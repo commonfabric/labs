@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CfcLabelView } from "../../src/cfc/label-view-core.ts";
 import {
@@ -7,6 +6,7 @@ import {
   isWrittenProfileName,
   soleRepresentedPrincipal,
 } from "../../src/cfc/represents-principal.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 const OTHER_DID = "did:key:z6MkoTHERoTHERoTHERoTHERoTHERoTHERoTHERoTHERoT";

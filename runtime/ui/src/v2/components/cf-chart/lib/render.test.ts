@@ -2,7 +2,6 @@
 import { mount } from "../../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { render, type TemplateResult } from "lit";
 // @ts-types="@types/d3-scale"
 import { scaleBand, scaleLinear } from "d3-scale";
@@ -15,6 +14,7 @@ import {
   renderLine,
   renderMark,
 } from "./render.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** Renders an SVG template into an `<svg>` element and returns the element. */
 function renderSvg(template: TemplateResult): SVGSVGElement {

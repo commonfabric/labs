@@ -6,6 +6,7 @@
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { fromFileUrl, join } from "@std/path";
+import { test } from "@commonfabric/test-support/test";
 
 const support = (name: string) =>
   fromFileUrl(new URL(`./support/${name}`, import.meta.url));
@@ -21,7 +22,7 @@ async function denoDir(): Promise<string> {
   return JSON.parse(new TextDecoder().decode(stdout)).denoDir as string;
 }
 
-Deno.test("readEnv swallows a denied env read and falls through to release", async () => {
+test("readEnv swallows a denied env read and falls through to release", async () => {
   // No --allow-env: Deno.env.get throws, readEnv's catch swallows it, and the
   // source resolves to the release rather than propagating the denial.
   const { code, stdout, stderr } = await new Deno.Command(Deno.execPath(), {
@@ -42,7 +43,7 @@ Deno.test("readEnv swallows a denied env read and falls through to release", asy
   assertStringIncludes(new TextDecoder().decode(stdout), '"kind":"release"');
 });
 
-Deno.test("openSource reports when the pinned release can't be downloaded", async () => {
+test("openSource reports when the pinned release can't be downloaded", async () => {
   // A scratch DENO_DIR that mirrors the real module cache but has an empty plug
   // cache: modules still resolve offline, but the libsqlite3 download misses the
   // cache and, with no --allow-net, cannot fetch — exercising the download-
@@ -80,7 +81,7 @@ Deno.test("openSource reports when the pinned release can't be downloaded", asyn
   }
 });
 
-Deno.test("a labeled query fails loudly when column-origin can't bind", async () => {
+test("a labeled query fails loudly when column-origin can't bind", async () => {
   // The probe loads @db/sqlite (so its own library binds) and only then points
   // DENO_SQLITE_LOCAL at a build column-origin can't open, then runs a labeled
   // read through the server. The read must fail with the bind error rather than

@@ -140,8 +140,10 @@ export type PieceCurrencySnapshot = {
   writes: string[];
 
   /**
-   * The slices the piece's computations ran at. The `space` slice is always
-   * among them.
+   * The slices a live computation of the piece ran at. A slice none ran at
+   * is not among them, the `space` slice included: the snapshot has nothing
+   * to say of it, and the index keeps or replaces the one it holds by that
+   * slice's own mark (`storeCurrencyRecords()`).
    */
   slices: PieceCurrencySlice[];
 
@@ -352,7 +354,6 @@ export function snapshotPieceCurrency(
     }
     return slice;
   };
-  sliceAt("space");
 
   for (const node of nodes) {
     const surface = state.writeIndex.getSchedulingWrites(node.action) ?? [];

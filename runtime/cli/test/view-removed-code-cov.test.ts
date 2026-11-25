@@ -10,11 +10,12 @@ import {
   createDiffHighlighter,
 } from "../lib/view/diffedit.ts";
 import type { Line } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const NO_WS: DiffWorkspace = { resolve: () => null, read: () => null };
 const encode = (text: string): Uint8Array => new TextEncoder().encode(text);
 
-Deno.test("diffdoc cov: Git batch output accepts blobs and rejects malformed records", () => {
+test("diffdoc cov: Git batch output accepts blobs and rejects malformed records", () => {
   const a = "a".repeat(40);
   const b = "b".repeat(40);
   const parsed = _dd.parseGitBatchOutput(
@@ -48,7 +49,7 @@ Deno.test("diffdoc cov: Git batch output accepts blobs and rejects malformed rec
   );
 });
 
-Deno.test("diffdoc cov: Git blob reads stay local and return empty results after command failures", () => {
+test("diffdoc cov: Git blob reads stay local and return empty results after command failures", () => {
   type GitBatchRunner = NonNullable<
     Parameters<typeof _dd.readGitBlobs>[2]
   >;
@@ -89,7 +90,7 @@ Deno.test("diffdoc cov: Git blob reads stay local and return empty results after
   );
 });
 
-Deno.test("diffdoc cov: old-file reconstruction rejects inconsistent hunk metadata", () => {
+test("diffdoc cov: old-file reconstruction rejects inconsistent hunk metadata", () => {
   const diff = `diff --git a/m.ts b/m.ts
 --- a/m.ts
 +++ b/m.ts
@@ -123,7 +124,7 @@ Deno.test("diffdoc cov: old-file reconstruction rejects inconsistent hunk metada
   );
 });
 
-Deno.test("diffdoc cov: a file section without hunks has no old-file lines", () => {
+test("diffdoc cov: a file section without hunks has no old-file lines", () => {
   const diff = `diff --git a/image.png b/image.png
 Binary files a/image.png and b/image.png differ
 `;
@@ -132,9 +133,9 @@ Binary files a/image.png and b/image.png differ
   assertEquals(doc.text, diff);
 });
 
-Deno.test("diffdoc cov: complete-line spans reject different source text", () => {
+test("diffdoc cov: complete-line spans reject different source text", () => {
   assertEquals(
-    _dd.shiftCompleteLineSpans("-actual", [{
+    _dd.completeFileLine({ text: "-actual", spans: [] }, "-actual", [{
       col: 0,
       text: "different",
       cls: "identifier",
@@ -143,7 +144,7 @@ Deno.test("diffdoc cov: complete-line spans reject different source text", () =>
   );
 });
 
-Deno.test("diffedit cov: live removed lines retain CRLF transport after old-file highlighting", () => {
+test("diffedit cov: live removed lines retain CRLF transport after old-file highlighting", () => {
   const diff = [
     "diff --git a/m.ts b/m.ts\r",
     "--- a/m.ts\r",

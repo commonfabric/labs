@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type ts from "typescript";
 
 import { PrimitiveFormatter } from "../../src/formatters/primitive-formatter.ts";
 import type { GenerationContext } from "../../src/interface.ts";
 import { SchemaGenerator } from "../../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A context with nothing beyond what every generation starts with. */
 function contextFor(checker: ts.TypeChecker): GenerationContext {

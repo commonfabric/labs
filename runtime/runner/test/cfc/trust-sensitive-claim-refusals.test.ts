@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 
@@ -13,6 +12,7 @@ import {
   setCfcTrustSnapshot,
 } from "../../src/storage/extended-storage-transaction.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,

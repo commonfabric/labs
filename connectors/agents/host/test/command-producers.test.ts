@@ -4,6 +4,7 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 import { assertEquals, assertNotEquals, assertRejects } from "@std/assert";
 import { fromFileUrl } from "@std/path";
 import type { Cell } from "../../../../runtime/runner/src/builder/types.ts";
@@ -48,7 +49,7 @@ async function sendThrough(
   await runtime.settled();
 }
 
-Deno.test("a configured producer piece sends commands through its own protected queue", async () => {
+test("a configured producer piece sends commands through its own protected queue", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -126,7 +127,7 @@ Deno.test("a configured producer piece sends commands through its own protected 
   }
 });
 
-Deno.test("a producer whose pattern declares no command authorization is refused", async () => {
+test("a producer whose pattern declares no command authorization is refused", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -170,7 +171,7 @@ Deno.test("a producer whose pattern declares no command authorization is refused
   }
 });
 
-Deno.test("a producer whose command writer is defined in another module is refused", async () => {
+test("a producer whose command writer is defined in another module is refused", async () => {
   // The pattern transformer refuses a `WriteAuthorizedBy` over an imported
   // handler, so no compiled pattern declares one; the host still checks the
   // declaration it reads from a deployed piece against that piece's own
@@ -225,7 +226,7 @@ Deno.test("a producer whose command writer is defined in another module is refus
   assertEquals(bindings, []);
 });
 
-Deno.test("a producer whose pattern has no recorded identity is refused", async () => {
+test("a producer whose pattern has no recorded identity is refused", async () => {
   // Without the pattern's identity the writer's module cannot be compared
   // with it, so the binding stops before any queue is created.
   const pattern = {
@@ -270,7 +271,7 @@ Deno.test("a producer whose pattern has no recorded identity is refused", async 
   assertEquals(bindings, []);
 });
 
-Deno.test("a producer cannot write through another producer's queue", async () => {
+test("a producer cannot write through another producer's queue", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),

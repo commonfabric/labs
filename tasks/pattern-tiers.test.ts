@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   declaredTier,
@@ -17,6 +16,7 @@ import {
   runTierCheck,
   staleTableEntries,
 } from "./check-pattern-tiers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A temporary patterns tree holding one source for every table entry, so a run

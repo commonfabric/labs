@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Cell } from "../../src/cell.ts";
 import type { Action } from "../../src/scheduler/types.ts";
@@ -11,6 +10,12 @@ import {
   toMemorySpaceAddress,
 } from "../scheduler-test-utils.ts";
 import { type CapturedLogs, captureLogs } from "../support/captured-logs.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("run", () => {
   let env: SchedulerTestRuntime;

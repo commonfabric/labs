@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   ensureSchemaDocument,
   loadSchemaDocument,

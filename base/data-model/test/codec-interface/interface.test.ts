@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricInstancePlus, FabricValue, FabricValuePlus } from "@";
@@ -7,6 +6,7 @@ import type {
   NonterminalCodec,
   TerminalCodec,
 } from "@/codec-common";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The assertions in this file are made when it is type-checked, which the
 // package's `test` task does before it runs anything, not when it runs. Each

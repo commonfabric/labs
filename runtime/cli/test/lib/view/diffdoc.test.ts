@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
+import { parse, PendingParses } from "../../../lib/view/backgroundparse.ts";
 import { parseDiff } from "../../../lib/view/diff.ts";
 import {
   _internal,
@@ -13,7 +13,8 @@ import {
   type Language,
   languageForFile,
 } from "../../../lib/view/languages/language.ts";
-import type { ViewMode } from "../../../lib/view/model.ts";
+import type { Span, ViewMode } from "../../../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FILES = new Map([
   ["/ws/a.ts", "export function alpha() {\n  return 2;\n}\n"],
@@ -75,13 +76,22 @@ function harness() {
     text: string,
     cache?: WorkspaceCache,
     viewMode: ViewMode = "source",
+    pending?: PendingParses,
   ) => {
     const model = parseDiff(text)!;
     const languages: DiffFileLanguages[] = model.files.map(() => ({
       oldLanguage: counted,
       newLanguage: counted,
     }));
-    return buildDiffDocument(text, model, ws, cache, viewMode, languages);
+    return buildDiffDocument(
+      text,
+      model,
+      ws,
+      cache,
+      viewMode,
+      languages,
+      pending,
+    );
   };
   return { reads, parses, build };
 }
@@ -280,6 +290,69 @@ describe("diffdoc", () => {
     });
   });
 
+  describe("completeFileLine()", () => {
+    const plain = { text: "+a = 1", spans: [], bg: "add" as const };
+    const fileSpans: Span[] = [
+      { col: 0, text: "a", cls: "identifier" },
+      { col: 1, text: " = ", cls: "whitespace" },
+      { col: 4, text: "1", cls: "number" },
+    ];
+
+    it("shows the complete file's spans one column past the marker", () => {
+      const line = _internal.completeFileLine(plain, "+a = 1", fileSpans);
+
+      expect(line?.text).toBe("+a = 1");
+      expect(line?.bg).toBe("add");
+      expect(line?.spans).toEqual([
+        { col: 0, text: "+", cls: "diffAdd" },
+        { col: 1, text: "a", cls: "identifier" },
+        { col: 2, text: " = ", cls: "whitespace" },
+        { col: 5, text: "1", cls: "number" },
+      ]);
+    });
+
+    it("keeps a carriage return the diff added as whitespace", () => {
+      const line = _internal.completeFileLine(plain, "+a = 1\r", fileSpans);
+
+      expect(line?.spans.at(-1)).toEqual({
+        col: 6,
+        text: "\r",
+        cls: "whitespace",
+      });
+    });
+
+    it("shows a byte order mark the decoding removed as whitespace", () => {
+      const line = _internal.completeFileLine(
+        plain,
+        "+\uFEFFa = 1",
+        fileSpans,
+      );
+
+      expect(line?.spans.slice(0, 3)).toEqual([
+        { col: 0, text: "+", cls: "diffAdd" },
+        { col: 1, text: "\uFEFF", cls: "whitespace" },
+        { col: 2, text: "a", cls: "identifier" },
+      ]);
+    });
+
+    it("returns null for spans that leave more of the line than a carriage return", () => {
+      expect(_internal.completeFileLine(plain, "+a = 12", fileSpans)).toBe(
+        null,
+      );
+      expect(_internal.completeFileLine(plain, "+a = 1\r\r", fileSpans))
+        .toBe(null);
+    });
+
+    it("keeps spans set on it in place of its own", () => {
+      const line = _internal.completeFileLine(plain, "+a = 1", fileSpans)!;
+      const replacement: Span[] = [{ col: 0, text: "+a = 1", cls: "plain" }];
+
+      line.spans = replacement;
+
+      expect(line.spans).toBe(replacement);
+    });
+  });
+
   describe("sharedParse()", () => {
     it("throws when asked for a key it did not count", () => {
       const parse = _internal.sharedParse(["/ws/a.ts"], new Map());
@@ -318,12 +391,12 @@ describe("diffdoc", () => {
         });
       });
 
-      describe("without()", () => {
-        it("returns a copy that has forgotten the paths, leaving the original whole", () => {
+      describe("editing()", () => {
+        it("returns a cache that reads the paths afresh, leaving the original's sections of them whole", () => {
           const { parses, build } = harness();
           const cache = new WorkspaceCache();
           build(LOG, cache);
-          const copy = cache.without(["/ws/a.ts"]);
+          const copy = cache.editing(["/ws/a.ts"]);
           expect(copy.file("/ws/a.ts")).toBe(undefined);
           expect(copy.file("/ws/b.ts")?.fileText).toBe(FILES.get("/ws/b.ts"));
 
@@ -333,6 +406,89 @@ describe("diffdoc", () => {
           parses.length = 0;
           build(LOG, cache);
           expect(parses).toEqual([]);
+        });
+
+        it("records in this cache the files its builds read, except the paths", () => {
+          const { build } = harness();
+          const cache = new WorkspaceCache();
+          build(LOG, cache);
+          cache.forget("/ws/a.ts");
+          cache.forget("/ws/b.ts");
+
+          build(LOG, cache.editing(["/ws/a.ts"]));
+
+          expect(cache.file("/ws/a.ts")).toBe(undefined);
+          expect(cache.file("/ws/b.ts")?.fileText).toBe(FILES.get("/ws/b.ts"));
+        });
+      });
+
+      describe("waitedOn()", () => {
+        /** Finishes each of `pending`'s parses with what a parse here gives. */
+        function finishAll(pending: PendingParses): number {
+          const jobs = pending.take();
+          for (const taken of jobs) {
+            taken.finish(
+              parse(taken.kind, taken.language, taken.text, taken.fileName),
+            );
+          }
+          return jobs.length;
+        }
+
+        it("returns the parses a build left pending until a build gives them to their sections", () => {
+          const { build } = harness();
+          const cache = new WorkspaceCache();
+          const pending = new PendingParses(0);
+          build(LOG, cache, "source", pending);
+
+          const waited = cache.waitedOn().size;
+          const left = finishAll(pending);
+          const before = cache.waitedOn().size;
+          build(LOG, cache, "source", pending);
+
+          expect(waited).toBe(left);
+          expect(left).toBeGreaterThan(0);
+          expect(before).toBe(left);
+          expect(cache.waitedOn().size).toBe(0);
+        });
+
+        it("leaves out a section the other view mode's latest build used as built with every parse", () => {
+          // A section that neither side renders builds alike in both view
+          // modes, so the rendered build reuses no section and builds it from
+          // the finished parses, while the source build's stays waiting.
+
+          const { build } = harness();
+          const cache = new WorkspaceCache();
+          const pending = new PendingParses(0);
+          build(LOG, cache, "source", pending);
+          finishAll(pending);
+
+          build(LOG, cache, "rendered", pending);
+
+          expect(cache.sections("source").size).toBeGreaterThan(0);
+          expect(
+            [...cache.sections("source").values()].every((section) =>
+              section.waitingOn.length > 0
+            ),
+          ).toBe(true);
+          expect(cache.waitedOn().size).toBe(0);
+        });
+
+        it("answers for the cache an editing cache was made from", () => {
+          const { build } = harness();
+          const cache = new WorkspaceCache();
+          const pending = new PendingParses(0);
+          build(LOG, cache, "source", pending);
+          const editing = cache.editing(["/ws/a.ts"]);
+          finishAll(pending);
+
+          build(LOG, cache, "source", pending);
+
+          expect(editing.waitedOn()).toEqual(new Set());
+          expect(
+            [...editing.sections("source").values()].some((section) =>
+              section.waitingOn.length > 0
+            ),
+          ).toBe(true);
         });
       });
     });

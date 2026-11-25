@@ -1,12 +1,19 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { selectCurrencyPiece } from "@commonfabric/memory/v2/currency-index";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import type { Cell } from "../../src/cell.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
+import type { CurrencyIndexMode } from "../../src/executor/store-currency.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
 import { Runtime } from "../../src/runtime.ts";
@@ -106,7 +113,11 @@ describe("SpaceServer", () => {
     });
     cycles = new ArrivalLog();
     servingRuntimes = [];
-    host = new ExecutorHost({
+  });
+
+  /** A host that keeps the currency index as `mode` says. */
+  const newHost = (mode: CurrencyIndexMode): ExecutorHost =>
+    new ExecutorHost({
       server,
       serviceIdentity: serviceSigner.did(),
       createRuntime: (space) => {
@@ -131,12 +142,11 @@ describe("SpaceServer", () => {
       },
       policy: {
         idleParkMs: 600_000,
-        currencyIndex: "skip",
+        currencyIndex: mode,
         currencyEpoch: "test-epoch",
       },
       onWaveCycle: cycles.record,
     });
-  });
 
   afterEach(async () => {
     await host?.close();
@@ -192,10 +202,13 @@ describe("SpaceServer", () => {
   /**
    * Stands the three pieces up as a client that then leaves, each reading
    * the output of the one before it, and parks all three spaces once each
-   * piece is recorded. Returns the pieces' roots and the id of the first
-   * piece's argument.
+   * piece is recorded, under a host that keeps the index as `mode` says.
+   * Returns the pieces' roots and the id of the first piece's argument.
    */
-  const standUpAndPark = async () => {
+  const standUpAndPark = async (
+    mode: CurrencyIndexMode = "start-upstream",
+  ) => {
+    host = newHost(mode);
     const setup = openRuntime(setupSigner);
     const a = await run<{ a: number }>(
       setup,
@@ -329,6 +342,28 @@ describe("SpaceServer", () => {
 
         expect([serves(roots.first), serves(roots.middle), serves(roots.last)])
           .toEqual([false, false, false]);
+      });
+
+      it("starts the last piece alone when an input of the first changed, on what the store holds of the piece before it, and carries nothing, under `skip`", async () => {
+        // A loop that keeps no index starts the same piece and derives the
+        // same value.
+
+        const { roots, input, resultSchema } = await standUpAndPark("skip");
+        await changeInput(input, 20);
+
+        const { alice, result } = await watchLast(resultSchema);
+        await awaitEach(cycles, () => serves(roots.last));
+        await waitForCellValue(
+          alice,
+          result.key("c"),
+          (value: string | undefined) => value === "c:b:1",
+          { stuckLabel: "alice to read what derives from the stored value" },
+        );
+        await host!.whenQuiescent();
+
+        expect([serves(roots.first), serves(roots.middle)])
+          .toEqual([false, false]);
+        expect(host!.stats().currency.carried).toBe(0);
       });
     });
   });

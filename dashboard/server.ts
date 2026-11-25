@@ -58,6 +58,13 @@ import {
   type TileView,
 } from "./types.ts";
 import { livePages } from "./live-page.ts";
+import { dashboardRunnersGitHub, RunnersFeed } from "./runners-feed.ts";
+import { runnersPage } from "./runners-page.ts";
+import {
+  RUNNERS_KEY_PATH,
+  RUNNERS_PATH,
+  RUNNERS_SOCKET_PATH,
+} from "./runners-paths.ts";
 import { type Board, repoPagesRoute } from "./repo-page.ts";
 import { SERVING_VERSION, withVersionHeader } from "./version.ts";
 import {
@@ -69,6 +76,12 @@ import {
 const ctx = makeCtx(
   greenBranchOf,
   new RunLists(dashboardCacheFile("fabric-wall-run-lists-tiles.json")),
+);
+// The runners page's feed, which `start()` binds to the relay it follows.
+let runnersFeed = new RunnersFeed(
+  dashboardRunnersGitHub(),
+  githubWebhooks,
+  SERVING_VERSION,
 );
 const views = new Map<string, TileView>();
 const lastRun = new Map<string, number>();
@@ -811,6 +824,27 @@ export async function handle(req: Request): Promise<Response> {
     });
     return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
   }
+  if (url.pathname === RUNNERS_KEY_PATH) {
+    return new Response(runnersFeed.key, {
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    });
+  }
+  if (url.pathname === RUNNERS_SOCKET_PATH) {
+    if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Expected a WebSocket upgrade", { status: 426 });
+    }
+    return runnersFeed.open(req);
+  }
+  if (url.pathname === RUNNERS_PATH) {
+    return withVersionHeader(
+      new Response(runnersPage(SERVING_VERSION), {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+    );
+  }
   if (url.pathname === "/healthz") return Response.json({ ok: views.size > 0, at: lastChange });
   for (const r of routes) {
     if (url.pathname === r.path) {
@@ -840,6 +874,9 @@ export function start(
   collect: () => void | Promise<void> = tick,
   webhooks: GitHubWebhooks = githubWebhooks,
 ) {
+  if (webhooks !== githubWebhooks) {
+    runnersFeed = new RunnersFeed(dashboardRunnersGitHub(), webhooks, SERVING_VERSION);
+  }
   // Taken in once every other listener, the run lists among them, has taken
   // the delivery in.
   webhooks.listen((delivery) =>
@@ -855,6 +892,9 @@ export function start(
   // Returned so a caller can run one turn of the clock on demand.
   const onTick = () => {
     void webhooks.connect();
+    runnersFeed.tick().catch((error) =>
+      console.error("runners page: keeping it current failed:", error)
+    );
     return serveTick(collect);
   };
   const timer = setInterval(onTick, TICK_MS);

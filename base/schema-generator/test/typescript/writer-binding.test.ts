@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { resolveWriterBinding } from "../../src/typescript/writer-binding.ts";
 import { createTestProgram } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * What `resolveWriterBinding()` returns for the identifier `binding` in

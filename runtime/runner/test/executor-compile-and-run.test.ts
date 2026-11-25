@@ -4,13 +4,19 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { maxOf } from "@commonfabric/collections/math";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 
 import { type Cell, sendEvent } from "../src/cell.ts";
 import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
@@ -22,6 +28,13 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { ArrivalLog, awaitEach } from "./support/serving-waits.ts";
 import { waitUntil } from "./support/wait-until.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up. Its flush deadline must advance in real
+// time while compiler work settles.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("served compile space");
 const space = spaceSigner.did() as MemorySpace;

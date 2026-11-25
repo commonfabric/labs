@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { isClosedResearchTask } from "../../src/research/closed-task.ts";
 import type { HarnessSkillRegistry } from "../../src/contracts/skill.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("isClosedResearchTask()", () => {
   const patternId = "v6_KSFHs9AmTg9PKwMmPdZyEHxZ9Oykhno4HBOfUo5s";

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path/from-file-url";
 import { join } from "@std/path/join";
@@ -16,6 +15,7 @@ import {
   patternRoot,
   PATTERNS_DIR,
 } from "./pattern-files.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("isPatternSource", () => {
   it("accepts authored .ts and .tsx entries", () => {

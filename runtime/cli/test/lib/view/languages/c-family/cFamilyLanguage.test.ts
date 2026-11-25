@@ -1,4 +1,3 @@
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { parseDiff } from "../../../../../lib/view/diff.ts";
@@ -18,6 +17,7 @@ import {
   cudaLanguage,
 } from "../../../../../lib/view/languages/c-family/language.ts";
 import type { Line, TokenClass } from "../../../../../lib/view/model.ts";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 
 /** The source each colored line reconstructs. */
 function verbatim(lines: readonly Line[]): string {
@@ -421,6 +421,42 @@ describe("cFamilyLanguage", () => {
       expect(document.flatStructure.at(-1)!.nameOffset).toBe(
         source.indexOf("reset() {"),
       );
+    });
+
+    it("spans each of several declarators alone, even with a comment between them", () => {
+      const source = [
+        "int one, /* note */ two;",
+        "int /* note */ only;",
+      ].join("\n");
+
+      expect(
+        cppLanguage.parseDocument(source).flatStructure.map((node) => [
+          node.label,
+          node.startLine,
+          node.startCol,
+          node.endCol,
+        ]),
+      ).toEqual([
+        ["one", 0, 4, 7],
+        ["two", 0, 20, 23],
+        // The only declarator of its declaration spans the declaration.
+        ["only", 1, 0, 20],
+      ]);
+    });
+
+    it("labels a conversion operator without the comments in its type or its parameters", () => {
+      const source = [
+        "class Handle {",
+        "  operator int(/* none */) const;",
+        "  operator /* raw */ bool() const;",
+        "};",
+      ].join("\n");
+
+      expect(outline(cppLanguage, source)).toEqual([
+        ["class", "class Handle", 0, 0],
+        ["method", "operator int()", 1, 1],
+        ["method", "operator bool()", 1, 2],
+      ]);
     });
 
     it("lists a header's declarations in either dialect", () => {

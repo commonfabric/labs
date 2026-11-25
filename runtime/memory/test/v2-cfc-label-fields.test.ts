@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import {
@@ -6,6 +5,7 @@ import {
   classifyLabelField,
   LABEL_FIELD_CLASSIFICATION,
 } from "@commonfabric/memory/v2/cfc-label-fields";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("CFC label-field classification (inv-12 / SC-25)", () => {
   // The design §2 initial-assignment table

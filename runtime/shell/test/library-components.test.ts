@@ -2,10 +2,15 @@
 // extend a bare HTMLElement as they load, so they can only load once the test
 // has installed one.
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { installBrowserGlobals } from "./browser-globals.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** Each custom element defined while the entry loaded, by tag. */
 const defined = new Map<string, unknown>();

@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { utf8Compare } from "@commonfabric/text/utf8";
 import { encodeWtf8 } from "@commonfabric/text/wtf8";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Renders a string's UTF-16 code units, for a test message. */
 function codeUnitsOf(value: string): string {

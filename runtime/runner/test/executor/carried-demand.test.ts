@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { beforeEach, describe, it } from "@std/testing/bdd";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import type { CarriedDemandRow } from "@commonfabric/memory/v2/server";
+import { beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   CarriedDemand,

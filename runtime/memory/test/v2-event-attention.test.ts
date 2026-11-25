@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as Engine from "../v2/engine.ts";
 import { Server } from "../v2/server.ts";
@@ -20,6 +19,12 @@ import {
   type StreamEventsDocValue,
   type StreamLinkRef,
 } from "../v2.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const AUDIENCE = "did:key:z6Mk-event-attention-audience";
 const SPACE = "did:key:z6Mk-event-attention-space";

@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { refuseCommits } from "@/test/support/refuse-commits.ts";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -18,6 +17,12 @@ import {
 } from "@commonfabric/runner/shared";
 
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   addToIndex,

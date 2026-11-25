@@ -38,8 +38,9 @@ maintenance costs are described in
 `runtime.scheduler.setReadStatsEnabled(true)` enables transaction-scoped read
 accounting for subsequent scheduler action runs. It is disabled by default.
 `getActionStats(action)` exposes cumulative `reads` and `lastRunReads`;
-`scheduler.run.complete` telemetry carries the per-run counts and authored
-source location. Cumulative counts include only runs measured while enabled.
+`scheduler.run.complete` telemetry carries the per-run counts, whether an input
+change caused the run, and, where they are known, the authored source location
+and the piece. Cumulative counts include only runs measured while enabled.
 
 Proxy accesses include lazy schema views and query result proxies, including
 elements materialized by array methods and iterators. Link resolutions count

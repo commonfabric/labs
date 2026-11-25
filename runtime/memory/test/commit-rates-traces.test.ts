@@ -24,9 +24,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CommitRateTracker } from "../v2/commit-rates.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 type StretchKind = "storm" | "loop-under-threshold" | "quiet";
 

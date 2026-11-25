@@ -19,6 +19,7 @@ import { stripAnsi } from "../lib/view/ansi.ts";
 import { frameTop } from "../lib/view/actions.ts";
 import { gitBlobName } from "./view-helpers.ts";
 import { languageForFile } from "../lib/view/languages/language.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const TWO_FILES = [
   "diff --git a/src/app.ts b/src/app.ts",
@@ -39,7 +40,7 @@ const TWO_FILES = [
   "",
 ].join("\n");
 
-Deno.test("diffFiles: ranges, counts, test flag, and summary text", () => {
+test("diffFiles: ranges, counts, test flag, and summary text", () => {
   const files = diffFiles(TWO_FILES);
   assertEquals(files.length, 2);
   assertEquals(files[0].path, "src/app.ts");
@@ -54,7 +55,7 @@ Deno.test("diffFiles: ranges, counts, test flag, and summary text", () => {
   assertEquals(files[1].summary.text, "▸ src/app.test.ts  +1 −0");
 });
 
-Deno.test("diffFiles: new / deleted / renamed / binary summaries", () => {
+test("diffFiles: new / deleted / renamed / binary summaries", () => {
   const created = diffFiles(
     [
       "diff --git a/new.ts b/new.ts",
@@ -120,7 +121,7 @@ Deno.test("diffFiles: new / deleted / renamed / binary summaries", () => {
   assertEquals(binary[0].summary.text, "▸ img.png  (binary)");
 });
 
-Deno.test("diffFiles: a non-diff yields no files", () => {
+test("diffFiles: a non-diff yields no files", () => {
   assertEquals(diffFiles("just some text\nnot a diff\n"), []);
 });
 
@@ -133,7 +134,7 @@ const ln = (text: string): Line => ({
   spans: [{ col: 0, text, cls: "plain" }],
 });
 
-Deno.test("identityFold: display equals the document", () => {
+test("identityFold: display equals the document", () => {
   const lines = [ln("a"), ln("b"), ln("c")];
   const plan = identityFold(lines);
   assertEquals(plan.displayLines, lines);
@@ -141,7 +142,7 @@ Deno.test("identityFold: display equals the document", () => {
   assertEquals(plan.displayToDoc(1), 1);
 });
 
-Deno.test("buildFoldPlan: a collapsed file becomes one summary row", () => {
+test("buildFoldPlan: a collapsed file becomes one summary row", () => {
   const files = diffFiles(TWO_FILES);
   const docLines = TWO_FILES.split("\n").map(ln);
   // Collapse the first file (lines 0..7) only.
@@ -177,7 +178,7 @@ Deno.test("buildFoldPlan: a collapsed file becomes one summary row", () => {
   assertEquals(plan.displayToDoc(1), 8, "row 1 is the file-2 header");
 });
 
-Deno.test("buildFoldPlan: nothing collapsed is the identity", () => {
+test("buildFoldPlan: nothing collapsed is the identity", () => {
   const files = diffFiles(TWO_FILES);
   const docLines = TWO_FILES.split("\n").map(ln);
   const plan = buildFoldPlan(docLines, files, new Set());
@@ -188,7 +189,7 @@ Deno.test("buildFoldPlan: nothing collapsed is the identity", () => {
 // test-path detection
 //
 
-Deno.test("isMarkdownPath: matches the pager's filename classification", () => {
+test("isMarkdownPath: matches the pager's filename classification", () => {
   for (
     const path of [
       "README.md",
@@ -209,7 +210,7 @@ Deno.test("isMarkdownPath: matches the pager's filename classification", () => {
   }
 });
 
-Deno.test("isTestPath: directories and basenames", () => {
+test("isTestPath: directories and basenames", () => {
   for (
     const p of [
       "src/app.test.ts",
@@ -325,7 +326,7 @@ function foldSession(
   );
 }
 
-Deno.test("fold: f hides the file the viewport is on, f again shows it", () => {
+test("fold: f hides the file the viewport is on, f again shows it", () => {
   const s = foldSession(TWO_FILES);
   const full = s.displayDoc().lines.length;
   press(s, "f"); // collapse file 0 (the viewport is at its top)
@@ -344,7 +345,7 @@ Deno.test("fold: f hides the file the viewport is on, f again shows it", () => {
   assertEquals(s.displayDoc().lines.length, full, "showing again restores it");
 });
 
-Deno.test("fold: a summary omits markers for a hidden expansion edge", () => {
+test("fold: a summary omits markers for a hidden expansion edge", () => {
   const ws: DiffWorkspace = {
     resolve: (path) => path,
     read: (path) =>
@@ -387,7 +388,7 @@ Deno.test("fold: a summary omits markers for a hidden expansion edge", () => {
   assertEquals(internals.displayAdjacentDiffMetadataRows(hiddenEdge), []);
 });
 
-Deno.test("fold: a smaller file-number gutter clamps horizontal panning", () => {
+test("fold: a smaller file-number gutter clamps horizontal panning", () => {
   const root = Deno.makeTempDirSync();
   try {
     const longLine = "x".repeat(40);
@@ -449,7 +450,7 @@ Deno.test("fold: a smaller file-number gutter clamps horizontal panning", () => 
   }
 });
 
-Deno.test("fold: F hides all files, E shows all files", () => {
+test("fold: F hides all files, E shows all files", () => {
   const s = foldSession(TWO_FILES);
   const full = s.displayDoc().lines.length;
   press(s, "F");
@@ -462,7 +463,7 @@ Deno.test("fold: F hides all files, E shows all files", () => {
   assertEquals(s.displayDoc().lines.length, full, "E restores every file");
 });
 
-Deno.test("fold: T hides shown test files and shows them when all are hidden", () => {
+test("fold: T hides shown test files and shows them when all are hidden", () => {
   const s = foldSession(TWO_FILES);
   const full = s.displayDoc().lines.length;
   press(s, "T");
@@ -481,7 +482,7 @@ Deno.test("fold: T hides shown test files and shows them when all are hidden", (
   assertEquals(s.view().message, "Showing 1 test file.");
 });
 
-Deno.test("fold: T follows the tests the repository declares over file names", () => {
+test("fold: T follows the tests the repository declares over file names", () => {
   // The workspace declares src/app.ts a test and src/app.test.ts not one.
   const ws: DiffWorkspace = {
     resolve: () => null,
@@ -505,7 +506,7 @@ Deno.test("fold: T follows the tests the repository declares over file names", (
   assertEquals(s.view().message, "Hid 1 test file.");
 });
 
-Deno.test("diffFiles: a declared test status overrides the path's own", () => {
+test("diffFiles: a declared test status overrides the path's own", () => {
   const declared: string[][] = [];
   const files = diffFiles(TWO_FILES, (paths) => {
     declared.push([...paths]);
@@ -550,7 +551,7 @@ const CATEGORY_FILES = [
   "",
 ].join("\n");
 
-Deno.test("fold: M toggles every Markdown file", () => {
+test("fold: M toggles every Markdown file", () => {
   const s = foldSession(CATEGORY_FILES);
   const full = s.displayDoc().lines.length;
   press(s, "M");
@@ -605,7 +606,7 @@ const COMMENT_ONLY_OBJECTS = new Map([
   [gitBlobName(OLD_TAIL), OLD_TAIL],
 ]);
 
-Deno.test("fold: C toggles files that change only comments", () => {
+test("fold: C toggles files that change only comments", () => {
   const s = foldSession(COMMENT_ONLY_FILES, 30, 80, COMMENT_ONLY_OBJECTS);
   const full = s.displayDoc().lines.length;
   press(s, "C");
@@ -630,7 +631,38 @@ Deno.test("fold: C toggles files that change only comments", () => {
   assertEquals(s.displayDoc().lines.length, full, "c hides no files");
 });
 
-Deno.test("fold: C selects no file whose old Git object is unknown", () => {
+test("fold: C judges the diff as edited since it was last pressed", () => {
+  const notes = "// new explanation\n// and more\nkeep(); // unchanged\n";
+  const diff = COMMENT_ONLY_FILES.slice(
+    COMMENT_ONLY_FILES.indexOf("diff --git a/src/notes.ts"),
+    COMMENT_ONLY_FILES.indexOf("diff --git a/src/tail.ts"),
+  );
+  const ws: DiffWorkspace = {
+    resolve: (path) => path === "src/notes.ts" ? "/w/src/notes.ts" : null,
+    read: (path) => path === "/w/src/notes.ts" ? notes : null,
+    readBlob: (object) => COMMENT_ONLY_OBJECTS.get(object) ?? null,
+  };
+  const { doc, edit } = buildDiffDocument(diff, parseDiff(diff)!, ws);
+  const s = new Session(
+    doc,
+    { color: false, showLineNumbers: false },
+    { width: 80, height: 30 },
+    undefined,
+    diffSource(ws, edit),
+  );
+  press(s, "C");
+  assertEquals(s.view().message, "Hid 1 comment-only file.");
+  press(s, "C");
+  assertEquals(s.view().message, "Showing 1 comment-only file.");
+
+  s.top = 6;
+  press(s, "e", ..."run(); ", "escape");
+  assertEquals(s.doc.lines[6].text, "+run(); // new explanation");
+  press(s, "C");
+  assertEquals(s.view().message, "No comment-only files.");
+});
+
+test("fold: C selects no file whose old Git object is unknown", () => {
   const s = foldSession(COMMENT_ONLY_FILES);
   const full = s.displayDoc().lines.length;
   press(s, "C");
@@ -638,7 +670,7 @@ Deno.test("fold: C selects no file whose old Git object is unknown", () => {
   assertEquals(s.view().message, "No comment-only files.");
 });
 
-Deno.test("fold: a category key reports when the diff has no matching files", () => {
+test("fold: a category key reports when the diff has no matching files", () => {
   const s = foldSession(TWO_FILES);
   const full = s.displayDoc().lines.length;
   press(s, "M");
@@ -646,7 +678,7 @@ Deno.test("fold: a category key reports when the diff has no matching files", ()
   assertEquals(s.view().message, "No Markdown files.");
 });
 
-Deno.test("fold: a partly hidden category is made fully hidden", () => {
+test("fold: a partly hidden category is made fully hidden", () => {
   const s = foldSession(CATEGORY_FILES);
   press(s, "M");
   press(s, "T");
@@ -656,7 +688,7 @@ Deno.test("fold: a partly hidden category is made fully hidden", () => {
   assertEquals(s.view().message, "Hid 1 test file.");
 });
 
-Deno.test("fold: bulk commands preserve a wrapped viewport column", () => {
+test("fold: bulk commands preserve a wrapped viewport column", () => {
   const show = [
     "commit 0123456789abcdef0123456789abcdef01234567",
     "Author: A",
@@ -682,7 +714,7 @@ Deno.test("fold: bulk commands preserve a wrapped viewport column", () => {
   }
 });
 
-Deno.test("fold: another fold preserves a wrapped summary continuation", () => {
+test("fold: another fold preserves a wrapped summary continuation", () => {
   const first = `src/${"first/".repeat(12)}app.ts`;
   const second = `src/${"second/".repeat(12)}app.ts`;
   const diff = [
@@ -716,7 +748,7 @@ Deno.test("fold: another fold preserves a wrapped summary continuation", () => {
   }
 });
 
-Deno.test("fold: the collapsed summary renders on screen", () => {
+test("fold: the collapsed summary renders on screen", () => {
   const s = foldSession(TWO_FILES);
   press(s, "F");
   const view: ViewState = s.view();
@@ -726,7 +758,7 @@ Deno.test("fold: the collapsed summary renders on screen", () => {
   assert(text.includes("▸ src/app.test.ts  +1 −0"), text);
 });
 
-Deno.test("fold: a selected file spans every wrapped summary row", () => {
+test("fold: a selected file spans every wrapped summary row", () => {
   const longPath = `src/${"nested/".repeat(10)}app.ts`;
   const diff = [
     "commit 0123456789abcdef0123456789abcdef01234567",
@@ -773,7 +805,7 @@ Deno.test("fold: a selected file spans every wrapped summary row", () => {
   );
 });
 
-Deno.test("fold: folding is refused on a non-diff view", () => {
+test("fold: folding is refused on a non-diff view", () => {
   const doc = {
     text: "const x = 1;\n",
     lines: [{ text: "const x = 1;", spans: [] }],
@@ -789,7 +821,7 @@ Deno.test("fold: folding is refused on a non-diff view", () => {
   assert(s.view().message.includes("diff view"), s.view().message);
 });
 
-Deno.test("fold: revealing the cursor to edit expands every fold", () => {
+test("fold: revealing the cursor to edit expands every fold", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "app.ts"), "keep\nnew\n");
@@ -836,7 +868,7 @@ Deno.test("fold: revealing the cursor to edit expands every fold", () => {
   }
 });
 
-Deno.test("fold: a selected node and a search match map onto the summary row", () => {
+test("fold: a selected node and a search match map onto the summary row", () => {
   const s = foldSession(TWO_FILES);
   press(s, "f"); // collapse file 0 (lines 0..7 → display row 0)
   // Select the collapsed file's node (the first structure node).
@@ -871,7 +903,7 @@ Deno.test("fold: a selected node and a search match map onto the summary row", (
   );
 });
 
-Deno.test("fold: a collapsed file contributes one searchable match", () => {
+test("fold: a collapsed file contributes one searchable match", () => {
   const diff = [
     "diff --git a/a.ts b/a.ts",
     "--- a/a.ts",
@@ -908,7 +940,7 @@ Deno.test("fold: a collapsed file contributes one searchable match", () => {
   expect(s.view().currentMatch).toBe(0);
 });
 
-Deno.test("fold: F / E / T / M are refused on a non-diff view", () => {
+test("fold: F / E / T / M are refused on a non-diff view", () => {
   const doc = {
     text: "const x = 1;\n",
     lines: [{ text: "const x = 1;", spans: [] }],
@@ -926,7 +958,7 @@ Deno.test("fold: F / E / T / M are refused on a non-diff view", () => {
   }
 });
 
-Deno.test("fold: WASD with no selection picks a node visible on screen while folded", () => {
+test("fold: WASD with no selection picks a node visible on screen while folded", () => {
   const s = foldSession(TWO_FILES);
   press(s, "F"); // collapse everything → summary rows only
   press(s, "tab"); // start navigation with nothing selected
@@ -939,7 +971,7 @@ Deno.test("fold: WASD with no selection picks a node visible on screen while fol
   );
 });
 
-Deno.test("nav: starting navigation with the viewport past every node start selects a node", () => {
+test("nav: starting navigation with the viewport past every node start selects a node", () => {
   // Two statements far apart; scrolling into the blank gap leaves no node start
   // on screen, so navigation falls back rather than selecting nothing.
   const doc = parseDocument(
@@ -954,7 +986,7 @@ Deno.test("nav: starting navigation with the viewport past every node start sele
   assert(s.view().selected !== null, "the fallback selected a node");
 });
 
-Deno.test("fold: a collapsed file's interior is not navigable", () => {
+test("fold: a collapsed file's interior is not navigable", () => {
   const navDiff = [
     "diff --git a/a.ts b/a.ts",
     "--- a/a.ts",
@@ -995,7 +1027,7 @@ Deno.test("fold: a collapsed file's interior is not navigable", () => {
   );
 });
 
-Deno.test("line numbers: file mode shows new-file lines and blanks for structure", () => {
+test("line numbers: file mode shows new-file lines and blanks for structure", () => {
   const diff = [
     "diff --git a/m.ts b/m.ts",
     "--- a/m.ts",
@@ -1023,7 +1055,7 @@ Deno.test("line numbers: file mode shows new-file lines and blanks for structure
   assertEquals(file[8], 43, "' keep43' is new-file line 43");
 });
 
-Deno.test("line numbers: file mode parses the diff once per document", () => {
+test("line numbers: file mode parses the diff once per document", () => {
   const diff = [
     "diff --git a/m.ts b/m.ts",
     "--- a/m.ts",
@@ -1063,7 +1095,7 @@ Deno.test("line numbers: file mode parses the diff once per document", () => {
   assertEquals(reads, settled, "redrawing does not re-parse the diff");
 });
 
-Deno.test("line numbers: file mode follows an edit that adds a line", () => {
+test("line numbers: file mode follows an edit that adds a line", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -1114,7 +1146,7 @@ Deno.test("line numbers: file mode follows an edit that adds a line", () => {
   }
 });
 
-Deno.test("line numbers: file mode numbers a commit message from one", () => {
+test("line numbers: file mode numbers a commit message from one", () => {
   const show = [
     "commit 0123456789abcdef0123456789abcdef01234567",
     "Author: A",
@@ -1140,7 +1172,7 @@ Deno.test("line numbers: file mode numbers a commit message from one", () => {
   assertEquals(nums[6], 3, "the body is message line 3");
 });
 
-Deno.test("fold: navigating after the selected file collapses resumes at that file", () => {
+test("fold: navigating after the selected file collapses resumes at that file", () => {
   const navDiff = [
     "diff --git a/a.ts b/a.ts",
     "--- a/a.ts",

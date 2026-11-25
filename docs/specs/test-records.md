@@ -19,21 +19,18 @@ A test's identity has three required parts, scoped within a repository:
   `integration`, `typecheck`, `lint`, `format`, `gate`.
 - **scope** — the workspace member that owns the test, or `repo` for
   repository-level checks.
-- **name** — the full name the test's own runner reports: the bdd describe
-  chain joined with `" > "`, a `Deno.test` name, a pattern test's
-  repository-root-relative file path with forward slashes, a task name, a
-  script's own name (`acl.sh`), a script step (`integration.sh
-  piece-values`), or a task-plus-item pair (`cfcheck <file>`,
-  `pattern-compat <key>`, `pattern-vintage <testKey> <tier> <stamp>`). A
-  bdd file declaring a hook outside every `describe` has a root suite
-  invented for it, named `global`, and every chain that file goes on to
-  run opens with that name. A suite it registers as ignored is reported
-  under its bare name. The runner keeps such a suite out of the root
-  suite and never runs its body. A `describe` or `it` call carrying no
-  name of its own is named after the body it was given, and a name the
-  call carries stands even where it is empty, so a chain can hold an
-  empty element. The runner refuses an empty name for the outermost
-  registration of a file, so an empty element is never the first.
+- **name** — the full name the test's own runner reports: for a test
+  registered through `@commonfabric/test-support/test`, the names of the
+  `describe`s enclosing it and its own, joined with `" > "`, and for a step
+  a test runs, the test's name and the step's joined the same way; a
+  pattern test's repository-root-relative file path with forward slashes, a
+  task name, a script's own name (`acl.sh`), a script step
+  (`integration.sh piece-values`), or a task-plus-item pair
+  (`cfcheck <file>`, `pattern-compat <key>`,
+  `pattern-vintage <testKey> <tier> <stamp>`). A name a call carries stands
+  even where it is empty, so a chain can hold an empty element. Deno
+  refuses an empty name for the outermost registration of a file, so an
+  empty element is never the first.
 - **variant**, when present — a stable name for a non-default configuration
   that runs the same test. The default configuration has no variant. The
   server-execution deployed-topology lanes have stable `default` and
@@ -102,20 +99,19 @@ The compact identity fields are `k`, `s`, `n`, and optional `v`. Omitting
 `[k,s,n]` grouping key for unmarked records and append `v` as a fourth part
 only when it is present.
 
-A record carries `outcome` (`pass`, `fail`, or `skip`), `durationMs` from
-the runner's own measurement (never a clock inside the test process, which
-several packages fake), and optionally `file`, the repository-relative
-source path when the producer reliably knows it — metadata, not identity.
-A reader drops a record whose `file`, or whose name where the kind is
-`pattern`, is absolute or climbs above the repository root. Such a path
-names a file outside the repository, and no test of the repository lives
-there.
-A `cfcheck` item's duration is what the batch spent on that pattern's own
-files. The gate is its own runner and measures them itself: the compiler
-times each file it checks and each file it emits, and the batch charges
-every file to the one program that resolved it. The run's program-wide
-parse and bind belongs to no pattern and is in none of them, which is why
-those durations sum to less than the run takes.
+A record carries `outcome` (`pass`, `fail`, or `skip`), `durationMs` from the
+runner's own measurement (never a clock a test can replace: several packages
+fake the clock inside the test process, and the test module reads the real one
+before any test runs), and optionally `file`, the repository-relative source
+path when the producer reliably knows it — metadata, not identity. A reader
+drops a record whose `file`, or whose name where the kind is `pattern`, is
+absolute or climbs above the repository root. Such a path names a file outside
+the repository, and no test of the repository lives there. A `cfcheck` item's
+duration is what the batch spent on that pattern's own files. The gate is its
+own runner and measures them itself: the compiler times each file it checks and
+each file it emits, and the batch charges every file to the one program that
+resolved it. The run's program-wide parse and bind belongs to no pattern and is
+in none of them, which is why those durations sum to less than the run takes.
 
 A duration says how long the test takes only where the execution passed.
 A failure ended where the failure was reached. Where a wait's safety net
@@ -126,62 +122,106 @@ over-sixty-seconds list and the dashboard's daily mean among them. Run,
 failure and skip counts read every record, which is what those counters
 are for.
 
-For a suite ingested from a JUnit report, `file` comes from one of two
-places and the second overrides the first. Deno names a case's class after
-the module that registered the test, so the case a `describe` registers
-carries the file of every leaf beneath it, and the report joins itself: a
-leaf is named as its describe chain, and its file is the one whose
-registered name is the longest prefix of that chain. What the class names
-is the nearest frame of this repository's own code below the runner, so
-that source holds only while nothing of ours sits between a test file and
-the registrar. The `describe` and `it` the import map resolves to are
-therefore the real ones wherever they would have nothing to do, and a
-module that does register on a file's behalf — a fixture runner, a clock
-harness — takes the class name with it.
+A test registered through `@commonfabric/test-support/test` takes its `file`
+from that module, which knows the test file its realm runs: Deno runs each test
+file in a realm of its own, with that file as `Deno.mainModule`, and the module
+names it relative to the repository the module belongs to. A file that
+registers its cases through a shared module is therefore the file its records
+carry, and the file its skip list is keyed by. A test file outside the
+repository, such as a fixture a test wrote to a temporary directory, records
+nothing.
 
-The registration preload is such a module, and it replaces what it takes:
-it writes a name-to-file map into the spool, and ingestion lays that over
-what the report says. The map holds each name `Deno.test` was called with
-and, for a file written with `describe` and `it`, the whole chain of each
-leaf. Every name maps to the test file the process runs, which is
-`Deno.mainModule`, whichever module made the call: a file that registers
-its cases through a shared module is the file its records carry, and the
-file its skip list is keyed by. A hook a file declares outside every `describe` has no suite to
-hold it, so the bdd runner makes one named `global` and every suite that
-file goes on to run sits inside it; the chain each leaf is named by opens
-with that name. A suite title two files share says nothing about either
-and is dropped from the merged map; a leaf's whole chain is what usually
-survives that, and `global` is a title every file declaring such a hook
-shares.
+The module does not write records, since it knows neither the kind nor the
+scope its run records under. It writes what it knows into the spool as it
+goes, in a file of its own for each test file, named `results-<ulid>.ndjson`.
+Once the test file has loaded, a `registered` line lists every test and group
+the file registered, each as the names enclosing it, outermost first:
 
-Every package of a workspace run writes into one spool, so each map also
-names the repository-relative directory its process ran in. A caller
-ingesting one package's report asks for that directory. A map naming it
-belongs to that package and is read whole, whatever files it names: a
-test task may name a file anywhere in the tree. A map naming no directory at all
-is judged by its files instead, and contributes only those under the directory
-asked for. Either way the scope is applied before ambiguity is judged, or a
-name two packages happen to share would cost each of them a file it held
-unambiguously.
+```json
+{ "line": "registered", "file": "base/bakery/test/glaze.test.ts", "names": [["glaze"], ["glaze", "thickens when heated"]] }
+```
 
-A name map is also a statement of what a file holds, which a lane reads to tell
-a test the tree no longer holds from one a batch never reached. An uncaught
-error or an unhandled rejection can stop a module part way through loading,
-after it has registered some of its tests. Deno runs each test file in a realm
-of its own, with a preload of its own. So once an `error` or
-`unhandledrejection` event reaches a test file's realm before any of that file's
-hooks or tests has begun, whether or not anything handles it, the preload writes
-every name it has noted for the file again, in a map carrying `"interrupted":
-true`, and marks every later map of that file the same way. Deno begins a file's
-hooks and tests only once its module has settled, having finished loading or
-stopped, and the preload marks nothing after that. The names still say which
-file each came from, but no file such a map names counts as having registered
-only those names. A module whose loading never finishes, or that calls
-`Deno.exit`, leaves a map without the mark, but none of its file's tests run, so
-its file records nothing, and a unit that recorded nothing fails the run.
+As each test or group finishes, a `result` line says how it went. A group is a
+`describe`, or a test that ran steps, and carries `"container": true`. A
+failure carries what it threw:
 
-The browser test runner registers no names through the preload, and makes the
-same statement for the whole of a run with a mark named `whole-run-<uuid>.json`.
+```json
+{ "line": "result", "file": "base/bakery/test/glaze.test.ts", "name": ["glaze", "thickens when heated"], "outcome": "pass", "durationMs": 12 }
+```
+
+A skip the file's skip list caused carries `"listed": true`, and
+`readResults` returns it apart from the records: a skip of the run's share
+says nothing about the test, and only the run that wrote the list knows which
+of its entries are its share. A step the list names still runs where its test
+does, since the steps before it may have set up what it reads, and its result
+carries `"listed": true` in the same way.
+
+A group's outcome is `fail` only where it failed on its own account: one of
+its hooks threw, or the test running steps threw. A group whose only failures
+are those of what it holds passed. Its duration runs from the start of its
+hooks to their end, everything inside it included.
+
+Some failures happen outside any one test's body, and each still reaches a
+`fail`:
+
+- What a test package runs around each suite (`wrapSuites`) throwing, such as
+  a guard that finds a production backstop fired, fails that suite on its own
+  account, and so does a wrapper that does not run the suite exactly once.
+- A file's own hooks, those declared outside every `describe`, are written as a
+  group whose name is the file's repository-relative path. Its time is what
+  those hooks took, and a failure is its own. Since hooks that never settle end
+  the file with no event to write it from, it is written as failed before each
+  run of those hooks, as it stands once they finish, and again as the file
+  unloads, and a reader takes a process's last line for the group. A signal that
+  cuts those hooks off therefore leaves the group failed. The file's `beforeAll`
+  hooks run before its first test, with the file's own permissions, and only
+  where the skip list leaves the file a test to run. Where they throw, Deno runs
+  none of the file's tests and fails the file, and the file's group is the one
+  record of it. A filter, which the module cannot see, does not stop them
+  running. A suite that ignores every test it holds writes their skips whether
+  or not a filter chose it, since those skips are the tests' own.
+- An error a test leaves uncaught, such as a promise it rejects without
+  awaiting, reaches the file in the turn of the event loop after the test
+  returns, which the module waits for before it writes the test's result, so
+  that error fails the test that left it. Otherwise an error fails the
+  innermost test or group running when it arrives — a `describe` while its
+  own hooks run — and, where none runs, such as during the file's own hooks
+  or after the file unloads, the file's group. An error a timer throws after
+  its test returned is charged by when it arrives, and so may fail the test
+  running then. One the file's own listeners handle fails nothing. A test
+  Deno gave up on, whose promise never settled, is written as a failure when
+  the next suite starts, so that nothing later is charged to it.
+- A test that returns while a step it started is still running fails.
+- A test or group still running when its file ends — a test whose promise
+  never settles, so that the event loop runs dry, or one an uncaught error
+  ends — is written as it stands as the file unloads: a test as a failure,
+  since it never finished, and a group on its own account. The tests the file
+  never reached write nothing, and neither does a test a signal cut off,
+  which neither passed nor failed.
+
+Deno's sanitizers judge a test only after it has returned, out of the
+module's sight, so the module refuses a test or step that turns one on. It
+also refuses a test, group or step whose full name another of its file has,
+since the two would be one identity, and a name holding the separator ` > `.
+
+A run's owner reads those lines back with the kind and scope the invocation
+ran under (`readResults` in `@commonfabric/test-support/records`). Every test
+becomes a record. A group becomes one only where it says something its tests do
+not, which [CI movement](#ci-movement) sets out, and it then takes the time it
+spent outside the groups and tests directly inside it. What each outermost
+group spent beyond the records inside it is what its hooks took, or for a
+test that runs steps, its own work around them, which a lane measures, and
+which is never a record of a test.
+
+The `registered` line is also a statement of what a file holds, which a lane
+reads to tell a test the tree no longer holds from one a batch never reached.
+The module writes it from the file's first `beforeAll`, which Deno runs once
+the module has finished loading and before any of its tests, whether or not
+any of them runs. A module that stopped part way through loading therefore
+names nothing, and a unit that recorded nothing fails the run.
+
+The browser test runner writes no results, and makes the same statement for the
+whole of a run with a mark named `whole-run-<uuid>.json`.
 The mark holds a JSON object with the `kind` and `scope` the run's records carry
 and `tests`, every test's name by the repository-relative file that registered
 it. The runner writes one only when it loaded every file it was handed and every
@@ -538,61 +578,54 @@ make if a closed partition is ever shown to have lost something.
 Test jobs hold no record-store credential. Each recording job — which is every
 job running tests that "Recording" above does not exempt — spools records
 and uploads one credential-free `test-records-<job>-a<attempt>` artifact, `if:
-always()`. JUnit XML becomes records as it is gathered: leaf cases become
-records, and container cases — one per describe level and one per test or step
-that runs steps, with overlapping times — are recorded only where they say something the cases inside them do not. A
-container is a case another case's name is inside.
+always()`. The results a test file writes become records as they are gathered:
+every test becomes a record, and a group is recorded only where it says
+something the tests inside it do not.
 
-A container that failed on its own account is recorded as a failure. It fails on
-its own account when its body or one of its hooks threw, or when it finished
-with a step still running, and Deno reports that failure on the container. A
-container whose only failure is that a case inside it failed is not recorded for
-that failure, since that case carries it. A recorded container takes the time it
-spent outside the cases directly inside it, since theirs is in their own records.
+A group that failed on its own account is recorded as a failure. A group whose
+only failure is that a test inside it failed is not recorded for that failure,
+since that test carries it. A recorded group takes the time it spent outside the
+groups and tests directly inside it, since theirs is in their own records.
 
-A container the lane's manifest holds, as an identity in the unit that ran it,
-is recorded on every run with its outcome on its own account: a pass where it
-failed only through the cases inside it. Its history then holds its passes as
+A group the lane's manifest holds, as an identity in the unit that ran it, is
+recorded on every run with its outcome on its own account: a pass where it
+failed only through the tests inside it. Its history then holds its passes as
 well as its failures, which is what the publisher judges flakiness, new real
 test failures, and the default branch's latest outcome by. The manifest holds a
-container once a run has recorded it, so a container becomes an identity of its
-own the first time it fails on its own account, and every `describe` does not.
-Until the manifest holds it, a rerun of its unit records nothing for it. A name
-the report gives to more than one case is not recorded this way: the bdd runner
-names the suite of a file's top-level hooks `global` in every file that has
-them, and that name says nothing about which of them passed. Outside a lane,
-nothing is known, and a container is recorded only when it fails on its own
+group once a run has recorded it, so a group becomes an identity of its own the
+first time it fails on its own account, and every `describe` does not. Until the
+manifest holds it, a rerun of its unit records nothing for it. Outside a lane,
+nothing is known, and a group is recorded only when it fails on its own
 account.
 
 In `deno.yml` the recording jobs are the lanes of the `tests` job. Each lane
 ships one artifact, `test-records-tests-<lane>-a<attempt>`, and its shipping
-step names no variant and no JUnit specification. The lane runner
-(`tasks/ci-lane.ts`) gathers each batch's direct records and JUnit reports into
-the lane's spool as the batch finishes, marking each with its suite's variant. A
-lane that opens a test file for some of its tests registers the rest as ignored,
-through the skip list it hands the file's process, and ships no record of them:
-each is another lane's share, or one the plan did not select, and the lane's
-skip says nothing about the test itself. A skip a test registers for itself is
-recorded, and so is one a configuration declares, by the lane the plan gave that
-test to. Each suite declares its JUnit outputs in the topology, so the lane
-knows where they are without the workflow saying. A lane that ran default and
-non-default batches therefore ships records the job-wide inputs could not have
-described. `Status` ships one more artifact, `test-records-coverage-a<attempt>`,
-from every run: the record of each coverage gate it judged, and from a push the
-coverage measurements it writes as well. The artifact holds `records.ndjson` —
-always written, zero records or not — and `job.json`; an artifact without a
-readable `records.ndjson` is truncated, and the relay fails it visibly rather
-than ship a context-only object that would read as a run with no tests. The
-attempt lives in the artifact name because artifacts are scoped to the run. A
-relay ships only the artifacts whose name carries the attempt that triggered it,
-and dates and names them by that attempt's start, so a re-run's new jobs create
-new objects and nothing an earlier attempt produced is shipped again.
+step names no variant. The lane runner (`tasks/ci-lane.ts`) gathers each batch's
+records and its tests' results into the lane's spool as the batch finishes,
+marking each with its suite's variant. A lane that opens a test file for some of
+its tests registers the rest as ignored, through the skip list it hands the
+file's process, whose results mark those skips as listed, and ships no record of
+them: each is another lane's share, or one the plan did not select, and the
+lane's skip says nothing about the test itself. A skip a test registers for
+itself is recorded, and so is one a configuration declares, by the lane the plan
+gave that test to. Each suite declares in the topology what its tests' results
+are recorded as, so the lane knows without the workflow saying. A lane that ran
+default and non-default batches therefore ships records the job-wide inputs
+could not have described. `Status` ships one more artifact,
+`test-records-coverage-a<attempt>`, from every run: the record of each coverage
+gate it judged, and from a push the coverage measurements it writes as well. The
+artifact holds `records.ndjson` — always written, zero records or not — and
+`job.json`; an artifact without a readable `records.ndjson` is truncated, and
+the relay fails it visibly rather than ship a context-only object that would
+read as a run with no tests. The attempt lives in the artifact name because
+artifacts are scoped to the run. A relay ships only the artifacts whose name
+carries the attempt that triggered it, and dates and names them by that
+attempt's start, so a re-run's new jobs create new objects and nothing an
+earlier attempt produced is shipped again.
 
 The shared shipping action's optional `variant` input stamps every spooled
-and JUnit-derived record gathered by that job, and its optional `junit` input
-names the JUnit reports to ingest. A job that gathers its own records, as a lane
-does, passes neither, and a job running only the default configuration omits
-`variant`.
+record gathered by that job. A job that gathers its own records, as a lane
+does, passes none, and so does a job running only the default configuration.
 
 The relay checks out its implementation from the default branch, not from
 the triggering test run. A new optional record field therefore rolls out in

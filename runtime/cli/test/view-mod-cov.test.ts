@@ -5,14 +5,19 @@
  * closure directly to exercise both the diff and source semantics paths.
  */
 
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertNotEquals,
+  assertThrows,
+} from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { IN_PLACE_PARSE_BUDGET, parse } from "../lib/view/backgroundparse.ts";
 import { markdownLanguage } from "../lib/view/languages/markdown/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
 import { pythonLanguage } from "../lib/view/languages/python/language.ts";
 import { buildPreparedView, buildView, ViewError } from "../lib/view/mod.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 // These cases color Python through its synchronous entry points, which show
 // plain text until its parser has loaded.
@@ -30,7 +35,7 @@ const DIFF = `diff --git a/a.ts b/a.ts
  const y = x;
 `;
 
-Deno.test("buildView: a named source file is editable and its semantics closure runs", () => {
+test("buildView: a named source file is editable and its semantics closure runs", () => {
   const r = buildView(SRC, "transformed.ts");
   assert(r.doc.lines.length > 0);
   const s = r.semantics(); // runs createSemantics (the source closure body)
@@ -38,7 +43,7 @@ Deno.test("buildView: a named source file is editable and its semantics closure 
   assertEquals(r.editSource.editable, true, "a named file is editable");
 });
 
-Deno.test("buildView: an ordinary pipe with no file is read-only plain text", () => {
+test("buildView: an ordinary pipe with no file is read-only plain text", () => {
   const r = buildView(SRC);
 
   assertEquals(r.doc.structure, []);
@@ -50,7 +55,7 @@ Deno.test("buildView: an ordinary pipe with no file is read-only plain text", ()
   assertEquals(r.editSource.editable, false);
 });
 
-Deno.test("buildView: decodes buffered text after byte detection completes", () => {
+test("buildView: decodes buffered text after byte detection completes", () => {
   const text = "#!/usr/bin/env python3\ndef greet():\n    pass\n";
   const bytes = new TextEncoder().encode(text);
   const view = buildView({
@@ -68,7 +73,7 @@ Deno.test("buildView: decodes buffered text after byte detection completes", () 
   );
 });
 
-Deno.test("buildView: source syntax is not guessed from content", () => {
+test("buildView: source syntax is not guessed from content", () => {
   const examples = [
     ["JSON", '{"value": true}\n'],
     ["Markdown", "# Heading\n"],
@@ -87,7 +92,7 @@ Deno.test("buildView: source syntax is not guessed from content", () => {
   }
 });
 
-Deno.test("buildView: transformed compiler output keeps the TypeScript default", () => {
+test("buildView: transformed compiler output keeps the TypeScript default", () => {
   const r = buildView(TRANSFORMED);
 
   assert(
@@ -136,7 +141,7 @@ describe("decoded buildView input", () => {
   });
 });
 
-Deno.test("buildView: a virtual filename selects piped source without making it editable", () => {
+test("buildView: a virtual filename selects piped source without making it editable", () => {
   const source = 'def greet(name):\n    return f"Hello, {name}"\n';
   const r = buildView(source, undefined, undefined, {
     fileName: "scripts/greet.py",
@@ -153,7 +158,7 @@ Deno.test("buildView: a virtual filename selects piped source without making it 
   assertEquals(r.editSource.parse(source), r.doc);
 });
 
-Deno.test("buildPreparedView: a rename loads the parser of the side left behind", async () => {
+test("buildPreparedView: a rename loads the parser of the side left behind", async () => {
   // A diff resolves its two sides separately, so a file renamed out of one
   // language is still parsed as that language.
   const diff = [
@@ -186,11 +191,13 @@ Deno.test("buildPreparedView: a rename loads the parser of the side left behind"
   );
 });
 
-Deno.test("buildPreparedView: deferring parses leaves a large complete file for later", async () => {
-  // The test runs in this package's directory, whose files the diff's
-  // workspace reads. This one is larger than the budget parsed at once.
+test("buildPreparedView: deferring parses leaves a large complete file for later", async () => {
+  // The diff names one of this package's own files, which the diff's
+  // workspace reads from disk. This one is larger than the budget parsed
+  // at once.
   const path = "runtime/cli/lib/view/session.ts";
-  const text = Deno.readTextFileSync("lib/view/session.ts");
+  const source = new URL("../lib/view/session.ts", import.meta.url);
+  const text = Deno.readTextFileSync(source);
   assert(text.length > IN_PLACE_PARSE_BUDGET, "the file is past the budget");
   const diff = [
     `diff --git a/${path} b/${path}`,
@@ -213,7 +220,7 @@ Deno.test("buildPreparedView: deferring parses leaves a large complete file for 
 
   assertEquals(
     deferred.parses.map(({ kind, fileName }) => [kind, fileName]),
-    [["document", Deno.realPathSync("lib/view/session.ts")], ["lines", path]],
+    [["document", Deno.realPathSync(source)], ["lines", path]],
   );
   assertEquals(whole.parses, []);
   for (const job of deferred.parses) {
@@ -222,7 +229,38 @@ Deno.test("buildPreparedView: deferring parses leaves a large complete file for 
   assertEquals(deferred.editSource.parse(diff), whole.doc);
 });
 
-Deno.test("buildView: a shebang selects an extensionless source and its editor", () => {
+test("buildPreparedView: once the parses end, a build parses again what they left", async () => {
+  // Each parse finishes with plain text, so that a build that uses the
+  // finished results shows plain text, and one that parses again colors.
+  const path = "runtime/cli/lib/view/session.ts";
+  const text = Deno.readTextFileSync("lib/view/session.ts");
+  const diff = [
+    `diff --git a/${path} b/${path}`,
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    "@@ -1 +1 @@",
+    "-/** old */",
+    `+${text.split("\n")[0]}`,
+    "",
+  ].join("\n");
+  const kept = await buildPreparedView(diff, undefined, undefined, {}, true);
+  const ended = await buildPreparedView(diff, undefined, undefined, {}, true);
+  const whole = await buildPreparedView(diff);
+  for (const job of [...kept.parses, ...ended.parses]) {
+    job.finish(parse(job.kind, plainTextLanguage, job.text, job.fileName));
+  }
+
+  ended.parsesEnded();
+
+  assertEquals(ended.editSource.parse(diff), whole.doc);
+  assertNotEquals(
+    kept.editSource.parse(diff).lines,
+    whole.doc.lines,
+    "a view whose parses have not ended builds from their results",
+  );
+});
+
+test("buildView: a shebang selects an extensionless source and its editor", () => {
   const source = "#!/usr/bin/env python3\ndef greet():\n    return 'hello'\n";
   const piped = buildView(source);
   const file = buildView(source, "greet");
@@ -240,7 +278,7 @@ Deno.test("buildView: a shebang selects an extensionless source and its editor",
   assertEquals(file.editSource.editable, true);
 });
 
-Deno.test("buildView: an explicit language takes priority over a virtual filename", () => {
+test("buildView: an explicit language takes priority over a virtual filename", () => {
   const source = "# **Piped heading**\n";
   const r = buildView(source, undefined, undefined, {
     language: markdownLanguage,
@@ -259,7 +297,7 @@ Deno.test("buildView: an explicit language takes priority over a virtual filenam
   );
 });
 
-Deno.test("buildView: explicit source selection suppresses automatic detection", () => {
+test("buildView: explicit source selection suppresses automatic detection", () => {
   const transformed = buildView(TRANSFORMED, undefined, undefined, {
     language: plainTextLanguage,
   });
@@ -284,7 +322,7 @@ Deno.test("buildView: explicit source selection suppresses automatic detection",
   );
 });
 
-Deno.test("buildView: source selection rejects incompatible direct calls", () => {
+test("buildView: source selection rejects incompatible direct calls", () => {
   assertThrows(
     () =>
       buildView(SRC, "actual.ts", undefined, {
@@ -303,7 +341,7 @@ Deno.test("buildView: source selection rejects incompatible direct calls", () =>
   );
 });
 
-Deno.test("buildView: transformed declarations without bodies retain function structure", () => {
+test("buildView: transformed declarations without bodies retain function structure", () => {
   const r = buildView(
     "// transformed: /types.ts\nexport declare function run(): void;\n",
   );
@@ -320,7 +358,7 @@ Deno.test("buildView: transformed declarations without bodies retain function st
   });
 });
 
-Deno.test("buildView: only an exact first-line transformed header selects TypeScript", () => {
+test("buildView: only an exact first-line transformed header selects TypeScript", () => {
   for (
     const text of [
       "ordinary text",
@@ -334,14 +372,14 @@ Deno.test("buildView: only an exact first-line transformed header selects TypeSc
   }
 });
 
-Deno.test("buildView: blank input remains a read-only source", () => {
+test("buildView: blank input remains a read-only source", () => {
   const r = buildView(" \n\t\n");
 
   assertEquals(r.editSource.isDiff, undefined);
   assertEquals(r.editSource.editable, false);
 });
 
-Deno.test("buildView: a diff takes the diff branch and a diff-semantics closure", () => {
+test("buildView: a diff takes the diff branch and a diff-semantics closure", () => {
   const r = buildView(DIFF);
   r.semantics(); // runs createDiffSemantics (the diff closure body)
   assert(
@@ -350,7 +388,7 @@ Deno.test("buildView: a diff takes the diff branch and a diff-semantics closure"
   );
 });
 
-Deno.test("buildView: commit output with no file diff takes the commit-editing branch", () => {
+test("buildView: commit output with no file diff takes the commit-editing branch", () => {
   const commit = [
     "commit 0123456789abcdef0123456789abcdef01234567",
     "Author: A B <a@b.example>",
@@ -364,7 +402,7 @@ Deno.test("buildView: commit output with no file diff takes the commit-editing b
   assertEquals(r.editSource.label, null);
 });
 
-Deno.test("buildView: a commit with no message takes the commit branch", () => {
+test("buildView: a commit with no message takes the commit branch", () => {
   const commit = [
     "commit 0123456789abcdef0123456789abcdef01234567",
     "Author: A B <a@b.example>",
@@ -376,7 +414,7 @@ Deno.test("buildView: a commit with no message takes the commit branch", () => {
   assertEquals(r.editSource.label, null);
 });
 
-Deno.test("buildView: commit-looking prose without Git metadata stays a source file", () => {
+test("buildView: commit-looking prose without Git metadata stays a source file", () => {
   const text = [
     "commit 0123456789abcdef0123456789abcdef01234567",
     "",
@@ -392,14 +430,14 @@ Deno.test("buildView: commit-looking prose without Git metadata stays a source f
   assertEquals(piped.editSource.editable, false);
 });
 
-Deno.test("buildView: a commit token followed by ordinary text stays a source file", () => {
+test("buildView: a commit token followed by ordinary text stays a source file", () => {
   const r = buildView("commit deadbee\nordinary text\n", "notes.txt");
 
   assertEquals(r.editSource.isDiff, undefined);
   assertEquals(r.editSource.editable, true);
 });
 
-Deno.test("buildView: a standard commit header without its separator stays source", () => {
+test("buildView: a standard commit header without its separator stays source", () => {
   const text = [
     "commit 0123456789abcdef0123456789abcdef01234567",
     "Author: A B <a@b.example>",
@@ -411,7 +449,7 @@ Deno.test("buildView: a standard commit header without its separator stays sourc
   assertEquals(r.editSource.editable, true);
 });
 
-Deno.test("buildView: an email commit header without its separator stays source", () => {
+test("buildView: an email commit header without its separator stays source", () => {
   const sha = "0123456789abcdef0123456789abcdef01234567";
   const text = [
     `From ${sha} Mon Sep 17 00:00:00 2001`,
@@ -425,7 +463,7 @@ Deno.test("buildView: an email commit header without its separator stays source"
   assertEquals(r.editSource.editable, true);
 });
 
-Deno.test("buildView: Git's built-in commit header formats take the commit branch", () => {
+test("buildView: Git's built-in commit header formats take the commit branch", () => {
   const sha = "0123456789abcdef0123456789abcdef01234567";
   const formats = [
     ["short", "Author: A B <a@b.example>"],
@@ -452,7 +490,7 @@ Deno.test("buildView: Git's built-in commit header formats take the commit branc
   }
 });
 
-Deno.test("buildView: compact and email commit formats retain diff ownership", () => {
+test("buildView: compact and email commit formats retain diff ownership", () => {
   const sha = "0123456789abcdef0123456789abcdef01234567";
   const formats = [
     ["oneline", `${sha} Subject\n${DIFF}`],
@@ -481,7 +519,7 @@ Deno.test("buildView: compact and email commit formats retain diff ownership", (
   }
 });
 
-Deno.test("buildView: CRLF commit-only output takes the commit branch", () => {
+test("buildView: CRLF commit-only output takes the commit branch", () => {
   const text = [
     "commit 0123456789abcdef0123456789abcdef01234567",
     "Author: A B <a@b.example>",
@@ -494,13 +532,13 @@ Deno.test("buildView: CRLF commit-only output takes the commit branch", () => {
   assertEquals(buildView(text).editSource.isDiff, true);
 });
 
-Deno.test("buildView: forceDiff pins diff mode even on non-diff text", () => {
+test("buildView: forceDiff pins diff mode even on non-diff text", () => {
   const r = buildView("const a = 1;\n", undefined, true);
   r.semantics();
   assert(r.doc.lines.length > 0);
 });
 
-Deno.test("buildView: forceDiff=false views a real diff as source (--no-diff)", () => {
+test("buildView: forceDiff=false views a real diff as source (--no-diff)", () => {
   const diff = buildView(DIFF); // auto-detects: a diff
   assert(
     diff.doc.flatStructure.some((n) => n.kind === "hunk"),
@@ -513,7 +551,7 @@ Deno.test("buildView: forceDiff=false views a real diff as source (--no-diff)", 
   );
 });
 
-Deno.test("buildView: a source file that embeds a complete diff stays source", () => {
+test("buildView: a source file that embeds a complete diff stays source", () => {
   const embedded = `const patch = \`
 diff --git a/x.ts b/x.ts
 --- a/x.ts
@@ -534,7 +572,7 @@ diff --git a/x.ts b/x.ts
   );
 });
 
-Deno.test("buildView: a git header followed by ordinary source stays source", () => {
+test("buildView: a git header followed by ordinary source stays source", () => {
   const source = "diff --git a/x.ts b/x.ts\n" +
     "const value = 1;\n" +
     "export { value };\n";

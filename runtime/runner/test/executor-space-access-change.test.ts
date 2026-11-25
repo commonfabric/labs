@@ -8,13 +8,18 @@
  * client fires is also run on that client as its speculative echo.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { StreamEventsDocValue } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { Cell } from "../src/cell.ts";

@@ -4,6 +4,7 @@ import {
   inspectMaterializedValueCommand,
   inspectValueCommand,
 } from "./provenance.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const baseLink = {
   id: "of:session",
@@ -11,7 +12,7 @@ const baseLink = {
   path: ["value", "details"],
 };
 
-Deno.test("space-scoped retrieval uses the default SQLite scope", () => {
+test("space-scoped retrieval uses the default SQLite scope", () => {
   const command = inspectValueCommand({ ...baseLink, scope: "space" });
 
   assert(!command.includes("inspect overlay"));
@@ -19,7 +20,7 @@ Deno.test("space-scoped retrieval uses the default SQLite scope", () => {
   assert(command.includes(`--path-json '["value","details"]'`));
 });
 
-Deno.test("retrieval preserves every link path segment", () => {
+test("retrieval preserves every link path segment", () => {
   const command = inspectValueCommand({
     ...baseLink,
     path: ["a/b", "", 0],
@@ -30,7 +31,7 @@ Deno.test("retrieval preserves every link path segment", () => {
   assert(!rootCommand.includes("--path-json"));
 });
 
-Deno.test("user-scoped retrieval discovers and uses the raw scope key", () => {
+test("user-scoped retrieval discovers and uses the raw scope key", () => {
   const command = inspectValueCommand({ ...baseLink, scope: "user" });
 
   assert(command.includes("cf inspect overlay"));
@@ -45,7 +46,7 @@ Deno.test("user-scoped retrieval discovers and uses the raw scope key", () => {
   assert(!command.includes("--scope 'user'"));
 });
 
-Deno.test("session-scoped linked retrieval uses the raw scope key", () => {
+test("session-scoped linked retrieval uses the raw scope key", () => {
   const command = inspectLinkedValueCommand(
     { ...baseLink, scope: "session" },
     "RECEIPT_REVISION_SEQ",
@@ -62,7 +63,7 @@ Deno.test("session-scoped linked retrieval uses the raw scope key", () => {
   assert(!command.includes("--scope 'session'"));
 });
 
-Deno.test("recursive retrieval distinguishes declared and raw scopes", () => {
+test("recursive retrieval distinguishes declared and raw scopes", () => {
   const command = inspectMaterializedValueCommand({
     ...baseLink,
     scope: "space",

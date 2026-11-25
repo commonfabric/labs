@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type AclDocumentSource,
   createRuntimeSpaceMembershipProvider,
 } from "../src/cfc/space-membership.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ALICE = "did:key:alice";
 const SPACE_TEAM = "did:key:team-space";

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   fromBase64url,
@@ -11,6 +10,7 @@ import {
   bigintToMinimalTwosComplement,
   bigintToUnpaddedBase64url,
 } from "@commonfabric/bytes/bigint";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   bigintFromMtcDirect,
@@ -260,13 +260,19 @@ for (
   ]
 ) {
   const FIXTURE_SLICE_SIZE = 1000;
+  const slices: { slice: typeof fixtures; sliceLabel: string }[] = [];
   for (let at = 0; at < fixtures.length; at += FIXTURE_SLICE_SIZE) {
     const slice = full
       ? fixtures.slice(at, at + FIXTURE_SLICE_SIZE)
       : fixtures.slice(at, at + 5);
-    const sliceLabel = `fixtures ${at}..${at + slice.length - 1}`;
+    slices.push({
+      slice,
+      sliceLabel: `fixtures ${at}..${at + slice.length - 1}`,
+    });
+  }
 
-    describe(`${biToMtc.name}()`, () => {
+  describe(`${biToMtc.name}()`, () => {
+    for (const { slice, sliceLabel } of slices) {
       it(`encodes ${sliceLabel}`, () => {
         for (let i = 0; i < slice.length; i++) {
           const { value, encoded, label } = slice[i]!;
@@ -277,9 +283,11 @@ for (
           }
         }
       });
-    });
+    }
+  });
 
-    describe(`${biFromMtc.name}()`, () => {
+  describe(`${biFromMtc.name}()`, () => {
+    for (const { slice, sliceLabel } of slices) {
       it(`decodes ${sliceLabel}`, () => {
         for (let i = 0; i < slice.length; i++) {
           const { value, encoded, label } = slice[i]!;
@@ -290,12 +298,20 @@ for (
           }
         }
       });
-    });
+    }
 
-    describe(
-      `\`${biToMtc.name}()\` -> \`${biFromMtc.name}()\` round trip ` +
-        `through base64url`,
-      () => {
+    it("throws on empty input", () => {
+      expect(() => biFromMtc(new Uint8Array([]))).toThrow(
+        "empty input",
+      );
+    });
+  });
+
+  describe(
+    `\`${biToMtc.name}()\` -> \`${biFromMtc.name}()\` round trip ` +
+      `through base64url`,
+    () => {
+      for (const { slice, sliceLabel } of slices) {
         it(`round-trips ${sliceLabel}`, () => {
           for (let i = 0; i < slice.length; i++) {
             const { value, label } = slice[i]!;
@@ -309,21 +325,9 @@ for (
             }
           }
         });
-      },
-    );
-  }
-
-  //
-  // Edge cases
-  //
-
-  describe(`${biFromMtc.name}()`, () => {
-    it("throws on empty input", () => {
-      expect(() => biFromMtc(new Uint8Array([]))).toThrow(
-        "empty input",
-      );
-    });
-  });
+      }
+    },
+  );
 }
 
 //

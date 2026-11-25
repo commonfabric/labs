@@ -1,9 +1,14 @@
-/// <reference path="./clock.d.ts" />
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
 import type { SessionReport } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { ECHO_TRIP_THRESHOLD } from "../src/scheduler/constants.ts";
 import type { EchoStep } from "../src/scheduler/echo-breaker.ts";

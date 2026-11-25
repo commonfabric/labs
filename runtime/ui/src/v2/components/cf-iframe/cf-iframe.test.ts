@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { PropertyValues } from "lit";
 
 import {
@@ -10,6 +9,7 @@ import {
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
 import type { FabricBridge } from "@commonfabric/iframe-sandbox";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { runtimeContext } from "../../runtime-context.ts";
 import { CFIframe } from "./index.ts";

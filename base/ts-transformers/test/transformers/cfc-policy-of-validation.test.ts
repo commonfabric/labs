@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { validateSource } from "../utils.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The message of each `cfc-policy-of` diagnostic reported for a module that

@@ -6,6 +6,7 @@ import {
   pickInspectPort,
   profilingChildEnv,
 } from "./cf-profile-lib.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const decoder = new TextDecoder();
 
@@ -106,7 +107,7 @@ function profilingCaptureEnv(): Record<string, string> {
   return env;
 }
 
-Deno.test("cf-profile captures a CPU profile for CLI help", async () => {
+test("cf-profile captures a CPU profile for CLI help", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "cf-profile-test-" });
   try {
     const profilePath = join(tmpDir, "profile.cpuprofile");
@@ -150,7 +151,7 @@ Deno.test("cf-profile captures a CPU profile for CLI help", async () => {
   }
 });
 
-Deno.test("cf-profile requires a CLI command", async () => {
+test("cf-profile requires a CLI command", async () => {
   const scriptPath = fromFileUrl(new URL("cf-profile.ts", import.meta.url));
 
   const result = await new Deno.Command(Deno.execPath(), {
@@ -172,7 +173,7 @@ Deno.test("cf-profile requires a CLI command", async () => {
   );
 });
 
-Deno.test("cf-profile exits when the child never publishes an inspector URL", async () => {
+test("cf-profile exits when the child never publishes an inspector URL", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "cf-profile-port-test-" });
   const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
   try {
@@ -203,7 +204,7 @@ Deno.test("cf-profile exits when the child never publishes an inspector URL", as
   }
 });
 
-Deno.test("capture-deno-inspector-profile entrypoint validates required args", async () => {
+test("capture-deno-inspector-profile entrypoint validates required args", async () => {
   const scriptPath = fromFileUrl(
     new URL("capture-deno-inspector-profile.ts", import.meta.url),
   );
@@ -224,7 +225,7 @@ Deno.test("capture-deno-inspector-profile entrypoint validates required args", a
   assertStringIncludes(stderr, "--output is required");
 });
 
-Deno.test("capture-deno-inspector-profile waits for profiler start before summary stop", async () => {
+test("capture-deno-inspector-profile waits for profiler start before summary stop", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "profile-capture-test-" });
   let target: Deno.ChildProcess | undefined;
   try {
@@ -366,7 +367,7 @@ Deno.test("capture-deno-inspector-profile waits for profiler start before summar
   }
 });
 
-Deno.test("capture-deno-inspector-profile starts from a console marker", async () => {
+test("capture-deno-inspector-profile starts from a console marker", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "profile-capture-test-" });
   let target: Deno.ChildProcess | undefined;
   try {

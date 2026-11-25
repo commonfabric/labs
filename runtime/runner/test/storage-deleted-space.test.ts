@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { V2Error } from "@commonfabric/memory/v2";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   applyCommit,
@@ -17,6 +16,12 @@ import {
   resetServerExecutionConfig,
   setServerExecutionConfig,
 } from "../v2.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-derived-acl-document-space";
 const ACL_ID = `of:${SPACE}`;

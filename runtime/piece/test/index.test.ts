@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as entry from "../src/index.ts";
 import { pieceId } from "../src/piece-id.ts";
 import * as slugs from "../src/slugs.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("index", () => {
   it("exports `pieceId()` and the slug API under their own names, and nothing else", () => {

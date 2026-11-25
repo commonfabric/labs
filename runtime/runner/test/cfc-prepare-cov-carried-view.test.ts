@@ -1,7 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { CfcCellLinkRefPayload } from "../src/cfc/link-label-view.ts";

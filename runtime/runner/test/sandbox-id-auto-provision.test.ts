@@ -25,7 +25,6 @@
  * falls under case A when wired as `patternTool(bash)`.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -37,6 +36,12 @@ import {
   resetMockMode,
 } from "@commonfabric/llm/client";
 import type { BuiltInLLMMessage, BuiltInLLMTool } from "@commonfabric/api";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { createBuilder } from "../src/builder/factory.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";

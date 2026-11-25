@@ -2,10 +2,10 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { adopt } from "../cf-resizable-panel-group/membership.ts";
 import { CFResizablePanel } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A panel mounted with `properties` in a group that records what the panel
  * tells it, and the names of those calls. */

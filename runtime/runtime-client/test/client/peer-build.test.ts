@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { EventEmitter } from "@/client/emitter.ts";
 import type {
@@ -10,6 +9,7 @@ import type {
   IPCClientNotification,
   IPCRemotePost,
 } from "@/protocol/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Each test file has its own isolate. Load the runtime only after installing
 // the build define so these tests exercise the bundled-code branches.

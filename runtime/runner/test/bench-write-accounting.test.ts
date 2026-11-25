@@ -5,10 +5,10 @@
  * a reconstructed value is the value that went in.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import type { IAttestation } from "../src/storage/interface.ts";
 import {

@@ -2062,6 +2062,9 @@ export const runPatternTool: HarnessToolDefinition<
             argumentSchema: pattern.argumentSchema,
             resultSchema: pattern.resultSchema,
             dependencies: patternIndexDependencies(program.files),
+            // No `standalone`: a revision keeps its predecessor's answer, and
+            // a first version's entry is always `main.tsx`, so a harness
+            // pattern stands alone unless it needs an input with no default.
             // Recording and surfacing are separate. Only an explicit seed
             // configuration asks search to offer a passing render immediately.
             ...(publicationVerdict.status === "recorded"

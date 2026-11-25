@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { argv, cf, checkStderr, stripAnsi } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("CLI naming", () => {
   it("shows cf in top-level help", async () => {

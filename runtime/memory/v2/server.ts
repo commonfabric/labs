@@ -28,6 +28,7 @@ import {
   isCapable,
   isDeletionTombstone,
 } from "../acl.ts";
+import { asPatternIdentityRef } from "../../runner/src/meta-seam.ts";
 import { lookupSchemaDocument } from "../../runner/src/schema-registry.ts";
 import {
   type BranchCreateRequest,
@@ -418,6 +419,23 @@ const SUBSCRIPTION_REFRESH_DELAY_MS = 5;
  * (`MAX_RESULT_LINK_DEPTH` in the runner's `ensure-piece-running.ts`).
  */
 const CURRENCY_ROOT_HOPS_MAX = 10;
+
+/** Whether `id` is that of a document a computation derives. */
+const isComputedId = (id: string): boolean => id.startsWith("computed:");
+
+/**
+ * Whether `document`, the stored space instance of a document, is one a
+ * structure load of it starts no piece from and finishes reading at: it is
+ * absent, or it carries no `result` field and no pattern pointer. The
+ * pattern pointer is tested with `asPatternIdentityRef()`, the test the
+ * load itself applies. A `result` field counts whatever it holds, so a
+ * document whose `result` holds no link is not plain, though a load of it
+ * may start nothing.
+ */
+const isPlainDocument = (document: EntityDocument | null): boolean =>
+  document === null ||
+  (!("result" in document) &&
+    asPatternIdentityRef(document.patternIdentity) === undefined);
 
 /**
  * How many times the change behind a trigger may come back to a space before
@@ -1400,7 +1418,8 @@ type SessionHandle = {
 /** Kind of the LAST operation an origin commit applied to a doc — decides the
  * own-write echo shape at flush (CT-1965): `set`/`delete` heads are elided
  * (the writer provably holds their outcome), `patch` heads ride the frame as
- * full post-apply documents, and `derived` heads, which the engine wrote from
+ * full post-apply documents unless the origin's `base` shows the writer
+ * reaches them by replay, and `derived` heads, which the engine wrote from
  * the commit rather than the writer supplying them, always ride it. */
 type DirtyOp = "set" | "patch" | "delete" | "derived";
 
@@ -1408,6 +1427,19 @@ type DirtyOrigin = {
   sessionId: string;
   seq: number;
   op: DirtyOp;
+
+  /**
+   * For a `patch` head, what the writing session's replica replays its own
+   * patches over to reach the head, when that is known. A number is the seq of
+   * the revision that precedes the unbroken run of the session's own patches
+   * ending at `seq`: a session that holds that revision reaches the head by
+   * replaying the patches it sent, so the head is left out of its frame. The
+   * value `own-write` says the run follows the session's own `set` or
+   * `delete` in the same dirty batch, whose outcome the session holds without
+   * a frame. Absent, nothing shows the session can reach the head, and the
+   * head rides the frame.
+   */
+  base?: number | "own-write";
 };
 
 /**
@@ -2848,6 +2880,9 @@ class Connection {
       );
       if (response.type === "hello.ok") {
         response.sessionOpen = this.issueSessionOpenAuth();
+        if (this.#slotLimit !== MAX_UNTRUSTED_MESSAGE_SLOTS) {
+          response.messageSlots = this.#slotLimit;
+        }
       }
       this.#send(response);
       if (response.type !== "hello.ok") {
@@ -4169,10 +4204,13 @@ export class Server {
        * is). It bounds the work one message can cost the server, so a
        * higher one is for a bounded operation that needs it, such as moving
        * the source of a holder with thousands of members, whose update
-       * sends one watch per member document. It may only raise the default,
-       * and construction throws for one below it: a direct client sizes the
-       * parts it stages a watch set in by the default, and nothing tells it
-       * of a lower limit, so a set it would send in parts would be refused. */
+       * sends one watch per member document. A connection's `hello.ok`
+       * carries a limit other than the default (`messageSlots`), and a
+       * direct client holds its requests to it. It may only raise the
+       * default, and construction throws for one below it: a client that
+       * does not read `messageSlots` sizes the parts it stages a watch set
+       * in by the default, so a set it would send in parts would be
+       * refused. */
       untrustedMessageSlots?: number;
 
       authorizeSessionOpen: (
@@ -8649,15 +8687,66 @@ export class Server {
           // decides the flush-time echo shape.
           const committedWrites: Array<{ id: string; scopeKey: ScopeKey }> = [];
           const dirtyOps = new Map<string, DirtyOp>();
+          const revisionCounts = new Map<string, number>();
+          for (const revision of commit.revisions) {
+            const dirtyKey = toDirtyKey(
+              revision.id,
+              revision.scopeKey as ScopeKey,
+            );
+            revisionCounts.set(
+              dirtyKey,
+              (revisionCounts.get(dirtyKey) ?? 0) + 1,
+            );
+          }
+          // For each document whose head this commit produced by applying
+          // one `patch` of the session's exactly as the session sent it, the
+          // seq of the revision the patch was applied over. The writer's
+          // replica promotes its pending layer by replaying those patches
+          // over what it holds, with the function the engine applied them
+          // with, so a writer holding that revision holds the head. A
+          // revision whose patches are not the array the operation carried
+          // is one the engine rewrote first, with an event's stamps for one,
+          // and a document the commit wrote more than once is promoted by a
+          // path that replays only part of it; neither gets an entry, and
+          // their heads ride the frame. So does every head of a commit that
+          // carries a field edit: the writer's layer shows the edited field
+          // as the text its transaction computed, and the engine stores the
+          // text the edit integrates to, or leaves the field as it was for an
+          // edit it has already integrated.
+          const replayable = getOwnWriteEchoConfig() &&
+            applyOperations.length === 0;
+          const precedingSeqs = new Map<string, number>();
           for (const revision of commit.revisions) {
             const scopeKey = revision.scopeKey as ScopeKey;
             committedWrites.push({ id: revision.id, scopeKey });
+            if (
+              replayable && revision.op === "patch" &&
+              revision.derived !== true && revision.patches !== undefined
+            ) {
+              const dirtyKey = toDirtyKey(revision.id, scopeKey);
+              const sent = message.commit.operations[revision.opIndex];
+              if (
+                revisionCounts.get(dirtyKey) === 1 && sent?.op === "patch" &&
+                sent.patches === revision.patches
+              ) {
+                const preceding = Engine.precedingRevisionSeq(engine, {
+                  branch: commit.branch,
+                  id: revision.id,
+                  scopeKey,
+                  seq: commit.seq,
+                });
+                if (preceding !== undefined) {
+                  precedingSeqs.set(dirtyKey, preceding);
+                }
+              }
+            }
             // A revision the engine derived, a field's anchors document
             // rewritten for an edit, is no write of the committing session's,
-            // which holds nothing of it to promote. With own-write echo on, a
-            // `patch` head reaches its writer anyway; with it off, a `patch`
-            // head is withheld from its writer, so only the `derived` kind
-            // gets the rewrite to the session whose edit moved the anchors.
+            // which holds nothing of it to promote. A `patch` head is
+            // withheld from a writer that reaches it by replay, and from
+            // every writer with own-write echo off, so only the `derived`
+            // kind gets the rewrite to the session whose edit moved the
+            // anchors.
             dirtyOps.set(
               toDirtyKey(revision.id, scopeKey),
               revision.derived === true ? "derived" : revision.op,
@@ -8668,6 +8757,7 @@ export class Server {
               sessionId: message.sessionId,
               seq: commit.seq,
               ops: dirtyOps,
+              precedingSeqs,
             });
           } else {
             // Every operation elided: nothing was written, so no document
@@ -8723,11 +8813,12 @@ export class Server {
           // Dirty-origin tracking decides the echo shape for the session's
           // own accepted writes (CT-1965): set- and delete-produced heads are
           // elided from the frame — the writer provably holds their outcome,
-          // and the verdict plus marker promote it — while patch-produced
-          // heads ride the frame as full post-apply documents, since merged
-          // state is truth the writer cannot extrapolate. REJECTED commits'
-          // docs are staged origin-less (stageConflictRefreshDirtyIds), so
-          // repair frames DO cover them.
+          // and the verdict plus marker promote it — while a patch-produced
+          // head rides the frame as the full post-apply document, since
+          // merged state is truth the writer cannot extrapolate, unless the
+          // writer holds the revision its patches were applied over.
+          // REJECTED commits' docs are staged origin-less
+          // (stageConflictRefreshDirtyIds), so repair frames DO cover them.
           session.pendingCaughtUpLocalSeq = Math.max(
             session.pendingCaughtUpLocalSeq,
             message.commit.localSeq,
@@ -12022,14 +12113,24 @@ export class Server {
                     // have moved it since, so `entry.doc` IS that commit's
                     // post-apply document. A `set`/`delete` head is then elided —
                     // the client supplied the bytes (or the absence) and the
-                    // verdict + marker promote them — while a `patch` head is
-                    // delivered in full: its post-apply state can contain merged
-                    // foreign content the writer's own ops cannot reproduce.
+                    // verdict + marker promote them. A `patch` head can contain
+                    // merged foreign content the writer's own ops cannot
+                    // reproduce, so it is elided only where the origin names
+                    // the base its run of patches started from and the session
+                    // holds that base: the revision this session was last sent
+                    // or last had elided, or its own `set` or `delete` in this
+                    // batch. Every revision from that base to the head is then
+                    // a patch the session sent, and replaying them over the
+                    // base yields `entry.doc`. Any other `patch` head is
+                    // delivered in full.
                     const held = origin !== undefined &&
                       origin.sessionId === sessionId &&
                       origin.seq === entry.seq &&
                       origin.op !== "derived" &&
-                      (origin.op !== "patch" || !getOwnWriteEchoConfig());
+                      (origin.op !== "patch" || !getOwnWriteEchoConfig() ||
+                        origin.base === "own-write" ||
+                        (origin.base !== undefined &&
+                          previous?.seq === origin.base));
                     if (!held) {
                       upserts.push(entry);
                     }
@@ -12490,6 +12591,13 @@ export class Server {
       sessionId: string;
       seq: number;
       ops: ReadonlyMap<string, DirtyOp>;
+
+      /**
+       * For each dirty key whose head the commit produced by applying one
+       * `patch` exactly as the session sent it, the seq of the revision
+       * that patch was applied over.
+       */
+      precedingSeqs?: ReadonlyMap<string, number>;
     },
   ): void {
     if (dirtyIds !== undefined) {
@@ -12521,10 +12629,32 @@ export class Server {
           // every session, the writer included.
           origins?.delete(id);
         } else {
+          const op = origin.ops.get(id) ?? "patch";
+          const preceding = origin.precedingSeqs?.get(id);
+          // A patch applied over the head an origin of this session already
+          // names continues that origin's run: the two commits are adjacent
+          // revisions of the document, both the session's own. The run then
+          // keeps the base it started from, or starts at the session's own
+          // `set` or `delete`. A patch applied over any other revision
+          // starts a run at that revision.
+          const earlier = origins?.get(id);
+          const continues = earlier !== undefined &&
+            earlier.sessionId === origin.sessionId &&
+            earlier.seq === preceding;
+          const base = op !== "patch" || preceding === undefined
+            ? undefined
+            : !continues
+            ? preceding
+            : earlier.op === "patch"
+            ? earlier.base
+            : earlier.op === "derived"
+            ? undefined
+            : "own-write";
           origins?.set(id, {
             sessionId: origin.sessionId,
             seq: origin.seq,
-            op: origin.ops.get(id) ?? "patch",
+            op,
+            ...(base === undefined ? {} : { base }),
           });
         }
       }
@@ -12980,15 +13110,18 @@ export class Server {
 
   /**
    * Tells each armed reader of `space` that registered an instance whose
-   * row moved since its pull, once, and disarms it. Called after each
-   * change to `space`'s currency index, whose rows are current by then.
+   * row moved since its pull, once, and disarms it, and shortens the arming
+   * of each reader armed for longer than `space` may now be rested on.
+   * Called after each change to `space`'s currency index, whose rows are
+   * current by then.
    */
   #tellCurrencyReaders(space: string, engine: Engine.Engine): void {
     try {
       this.#tellArmedCurrencyReaders(space, engine);
     } finally {
-      // The index changed, and a reader may have been disarmed: either can
-      // change which demand carried into `space` stands.
+      // The index changed, and a reader may have been disarmed or had its
+      // arming shortened: each can change which demand carried into `space`
+      // stands.
       this.#refreshCarriedDemand(space);
     }
   }
@@ -13013,15 +13146,44 @@ export class Server {
     }
     // A reader armed for longer than `space` now holds was told a later
     // time, or none, by a pull made before a slice here was recorded as
-    // expiring sooner.
+    // expiring sooner, or before `space` was armed with a space it reads
+    // for a limited time.
     const until = this.#currencyRestsUntil(space, engine);
-    if (until === undefined) return;
-    for (const [reader, entry] of [...armed]) {
+    if (until !== undefined) this.#shortenCurrencyArmings(space, until);
+  }
+
+  /**
+   * Shortens to `until` the arming of each reader armed with `space` for
+   * longer, and tells that reader, once `space` may be rested on only until
+   * then. Nothing in `space` moved, so the reader stays armed and pulls
+   * nothing, and its loop judges again, which returns it that time.
+   * Disarming it instead would have it pull again, and where it is read
+   * back by `space`, round a circle of spaces, the trigger would disarm
+   * `space` in turn, whose pull would arm the reader for longer again: the
+   * circle would go round with nothing moving in it, and never yield. A
+   * reader shortened may itself be rested on only until `until`, so its own
+   * readers are shortened in turn, which ends at the first space whose
+   * readers are armed until then or sooner.
+   *
+   * @returns Whether a reader of `space` was shortened. The caller brings
+   * the demand carried into `space` into line.
+   */
+  #shortenCurrencyArmings(space: string, until: number): boolean {
+    const armed = this.#currencyArmed.get(space);
+    if (armed === undefined) return false;
+    const shortened: string[] = [];
+    for (const [reader, entry] of armed) {
       if (entry.until !== undefined && entry.until <= until) continue;
-      armed.delete(reader);
-      this.#triggerCurrencyReader(reader);
-      this.#queueFollowForCarriedDemand(reader, space);
+      armed.set(reader, { ...entry, until });
+      shortened.push(reader);
     }
+    for (const reader of shortened) {
+      this.#notifyCurrencyChanged(reader);
+      if (this.#shortenCurrencyArmings(reader, until)) {
+        this.#refreshCarriedDemand(reader);
+      }
+    }
+    return shortened.length > 0;
   }
 
   /**
@@ -13392,6 +13554,11 @@ export class Server {
    * being read, so one a session names at an instance narrower than the
    * space, which the space may hold no instance of, is judged too.
    *
+   * A root that is no `computed:` document and whose stored space instance
+   * is absent or carries neither a `result` field nor a pattern pointer
+   * (`isPlainDocument()`) is one a structure load starts no piece from,
+   * whatever writes it. It is judged as no piece and returned in `plain`.
+   *
    * A root may rest on a slice that read another space. Each space read by
    * a slice the demand rows are resolved under is followed first: one that
    * `space` is armed with is not asked, and any other is pulled from.
@@ -13403,12 +13570,13 @@ export class Server {
    * upstream of them alone.
    *
    * @returns The roots that pass, each with the piece it was judged as, the
-   * roots that are held, the reads that keep a held root or a running piece
-   * stale upstream, each with the piece to start for it, how many roots
-   * each reason refused, the slices marked since `space`'s serving loop
-   * last asked, and the earliest time a slice of `space` expires at or its
-   * arming with a space it reads runs out, where either does: the roots are
-   * to be judged again then, since no commit reports it.
+   * roots a load starts no piece from, the roots that are held, the reads
+   * that keep a held root or a running piece stale upstream, each with the
+   * piece to start for it, how many roots each reason refused, the slices
+   * marked since `space`'s serving loop last asked, and the earliest time a
+   * slice of `space` expires at or its arming with a space it reads runs
+   * out, where either does: the roots are to be judged again then, since no
+   * commit reports it.
    */
   async judgeCurrencyRoots(
     space: string,
@@ -13425,6 +13593,13 @@ export class Server {
      * it leaves the root unstarted.
      */
     servable: Array<{ root: string; piece: string; origins: string[] }>;
+
+    /**
+     * The roots a structure load starts no piece from (`isPlainDocument()`),
+     * absent where there is none.
+     */
+    plain?: string[];
+
     held: Array<{ root: string; piece: string; readers: string[] }>;
     upstream: CurrencyUpstreamRead[];
     refused: Partial<Record<CurrencyRefusal, number>>;
@@ -13450,10 +13625,15 @@ export class Server {
       return { servable: [], held: [], upstream: [], ...found() };
     }
 
+    /** The roots a structure load starts no piece from. */
+    const plain = new Set<string>();
+
     /**
      * The recorded piece `root` leads to: the one piece recorded as deriving
      * it where it is a computed document, or else the piece its back-links
-     * reach, if they reach one.
+     * reach, if they reach one. A root that is no computed document and
+     * whose stored space instance is plain leads to none, and is noted in
+     * `plain`.
      */
     const pieceOf = (root: string): string | undefined => {
       const deriver = selectCurrencyDeriver(engine, { space, id: root });
@@ -13467,6 +13647,10 @@ export class Server {
           id,
           scopeKey: "space",
         });
+        if (id === root && !isComputedId(root) && isPlainDocument(document)) {
+          plain.add(root);
+          return undefined;
+        }
         const link = document === null
           ? undefined
           : (document as Record<string, unknown>).result;
@@ -13481,10 +13665,17 @@ export class Server {
     for (const root of roots) {
       const piece = pieceOf(root);
       if (piece !== undefined) pieces.set(root, piece);
-      else refused["no-record"] = (refused["no-record"] ?? 0) + 1;
+      else if (!plain.has(root)) {
+        refused["no-record"] = (refused["no-record"] ?? 0) + 1;
+      }
     }
+    /** What every return carries besides what the index judged. */
+    const unjudged = () => ({
+      ...(plain.size > 0 && { plain: [...plain] }),
+      ...found(),
+    });
     if (pieces.size === 0 && running.length === 0) {
-      return { servable: [], held: [], upstream: [], ...found() };
+      return { servable: [], held: [], upstream: [], ...unjudged() };
     }
     const demand = this.demandForSpace(
       space,
@@ -13559,7 +13750,7 @@ export class Server {
       const reason = reasons.get(piece);
       if (reason !== undefined) refused[reason] = (refused[reason] ?? 0) + 1;
     }
-    return { servable, held, upstream: judgment.upstream, ...found() };
+    return { servable, held, upstream: judgment.upstream, ...unjudged() };
   }
 
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a

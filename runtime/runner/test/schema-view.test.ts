@@ -6,13 +6,18 @@
 // covers the refusal contract — where a mismatch surfaces, and where it does
 // not.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLogger } from "@commonfabric/logger";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import { isSchemaMismatchError } from "../src/schema-view.ts";
 import type { JSONSchema } from "../src/builder/types.ts";

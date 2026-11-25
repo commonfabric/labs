@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
@@ -17,6 +16,12 @@ import {
 } from "@commonfabric/runner";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { EmulatedStorageManager } from "../../runner/src/storage/v2-emulate.ts";
 import { newSharedServer } from "../../runner/test/memory-v2-test-utils.ts";
 

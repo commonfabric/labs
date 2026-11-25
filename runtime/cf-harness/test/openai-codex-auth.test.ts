@@ -7,9 +7,9 @@ import {
 } from "@std/assert";
 import { join } from "@std/path";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import {
   completeOpenAICodexDeviceAuthorization,
   createOpenAICodexBrowserAuthorization,
@@ -57,7 +57,7 @@ const callbackOrigin = (authorizationUrl: string): string =>
   new URL(new URL(authorizationUrl).searchParams.get("redirect_uri") ?? "")
     .origin;
 
-Deno.test("Codex browser authorization pins the OpenCode/pi PKCE contract", async () => {
+test("Codex browser authorization pins the OpenCode/pi PKCE contract", async () => {
   const flow = await createOpenAICodexBrowserAuthorization({
     randomBytes: (length) => new Uint8Array(length).fill(7),
   });
@@ -81,7 +81,7 @@ Deno.test("Codex browser authorization pins the OpenCode/pi PKCE contract", asyn
   assertEquals(flow.verifier.length > 40, true);
 });
 
-Deno.test("Codex account identity requires the pinned nested claim", () => {
+test("Codex account identity requires the pinned nested claim", () => {
   assertThrows(
     () =>
       extractOpenAICodexAccountId(jwt({
@@ -92,7 +92,7 @@ Deno.test("Codex account identity requires the pinned nested claim", () => {
   );
 });
 
-Deno.test("Codex credential refresh is serialized per owner and persists rotation", async () => {
+test("Codex credential refresh is serialized per owner and persists rotation", async () => {
   const store = new InMemoryHarnessCredentialStore();
   const original: OpenAICodexOAuthCredential = {
     type: "oauth",
@@ -143,7 +143,7 @@ Deno.test("Codex credential refresh is serialized per owner and persists rotatio
   );
 });
 
-Deno.test("Codex credential refresh preserves a token when rotation is omitted", async () => {
+test("Codex credential refresh preserves a token when rotation is omitted", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.set("local", "openai-codex", {
     type: "oauth",
@@ -182,7 +182,7 @@ Deno.test("Codex credential refresh preserves a token when rotation is omitted",
   );
 });
 
-Deno.test("Codex credential refresh persists rotation before reporting a late abort", async () => {
+test("Codex credential refresh persists rotation before reporting a late abort", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.set("local", "openai-codex", {
     type: "oauth",
@@ -225,7 +225,7 @@ Deno.test("Codex credential refresh persists rotation before reporting a late ab
   );
 });
 
-Deno.test("Codex credential resolution never falls back after revocation", async () => {
+test("Codex credential resolution never falls back after revocation", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.set("local", "openai-codex", {
     type: "oauth",
@@ -249,7 +249,7 @@ Deno.test("Codex credential resolution never falls back after revocation", async
   assertEquals(error.message, "OpenAI Codex token refresh failed (400)");
 });
 
-Deno.test("Codex credential resolution fails before traffic when disconnected or unhealthy", async () => {
+test("Codex credential resolution fails before traffic when disconnected or unhealthy", async () => {
   const disconnected = new InMemoryHarnessCredentialStore();
   let requests = 0;
   const disconnectedResolver = new OpenAICodexCredentialResolver({
@@ -294,7 +294,7 @@ Deno.test("Codex credential resolution fails before traffic when disconnected or
   assertEquals(requests, 0);
 });
 
-Deno.test("Codex browser login validates state and persists only after exchange", async () => {
+test("Codex browser login validates state and persists only after exchange", async () => {
   const store = new InMemoryHarnessCredentialStore();
   const auth = new OpenAICodexAuthService(store, "local");
   let redirectUri: string | null = null;
@@ -342,7 +342,7 @@ Deno.test("Codex browser login validates state and persists only after exchange"
   );
 });
 
-Deno.test("Codex credential refresh honors pre-abort and releases its owner lock on mid-refresh abort", async () => {
+test("Codex credential refresh honors pre-abort and releases its owner lock on mid-refresh abort", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.set("local", "openai-codex", {
     type: "oauth",
@@ -402,7 +402,7 @@ Deno.test("Codex credential refresh honors pre-abort and releases its owner lock
   });
 });
 
-Deno.test("Codex credential resolution preserves abort during credential reads", async () => {
+test("Codex credential resolution preserves abort during credential reads", async () => {
   const credential: OpenAICodexOAuthCredential = {
     type: "oauth",
     providerId: "openai-codex",
@@ -442,7 +442,7 @@ Deno.test("Codex credential resolution preserves abort during credential reads",
   assertStrictEquals(error, reason);
 });
 
-Deno.test("Codex browser login preserves abort during PKCE generation", async () => {
+test("Codex browser login preserves abort during PKCE generation", async () => {
   const controller = new AbortController();
   let authorizationUrls = 0;
   const login = loginOpenAICodexWithBrowser({
@@ -464,7 +464,7 @@ Deno.test("Codex browser login preserves abort during PKCE generation", async ()
   assertEquals(authorizationUrls, 0);
 });
 
-Deno.test("Codex exchange and refresh network errors have secret-free cause graphs", async () => {
+test("Codex exchange and refresh network errors have secret-free cause graphs", async () => {
   const exchangeError = await assertRejects(() =>
     exchangeOpenAICodexAuthorizationCode({
       code: "exchange-code-secret",
@@ -513,7 +513,7 @@ Deno.test("Codex exchange and refresh network errors have secret-free cause grap
   assertEquals(refreshGraph.includes("account-secret-in-cause"), false);
 });
 
-Deno.test("Codex authorization-code exchange preserves non-DOM abort reasons", async () => {
+test("Codex authorization-code exchange preserves non-DOM abort reasons", async () => {
   const controller = new AbortController();
   let markStarted!: () => void;
   const started = new Promise<void>((resolve) => {
@@ -542,7 +542,7 @@ Deno.test("Codex authorization-code exchange preserves non-DOM abort reasons", a
   assertStrictEquals(error, reason);
 });
 
-Deno.test("Codex browser login ignores wrong-state callbacks and accepts the valid callback", async () => {
+test("Codex browser login ignores wrong-state callbacks and accepts the valid callback", async () => {
   const store = new InMemoryHarnessCredentialStore();
   let exchanges = 0;
   const result = await loginOpenAICodexWithBrowser({
@@ -580,7 +580,7 @@ Deno.test("Codex browser login ignores wrong-state callbacks and accepts the val
   assertEquals(result.accountId, "acct-after-wrong-state");
 });
 
-Deno.test("Codex browser login cancellation closes the callback listener", async () => {
+test("Codex browser login cancellation closes the callback listener", async () => {
   const controller = new AbortController();
   await assertRejects(
     () =>
@@ -597,7 +597,7 @@ Deno.test("Codex browser login cancellation closes the callback listener", async
   );
 });
 
-Deno.test("Codex browser login rejects a pre-aborted signal before opening the listener", async () => {
+test("Codex browser login rejects a pre-aborted signal before opening the listener", async () => {
   const controller = new AbortController();
   const reason = new DOMException("already canceled", "AbortError");
   controller.abort(reason);
@@ -621,7 +621,7 @@ Deno.test("Codex browser login rejects a pre-aborted signal before opening the l
   assertEquals(authorizationUrls, 0);
 });
 
-Deno.test("Codex browser login rejects concurrent transactions for one owner", async () => {
+test("Codex browser login rejects concurrent transactions for one owner", async () => {
   const controller = new AbortController();
   let markReady!: () => void;
   const ready = new Promise<void>((resolve) => {
@@ -652,7 +652,7 @@ Deno.test("Codex browser login rejects concurrent transactions for one owner", a
   await assertRejects(() => first, DOMException, "cancel first");
 });
 
-Deno.test("Codex device login honors pending and slow_down intervals", async () => {
+test("Codex device login honors pending and slow_down intervals", async () => {
   const device = await startOpenAICodexDeviceAuthorization({
     fetchFn: () =>
       Promise.resolve(
@@ -732,7 +732,7 @@ Deno.test("Codex device login honors pending and slow_down intervals", async () 
   assertEquals(result.accountId, "acct-device");
 });
 
-Deno.test("Codex device login stops on a terminal provider denial", async () => {
+test("Codex device login stops on a terminal provider denial", async () => {
   let waits = 0;
   await assertRejects(
     () =>
@@ -762,7 +762,7 @@ Deno.test("Codex device login stops on a terminal provider denial", async () => 
   assertEquals(waits, 1);
 });
 
-Deno.test("Codex refresh classifies invalid grants without exposing tokens", async () => {
+test("Codex refresh classifies invalid grants without exposing tokens", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.set("local", "openai-codex", {
     type: "oauth",
@@ -796,7 +796,7 @@ Deno.test("Codex refresh classifies invalid grants without exposing tokens", asy
   );
 });
 
-Deno.test("Codex terminal refresh health persists and prevents another request", async () => {
+test("Codex terminal refresh health persists and prevents another request", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.set("local", "openai-codex", {
     type: "oauth",
@@ -839,7 +839,7 @@ Deno.test("Codex terminal refresh health persists and prevents another request",
   assertEquals(requests, 1);
 });
 
-Deno.test("Codex refresh rotation and terminal health survive file-store reopen", async () => {
+test("Codex refresh rotation and terminal health survive file-store reopen", async () => {
   const root = await Deno.makeTempDir();
   const path = join(root, "auth.json");
   const store = new FileHarnessCredentialStore({ path });
@@ -902,7 +902,7 @@ Deno.test("Codex refresh rotation and terminal health survive file-store reopen"
   );
 });
 
-Deno.test("Codex transient refresh failures leave credential health unchanged", async () => {
+test("Codex transient refresh failures leave credential health unchanged", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.set("local", "openai-codex", {
     type: "oauth",
@@ -933,7 +933,7 @@ Deno.test("Codex transient refresh failures leave credential health unchanged", 
   );
 });
 
-Deno.test("Codex login clears terminal credential health", async () => {
+test("Codex login clears terminal credential health", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.updateRecord("local", "openai-codex", () => ({
     credential: {
@@ -965,7 +965,7 @@ Deno.test("Codex login clears terminal credential health", async () => {
   });
 });
 
-Deno.test("Codex login cancellation while queued preserves prior auth", async () => {
+test("Codex login cancellation while queued preserves prior auth", async () => {
   const store = new InMemoryHarnessCredentialStore();
   const previous: OpenAICodexOAuthCredential = {
     type: "oauth",
@@ -1010,7 +1010,7 @@ Deno.test("Codex login cancellation while queued preserves prior auth", async ()
   assertEquals(await store.get("local", "openai-codex"), previous);
 });
 
-Deno.test("Codex login reports late cancellation after its atomic save", async () => {
+test("Codex login reports late cancellation after its atomic save", async () => {
   const store = new InMemoryHarnessCredentialStore();
   const controller = new AbortController();
   const reason = new Error("login canceled after commit");
@@ -1037,7 +1037,7 @@ Deno.test("Codex login reports late cancellation after its atomic save", async (
   assertEquals(await store.get("local", "openai-codex"), credential);
 });
 
-Deno.test("Codex token exchange rejects malformed token responses before persistence", async () => {
+test("Codex token exchange rejects malformed token responses before persistence", async () => {
   const error = await assertRejects(() =>
     exchangeOpenAICodexAuthorizationCode({
       code: "code",
@@ -1687,7 +1687,7 @@ const refreshedTokenReply = (): Response =>
     { status: 200 },
   );
 
-Deno.test("a Codex token the provider refused is refreshed though its expiry is ahead", async () => {
+test("a Codex token the provider refused is refreshed though its expiry is ahead", async () => {
   const store = new InMemoryHarnessCredentialStore();
   const refused = unexpiredCodexCredential("access-refused");
   await store.set("local", "openai-codex", refused);
@@ -1712,7 +1712,7 @@ Deno.test("a Codex token the provider refused is refreshed though its expiry is 
   );
 });
 
-Deno.test("a refused Codex token already replaced is not refreshed again", async () => {
+test("a refused Codex token already replaced is not refreshed again", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.set(
     "local",
@@ -1730,7 +1730,7 @@ Deno.test("a refused Codex token already replaced is not refreshed again", async
   assertEquals(next?.credential.accessToken, "access-newer");
 });
 
-Deno.test("a refused Codex token whose refresh is refused for good needs reconnection", async () => {
+test("a refused Codex token whose refresh is refused for good needs reconnection", async () => {
   const store = new InMemoryHarnessCredentialStore();
   const refused = unexpiredCodexCredential("access-refused");
   await store.set("local", "openai-codex", refused);
@@ -1752,7 +1752,7 @@ Deno.test("a refused Codex token whose refresh is refused for good needs reconne
   );
 });
 
-Deno.test("a refused Codex token whose refresh cannot be completed stays connected", async () => {
+test("a refused Codex token whose refresh cannot be completed stays connected", async () => {
   const store = new InMemoryHarnessCredentialStore();
   const refused = unexpiredCodexCredential("access-refused");
   await store.set("local", "openai-codex", refused);
@@ -1774,7 +1774,7 @@ Deno.test("a refused Codex token whose refresh cannot be completed stays connect
   );
 });
 
-Deno.test("a refresh that returns a token with no account id is reported as the refresh's failure", async () => {
+test("a refresh that returns a token with no account id is reported as the refresh's failure", async () => {
   const store = new InMemoryHarnessCredentialStore();
   const refused = unexpiredCodexCredential("access-refused");
   await store.set("local", "openai-codex", refused);
@@ -1803,7 +1803,7 @@ Deno.test("a refresh that returns a token with no account id is reported as the 
   );
 });
 
-Deno.test("marking a refused Codex token needs reconnection only while it is the stored one", async () => {
+test("marking a refused Codex token needs reconnection only while it is the stored one", async () => {
   const store = new InMemoryHarnessCredentialStore();
   const stored = unexpiredCodexCredential("access-stored");
   await store.set("local", "openai-codex", stored);

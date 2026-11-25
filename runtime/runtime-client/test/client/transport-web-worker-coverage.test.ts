@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { readCoverageProfileUrls } from "@commonfabric/test-support/coverage-profiles";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("transport-web-worker-coverage", () => {
   it("keeps a complete coverage profile from a worker the process disposes of just before exiting", async () => {

@@ -14,7 +14,6 @@
  * surface.
  */
 
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
 import {
@@ -36,6 +35,7 @@ import {
   WALKTHROUGH_PATH,
   walkthroughCommands,
 } from "./check-verb-session-sync.ts";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 

@@ -5,7 +5,6 @@
  * documents once it is stored.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
@@ -14,6 +13,7 @@ import {
   cloneSchemaMutable,
   internSchema,
 } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { ContextualFlowControl } from "../src/cfc.ts";
 import { externalizeSchema } from "../src/link-utils.ts";
