@@ -26624,6 +26624,28 @@ today's path, compiled from the same source, or as a compiled piece.
       plain. A write through an output the crate emits as an input, as
       `computed(() => x.get())`, lands in the argument (question 86).
 
+1066. **A reference that names nothing reads its default** (replaces the
+      sentence of note 1061 on a reference by key that no position holds). The
+      owner's decision of 2026-11-24: a read through a reference by key that no
+      position holds gives what a read of a place that holds nothing gives, the
+      default declared for it, and nothing where none is declared. How long ago
+      the element left plays no part, and a cell whose type admits no
+      `undefined` and that declares a default never reads as `undefined`.
+      `Store.locate` takes the default of a declared place, as a state cell, at
+      the position where the place holds the link, before the default of a later
+      link that declares one, so a read that starts at the cell through a
+      reference with no schema of its own gives it as well. Before that only a
+      read through the result's redirect gave the default: value code that read
+      `center.get().lat` and a handler that copied `center.get()` failed. The
+      test is in `exec/test/executor.test.ts` over
+      `compare/fixtures/dangling-default.tsx`, seen failing first, and five
+      tests of references by key expect the cell's default, `null` or
+      `{ lat: 0, lng: 0 }`, where they expected `undefined`. ES §2.5 ("A
+      reference whose key no position holds") states it;
+      `plan-and-label-templates.md` §1.3, the README, the language subset and
+      the scheduler document say the same. A write through such a reference is
+      still refused (`MissingKey`).
+
 ### CFC questions deferred, round nineteen, fourth continuation
 
 Noted and not resolved, by the owner's instruction of 2026-11-22.
