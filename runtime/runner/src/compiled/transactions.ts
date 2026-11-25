@@ -2643,7 +2643,7 @@ export class RuntimeTransactions implements TransactionHooks {
         path,
         store,
         memberships,
-        splice,
+        made ?? splice,
       );
       if (ofBuckets.length > 0 || ofLists.length > 0 || ofMarkers.length > 0) {
         writes = [...given, ...ofBuckets, ...ofLists, ...ofMarkers];
@@ -2904,7 +2904,8 @@ export class RuntimeTransactions implements TransactionHooks {
     );
     if (made.length === 0 || arrays.length === 0) return [];
     // A splice wrote the members it put in, and only those can hold a
-    // marker it made: what is looked at follows what was written.
+    // marker it made: what is looked at follows what was written. `splice`
+    // is the splice the store made at `path`.
     const held = store.peek(doc, path);
     const wanted = new Set<object>(made.map(({ stream }) => stream));
     const paths = new Map<object, string[]>();

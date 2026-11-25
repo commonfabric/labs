@@ -3870,6 +3870,12 @@ export class Instance {
    * what is kept under the element's key.
    */
   readonly #indexReaders = new Map<string, Set<string>>();
+  /**
+   * The collections an entry of `#indexReaders` was registered for, once:
+   * a collection none of whose elements has a reader of its position
+   * names no element when its positions move (`#reassemble`).
+   */
+  readonly #indexedCollections = new Set<number>();
   /** On the root: the readers of each document, by path. */
   readonly #readers = new Map<string, Readers>();
   /**
@@ -8264,6 +8270,7 @@ export class Instance {
       const readers = this.#indexReaders.get(under) ?? new Set();
       readers.add(body);
       this.#indexReaders.set(under, readers);
+      this.#indexedCollections.add(collection);
       this.#slot(body);
     }
   }
@@ -9661,6 +9668,7 @@ export class Instance {
       const readers = this.#indexReaders.get(under) ?? new Set();
       readers.add(key);
       this.#indexReaders.set(under, readers);
+      this.#indexedCollections.add(collection);
     }
     // A write to something that the evaluation had read, and a change
     // of something it had used, while it ran.
@@ -10896,7 +10904,7 @@ export class Instance {
       );
     }
     if (elements.length !== length) return undefined;
-    const indexed = this.#indexReaders.size > 0;
+    const indexed = this.#indexedCollections.has(collection);
     const end = high < 0 ? elements.length : Math.min(high, elements.length);
     for (let index = low; index < end; index++) {
       this.counts.elementsVisited += 1;
