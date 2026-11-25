@@ -28,6 +28,7 @@
  * once for each principal that demands the piece.
  */
 import { isWalkableObjectNotArray } from "@commonfabric/data-model";
+import type { Artifact } from "../../../../base/pattern-compiler/exec/executor.ts";
 import type { FabricValue } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity";
 
@@ -97,6 +98,42 @@ const EFFECTS = {
 /** Whether the runtime answers the effect `builtin` of a compiled piece. */
 export const answersEffect = (builtin: string): boolean =>
   Object.hasOwn(EFFECTS, builtin);
+
+/**
+ * Why a compiled program cannot run as a compiled piece, where it cannot: a
+ * plan of the program requests an effect that no built-in of the runtime
+ * answers for a compiled piece (`answersEffect`). A `wish`, and the effects
+ * `fetchJson`, `fetchJsonUnchecked`, `fetchText` and `fetchBinary` of the
+ * reactive tier, are answered by the runtime's own. An effect a handler
+ * requests is not in the operations of a plan, and is not looked for here:
+ * it stays unanswered. Every pattern of the program is looked at where the
+ * compiler gives them, since a function body of the pattern may instantiate
+ * any of them.
+ */
+export const unansweredRequestOf = (
+  compiled: { main: Artifact; modules?: { patterns: Artifact[] }[] },
+): string | undefined => {
+  const patterns = [
+    compiled.main,
+    ...(compiled.modules ?? []).flatMap(({ patterns }) => patterns),
+  ];
+  for (const { plan, name } of patterns) {
+    const operations = (plan as {
+      operations?: { kind?: string; implementation?: { builtin?: string } }[];
+    }).operations ?? [];
+    const unanswered = operations.find(({ kind, implementation }) =>
+      kind === "effect" && !answersEffect(implementation?.builtin ?? "")
+    );
+    if (unanswered !== undefined) {
+      return `The plan of the pattern \`${
+        name ?? "default"
+      }\` requests the effect \`${
+        unanswered.implementation?.builtin ?? "unnamed"
+      }\`, which a compiled piece does not answer in this runtime.`;
+    }
+  }
+  return undefined;
+};
 
 /**
  * The runtime's `wish`, and its built-ins of `EFFECTS`, registered for the

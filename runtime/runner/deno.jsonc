@@ -105,6 +105,8 @@
     "./cfc/represents-principal": "./src/cfc/represents-principal.ts",
     "./compiled/compile.deno": "./src/compiled/compile.deno.ts",
     "./compiled/serving": "./src/compiled/serving.ts",
+    "./compiled/setup": "./src/compiled/setup.ts",
+    "./compiled/wish": "./src/compiled/wish.ts",
     "./executor/lifecycle-verb": "./src/executor/lifecycle-verb.ts",
     "./executor/host": "./src/executor/host.ts",
     "./executor/loopback-storage": "./src/executor/loopback-storage.ts",

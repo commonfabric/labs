@@ -25,6 +25,7 @@ import {
   setUpCompiledPiece,
 } from "../../src/compiled/setup.ts";
 import { compartmentEvaluator } from "../../src/compiled/value-code.ts";
+import { getMetaLink } from "../../src/link-utils.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 
@@ -632,6 +633,50 @@ describe("a compiled piece under the serving loop", () => {
       expect(value.last).toBe("undefined");
       expect(compiled).toEqual([program]);
       expect(evaluated).toBe(1);
+    });
+
+    it("names the argument document in the metadata of the result document, where a client finds it, and derives from what the client writes into it", async () => {
+      const sender = client();
+      const program = await programOf("handler");
+      type Result = { note: string; record?: unknown };
+      const result = sender.getCell<Result>(space, "handler");
+      await commit(sender, (tx) => {
+        setUpCompiledPiece(
+          sender,
+          tx,
+          program,
+          { secret: "s", note: "n" },
+          result.withTx(tx),
+        );
+      });
+      const cell = sender.getCellFromLink<Result>(
+        result.getAsNormalizedFullLink(),
+      );
+      cancels.push(cell.sink(() => {}));
+      await waitForCellValue<Result>(
+        sender,
+        cell,
+        (value) => value?.note === "n",
+        { stuckLabel: "a client reads the result of the load" },
+      );
+
+      const argument = getMetaLink(cell, "argument");
+      expect(argument?.id).toBe(
+        argumentDocumentOf(result.getAsNormalizedFullLink().id),
+      );
+      await commit(sender, (tx) => {
+        sender.getCellFromLink<{ note: string }>(argument!, undefined, tx)
+          .key("note").set("m");
+      });
+
+      const value = await waitForCellValue<Result>(
+        sender,
+        cell,
+        (value) => value?.note === "m",
+        { stuckLabel: "a client reads what the piece derived from its write" },
+      );
+      expect(value.note).toBe("m");
+      expect(serving.pieces().length).toBe(1);
     });
 
     it("is not evaluated where a client wrote an artifact in the place of the source, and the client reads why", async () => {

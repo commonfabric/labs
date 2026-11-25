@@ -15,6 +15,7 @@ import {
 import type { FabricValue } from "@commonfabric/data-model";
 import { type Cell, convertCellsToLinks } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
+import { rawMetaWriteAuthorization } from "../meta-seam.ts";
 import type { Runtime } from "../runtime.ts";
 import type { URI } from "../sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -108,10 +109,16 @@ export const patternProgramOf = (text: string): PatternProgram | undefined => {
  * the document of the source, which holds `program` as JSON text, the
  * document that names it for the result document of `resultCell`, and the
  * argument document, where `argument` holds values and cells. The caller
- * commits `tx`, and the result document stays empty until a serving runtime
- * compiled the source and derived the result. The client writes no
- * artifact: the serving runtime evaluates value code its own compile gave
- * and none it finds stored.
+ * commits `tx`, and the value of the result document stays empty until a
+ * serving runtime compiled the source and derived the result. The client
+ * writes no artifact: the serving runtime evaluates value code its own
+ * compile gave and none it finds stored.
+ *
+ * The metadata of the result document links to the argument document, as
+ * the runner's setup links a piece's result to its argument, so a client
+ * that reads or writes the argument of a piece finds it the same way for
+ * a compiled piece (`PiecesController.getArgument`). Returns the entity of
+ * the document of the source, which is named by the text it holds.
  */
 export const setUpCompiledPiece = (
   runtime: Runtime,
@@ -119,7 +126,7 @@ export const setUpCompiledPiece = (
   program: PatternProgram,
   argument: unknown,
   resultCell: Cell<unknown>,
-): void => {
+): URI => {
   const result = resultCell.getAsNormalizedFullLink();
   if (result.path.length > 0) {
     throw new Error("The result cell of a compiled piece is a whole entity.");
@@ -134,11 +141,17 @@ export const setUpCompiledPiece = (
   const source = patternSourceDocumentOf(text);
   tx.writeValueOrThrow(at(source), text);
   tx.writeValueOrThrow(at(compiledPointerOf(result.id)), { source });
+  const argumentDocument = at(argumentDocumentOf(result.id));
   tx.writeValueOrThrow(
-    at(argumentDocumentOf(result.id)),
+    argumentDocument,
     convertCellsToLinks(argument as never) as FabricValue,
   );
-  // The runtime is named so that the call reads as `startCompiledPiece`
-  // does, and a setup that needs it later changes no caller.
-  void runtime;
+  resultCell.withTx(tx).setMetaRaw(
+    "argument",
+    runtime.getCellFromLink(argumentDocument).getAsWriteRedirectLink({
+      base: resultCell,
+    }) as FabricValue,
+    rawMetaWriteAuthorization,
+  );
+  return source;
 };

@@ -42,6 +42,7 @@ import {
   scopeCallerEventId,
   sendEvent,
 } from "@commonfabric/runner";
+import { setUpCompiledPiece } from "@commonfabric/runner/compiled/setup";
 import { pieceListSchema } from "@commonfabric/runner/schemas";
 import { isStoredArgumentSchemaRefusal } from "@commonfabric/runner/shared";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -488,6 +489,124 @@ export async function servedInstantiatePiece(
   if (outcome.error !== undefined) {
     // A setup that threw is reported through the aborted transaction's
     // `reason`; a storage rejection is the error itself.
+    const cause =
+      "reason" in outcome.error && outcome.error.reason !== undefined
+        ? outcome.error.reason
+        : outcome.error;
+    if (cause instanceof ServedLifecycleRefusal) throw cause;
+    throw new ServedLifecycleRefusal("setup-failed", describeFailure(cause), {
+      cause,
+    });
+  }
+  return outcome.ok!;
+}
+
+/** What `compiledInstantiatePiece` asks for. */
+export interface CompiledInstantiateRequest {
+  /** The source of the pattern, which the serving runtime compiles. */
+  program: RuntimeProgram;
+
+  /** The new piece's argument; absent means an empty one. */
+  argument?: object;
+
+  /** A name for the new piece, claimed in the creation transaction. */
+  slug?: string;
+
+  /** Take `slug` even when it already names something. */
+  force?: boolean;
+
+  /** Leave registration pending for `completeServedRegistration`. */
+  register?: boolean;
+
+  /** Caller-owned creation key, scoped to the acting principal and space. */
+  requestKey?: string;
+
+  /** The principal the client acts as, which keys the creation receipt. */
+  actingUser: string;
+}
+
+/**
+ * Sets a piece of a compiled pattern up from a client of a serving
+ * deployment, in one transaction: what `setUpCompiledPiece` writes (the
+ * source, the document that names it for the result document, and the
+ * argument), the creation receipt in the record `servedInstantiatePiece`
+ * keeps, and the slug when asked for, refused as there unless `force` is
+ * set. The serving runtime of the space compiles the source and starts the
+ * piece once something demands its result; nothing here compiles or runs
+ * it. The receipt's pattern names the document of the source, which is
+ * named by the text it holds, and the export the program runs, so a
+ * retry by the same request key finds the piece the first attempt set up
+ * and `completeServedRegistration` registers it as it registers a piece
+ * the serving side created.
+ */
+export async function compiledInstantiatePiece(
+  pieces: PiecesController,
+  request: CompiledInstantiateRequest,
+): Promise<ServedInstantiateReceipt> {
+  const runtime = pieces.runtime;
+  const space = pieces.getSpace();
+  const requestKey = request.requestKey ?? crypto.randomUUID();
+  const requestRecord = receiptRecord(
+    runtime,
+    space,
+    requestKey,
+    request.actingUser,
+  );
+  await requestRecord.sync();
+  const completed = requestRecord.get();
+  if (completed !== undefined) return completed;
+  const piece = runtime.getCell(space, {
+    purpose: "compiled-piece-instantiation",
+    principal: request.actingUser,
+    requestKey,
+  });
+  const slugClaim = request.slug === undefined
+    ? undefined
+    : await prepareSlugClaim(pieces, request.slug, piece, {
+      writeTargetMetadata: true,
+    });
+  const pieceId = pieceIdOf(piece);
+  if (pieceId === undefined) throw new Error("the new piece has no entity id");
+  const outcome = await runtime.editWithRetry((tx) => {
+    const retained = requestRecord.withTx(tx).get();
+    if (retained !== undefined) return retained;
+    const source = setUpCompiledPiece(
+      runtime,
+      tx,
+      request.program,
+      request.argument ?? {},
+      piece.withTx(tx),
+    );
+    if (slugClaim !== undefined) {
+      const refusal = claimSlugInTx(pieces, slugClaim, tx, {
+        ...(request.force === undefined ? {} : { force: request.force }),
+      });
+      if (refusal !== undefined) {
+        throw new ServedLifecycleRefusal(
+          "slug-taken",
+          `Slug "${slugClaim.validSlug}" already points at ` +
+            `${refusal.held ?? "nothing"}, so assigning it would take that ` +
+            "address from whoever holds it. Pass `force` to take it anyway; " +
+            "nothing was created.",
+        );
+      }
+    }
+    const receipt: ServedInstantiateReceipt = {
+      requestKey,
+      pieceId,
+      pattern: {
+        identity: source,
+        symbol: request.program.mainExport ?? "default",
+      },
+      registration: {
+        status: request.register === true ? "pending" : "skipped",
+      },
+      ...(slugClaim === undefined ? {} : { slug: slugClaim.validSlug }),
+    };
+    requestRecord.withTx(tx).set(receipt);
+    return receipt;
+  });
+  if (outcome.error !== undefined) {
     const cause =
       "reason" in outcome.error && outcome.error.reason !== undefined
         ? outcome.error.reason

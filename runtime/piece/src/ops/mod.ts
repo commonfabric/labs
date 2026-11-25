@@ -149,6 +149,8 @@ export {
   PieceInputPathError,
 } from "./piece-input-path.ts";
 export {
+  compiledInstantiatePiece,
+  type CompiledInstantiateRequest,
   completeServedRegistration,
   confirmServedFollow,
   confirmServedInstantiate,

@@ -25,7 +25,6 @@
  * Nothing imports this module but a caller that gives a runtime a
  * compiler, so a runtime without one loads no executor.
  */
-import type { Artifact } from "../../../../base/pattern-compiler/exec/executor.ts";
 import { getLogger } from "@commonfabric/logger";
 import type { RuntimeProgram } from "../harness/types.ts";
 import type { Runtime } from "../runtime.ts";
@@ -38,7 +37,7 @@ import {
   type ServeCompiledPiecesOptions,
 } from "./serving.ts";
 import { type PatternProgram, setUpCompiledPiece } from "./setup.ts";
-import { answersEffect } from "./wish.ts";
+import { unansweredRequestOf } from "./wish.ts";
 
 const logger = getLogger("compiled-run");
 
@@ -66,45 +65,6 @@ type Prepared =
  */
 const isMissingCompiler = (error: unknown): boolean =>
   error instanceof Error && error.name === "PatternCompilerMissingError";
-
-/**
- * Why a compiled program cannot run as a compiled piece in a runtime that
- * `Runtime.run` starts it in, where it cannot: a plan of the program
- * requests an effect that no built-in of the runtime answers for a
- * compiled piece (`answersEffect`). A `wish`, and the effects
- * `fetchJson`, `fetchJsonUnchecked`, `fetchText` and `fetchBinary` of the
- * reactive tier, are answered by the runtime's own (`compiled/wish.ts`).
- * An effect a handler requests is not in the operations of a plan, and is
- * not looked for here: it stays unanswered. Every pattern of the program
- * is looked at where the compiler gives them, since a function body of the
- * pattern may instantiate any of them.
- */
-const unansweredRequestOf = (
-  compiled: Awaited<ReturnType<CompilePatternProgram>> & {
-    modules?: { patterns: Artifact[] }[];
-  },
-): string | undefined => {
-  const patterns = [
-    compiled.main,
-    ...(compiled.modules ?? []).flatMap(({ patterns }) => patterns),
-  ];
-  for (const { plan, name } of patterns) {
-    const operations = (plan as {
-      operations?: { kind?: string; implementation?: { builtin?: string } }[];
-    }).operations ?? [];
-    const unanswered = operations.find(({ kind, implementation }) =>
-      kind === "effect" && !answersEffect(implementation?.builtin ?? "")
-    );
-    if (unanswered !== undefined) {
-      return `The plan of the pattern \`${
-        name ?? "default"
-      }\` requests the effect \`${
-        unanswered.implementation?.builtin ?? "unnamed"
-      }\`, which a compiled piece does not answer in this runtime.`;
-    }
-  }
-  return undefined;
-};
 
 /**
  * Has `runtime` compile each program `PatternManager.compilePattern` is
