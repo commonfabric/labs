@@ -1190,6 +1190,17 @@ test("dau: distinct people per UTC day", () => {
   assertEquals(foldSeries([ser("did:key:alice", [[day1, 0]])]).size, 0);
 });
 
+test("dau: a series that names no person counts no one on its days", () => {
+  const day1 = 1_783_641_600_000;
+  const values = [{ timestamp: day1, value: 40 }];
+  const byDay = foldSeries([
+    { labels: [{ key: { name: "service.name" }, value: "toolshed" }], values },
+    { values },
+    { labels: [{ key: { name: "enduser.id" }, value: "did:key:alice" }], values },
+  ]);
+  assertEquals([...byDay.get(day1) ?? []], ["did:key:alice"]);
+});
+
 test("gated tiles gray out cleanly without their env", async () => {
   const cases = [
     [discordOnline, "DISCORD_BOT_TOKEN"],

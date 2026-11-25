@@ -2226,7 +2226,10 @@ gray-out contract. These ordinary unit tests are hermetic and need only
 `--allow-env` for module-load configuration reads. The full `test` task also
 verifies that Resvg reproduces the embedded PNGs and runs the favicon
 behavior in the local browser test runner. The package tasks grant the additional
-permissions those two checks need. `tiles/prod-uptime.test.ts` exercises the
+permissions those two checks need. `test/runners-feed-socket.test.ts` opens the
+runners feed's WebSockets over TCP on this machine, the only way Deno upgrades
+a request, so the `deno-test` task runs it with every permission too.
+`tiles/prod-uptime.test.ts` exercises the
 production tile's public-site, health, DNS, and proxy checks with canned HTTP
 responses, an injected DNS resolver, an injected proxy client factory, and a
 fake SOCKS5 proxy, so its unit tests never reach the network. This is

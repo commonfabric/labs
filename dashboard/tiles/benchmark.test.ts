@@ -3784,10 +3784,14 @@ test("empty runtime history asks for a token to collect data", async () => {
 test("benchmark: a failed drill-down cache write does not gray the tile", async () => {
   // The artifact was read and its metrics held in memory before the cache write
   // failed, so the tile still totals them; only the persistence to disk failed.
+  // The collection writes three times: the run it read, the history it
+  // assembled, and the mark that the drill-down was refreshed. Whichever
+  // fails, the drill-down is not taken for refreshed, so a page that asks
+  // for it starts another refresh.
   const archive = await benchZip(report([
     bench("runtime/a/write.bench.ts", null, "write", timings(1_000)), // avg 500
   ]));
-  for (const failedRename of [1, 2]) {
+  for (const failedRename of [1, 2, 3]) {
     const directory = await Deno.makeTempDir({ prefix: "benchmark-write-" });
     const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
     const originalFetch = globalThis.fetch;
@@ -3828,10 +3832,18 @@ test("benchmark: a failed drill-down cache write does not gray the tile", async 
           : rename(oldpath, newpath);
       }) as typeof Deno.rename;
 
-      const view = await isolated.benchmark.collect(ctx({ GH_TOKEN: "token" }));
+      const tokenContext = ctx({ GH_TOKEN: "token" });
+      const view = await isolated.benchmark.collect(tokenContext);
       assertEquals(view.status, "good"); // the in-memory total is unaffected
       assertStringIncludes(view.value ?? "", "new"); // a single run: the trend reads "new"
       assertEquals(renames, failedRename); // the write was attempted and failed
+
+      const check = await isolated.benchmarkHistoryCheckResponse(tokenContext);
+      const { progress } = await check.json();
+      assert(progress, "the drill-down was taken for refreshed");
+      await isolated.benchmarkHistoryProgressResponse(
+        new URL(`http://x/bench/runtime-progress?id=${progress.id}`),
+      ).text();
 
     } finally {
       Deno.rename = rename;
