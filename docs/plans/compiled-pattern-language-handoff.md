@@ -25,7 +25,7 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
 | `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The merged branch at `5db1c2658d`: every branch of the build, and the two executor fixes of round twenty (P453) | #10183, stacked on #10140 |
 | `merge-attempt/serving-m6` | none | The merge of the serving branch, at `31d73441f8`; the merged branch was fast-forwarded to it | none |
-| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-four, and the four link-following commits of `claude/fabrichat-row-rights-68447f` (P470, P471), and rounds twenty-five and twenty-six, at `a184f568a0`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461), the store step of a result (P462 to P464); cut from the merged branch at `5db1c2658d` | none (local) |
+| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-four, and the four link-following commits of `claude/fabrichat-row-rights-68447f` (P470, P471), and rounds twenty-five to twenty-seven, at `e157bd950b`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461), the store step of a result (P462 to P464); cut from the merged branch at `5db1c2658d` | none (local) |
 | `claude/fabrichat-row-rights-68447f` | `fabrichat-row-rights-68447f` | The FabriChat room, real and copy, whose message rows derive their own controls; the two executor fixes of round twenty, carried onto the merged branch | none (local) |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
@@ -254,6 +254,34 @@ twenty).
   clause is refused where today's path commits (note 1079); the crate gives no
   value function for a `computed` declared in an element body whose result is
   the source of a collection (note 1082).
+  Round twenty-seven (`e157bd950b`, notes 1087 to 1094, P479 to P481) made the
+  compiled path runnable locally: `EXPERIMENTAL_COMPILED_PATTERNS=true
+  ./scripts/start-local-dev.sh --port-offset=300` builds the compiler and
+  starts a toolshed whose serving workers compile and serve compiled pieces
+  (P481); `cf piece new` against it compiles the program with the local
+  binary and creates a compiled piece where the compiler accepts it, or a
+  piece on today's path where it refuses, and says which (P479); a list of
+  row links is one document by default, so a client reads it as the array it
+  is (P480; chunks stay an option). `LOCAL_DEV_SERVERS.md`, "Compiled
+  patterns", has the commands. On 2026-11-25 the coordinator used it in the
+  desktop app's browser: the counter (`patterns/examples/counter`) renders and
+  each click increments it; the todo list (`patterns/examples/todo-list`)
+  adds items from its input, ticks a checkbox, edits a title and derives its
+  counts and summary; the FabriChat room copy renders, creates a profile and
+  sends a message from its send button. Open: removing a todo from its row's
+  button does nothing on the compiled path and works on today's path (the
+  row sends `removeItem` with its item and `items.remove(item)` removes
+  nothing; not diagnosed); the room's author chip reads "Unknown author" (not
+  compared, since the room copy uses the window `.last(n)` that today's path
+  lacks); a path read through a link from the CLI returns nothing, since a
+  compiled piece's result document carries no schema metadata (a CFC
+  question, round twenty-seven's question 1); the serving loop does not
+  start a piece demanded before its setup committed (the CLI no longer
+  demands early; a shell that opens an address early could); the Topics copy
+  and the real FabriChat room and Topics board are refused by the compiler's
+  check (`subset-type:mismatch`), so they run on today's path; a CLI send to
+  the room copy is refused (its write policy expects a gesture from the send
+  surface).
 - *Fixed in round twenty, two executor defects (notes 1012 and 1013).*
   `Executor.#invoke` handed a body a plain value where an `identity` entry
   of `Body.computed` reached each row through `*`, so a body that resolved
@@ -419,13 +447,14 @@ and P350 to P360 sandbox and scopes, P310 to P316 and P370 to P382 write integri
 P411 specification review; P420 to P425 resume by units, fourth round; P390
 to P394 serving, round fifteen; P450 to P464 the merges and rounds nineteen
 to twenty-four, P470 and P471 the link-following work, P472 to P478
-rounds twenty-five and twenty-six (the next is P479). Note
+rounds twenty-five and twenty-six, P479 to P481 round twenty-seven (the
+next is P482). Note
 numbers in `SPEC-NOTES.md` likewise: 692 to 704, 860 to 875 and 960 to 975
 trunk, 940 to 944 carry, 742 to 752 and 880 to 892 sandbox, 760 to 772
 and 900 to 914 write integrity, 851 to 866 and 920 to 932 serving, 980 to
-1086 the merges and the rounds after them (1016 to 1086 on
+1094 the merges and the rounds after them (1016 to 1094 on
 `claude/compiled-pattern-scoped-rows`, 1060 to 1066 the link-following
-work; the next is 1087). The plan documents hold decisions up to
+work; the next is 1095). The plan documents hold decisions up to
 P210 and P410 to P411; the rounds after that are in `SPEC-NOTES.md` of their
 branches only and need a document round after the merges.
 
