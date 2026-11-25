@@ -516,28 +516,28 @@ uses this fixture mechanism at both postures.
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, C, C++, CUDA, shell,
-makefile, Dockerfile, Java properties, INI, Graphviz DOT, ProGuard, XML, and Org
-mode files use their own highlighting. A lowercase `.c` selects C; `.cc`,
-`.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`, `.h++`, `.tcc`, and an uppercase
-`.C` select C++; and `.cu` and `.cuh` select CUDA. C++ and CUDA share one
-grammar, which colors CUDA's qualifiers, such as `__global__`, as keywords. C
-and C++ both write `.h` headers, so a `.h` file is colored in a mode that claims
-neither dialect, using the C++ grammar, which reads the declarations C headers
-usually make; a C header that uses one of C++'s keywords, such as `new`, as a
-name is colored as C when piped with `--language
-c`. HCL covers OpenTofu and
-Terraform configuration named `.tf` or `.tofu`, variable definitions files named
-`.tfvars`, backend configuration files named `.tfbackend`, and other `.hcl`
-files, such as dependency lock files. A string's interpolations and template
-directives are colored as code inside the string. Starlark covers Bazel's build
-files, named `BUILD`, `BUILD.bazel`, or with a `.BUILD` suffix, its module,
-repository, and workspace files, `.bzl` extension files, and other `.star`
-files. Its structure tree lists functions, each name that a statement outside
-functions assigns a value to on its own, and the target that each rule call
-outside functions declares when its `name` argument is a string literal. The
-Bazel rc language covers `.bazelrc` and other files named with that suffix, and
-lists the files an rc file imports and the configurations it defines, such as
-`race` in `build:race`. `.bazelversion` is plain text. Shell covers Bash and
+makefile, Dockerfile, Java properties, INI, dotenv, Graphviz DOT, ProGuard, XML,
+and Org mode files use their own highlighting. A lowercase `.c` selects C;
+`.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`, `.h++`, `.tcc`, and an
+uppercase `.C` select C++; and `.cu` and `.cuh` select CUDA. C++ and CUDA share
+one grammar, which colors CUDA's qualifiers, such as `__global__`, as keywords.
+C and C++ both write `.h` headers, so a `.h` file is colored in a mode that
+claims neither dialect, using the C++ grammar, which reads the declarations C
+headers usually make; a C header that uses one of C++'s keywords, such as `new`,
+as a name is colored as C when piped with `--language
+c`. HCL covers OpenTofu
+and Terraform configuration named `.tf` or `.tofu`, variable definitions files
+named `.tfvars`, backend configuration files named `.tfbackend`, and other
+`.hcl` files, such as dependency lock files. A string's interpolations and
+template directives are colored as code inside the string. Starlark covers
+Bazel's build files, named `BUILD`, `BUILD.bazel`, or with a `.BUILD` suffix,
+its module, repository, and workspace files, `.bzl` extension files, and other
+`.star` files. Its structure tree lists functions, each name that a statement
+outside functions assigns a value to on its own, and the target that each rule
+call outside functions declares when its `name` argument is a string literal.
+The Bazel rc language covers `.bazelrc` and other files named with that suffix,
+and lists the files an rc file imports and the configurations it defines, such
+as `race` in `build:race`. `.bazelversion` is plain text. Shell covers Bash and
 POSIX shell scripts named `.sh`, `.bash`, or `.command`, and Bash's startup
 files, such as `.bashrc` and `.profile`. A heredoc's body is colored as a
 string, with the expansions its delimiter allows. The makefile language reads
@@ -596,6 +596,22 @@ lines and comments heads a section whose name does not start the way a JSON
 array's first value does. A line in an Ansible inventory that names a host and
 then sets `name=value` variables colors the host and each variable. The
 structure tree lists sections with the keys and hosts in each.
+
+Dotenv covers the environment files that programs, Docker Compose, and shell
+scripts read variables from. `.env` selects it, as does a name that continues
+`.env` with a further suffix, such as `.env.local` or `.env.example`, unless
+that suffix is another language's extension, as `.env.json` is. An example copy
+of an environment file, such as `config.env.example` or `deploy-env.sample`,
+selects it as well, through an `.example`, `.sample`, `.template`, or `.dist`
+suffix. Another name ending in `.env` is dotenv when its first line other than
+blank lines and `#` comments sets a variable, because Ansible Vault files and
+Skip's Xcode-style app configuration use that suffix too. A value that opens
+with a quote runs to the matching quote, across lines, and is read as an
+unquoted value when no quote matches it. A `#` that follows white space starts a
+comment after a value. References to other variables, such as `$NAME` and
+`${NAME:-default}`, are colored in unquoted and double-quoted values, and `$$`
+is a dollar sign, as Docker Compose reads it. The structure tree lists the
+variables the file sets.
 
 The Dockerfile language reads the syntax of BuildKit's Dockerfile frontend in
 files named `Dockerfile`, `dockerfile`, `Containerfile`, or `containerfile`, in

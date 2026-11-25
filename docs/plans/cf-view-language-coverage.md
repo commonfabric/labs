@@ -52,7 +52,9 @@ lists, have syntax highlighting; properties files list their keys, and XML lists
 its elements.
 INI, which covers Ansible configuration and inventories and the configuration
 files of Python tools, has syntax highlighting and a structure tree of sections
-and the keys and hosts in each. Org mode has syntax highlighting, with each
+and the keys and hosts in each. Dotenv, which covers environment files and the
+example copies of them that projects commit, has syntax highlighting and a
+structure tree of the variables each file sets. Org mode has syntax highlighting, with each
 source block colored as the language it names, and a structure tree of
 headlines. Git attributes files have syntax highlighting and a structure tree
 of their patterns and macro definitions. Lean has syntax highlighting and a
@@ -86,7 +88,7 @@ remain outside diff editing and semantic source loading.
 
 Python, Go, Swift, Kotlin, Rust, TOML, HCL, shell, C, C++, and Starlark run on
 Tree-sitter through a shared, language-neutral adapter, which HTML will use as
-well. Java properties, INI, ProGuard rules, Git attributes, XML, makefiles, Org
+well. Java properties, INI, dotenv, ProGuard rules, Git attributes, XML, makefiles, Org
 mode, Lean, ignore files, Go's module and checksum files, Bazel rc files,
 Graphviz DOT, and Dockerfiles use focused scanners.
 The order is provisional because recent activity was measured in six of the 26
@@ -95,7 +97,7 @@ active organization repositories.
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, shell, C, C++, CUDA,
-makefile, Dockerfile, Java properties, INI, ProGuard, Git attributes, XML, Org
+makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git attributes, XML, Org
 mode, directive configuration, ignore-file, Graphviz DOT, and diff support to
 honest handling of every textual syntax in the active `commonfabric`
 repositories.
@@ -983,7 +985,7 @@ file reconstructed exactly.
 - [x] Add Git attributes files.
 - [ ] Add Git modules.
 - [x] Add worktree-include syntax.
-- [ ] Add dotenv files and compound examples.
+- [x] Add dotenv files and compound examples.
 - [x] Add INI, Ansible configuration, and inventory files.
 - [ ] Add systemd units.
 - [ ] Add tmpfiles configuration.
@@ -1245,6 +1247,48 @@ largest ratio of Dockerfile to TOML seen in any round. The machine was loaded so
 heavily that the controls ran 12.6 to 46 times slower than TOML's recorded
 medians, so no round met the condition the HCL measurement set on its controls,
 and these figures are less certain than HCL's.
+
+A November 13, 2026 read of the local checkouts of the organization's
+repositories found 24 dotenv files in 7 repositories: ten `config.env.example`
+files in Loom Scripts, eight files in Infra, two in Labs, and one each in Auth
+Broker, CRM, Dynabook, and the `commonfabric-weaver` repository. The six months
+before the read hold 57 path-change events on them. The July survey also listed
+dotenv examples in Loom and Pattern Factory, whose local checkouts hold none.
+
+Dotenv uses a focused scanner, which reads the common forms as the dotenv
+libraries, Docker Compose, and a shell sourcing the file all read them: `#`
+starts a comment line, an optional `export` precedes a variable's name, and the
+first `=` separates the name from its value. A value that opens with a quote
+runs to the matching quote, across lines, and is read as an unquoted value when
+no quote matches it, as the npm `dotenv` package reads it. A `#` that follows
+white space starts a comment after a value. `$NAME` and `${NAME}` references,
+with the operator and default of forms such as `${NAME:-default}`, are colored
+in unquoted and double-quoted values, and `$$` is a dollar sign, as Docker
+Compose reads it. `.env` and a name that continues it with a further suffix,
+such as `.env.local` or `.env.example`, select dotenv by name, unless that
+suffix is another language's extension. So does an example copy whose name ends
+in `env` followed by `.example`, `.sample`, `.template`, or `.dist`, such as
+`config.env.example` or `toolshed-env.example`. A filename pattern claims a name
+only when no language claims it by extension or exact name, which is what leaves
+`.env.xml` to XML. Another `.env` file is dotenv when its first line other than
+blank lines and comments sets a variable. That evidence leaves out the three
+`.env` files in those checkouts that are not dotenv: two Ansible Vault files in
+Infra, and Skip's app configuration in `commonfabric-weaver`, which follows
+Xcode's build-settings syntax with `//` comments. Infra's `runner.env.j2` and
+`otel-collector.env.j2` are Jinja templates over a dotenv host, which the Jinja
+item under Stage 8 covers.
+
+Every one of the 24 files reconstructs exactly, every one of their 14,585
+characters other than white space has a token class, and each of their 116
+variable assignments is a structure entry. On 100 kilobytes of those files, the
+scanner's median full highlight, document parse, and re-color after one edit
+stayed between 2.0 and 8.1 milliseconds in three runs. The machine's load
+average was about 166, so the 95th percentiles measured only its stalls, and
+each run alternated with the Java properties scanner, whose medians on the same
+source stayed between 2.4 and 8.8. Inputs built to slow it are slowest where
+each reference becomes its own colored span: 100 kilobytes of `$A` references
+took medians of 7 to 52 milliseconds. Fixtures come from Labs and
+`commonfabric-weaver`.
 
 Completion gate: every surveyed exact-name and compound-name operational file
 selects without content guessing.
