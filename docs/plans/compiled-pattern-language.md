@@ -6723,8 +6723,8 @@ is relitigated.
   (`subset-type:mismatch`) stays as it is. The real Topics board
   (`patterns/apps/topics/main.tsx`) declared `mentionListsOf` and
   `cardRowsOf` that way so its tests could pass plain stand-ins; those two
-  parameters and the board's tests are to be changed on the build branch,
-  and the owner changes the other patterns. Checked as a whole program, the board drew 35
+  parameters and the board's tests were changed on the build branch, which
+  is local and not pushed, and the owner changes the other patterns. Checked as a whole program, the board drew 35
   more refusals: the same kind of parameter in `topic.tsx`, in
   `product/collection-naming/naming.ts` and `mentionable.ts`, and in
   `system/profile-face/profile-face.ts`, and in `topic.tsx` a writable view
@@ -6732,11 +6732,11 @@ is relitigated.
   §7.5.1), `unknown` reads of the legacy author name, an import form and a
   mapped type. Asked whether to change those modules and the rest of
   `topic.tsx` on the build branch, the owner answered "Fix both here"
-  (2026-11-25): those modules and the rest of `topic.tsx` are to be changed
-  on the build branch too, keeping the board's upgrade path from an existing
-  board. Where that work stands is recorded in
-  [compiled-pattern-language-handoff.md](compiled-pattern-language-handoff.md),
-  not here.
+  (2026-11-25): those modules and the rest of `topic.tsx` were changed on
+  the build branch too, keeping the board's upgrade path from an existing
+  board. That branch is local and not pushed; this branch's copies of those
+  files are unchanged. The details are in
+  [compiled-pattern-language-handoff.md](compiled-pattern-language-handoff.md).
 
 - The stream-events sidecar of server execution (`of:stream-events:`,
   `STREAM_ENTRIES_DOC_PREFIX` in `runtime/memory/v2.ts`) is internal state of
