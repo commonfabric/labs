@@ -858,10 +858,10 @@ unseen. The organization's self-hosted and larger runners are read when a page
 opens, at most twice a minute, and on the server's tick every five minutes while
 a page is open, since no delivery says when a runner comes, goes, or loses its
 connection. A list that cannot be read is kept as it was, and named on the
-board. Listing them takes organization admin access: GitHub documents that a
-classic token needs `admin:org` for self-hosted runners and `manage_runners:org`
-for larger runners. Without them, the jobs' runners are pooled by what the jobs
-say.
+board. The larger runners are read group by group, so listing both takes one
+permission: a GitHub App or a fine-grained token needs read-only access to the
+organization's "Self-hosted runners", and a classic token needs `admin:org`.
+Without it, the jobs' runners are pooled by what the jobs say.
 
 The page moves its balls in the browser, every frame while any moves, by the
 time the frame took (`runner-physics.ts`), and stops drawing once everything is
@@ -1405,7 +1405,8 @@ requests an hour, where a personal access token is allowed 5,000.
    job was cancelled, which the **ci** and **ci trust** tiles read. **Pull
    requests** is for **recent commits**.
 3. **Organization permissions**: **Members** **Read-only** for **github
-   users**. GitHub refuses an app's tokens for an organization's billing
+   users**, and **Self-hosted runners** **Read-only** for the runners page's
+   self-hosted and larger runners. GitHub refuses an app's tokens for an organization's billing
    ("Resource not accessible by integration"), so **github spend** reads
    through the app only with `GH_BILLING_ENTERPRISE` set. For an
    organization's billing, set `GH_BILLING_TOKEN` as well.
@@ -1464,8 +1465,9 @@ organization member; other callers see only public memberships.
    requests** to **Read-only**. **Pull requests** is for **recent commits**.
 5. **Organization permissions**: set **Members** to **Read-only** for GitHub
    users. Set **Administration** to **Read-only** for github spend. Only an org
-   owner or billing manager can grant the latter permission. Skip either
-   permission when its tile is not needed.
+   owner or billing manager can grant that permission. Set **Self-hosted
+   runners** to **Read-only** for the runners page's self-hosted and larger
+   runners. Skip any of these permissions whose tile or page is not needed.
 6. **Generate token** and copy it (`github_pat_…`, shown once).
 
 If you only need the labs CI tiles, keep `commonfabric` as the resource owner,

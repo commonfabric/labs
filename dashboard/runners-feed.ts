@@ -143,19 +143,27 @@ export function dashboardRunnersGitHub(): RunnersGitHub {
         );
     },
     async largerRunners() {
-      return (await all(`orgs/${org}/actions/hosted-runners?per_page=100`, "runners"))
-        .filter(isObjectNotArray).flatMap((runner) => {
-          const name = runner.name;
-          if (typeof name !== "string") return [];
-          const size = isObjectNotArray(runner.machine_size_details) ? runner.machine_size_details : {};
-          return [{
-            owner: org,
-            name,
-            maximum: number(runner.maximum_runners),
-            cores: number(size.cpu_cores),
-            memory: number(size.memory_gb),
-          }];
-        });
+      // Each larger runner is in one runner group. Reading them group by
+      // group takes the self-hosted runners permission, whereas the
+      // organization's own list of them takes the administration permission.
+      const groups = (await all(`orgs/${org}/actions/runner-groups?per_page=100`, "runner_groups"))
+        .filter(isObjectNotArray).flatMap(({ id }) => typeof id === "number" ? [id] : []);
+      const lists = await inParallel(
+        GITHUB_REQUEST_CONCURRENCY / 4,
+        groups.map((id) => () => all(`orgs/${org}/actions/runner-groups/${id}/hosted-runners?per_page=100`, "runners")),
+      );
+      return lists.flat().filter(isObjectNotArray).flatMap((runner) => {
+        const name = runner.name;
+        if (typeof name !== "string") return [];
+        const size = isObjectNotArray(runner.machine_size_details) ? runner.machine_size_details : {};
+        return [{
+          owner: org,
+          name,
+          maximum: number(runner.maximum_runners),
+          cores: number(size.cpu_cores),
+          memory: number(size.memory_gb),
+        }];
+      });
     },
   };
 }
