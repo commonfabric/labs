@@ -1751,6 +1751,14 @@ export type HelloOkMessage = {
   protocol: typeof MEMORY_PROTOCOL;
   flags: WireMemoryProtocolFlags;
   sessionOpen?: SessionOpenAuthMetadata;
+
+  /**
+   * The most slots the server reads in one message from this connection's
+   * client, when it was given a limit other than
+   * {@link MAX_UNTRUSTED_MESSAGE_SLOTS}. Absent, the limit is that default.
+   * A direct client holds its own requests to it.
+   */
+  messageSlots?: number;
 };
 
 export type SessionOpenChallenge = {
