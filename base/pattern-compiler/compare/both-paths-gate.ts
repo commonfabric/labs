@@ -79,11 +79,7 @@ import {
   WHO,
   type Who,
 } from "./both-paths-serving.ts";
-import {
-  linksIn,
-  type SpaceSnapshot,
-  type StoredDocument,
-} from "./both-paths-store.ts";
+import { linksIn, type StoredDocument } from "./both-paths-store.ts";
 
 /** One thing the comparison found. */
 export type Finding = {
@@ -210,6 +206,24 @@ export type Positions = {
 /** The key of a document instance and a path in it. */
 const placeKey = (document: StoredDocument, path: readonly string[]) =>
   `${document.id}\n${document.scopeKey}\n${path.join("/")}`;
+
+/**
+ * The position of `path` of `document`: below the longest path of it a walk
+ * reached, or `undefined` where a walk reached none.
+ */
+const positionOf = (
+  positions: Pick<Positions, "reached">,
+  document: StoredDocument,
+  path: readonly string[],
+): string | undefined => {
+  for (let length = path.length; length >= 0; length--) {
+    const at = positions.reached.get(placeKey(document, path.slice(0, length)));
+    if (at === undefined) continue;
+    const rest = path.slice(length);
+    return rest.length === 0 ? at : `${at}/${rest.join("/")}`;
+  }
+  return undefined;
+};
 
 /**
  * The positions of every result of `run` at `checkpoint`, walked from each
@@ -427,7 +441,7 @@ export const foreignClausesOf = (
         for (const who of WHO) {
           if (crossed && scope.endsWith(`:${who}`)) continue;
           if (!namesPrincipal(clause, run.identities.principals[who])) continue;
-          const position = positions.reached.get(placeKey(document, path));
+          const position = positionOf(positions, document, path);
           found.push({
             document: document.id,
             path: `/${path.join("/")}`,
@@ -528,7 +542,7 @@ export const foreignValuesOf = (
             ),
         );
         if (protectedHere) continue;
-        const position = positions.reached.get(placeKey(document, path));
+        const position = positionOf(positions, document, path);
         found.push({
           where: position ??
             `${name} ${document.id.slice(0, 18)}/${path.join("/")}`,
@@ -1098,3 +1112,16 @@ export const runScenario = async (
     runs,
   };
 };
+
+/**
+ * The exit status of a run of the gate: 0 only where no scenario differs in
+ * a finding the ledger does not cover and no entry of the ledger covered
+ * nothing. A skipped scenario is reported with its reason and is neither.
+ */
+export const exitStatusOf = (
+  outcomes: readonly Outcome[],
+  stale: readonly LedgerEntry[],
+): 0 | 1 =>
+  outcomes.some(({ status }) => status === "differing") || stale.length > 0
+    ? 1
+    : 0;

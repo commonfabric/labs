@@ -459,7 +459,8 @@ export const runPath = async (
   };
   for (const [name, texts] of Object.entries(scenario.scoped ?? {})) {
     const who = options.roles[name];
-    if (who !== undefined) run.scoped[who].push(...texts);
+    if (who === undefined) continue;
+    for (const text of texts) run.scoped[who].push(text);
   }
   // How many compiled pieces the serving runtimes started, and why they
   // did not start one, by its result document.

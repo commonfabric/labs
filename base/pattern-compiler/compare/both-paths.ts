@@ -70,6 +70,7 @@ import type { IExtendedStorageTransaction } from "../../../runtime/runner/src/st
 import { corpusScenarios, gateCorpusScenarios } from "./both-paths-corpus.ts";
 import {
   applyLedger,
+  exitStatusOf,
   type Ledger,
   outcomeOf,
   runScenario,
@@ -1024,7 +1025,7 @@ const runGate = async (args: string[]): Promise<number> => {
       `  a ledger entry covers nothing: ${entry.scenario} ${entry.step} ${entry.position} ${entry.kind}`,
     );
   }
-  return summary.differing === 0 && stale.length === 0 ? 0 : 1;
+  return exitStatusOf(results.map(({ outcome }) => outcome), stale);
 };
 
 if (import.meta.main) {
