@@ -545,10 +545,12 @@ describe({
         ),
       );
       expect((await setup.commit().settled).error).toBeUndefined();
-      const stale: CommitError = {
+      // The engine's stale-read refusal carries more fields than these two,
+      // and the scheduler decides from its name to run the action again.
+      const stale = {
         name: "ConflictError",
         message: "stale confirmed read: of:doc at seq 1 conflicted with seq 2",
-      };
+      } as CommitError;
       expect(isStaleReadConflict(stale)).toBe(true);
       // The query is the pattern's one node, so the first transaction a
       // scheduled action commits is the query's first run.
