@@ -34,6 +34,7 @@ import {
   equals,
   lift,
   type ReadonlyCell,
+  type Stream,
   Writable,
 } from "commonfabric";
 
@@ -341,18 +342,10 @@ export interface RecordNamesResult {
  * and the key writes are one transaction, so a create that lands while this
  * runs serializes with it rather than colliding on a name.
  */
-export function recordNames(
-  members: {
-    // The stored values, for each member's own report of its name, and the
-    // position's cell, for the verb this sends to. The verb is named
-    // structurally because no collection's member type is in scope here.
-    get(): readonly ({ shortName?: string } | undefined)[];
-    key(index: number): {
-      resolveAsCell(): {
-        key(verb: "recordName"): { send(event: { name: string }): void };
-      };
-    };
-  },
+export function recordNames<M extends NamedMember>(
+  // The list as the collection stores it: its stored values, and the cell of
+  // each position, whose member this resolves to send the verb.
+  members: Writable<M[]>,
   names: NamesMapCell,
 ): RecordNamesResult {
   const map = names.get() ?? {};
@@ -390,10 +383,27 @@ export function recordNames(
       named.push(name);
       continue;
     }
-    member.key("recordName").send({ name });
+    // The member's verb, through the member as a `NamedMember`, which is what
+    // types the event the verb takes.
+    const asked: Writable<NamedMember> = member;
+    asked.key("recordName").send({ name });
     pending.push(name);
   }
   return { assigned, named, pending };
+}
+
+/**
+ * A member as `recordNames()` reads and asks it: its own report of its name,
+ * and the verb it stores a name through, which is optional because no
+ * collection's member type is in scope here. A member type that declares
+ * neither is one.
+ */
+export interface NamedMember {
+  /** The name the member reports as its own, where it reports one. */
+  shortName?: string;
+
+  /** The verb that stores the name the collection allocated for the member. */
+  recordName?: Stream<{ name: string }>;
 }
 
 /**

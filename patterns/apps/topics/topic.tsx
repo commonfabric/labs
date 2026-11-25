@@ -21,12 +21,15 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+// The schema module declares the overloads of `lift` that take schemas, which
+// `migrateTopicState` calls; importing a name from it brings them in.
+// deno-lint-ignore no-unused-vars
+import type { Schema } from "commonfabric/schema";
 import {
   type ProfileFace,
   profileFace,
   type ProfileFaceFields,
 } from "../../system/profile-face/profile-face.ts";
-import type {} from "commonfabric/schema";
 
 import { isMemberName } from "../../product/collection-naming/allocator.ts";
 
@@ -1154,20 +1157,6 @@ export const appendLink = (
   return link;
 };
 
-/** Author fields that may be only partially populated in stored comments. */
-interface TopicUpgradeComment {
-  /** Structured destination whose existing properties are preserved. */
-  author?: Partial<TopicAuthor>;
-
-  /** Legacy storage key retained for version-zero inputs. */
-  authorName?: unknown;
-
-  /** The stamps the activity step reads. */
-  sentAt?: number;
-  editedAt?: number;
-  removedAt?: number;
-}
-
 /** The stamps of a stored link the activity step reads. */
 interface TopicUpgradeLink {
   addedAt?: number;
@@ -1182,11 +1171,13 @@ interface TopicUpgradeState {
   /** Legacy storage key; its spelling remains fixed for version-zero inputs. */
   createdByName: ReadonlyCell<unknown>;
 
-  /** Structured creator destination, including partially populated stored data. */
-  createdBy: Writable<Partial<TopicAuthor> | undefined>;
+  /** Structured creator destination, declared as the input stores it. The
+   * reader contract below reads partially populated stored data. */
+  createdBy: Writable<TopicAuthor | undefined>;
 
-  /** Original comment identities, including the fixed legacy `authorName` key. */
-  comments: Writable<TopicUpgradeComment[]>;
+  /** Original comment identities, including the fixed legacy `authorName`
+   * key, declared as the input stores them. */
+  comments: Writable<StoredTopicComment[]>;
 
   /** The kept count and activity time, which the activity step fills and every
    * verb that adds, edits or retracts a record keeps. */
@@ -1279,8 +1270,15 @@ type TopicWriteState<K extends keyof TopicInput = never> =
   & Required<Pick<TopicInput, K>>
   & {
     /** Shared state checked before the mutation's first durable write. */
-    upgrade: Writable<TopicUpgradeState>;
+    upgrade: TopicUpgradeState;
   };
+
+/**
+ * A legacy author name as text: the string it is, and the empty string for
+ * any other stored value, which the public input's legacy domain admits.
+ */
+const legacyText = (legacy: unknown): string =>
+  typeof legacy === "string" ? legacy : "";
 
 /**
  * Upgrades version zero to one by filling missing structured author names.
@@ -1293,17 +1291,21 @@ const upgradeLegacyAuthors = (
   input: TopicUpgradeState,
   fromHandler: boolean,
 ): boolean => {
+  // A legacy name supplies attribution when it is a nonblank string other
+  // than the placeholder; it is copied verbatim.
+  const useful = (legacy: unknown): string | undefined => {
+    const text = legacyText(legacy);
+    return text.trim() && text.trim() !== "someone" ? text : undefined;
+  };
   const { createdByName, createdBy, comments } = input;
 
   const legacyCreatorName = createdByName.get();
   const creator = createdBy.get();
   const storedCreatorName = createdBy.key("name").get();
   const creatorKind = createdBy.key("kind").get();
-  const creatorName = !storedCreatorName?.trim() &&
-      typeof legacyCreatorName === "string" && legacyCreatorName.trim() &&
-      legacyCreatorName.trim() !== "someone"
-    ? legacyCreatorName
-    : undefined;
+  const creatorName = storedCreatorName?.trim()
+    ? undefined
+    : useful(legacyCreatorName);
   // Handles keep unresolved reads pending in the lift. Eager handler reads
   // can return undefined for both absent fields and unresolved links.
   const storedComments = comments.get();
@@ -1325,11 +1327,7 @@ const upgradeLegacyAuthors = (
         (author !== undefined && storedName !== undefined &&
           kind !== undefined && legacyName !== undefined),
       absent: author === undefined,
-      name: !storedName?.trim() &&
-          typeof legacyName === "string" && legacyName.trim() &&
-          legacyName.trim() !== "someone"
-        ? legacyName
-        : undefined,
+      name: storedName?.trim() ? undefined : useful(legacyName),
       kind,
     };
   });
@@ -1372,7 +1370,7 @@ const upgradeLegacyAuthors = (
  * activity, so its own stamp moves the clock forward.
  */
 /** The stamps of one record as its keys read, `undefined` where one is absent. */
-type StampsRead<K extends string> = { readonly [P in K]: number | undefined };
+type StampsRead<K extends string> = Readonly<Record<K, number | undefined>>;
 
 const activityOf = (
   comments: readonly StampsRead<"sentAt" | "editedAt" | "removedAt">[],
@@ -1517,10 +1515,18 @@ const upgradeTopicState = (state: TopicUpgradeState, verb?: string): void => {
   }
 };
 
+/**
+ * The upgrade reader contract as a schema of no particular type. The lift's
+ * state is the record of handles the Topic binds, typed as the input stores
+ * each field (`TopicUpgradeState`); the contract reads the wider legacy shapes
+ * `state-upgrades.md` describes, which a type derived from it would declare.
+ */
+const TOPIC_UPGRADE_READER: JSONSchema = TOPIC_UPGRADE_SCHEMA;
+
 /** Runs pending state upgrades whenever the Topic runs, without a result read. */
 const migrateTopicState = lift(
   (state: TopicUpgradeState): void => upgradeTopicState(state),
-  TOPIC_UPGRADE_SCHEMA,
+  TOPIC_UPGRADE_READER,
   toSchema<void>(),
 );
 
@@ -1592,7 +1598,7 @@ const RECORD_NAME_STATE_SCHEMA = toSchema<
 /** Bound state for `submitProfileComment`. */
 type SubmitProfileCommentState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Stored thread containing the mutation target. */
   comments: Writable<TopicComment[] | Default<[]>>;
@@ -1616,7 +1622,7 @@ export const submitProfileComment = handler<void, SubmitProfileCommentState>(
     ...SUBMIT_PROFILE_COMMENT_STATE_SCHEMA,
     properties: {
       ...SUBMIT_PROFILE_COMMENT_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   (
@@ -1632,9 +1638,9 @@ export const submitProfileComment = handler<void, SubmitProfileCommentState>(
     const text = commentDraft.get();
     const author = topicAuthorFromPerson(profileName, face);
     if (!text.trim() || !author) return;
-    upgradeTopicState(upgrade.get(), "submitProfileComment");
+    upgradeTopicState(upgrade, "submitProfileComment");
     const comment = appendComment(comments, text, author);
-    noteActivity(upgrade.get(), comment.sentAt, 1);
+    noteActivity(upgrade, comment.sentAt, 1);
     commentDraft.set("");
   },
 );
@@ -1642,7 +1648,7 @@ export const submitProfileComment = handler<void, SubmitProfileCommentState>(
 /** Bound state for `retractProfileComment`. */
 type RetractProfileCommentState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Stored thread containing the mutation target. */
   comments: Writable<TopicComment[] | Default<[]>>;
@@ -1677,7 +1683,7 @@ export const retractProfileComment = handler<void, RetractProfileCommentState>(
     ...RETRACT_PROFILE_COMMENT_STATE_SCHEMA,
     properties: {
       ...RETRACT_PROFILE_COMMENT_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   (_, { upgrade, comments, comment, profileName }) => {
@@ -1686,10 +1692,10 @@ export const retractProfileComment = handler<void, RetractProfileCommentState>(
     if (!comment || comment.get() === undefined) return;
     if (!isElementOf(comments, comment)) return;
     if (comment.get()?.removedAt !== undefined) return;
-    upgradeTopicState(upgrade.get(), "retractProfileComment");
+    upgradeTopicState(upgrade, "retractProfileComment");
     const removedAt = Date.now();
     comment.key("removedAt").set(removedAt);
-    noteActivity(upgrade.get(), removedAt, -1);
+    noteActivity(upgrade, removedAt, -1);
     comment.key("removedBy").set(author);
   },
 );
@@ -1720,7 +1726,7 @@ export const persistTitle = (
 /** Bound state for `saveProfileTitle`. */
 type SaveProfileTitleState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Durable title saved with its attribution stamps. */
   title: Writable<string | Default<"">>;
@@ -1754,7 +1760,7 @@ export const saveProfileTitle = handler<void, SaveProfileTitleState>(
     ...SAVE_PROFILE_TITLE_STATE_SCHEMA,
     properties: {
       ...SAVE_PROFILE_TITLE_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   (
@@ -1772,7 +1778,7 @@ export const saveProfileTitle = handler<void, SaveProfileTitleState>(
     const text = titleDraft.get();
     const author = topicAuthorFromPerson(profileName);
     if (!text.trim() || !author) return;
-    upgradeTopicState(upgrade.get(), "saveProfileTitle");
+    upgradeTopicState(upgrade, "saveProfileTitle");
     const saved = persistTitle(
       title,
       titleUpdatedBy,
@@ -1780,7 +1786,7 @@ export const saveProfileTitle = handler<void, SaveProfileTitleState>(
       text,
       author,
     );
-    noteActivity(upgrade.get(), saved.titleUpdatedAt);
+    noteActivity(upgrade, saved.titleUpdatedAt);
     editingTitle.set(false);
   },
 );
@@ -1788,7 +1794,7 @@ export const saveProfileTitle = handler<void, SaveProfileTitleState>(
 /** Bound state for `saveProfileBody`. */
 type SaveProfileBodyState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Durable prose saved with its references and attribution. */
   body: Writable<string | Default<"">>;
@@ -1827,7 +1833,7 @@ export const saveProfileBody = handler<void, SaveProfileBodyState>(
     ...SAVE_PROFILE_BODY_STATE_SCHEMA,
     properties: {
       ...SAVE_PROFILE_BODY_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   (
@@ -1846,7 +1852,7 @@ export const saveProfileBody = handler<void, SaveProfileBodyState>(
   ) => {
     const author = topicAuthorFromPerson(profileName);
     if (!author) return;
-    upgradeTopicState(upgrade.get(), "saveProfileBody");
+    upgradeTopicState(upgrade, "saveProfileBody");
     // One whole-value set per explicit save keeps the conflict window small; a
     // live-bound textarea on a shared string would conflict per keystroke.
     body.set(bodyDraft.get());
@@ -1861,7 +1867,7 @@ export const saveProfileBody = handler<void, SaveProfileBodyState>(
     bodyUpdatedBy.set(author);
     const savedAt = Date.now();
     bodyUpdatedAt.set(savedAt);
-    noteActivity(upgrade.get(), savedAt);
+    noteActivity(upgrade, savedAt);
     editingBody.set(false);
   },
 );
@@ -1869,7 +1875,7 @@ export const saveProfileBody = handler<void, SaveProfileBodyState>(
 /** Bound state for `dropMention`. */
 type DropMentionState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Durable set of verb-made piece references. */
   mentioned: Writable<unknown[] | Default<[]>>;
@@ -1894,12 +1900,12 @@ export const dropMention = handler<void, DropMentionState>(
     ...DROP_MENTION_STATE_SCHEMA,
     properties: {
       ...DROP_MENTION_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   (_, { upgrade, mentioned, topic }) => {
     if (!topic) return;
-    upgradeTopicState(upgrade.get(), "dropMention");
+    upgradeTopicState(upgrade, "dropMention");
     mentioned.removeByValue(topic);
   },
 );
@@ -1907,7 +1913,7 @@ export const dropMention = handler<void, DropMentionState>(
 /** Bound state for `retractProfileLink`. */
 type RetractProfileLinkState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Stored links containing the mutation target. */
   links: Writable<TopicLink[] | Default<[]>>;
@@ -1931,7 +1937,7 @@ export const retractProfileLink = handler<void, RetractProfileLinkState>(
     ...RETRACT_PROFILE_LINK_STATE_SCHEMA,
     properties: {
       ...RETRACT_PROFILE_LINK_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   (_, { upgrade, links, link, profileName }) => {
@@ -1940,10 +1946,10 @@ export const retractProfileLink = handler<void, RetractProfileLinkState>(
     if (!link || link.get() === undefined) return;
     if (!isElementOf(links, link)) return;
     if (link.get()?.removedAt !== undefined) return;
-    upgradeTopicState(upgrade.get(), "retractProfileLink");
+    upgradeTopicState(upgrade, "retractProfileLink");
     const removedAt = Date.now();
     link.key("removedAt").set(removedAt);
-    noteActivity(upgrade.get(), removedAt);
+    noteActivity(upgrade, removedAt);
     link.key("removedBy").set(author);
   },
 );
@@ -1951,7 +1957,7 @@ export const retractProfileLink = handler<void, RetractProfileLinkState>(
 /** Bound state for `submitProfileLink`. */
 type SubmitProfileLinkState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Stored links containing the mutation target. */
   links: Writable<TopicLink[] | Default<[]>>;
@@ -1976,7 +1982,7 @@ export const submitProfileLink = handler<void, SubmitProfileLinkState>(
     ...SUBMIT_PROFILE_LINK_STATE_SCHEMA,
     properties: {
       ...SUBMIT_PROFILE_LINK_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   (
@@ -1993,7 +1999,7 @@ export const submitProfileLink = handler<void, SubmitProfileLinkState>(
     const url = linkUrlDraft.get();
     const author = topicAuthorFromPerson(profileName);
     if (!url.trim() || !isSafeLinkUrl(url) || !author) return;
-    upgradeTopicState(upgrade.get(), "submitProfileLink");
+    upgradeTopicState(upgrade, "submitProfileLink");
     const link = appendLink(
       links,
       url,
@@ -2001,7 +2007,7 @@ export const submitProfileLink = handler<void, SubmitProfileLinkState>(
       linkLabelDraft.get(),
       author,
     );
-    noteActivity(upgrade.get(), link.addedAt ?? 0);
+    noteActivity(upgrade, link.addedAt ?? 0);
     linkUrlDraft.set("");
     linkLabelDraft.set("");
     linkKindDraft.set("web");
@@ -2159,7 +2165,7 @@ const addCommentHandler = handler<
     ...COMMENTS_WRITE_SCHEMA,
     properties: {
       ...COMMENTS_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   ({ body: text, agentName }, { upgrade, comments }) => {
@@ -2167,9 +2173,9 @@ const addCommentHandler = handler<
     const author = topicAuthorFromAgent(agentName) ??
       rejectMutation("addComment", "agentName must be non-blank");
     if (!trimmed) rejectMutation("addComment", "body must be non-empty");
-    upgradeTopicState(upgrade.get(), "addComment");
+    upgradeTopicState(upgrade, "addComment");
     const comment = appendComment(comments, trimmed, author);
-    noteActivity(upgrade.get(), comment.sentAt, 1);
+    noteActivity(upgrade, comment.sentAt, 1);
     return { comment };
   },
 );
@@ -2185,7 +2191,7 @@ const addLinkHandler = handler<
     ...LINKS_WRITE_SCHEMA,
     properties: {
       ...LINKS_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   ({ kind, url, label, agentName }, { upgrade, links }) => {
@@ -2196,9 +2202,9 @@ const addLinkHandler = handler<
     if (!isSafeLinkUrl(trimmedUrl)) {
       rejectMutation("addLink", "url must be http(s)");
     }
-    upgradeTopicState(upgrade.get(), "addLink");
+    upgradeTopicState(upgrade, "addLink");
     const link = appendLink(links, trimmedUrl, kind, label, author);
-    noteActivity(upgrade.get(), link.addedAt ?? 0);
+    noteActivity(upgrade, link.addedAt ?? 0);
     return { link };
   },
 );
@@ -2214,7 +2220,7 @@ const removeCommentHandler = handler<
     ...COMMENTS_WRITE_SCHEMA,
     properties: {
       ...COMMENTS_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   ({ comment, agentName }, { upgrade, comments }) => {
@@ -2233,14 +2239,14 @@ const removeCommentHandler = handler<
     if (comment.get()?.removedAt !== undefined) {
       rejectMutation("removeComment", "comment is already retracted");
     }
-    upgradeTopicState(upgrade.get(), "removeComment");
+    upgradeTopicState(upgrade, "removeComment");
     const removedAt = Date.now();
     // Two field writes into the element the caller named, not a rewrite of
     // the array. Concurrent retractions of distinct comments merge, and
     // every surviving reference stays a reference.
     comment.key("removedAt").set(removedAt);
     comment.key("removedBy").set(author);
-    noteActivity(upgrade.get(), removedAt, -1);
+    noteActivity(upgrade, removedAt, -1);
     return { removedAt, removedBy: author };
   },
 );
@@ -2256,7 +2262,7 @@ const editCommentHandler = handler<
     ...COMMENTS_WRITE_SCHEMA,
     properties: {
       ...COMMENTS_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   ({ comment, body: text, agentName }, { upgrade, comments }) => {
@@ -2279,11 +2285,11 @@ const editCommentHandler = handler<
     }
     const trimmed = (text ?? "").trim();
     if (!trimmed) rejectMutation("editComment", "body must be non-empty");
-    upgradeTopicState(upgrade.get(), "editComment");
+    upgradeTopicState(upgrade, "editComment");
     const editedAt = Date.now();
     comment.key("body").set(trimmed);
     comment.key("editedAt").set(editedAt);
-    noteActivity(upgrade.get(), editedAt);
+    noteActivity(upgrade, editedAt);
     return { body: trimmed, editedAt };
   },
 );
@@ -2299,7 +2305,7 @@ const removeLinkHandler = handler<
     ...LINKS_WRITE_SCHEMA,
     properties: {
       ...LINKS_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   ({ link, url, agentName }, { upgrade, links }) => {
@@ -2336,10 +2342,10 @@ const removeLinkHandler = handler<
     } else if (target.get()?.removedAt !== undefined) {
       rejectMutation("removeLink", "link is already retracted");
     }
-    upgradeTopicState(upgrade.get(), "removeLink");
+    upgradeTopicState(upgrade, "removeLink");
     const removedAt = Date.now();
     target!.key("removedAt").set(removedAt);
-    noteActivity(upgrade.get(), removedAt);
+    noteActivity(upgrade, removedAt);
     target!.key("removedBy").set(author);
     return {
       url: target!.get()?.url ?? named,
@@ -2360,7 +2366,7 @@ const setBodyHandler = handler<
     ...BODY_WRITE_SCHEMA,
     properties: {
       ...BODY_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   (
@@ -2370,12 +2376,12 @@ const setBodyHandler = handler<
     const author = topicAuthorFromAgent(agentName) ??
       rejectMutation("setBody", "agentName must be non-blank");
     const persisted = text ?? "";
-    upgradeTopicState(upgrade.get(), "setBody");
+    upgradeTopicState(upgrade, "setBody");
     body.set(persisted);
     const bodyUpdatedAtValue = Date.now();
     bodyUpdatedBy.set(author);
     bodyUpdatedAt.set(bodyUpdatedAtValue);
-    noteActivity(upgrade.get(), bodyUpdatedAtValue);
+    noteActivity(upgrade, bodyUpdatedAtValue);
     return {
       body: persisted,
       bodyUpdatedBy: author,
@@ -2395,7 +2401,7 @@ const setTitleHandler = handler<
     ...TITLE_WRITE_SCHEMA,
     properties: {
       ...TITLE_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   (
@@ -2406,7 +2412,7 @@ const setTitleHandler = handler<
     const author = topicAuthorFromAgent(agentName ?? "") ??
       rejectMutation("setTitle", "agentName must be non-blank");
     if (!trimmed) rejectMutation("setTitle", "title must be non-empty");
-    upgradeTopicState(upgrade.get(), "setTitle");
+    upgradeTopicState(upgrade, "setTitle");
     const saved = persistTitle(
       title,
       titleUpdatedBy,
@@ -2414,7 +2420,7 @@ const setTitleHandler = handler<
       trimmed,
       author,
     );
-    noteActivity(upgrade.get(), saved.titleUpdatedAt);
+    noteActivity(upgrade, saved.titleUpdatedAt);
     return saved;
   },
 );
@@ -2426,7 +2432,7 @@ const mentionHandler = handler<MentionEvent, TopicWriteState<"mentioned">>(
     ...MENTIONED_WRITE_SCHEMA,
     properties: {
       ...MENTIONED_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   ({ topic }, { upgrade, mentioned }) => {
@@ -2441,7 +2447,7 @@ const mentionHandler = handler<MentionEvent, TopicWriteState<"mentioned">>(
     // A set-add, not an append: referencing the same piece twice is one
     // reference. Mergeable, so concurrent mentions of distinct pieces all
     // land and a repeated one is a no-op against durable state.
-    upgradeTopicState(upgrade.get(), "mention");
+    upgradeTopicState(upgrade, "mention");
     mentioned.addUnique(topic);
   },
 );
@@ -2453,7 +2459,7 @@ const unmentionHandler = handler<UnmentionEvent, TopicWriteState<"mentioned">>(
     ...MENTIONED_WRITE_SCHEMA,
     properties: {
       ...MENTIONED_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   ({ topic }, { upgrade, mentioned }) => {
@@ -2467,7 +2473,7 @@ const unmentionHandler = handler<UnmentionEvent, TopicWriteState<"mentioned">>(
     // array and set it back, which is both a clobbering write and the shape
     // that flattens surviving references. This one resolves against durable
     // state, so concurrent removals of distinct entries merge.
-    upgradeTopicState(upgrade.get(), "unmention");
+    upgradeTopicState(upgrade, "unmention");
     mentioned.removeByValue(topic);
   },
 );
@@ -2475,7 +2481,7 @@ const unmentionHandler = handler<UnmentionEvent, TopicWriteState<"mentioned">>(
 /** Bound state for `recordName`. */
 type RecordNameState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** The topic's own stored number, absent until a call records one. The
    * writable handle the write needs, over an input every other reader takes
@@ -2494,7 +2500,7 @@ const recordNameHandler = handler<
     ...RECORD_NAME_STATE_SCHEMA,
     properties: {
       ...RECORD_NAME_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+      upgrade: TOPIC_UPGRADE_SCHEMA,
     },
   },
   ({ name }, { upgrade, shortName }) => {
@@ -2514,7 +2520,7 @@ const recordNameHandler = handler<
     if (stored !== undefined && stored !== "") {
       rejectMutation("recordName", `topic already stores \`${stored}\``);
     }
-    upgradeTopicState(upgrade.get(), "recordName");
+    upgradeTopicState(upgrade, "recordName");
     shortName.set(given);
     return { name: given, wrote: true };
   },

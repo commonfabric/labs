@@ -64,6 +64,13 @@ import Topic, {
   whenLabel,
 } from "./topic.tsx";
 
+/** What a member of a collection publishes to its mention universe. */
+interface MentionSourceForTest {
+  [NAME]?: string;
+  title?: string;
+  shortName?: string;
+}
+
 interface TestVNode {
   type: "vnode";
   name: string;
@@ -974,27 +981,32 @@ export default pattern(() => {
   // one), the collection's name for a member is copied off the member's own
   // and reads blank where it has none, and a row records its SOURCE as
   // `piece` — identity, not a copy.
+  const indexNamed = new Writable<MentionSourceForTest | undefined>({
+    [NAME]: "Named",
+    title: "Titled",
+    shortName: "42",
+  });
+  const indexCold = new Writable<MentionSourceForTest | undefined>({
+    title: "Cold title",
+  });
+  const indexBlankName = new Writable<MentionSourceForTest | undefined>({
+    [NAME]: "",
+    title: "Blank name",
+  });
+  const indexMidSync = new Writable<MentionSourceForTest | undefined>();
   const assert_mention_index_rows_pure = assert(() => {
-    const named = {
-      get: () => ({ [NAME]: "Named", title: "Titled", shortName: "42" }),
-    };
-    const cold = {
-      get: () => ({ title: "Cold title" }),
-    };
-    const blankName = { get: () => ({ [NAME]: "", title: "Blank name" }) };
-    const midSync = { get: () => undefined };
     const rows = mentionableRowsOf(
-      [named, cold, midSync, blankName, undefined],
+      [indexNamed, indexCold, indexMidSync, indexBlankName, undefined],
     );
     return rows.length === 3 &&
       rows[0]?.[NAME] === "Named" &&
       rows[0]?.title === "Titled" &&
       rows[0]?.shortName === "42" &&
-      rows[0]?.piece === named &&
+      equals(rows[0]?.piece as object, indexNamed) &&
       rows[1]?.[NAME] === "Cold title" &&
       rows[1]?.shortName === "" &&
       rows[2]?.[NAME] === "Blank name" &&
-      rows[2]?.piece === blankName;
+      equals(rows[2]?.piece as object, indexBlankName);
   });
 
   // A topic accepts the index's rows as its mention universe — the exact

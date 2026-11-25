@@ -349,15 +349,18 @@ describe("collection naming under concurrent creates", () => {
      * Bob's basis holds, answered without reading the cell — the allocator
      * reads nothing but the keys, so what stands under them does not matter —
      * and the same `key()` to write through. The allocation is therefore
-     * identical, and the transaction differs only in what it read.
+     * identical, and the transaction differs only in what it read. It
+     * implements the two members the allocator calls and no other member of a
+     * cell, and declares itself a `NamesMapCell` here, where it is handed over.
      */
     function withoutKeysetRead(
       names: Cell<naming.NamesMap>,
     ): naming.NamesMapCell {
-      return {
+      const standIn = {
         get: () => ({ [SEED_NAME]: true }),
         key: (name: string) => names.key(name),
       };
+      return standIn as unknown as naming.NamesMapCell;
     }
 
     /**

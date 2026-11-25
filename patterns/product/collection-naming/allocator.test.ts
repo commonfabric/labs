@@ -26,11 +26,13 @@ import {
  * A stand-in for the namespace cell a verb holds: `get()` reads the map back
  * and `key(name).set(member)` writes one entry, both over an ordinary object.
  * `entries` is left out for a collection that has never named a member, whose
- * map reads `undefined` inside a verb.
+ * map reads `undefined` inside a verb. It implements the two members the
+ * allocator calls and no other member of a cell, and declares itself a
+ * `NamesMapCell` here, where it is handed over.
  */
 function namesMapCell(entries?: NamesMap): NamesMapCell {
   let map = entries;
-  return {
+  const standIn = {
     get: () => map,
     key: (name: string) => ({
       set: (member: unknown) => {
@@ -38,6 +40,7 @@ function namesMapCell(entries?: NamesMap): NamesMapCell {
       },
     }),
   };
+  return standIn as unknown as NamesMapCell;
 }
 
 describe("allocator", () => {

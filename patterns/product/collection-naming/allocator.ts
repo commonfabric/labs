@@ -8,14 +8,16 @@
  * the module rather than an accident of what it happens to need. `lift`,
  * `equals` and `Writable` are ambient declarations that bind nothing at
  * runtime, so a module importing one of them as a value links only inside the
- * pattern runtime. This one instead takes the namespace as the structural
- * `NamesMapCell` and a member as an opaque `unknown` it stores and never
- * reads, so a plain `deno test` can import it and exercise the allocation rule
- * directly. `naming.ts` beside it holds what does take those values, and
- * re-exports everything declared here.
+ * pattern runtime. This one imports `Writable` as a type alone, which binds
+ * nothing, takes the namespace as the cell `NamesMapCell` and a member as an
+ * opaque `unknown` it stores and never reads, so a plain `deno test` can
+ * import it and exercise the allocation rule directly. `naming.ts` beside it
+ * holds what does take those values, and re-exports everything declared here.
  *
  * `docs/specs/collection-naming.md` is the design this implements.
  */
+
+import type { Writable } from "commonfabric";
 
 /**
  * The namespace: each name to the member it names, held as an unread
@@ -41,20 +43,13 @@ export type NamesMap = Record<string, unknown>;
  * at a time. Nothing here rewrites the map whole, which is what lets two
  * verbs naming different members merge instead of clobbering each other.
  *
- * Declared structurally, with `get()` returning `undefined` for a map nothing
- * has written yet. A verb reads its binding through a schema that carries no
- * default, so on a collection that has never named a member the map is
- * absent inside the verb however the input declares it; the structural
- * declaration is what makes the readers here handle that where the compiler
- * can see it. A `Writable<NamesMap>` satisfies it.
+ * The cell's type is the map the collection's input stores, as a cell passed
+ * to a helper has to be declared (`language-subset.md` §7.5.1). A verb reads
+ * its binding through a schema that carries no default, so on a collection
+ * that has never named a member the map is absent inside the verb however the
+ * input declares it, and every reader here reads it with `?? {}`.
  */
-export interface NamesMapCell {
-  /** The map, or `undefined` before the first name is written. */
-  get(): NamesMap | undefined;
-
-  /** The entry for `name`, to be set to the member it names. */
-  key(name: string): { set(member: unknown): void };
-}
+export type NamesMapCell = Writable<NamesMap>;
 
 /**
  * Whether `key` is a member name: a canonical decimal string — `0`, or a
