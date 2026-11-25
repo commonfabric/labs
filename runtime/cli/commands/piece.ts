@@ -5731,23 +5731,34 @@ export async function newPieceFromCommand(
     deps.note ?? note,
     facts,
   );
-  const { pieceId, name } = await (deps.newPiece ?? newPieceWithReceipt)(
-    spaceConfig,
-    entry,
-    {
-      ...(version === undefined ? {} : { onDeployed: version.onDeployed }),
-      start: options.start,
-      slug: options.slug,
-      force: !!options.force,
-      ...(input === undefined ? {} : { input }),
-      ...(options.requestKey === undefined
-        ? {}
-        : { requestKey: options.requestKey }),
-    },
-  );
+  const { pieceId, name, path, pathNote } = await (deps.newPiece ??
+    newPieceWithReceipt)(
+      spaceConfig,
+      entry,
+      {
+        ...(version === undefined ? {} : { onDeployed: version.onDeployed }),
+        start: options.start,
+        slug: options.slug,
+        force: !!options.force,
+        ...(input === undefined ? {} : { input }),
+        ...(options.requestKey === undefined
+          ? {}
+          : { requestKey: options.requestKey }),
+      },
+    );
+  // Where the deployment serves compiled pieces, which path the piece took
+  // is a fact of the creation, owed under `--quiet` too.
+  if (path !== undefined) {
+    (deps.note ?? note)(
+      `Created on the ${path} path${
+        pathNote === undefined ? "." : `: ${pathNote}`
+      }`,
+    );
+  }
   // `--json` is the machine surface: one object naming the piece and, for a
-  // piece from the index that has one, the pattern's display name, and for
-  // one from a file, what became of its private version.
+  // piece from the index that has one, the pattern's display name, for one
+  // from a file, what became of its private version, and where the
+  // deployment serves compiled pieces, the path it took.
   const print = deps.render ?? render;
   if (options.json) {
     const kept = await version?.settle();
@@ -5766,6 +5777,8 @@ export async function newPieceFromCommand(
       {
         pieceId,
         ...(name === undefined ? {} : { name }),
+        ...(path === undefined ? {} : { path }),
+        ...(pathNote === undefined ? {} : { pathNote }),
         ...(kept === undefined || versionJson === undefined
           ? {}
           : { version: versionJson(kept) }),

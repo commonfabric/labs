@@ -52,6 +52,7 @@ import {
 } from "@commonfabric/piece";
 import {
   assertPieceInputPath,
+  compiledInstantiatePiece,
   completeServedRegistration,
   type PatternCompatibilityReport,
   type PatternUpdateReceipt,
@@ -130,6 +131,12 @@ import {
   releaseConfidentialityByIntent,
   storedClausesForRelease,
 } from "@commonfabric/runner/cfc/confidentiality-release";
+import {
+  defaultPatternCompilerBinary,
+  PatternCompiler,
+} from "@commonfabric/runner/compiled/compile.deno";
+import { compiledFailureOf } from "@commonfabric/runner/compiled/setup";
+import { unansweredRequestOf } from "@commonfabric/runner/compiled/wish";
 import { entityKindOfIdString } from "@commonfabric/runner/entity-kind";
 import { waitForSettledThroughHead } from "@commonfabric/runner/executor/watermark";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
@@ -604,6 +611,18 @@ export interface PieceResolutionDeps {
 }
 
 interface PieceOperationDependencies extends PieceResolutionDeps {
+  /** What the pattern compiler says of a program before a compiled creation. */
+  checkCompiledProgram?: typeof checkCompiledProgram;
+
+  /** Creates a piece on the compiled path; {@link createCompiledPiece} by default. */
+  createCompiledPiece?: typeof createCompiledPiece;
+
+  /**
+   * Settles once the serving runtime started a compiled piece, or rejects
+   * with why it did not; {@link compiledPieceStarted} by default.
+   */
+  compiledPieceStarted?: typeof compiledPieceStarted;
+
   loadPieceForRead?: typeof loadPieceForRead;
   loadIdentity?: typeof loadIdentity;
   getProgramFromFile?: typeof getProgramFromFile;
@@ -1898,6 +1917,214 @@ function servesLifecycleVerbs(pieces: PiecesController): boolean {
 }
 
 /**
+ * Whether the serving runtimes of the deployment this connection speaks to
+ * start pieces of compiled patterns: it runs the serving loop with the
+ * experimental option `compiledPatterns` on, as its posture says unless
+ * this process's `EXPERIMENTAL_COMPILED_PATTERNS` overrides it.
+ */
+function servesCompiledPieces(pieces: PiecesController): boolean {
+  return servesLifecycleVerbs(pieces) &&
+    (pieces.runtime as Runtime | undefined)?.experimental.compiledPatterns ===
+      true;
+}
+
+/**
+ * What the pattern compiler says of a program, here, before a piece of it
+ * is created: `accepted`, the reason it is `refused`, or why it is
+ * `unchecked`.
+ */
+export type CompiledProgramCheck =
+  | { accepted: true }
+  | { refused: string }
+  | { unchecked: string };
+
+/**
+ * Compiles `program` with the binary of `base/pattern-compiler` that
+ * `PATTERN_COMPILER_BINARY` names, or else the release build of this
+ * checkout, and decides as `Runtime.run` decides under
+ * `runCompiledPatterns()`: a program is refused where the crate refuses it
+ * or a plan of it requests an effect no built-in answers for a compiled
+ * piece, and accepted otherwise. Where no binary is at that path, nothing
+ * is checked. The serving runtime compiles the program again, with its own
+ * binary, so a check here is what this checkout's crate says, which a
+ * deployment running another build of the crate may not.
+ */
+export async function checkCompiledProgram(
+  program: RuntimeProgram,
+  env: (name: string) => string | undefined = (name) => Deno.env.get(name),
+): Promise<CompiledProgramCheck> {
+  const binary = env("PATTERN_COMPILER_BINARY") ||
+    defaultPatternCompilerBinary();
+  try {
+    const compiled = await new PatternCompiler({ binary }).compile(program);
+    const unanswered = unansweredRequestOf(compiled);
+    return unanswered === undefined
+      ? { accepted: true }
+      : { refused: unanswered };
+  } catch (error) {
+    // The class is named and not compared: a binary that is not there is a
+    // fact of this checkout, and no refusal of the program.
+    if (
+      error instanceof Error && error.name === "PatternCompilerMissingError"
+    ) {
+      return {
+        unchecked: `No pattern compiler is at ${binary} to check the ` +
+          "program, so the serving runtime decides alone; " +
+          "`cargo build --release` in `base/pattern-compiler` builds one.",
+      };
+    }
+    return { refused: describeFailure(error) };
+  }
+}
+
+/** Why the serving runtime did not start a compiled piece set up for it. */
+export class CompiledPieceRefusedError extends Error {
+  override name = "CompiledPieceRefusedError";
+
+  /** Constructs an instance for the piece `pieceId`, refused for `reason`. */
+  constructor(pieceId: string, reason: string) {
+    super(
+      `The serving runtime did not start the compiled piece ${pieceId}: ` +
+        `${reason}\nThe piece was set up and is not registered. ` +
+        "With EXPERIMENTAL_COMPILED_PATTERNS=false in the environment, " +
+        `${cliCommand(["piece", "new"])} creates it on the standard path.`,
+    );
+  }
+}
+
+/**
+ * Settles once the serving runtime started the compiled piece `pieceId`, so
+ * that its result document holds a value, and rejects with
+ * `CompiledPieceRefusedError` once the runtime stored why it did not start
+ * it. The subscription on the result document is what demands the piece of
+ * the serving loop. It reads the result document alone, as the piece's
+ * value is not what is waited for.
+ */
+export function compiledPieceStarted(
+  pieces: PiecesController,
+  pieceId: string,
+): Promise<void> {
+  const runtime = pieces.runtime;
+  const result = runtime.getCellFromEntityId(
+    pieces.getSpace(),
+    entityIdFrom(pieceId),
+    [],
+    false as JSONSchema,
+  );
+  const link = result.getAsNormalizedFullLink();
+  const failure = runtime.getCellFromLink<{ reason?: unknown } | undefined>({
+    space: link.space,
+    id: compiledFailureOf(link.id),
+    path: [],
+    scope: "space",
+  });
+  return new Promise<void>((resolve, reject) => {
+    const cancels: (() => void)[] = [];
+    let settled = false;
+    const settle = (finish: () => void) => {
+      if (settled) return;
+      settled = true;
+      finish();
+      // A callback that runs while `sink()` subscribes, before it returned
+      // what cancels it, leaves the cancel to the line after the two sinks.
+      if (cancels.length === 2) { for (const cancel of cancels) cancel(); }
+    };
+    cancels.push(result.sink(() => {
+      const value = runtime.readTx().readValueOrThrow(link);
+      if (value !== undefined) settle(resolve);
+    }));
+    cancels.push(failure.sink((value) => {
+      const reason = value?.reason;
+      if (typeof reason === "string") {
+        settle(() => reject(new CompiledPieceRefusedError(pieceId, reason)));
+      }
+    }));
+    if (settled) { for (const cancel of cancels) cancel(); }
+  });
+}
+
+/**
+ * Creates a piece of a compiled pattern against a deployment that serves
+ * them: sets it up from this client with its creation receipt
+ * (`compiledInstantiatePiece`), waits for the serving runtime of the space
+ * to compile the source and start the piece, within `boundStart`, and then
+ * registers it through the space's root as a served creation is
+ * registered. A piece the serving runtime refused is left unregistered,
+ * and the refusal is thrown. With `start` false nothing waits for the
+ * serving runtime, and the piece is registered at once.
+ */
+export async function createCompiledPiece(
+  config: SpaceConfig,
+  pieces: PiecesController,
+  program: RuntimeProgram,
+  options: {
+    input?: object;
+    start?: boolean;
+    slug?: string;
+    force?: boolean;
+    requestKey?: string;
+  } | undefined,
+  deps: PieceOperationDependencies,
+  boundStart: <T>(start: Promise<T>) => Promise<T>,
+): Promise<string> {
+  const requestKey = options?.requestKey ?? crypto.randomUUID();
+  const trace = deps.phaseTrace ?? cliPhaseTrace;
+  const actingUser =
+    (await (deps.loadIdentity ?? loadIdentity)(config.identity)).did();
+  const incomplete = (error: unknown) =>
+    new Error(
+      `Piece creation outcome may be incomplete. Retry the same command ` +
+        `with --request-key ${requestKey}. ` + describeFailure(error),
+      { cause: error },
+    );
+  const created = await timeCliPhase(
+    "newPiece.compiled.setUp",
+    () =>
+      compiledInstantiatePiece(pieces, {
+        program,
+        ...(options?.input === undefined ? {} : { argument: options.input }),
+        ...(options?.slug === undefined ? {} : { slug: options.slug }),
+        ...(options?.force === undefined ? {} : { force: options.force }),
+        register: true,
+        requestKey,
+        actingUser,
+      }),
+    trace,
+  ).catch((error) => {
+    throw error instanceof ServedLifecycleRefusal ? error : incomplete(error);
+  });
+  if (options?.start !== false) {
+    await timeCliPhase(
+      "newPiece.compiled.start",
+      () =>
+        boundStart(
+          (deps.compiledPieceStarted ?? compiledPieceStarted)(
+            pieces,
+            created.pieceId,
+          ),
+        ),
+      trace,
+    );
+  }
+  const registered = await timeCliPhase(
+    "newPiece.compiled.register",
+    () => completeServedRegistration(pieces, created, actingUser),
+    trace,
+  ).catch((error) => {
+    throw incomplete(error);
+  });
+  if (registered.registration.status !== "handled") {
+    throw new Error(
+      `Piece ${created.pieceId} was created but registration is ` +
+        `${registered.registration.status}. ` +
+        `Retry the same command with --request-key ${requestKey}. ` +
+        (registered.registration.error ?? ""),
+    );
+  }
+  return created.pieceId;
+}
+
+/**
  * The client a served verb is sent with: it sends the verb on `pieces`'
  * memory session for its space, so the verb reaches the process serving that
  * space and runs as the identity the connection was opened as.
@@ -2077,12 +2304,24 @@ function noSpaceAnswers(error: SpaceNotFoundError): Error {
 }
 
 /**
- * What creating a piece answers: the piece's id, and for a piece from the
- * pattern index, the index's display name for the pattern when it has one.
+ * What creating a piece answers: the piece's id, for a piece from the
+ * pattern index the index's display name for the pattern when it has one,
+ * and where the deployment serves compiled pieces, which path the piece
+ * took.
  */
 export interface NewPieceReceipt {
   pieceId: string;
   name?: string;
+
+  /**
+   * The path the piece runs on, where the deployment serves compiled
+   * pieces: `compiled`, set up for the serving runtime to compile and
+   * start, or `standard`, where the pattern compiler refused the program.
+   */
+  path?: "compiled" | "standard";
+
+  /** Why the piece took its path: the compiler's refusal, or why nothing was checked. */
+  pathNote?: string;
 }
 
 /**
@@ -2164,8 +2403,13 @@ export async function newPieceWithReceipt(
   // A creation replayed by its request key from the index answers from the
   // receipt the first attempt left, naming the piece's pattern by identity:
   // the index need not be reachable, nor the pattern still published, for a
-  // creation that already committed.
-  const replayed = "patternId" in entry && options?.requestKey !== undefined
+  // creation that already committed. A deployment that serves compiled
+  // pieces needs the program to decide the path, and a retry of a creation
+  // that committed takes the path its first attempt took, whose receipt the
+  // creation then finds.
+  const compiledOffered = servesCompiledPieces(pieces);
+  const replayed = !compiledOffered && "patternId" in entry &&
+      options?.requestKey !== undefined
     ? await timeCliPhase(
       "newPiece.readReceipt",
       async () =>
@@ -2250,6 +2494,42 @@ export async function newPieceWithReceipt(
     });
     return Promise.race([starting, expired]).finally(() => settled.abort());
   };
+  // Where the deployment serves compiled pieces, the pattern compiler here
+  // decides the path before anything is written: a piece of a program it
+  // accepts is set up for the serving runtime to compile and start, and one
+  // of a program it refuses is created on the standard path, saying why.
+  const check = compiledOffered && indexed !== undefined
+    ? await timeCliPhase(
+      "newPiece.checkCompiledProgram",
+      () =>
+        (deps.checkCompiledProgram ?? checkCompiledProgram)(indexed.program),
+    )
+    : undefined;
+  if (check !== undefined && !("refused" in check)) {
+    const id = await timeCliPhase(
+      "newPiece.createCompiled",
+      () =>
+        (deps.createCompiledPiece ?? createCompiledPiece)(
+          config,
+          pieces,
+          indexed!.program,
+          options,
+          deps,
+          boundStart,
+        ),
+    );
+    noteWroteTo(config.space);
+    deployedFrom(id);
+    return {
+      pieceId: id,
+      ...named,
+      path: "compiled",
+      ...("unchecked" in check ? { pathNote: check.unchecked } : {}),
+    };
+  }
+  const took: Pick<NewPieceReceipt, "path" | "pathNote"> = check === undefined
+    ? {}
+    : { path: "standard", pathNote: check.refused };
   // Receipt-backed creation returns after both setup and registration commit.
   // Only a request key replays a receipt, so a creation with no program to
   // hand on (`indexed` absent) always takes this path.
@@ -2289,7 +2569,7 @@ export async function newPieceWithReceipt(
     });
     noteWroteTo(config.space);
     deployedFrom(id);
-    return { pieceId: id, ...named };
+    return { pieceId: id, ...named, ...took };
   }
   const program = indexed.program;
   const piece = await timeCliPhase(
