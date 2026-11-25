@@ -2684,9 +2684,10 @@ function carriesPieceMetadata(
  * A link inside the value is followed where setup follows it: at a position
  * the candidate reads as a value, which `readsAsValue` decides from the path
  * below the link being proved. Setup reads only the top level behind a
- * position typed as a cell handle. Links that lead back to a value on the
- * way to itself reach nothing for setup to read. No more than
- * {@link MAX_OWN_INPUT_DEPTH} documents are read on the way to any one value.
+ * position typed as a cell handle. Links that lead back to where they
+ * started reach nothing for setup to read, which the reader reports, and no
+ * more than {@link MAX_OWN_INPUT_DEPTH} documents are read on the way to any
+ * one value, which ends every other walk.
  */
 function holdsOwnPlainInput(
   linkedCell: Cell<unknown>,
@@ -2699,9 +2700,6 @@ function holdsOwnPlainInput(
   const ownPlainDocument = (link: NormalizedFullLink) =>
     isStoredArgumentOwnData(tx, link, home) &&
     !carriesPieceMetadata(link, pieces, tx);
-  // Values judged plain, and the values on the way to the one being judged.
-  const judged = new Set<string>();
-  const reading = new Set<string>();
   const plain = (
     start: NormalizedFullLink,
     path: readonly (string | number)[],
@@ -2717,13 +2715,8 @@ function holdsOwnPlainInput(
       reached.outside === true || reached.cyclic === true ||
       reached.value === undefined
     ) return false;
-    const at = reached.base;
-    const key = JSON.stringify([at.id, at.path, path]);
-    if (reading.has(key)) return false;
-    if (judged.has(key)) return true;
-    reading.add(key);
     const holder = pieces.runtime.getCellFromLink(
-      { ...at, schema: undefined },
+      { ...reached.base, schema: undefined },
       undefined,
       tx,
     );
@@ -2734,20 +2727,13 @@ function holdsOwnPlainInput(
       for (const segment of nested.path) {
         from = from.key(segment as keyof unknown) as Cell<unknown>;
       }
-      let target: NormalizedFullLink;
-      try {
-        target = pieces.runtime.getCellFromLink(
-          { ...parseLinkOrThrow(nested.value, from), schema: undefined },
-          undefined,
-          tx,
-        ).getAsNormalizedFullLink();
-      } catch {
-        return false;
-      }
+      const target = pieces.runtime.getCellFromLink(
+        { ...parseLinkOrThrow(nested.value, from), schema: undefined },
+        undefined,
+        tx,
+      ).getAsNormalizedFullLink();
       if (!plain(target, nestedPath, read)) return false;
     }
-    reading.delete(key);
-    judged.add(key);
     return true;
   };
   return plain(linkedCell.getAsNormalizedFullLink(), [], 0);
