@@ -1374,6 +1374,16 @@ export type Counts = {
    * visited, whether or not it was then evaluated.
    */
   scopedPulls: number;
+  /**
+   * Elements that bringing an assembly up to date from the changes of its
+   * source looked at one by one (`Instance.#reassemble`): those numbered
+   * again behind a splice of the source, and those of the source and of
+   * the result that the membership of a `filter` was formed from; and the
+   * rows that bringing the stored rows of a unit up to date compared by
+   * key (`Instance.#storeUnit`). The probes of a binary search are not
+   * counted.
+   */
+  elementsVisited: number;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -3539,6 +3549,7 @@ export class Instance {
     failures: 0,
     groupUpdates: 0,
     scopedPulls: 0,
+    elementsVisited: 0,
   };
   readonly valueOfOutput = new Map<number, number>();
   readonly bodies = new Map<number, (...given: unknown[]) => unknown>();
@@ -7053,6 +7064,14 @@ export class Instance {
       }
       return;
     }
+    if (
+      unit.seen !== undefined && entry.version === unit.seen.version &&
+      entry.value === unit.seen.value && entry.members === unit.seen.members
+    ) {
+      // Brought up to date with no change of its members.
+      unit.seen = entry;
+      return;
+    }
     const values = Array.isArray(entry.value) ? entry.value : [];
     const path = this.#pathOf(unit);
     const { delta } = entry;
@@ -7124,6 +7143,7 @@ export class Instance {
       tail < were - head && tail < keys.length - head &&
       unit.keys[were - 1 - tail] === keys[keys.length - 1 - tail]
     ) tail += 1;
+    this.counts.elementsVisited += head + tail;
     const row = (index: number) => {
       if (values[index] === unit.values[index]) return;
       unit.values[index] = values[index];
@@ -9977,6 +9997,9 @@ export class Instance {
     // the splices where each put in as many members as it removed,
     // and otherwise every position from the first splice on.
     let high = 0;
+    // How many positions at the end of the source no splice touched: the
+    // same elements in the same order before and after.
+    let untouched = elements.length;
     for (const op of ops) {
       const fresh = op.inserted.map((key): Element => ({
         key,
@@ -10067,11 +10090,16 @@ export class Instance {
       high = op.removed.length === op.inserted.length && high >= 0
         ? Math.max(high, op.start + op.inserted.length)
         : -1;
+      untouched = Math.min(
+        untouched,
+        elements.length - op.start - op.inserted.length,
+      );
     }
     if (elements.length !== length) return undefined;
     const indexed = this.#indexReaders.size > 0;
     const end = high < 0 ? elements.length : Math.min(high, elements.length);
     for (let index = low; index < end; index++) {
+      this.counts.elementsVisited += 1;
       const element = elements[index];
       if (element.source === PENDING) {
         if (keyAt(index) !== element.key) return undefined;
@@ -10099,6 +10127,9 @@ export class Instance {
     }
     const dirty: string[] = [];
     let flagged = false;
+    // The first and the last position of the source whose flag changed.
+    let flippedFrom = elements.length;
+    let flippedTo = -1;
     for (const key of changed) {
       const element = byKey.get(key);
       if (element === undefined) continue;
@@ -10126,7 +10157,11 @@ export class Instance {
       if (flags !== undefined) {
         const result = entry.value;
         if (result !== null && typeof result === "object") return undefined;
-        if (flags[index] !== Boolean(result)) flagged = true;
+        if (flags[index] !== Boolean(result)) {
+          flagged = true;
+          flippedFrom = Math.min(flippedFrom, index);
+          flippedTo = Math.max(flippedTo, index);
+        }
         flags[index] = Boolean(result);
       }
     }
@@ -10408,36 +10443,102 @@ export class Instance {
         differs = false;
       }
     } else if (moved || flagged) {
-      differs = true;
-      rowsNow = [];
-      const kept: unknown[] = [];
-      elements.forEach((element, index) => {
-        if (!flags?.[index]) return;
-        rowsNow.push({ ...element, index: rowsNow.length });
-        kept.push(element.source);
-      });
-      rows.members = rowsNow;
-      value = kept;
-      // The rows that left or entered, as one splice: what stands
-      // before and after it holds the keys it held.
-      const [were, now] = [members.length, rowsNow.length];
+      // A `filter`: its members are the elements of the source whose flag
+      // holds, in the order of the source. The positions of the source
+      // that a splice put in or whose flag changed are looked at, and no
+      // other: the members before the first of them and behind the last
+      // are those that stood there, found by binary search over the
+      // members by where their elements stand now. An element that is no
+      // reference, as a row of a `map` is, forms the assembly whole, as it
+      // does for a window.
+      if (flags === undefined || !Array.isArray(held.value)) return undefined;
+      const count = elements.length;
+      const from = Math.min(low, flippedFrom);
+      const end = Math.max(
+        from,
+        count - Math.min(untouched, count - 1 - flippedTo),
+      );
+      const placeOf = (member: Element) => byKey.get(member.key)?.index;
+      // The first member whose element left or stands at `from` or behind.
       let head = 0;
+      for (let above = members.length; head < above;) {
+        const middle = (head + above) >> 1;
+        const place = placeOf(members[middle]);
+        if (place !== undefined && place < from) head = middle + 1;
+        else above = middle;
+      }
+      // The first member of the positions behind `end`, which no change
+      // touched.
+      let behind = head;
+      for (let above = members.length; behind < above;) {
+        const middle = (behind + above) >> 1;
+        const place = placeOf(members[middle]);
+        if (place !== undefined && place >= end) above = middle;
+        else behind = middle + 1;
+      }
+      const fresh: Element[] = [];
+      const freshValues: unknown[] = [];
+      for (let index = from; index < end; index++) {
+        this.counts.elementsVisited += 1;
+        if (!flags[index]) continue;
+        const element = elements[index];
+        if (!(element.source instanceof Ref)) return undefined;
+        fresh.push({ ...element, index: head + fresh.length });
+        freshValues.push(element.source);
+      }
+      // The members that left or entered, as one splice: what stands
+      // before and after it holds the keys it held.
+      const were = behind - head;
+      this.counts.elementsVisited += were;
+      let same = 0;
       while (
-        head < were && head < now && members[head].key === rowsNow[head].key
-      ) head += 1;
-      let tail = 0;
+        same < were && same < fresh.length &&
+        members[head + same].key === fresh[same].key
+      ) same += 1;
+      let sameEnd = 0;
       while (
-        tail < were - head && tail < now - head &&
-        members[were - 1 - tail].key === rowsNow[now - 1 - tail].key
-      ) tail += 1;
-      delta = {
-        ops: head === were && head === now ? [] : [{
-          start: head,
-          removed: members.slice(head, were - tail).map(({ key }) => key),
-          inserted: rowsNow.slice(head, now - tail).map(({ key }) => key),
-        }],
-        rows: [],
-      };
+        sameEnd < were - same && sameEnd < fresh.length - same &&
+        members[behind - 1 - sameEnd].key ===
+          fresh[fresh.length - 1 - sameEnd].key
+      ) sameEnd += 1;
+      differs = same + sameEnd < were || same + sameEnd < fresh.length;
+      if (differs) {
+        rowsNow = [
+          ...members.slice(0, head),
+          ...fresh,
+          ...members.slice(behind),
+        ];
+        // The members behind the splice stand at other positions where
+        // it put in another number than it took out.
+        for (
+          let index = fresh.length === were
+            ? rowsNow.length
+            : head + fresh.length;
+          index < rowsNow.length;
+          index++
+        ) {
+          this.counts.elementsVisited += 1;
+          rowsNow[index] = { ...rowsNow[index], index };
+        }
+        rows.members = rowsNow;
+        value = [
+          ...held.value.slice(0, head),
+          ...freshValues,
+          ...held.value.slice(behind),
+        ];
+        delta = {
+          ops: [{
+            start: head + same,
+            removed: members.slice(head + same, behind - sameEnd).map((
+              { key },
+            ) => key),
+            inserted: fresh.slice(same, fresh.length - sameEnd).map((
+              { key },
+            ) => key),
+          }],
+          rows: [],
+        };
+      }
     } else {
       differs = false;
     }
@@ -10446,7 +10547,10 @@ export class Instance {
     }
     seen();
     if (differs) store.clock += 1;
-    const version = (held.version ?? 0) + 1;
+    // The count of the changes of the members, which a reader brought up
+    // to date from the delta of each (`Rows.upstream`) compares with the
+    // count it saw: a pass that changed nothing is none.
+    const version = (held.version ?? 0) + (differs ? 1 : 0);
     return {
       ...held,
       value,

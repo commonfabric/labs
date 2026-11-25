@@ -488,3 +488,162 @@ describe("an edit of one member of an element that has state", () => {
     }
   });
 });
+
+// How bringing the membership of a `filter` up to date grows with the
+// elements, on `fixtures/filter-rows.tsx`: `shown` is a `filter` over
+// `items`, given as an array of references or as an array of plain values
+// in place, and `titled` a `filter` over the result of `shown`, another
+// per-element construct whose elements are those of `items`. A change of
+// one element is brought up to date from the changes of the source, and
+// looks at the same number of elements at 10 and at 100.
+// `fixtures/filter-of-map.tsx` has a `filter` over the result of a `map`,
+// whose elements are the records the `map` returns.
+describe("the membership of a `filter` brought up to date", () => {
+  const row = (index: number) => ({
+    title: `t${index}`,
+    shown: index % 2 === 0,
+  });
+  const start = async (
+    fixture: string,
+    references: boolean,
+    length: number,
+  ) => {
+    const items = Array.from({ length }, (_, index) => row(index));
+    return new Instance(
+      await artifactOf(fixture),
+      references
+        ? {
+          pool: Object.fromEntries(items.map((held, index) => [index, held])),
+          items: items.map((_, index) => ({
+            $link: { doc: ARGUMENT, path: ["pool", `${index}`] },
+          })),
+        }
+        : { items },
+    );
+  };
+  /** Appends `added` to `items`, in the pool where `items` links there. */
+  const append = (
+    instance: Instance,
+    length: number,
+    added: { title: string; shown: boolean },
+  ) => {
+    if (instance.store.peek(ARGUMENT, ["pool"]) === undefined) {
+      instance.spliceArgument(["items"], length, 0, [added]);
+      return;
+    }
+    instance.store.write(new Ref(ARGUMENT, ["pool", `${length}`]), added);
+    instance.spliceArgument(["items"], length, 0, [
+      { $link: { doc: ARGUMENT, path: ["pool", `${length}`] } },
+    ]);
+  };
+  /** The path of a member of the element at `index` of `items`. */
+  const at = (instance: Instance, index: number, member: string) =>
+    instance.store.peek(ARGUMENT, ["pool"]) === undefined
+      ? ["items", `${index}`, member]
+      : ["pool", `${index}`, member];
+  const changes: [string, (instance: Instance, length: number) => void][] = [
+    ["an append of an element the predicate keeps", (instance, length) => {
+      append(instance, length, { title: "new", shown: true });
+    }],
+    ["an append of an element the predicate leaves out", (instance, length) => {
+      append(instance, length, { title: "new", shown: false });
+    }],
+    [
+      "an edit of a member the predicate reads that keeps the membership",
+      (instance) => {
+        instance.writeArgument(at(instance, 4, "title"), "edited");
+      },
+    ],
+    ["an edit that takes the last element out", (instance, length) => {
+      instance.writeArgument(at(instance, length - 2, "title"), "");
+    }],
+    [
+      "an append of an element the predicate leaves out, then of one it keeps",
+      (instance, length) => {
+        append(instance, length, { title: "late", shown: false });
+        append(instance, length + 1, { title: "new", shown: true });
+      },
+    ],
+    ["a removal of the last element", (instance, length) => {
+      instance.spliceArgument(["items"], length - 1, 1, []);
+    }],
+  ];
+
+  for (
+    const [kind, references] of [
+      ["an array of references", true],
+      ["an array of plain values in place", false],
+    ] as const
+  ) {
+    for (const [name, change] of changes) {
+      it(`looks at as many elements at 10 as at 100: ${name}, for a \`filter\` over ${kind} and over the result of a \`filter\` over it`, async () => {
+        const costs = [];
+        for (const length of [10, 100]) {
+          const instance = await start("filter-rows", references, length);
+          const before = {
+            visited: instance.counts.elementsVisited,
+            formed: instance.counts.assembliesFormed,
+          };
+          change(instance, length);
+          costs.push({
+            visited: instance.counts.elementsVisited - before.visited,
+            formed: instance.counts.assembliesFormed - before.formed,
+          });
+        }
+        const [small, large] = costs;
+
+        expect(large).toEqual(small);
+        expect(small.formed).toBe(0);
+      });
+    }
+  }
+
+  it("holds the elements each predicate keeps after each change", async () => {
+    for (const references of [true, false]) {
+      const changed = async (fixture: string) => {
+        const instance = await start(fixture, references, 10);
+        const titles = () =>
+          Object.fromEntries(
+            Object.entries(instance.result() as Record<string, unknown>)
+              .map(([name, rows]) => [
+                name,
+                (rows as { title: string }[]).map(({ title }) => title),
+              ]),
+          );
+        const seen = [];
+        append(instance, 10, { title: "new", shown: true });
+        seen.push(titles());
+        instance.writeArgument(at(instance, 4, "title"), "skip");
+        seen.push(titles());
+        instance.writeArgument(at(instance, 6, "title"), "");
+        seen.push(titles());
+        append(instance, 11, { title: "late", shown: false });
+        instance.spliceArgument(["items"], 2, 1, []);
+        seen.push(titles());
+        return seen;
+      };
+
+      expect(await changed("filter-rows")).toEqual([
+        {
+          shown: ["t0", "t2", "t4", "t6", "t8", "new"],
+          titled: ["t0", "t2", "t4", "t6", "t8", "new"],
+        },
+        {
+          shown: ["t0", "t2", "skip", "t6", "t8", "new"],
+          titled: ["t0", "t2", "t6", "t8", "new"],
+        },
+        {
+          shown: ["t0", "t2", "skip", "t8", "new"],
+          titled: ["t0", "t2", "t8", "new"],
+        },
+        { shown: ["t0", "skip", "t8", "new"], titled: ["t0", "t8", "new"] },
+      ]);
+      expect(await changed("filter-of-map")).toEqual([
+        { marked: ["t0!", "t2!", "t4!", "t6!", "t8!", "new!"] },
+        { marked: ["t0!", "t2!", "skip!", "t6!", "t8!", "new!"] },
+        { marked: ["t0!", "t2!", "skip!", "t8!", "new!"] },
+        { marked: ["t0!", "skip!", "t8!", "new!"] },
+      ]);
+    }
+  });
+});
