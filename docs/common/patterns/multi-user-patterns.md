@@ -257,7 +257,7 @@ the badge. Keep that shared state **object-wrapped** (`{ items: [...] }`, like t
 roster's `Roster` or scrabble's `PlayerRoster`) rather than a bare
 `Writable<T[]>`: a bare array with a nested live cell unwraps to a weak object and
 breaks CTS handler-state / `.get()`-snapshot output typing. Two rules make it
-work (see `scrabble.tsx`): type the **input** value-side — `PerSpace<Roster>`,
+work (see `scrabble/main.tsx`): type the **input** value-side — `PerSpace<Roster>`,
 not `PerSpace<Writable<Roster>>` (handlers still take `Writable<Roster>` state, so
 the body uses field access `players.list` while handlers use `.get()`/`.key()`);
 and type the **output** as a profile-less view (`Omit<Player, "profile">`) so the
