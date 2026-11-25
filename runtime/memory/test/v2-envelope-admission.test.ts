@@ -3,16 +3,28 @@ import { toFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
-import { hashStringOf, taggedHashStringOf } from "@commonfabric/data-model";
+import {
+  type FabricValue,
+  hashStringOf,
+  taggedHashStringOf,
+} from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 
-import { applyCommit, close, type Engine, open, read } from "../v2/engine.ts";
+import { type Operation, ProtocolError } from "../v2.ts";
 import { cfcCanonicalClauseDigest } from "../v2/cfc-clause-identity.ts";
+import {
+  type Client,
+  connect,
+  loopback,
+  type SpaceSession,
+} from "../v2/client.ts";
+import { applyCommit, close, type Engine, open, read } from "../v2/engine.ts";
 import {
   admitsDroppedDeclaredPaths,
   droppedDeclaredPaths,
 } from "../v2/envelope-admission.ts";
-import { ProtocolError } from "../v2.ts";
+import { Server } from "../v2/server.ts";
+import { authorizeLoopbackSessionOpen } from "../v2/session-open-auth.ts";
 
 const OWNER = "did:key:z6MkownerOwnerOwnerOwnerOwnerOwnerOwnerOwner";
 const OTHER = "did:key:z6MkotherOtherOtherOtherOtherOtherOtherOther";
@@ -431,6 +443,177 @@ describe("envelope-admission", () => {
       seed([declared(["rooms"], [personalSpace(OTHER)])]);
       commitAs(OTHER, [{ op: "delete", id }]);
       expect(read(engine, { id })).toBeNull();
+    });
+  });
+
+  describe("a session's commit whose envelope holds a `TransformedBy` stamp", () => {
+    // TODO(jkomoros): The two cases that store the stamp pin an admission
+    // the store should not make. The stamp is one "minted by the runtime for
+    // one attempt, from the identity that ran and the witnesses it consumed,
+    // and by nothing else" (§15.4, `15-atom-registry.md`), and an exchange
+    // rule reads a stored one as evidence of that run. Each session here is
+    // a memory protocol client with no runtime behind it, and the store
+    // keeps the stamp it sends, on a document the session creates and on one
+    // another principal wrote. Flip them when admission refuses or strips an
+    // integrity atom that no runtime's label derivation produced.
+    //
+    // The server holds an access list in `enforce` mode, so what bounds the
+    // admission is the list: `WRITE` on the space. Sessions open unsigned,
+    // each as the principal it names, so the cases say nothing about how a
+    // deployment tells a runtime it trusts from any other session of a
+    // principal the list grants `WRITE`.
+
+    const SPACE = "did:key:z6Mk-envelope-admission-stamp-space";
+    const WRITER = "did:key:z6Mk-envelope-admission-stamp-writer";
+    const READER = "did:key:z6Mk-envelope-admission-stamp-reader";
+    const id = "of:view";
+
+    const verified = (symbol: string) => ({
+      kind: "verified",
+      moduleIdentity: "module:table",
+      symbol,
+      bindingPath: [symbol],
+    });
+
+    /** The stamp `viewFor` leaves on a view of `move`'s output for `viewer`. */
+    const stamp = (viewer: string) => ({
+      type: CFC_ATOM_TYPE.TransformedBy,
+      identity: verified("viewFor"),
+      inputWitness: {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: verified("move"),
+      },
+      viewer,
+    });
+
+    /** An envelope whose value entry seals the document, with `integrity`. */
+    const sealed = (integrity: FabricValue[]): FabricValue => ({
+      version: 1,
+      schemaHash,
+      labelMap: {
+        version: 1,
+        entries: [{
+          path: [],
+          origin: "derived",
+          observes: "value",
+          label: { confidentiality: [personalSpace(SPACE)], integrity },
+        }],
+      },
+    });
+
+    let server: Server;
+    let clients: Client[];
+    let localSeq: number;
+
+    beforeEach(async () => {
+      server = new Server({
+        store: new URL(
+          `memory://envelope-admission-stamp-${crypto.randomUUID()}`,
+        ),
+        authorizeSessionOpen: authorizeLoopbackSessionOpen,
+        sessionOpenAuth: { audience: "did:key:z6Mk-envelope-admission-stamp" },
+        acl: { mode: "enforce" },
+      });
+      clients = [];
+      localSeq = 0;
+      // The space's own identity writes its access list, in a commit that
+      // holds nothing else, and then the schema document every envelope here
+      // names.
+      const owner = await sessionAs(SPACE);
+      await commit(owner, [{
+        op: "set",
+        id: `of:${SPACE}`,
+        value: {
+          value: { [SPACE]: "OWNER", [WRITER]: "WRITE", [READER]: "READ" },
+        },
+      }]);
+      await commit(owner, [{
+        op: "set",
+        id: `cid:${schemaHash}`,
+        value: { value: schema },
+      }]);
+    });
+
+    afterEach(async () => {
+      for (const client of clients) await client.close();
+      await server.close();
+    });
+
+    /** A session on the space, opened as `principal` on its own connection. */
+    const sessionAs = async (principal: string): Promise<SpaceSession> => {
+      const client = await connect({ transport: loopback(server) });
+      clients.push(client);
+      return await client.mount(SPACE, {}, (_space, _session, context) => ({
+        invocation: {
+          aud: context.audience,
+          challenge: context.challenge.value,
+        },
+        authorization: { principal },
+      }));
+    };
+
+    const commit = (session: SpaceSession, operations: Operation[]) =>
+      session.transact({
+        localSeq: ++localSeq,
+        reads: { confirmed: [], pending: [] },
+        operations,
+      });
+
+    /** The document `id` as a session opened as `principal` reads it. */
+    const documentAs = async (principal: string) => {
+      const result = await (await sessionAs(principal)).queryGraph({
+        roots: [{ id, selector: { path: [], schema: false } }],
+      });
+      return result.entities.find((entity) => entity.id === id)?.document;
+    };
+
+    it("stores the stamp of a document a `WRITE` session creates, as sent", async () => {
+      const document = {
+        value: { hand: ["AS", "KH"] },
+        cfc: sealed([stamp(WRITER)]),
+      };
+      await commit(await sessionAs(WRITER), [{
+        op: "set",
+        id,
+        value: document,
+      }]);
+      expect(await documentAs(READER)).toEqual(document);
+    });
+
+    it("stores the stamp a `WRITE` session adds to a document another principal wrote", async () => {
+      const value = { hand: ["AS", "KH"] };
+      await commit(await sessionAs(SPACE), [{
+        op: "set",
+        id,
+        value: { value, cfc: sealed([]) },
+      }]);
+      expect(await documentAs(READER)).toEqual({ value, cfc: sealed([]) });
+
+      await commit(await sessionAs(WRITER), [{
+        op: "patch",
+        id,
+        patches: [{
+          op: "add",
+          path: "/cfc/labelMap/entries/0/label/integrity/-",
+          value: stamp(WRITER),
+        }],
+      }]);
+      expect(await documentAs(READER)).toEqual({
+        value,
+        cfc: sealed([stamp(WRITER)]),
+      });
+    });
+
+    it("throws `AuthorizationError` for a `READ` session, and stores nothing", async () => {
+      const reader = await sessionAs(READER);
+      await expect(
+        commit(reader, [{
+          op: "set",
+          id,
+          value: { value: {}, cfc: sealed([stamp(READER)]) },
+        }]),
+      ).rejects.toMatchObject({ name: "AuthorizationError" });
+      expect(await documentAs(READER) ?? null).toBeNull();
     });
   });
 });

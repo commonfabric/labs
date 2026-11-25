@@ -5,12 +5,15 @@ import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 
 import {
+  SEED_ENVELOPE_SCHEMA,
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   buildCfcPolicyArtifactManifest,
   cfcPolicyManifestDocId,
@@ -23,7 +26,11 @@ import type {
 } from "../src/cfc/types.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import { Runtime } from "../src/runtime.ts";
-import { StorageManager } from "../src/storage/cache.deno.ts";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+  StorageManager,
+} from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 import { declaredOnwardRead } from "../src/storage/reactivity-log.ts";
@@ -34,6 +41,7 @@ const space = signer.did();
 
 const ALICE = "did:key:alice";
 const BOB = "did:key:bob";
+const EVE = "did:key:eve";
 
 // The sealed clause names the documents' own space, so a write that carries
 // it fits the store it lands in.
@@ -708,6 +716,233 @@ describe("exchange at observation", () => {
         await derive(runtime, ["tally"], "derived");
         expect(clausesOf(runtime, "derived")).toEqual([SEALED]);
       }, { evaluation: "observe" });
+    });
+  });
+  describe("a stored stamp and a rule that names an input witness", () => {
+    // The rule releases a view `viewFor` wrote for a viewer out of what
+    // `move` wrote, so the stamp it matches holds an `inputWitness` beside
+    // its viewer. The cases directly in this group seed their stamps as the
+    // groups above do, through the privileged write, which stands in for the
+    // run that would have minted one. No run here did. The evaluator matches
+    // the stored atom against the rule's pattern, and the atom names neither
+    // the run that minted it nor the document that holds it.
+
+    const MOVE = verified("move");
+
+    /** The stamp `identity` leaves on what it wrote out of `witness`'s. */
+    const witnessed = (
+      identity: ImplementationIdentity,
+      witness: ImplementationIdentity,
+      viewer: string,
+    ): CfcAtom =>
+      ({
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity,
+        inputWitness: { type: CFC_ATOM_TYPE.TransformedBy, identity: witness },
+        viewer,
+      }) as CfcAtom;
+
+    const WITNESSED_RULES: CfcPolicyRecordInput[] = [{
+      id: "table",
+      rules: [{
+        id: "release-own-view-of-a-move",
+        appliesTo: SEALED,
+        preCondition: {
+          integrity: [{
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: {
+              kind: "verified",
+              moduleIdentity: "module:table",
+              symbol: "viewFor",
+            },
+            inputWitness: {
+              type: CFC_ATOM_TYPE.TransformedBy,
+              identity: {
+                kind: "verified",
+                moduleIdentity: "module:table",
+                symbol: "move",
+              },
+            },
+            viewer: { var: "$viewer" },
+          }],
+        },
+        post: {
+          addAlternatives: [{
+            type: CFC_ATOM_TYPE.User,
+            subject: { var: "$viewer" },
+          }],
+        },
+      }],
+    }];
+
+    it("carries the viewer the stamp names beside the sealed clause", async () => {
+      await withRuntime(async (runtime) => {
+        await seedStamped(runtime, "view", { hand: ["AS", "KH"] }, [
+          witnessed(VIEW, MOVE, EVE),
+        ]);
+        await derive(runtime, ["view"], "derived");
+        expect(clausesOf(runtime, "derived")).toEqual([releasedTo(EVE)]);
+      }, { rules: WITNESSED_RULES });
+    });
+
+    it("carries a viewer other than the principal whose user scope holds the document", async () => {
+      // The document is the signer's own instance at the user scope, and the
+      // stamp on it names another principal.
+
+      await withRuntime(async (runtime) => {
+        const seeding = runtime.edit();
+        writeSeedEnvelopeDoc(seeding, space);
+        seedStoredEnvelope(seeding, {
+          space,
+          scope: "user",
+          id: idOf(runtime, "own-view", seeding),
+          path: [],
+        }, {
+          value: { hand: ["AS"] },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                origin: "derived",
+                observes: "value",
+                label: {
+                  confidentiality: [SEALED],
+                  integrity: [witnessed(VIEW, MOVE, EVE)],
+                },
+              }],
+            },
+          },
+        });
+        expect((await seeding.commit().settled).ok).toBeDefined();
+
+        const tx = runtime.edit();
+        setCfcImplementationIdentity(tx, DERIVE);
+        const value = runtime
+          .getCell(space, "own-view", undefined, tx, "user").getRaw();
+        expect(value).toEqual({ hand: ["AS"] });
+        expect(runtime.getCell(space, "own-view").getRaw()).toBeUndefined();
+        tx.writeOrThrow({
+          space,
+          scope: "space",
+          id: idOf(runtime, "derived", tx),
+          path: ["value"],
+        }, JSON.stringify(value));
+        tx.prepareCfc();
+        expect((await tx.commit().settled).error).toBeUndefined();
+        expect(clausesOf(runtime, "derived")).toEqual([releasedTo(EVE)]);
+      }, { rules: WITNESSED_RULES });
+    });
+
+    it("keeps the sealed clause of a stamp holding no input witness", async () => {
+      await withRuntime(async (runtime) => {
+        await seedStamped(runtime, "unwitnessed", { hand: ["AS"] }, [
+          transformedBy(VIEW, EVE),
+        ]);
+        await derive(runtime, ["unwitnessed"], "derived");
+        expect(clausesOf(runtime, "derived")).toEqual([SEALED]);
+      }, { rules: WITNESSED_RULES });
+    });
+
+    it("keeps the sealed clause of a stamp whose witness names other code", async () => {
+      await withRuntime(async (runtime) => {
+        await seedStamped(runtime, "other-witness", { hand: ["AS"] }, [
+          witnessed(VIEW, OTHER, EVE),
+        ]);
+        await derive(runtime, ["other-witness"], "derived");
+        expect(clausesOf(runtime, "derived")).toEqual([SEALED]);
+      }, { rules: WITNESSED_RULES });
+    });
+
+    describe("where a session sent the stamp to the store itself", () => {
+      // TODO(jkomoros): This pins a release the runtime should not make. The
+      // stamp is one "minted by the runtime for one attempt, from the
+      // identity that ran and the witnesses it consumed, and by nothing
+      // else" (§15.4, `15-atom-registry.md`), and here a memory protocol
+      // session with no runtime behind it sets the document, label and all,
+      // naming its own principal as the viewer.
+      // The store keeps the label as sent, and a runtime that then reads the
+      // document matches the stamp as it matches one a run minted. Flip it
+      // when the store refuses or strips a stamp no runtime's label
+      // derivation produced, or the evaluator asks for evidence of the mint.
+      //
+      // The server is the loopback one, which admits an unsigned open as the
+      // principal it names and keeps no access list. So the case shows what
+      // a session able to write the space can do, and nothing about which
+      // sessions a deployment lets write it.
+
+      it("carries the viewer the stamp names beside the sealed clause", async () => {
+        const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+        const storageManager = EmulatedStorageManager.connectTo(server, {
+          as: signer,
+        });
+        const runtime = new Runtime({
+          apiUrl: new URL("https://example.com"),
+          storageManager,
+          cfcFlowLabels: "persist",
+          cfcPolicyRecords: WITNESSED_RULES,
+          cfcPolicyEvaluation: "enforce",
+        });
+        const client = await MemoryV2Client.connect({
+          instanceNames: namesInstancesByDefault(),
+          transport: MemoryV2Client.loopback(server),
+        });
+        try {
+          const session = await client.mount(
+            space,
+            {},
+            (_space, _session, context) => ({
+              invocation: {
+                aud: context.audience,
+                challenge: context.challenge.value,
+              },
+              authorization: { principal: EVE },
+            }),
+          );
+          await session.transact({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: `cid:${SEED_ENVELOPE_SCHEMA_HASH}`,
+              value: { value: SEED_ENVELOPE_SCHEMA },
+            }, {
+              op: "set",
+              id: runtime.getCell(space, "sent").getAsNormalizedFullLink().id,
+              value: {
+                value: { hand: ["AS", "KH"] },
+                cfc: {
+                  version: 1,
+                  schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+                  labelMap: {
+                    version: 1,
+                    entries: [{
+                      path: [],
+                      origin: "derived",
+                      observes: "value",
+                      label: {
+                        confidentiality: [SEALED],
+                        integrity: [witnessed(VIEW, MOVE, EVE)],
+                      },
+                    }],
+                  },
+                },
+              },
+            }],
+          });
+
+          await runtime.getCell(space, "sent").sync();
+          await derive(runtime, ["sent"], "derived");
+          expect(clausesOf(runtime, "derived")).toEqual([releasedTo(EVE)]);
+        } finally {
+          await client.close();
+          await runtime.dispose();
+          await storageManager.close();
+          await server.close();
+        }
+      });
     });
   });
 });
