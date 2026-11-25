@@ -2638,7 +2638,13 @@ export class RuntimeTransactions implements TransactionHooks {
           target.doc === doc && isPrefix(target.path, at)
         )
       );
-      const ofMarkers = this.#recordsOfMarkers(doc, path, store, memberships);
+      const ofMarkers = this.#recordsOfMarkers(
+        doc,
+        path,
+        store,
+        memberships,
+        splice,
+      );
       if (ofBuckets.length > 0 || ofLists.length > 0 || ofMarkers.length > 0) {
         writes = [...given, ...ofBuckets, ...ofLists, ...ofMarkers];
       }
@@ -2891,15 +2897,32 @@ export class RuntimeTransactions implements TransactionHooks {
     path: readonly string[],
     store: Store,
     arrays: readonly PlanWrite[],
+    splice: { start: number; removed: number; inserted: number } | undefined,
   ): PlanWrite[] {
     const made = this.#markersMade.splice(0).filter(({ stream }) =>
       stream.keys.length > 0
     );
     if (made.length === 0 || arrays.length === 0) return [];
-    const paths = streamPaths(
-      store.peek(doc, path),
-      new Set(made.map(({ stream }) => stream)),
-    );
+    // A splice wrote the members it put in, and only those can hold a
+    // marker it made: what is looked at follows what was written.
+    const held = store.peek(doc, path);
+    const wanted = new Set<object>(made.map(({ stream }) => stream));
+    const paths = new Map<object, string[]>();
+    if (splice !== undefined && Array.isArray(held)) {
+      for (
+        let position = splice.start;
+        position < splice.start + splice.inserted && position < held.length;
+        position++
+      ) {
+        for (const [stream, below] of streamPaths(held[position], wanted)) {
+          paths.set(stream, [`${position}`, ...below]);
+        }
+      }
+    } else {
+      for (const [stream, below] of streamPaths(held, wanted)) {
+        paths.set(stream, below);
+      }
+    }
     const records: PlanWrite[] = [];
     for (const { entity, stream } of made) {
       const below = paths.get(stream);
