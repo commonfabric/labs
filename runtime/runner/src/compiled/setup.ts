@@ -173,8 +173,11 @@ export const setUpCompiledPiece = (
     argumentDocument,
     convertCellsToLinks(argument as never) as FabricValue,
   );
-  resultCell.withTx(tx).setMetaRaw(
-    "argument",
+  // Written through the transaction and not the cell, which would start a
+  // load of the result document: a subscription that reaches the serving
+  // loop before this commit demands a piece the storage does not name yet.
+  tx.writeOrThrow(
+    { ...at(result.id), path: ["argument"] },
     runtime.getCellFromLink(argumentDocument).getAsWriteRedirectLink({
       base: resultCell,
     }) as FabricValue,
