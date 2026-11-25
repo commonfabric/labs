@@ -1,7 +1,7 @@
 ---
 status: historical
 created: 2026-11-13
-archived: 2026-11-14
+archived: 2026-11-13
 reason: "Point-in-time measurements of the shipped cf view HTML path with its embedded CSS and JavaScript, its coverage of the organization's HTML files, and the evaluation of the HTML parsers the UI package already pins."
 ---
 
