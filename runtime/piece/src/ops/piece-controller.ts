@@ -2609,11 +2609,19 @@ function holdsOwnPlainInput(
       for (const segment of nested.path) {
         from = from.key(segment as keyof unknown) as Cell<unknown>;
       }
-      const target = pieces.runtime.getCellFromLink(
-        { ...parseLinkOrThrow(nested.value, from), schema: undefined },
-        undefined,
-        tx,
-      ).getAsNormalizedFullLink();
+      // A link envelope is recognized by its outside, and stored bytes can
+      // hold one with nothing a link is made of inside it. That one cannot
+      // be followed, so what it stands for was not read.
+      let target: NormalizedFullLink;
+      try {
+        target = pieces.runtime.getCellFromLink(
+          { ...parseLinkOrThrow(nested.value, from), schema: undefined },
+          undefined,
+          tx,
+        ).getAsNormalizedFullLink();
+      } catch {
+        return false;
+      }
       if (!plain(target, nestedPath, read)) return false;
     }
     return true;
