@@ -79,7 +79,7 @@ import {
   WHO,
   type Who,
 } from "./both-paths-serving.ts";
-import { linksIn, type StoredDocument } from "./both-paths-store.ts";
+import { linksIn, MAX_DEPTH, type StoredDocument } from "./both-paths-store.ts";
 
 /** One thing the comparison found. */
 export type Finding = {
@@ -464,15 +464,18 @@ const stringsIn = (
   value: unknown,
   at: string[] = [],
   found: { path: string[]; text: string }[] = [],
+  within: unknown[] = [],
 ): { path: string[]; text: string }[] => {
+  if (at.length > MAX_DEPTH || within.includes(value)) return found;
   if (typeof value === "string") found.push({ path: at, text: value });
-  else if (isFabricArray(value as FabricValue) || Array.isArray(value)) {
+  const inside = [...within, value];
+  if (isFabricArray(value as FabricValue) || Array.isArray(value)) {
     (value as unknown[]).forEach((member, index) =>
-      stringsIn(member, [...at, String(index)], found)
+      stringsIn(member, [...at, String(index)], found, inside)
     );
   } else if (isFabricPlainObject(value as FabricValue)) {
     for (const [name, member] of Object.entries(value as object)) {
-      stringsIn(member, [...at, name], found);
+      stringsIn(member, [...at, name], found, inside);
     }
   }
   return found;

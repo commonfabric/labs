@@ -484,7 +484,11 @@ export const runPath = async (
                 error instanceof CompiledPieceRefused
                   ? "refused"
                   : "not started"
-              }: ${firstLine(error)}`,
+              }: ${
+                (error instanceof Error ? error.message : String(error))
+                  .split("\n").filter((line) => line.trim() !== "")
+                  .slice(0, 3).join(" | ").slice(0, 400)
+              }`,
             );
           },
         });

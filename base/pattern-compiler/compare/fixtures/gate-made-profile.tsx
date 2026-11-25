@@ -30,8 +30,8 @@ const touch = handler<void, { touches: Writable<number> }>(
 );
 
 const Card = pattern<{ title: string }, CardResult>(({ title }) => {
-  const profile = wish<{ name: string }>({ query: "#profile" });
-  const viewer = computed(() => profile.result?.name ?? "");
+  const profile = wish<Writable<{ name: string }>>({ query: "#profile" });
+  const viewer = computed(() => profile.result?.get()?.name ?? "");
   const touches = new Writable(0);
   return {
     [UI]: <div>{title} for {viewer}</div>,

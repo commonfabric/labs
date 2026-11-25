@@ -32,10 +32,10 @@
  * and no entry covers nothing. What the runtimes log goes nowhere unless
  * `BOTH_PATHS_VERBOSE` is set; the runtimes' banners go to standard error.
  *
- * `--one-principal` in front of the arguments runs the harness this file
- * held before the gate, one principal with no serving loop and no session,
- * which `runBothPaths` below still is: `<results.jsonl> [part of a name]
- * [--corpus]`. The rest of this head describes that harness.
+ * `--one-principal` in front of the arguments runs the harness of one
+ * principal with no serving loop and no session, `runBothPaths` below:
+ * `<results.jsonl> [part of a name] [--corpus]`. The rest of this head
+ * describes that harness.
  *
  * It runs one pattern on both paths with the same events, gestures and
  * principals, and compares what each path did
@@ -766,9 +766,8 @@ export const runBothPaths = async (
 };
 
 /**
- * The command of the harness with one principal and no serving loop, as it
- * was before the two-principal gate: `--one-principal` in front of its
- * arguments.
+ * The command of the harness with one principal and no serving loop:
+ * `--one-principal` in front of its arguments.
  */
 const runOnePrincipal = async (args: string[]) => {
   const [file, ...rest] = args;
@@ -993,7 +992,11 @@ const runGate = async (args: string[]): Promise<number> => {
           kind: "failure",
           position: "harness",
           today: caught instanceof Error
-            ? caught.message.split("\n")[0]
+            ? `${caught.message.split("\n")[0]} ${
+              Deno.env.get("BOTH_PATHS_VERBOSE") === undefined
+                ? ""
+                : caught.stack
+            }`
             : String(caught),
         }],
       };

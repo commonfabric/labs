@@ -183,6 +183,15 @@ export const snapshotOf = (store: URL, space: string): SpaceSnapshot => {
   };
 };
 
+/**
+ * The deepest a walk of a stored value goes. A value the state inspector
+ * reconstructs can hold itself (a view of `examples/fair-share/main.tsx` on
+ * today's path, whose `props.bytes` leads back to the view), which a walk
+ * skips where it meets an object it is already inside of, and stops at this
+ * depth otherwise.
+ */
+export const MAX_DEPTH = 64;
+
 /** The message of an error state, where `value` is one. */
 export const errorMessageOf = (value: unknown): string | undefined => {
   if (isErrorState(value)) return String(value.$error.message);
@@ -197,17 +206,22 @@ export const errorMessageOf = (value: unknown): string | undefined => {
 export const countErrorStates = (
   value: unknown,
   into: Record<string, number>,
+  within: unknown[] = [],
 ): void => {
+  if (within.length > MAX_DEPTH || within.includes(value)) return;
   const message = errorMessageOf(value);
   if (message !== undefined) {
     into[message] = (into[message] ?? 0) + 1;
     return;
   }
+  const inside = [...within, value];
   if (isFabricArray(value as FabricValue) || Array.isArray(value)) {
-    for (const member of value as unknown[]) countErrorStates(member, into);
+    for (const member of value as unknown[]) {
+      countErrorStates(member, into, inside);
+    }
   } else if (isFabricPlainObject(value as FabricValue)) {
     for (const member of Object.values(value as Record<string, unknown>)) {
-      countErrorStates(member, into);
+      countErrorStates(member, into, inside);
     }
   }
 };
@@ -306,8 +320,13 @@ export const linksIn = (
   value: FabricValue | undefined = document.value,
   at: string[] = [],
   found: { path: string[]; link: StoredLink }[] = [],
+  within: unknown[] = [],
 ): { path: string[]; link: StoredLink }[] => {
-  if (value === undefined || value === null) return found;
+  if (
+    value === undefined || value === null || at.length > MAX_DEPTH ||
+    within.includes(value)
+  ) return found;
+  const inside = [...within, value];
   const link = decodedLinkOf(value);
   if (link !== null) {
     found.push({
@@ -323,11 +342,11 @@ export const linksIn = (
   }
   if (isFabricArray(value) || Array.isArray(value)) {
     (value as FabricValue[]).forEach((member, index) =>
-      linksIn(document, member, [...at, String(index)], found)
+      linksIn(document, member, [...at, String(index)], found, inside)
     );
   } else if (isFabricPlainObject(value)) {
     for (const [name, member] of Object.entries(value)) {
-      linksIn(document, member as FabricValue, [...at, name], found);
+      linksIn(document, member as FabricValue, [...at, name], found, inside);
     }
   }
   return found;
