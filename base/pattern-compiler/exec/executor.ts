@@ -17335,13 +17335,11 @@ export class Instance {
       this.#handlerHost = outer;
       root.#evaluating.pop();
     }
-    return returned === undefined
-      ? { binding, committed: true }
-      : {
-        binding,
-        committed: true,
-        result: this.stored(this.returned(returned)),
-      };
+    return returned === undefined ? { binding, committed: true } : {
+      binding,
+      committed: true,
+      result: this.stored(this.returned(returned)),
+    };
   }
 
   /**
