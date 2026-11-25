@@ -6688,17 +6688,24 @@ is relitigated.
   the branch `claude/compiled-pattern-scoped-rows`: written under no record,
   the marker took the derivation's join and was refused at every derivation
   while an element carrying a confidentiality clause existed, as in
-  `examples/fair-share/main.tsx` and `apps/redactor/vault.tsx`. The
+  `patterns/examples/fair-share/main.tsx` and
+  `patterns/apps/redactor/vault.tsx`. The
   coordinator recommended this form, and the owner agreed: "I agreed with
   your suggestions". Not built.
 
-- A spread of a record that a body builds is emitted as a pass: each member
-  is placed at its position with the label of that member's value, where a
-  read of the whole record joined the labels of every member into each
-  position the spread gives (2026-11-24, Z97). This answers question 4 of
-  round twenty-two (note 1031, read 2) on the same branch, a change that
-  stores less label; it is what lets the room's rendered tree stay of the
-  space where it spreads a record that holds a scoped value. The coordinator
+- A spread of an object that a body builds, whose members the literal
+  declares, is emitted as a pass: each member is placed at its position as
+  it is, with the label of that member's value, and nothing of the object
+  is read (2026-11-24, Z97). `plan-and-label-templates.md` §3.4 already
+  gives each declared path of a spread the template of `a.p`; the emitted
+  code did not follow it, since the crate emitted such a spread as a read of
+  the whole object (`$h.v(...)`), which joined the labels of every member
+  into each position the spread gives. So the ruling makes the code follow
+  §3.4, and it stores less label than the code did. A spread of a value of
+  record type, whose keys are data, keeps §3.4's template at `*`. This
+  answers question 4 of round twenty-two (note 1031, read 2) on the same
+  branch; it is what lets the room's rendered tree stay of the space where
+  it spreads an object that holds a scoped value. The coordinator
   recommended it, and the owner agreed in the same words as Z96. Not built.
   Both rulings decide questions that Z88 deferred; when each is built, the
   round checks it against `docs/development/cfc-spec-correspondence.md` and

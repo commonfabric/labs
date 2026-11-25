@@ -7096,7 +7096,11 @@ type with no index signature, joined with the `shape` of each optional
 property. Where the type of `a` is a record type, whose keys are data, the
 result's `enumeration` is that of `a`, and the template at `*` is the template
 of `a` at `*`, joined with the templates of the written members whose names
-the record's key type admits.
+the record's key type admits. A spread is a pass: the emitted code places
+each member of `a` as it is, a reference included, and reads nothing of `a`,
+as a spread copies the members in JavaScript (decision Z97 of the plan
+document). A read of `a` whole would join the labels of all its members
+into every position the spread gives, which the templates above do not.
 
 **A spread in an array literal.** `[e0, ...xs, e1]` is an array the cone
 computes, and the positions after a spread are not known when the pattern
