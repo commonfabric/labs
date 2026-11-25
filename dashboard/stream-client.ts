@@ -46,7 +46,10 @@ export interface LiveUpdateStream {
  * interval, so a server that refuses or fails connections costs one request an
  * interval however long it is away. A server that accepts a connection and then
  * drops it arms the prompt reopen again each time, so the page follows a
- * flapping server as fast as it flaps.
+ * flapping server as fast as it flaps. A stream the page abandons, because it
+ * cannot follow what arrives on it, is the exception to the prompt reopen: it
+ * is reopened on the silence interval, as a stream never heard on is, so a
+ * failure that recurs on every stream costs one request an interval.
  *
  * Reopening the stream and reporting whether the page can hear the server are
  * separate questions with separate answers. Reopening is paced, because each
