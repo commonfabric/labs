@@ -21,12 +21,15 @@ These files model that case with `cf test`. No real location data is involved.
 | `share-readers.tsx` | The share pattern with its store under `share-policy.tsx`: "readers of B" rather than "anyone the value reaches".                                                                                                            |
 | `main.test.tsx`     | The four cases below. Each share runs in a new space that grants everyone READ.                                                                                                                                              |
 | `readers.test.tsx`  | The labeled store, which `cf test` can only partly decide (finding 4).                                                                                                                                                       |
+| `sqlite-source.tsx` | The same fixes as SQLite rows, under three row rules: the policy alone, `any(dbOwner(), policy)`, and `dbOwner()`.                                                                                                           |
+| `sqlite.test.tsx`   | The share pattern fed from those rows (finding 6).                                                                                                                                                                           |
 
 Run:
 
 ```sh
 deno task cf test patterns/dev/test/share-space-declassify/main.test.tsx
 deno task cf test patterns/dev/test/share-space-declassify/readers.test.tsx
+deno task cf test patterns/dev/test/share-space-declassify/sqlite.test.tsx
 ```
 
 Both run under `enforce-strict` CFC with flow labels persisted. Handlers run on
@@ -89,6 +92,30 @@ the server-execution serving loop, which is the `cf test` default.
    "this space", only `CurrentPrincipal`. Loom's replica copies
    (`anyOf(User{owner}, Space(loom))`, top/3483) are written from outside the
    pattern language.
+
+6. **A `PolicyOf` atom in a SQLite row rule releases nothing.** Loom's
+   connectors label SQLite rows, so the connector change top/3599 proposes
+   (`anyOf(User{owner}, PolicyOf<rules>)` at ingest) goes through a row rule.
+   `sqlite.test.tsx` writes the compiled `PolicyOf<locationRules>` atom into row
+   rules with `constant()`. A row whose rule names the policy alone, the same
+   label that releases from a cell in `main.test.tsx`, is refused at the share
+   store (`maxConfidentiality failed at /`).
+
+   The cause, from reading the code rather than from a label dump: the compiled
+   atom's subject is the placeholder `{__ctOwningSpace: true}`. Only the schema
+   write path resolves it to the owning space and installs the policy's manifest
+   there (`resolvePolicyOfValue` in `runtime/runner/src/cfc/prepare.ts`). The
+   row-label evaluator (`runtime/memory/v2/sqlite/row-label.ts`,
+   `row-label-read.ts`) resolves only `dbOwner()` and `principal()`, and passes
+   a `constant()` atom through unchanged. So no rule of the policy is found for
+   the row. A connector writing its label profile from outside the pattern
+   language is in the same position, with no compiler to lower the atom at all.
+
+   The connector label change in loom therefore waits on two labs changes: a
+   policy whose reference a connector can write (a system policy with a pinned
+   digest and a concrete subject), and the row-label path resolving that
+   reference and loading its manifest. The test asserts today's behavior and
+   says at the assertion what to expect once both land.
 
 ## Runtime behavior found along the way
 
