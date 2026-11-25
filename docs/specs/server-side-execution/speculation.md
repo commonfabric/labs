@@ -143,12 +143,13 @@ currency. The existing overlay and retirement rules below still apply.
   object a builtin's run writes as an element of an array becomes a
   document of its own whose id derives from that cause, from what the
   write writes (with, for an append, the length of the array it
-  extends), and from the object's place among the objects that write
+  extends, whose elements are links to their documents), and from the
+  object's place among the objects that write
   anchors. The client's run of a builtin and the served run of the same
-  node over the same inputs therefore mint the same documents, and a
-  later run that writes anything else mints documents of its own rather
-  than reusing those of an earlier run, whose stores it reads back and
-  rewrites. Before builtins' runs carried a frame, a builtin drew those
+  node therefore mint the same documents when they write the same value,
+  and a later run that writes anything else mints documents of its own
+  rather than reusing those of an earlier run, whose stores it reads
+  back and rewrites. Before builtins' runs carried a frame, a builtin drew those
   ids from a counter each runtime keeps for its whole life: a client
   running `generateObject` minted its `messages` elements under ids the
   served run never wrote, and the echo masked the served answer until
@@ -158,7 +159,15 @@ currency. The existing overlay and retirement rules below still apply.
   work a builtin does after its run returns, such as an effect's
   answer, which only the serving runtime does; and the event handlers a
   builtin registers, whose writes are a handled event's echo and retire
-  with its intent (§4 step 2) rather than on arrival.
+  with its intent (§4 step 2) rather than on arrival. And convergence
+  needs the two runs to write the same value: a client whose replica of
+  what the run reads, the builtin's own store included, differs from the
+  serving runtime's when each runs, such as an append extending a list
+  that has since grown, writes other content, mints other documents,
+  and its entry still waits for them. Lifts' and handlers' frame
+  counters share that exposure. Retiring an entry on the served run of
+  its node rather than on the arrival of each document it wrote would
+  close it, and is an open question for §4 (top/3641).
 - **Unreplicated inputs**: a speculative read of a doc/path the client
   has not replicated is PENDING for that branch — speculation NEVER
   blocks on a fetch and never triggers a network read. The branch
