@@ -2557,7 +2557,10 @@ views under server execution runs no piece and follows nothing, the space
 root included; the serving runtime is the opener of every piece it serves.
 Tenure activation owes its space the EXISTENCE of a root, without following
 that root's source; the root's origin is followed on the first start of the
-root, as any piece's is. A served wish explicitly opens the runtime-supplied
+root, as any piece's is. A root the activation creates is recorded as
+following its origin, since creating it ran what the origin offered
+(piece-source-lifecycle.md), so that first follow writes nothing where the
+origin still offers the same source. A served wish explicitly opens the runtime-supplied
 sidecars it needs through `openSidecarSurface` and `SourceReconciler.open`;
 existing sidecars follow their origins on that open. The SWAP is the
 server's: a pattern-pointer
