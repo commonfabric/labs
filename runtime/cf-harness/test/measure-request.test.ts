@@ -103,6 +103,37 @@ describe("measure-request", () => {
     expect(await measureRequest(dir)).toEqual(before);
   });
 
+  it("measures a run recorded with the schema as its own system message as one recorded with it in the prompt", async () => {
+    const before = await measureRequest(dir);
+    Deno.writeTextFileSync(
+      join(dir, "transcript.json"),
+      JSON.stringify([
+        {
+          role: "system",
+          content: [
+            "You are cf-harness.",
+            "",
+            "Additional instructions:",
+            "Answer in one line.",
+            "",
+            "Structured result contract:",
+            "- The result schema follows these instructions as a message of its own.",
+          ].join("\n"),
+        },
+        {
+          role: "system",
+          content: `Result schema (JSON):\n${
+            JSON.stringify({ type: "object" })
+          }`,
+        },
+        { role: "user", content: "Granted references for this run: none." },
+        { role: "user", content: "count to 100" },
+        { role: "assistant", content: "" },
+      ]),
+    );
+    expect(await measureRequest(dir)).toEqual(before);
+  });
+
   it("takes no heading the instructions quote for the real contract or schema, in either recorded order", async () => {
     const quoted = [
       "Answer in one line, like this example:",
