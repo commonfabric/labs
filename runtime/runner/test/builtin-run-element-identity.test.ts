@@ -27,39 +27,64 @@ const space = signer.did();
 type Seen = { word: string };
 
 /**
- * A builtin that keeps, in a store of its own, every word its input has held,
- * one object per word, appending the new word to what its earlier runs wrote.
+ * A builtin that keeps a list of words in a store of its own, and on each run
+ * over a word its input holds writes that word to the list with `write`, which
+ * reads the list only if it means to. The
+ * list's objects are each a document of their own.
  */
-const seenWords = raw(
-  (
-    inputsCell: Cell<{ word?: string }>,
-    sendResult: (tx: IExtendedStorageTransaction, result: unknown) => void,
-    _addCancel: unknown,
-    cause: unknown,
-    parentCell: Cell<unknown>,
-    runtime: Runtime,
-  ) =>
-  (tx: IExtendedStorageTransaction) => {
-    const store = runtime.getCell<{ seen?: Seen[] }>(
-      parentCell.space,
-      { seenWords: cause },
-      undefined,
-      tx,
-    );
-    const word = inputsCell.withTx(tx).key("word").get();
-    const seen = store.key("seen").get() ?? [];
-    if (word !== undefined && !seen.some((entry) => entry.word === word)) {
-      store.key("seen").set([...seen, { word }]);
-    }
-    sendResult(tx, store);
-  },
-);
+function wordBuiltin(
+  write: (list: Cell<Seen[]>, word: string) => void,
+) {
+  return raw(
+    (
+      inputsCell: Cell<{ word?: string }>,
+      sendResult: (tx: IExtendedStorageTransaction, result: unknown) => void,
+      _addCancel: unknown,
+      cause: unknown,
+      parentCell: Cell<unknown>,
+      runtime: Runtime,
+    ) =>
+    (tx: IExtendedStorageTransaction) => {
+      const store = runtime.getCell<{ seen?: Seen[] }>(
+        parentCell.space,
+        { words: cause },
+        undefined,
+        tx,
+      );
+      const word = inputsCell.withTx(tx).key("word").get();
+      if (word !== undefined) {
+        write(store.key("seen"), word);
+      }
+      sendResult(tx, store);
+    },
+  );
+}
 
-/** The piece: one node of the builtin over the argument's word. Built once a
+/** Each builtin the cases run, by the name a piece calls it by. */
+const BUILTINS = {
+  // Every word once: rewrites the list with the new word after the old ones.
+  seen_words: wordBuiltin((list, word) => {
+    const seen = list.get() ?? [];
+    if (!seen.some((entry) => entry.word === word)) {
+      list.set([...seen, { word }]);
+    }
+  }),
+  // Every word each time it comes: appends it.
+  word_log: wordBuiltin((list, word) => list.push({ word })),
+  // Every word twice each time it comes: appends it, and again.
+  word_log_twice: wordBuiltin((list, word) => {
+    list.push({ word });
+    list.push({ word });
+  }),
+};
+
+type BuiltinName = keyof typeof BUILTINS;
+
+/** The piece: one node of `builtin` over the argument's word. Built once a
  * runtime exists, since a pattern is built in a runtime's frame. */
-const buildPiece = () =>
-  pattern<{ word: string }>(({ word }) => ({
-    words: createNodeFactory({ type: "ref", implementation: "seen_words" })({
+const buildPiece = (builtin: BuiltinName) =>
+  pattern<{ word?: string }>(({ word }) => ({
+    words: createNodeFactory({ type: "ref", implementation: builtin })({
       word,
     }),
   }));
@@ -75,19 +100,23 @@ function openRuntime(): Runtime {
     apiUrl: new URL(import.meta.url),
     storageManager: storage,
   });
-  runtime.moduleRegistry.addModuleByRef("seen_words", seenWords);
+  for (const [name, builtin] of Object.entries(BUILTINS)) {
+    runtime.moduleRegistry.addModuleByRef(name, builtin);
+  }
   opened.push({ runtime, storage });
   return runtime;
 }
 
-/** Runs the piece over `word` in `runtime`, and returns its argument. */
+/** Runs a piece of `builtin` over `word` in `runtime`, and returns its
+ * argument and result. */
 async function start(
   runtime: Runtime,
   word: string,
-): Promise<{ argument: Cell<{ word: string }>; result: Cell<unknown> }> {
-  const piece = buildPiece();
+  builtin: BuiltinName = "seen_words",
+): Promise<{ argument: Cell<{ word?: string }>; result: Cell<unknown> }> {
+  const piece = buildPiece(builtin);
   const tx = runtime.edit();
-  const argument = runtime.getCell<{ word: string }>(
+  const argument = runtime.getCell<{ word?: string }>(
     space,
     "builtin run element identity argument",
     undefined,
@@ -106,6 +135,18 @@ async function start(
   cancels.push(result.key("words").sink(() => {}));
   await runtime.idle();
   return { argument, result };
+}
+
+/** Sets the piece's word, and waits for the node to have run over it. */
+async function setWord(
+  runtime: Runtime,
+  argument: Cell<{ word?: string }>,
+  word: string | undefined,
+): Promise<void> {
+  const change = runtime.edit();
+  argument.withTx(change).key("word").set(word);
+  expect((await change.commit().settled).error).toBeUndefined();
+  await runtime.idle();
 }
 
 /** The store the node keeps, as the node's output names it. */
@@ -133,10 +174,7 @@ describe("builtin-run-element-identity", () => {
     const runtime = openRuntime();
     const { argument, result } = await start(runtime, "first");
     {
-      const change = runtime.edit();
-      argument.withTx(change).key("word").set("second");
-      expect((await change.commit().settled).error).toBeUndefined();
-      await runtime.idle();
+      await setWord(runtime, argument, "second");
 
       const seen = storeOf(result).key("seen").get()!;
       expect(seen.map((entry) => entry.word)).toEqual(["first", "second"]);
@@ -163,6 +201,62 @@ describe("builtin-run-element-identity", () => {
     const { result: otherResult } = await start(other, "first");
 
     expect(elementIds(oneResult)).toHaveLength(1);
+    expect(elementIds(otherResult)).toEqual(elementIds(oneResult));
+  });
+
+  it("appends an object to a document of its own after another writer took one out before it", async () => {
+    const runtime = openRuntime();
+    const { argument, result } = await start(runtime, "first", "word_log");
+    await setWord(runtime, argument, "second");
+    const [, secondId] = elementIds(result);
+
+    // Another writer takes the first word out, leaving the list as long as
+    // it was when the node appended the second; the word is cleared with it,
+    // so the node's run that follows appends nothing.
+    const remove = runtime.edit();
+    const list = storeOf(result).key("seen").withTx(remove);
+    list.set(list.get()!.slice(1));
+    argument.withTx(remove).key("word").set(undefined);
+    expect((await remove.commit().settled).error).toBeUndefined();
+    await runtime.idle();
+    expect(elementIds(result)).toEqual([secondId]);
+
+    // The same word again, appended at the length the second one was.
+    await setWord(runtime, argument, "second");
+
+    const seen = storeOf(result).key("seen").get()!;
+    expect(seen.map((entry) => entry.word)).toEqual(["second", "second"]);
+    expect(new Set(elementIds(result)).size).toBe(2);
+  });
+
+  it("appends two equal objects one run writes to documents of their own", async () => {
+    const runtime = openRuntime();
+    const { result } = await start(runtime, "first", "word_log_twice");
+
+    expect(elementIds(result)).toHaveLength(2);
+    expect(new Set(elementIds(result)).size).toBe(2);
+  });
+
+  it("mints the same documents for the same append in every runtime that runs the node", async () => {
+    const one = openRuntime();
+    const other = openRuntime();
+    const warm = other.edit();
+    other.getCell<Seen[]>(
+      space,
+      "builtin run element identity warm",
+      undefined,
+      warm,
+    ).set([{ word: "unrelated" }]);
+    expect((await warm.commit().settled).error).toBeUndefined();
+
+    const { result: oneResult } = await start(one, "first", "word_log_twice");
+    const { result: otherResult } = await start(
+      other,
+      "first",
+      "word_log_twice",
+    );
+
+    expect(elementIds(oneResult)).toHaveLength(2);
     expect(elementIds(otherResult)).toEqual(elementIds(oneResult));
   });
 });

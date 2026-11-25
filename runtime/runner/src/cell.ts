@@ -3543,7 +3543,7 @@ export class CellImpl<T extends FabricValue>
         currentValue,
         values,
         cause,
-        frameAnchorIds(this.#frame, values, currentValue.length),
+        frameAnchorIds(this.#frame, values, currentValue),
       );
     } else {
       if (currentValue !== undefined) {
@@ -3721,7 +3721,7 @@ export class CellImpl<T extends FabricValue>
         existing,
         toAdd,
         cause,
-        frameAnchorIds(this.#frame, toAdd, existing.length),
+        frameAnchorIds(this.#frame, toAdd, existing),
       );
     } else {
       diffAndUpdate(
@@ -6153,13 +6153,13 @@ function validateStaticData(value: unknown): void {
 export function frameAnchorIds(
   frame: Frame | undefined,
   written: unknown,
-  appendAt?: number,
+  extending?: readonly unknown[],
 ): (() => string | number) | undefined {
   if (frame === undefined) return undefined;
   if (frame.builtinRun !== true) return () => frame.generatedIdCounter++;
   // Under a builtin's run the seeds come from the write: what it writes (with,
-  // for an append, the length of the array it extends) and a count from zero
-  // within it. A builtin's run restarts its frame's counter, and its stores
+  // for an append, the stored array it extends, whose elements are links to
+  // their documents) and a count from zero within it. A builtin's run restarts its frame's counter, and its stores
   // are read back and written again by its later runs, so seeding from the
   // counter would hand a new element the id an earlier run gave another.
   // Seeded from the write, every runtime running the node mints the same
@@ -6171,7 +6171,7 @@ export function frameAnchorIds(
   return () => {
     writeId ??= toURI(
       createRef(
-        { write: written, ...(appendAt === undefined ? {} : { appendAt }) },
+        { write: written, ...(extending === undefined ? {} : { extending }) },
         frame.cause,
       ),
     );

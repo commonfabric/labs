@@ -348,7 +348,7 @@ export type Frame = {
   /**
    * Set on the frame a builtin's run carries (runner.ts). A write by a cell
    * made under it anchors the array elements it writes from what it writes
-   * (`writeAnchoring()` in cell.ts) rather than from this frame's counter,
+   * (`frameAnchorIds()` in cell.ts) rather than from this frame's counter,
    * which restarts with every run: a builtin keeps stores that its later runs
    * read back and write again, and a restarted counter would hand a new
    * element the id an earlier run gave another. Not inherited by frames

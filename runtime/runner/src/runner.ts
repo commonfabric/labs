@@ -16780,9 +16780,10 @@ export class Runner {
     // Each run carries a frame of its own whose cause is the node's identity,
     // in a frame context of its own, as a lift's run does. The ids the run
     // mints come from that frame: an object it writes as an array element
-    // becomes a document whose id derives from the node and the run's own
-    // count, so every runtime running this node over the same inputs mints
-    // the same documents. Drawn from the runtime's own frame instead, they
+    // becomes a document whose id derives from the node's cause and from what
+    // the write writes (`frameAnchorIds()`), so every runtime running this
+    // node mints the same documents for the same write. Drawn from the
+    // runtime's own frame instead, they
     // differ from runtime to runtime, and a client's speculative echo of the
     // run then waits for documents the served run never writes
     // (speculation.md §2, "A speculative run mints the ids the served run
