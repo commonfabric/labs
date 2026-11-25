@@ -43,7 +43,7 @@ function positions(world: HeapWorld): Map<number, { x: number; y: number }> {
   return result;
 }
 
-/** Returns a heap of six hundred balls a hundred by three hundred, at rest, too deep ever to stop moving on its own. */
+/** Returns a heap of six hundred balls a hundred by three hundred, forty rows deep, at rest. */
 function deepHeap(): HeapWorld {
   const world = poured(100, 300, heapDiameter(600, 100, 300, 16), 600);
   runToRest(world);
@@ -301,23 +301,28 @@ describe("runner-physics", () => {
 
         it("leaves asleep the balls of a deep heap at rest that only rest on balls a landing ball wakes", () => {
           // The ball dropped on the heap wakes the few it lands on and
-          // presses, and rolls off any it lands balanced on, into a groove;
-          // the balls resting on those stay in contact with them, so stay
-          // asleep, and so does everything farther off.
+          // presses as it rolls down the heap into a groove; the balls
+          // resting on those stay in contact with them, so stay asleep, and
+          // so does everything farther from its path.
           const world = deepHeap();
           const d = world.diameter;
           const before = positions(world);
           world.add(-1, 50, -20);
-          runToRest(world);
-          const landed = positions(world).get(-1);
-          if (landed === undefined) throw new Error("The heap lost the ball dropped on it.");
+          const path: { x: number; y: number }[] = [];
+          for (let frames = 0; frames < 2000 && world.advance(FRAME); frames++) {
+            const where = positions(world).get(-1);
+            if (where === undefined) throw new Error("The heap lost the ball dropped on it.");
+            path.push(where);
+          }
+          expect(world.resting).toBe(true);
           let moved = 0;
           for (const [id, where] of positions(world)) {
             const was = before.get(id);
             if (was === undefined || (where.x === was.x && where.y === was.y)) continue;
             moved++;
-            expect(Math.hypot(was.x - landed.x, was.y - landed.y)).toBeLessThan(2.5 * d);
+            expect(path.some((on) => Math.hypot(was.x - on.x, was.y - on.y) < 2.5 * d)).toBe(true);
           }
+          expect(moved).toBeGreaterThan(0);
           expect(moved).toBeLessThanOrEqual(12);
         });
 
@@ -457,6 +462,16 @@ describe("runner-physics", () => {
           const world = poured(100, 300, heapDiameter(600, 100, 300, 16), 600);
           expect(runToRest(world)).toBeLessThanOrEqual(5 / FRAME);
           expectInside(world, 100, 300);
+        });
+
+        it("brings a heap of thousands of balls to rest because they stop, before five seconds would put it at rest, with none overlapping", () => {
+          for (const [width, height] of [[360, 240], [200, 200]]) {
+            const diameter = heapDiameter(2000, width, height, 16);
+            const world = poured(width, height, diameter, 2000);
+            expect(runToRest(world)).toBeLessThan(4.5 / FRAME);
+            expectInside(world, width, height);
+            expect(closest(world)).toBeGreaterThan(diameter * 0.95);
+          }
         });
 
         it("makes the balls smaller at once when the heap stops moving with balls stuck on the slope", () => {

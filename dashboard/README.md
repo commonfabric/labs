@@ -871,15 +871,17 @@ moves much further than its own width in one, sorting its balls by the squares
 of a grid each step so that each ball finds its neighbors among a few others. A
 heap at rest sleeps, and a change wakes only the balls it can move, such as
 those above a ball that leaves, so that a ball landing on a heap at rest moves
-only the balls it lands on. A heap of more than about a thousand balls never
-quite comes to rest: its balls go on settling until five seconds after each
-change. The balls are drawn with WebGL in one draw call (`runner-gl.ts`), each
-heap's balls cut to its pool's rounded box in the shader, and the few balls
-leaving the board on a 2D canvas over it. A page shows what many deliveries
+only the balls it lands on. A step pushes overlapping balls apart row by row
+from the floor up, once for each eight rows of awake balls, between two and
+six times, so that the weight of a heap up to about fifty rows deep reaches its
+floor and its balls come to rest rather than go on jostling. The balls are
+drawn with WebGL in one draw call (`runner-gl.ts`), each heap's balls cut to its
+pool's rounded box in the shader, and the few balls leaving the board on a 2D
+canvas over it. A page shows what many deliveries
 change together once, with the next frame. In headless Chrome on an Apple M5
 Max, a board of 6,000 queued jobs with jobs starting and ending ten times a
-second draws at 120 frames a second, with at most 8 milliseconds of script in a
-frame.
+second draws at 120 frames a second, with about 5 milliseconds of script in a
+typical frame and at most 10 in nineteen of twenty.
 
 The socket needs a key that the server makes when it starts, which a page reads
 from `/runners/key` before it opens the socket. Only a page of the dashboard's
