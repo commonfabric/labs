@@ -14,6 +14,8 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import { declaredOnwardRead } from "../src/storage/reactivity-log.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("cfc transformed-by withdrawal");
 const space = signer.did();
@@ -401,6 +403,129 @@ describe("TransformedBy withdrawal", () => {
       await replaceFirstAs(HAND_COUNT, "selected", "planted");
       await replaceFirstAs(TALLY, "selected", "chosen");
       expect(await publishFirst("selected")).toBe(false);
+    });
+
+    // A list coordinator declares its read of the input list onward to its
+    // result (`declaredOnwardRead`), and a reconcile then writes only the
+    // slots it changes, so the result's membership stamp is re-minted from
+    // a join whose transaction wrote no slot another writer replaced.
+    describe("as the target of a read declared onward", () => {
+      const rosterSchema = {
+        type: "array",
+        items: { type: "string" },
+        ifc: briefSchema.ifc,
+      } as const satisfies JSONSchema;
+
+      const linkListSchema = {
+        type: "array",
+        items: { asCell: ["cell"] },
+      } as const satisfies JSONSchema;
+
+      beforeEach(async () => {
+        const seed = runtime.edit();
+        runtime.getCell(space, "roster", rosterSchema, seed).set(["chosen"]);
+        expect((await seed.commit().settled).error).toBeUndefined();
+      });
+
+      const readRosterOnto = (
+        tx: IExtendedStorageTransaction,
+        listId: string,
+      ) =>
+        tx.runWithAmbientReadMeta(
+          declaredOnwardRead({ space, scope: "space", id: listId, path: [] }),
+          () => runtime.getCell(space, "roster", undefined, tx).getRaw(),
+        );
+
+      // Under `identity`, reads the roster onward to the list and sets the
+      // list to two references to `member`.
+      const selectOnward = async (
+        identity: ImplementationIdentity,
+        cause: string,
+        member: string,
+      ): Promise<void> => {
+        const tx = measuredEdit(identity);
+        const list = runtime.getCell(space, cause, linkListSchema, tx);
+        readRosterOnto(tx, list.getAsNormalizedFullLink().id);
+        const element = runtime.getCell(space, member, undefined, tx);
+        list.set([element, element]);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      };
+
+      // Under `identity`, reads the roster onward to the list and writes only
+      // its second slot, as an incremental reconcile does.
+      const reconcileSecondAs = async (
+        identity: ImplementationIdentity,
+        cause: string,
+        member: string,
+      ): Promise<void> => {
+        const tx = measuredEdit(identity);
+        const list = runtime.getCell(space, cause, linkListSchema, tx);
+        readRosterOnto(tx, list.getAsNormalizedFullLink().id);
+        list.key(1).set(runtime.getCell(space, member, undefined, tx));
+        expect((await tx.commit().settled).error).toBeUndefined();
+      };
+
+      // A stored label-map entry, in the shape these cases read.
+      type StoredEntry = {
+        path: string[];
+        origin?: string;
+        observes?: string;
+        label: {
+          integrity?: { type?: string; identity?: { symbol?: string } }[];
+        };
+      };
+
+      // The functions the stored membership stamp of the list names. Every
+      // read of a list's membership also consumes its slot templates, which
+      // a slot write withdraws and this route does not re-mint, so no gate
+      // reads the membership stamp alone; these cases hold the stored stamp
+      // itself to the meet.
+      const membershipNames = (cause: string): string[] => {
+        const tx = runtime.readTx();
+        const id = runtime.getCell(space, cause, undefined, tx)
+          .getAsNormalizedFullLink().id;
+        const cfc = tx.readOrThrow({
+          space,
+          scope: "space",
+          id,
+          path: ["cfc"],
+        });
+        const entries = storedLabelEntries<StoredEntry>(
+          cfc,
+          (ref) =>
+            tx.readOrThrow({
+              space,
+              scope: "space",
+              id: ref as `${string}:${string}`,
+              path: [],
+            }),
+        );
+        return entries
+          .filter((entry) =>
+            entry.origin === "structure" && entry.observes === "enumerate" &&
+            entry.path.length === 0
+          )
+          .flatMap((entry) => entry.label.integrity ?? [])
+          .flatMap((atom) =>
+            atom.type === CFC_ATOM_TYPE.TransformedBy &&
+              atom.identity?.symbol !== undefined
+              ? [atom.identity.symbol]
+              : []
+          );
+      };
+
+      it("names the function that reconciles the membership", async () => {
+        await selectOnward(TALLY, "selected", "chosen");
+        await reconcileSecondAs(TALLY, "selected", "planted");
+        expect(membershipNames("selected")).toEqual(["tally"]);
+      });
+
+      it("names no function on the membership after another function replaced a slot and the named function reconciles it", async () => {
+        await selectOnward(TALLY, "selected", "chosen");
+        await replaceFirstAs(HAND_COUNT, "selected", "planted");
+        await reconcileSecondAs(TALLY, "selected", "planted");
+        expect(membershipNames("selected")).toEqual([]);
+      });
     });
   });
 });
