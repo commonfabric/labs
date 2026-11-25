@@ -25,7 +25,7 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
 | `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The merged branch at `5db1c2658d`: every branch of the build, and the two executor fixes of round twenty (P453) | #10183, stacked on #10140 |
 | `merge-attempt/serving-m6` | none | The merge of the serving branch, at `31d73441f8`; the merged branch was fast-forwarded to it | none |
-| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-four, and the four link-following commits of `claude/fabrichat-row-rights-68447f` (P470, P471), at `0f9b207a49`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461), the store step of a result (P462 to P464); cut from the merged branch at `5db1c2658d` | none (local) |
+| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-four, and the four link-following commits of `claude/fabrichat-row-rights-68447f` (P470, P471), and round twenty-five, at `8442957f6f`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461), the store step of a result (P462 to P464); cut from the merged branch at `5db1c2658d` | none (local) |
 | `claude/fabrichat-row-rights-68447f` | `fabrichat-row-rights-68447f` | The FabriChat room, real and copy, whose message rows derive their own controls; the two executor fixes of round twenty, carried onto the merged branch | none (local) |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
@@ -199,8 +199,33 @@ twenty).
   and the rows of the main conversation are now of the space. But a send
   follows the room again: 490, 1,290 and 2,290 records at 100, 500 and
   1,000 messages (300 before), and 191 to 197, 1,190 to 1,491 and 2,837 to
-  3,155 ms of the piece's own time; the seed at 1,000 took 1,701 s. Round
-  twenty-five is diagnosing it.
+  3,155 ms of the piece's own time; the seed at 1,000 took 1,701 s.
+  Round twenty-five (`8442957f6f`, notes 1067 to 1076, P472 and P473) found
+  the cause in two paths older than round twenty-one that held only while
+  the rows were of a scope, not in the merge's resolution: a change of
+  labels re-gave the record of every row that read a `*` position of a
+  changed document, though no label at its positions changed (P472: only
+  records reading a position whose label changed are formed again); and a
+  handler's test of whether a value is there copied the whole result held
+  in place (P473: `Host.readChildren` reads none of the children). A send
+  is back to 282 records at every size, 45 to 48, 146 to 152 and 287 to 367
+  ms of the piece's own time at 100, 500 and 1,000 messages, and the seed at
+  1,000 takes 287 s. `SCALE_GROWTH=1` in the FabriChat harness now fails
+  when a send's counts differ between 100 and 200 messages, and the
+  harness counts the error states the piece's documents hold.
+  Open, found by that count: the merge put every message row's reactions
+  in an error state ("a collection of a scope narrower than the space, in a
+  row of another collection", one per row), since the row, now of the
+  space, maps over a value of the scope `user`; the plan is a place per row
+  and scope key for such a nested collection (note 1075), not built. Also
+  brought by the merge and not traced: a Topics create gives 205 to 206
+  records where it gave 111 to 123, and the first create of a run is
+  refused once; `system/fabrichat/message-row.tsx` in the corpus handles
+  fewer events. Observed at every commit and not traced, a possible
+  under-label: a body that iterates `items.get()` and reads `item.title`
+  stores no clause of the item at its outputs, where reading by
+  `items.key(i).key("title").get()` stores it (CFC question 3 of the
+  round).
 - *Fixed in round twenty, two executor defects (notes 1012 and 1013).*
   `Executor.#invoke` handed a body a plain value where an `identity` entry
   of `Body.computed` reached each row through `*`, so a body that resolved
@@ -360,15 +385,15 @@ Provisional decisions were numbered per round to avoid collisions: P250 to
 P253 serving, P270 to P275 and P330 to P335 resume by units, P290 to P296
 and P350 to P360 sandbox and scopes, P310 to P316 and P370 to P382 write integrity, P410 and
 P411 specification review; P420 to P425 resume by units, fourth round; P390
-to P394 serving, round fifteen; P450 to P461 the merges and rounds nineteen
-to twenty-three (the next is P462; P470 and P471 are taken by the
-uncommitted work on `claude/fabrichat-row-rights-68447f`). Note
+to P394 serving, round fifteen; P450 to P464 the merges and rounds nineteen
+to twenty-four, P470 and P471 the link-following work, P472 and P473
+round twenty-five (the next is P474). Note
 numbers in `SPEC-NOTES.md` likewise: 692 to 704, 860 to 875 and 960 to 975
 trunk, 940 to 944 carry, 742 to 752 and 880 to 892 sandbox, 760 to 772
 and 900 to 914 write integrity, 851 to 866 and 920 to 932 serving, 980 to
-1043 the merges and the rounds after them (1016 to 1043 on
-`claude/compiled-pattern-scoped-rows`; the next is 1044; 1060 to 1062 are
-taken by the uncommitted work on `claude/fabrichat-row-rights-68447f`). The plan documents hold decisions up to
+1076 the merges and the rounds after them (1016 to 1076 on
+`claude/compiled-pattern-scoped-rows`, 1060 to 1066 the link-following
+work; the next is 1077). The plan documents hold decisions up to
 P210 and P410 to P411; the rounds after that are in `SPEC-NOTES.md` of their
 branches only and need a document round after the merges.
 
