@@ -262,8 +262,11 @@ twenty).
   binary and creates a compiled piece where the compiler accepts it, or a
   piece on today's path where it refuses, and says which (P479); a list of
   row links is one document by default, so a client reads it as the array it
-  is (P480; chunks stay an option). `LOCAL_DEV_SERVERS.md`, "Compiled
-  patterns", has the commands. On 2026-11-25 the coordinator used it in the
+  is (P480; chunks stay an option). The commands are in the section
+  "Compiled patterns" of `docs/development/LOCAL_DEV_SERVERS.md` on the
+  branch `claude/compiled-pattern-scoped-rows` (local, not pushed; worktree
+  `compiled-pattern-scoped-rows`), not on this branch or any pushed one. On
+  2026-11-25 the coordinator used it in the
   desktop app's browser: the counter (`patterns/examples/counter`) renders and
   each click increments it; the todo list (`patterns/examples/todo-list`)
   adds items from its input, ticks a checkbox, edits a title and derives its
