@@ -204,7 +204,7 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
   explicit JSON schema in the strict form (no extra properties, every property
   required), which strict providers such as OpenAI's structured outputs take.
 
-**Layout.** `lofi-inductor.tsx` holds the state, the verbs, and the judgements
+**Layout.** `main.tsx` holds the state, the verbs, and the judgements
 (`rows`, `summary`, `heldOutF1`, `rewrite`, `poolOffer`, and each item's
 wording, `verdictsOf`), and lays out five sub-patterns in sibling files, in the
 order a person works through them. Each takes the values it shows and the
