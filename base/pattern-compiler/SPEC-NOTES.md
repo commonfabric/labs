@@ -28482,7 +28482,7 @@ note says `map`, it names the case.
 
       | Step                                        | Today's path           | Compiled path                                       |
       | ------------------------------------------- | ---------------------- | --------------------------------------------------- |
-      | three `addTopic`                            | commit, result printed | commit, result in the receipt after step 3          |
+      | three `addTopic`                            | commit, result printed | commit, result printed (step 3)                     |
       | `setTitle` by the topic's address           | commits                | commits                                             |
       | four `mention`/`unmention`                  | commit                 | commit                                              |
       | `setTitle` through `//space/board/topics/0` | commits                | commits                                             |
@@ -28500,8 +28500,10 @@ note says `map`, it names the case.
       as its `schema` metadata, and nothing where the receipt holds a value.
       `receiptShapeSchema` moved into `runtime/runner/src/receipt-shape.ts`.
       Test: `made-verbs.test.ts`, "returns what the handler returned in the
-      receipt of the handling", seen failing first (`20fb845e9a`). Not checked
-      with the CLI.
+      receipt of the handling", seen failing first (`20fb845e9a`). With the CLI
+      on the round's toolshed, `addTopic` on the compiled board prints the
+      result `{ topic: { $link: "/of:…" }, name: "1" }`, as today's path prints
+      it.
 
 1115. **An empty outcome cell (step 4), not built.** Reproduced with a case of
       `url-cells.test.ts` (removed again): `resolution?.cell !== undefined`
