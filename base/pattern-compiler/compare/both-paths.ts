@@ -1,6 +1,44 @@
 /**
- * Runs one pattern on both paths, today's and the compiled one, with the
- * same events, gestures and principals, and compares what each path did
+ * The comparison of both paths, today's and the compiled one, as a standing
+ * gate with two principals.
+ *
+ * Run from the repository root, after `cargo build --release` in
+ * `base/pattern-compiler`:
+ *
+ * `deno run -A --no-check base/pattern-compiler/compare/both-paths.ts <results.jsonl> [--sets=hand,named,corpus] [--only=<part of a name>] [--ledger=<file>]`
+ *
+ * Each scenario runs on both paths under a serving loop with two principals,
+ * A and B, that each hold a session (`both-paths-serving.ts`), and the runs
+ * are compared after each start and each step (`both-paths-gate.ts`): which
+ * events commit, what each principal reads at each member of each result,
+ * the labels stored at each position, two derived checks, every error state
+ * of the store, and what each step wrote. The sets of scenarios:
+ *
+ * - `hand`: the hand-written scenarios of `both-paths-scenarios.ts`, each
+ *   with alice as A and bob as B, and again with the roles exchanged.
+ * - `named`: the named scenarios of `both-paths-named.ts`, one for each
+ *   construct that reads a value of a narrower scope, Z100's case, and the
+ *   real Topics board.
+ * - `corpus`: every module of `patterns/` whose main pattern the crate gives
+ *   value code for, with the argument and the events `runner-corpus.ts`
+ *   derives (`gateCorpusScenarios`). A module the harness cannot drive is
+ *   skipped with its reason.
+ *
+ * The command prints one line for each scenario (equal, differing with the
+ * count of each kind of finding the ledger does not cover, or skipped with
+ * the reason) and a summary, writes each scenario's findings and the summary
+ * as JSON lines to `<results.jsonl>`, and exits 0 only where no scenario has
+ * a finding that no entry of the ledger (`both-paths-accepted.json`) covers
+ * and no entry covers nothing. What the runtimes log goes nowhere unless
+ * `BOTH_PATHS_VERBOSE` is set; the runtimes' banners go to standard error.
+ *
+ * `--one-principal` in front of the arguments runs the harness this file
+ * held before the gate, one principal with no serving loop and no session,
+ * which `runBothPaths` below still is: `<results.jsonl> [part of a name]
+ * [--corpus]`. The rest of this head describes that harness.
+ *
+ * It runs one pattern on both paths with the same events, gestures and
+ * principals, and compares what each path did
  * with each event: whether the handler's transaction committed, the message
  * of a refusal, what the result holds afterwards, and the claims stored at
  * each member of the result.
@@ -36,11 +74,6 @@
  *   as `flow`. The identity of a module differs between the paths by
  *   construction (note 764 of `SPEC-NOTES.md`), so a writer claim is
  *   compared by the path of its binding.
- *
- * Run from the repository root, after `cargo build --release` in
- * `base/pattern-compiler`:
- *
- * `deno run -A --no-check base/pattern-compiler/compare/both-paths.ts <results.jsonl> [part of a scenario name]`
  *
  * With `--corpus` in the place of the part of a name, or behind it, the
  * scenarios are those of `both-paths-corpus.ts`: one for each module of

@@ -624,6 +624,7 @@ export const runPath = async (
       await seedHome(clients[who], ids.homes[who].home as MemorySpace, {
         profileIn: ids.homes[who].profile as MemorySpace,
         name: PROFILE_NAMES[who],
+        confidential: Deno.env.get("BOTH_PATHS_PROFILE") !== "public",
       });
     }
     seq = writtenSince(store, ids.space, 0).seq;
@@ -704,11 +705,16 @@ export const runPath = async (
           provenance: reviewedActionProvenance("dom", step.trustedUi),
         };
         if (step.trustedUi !== undefined) markRendererTrustedEvent(sent);
+        // The acting client loads the result and what the stream's link
+        // leads to before it sends, as a client that shows the piece has:
+        // the space's client holds no sink.
         let stream = resultCell(client, piece);
+        await stream.sync();
         for (const member of path) {
           stream = stream.key(member as never) as Cell<unknown>;
+          await stream.sync();
         }
-        await stream.sync();
+        await (stream.resolveAsCell() as Cell<unknown>).sync();
         const handled = Promise.withResolvers<
           ReturnType<ReturnType<Runtime["edit"]>["status"]>
         >();
