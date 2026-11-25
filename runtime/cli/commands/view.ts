@@ -14,18 +14,19 @@ files. Transformed TypeScript is parsed with the same parser the transformer
 uses, so blocks, closures, schemas, type positions and Common Fabric builders
 (pattern/lift/handler/…) are colored exactly as the compiler sees them.
 Markdown, JSON, JSONC, YAML, Python, Go, Swift, Kotlin, Rust, TOML, HCL,
-Starlark, Bazel rc, Lean, C, C++, CUDA, CSS, shell, makefile, Dockerfile, Java
-properties, INI, dotenv, Graphviz DOT, ProGuard, Git attributes, Git
+Starlark, Bazel rc, Lean, C, C++, CUDA, CSS, HTML, shell, makefile, Dockerfile,
+Java properties, INI, dotenv, Graphviz DOT, ProGuard, Git attributes, Git
 configuration, GNU linker script, XML, CSV, TSV, assembly and SQL files use
 syntax highlighting selected from language metadata, as do Go's 'go.mod',
 'go.work', 'go.sum' and 'go.work.sum' files, Lean's 'lean-toolchain' files, Git,
 Docker and Bazel ignore files, and '.dat' files that hold a numeric table.
 Kotlin covers Gradle's '.gradle.kts' build scripts, HCL covers OpenTofu and
-Terraform configuration, Starlark covers Bazel's BUILD, '.bzl' and '.bazel'
-files, '.bazelrc' files use the Bazel rc language, a '.h' header is colored with
-the C++ grammar unless piped with '--language c', shell covers Bash and POSIX
-shell, makefiles color their recipes as shell, Dockerfiles color the shell form
-of their commands as shell, INI covers Ansible configuration and inventories,
+Terraform configuration, HTML colors its scripts as JavaScript or JSON and its
+style sheets as CSS, Starlark covers Bazel's BUILD, '.bzl' and '.bazel' files,
+'.bazelrc' files use the Bazel rc language, a '.h' header is colored with the
+C++ grammar unless piped with '--language c', shell covers Bash and POSIX shell,
+makefiles color their recipes as shell, Dockerfiles color the shell form of
+their commands as shell, INI covers Ansible configuration and inventories,
 dotenv covers environment files such as '.env' and '.env.example', Git
 configuration covers '.gitmodules' and '.gitconfig', linker scripts cover '.ld'
 and '.lds' files and the '.lds.S' and '.ld.S' files that the C preprocessor

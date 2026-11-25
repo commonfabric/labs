@@ -164,9 +164,9 @@ describe("diffcounts", () => {
       "@@ -1 +1 @@",
       "-void main() {} // old comment",
       "+void main() {} // new comment",
-      "diff --git a/page.html b/page.html",
-      "--- a/page.html",
-      "+++ b/page.html",
+      "diff --git a/page.vue b/page.vue",
+      "--- a/page.vue",
+      "+++ b/page.vue",
       "@@ -1 +1 @@",
       "-<!-- old note -->",
       "+<!-- new note -->",
@@ -257,6 +257,27 @@ describe("diffcounts", () => {
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
   });
 
+  it("recognizes HTML comments through HTML highlighting", async () => {
+    await prepareLanguages([languageForFile("page.html")]);
+    const diff = [
+      "diff --git a/page.html b/page.html",
+      "--- a/page.html",
+      "+++ b/page.html",
+      "@@ -1,4 +1,4 @@",
+      " <!--",
+      "-old note",
+      "+new note",
+      " -->",
+      "-<p>old <!-- note --></p>",
+      "+<p>new <!-- note --></p>",
+      "",
+    ].join("\n");
+
+    const counts = countsFor(diff);
+
+    expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
+  });
+
   it("uses highlighter decisions for languages it understands", () => {
     const diff = [
       "diff --git a/config.yaml b/config.yaml",
@@ -283,9 +304,9 @@ describe("diffcounts", () => {
       "- * old note",
       "+ * new note",
       "  */",
-      "diff --git a/page.html b/page.html",
-      "--- a/page.html",
-      "+++ b/page.html",
+      "diff --git a/page.vue b/page.vue",
+      "--- a/page.vue",
+      "+++ b/page.vue",
       "@@ -1,3 +1,3 @@",
       " <!--",
       "-old note",

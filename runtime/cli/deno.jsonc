@@ -39,7 +39,7 @@
     "@node/worker_threads": "node:worker_threads",
     "@std/fmt/colors": "jsr:@std/fmt@~1.0.2/colors",
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
-    "entities": "npm:entities@^8.0.0",
+    "entities": "npm:entities@^8.1.0",
     "marked": "npm:marked@^18.0.6",
     // `web-tree-sitter` and the `tree-sitter-*` grammars are `cf view`'s; its
     // guide to them is lib/view/DEPENDENCIES.md.
@@ -52,6 +52,7 @@
     "tree-sitter-cpp": "npm:tree-sitter-cpp@0.23.4",
     "tree-sitter-go": "npm:tree-sitter-go@0.25.0",
     "tree-sitter-css": "npm:tree-sitter-css@0.25.0",
+    "tree-sitter-html": "npm:tree-sitter-html@0.23.2",
     "tree-sitter-python": "npm:tree-sitter-python@0.25.0",
     "tree-sitter-rust": "npm:tree-sitter-rust@0.24.0",
     "typescript": "npm:typescript@6.0.3",

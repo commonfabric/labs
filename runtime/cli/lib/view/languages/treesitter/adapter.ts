@@ -100,6 +100,64 @@ export interface TreeSitterGrammar {
   /** The rule for comments that end before the point the parser reads them
    * to. */
   readonly shortComments?: ShortComments;
+
+  /** The stretches of source that another language colors, found in a parse
+   * of the source. Each stretch's classes replace the query's over its
+   * extent. */
+  embedded?(root: SyntaxNode): Iterable<EmbeddedStretch>;
+
+  /** Load what colors the grammar's embedded stretches. The grammar counts as
+   * loaded once this has finished as well as its parser, so each way a grammar
+   * loads loads this, and a view hears of both together. */
+  prepareEmbedded?(): Promise<void>;
+}
+
+/** A stretch of source that another language colors. */
+export interface EmbeddedStretch {
+  readonly start: number;
+  readonly end: number;
+
+  /** The same for two stretches only when their classes are the same, so
+   * that a coloring reuses the classes of a stretch it, or the coloring
+   * before it in the same highlighter, has already found. */
+  readonly key: string;
+
+  /** The same for a stretch and the stretch an edit makes of it, such as a
+   * page's third script before and after the edit. */
+  readonly slot: string;
+
+  /** The stretch's coloring, or undefined while its language loads. A
+   * highlighter that is `editing` keeps it for the next coloring, which
+   * passes it back as `earlier`, for the stretch in the same slot. */
+  color(
+    editing: boolean,
+    earlier?: EmbeddedColoring,
+  ): EmbeddedColoring | undefined;
+}
+
+/** How another language colors a stretch of source. */
+export interface EmbeddedColoring {
+  /** The token class of each character from the stretch's start to its end,
+   * left undefined where the language claims nothing. */
+  readonly classes: EmbeddedClasses;
+
+  /** The coloring of the text an edit makes of the stretch, worked out from
+   * this one's, when the language can. */
+  update?(text: string): EmbeddedColoring;
+}
+
+/** The classes of a stretch another language colors. */
+export type EmbeddedClasses = readonly (TokenClass | undefined)[];
+
+/** The embedded stretches of one coloring: their classes by key, and the
+ * colorings an editing highlighter keeps, by slot. */
+interface EmbeddedMemo {
+  readonly classes: Map<string, EmbeddedClasses>;
+  readonly colorings: Map<string, EmbeddedColoring>;
+}
+
+function embeddedMemo(): EmbeddedMemo {
+  return { classes: new Map(), colorings: new Map() };
 }
 
 /** A stretch of source, as offsets. */
@@ -250,7 +308,10 @@ async function loadGrammarNow(
     compiled.set(wasmUrl, compiling);
     compiling.catch(() => compiled.delete(wasmUrl));
   }
-  const language = await compiling;
+  const [language] = await Promise.all([
+    compiling,
+    grammar.prepareEmbedded?.(),
+  ]);
   const parser = new module.Parser();
   parser.setLanguage(language);
   const query = new module.Query(language, grammar.highlightQuery);
@@ -480,7 +541,7 @@ export function tokenClasses(
   if (ready === undefined) return undefined;
   const parse = parseSource(grammar, ready, text);
   try {
-    return classify(ready, parse, text.length);
+    return classify(grammar, ready, parse, text.length);
   } finally {
     deleteParse(parse);
   }
@@ -502,7 +563,7 @@ export function parseDocument(
     const structure = structureNodes(grammar, parse.tree.rootNode, source, 0);
     return {
       text,
-      lines: colorLines(ready, parse, text),
+      lines: colorLines(grammar, ready, parse, text),
       structure,
       flatStructure: flattenStructure(structure),
       definitions: source.definitions,
@@ -537,7 +598,8 @@ export function createHighlighter(
   if (ready === undefined) return createPlainTextHighlighter(initial);
   let text = initial;
   const held = { parse: parseSource(grammar, ready, text) };
-  let lines = colorLines(ready, held.parse, text);
+  let memo = embeddedMemo();
+  let lines = colorLines(grammar, ready, held.parse, text, memo);
   const highlighter: Highlighter = {
     get lines() {
       return lines;
@@ -548,7 +610,9 @@ export function createHighlighter(
       held.parse = parseSource(grammar, ready, next, previous);
       deleteParse(previous);
       text = next;
-      lines = colorLines(ready, held.parse, text);
+      const previousMemo = memo;
+      memo = embeddedMemo();
+      lines = colorLines(grammar, ready, held.parse, text, memo, previousMemo);
       return lines;
     },
   };
@@ -608,14 +672,22 @@ function point(lineStarts: number[], offset: number) {
   return { row, column: offset - lineStarts[row] };
 }
 
-/** Color every line of `text` from a parse of it. */
-function colorLines(ready: LoadedGrammar, parse: Parse, text: string): Line[] {
+/** Color every line of `text` from a parse of it, as {@link classify}
+ * does. */
+function colorLines(
+  grammar: TreeSitterGrammar,
+  ready: LoadedGrammar,
+  parse: Parse,
+  text: string,
+  memo?: EmbeddedMemo,
+  previous?: EmbeddedMemo,
+): Line[] {
   const lineStarts = parse.plain === text
     ? parse.lineStarts
     : computeLineStarts(text);
   return linesFromClasses(
     text,
-    classify(ready, parse, text.length),
+    classify(grammar, ready, parse, text.length, memo, previous),
     lineStarts,
   );
 }
@@ -624,12 +696,18 @@ function colorLines(ready: LoadedGrammar, parse: Parse, text: string): Line[] {
  * The token class of every character in the source, left undefined where the
  * query claims nothing. A narrower capture colors over the one containing it,
  * and the earliest pattern wins between captures of identical extent. A
- * comment the parse read as blank space is a comment.
+ * comment the parse read as blank space is a comment, and a stretch another
+ * language colors takes that language's classes. Those are taken from
+ * `previous` when it holds the stretch's key, and kept in `memo`, which an
+ * editing highlighter gives, with the colorings a later coloring works from.
  */
 function classify(
+  grammar: TreeSitterGrammar,
   ready: LoadedGrammar,
   parse: Parse,
   length: number,
+  memo?: EmbeddedMemo,
+  previous?: EmbeddedMemo,
 ): (TokenClass | undefined)[] {
   const classes = new Array<TokenClass | undefined>(length);
   const captures = ready.query.captures(parse.tree.rootNode);
@@ -651,6 +729,32 @@ function classify(
   }
   for (const { start, end } of parse.comments) {
     classes.fill("comment", start, end);
+  }
+  const seen = memo ?? embeddedMemo();
+  for (const stretch of grammar.embedded?.(parse.tree.rootNode) ?? []) {
+    const earlier = previous?.colorings.get(stretch.slot);
+    let embedded = seen.classes.get(stretch.key) ??
+      previous?.classes.get(stretch.key);
+    if (embedded === undefined) {
+      const coloring = stretch.color(memo !== undefined, earlier);
+      if (coloring === undefined) continue;
+      embedded = coloring.classes;
+      seen.colorings.set(stretch.slot, coloring);
+    } else if (earlier !== undefined) {
+      seen.colorings.set(stretch.slot, earlier);
+    }
+    if (embedded.length !== stretch.end - stretch.start) {
+      throw new Error(
+        `cf view: the ${grammar.id} grammar gave ${embedded.length} classes ` +
+          `for a stretch of ${stretch.end - stretch.start} characters.`,
+      );
+    }
+    seen.classes.set(stretch.key, embedded);
+    // A loop rather than `forEach`, which skips the characters a sparse array
+    // leaves unclaimed.
+    for (let index = 0; index < embedded.length; index++) {
+      classes[stretch.start + index] = embedded[index];
+    }
   }
   return classes;
 }

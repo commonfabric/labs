@@ -89,6 +89,10 @@ assigns.
 The systemd unit language has syntax highlighting, with the value of each
 setting that runs commands colored as a command line, and a structure tree of
 sections and the keys in each.
+HTML has syntax highlighting and a structure tree of elements. A script's text
+is colored as JavaScript or JSON, as its `type` and `language` attributes say,
+an event handler's value as JavaScript, and a `style` element's text and a
+`style` attribute's value as CSS.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -107,9 +111,8 @@ output streams the complete dump. Text saves use the encoder paired with the
 decoded source, including preservation of a UTF-8 byte order mark. Binary files
 remain outside diff editing and semantic source loading.
 
-Python, Go, Swift, Kotlin, Rust, TOML, HCL, CSS, shell, C, C++, and Starlark run
-on Tree-sitter through a shared, language-neutral adapter, which HTML will use
-as well. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
+Python, Go, Swift, Kotlin, Rust, TOML, HCL, CSS, HTML, shell, C, C++, and
+Starlark run on Tree-sitter through a shared, language-neutral adapter. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
 configuration files, XML, makefiles, Org mode, Lean, ignore files, Go's module
 and checksum files, Bazel rc files, Graphviz DOT, Dockerfiles, delimited tables,
 assembly, SQL, linker scripts, systemd units, authorized keys files, and Jinja
@@ -119,8 +122,8 @@ organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
-Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, CSS, shell, C, C++,
-CUDA, makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git
+Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, CSS, HTML, shell, C,
+C++, CUDA, makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git
 attributes, Git configuration, XML, Org mode, directive configuration,
 ignore-file, Graphviz DOT, CSV, TSV, `.dat` table, assembly, SQL, linker script,
 systemd unit, authorized keys, Jinja, and diff support to honest handling of
@@ -230,16 +233,16 @@ and a warm dependency cache. Initialization starts at the first statement in a
 fresh Deno process and includes dynamic imports, runtime initialization, the
 selected grammar and query, and one empty highlight.
 
-| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Shipped C++ / C | Shipped Go | Shipped Starlark | Shipped CSS | Accepted maximum |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 84.7 / 39.3 ms, estimated | 41.4 ms, estimated | 50.8 ms, estimated | 28.6 ms | 75 ms |
-| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 35.3 / 34.2 ms, estimated | 30.4 ms, estimated | 29.5 ms, estimated | 27.9 ms | 50 ms |
-| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 38.5 / 34.3 ms, estimated | 31.9 ms, estimated | 31.1 ms, estimated | 27.4 ms | 50 ms |
-| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 21.5 ms, estimated | 16.8 ms, estimated | 19.7 ms | 25 ms |
-| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 4.03 MiB, both | 0.38 MiB | 0.13 MiB | 0.19 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 48.98 MiB, both | 3.66 MiB | 0 MiB | 1.88 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 197 lines | 91 lines | 189 lines | 650 shipped lines; 200 for a later grammar |
-| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Shipped C++ / C | Shipped Go | Shipped Starlark | Shipped CSS | Shipped HTML | Accepted maximum |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 84.7 / 39.3 ms, estimated | 41.4 ms, estimated | 50.8 ms, estimated | 28.6 ms | 51.6 ms, estimated | 75 ms |
+| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 35.3 / 34.2 ms, estimated | 30.4 ms, estimated | 29.5 ms, estimated | 27.9 ms | 42.0 ms, estimated | 50 ms |
+| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 38.5 / 34.3 ms, estimated | 31.9 ms, estimated | 31.1 ms, estimated | 27.4 ms | 45.0 ms, estimated | 50 ms |
+| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 21.5 ms, estimated | 16.8 ms, estimated | 19.7 ms | 13.7 ms, estimated | 25 ms |
+| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 4.03 MiB, both | 0.38 MiB | 0.13 MiB | 0.19 MiB | 0.13 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 48.98 MiB, both | 3.66 MiB | 0 MiB | 1.88 MiB | 0.70 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 197 lines | 91 lines | 189 lines | 306 lines | 650 shipped lines; 200 for a later grammar |
+| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 The Python column is the
 [September 2026 Python measurement](../history/packages/cli/cf-view-python-treesitter-2026-09.md),
@@ -336,6 +339,19 @@ TOML control in turn. The control stayed within 0.89 to 1.21 times TOML's
 recorded medians, and each figure is the highest 95th percentile of the six
 rounds.
 
+The HTML column is the [November 2026 HTML
+measurement](../history/packages/cli/cf-view-html-2026-11.md), which is also the
+nested-HTML measurement: its source holds a script, an event handler, a `style`
+attribute, and a style sheet in every six lines, and its timings include
+coloring them. It ran on a machine too loaded for elapsed time to mean anything,
+so its timings are estimates from processor time: TOML's recorded 95th
+percentiles multiplied by the largest ratio of HTML's processor-time median to
+that of a TOML control run beside each round. A page that is one large script
+measured inside the same maximums. Its owned source leaves out 109 lines it
+added to the adapter and its helpers, which any grammar can use; HTML is over
+its owned-source maximum, for the reason under "HTML over its owned-source
+maximums".
+
 The binary build leaves out every directory of a grammar package except the
 one holding its WebAssembly grammar, such as generated C source and native
 builds, which the pager never reads. Shell's compiled figure is measured with
@@ -353,11 +369,18 @@ high.
 
 Each later host grammar may add at most 10 MiB to both byte measures and 200
 owned source lines. The common runtime and the Python, Go, Bash, and HTML host
-grammars together may occupy at most 40 MiB and 1,000 owned source lines. Tests,
-fixtures, and generated code do not count toward the source limit. CSS, as a
-language of its own, is held to the later-grammar maximums. The separate
-nested-HTML measurement sets the limits for the CSS and JavaScript grammars
-inside HTML before HTML delegates its regions to them.
+grammars together may occupy at most 40 MiB and 1,000 owned source lines; "Go
+over the cumulative owned-source maximum" and "HTML over its owned-source
+maximums" record where that stands. Tests, fixtures, and generated code do not
+count toward the source limit.
+
+A grammar that colors stretches of a host language, as CSS does for HTML, is
+held to the later-grammar maximums for bytes and owned source, whether or not
+it is also a language of its own. The host's timing maximums apply to the host
+with every language it embeds, measured on a source that holds each kind of
+embedded stretch. A language the pager already loads, such as the TypeScript
+and JavaScript language that colors HTML's scripts, adds nothing to the byte
+measures.
 
 ### Parser decision
 
@@ -406,14 +429,15 @@ artifacts into the repository. The measured packages occupy 35.66 MiB when
 unpacked, while the JavaScript and WebAssembly files used at runtime occupy 2.30
 MiB. Keeping the packages intact leaves grammar builds, licenses, and release
 synchronization with their publishers. The adapter must pin the observed
-JavaScript string-offset behavior with non-ASCII contract tests. HTML embedding
-must dispatch the grammar's injection ranges to the official Tree-sitter CSS and
-JavaScript grammars rather than treating the host grammar as if it parsed those
-regions. The Tree-sitter startup and dependency-size measurements exclude those
-two embedded grammars. The startup measurement does not describe the nested
-setup, while the dependency-size measurements are lower bounds for the
-cumulative parser packages. Measure and record the complete nested-HTML setup
-before HTML delegates its regions to embedded grammars.
+JavaScript string-offset behavior with non-ASCII contract tests. HTML colors
+each stretch that another language holds through that language, rather than
+treating the host grammar as if it parsed the stretch: style sheets through the
+official Tree-sitter CSS grammar, and scripts through the pager's own
+TypeScript and JavaScript language, which colors `.js` files. A page's scripts
+are therefore colored as a `.js` file is, and no JavaScript grammar is added.
+The
+[November 2026 HTML measurement](../history/packages/cli/cf-view-html-2026-11.md)
+records the complete nested setup.
 
 Do not add another focused scanner for Python, Go, shell, or HTML.
 
@@ -510,9 +534,8 @@ implementation for structure. The comparison therefore keeps the dependency. A p
 WebAssembly build, as Swift and Kotlin use, would bring shell inside the
 maximum.
 
-Python, shell, and Go take 34.95 MiB of the 40 MiB that the runtime and the
-four host grammars may occupy unpacked. The official HTML package unpacks to
-0.70 MiB.
+Python, shell, Go, and HTML take 35.65 MiB of the 40 MiB that the runtime and
+the four host grammars may occupy unpacked.
 
 #### Go over the cumulative owned-source maximum
 
@@ -537,6 +560,57 @@ implementation for structure, as the parser decision records. The comparison
 therefore keeps the dependency, and the maximums stay where they are. The
 cumulative overrun is in the shared adapter and in shell's module rather than
 in Go.
+
+#### HTML over its owned-source maximums
+
+HTML's module, `html/html.ts`, is 306 lines, against the 200 a later host
+grammar may add. HTML also adds 109 lines to the adapter and the coloring
+helpers beside it, for the stretches of a page that another language colors,
+which only HTML uses so far. That brings the runtime and the four host grammars
+to 1,801 lines, against the 1,000 they may occupy together.
+
+About 45 of HTML's 306 lines are the highlight query, the structure rule, and
+the node types the structure walk enters. The rest carry rules from the HTML
+standard that any parser would need: how a script's type string is derived from
+its `type` and `language` attributes and which types are JavaScript or JSON,
+which attribute names are event handlers, how character references in an
+attribute's value decode, and which stretch each embedded language colors. The
+one alternative parser measured, the Lezer HTML grammar that the UI package
+pins, is recorded under "HTML and the Lezer parser". A switch to it would keep
+most of the 306 lines. It would remove the 45 and the glue that hands stretches
+to the embedded languages, and replace them with a token-class mapping,
+structure walk, and incremental highlighter of its own, and it would leave the
+adapter, which the other languages use, where it is. No focused scanner may be
+written for HTML, so the comparison keeps the dependency, and the maximums stay
+where they are.
+
+#### HTML and the Lezer parser
+
+The UI package's editor pins Lezer's HTML and CSS grammars. On the HTML
+measurement's source, in processor time against the TOML control, Lezer parsed
+and classified the source in about a quarter of TOML's time, where the
+Tree-sitter HTML path took about twice TOML's. It re-colored after an edit in
+about a tenth of TOML's time, where the Tree-sitter path took about the same as
+TOML's, and it initialized in under half, where HTML took about twice. Its
+figures leave out the token-class mapping and line building the adapter does.
+On the measurement's single-script page, HTML re-colored an edit from the
+script's earlier parse in about TOML's time. Over the 1,515 surveyed HTML
+files, Lezer's error recovery inserted nodes in 4 files. The Tree-sitter
+grammar left part of 63 unparsed, because it cannot read omitted end tags, an
+ampersand followed by a space, or a `>` in text. Lezer
+would add 0.97 MiB unpacked, against HTML's 0.70 MiB, and a second parser
+family. It would also color a page's scripts and style sheets with grammars
+other than those that color `.js` and `.css` files. The
+[November 2026 CSS measurement](../history/packages/cli/cf-view-css-2026-11.md)
+compares Lezer's CSS grammar on its own.
+
+The dimensions trade off, so the parser decision stands on its priorities: one
+parser family in the pager, with one adapter for loading, coloring, editing,
+and structure, and the same colors for CSS and JavaScript in a page as in a
+file of their own. Every Tree-sitter HTML timing is estimated to be inside its
+maximum. Reopen this choice if HTML's timings on a quiet machine exceed a
+maximum, or if the structure tree's loss of nesting around the constructs the
+grammar cannot read proves to matter.
 
 #### Rust over its unpacked-dependency maximum
 
@@ -830,13 +904,45 @@ diffs, and incomplete edits. The gate passes.
 
 ## Stage 5: web markup, styling, and XML
 
-- [ ] Add HTML.
+- [x] Add HTML.
 - [x] Add CSS.
-- [ ] Delegate HTML `style` and `script` regions to CSS and JavaScript.
+- [x] Delegate HTML `style` and `script` regions to CSS and JavaScript.
 - [x] Add strict XML separately from permissive HTML.
 - [x] Route SVG, Apple property lists, and entitlement files through XML.
-- [ ] Evaluate the HTML and CSS parsers already pinned by the UI package
+- [x] Evaluate the HTML and CSS parsers already pinned by the UI package
   before adding a dependency.
+
+HTML runs on the Tree-sitter adapter with the official
+[`tree-sitter/tree-sitter-html`](https://github.com/tree-sitter/tree-sitter-html)
+grammar, whose npm package ships its WebAssembly build. `.html` and `.htm`
+select it. A November 13, 2026 read of the local checkouts of the
+organization's repositories found 1,515 HTML files in 18 repositories, all named
+`.html`, and 2,854 path-change events on HTML paths in the six months before
+the read. Most are generated: 1,193 are design renders in Specs, 17 are the
+website's built pages, and 37 more say they are generated or sit in a build
+directory. The other 268 files are in 15 repositories, with 839 of those
+events.
+
+Another language colors four kinds of stretch in a page. A `script` element's
+text is JavaScript for a classic script or a module, JSON for an import map,
+speculation rules, or a data block of a JSON type, and uncolored for any other
+data block. An event handler attribute's value is JavaScript. A `style`
+element's text, when its type is absent or `text/css`, and a `style`
+attribute's value are CSS. JavaScript is colored by the pager's TypeScript and
+JavaScript language, and CSS by the CSS grammar. An edit colors the page from
+the new parse, as for every language on the adapter, and colors again only the
+stretches of another language whose text it changed. Structure lists elements by tag name, with their `id` or
+`name`. The UI package's Lezer parsers were evaluated under "HTML and the Lezer
+parser", and its `happy-dom` dependency keeps no source positions, so it cannot
+color source.
+
+A coverage check over the 1,515 files found every file reconstructed exactly,
+and 0.041 percent of characters other than white space outside the text of
+elements without a token class. The grammar could not parse part of 63 files,
+312 of 602,384 lines, because it does not read omitted end tags, an ampersand
+followed by a space, or a `>` in text, which HTML allows. Coloring continues
+inside those regions, and the structure tree lists the elements there without
+the elements around them. Fixtures come from Labs, Dynabook, and Loom.
 
 XML is implemented ahead of the rest of this stage, for the Android formats
 under Stage 14. It uses a focused scanner rather than Tree-sitter: the official
@@ -850,15 +956,15 @@ organization's repositories without altering their source. A file that no name
 claims selects XML when its source starts with an XML declaration, which covers
 Interface Builder documents and project files.
 
-CSS is implemented ahead of HTML. A November 13, 2026 read of the
-local checkouts of the organization's repositories found 277 `.css` files in 10
-repositories, and 1,641 path-change events on CSS paths in 11 repositories in
-the six months before the read. Most of the files are build output and copies:
-241 are a website's built bundle, a Specs directory of generated prompt assets,
-and the Loom style system's built themes, which Dynabook holds and the two
-Weaver repositories copy. The other 36 files are in 9 repositories. 501 of the
-events are on build output and copies, and 1,140 on the other paths, 823 of
-them on Loom's web UI style sheet at its old and new paths.
+A November 13, 2026 read of the local checkouts of the organization's
+repositories found 277 `.css` files in 10 repositories, and 1,641 path-change
+events on CSS paths in 11 repositories in the six months before the read. Most
+of the files are build output and copies: 241 are a website's built bundle, a
+Specs directory of generated prompt assets, and the Loom style system's built
+themes, which Dynabook holds and the two Weaver repositories copy. The other 36
+files are in 9 repositories. 501 of the events are on build output and copies,
+and 1,140 on the other paths, 823 of them on Loom's web UI style sheet at its
+old and new paths.
 
 CSS runs on the Tree-sitter adapter with the official
 [`tree-sitter/tree-sitter-css`](https://github.com/tree-sitter/tree-sitter-css)
@@ -888,7 +994,7 @@ repositories is seven style sheets in gVisor's website, last changed on April
 15, 2026, so `.scss` stays plain text.
 
 Completion gate: host and embedded syntax ranges preserve the complete input,
-including malformed and partially edited markup.
+including malformed and partially edited markup. The gate passes.
 
 ## Stage 6: Lean
 

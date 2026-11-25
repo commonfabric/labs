@@ -1455,10 +1455,66 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     incompleteEvidence: { text: ".crblob", className: "interfaceName" },
   },
   {
+    languageId: "html",
+    surveyRepository: "labs",
+    surveyCommit: "2374f1c0c6a738520494e3fb035de9206c76e6f1",
+    surveyPath: "runtime/shell/public/index.html",
+    before: new URL("./html-labs/before.html", import.meta.url),
+    after: new URL("./html-labs/after.html", import.meta.url),
+    incomplete: new URL("./html-labs/incomplete.html", import.meta.url),
+    selection: {
+      filenames: [
+        "runtime/shell/public/index.html",
+        "loom-style/pick.html",
+        "static-content/welcome/INDEX.HTML",
+        "docs/legacy/page.htm",
+      ],
+      aliases: ["html"],
+    },
+    // A script's text is colored as JavaScript, whose `catch (e)` binds `e`.
+    beforeEvidence: { text: "e", className: "binding" },
+    afterEvidence: { text: "e", className: "binding" },
+    incompleteEvidence: { text: "e", className: "binding" },
+  },
+  {
+    languageId: "html",
+    surveyRepository: "dynabook",
+    surveyCommit: "afc8ecc269f331fc48c5da5c129ed11f51af6db6",
+    surveyPath: "loom-style/pick.html",
+    before: new URL("./html-dynabook/before.html", import.meta.url),
+    after: new URL("./html-dynabook/after.html", import.meta.url),
+    incomplete: new URL("./html-dynabook/incomplete.html", import.meta.url),
+    beforeEvidence: {
+      text: "/^(native|light|dark|system)$/",
+      className: "regex",
+    },
+    afterEvidence: {
+      text: "/^(native|light|dark|system)$/",
+      className: "regex",
+    },
+    incompleteEvidence: {
+      text: "/^(native|light|dark|system)$/",
+      className: "regex",
+    },
+  },
+  {
+    languageId: "html",
+    surveyRepository: "loom",
+    surveyCommit: "f8f831eb76ab420cd877a2a06ec77701786fd307",
+    surveyPath: "docs/development/archive/weaver-phase-1/mockups/pond-home.html",
+    before: new URL("./html-loom/before.html", import.meta.url),
+    after: new URL("./html-loom/after.html", import.meta.url),
+    incomplete: new URL("./html-loom/incomplete.html", import.meta.url),
+    beforeEvidence: { text: "leaf", className: "parameter" },
+    afterEvidence: { text: "leaf", className: "parameter" },
+    incompleteEvidence: { text: "leaf", className: "parameter" },
+  },
+  {
     languageId: "xml",
     // An attribute alone on its line is a dotenv or systemd `name=value` line,
-    // and dotenv and systemd color the name as XML colors an attribute's.
-    highlightingPeers: ["dotenv", "systemd"],
+    // and dotenv and systemd color the name as XML colors an attribute's. HTML
+    // colors an attribute's name as XML does.
+    highlightingPeers: ["dotenv", "systemd", "html"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "6cc0468bdafdf8dc44cd86faba60ff5912ead945",
     surveyPath: "android/app/src/main/AndroidManifest.xml",

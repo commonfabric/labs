@@ -120,5 +120,14 @@ the CLI pins `tree-sitter-css` exactly. That package is the official CSS grammar
 and ships its WebAssembly build. Like `tree-sitter-python`, it also ships
 generated C source, native bindings, and an install script, which the pager
 never uses; its dependencies are the two `tree-sitter-python` already brings.
-Roll it with the runtime, then run the `cf view` CSS tests and `cf view` against
-a `.css` file.
+HTML colors its `style` elements and attributes with it too. Roll it with the
+runtime, then run the `cf view` CSS and HTML tests and `cf view` against a
+`.css` file.
+
+HTML reaches its grammar through `runtime/cli/lib/view/languages/html/html.ts`,
+and the CLI pins `tree-sitter-html` exactly. That package is the official HTML
+grammar and ships its WebAssembly build. Like `tree-sitter-python`, it also
+ships generated C source, native bindings, and an install script, which the
+pager never uses; its dependencies are the two `tree-sitter-python` already
+brings. Roll it with the runtime, then run the `cf view` HTML tests and
+`cf view` against a `.html` file.
