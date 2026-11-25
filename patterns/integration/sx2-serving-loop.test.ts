@@ -26,7 +26,6 @@
 import { debugStr } from "@commonfabric/data-model";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import { createTestSpace, env } from "@commonfabric/integration";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assert, assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
@@ -36,6 +35,12 @@ import {
   watermarkCell,
 } from "@commonfabric/runner/executor/watermark";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { MemorySpace } from "@commonfabric/runner";
 import {
   initializePiecesController,

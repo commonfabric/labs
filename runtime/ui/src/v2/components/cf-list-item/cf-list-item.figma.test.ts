@@ -5,9 +5,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { CFListItem } from "./index.ts";
 import { figmaMapping } from "./cf-list-item.figma.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const observed: readonly string[] = CFListItem.observedAttributes;
 const variants = Object.values(figmaMapping.variants);

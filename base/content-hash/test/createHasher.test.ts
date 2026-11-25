@@ -12,13 +12,13 @@
  * implementation may sit behind the buffering layer.
  */
 
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromBase64url } from "@commonfabric/bytes/base64url";
 import {
   createHasher,
   type IncrementalHasher,
 } from "@commonfabric/content-hash";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 import { createHasherDeno } from "@/sha256-deno.ts";
 import { createHasherNoble } from "@/sha256-noble.ts";
 import {

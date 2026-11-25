@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   gatewayProvenanceHeaders,
   withGatewayOperation,
   withGatewayProvenance,
 } from "./gateway-provenance.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Records the request a wrapped fetch produced, and answers with nothing. */
 function recordingFetch(): {

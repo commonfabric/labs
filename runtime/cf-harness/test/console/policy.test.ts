@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { consolePolicyReport } from "../../console/policy.ts";
 import { DEFAULT_HARNESS_CHAT_POLICY } from "../../src/contracts/interactive-chat.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const INPUT = {
   policy: DEFAULT_HARNESS_CHAT_POLICY,

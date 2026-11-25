@@ -12,6 +12,7 @@ import type { Line, TokenClass } from "../lib/view/model.ts";
 import { parseDiff } from "../lib/view/diff.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { createDiffHighlighter, diffSource } from "../lib/view/diffedit.ts";
+import { test } from "@commonfabric/test-support/test";
 
 await pythonLanguage.prepare!();
 
@@ -57,7 +58,7 @@ function tempWorkspace(root: string): DiffWorkspace {
   };
 }
 
-Deno.test("python: metadata selects source, stub, and windowed files", () => {
+test("python: metadata selects source, stub, and windowed files", () => {
   for (const path of ["main.py", "types.pyi", "app.pyw", "/tmp/UPPER.PY"]) {
     assertEquals(languageForFile(path).id, "python", path);
   }
@@ -69,7 +70,7 @@ Deno.test("python: metadata selects source, stub, and windowed files", () => {
   }
 });
 
-Deno.test("python: the language registry selects Python extensions", () => {
+test("python: the language registry selects Python extensions", () => {
   const python = languageForFile("main.py");
   assertEquals(python.id, "python");
   assertEquals(languageForFile("types.pyi").id, "python");
@@ -82,7 +83,7 @@ Deno.test("python: the language registry selects Python extensions", () => {
   );
 });
 
-Deno.test("python: declarations, keywords, calls, properties, and comments color", () => {
+test("python: declarations, keywords, calls, properties, and comments color", () => {
   const source = [
     "#!/usr/bin/env python3",
     "@decorator",
@@ -115,7 +116,7 @@ Deno.test("python: declarations, keywords, calls, properties, and comments color
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("python: current string prefixes and escapes remain single tokens", () => {
+test("python: current string prefixes and escapes remain single tokens", () => {
   const source = [
     String.raw`plain = "a\"b\\c"`,
     String.raw`raw = r"\w+\s"`,
@@ -131,7 +132,7 @@ Deno.test("python: current string prefixes and escapes remain single tokens", ()
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("python: interpolated strings color their fields as code", () => {
+test("python: interpolated strings color their fields as code", () => {
   const source = [
     `formatted = f"{value!r}"`,
     `templated = t"{value}"`,
@@ -150,7 +151,7 @@ Deno.test("python: interpolated strings color their fields as code", () => {
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("python: formatted strings accept nested same-quote expressions", () => {
+test("python: formatted strings accept nested same-quote expressions", () => {
   const source = [
     'value = f"{items["key"]!r:>{width}}"',
     `nested = f"{f'{value=}'}"`,
@@ -165,7 +166,7 @@ Deno.test("python: formatted strings accept nested same-quote expressions", () =
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("python: multiline strings carry state across blank lines", () => {
+test("python: multiline strings carry state across blank lines", () => {
   const source = [
     'message = """first',
     "",
@@ -185,7 +186,7 @@ Deno.test("python: multiline strings carry state across blank lines", () => {
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("python: CRLF backslash continuations stay inside strings", () => {
+test("python: CRLF backslash continuations stay inside strings", () => {
   const continuation = "\\\r\n";
   const source = `plain = "left${continuation}right"\r\n` +
     `formatted = f"{1${continuation}+ 2}"`;
@@ -196,7 +197,7 @@ Deno.test("python: CRLF backslash continuations stay inside strings", () => {
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("python: formatted replacement fields can cross physical lines", () => {
+test("python: formatted replacement fields can cross physical lines", () => {
   const source = [
     'value = f"{',
     "    first +  # comment",
@@ -213,7 +214,7 @@ Deno.test("python: formatted replacement fields can cross physical lines", () =>
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("python: numeric forms and ellipsis use literal classes", () => {
+test("python: numeric forms and ellipsis use literal classes", () => {
   const source =
     "values = (0, 1_000, 0b_1010, 0o755, 0xCA_FE, .5, 1., 1.5e-2, 3j, ...)";
   const lines = highlight(source);
@@ -237,7 +238,7 @@ Deno.test("python: numeric forms and ellipsis use literal classes", () => {
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("python: brackets retain rainbow depth and Unicode columns", () => {
+test("python: brackets retain rainbow depth and Unicode columns", () => {
   const source = 'π = call([{"😀": value}])';
   const [line] = highlight(source);
   const brackets = line.spans.filter((span) => span.cls === "bracket");
@@ -258,7 +259,7 @@ Deno.test("python: brackets retain rainbow depth and Unicode columns", () => {
   assertEquals(verbatim([line]), source);
 });
 
-Deno.test("python: soft keywords are keywords only where they open a statement", () => {
+test("python: soft keywords are keywords only where they open a statement", () => {
   const source = [
     "match subject:",
     "    case Point(x, y):",
@@ -315,7 +316,7 @@ Deno.test("python: soft keywords are keywords only where they open a statement",
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("python: soft keywords resolve across line continuations", () => {
+test("python: soft keywords resolve across line continuations", () => {
   // What follows a soft keyword settles it, and a line continuation can put
   // that on the next physical line.
   const assignment = "match  \\\n    = lambda x: x";
@@ -358,7 +359,7 @@ Deno.test("python: soft keywords resolve across line continuations", () => {
   }
 });
 
-Deno.test("python: incomplete formatted fields recover without dropping text", () => {
+test("python: incomplete formatted fields recover without dropping text", () => {
   const source = [
     'escaped = f"{{literal}}"',
     'line_break = f"{value',
@@ -377,7 +378,7 @@ Deno.test("python: incomplete formatted fields recover without dropping text", (
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("python: malformed and incomplete input stays lossless", () => {
+test("python: malformed and incomplete input stays lossless", () => {
   for (
     const source of [
       "value = 'unterminated\nnext = True",
@@ -398,7 +399,7 @@ Deno.test("python: malformed and incomplete input stays lossless", () => {
   assertEquals([...classesOf(unterminated, '"""')], ["string"]);
 });
 
-Deno.test("python: structure carries classes, functions, and their decorators", () => {
+test("python: structure carries classes, functions, and their decorators", () => {
   const source = [
     "import sys",
     "",
@@ -458,7 +459,7 @@ Deno.test("python: structure carries classes, functions, and their decorators", 
   assertEquals(store.astKinds, ["class_definition"]);
 });
 
-Deno.test("python: live file highlighting re-baselines multiline state", () => {
+test("python: live file highlighting re-baselines multiline state", () => {
   const before = 'value = """first\nsecond\n"""\n';
   const after = 'value = "first"\nsecond = True\n';
   const highlighter = pythonLanguage.createHighlighter(before);
@@ -470,7 +471,7 @@ Deno.test("python: live file highlighting re-baselines multiline state", () => {
   assertEquals(verbatim(updated), after);
 });
 
-Deno.test("python: an incremental update matches a complete re-highlight", () => {
+test("python: an incremental update matches a complete re-highlight", () => {
   const source = [
     "# café ☕ and an astral 😀",
     "import sys",
@@ -519,7 +520,7 @@ Deno.test("python: an incremental update matches a complete re-highlight", () =>
   }
 });
 
-Deno.test("python: unavailable diff files use context for multiline strings", () => {
+test("python: unavailable diff files use context for multiline strings", () => {
   const diff = [
     "diff --git a/example.py b/example.py",
     "--- a/example.py",
@@ -543,7 +544,7 @@ Deno.test("python: unavailable diff files use context for multiline strings", ()
   assertEquals(verbatim(doc.lines), diff);
 });
 
-Deno.test("python: a seedless diff highlighter joins both hunk sides", () => {
+test("python: a seedless diff highlighter joins both hunk sides", () => {
   const diff = [
     "diff --git a/example.py b/example.py",
     "--- a/example.py",
@@ -569,7 +570,7 @@ Deno.test("python: a seedless diff highlighter joins both hunk sides", () => {
   assertEquals(verbatim(highlighter.update("not a diff")), "not a diff");
 });
 
-Deno.test("python: live diff edits retain complete-file multiline state", () => {
+test("python: live diff edits retain complete-file multiline state", () => {
   const root = Deno.makeTempDirSync();
   try {
     const file = ['value = """', "new text", '"""', ""].join("\n");
@@ -602,7 +603,7 @@ Deno.test("python: live diff edits retain complete-file multiline state", () => 
   }
 });
 
-Deno.test("python: deferred diff parsing keeps old state across a rename", () => {
+test("python: deferred diff parsing keeps old state across a rename", () => {
   const root = Deno.makeTempDirSync();
   try {
     const file = ['value = """', "new text", '"""', ""].join("\n");
@@ -635,7 +636,7 @@ Deno.test("python: deferred diff parsing keeps old state across a rename", () =>
   }
 });
 
-Deno.test("python: live edits account for line shifts across later hunks", () => {
+test("python: live edits account for line shifts across later hunks", () => {
   const root = Deno.makeTempDirSync();
   try {
     const file = [

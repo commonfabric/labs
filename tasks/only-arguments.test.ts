@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { readOnlyArguments } from "./only-arguments.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("readOnlyArguments()", () => {
   it("returns the terms in either spelling, and the rest in order", () => {

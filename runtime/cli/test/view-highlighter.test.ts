@@ -16,6 +16,7 @@ import {
 } from "../lib/view/languages/typescript/parse.ts";
 import type { Line } from "../lib/view/model.ts";
 import { SAMPLE, TS_PARSER_REGRESSION } from "./view-helpers.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** The index of the first line that differs in text or spans, or -1. Spans are
  * compared on every field the renderer reads. */
@@ -64,19 +65,19 @@ function checkSequence(label: string, steps: string[]): void {
   }
 }
 
-Deno.test("highlighter: typing a file out one character at a time matches a full parse", () => {
+test("highlighter: typing a file out one character at a time matches a full parse", () => {
   const steps: string[] = [""];
   for (let i = 1; i <= SAMPLE.length; i++) steps.push(SAMPLE.slice(0, i));
   checkSequence("type-forward", steps);
 });
 
-Deno.test("highlighter: deleting a file one character at a time matches a full parse", () => {
+test("highlighter: deleting a file one character at a time matches a full parse", () => {
   const steps: string[] = [];
   for (let i = SAMPLE.length; i >= 0; i--) steps.push(SAMPLE.slice(0, i));
   checkSequence("delete-backward", steps);
 });
 
-Deno.test("highlighter: opening and closing multi-line constructs matches a full parse", () => {
+test("highlighter: opening and closing multi-line constructs matches a full parse", () => {
   const mid = SAMPLE.indexOf("export const myPattern");
   const head = SAMPLE.slice(0, mid);
   const tail = SAMPLE.slice(mid);
@@ -105,7 +106,7 @@ Deno.test("highlighter: opening and closing multi-line constructs matches a full
   ]);
 });
 
-Deno.test("highlighter: inserting and deleting at every position matches a full parse", () => {
+test("highlighter: inserting and deleting at every position matches a full parse", () => {
   const hl = createHighlighter(SAMPLE, "m.ts");
   let cur = SAMPLE;
   for (let p = 0; p < SAMPLE.length; p += 5) {
@@ -124,7 +125,7 @@ Deno.test("highlighter: inserting and deleting at every position matches a full 
   }
 });
 
-Deno.test("highlighter: an edit re-baselines correctly across a multi-line comment", () => {
+test("highlighter: an edit re-baselines correctly across a multi-line comment", () => {
   // Opening a block comment recolors the lines it now swallows; closing it
   // restores them. The incremental result must track a full parse through both.
   const hl = createHighlighter(
@@ -146,7 +147,7 @@ Deno.test("highlighter: an edit re-baselines correctly across a multi-line comme
   );
 });
 
-Deno.test("highlighter: parser failures fall back and later edits recover", () => {
+test("highlighter: parser failures fall back and later edits recover", () => {
   const valid = "const view = <div>ready</div>;\n";
 
   const highlighter = createHighlighter(valid, "fixture.tsx");

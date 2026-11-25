@@ -19,6 +19,7 @@ import type {
 import * as schemaModule from "@commonfabric/api/schema";
 import type { Schema, SchemaWithoutCell } from "@commonfabric/api/schema";
 import type { MustBeTrue } from "@commonfabric/js-values/types";
+import { test } from "@commonfabric/test-support/test";
 type AssertAssignable<T, U> = [T] extends [U] ? true : never;
 type AssertNotAssignable<T, U> = [T] extends [U] ? never : true;
 
@@ -117,7 +118,7 @@ const _schemaWishOverload: MustBeTrue<
   SchemaWishOverloadAcceptsFactoryInput
 > = true;
 
-Deno.test("FactoryInput accepts reactive cell handles in factory bindings", () => {
+test("FactoryInput accepts reactive cell handles in factory bindings", () => {
   assertEquals(
     [
       typeof schemaModule,

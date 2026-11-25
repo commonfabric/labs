@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { commitCustodySeal } from "../src/cfc/custody-seal.ts";
 import type { Runtime } from "../src/runtime.ts";
@@ -18,6 +17,7 @@ import {
   setup,
   trustedClick,
 } from "./support/custody-seal-fixture.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Has each transaction `runtime` opens once `anchor` exists fail every read

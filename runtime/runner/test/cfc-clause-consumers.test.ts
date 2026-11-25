@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { isOrClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import { describe, it } from "@commonfabric/test-support/test";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import {
   isPromptInjectionMaterialRiskAtom,

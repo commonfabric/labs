@@ -4,9 +4,8 @@
  * fixture in this process, with no browser and no server.
  */
 
-import { describe } from "@std/testing/bdd";
-
 import { describeReadBudgetGroup } from "./topics-read-budget-suite.ts";
+import { describe } from "@commonfabric/test-support/test";
 
 describe("topics-read-budget-high-degree", () => {
   describeReadBudgetGroup("high-degree", import.meta.url);

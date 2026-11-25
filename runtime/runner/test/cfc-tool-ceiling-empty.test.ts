@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { llmDialogTestHelpers } from "../src/builtins/llm-dialog.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const { toolAllowsObservedConfidentiality } = llmDialogTestHelpers;
 

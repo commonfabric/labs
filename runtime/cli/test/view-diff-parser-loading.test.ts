@@ -6,9 +6,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { buildPreparedView } from "../lib/view/mod.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("diff parser loading", () => {
   it("colors an extensionless file in the language its diff's shebang selects", async () => {

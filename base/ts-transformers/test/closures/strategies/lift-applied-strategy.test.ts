@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -11,6 +10,7 @@ import {
   literalToValue,
   parseModule,
 } from "../../transformed-ast.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Transforms a module whose handler body runs `statements`. A handler body is

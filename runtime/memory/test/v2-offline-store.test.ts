@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
@@ -8,6 +7,12 @@ import {
   fileSize,
   preflightOfflineStore,
 } from "../v2/offline-store.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** A refusal as the rail reports one, for these tests to tell apart. */
 class Refused extends Error {}

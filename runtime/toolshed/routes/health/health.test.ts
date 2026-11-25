@@ -2,6 +2,7 @@ import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
+import { test } from "@commonfabric/test-support/test";
 
 import env from "@/env.ts";
 import {
@@ -18,7 +19,7 @@ if (env.ENV !== "test") {
 
 const app = createApp().route("/", router);
 
-Deno.test("health routes", async (t) => {
+test("health routes", async (t) => {
   await t.step("GET /_health returns 200 with health status", async () => {
     const response = await app.request("/_health");
     assertEquals(response.status, 200);

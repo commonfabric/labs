@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assertRejects } from "@std/assert";
 import { siteTableCause, siteTableSchema } from "@commonfabric/home-schemas";
@@ -15,6 +14,12 @@ import {
 } from "@commonfabric/runner";
 import type { MemorySpace } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 
 const signer = await Identity.fromPassphrase("pieces controller spaces");

@@ -1,8 +1,8 @@
 import { assert, assertEquals, assertMatch, assertRejects } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {

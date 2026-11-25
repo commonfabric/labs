@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type DeclaredTopicsBrowserPosture,
@@ -8,6 +7,7 @@ import {
   topicsBrowserPostureOf,
   type UndeclaredTopicsBrowserPosture,
 } from "../../integration/topics-browser-posture.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A served bundle carrying the build define `value` as the bundler emits it. */
 function bundleWith(value: string, servedByToolshed = true): ServedBundle {

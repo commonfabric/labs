@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { test } from "@commonfabric/test-support/test";
 import {
   extractMessage,
   findCommitHeaders,
@@ -14,7 +15,7 @@ import {
   SHOW,
 } from "./view-commitmsg-test-helpers.ts";
 
-Deno.test("findCommitHeaders: compact, reference, and email formats", () => {
+test("findCommitHeaders: compact, reference, and email formats", () => {
   const full = "0123456789abcdef0123456789abcdef01234567";
   assertEquals(findCommitHeaders([`${full} Subject`]), [
     { sha: full, line: 0 },
@@ -39,7 +40,7 @@ Deno.test("findCommitHeaders: compact, reference, and email formats", () => {
   );
 });
 
-Deno.test("extractMessage: strips the four-space indent and joins", () => {
+test("extractMessage: strips the four-space indent and joins", () => {
   const msgs = findCommitMessages(SHOW);
   assertEquals(
     extractMessage(SHOW, msgs[0]),
@@ -47,7 +48,7 @@ Deno.test("extractMessage: strips the four-space indent and joins", () => {
   );
 });
 
-Deno.test({
+test({
   name: "realGit: preserves nested Git configuration for another repository",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -99,7 +100,7 @@ git -C ${
   },
 });
 
-Deno.test({
+test({
   name: "realGit: rolls back nested reftable commits made by a hook",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -141,7 +142,7 @@ fi`,
   },
 });
 
-Deno.test("realGit: refuses a pager edit that conflicts with a staged edit", async () => {
+test("realGit: refuses a pager edit that conflicts with a staged edit", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -181,7 +182,7 @@ Deno.test("realGit: refuses a pager edit that conflicts with a staged edit", asy
   }
 });
 
-Deno.test({
+test({
   name: "realGit: rejects a selected working file changed by a hook",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -222,7 +223,7 @@ Deno.test({
   },
 });
 
-Deno.test("realGit: Git refuses amend while resolving a conflicted merge", async () => {
+test("realGit: Git refuses amend while resolving a conflicted merge", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -254,7 +255,7 @@ Deno.test("realGit: Git refuses amend while resolving a conflicted merge", async
   }
 });
 
-Deno.test("realGit: a no-op pager change keeps the committed contents", async () => {
+test("realGit: a no-op pager change keeps the committed contents", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -274,7 +275,7 @@ Deno.test("realGit: a no-op pager change keeps the committed contents", async ()
   }
 });
 
-Deno.test({
+test({
   name:
     "realGit: rolls back when a selected workspace file disappears in a hook",
   ignore: Deno.build.os === "windows",

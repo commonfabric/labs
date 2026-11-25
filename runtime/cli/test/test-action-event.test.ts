@@ -1,6 +1,5 @@
 /** Action wrapping demands copied fields while leaving descendants cold. */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -8,6 +7,7 @@ import {
   Runtime,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { pullActionEvent } from "../lib/test-action-event.ts";
 
 /** An event with independently deferred immediate and descendant producers. */

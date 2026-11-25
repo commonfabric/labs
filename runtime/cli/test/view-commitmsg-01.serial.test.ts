@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { test } from "@commonfabric/test-support/test";
 import {
   commitSubjects,
   findCommitMessages,
@@ -14,7 +15,7 @@ import {
   withGitShim,
 } from "./view-commitmsg-test-helpers.ts";
 
-Deno.test("findCommitMessages: the indented block after the header, ending at the diff", () => {
+test("findCommitMessages: the indented block after the header, ending at the diff", () => {
   const msgs = findCommitMessages(SHOW);
   assertEquals(msgs.length, 1);
   assertEquals(msgs[0].sha, "0123456789abcdef0123456789abcdef01234567");
@@ -22,7 +23,7 @@ Deno.test("findCommitMessages: the indented block after the header, ending at th
   assertEquals(msgs[0].end, 6, "ends at the last indented line");
 });
 
-Deno.test("commitSubjects: the Subject header of an email patch, prefix stripped", () => {
+test("commitSubjects: the Subject header of an email patch, prefix stripped", () => {
   const full = "0123456789abcdef0123456789abcdef01234567";
   const subjects = commitSubjects([
     `From ${full} Mon Sep 17 00:00:00 2001`,
@@ -35,7 +36,7 @@ Deno.test("commitSubjects: the Subject header of an email patch, prefix stripped
   assertEquals(subjects.get(full), "Fix the alignment");
 });
 
-Deno.test({
+test({
   name: "realGit: preserves hook paths and hooks installed during the amend",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -77,7 +78,7 @@ chmod +x ${shellQuote(commitMessageHook)}`,
   },
 });
 
-Deno.test("realGit: amends a valid empty commit", async () => {
+test("realGit: amends a valid empty commit", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -101,7 +102,7 @@ Deno.test("realGit: amends a valid empty commit", async () => {
   }
 });
 
-Deno.test({
+test({
   name: "realGit: restores a checked-out ref deleted by a hook",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -142,7 +143,7 @@ git reflog expire --expire=now --all`,
   },
 });
 
-Deno.test({
+test({
   name: "realGit: keeps a symlinked directory's lexical Git path",
   ignore: Deno.build.os === "windows",
   fn: async () => {
@@ -174,7 +175,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "realGit: a branch switch during hooks leaves both branches unamended",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -212,7 +213,7 @@ Deno.test({
   },
 });
 
-Deno.test("realGit: reports unavailable optional Git queries", () => {
+test("realGit: reports unavailable optional Git queries", () => {
   const root = Deno.makeTempDirSync();
   try {
     const runner = realGit(root);
@@ -233,7 +234,7 @@ Deno.test("realGit: reports unavailable optional Git queries", () => {
   }
 });
 
-Deno.test({
+test({
   name: "realGit: ignores a journal transition to a missing commit",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -267,7 +268,7 @@ fi`,
   },
 });
 
-Deno.test({
+test({
   name:
     "realGit: reports injected ref-storage, hook setup, and staged merge failures",
   ignore: Deno.build.os === "windows",

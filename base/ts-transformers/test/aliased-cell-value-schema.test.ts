@@ -9,12 +9,12 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CELL_DECLARATION_POSITIONS } from "./cell-declaration-positions.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callSchemas, parseModule } from "./transformed-ast.ts";
 import { transformFiles, transformSource } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TYPES = `
   type Profile = { name: string; accentColor: string };

@@ -6,7 +6,6 @@
  * own, and the address returned names it.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
@@ -24,6 +23,12 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 
 import { PiecesController } from "@commonfabric/piece/ops";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { SpaceConfig } from "../lib/piece.ts";
 import {

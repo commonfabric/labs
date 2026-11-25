@@ -20,7 +20,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   above,
@@ -32,6 +31,7 @@ import type { PromptTerminal } from "../lib/shuttle/prompt.ts";
 import { ASSUMED_ROWS } from "../lib/shuttle/page.ts";
 import { consoleRows, withPromptTerminal } from "../lib/shuttle/terminal.ts";
 import type { Key } from "../lib/view/keys.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** What the terminal sends to take the screen for a frame, and to give it back. */
 const ENTER_ALT = "\x1b[?1049h";

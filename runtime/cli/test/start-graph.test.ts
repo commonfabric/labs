@@ -8,10 +8,10 @@
  * so the limits here are what notices.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path/from-file-url";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { buildCfLauncherCommand } from "../launcher.ts";
 

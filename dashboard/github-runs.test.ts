@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join, relative, SEPARATOR } from "@std/path";
 import { walk } from "@std/fs/walk";
@@ -19,6 +18,7 @@ import {
 import { RELAY_VOUCH_MS } from "./github-webhooks.ts";
 import { RunListFile } from "./run-list-file.ts";
 import { FakeRelay, workflowRunPayload } from "./test/webhook-relay.ts";
+import { afterEach, beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 const REPO = "example/repo";
 const WORKFLOW = "ci.yml";

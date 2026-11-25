@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { PieceCallablesListing } from "../lib/piece.ts";
 import { listPieceCallables, partitionVerbListing } from "../lib/piece.ts";
 import { verbListingJson, verbListingLines } from "../commands/piece.ts";

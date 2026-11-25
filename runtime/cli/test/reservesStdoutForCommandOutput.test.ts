@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { reservesStdoutForCommandOutput } from "../lib/json-output.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("reservesStdoutForCommandOutput()", () => {
   it("skips the value of a long target option to find the subcommand", () => {

@@ -11,7 +11,6 @@
  * which is the whole reason the table is shared.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -29,6 +28,12 @@ import {
 import type { RuntimeOptions } from "../src/runtime.ts";
 import { presetCfcOptions, runtimePresets } from "../src/runtime-presets.ts";
 import { Runtime, signer, StorageManager } from "./engine-test-support.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The record a surface projects from options alone, with no Runtime. */
 const projected = (options: RuntimeOptions) =>

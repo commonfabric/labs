@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 
@@ -23,6 +22,7 @@ import {
   prepareConsoleLaunch,
 } from "../support/on-linux.ts";
 import type { ConsoleObservedLaunchHealth } from "../../console/health.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const PIECES_JSON = JSON.stringify({
   defaults: {

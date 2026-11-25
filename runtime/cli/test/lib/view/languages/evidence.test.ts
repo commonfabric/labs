@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { firstContentLineMatches } from "../../../../lib/view/languages/evidence.ts";
 import { languageForSource } from "../../../../lib/view/languages/language.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("evidence", () => {
   describe("firstContentLineMatches", () => {

@@ -4,7 +4,6 @@
  * once the server answers, and the pins `cf piece new` reports.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { type Stub, stub } from "@std/testing/mock";
@@ -20,6 +19,12 @@ import {
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { slugIdForSpace } from "../../runner/src/slugs.ts";
 import { runtimeErrorLog } from "../lib/callable.ts";

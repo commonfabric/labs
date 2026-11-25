@@ -1,8 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { resolveEntryIdentity } from "../src/index.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -18,6 +24,13 @@ import {
   getPatternEnvironment,
   setPatternEnvironment,
 } from "../src/builder/env.ts";
+
+// This file runs on the real clock because it holds the sidecar pattern fetch
+// on an explicit gate while the duplicate launch registers, with a short
+// test-armed pump inside the held window. A test-armed sleep never fires under
+// auto-advance. It waits on the gate and on runtime.idle(), never on a bare
+// delay for its verdict.
+useRealClock();
 
 // The profile-resolution starvation family's reproduced member (2026-08-25,
 // OW45 residue): when the `#profile` wish node's create-surface sidecar is

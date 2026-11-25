@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { verifyCompiledModuleBody } from "../src/sandbox/module-record-verifier.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Adversarial corpus against the ESM module verifier (`verifyCompiledModuleBody`).
 // Each fixture is a compiled-CommonJS body an attacker might hand-craft to defeat

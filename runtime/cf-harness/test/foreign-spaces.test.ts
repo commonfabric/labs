@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { resolveConsoleConfig } from "./support/on-linux.ts";
 import { resolveHarnessFabricSessionConfig } from "../src/fabric-session-options.ts";
@@ -8,6 +7,7 @@ import {
   parseHarnessForeignSpaces,
   validateHarnessForeignSpaces,
 } from "../src/foreign-spaces.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const LOCAL = "did:key:zLocal";
 const FOREIGN = "did:key:zForeign";

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { decodeMemoryBoundary } from "@commonfabric/memory/v2";
 import {
@@ -13,6 +12,7 @@ import {
   parseCfcLabelReference,
   storedCfcEnvelopeDefect,
 } from "@commonfabric/memory/v2/cfc-stored-envelope";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const secret = { confidentiality: ["secret"] };
 

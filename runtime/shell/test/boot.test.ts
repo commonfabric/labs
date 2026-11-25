@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { bootShell, type ShellBootDependencies } from "../src/lib/boot.ts";
 import type { DeviceLinkFragment } from "../src/lib/device-link.ts";

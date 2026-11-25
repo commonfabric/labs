@@ -5,10 +5,10 @@
  * indexes under it, for as long as it runs.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("start-transaction-release", () => {
   // Collection needs `--expose-gc` and the real clock, which this package's

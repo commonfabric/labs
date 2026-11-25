@@ -1,14 +1,14 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   estimateOpenAIModelUsageCostUsd,
   normalizeOpenAIUsage,
   sumHarnessModelUsage,
   withEstimatedOpenAIModelUsageCost,
 } from "../src/model/usage.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("normalizeOpenAIUsage maps Responses cache and reasoning details", () => {
+test("normalizeOpenAIUsage maps Responses cache and reasoning details", () => {
   assertEquals(
     normalizeOpenAIUsage({
       input_tokens: 2_000,
@@ -33,7 +33,7 @@ Deno.test("normalizeOpenAIUsage maps Responses cache and reasoning details", () 
   );
 });
 
-Deno.test("normalizeOpenAIUsage maps Chat Completions token names", () => {
+test("normalizeOpenAIUsage maps Chat Completions token names", () => {
   assertEquals(
     normalizeOpenAIUsage({
       prompt_tokens: 1_500,
@@ -56,7 +56,7 @@ Deno.test("normalizeOpenAIUsage maps Chat Completions token names", () => {
   );
 });
 
-Deno.test("sumHarnessModelUsage preserves absent fields", () => {
+test("sumHarnessModelUsage preserves absent fields", () => {
   assertEquals(
     sumHarnessModelUsage([
       { inputTokens: 10, cachedInputTokens: 0, outputTokens: 3 },
@@ -71,7 +71,7 @@ Deno.test("sumHarnessModelUsage preserves absent fields", () => {
   );
 });
 
-Deno.test("sumHarnessModelUsage never presents a partial cost as a total", () => {
+test("sumHarnessModelUsage never presents a partial cost as a total", () => {
   assertEquals(
     sumHarnessModelUsage([
       {
@@ -98,7 +98,7 @@ Deno.test("sumHarnessModelUsage never presents a partial cost as a total", () =>
   );
 });
 
-Deno.test("GPT-5.6 Terra estimates distinguish reads, writes, and output", () => {
+test("GPT-5.6 Terra estimates distinguish reads, writes, and output", () => {
   assertEquals(
     estimateOpenAIModelUsageCostUsd("gpt-5.6-terra", {
       inputTokens: 2_000,
@@ -117,7 +117,7 @@ Deno.test("GPT-5.6 Terra estimates distinguish reads, writes, and output", () =>
   );
 });
 
-Deno.test("cost estimate is withheld when cache detail is unavailable", () => {
+test("cost estimate is withheld when cache detail is unavailable", () => {
   assertEquals(
     estimateOpenAIModelUsageCostUsd("gpt-5.6-terra", {
       inputTokens: 2_000,
@@ -138,7 +138,7 @@ Deno.test("cost estimate is withheld when cache detail is unavailable", () => {
   );
 });
 
-Deno.test("cost estimate is withheld for inconsistent cache detail", () => {
+test("cost estimate is withheld for inconsistent cache detail", () => {
   assertEquals(
     estimateOpenAIModelUsageCostUsd("gpt-5.6-terra", {
       inputTokens: 1_000,
@@ -150,7 +150,7 @@ Deno.test("cost estimate is withheld for inconsistent cache detail", () => {
   );
 });
 
-Deno.test("cost estimate is withheld for inconsistent total usage", () => {
+test("cost estimate is withheld for inconsistent total usage", () => {
   assertEquals(
     estimateOpenAIModelUsageCostUsd("gpt-5.6-terra", {
       inputTokens: 1_000,
@@ -163,7 +163,7 @@ Deno.test("cost estimate is withheld for inconsistent total usage", () => {
   );
 });
 
-Deno.test("cost estimate is withheld for impossible reasoning usage", () => {
+test("cost estimate is withheld for impossible reasoning usage", () => {
   assertEquals(
     estimateOpenAIModelUsageCostUsd("gpt-5.6-terra", {
       inputTokens: 1_000,
@@ -177,7 +177,7 @@ Deno.test("cost estimate is withheld for impossible reasoning usage", () => {
   );
 });
 
-Deno.test("cost estimate is withheld for invalid token counts", () => {
+test("cost estimate is withheld for invalid token counts", () => {
   assertEquals(
     estimateOpenAIModelUsageCostUsd("gpt-5.6-terra", {
       inputTokens: 1_000.5,
@@ -189,7 +189,7 @@ Deno.test("cost estimate is withheld for invalid token counts", () => {
   );
 });
 
-Deno.test("GPT-5.6 long-context pricing applies to the full request", () => {
+test("GPT-5.6 long-context pricing applies to the full request", () => {
   assertEquals(
     estimateOpenAIModelUsageCostUsd("gpt-5.6-terra", {
       inputTokens: 272_001,

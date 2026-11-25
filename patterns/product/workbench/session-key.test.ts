@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { sessionKey as connectorSessionKey } from "../../../connectors/agents/connector/src/session-contract.ts";
 import { sessionKey } from "./session-key.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The pattern's spelling of a session's identity against the connector's,

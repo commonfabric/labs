@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { discoverGitCheckoutDirectories } from "../src/checkout-discovery.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("discoverGitCheckoutDirectories", () => {
   it("finds worktrees and does not descend into a checkout", async () => {

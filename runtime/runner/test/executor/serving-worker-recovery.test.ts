@@ -6,7 +6,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 import { stub } from "@std/testing/mock";
 import { defer } from "@commonfabric/async/defer";
@@ -19,6 +18,13 @@ import {
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { EngineWaveCommitSink } from "../../src/executor/engine-wave-sink.ts";
 import { SpaceNotServedError } from "../../src/executor/host.ts";
 import {

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type Spy, spy, stub } from "@std/testing/mock";
 
@@ -7,6 +6,13 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import { ExecutorHost, type HostOccupancy } from "../../src/executor/host.ts";
 import {

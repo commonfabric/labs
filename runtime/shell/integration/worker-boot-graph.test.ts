@@ -1,6 +1,7 @@
 import { assert } from "@std/assert";
 import { fromFileUrl, relative, resolve } from "@std/path";
 import { build } from "@commonfabric/felt";
+import { test } from "@commonfabric/test-support/test";
 import shellConfig from "../felt.config.ts";
 
 /**
@@ -30,7 +31,7 @@ import shellConfig from "../felt.config.ts";
 // schema-generator/src/typescript, ...), which must be allowed on the boot path.
 const NPM_TYPESCRIPT = /\/typescript\/\d+\.\d+\.\d+\//;
 
-Deno.test("worker boot graph: the TypeScript compiler is reachable only via the dynamic import, never statically", async () => {
+test("worker boot graph: the TypeScript compiler is reachable only via the dynamic import, never statically", async () => {
   const worker = shellConfig.entries.find(
     (e) => e.out === "scripts/worker-runtime",
   );

@@ -4,7 +4,6 @@
  * turn still gets a child that runs to its own limit.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -20,6 +19,7 @@ import type {
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 class FakeSandboxRuntime implements SandboxRuntime {
   describe(): SandboxRuntimeDescription {

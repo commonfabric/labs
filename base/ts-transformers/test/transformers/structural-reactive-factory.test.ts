@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -11,6 +10,7 @@ import {
   analyzeExpression,
   CELL_VARIANTS_PRELUDE,
 } from "../reactive/harness.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const PRELUDE = `${CELL_VARIANTS_PRELUDE}
 declare function makeCell(): Cell<number>;

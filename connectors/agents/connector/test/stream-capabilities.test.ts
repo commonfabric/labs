@@ -1,8 +1,8 @@
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { AgentFabricTarget } from "../src/fabric.ts";
 import { readStableCellGraphValue } from "../src/fabric-graph.ts";

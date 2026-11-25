@@ -1,7 +1,7 @@
 import { env } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { beforeAll, describe, it } from "@std/testing/bdd";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
 import {
   type ChurnCounters,

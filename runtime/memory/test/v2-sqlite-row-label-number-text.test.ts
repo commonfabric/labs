@@ -17,7 +17,6 @@
 
 import { Database } from "@db/sqlite";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   all,
   constant,
@@ -31,6 +30,7 @@ import {
   whenMatches,
 } from "../v2/sqlite/row-label.ts";
 import { table } from "../v2/sqlite/schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const OWNER = "did:key:zOwner";
 const GATED = "did:mailto:seven@example.com";

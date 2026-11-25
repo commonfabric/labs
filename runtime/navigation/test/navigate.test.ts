@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   type NavigationCommand,
@@ -9,6 +8,12 @@ import {
   openInNewTabWhenReady,
   setNewTabReservation,
 } from "@commonfabric/navigation";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // Exercises the `openInNewTab` helper that backs modifier-click ("open in new
 // tab") navigation for cf-cell-link, cf-profile-badge and cf-render (CT-1830).

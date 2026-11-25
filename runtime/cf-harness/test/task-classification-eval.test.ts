@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { codexEvalModel, main } from "../scripts/task-classification-eval.ts";
 import type { TaskClassificationCase } from "./task-classification-cases.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const cases: TaskClassificationCase[] = [
   {

@@ -7,6 +7,7 @@ import {
 import { AGENTS_HOST_USAGE } from "../src/cli-options.ts";
 import type { RunningAgentsHost } from "../src/start.ts";
 import { join } from "@std/path";
+import { test } from "@commonfabric/test-support/test";
 
 async function writeConfig(
   collectionIntervalMs?: number,
@@ -94,7 +95,7 @@ function dependencies(options: {
   };
 }
 
-Deno.test("SIGTERM drains a running host without aborting its owner signal", async () => {
+test("SIGTERM drains a running host without aborting its owner signal", async () => {
   const { directory, path } = await writeConfig();
   try {
     const listeners = new Map<Deno.Signal, () => void>();
@@ -136,7 +137,7 @@ Deno.test("SIGTERM drains a running host without aborting its owner signal", asy
   }
 });
 
-Deno.test("the CLI reports each bound command producer", async () => {
+test("the CLI reports each bound command producer", async () => {
   const { directory, path } = await writeConfig();
   try {
     const listeners = new Map<Deno.Signal, () => void>();
@@ -178,7 +179,7 @@ Deno.test("the CLI reports each bound command producer", async () => {
   }
 });
 
-Deno.test("SIGINT aborts host startup and removes signal listeners", async () => {
+test("SIGINT aborts host startup and removes signal listeners", async () => {
   const { directory, path } = await writeConfig();
   try {
     const listeners = new Map<Deno.Signal, () => void>();
@@ -208,7 +209,7 @@ Deno.test("SIGINT aborts host startup and removes signal listeners", async () =>
   }
 });
 
-Deno.test("a startup failure after a signal returns a failing exit code", async () => {
+test("a startup failure after a signal returns a failing exit code", async () => {
   const { directory, path } = await writeConfig();
   try {
     const listeners = new Map<Deno.Signal, () => void>();
@@ -245,7 +246,7 @@ Deno.test("a startup failure after a signal returns a failing exit code", async 
   }
 });
 
-Deno.test("a signal-driven shutdown failure returns a failing exit code", async () => {
+test("a signal-driven shutdown failure returns a failing exit code", async () => {
   const { directory, path } = await writeConfig();
   try {
     const listeners = new Map<Deno.Signal, () => void>();
@@ -281,7 +282,7 @@ Deno.test("a signal-driven shutdown failure returns a failing exit code", async 
   }
 });
 
-Deno.test("long-running mode requests periodic collection and cancels its schedule", async () => {
+test("long-running mode requests periodic collection and cancels its schedule", async () => {
   const { directory, path } = await writeConfig();
   try {
     const listeners = new Map<Deno.Signal, () => void>();
@@ -327,7 +328,7 @@ Deno.test("long-running mode requests periodic collection and cancels its schedu
   }
 });
 
-Deno.test("a zero collection interval disables periodic collection", async () => {
+test("a zero collection interval disables periodic collection", async () => {
   const { directory, path } = await writeConfig(0);
   try {
     const listeners = new Map<Deno.Signal, () => void>();
@@ -360,7 +361,7 @@ Deno.test("a zero collection interval disables periodic collection", async () =>
   }
 });
 
-Deno.test("shutdown starts while an active periodic collection drains", async () => {
+test("shutdown starts while an active periodic collection drains", async () => {
   const { directory, path } = await writeConfig();
   try {
     const listeners = new Map<Deno.Signal, () => void>();
@@ -411,7 +412,7 @@ Deno.test("shutdown starts while an active periodic collection drains", async ()
   }
 });
 
-Deno.test("--help prints the usage and starts no host", async () => {
+test("--help prints the usage and starts no host", async () => {
   const logs: string[] = [];
   const deps = dependencies({
     logs,
@@ -424,7 +425,7 @@ Deno.test("--help prints the usage and starts no host", async () => {
   assertEquals(logs, [AGENTS_HOST_USAGE]);
 });
 
-Deno.test("--once publishes one collection and stops without commands", async () => {
+test("--once publishes one collection and stops without commands", async () => {
   const { directory, path } = await writeConfig();
   try {
     const listeners = new Map<Deno.Signal, () => void>();
@@ -460,7 +461,7 @@ Deno.test("--once publishes one collection and stops without commands", async ()
   }
 });
 
-Deno.test("SIGHUP queues at most one follow-up collection after startup", async () => {
+test("SIGHUP queues at most one follow-up collection after startup", async () => {
   const { directory, path } = await writeConfig(0);
   try {
     const listeners = new Map<Deno.Signal, () => void>();
@@ -538,7 +539,7 @@ Deno.test("SIGHUP queues at most one follow-up collection after startup", async 
   }
 });
 
-Deno.test("a failure after startup stops the host and reports both failures", async () => {
+test("a failure after startup stops the host and reports both failures", async () => {
   const { directory, path } = await writeConfig();
   try {
     const listeners = new Map<Deno.Signal, () => void>();
@@ -572,7 +573,7 @@ Deno.test("a failure after startup stops the host and reports both failures", as
   }
 });
 
-Deno.test("the default schedule repeats until it is cancelled", async () => {
+test("the default schedule repeats until it is cancelled", async () => {
   // The test's resource sanitizer fails the test if the interval outlives
   // the cancellation.
   const twoTicks = Promise.withResolvers<void>();

@@ -13,10 +13,10 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 import { ensureDir } from "@std/fs";
-import { describe, it } from "@std/testing/bdd";
 import { join, toFileUrl } from "@std/path";
 
 import { spliceAll } from "@commonfabric/collections/splice";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   applyCommit,
   close,

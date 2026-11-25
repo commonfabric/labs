@@ -7,7 +7,6 @@
  * connect to that server over the loopback transport.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import type { FabricPlainObject } from "@commonfabric/api";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
@@ -62,10 +61,25 @@ import { parseLink } from "../src/link-utils.ts";
 import { ArrivalLog, awaitAdmitted } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
+import {
   TEST_SESSION_OPEN_AUDIENCE,
   testPrincipalSessionOpenAuthFactory,
   writeDeletionTombstone,
 } from "./memory-v2-test-utils.ts";
+
+// This file runs on the real clock because it drives two live ExecutorHosts
+// over one file store. Closing a host parks each space under the park's dispose
+// deadline, and the dispose waits on loopback work the pump reads as an idle
+// loop, so auto-advance fires that deadline at once: `close()` returns with the
+// dispose abandoned and still writing into the store the teardown then removes.
+// It waits on activation and store edges, never on a delay.
+useRealClock();
 
 const serviceSigner = await Identity.fromPassphrase("owner routing service");
 const aliceSigner = await Identity.fromPassphrase("owner routing alice");

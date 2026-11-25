@@ -10,7 +10,6 @@
  * runs nothing, and a case that needs a native store makes one.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join, toFileUrl } from "@std/path";
 
@@ -37,6 +36,12 @@ import type {
   SandboxRuntimeDescription,
 } from "../src/sandbox/types.ts";
 import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** A process runner that runs nothing and succeeds at it. */
 const inertRunner: ProcessRunner = {

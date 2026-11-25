@@ -3,6 +3,7 @@ import ts from "typescript";
 import { transformSource, validateSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { collect, emittedSchemas, parseModule } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** The single emitted schema literal, evaluated to its JS value. */
 async function schemaValue(source: string): Promise<Record<string, unknown>> {
@@ -12,7 +13,7 @@ async function schemaValue(source: string): Promise<Record<string, unknown>> {
   return schemas[0]!;
 }
 
-Deno.test("transformer coverage: nested aliases expand to canonical metadata", async () => {
+test("transformer coverage: nested aliases expand to canonical metadata", async () => {
   const source = `/// <cts-enable />
     import { toSchema } from "commonfabric";
 
@@ -35,7 +36,7 @@ Deno.test("transformer coverage: nested aliases expand to canonical metadata", a
   assertEquals(secret.ifc, { confidentiality: ["secret"] });
 });
 
-Deno.test("transformer coverage: projection paths lower as canonical pointers", async () => {
+test("transformer coverage: projection paths lower as canonical pointers", async () => {
   const source = `/// <cts-enable />
     import { toSchema } from "commonfabric";
 
@@ -59,7 +60,7 @@ Deno.test("transformer coverage: projection paths lower as canonical pointers", 
   });
 });
 
-Deno.test("transformer coverage: non-canonical Cfc payloads lower structurally", async () => {
+test("transformer coverage: non-canonical Cfc payloads lower structurally", async () => {
   // The canonical OpaqueInput helper was removed (the runner rejects ifc.opaque
   // fail-closed), but a non-canonical local alias with EXPLICIT type arguments
   // still resolves through the Cfc carrier — the generic payload passthrough.
@@ -88,7 +89,7 @@ Deno.test("transformer coverage: non-canonical Cfc payloads lower structurally",
   assertEquals(token.ifc, { opaque: true });
 });
 
-Deno.test("transformer coverage: imported Cfc metadata survives Writable.of type arguments", async () => {
+test("transformer coverage: imported Cfc metadata survives Writable.of type arguments", async () => {
   const source = `/// <cts-enable />
     import { type Cfc, Writable } from "commonfabric";
 
@@ -119,7 +120,7 @@ Deno.test("transformer coverage: imported Cfc metadata survives Writable.of type
   });
 });
 
-Deno.test("transformer coverage: UI helpers rewrite to intrinsic tags and data-ui markers", async () => {
+test("transformer coverage: UI helpers rewrite to intrinsic tags and data-ui markers", async () => {
   const source = `/// <cts-enable />
     import { UiAction } from "commonfabric";
 
@@ -144,7 +145,7 @@ Deno.test("transformer coverage: UI helpers rewrite to intrinsic tags and data-u
   assertEquals(jsxTagNames(root).includes("UiAction"), false);
 });
 
-Deno.test("transformer coverage: WriteAuthorizedBy emits diagnostics for invalid forms", async () => {
+test("transformer coverage: WriteAuthorizedBy emits diagnostics for invalid forms", async () => {
   const source = `/// <cts-enable />
     import { toSchema, WriteAuthorizedBy } from "commonfabric";
 

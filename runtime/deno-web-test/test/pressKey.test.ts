@@ -5,10 +5,15 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { pressKey } from "../commands.ts";
 import { DRIVER_BINDING, SETTLE_GLOBAL } from "../commands-protocol.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The commands sent through the stand-in binding, parsed. */
 let sent: { id: number; press: string; modifiers: string[] }[];

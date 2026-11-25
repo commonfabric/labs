@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { deepFreeze } from "@commonfabric/data-model";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { preparedDigestFor } from "../../src/cfc/canonical.ts";
 import type { PreparedDigestInput } from "../../src/cfc/types.ts";

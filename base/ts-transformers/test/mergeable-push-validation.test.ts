@@ -2,6 +2,7 @@ import { assert, assertEquals } from "@std/assert";
 import { validateSource } from "./utils.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const DIAGNOSTIC_TYPE = "mergeable-push:read-then-push";
 
@@ -13,7 +14,7 @@ function getReadThenPushWarnings(
   );
 }
 
-Deno.test("Mergeable push validation", async (t) => {
+test("Mergeable push validation", async (t) => {
   await t.step(
     "warns on a dedup-then-push to the same collection",
     async () => {

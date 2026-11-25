@@ -7,6 +7,7 @@
 import { assert, assertEquals } from "@std/assert";
 import type { Ctx } from "../types.ts";
 import { prodErrors } from "./prod-errors.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const HOUR = 3_600_000;
 const ENV = { SIGNOZ_URL: "https://signoz.example", SIGNOZ_API_KEY: "k" };
@@ -52,7 +53,7 @@ async function withFetch<T>(handler: (req: Request) => Promise<Response>, fn: ()
 const basePoints = (extra: string) => extra.match(/<polyline points="([^"]*)"/)![1].trim().split(" ");
 const yOf = (pt: string) => parseFloat(pt.split(",")[1]);
 
-Deno.test("prod errors: the headline is the last 12h error rate — <1% good, <5% warn, else bad", async () => {
+test("prod errors: the headline is the last 12h error rate — <1% good, <5% warn, else bad", async () => {
   const at = hourStamps();
   const recent: [number, number | null][] = Array.from({ length: 12 }, (_, i) => [at(i), 100]);
   // 1200 spans over the window; every error lands in the newest hour.
@@ -74,7 +75,7 @@ Deno.test("prod errors: the headline is the last 12h error rate — <1% good, <5
   assertEquals(bad.status, "bad");
 });
 
-Deno.test("prod errors: hours with no traces count as zero, keeping the axis linear in time", async () => {
+test("prod errors: hours with no traces count as zero, keeping the axis linear in time", async () => {
   const at = hourStamps();
   // A 50%-error hour 23 hours back, twelve clean hours now, and a ten-hour hole
   // between them that the response simply omits.
@@ -100,7 +101,7 @@ Deno.test("prod errors: hours with no traces count as zero, keeping the axis lin
   assert(ys[0] >= 0, "the old spike stays in view rather than clipping past the top");
 });
 
-Deno.test("prod errors: no traces in the last 12h -> unknown, never a green zero", async () => {
+test("prod errors: no traces in the last 12h -> unknown, never a green zero", async () => {
   const at = hourStamps();
   // Two hours of traffic two days ago and nothing since.
   const v = await withFetch(
@@ -114,7 +115,7 @@ Deno.test("prod errors: no traces in the last 12h -> unknown, never a green zero
   assertEquals([...(v.extra ?? "").matchAll(/<polyline/g)].length, 1);
 });
 
-Deno.test("prod errors: an empty result set -> unknown, and non-finite counts are dropped", async () => {
+test("prod errors: an empty result set -> unknown, and non-finite counts are dropped", async () => {
   const at = hourStamps();
   const none = await withFetch(() => ok([]), () => prodErrors.collect(ctx(ENV)));
   assertEquals(none.status, "unknown");
@@ -130,7 +131,7 @@ Deno.test("prod errors: an empty result set -> unknown, and non-finite counts ar
   assertEquals(junk.sub, "no toolshed-production spans");
 });
 
-Deno.test("prod errors: SigNoz unreachable -> gray, not red", async () => {
+test("prod errors: SigNoz unreachable -> gray, not red", async () => {
   const down = await withFetch(
     () => Promise.reject(new TypeError("error sending request for url")),
     () => prodErrors.collect(ctx(ENV)),
@@ -145,7 +146,7 @@ Deno.test("prod errors: SigNoz unreachable -> gray, not red", async () => {
   assertEquals(odd.sub, "SigNoz unavailable");
 });
 
-Deno.test("prod errors: an HTTP error names the status and stays gray", async () => {
+test("prod errors: an HTTP error names the status and stays gray", async () => {
   const v = await withFetch(
     () => Promise.resolve(new Response("nope", { status: 502 })),
     () => prodErrors.collect(ctx(ENV)),
@@ -155,7 +156,7 @@ Deno.test("prod errors: an HTTP error names the status and stays gray", async ()
   assertEquals(v.sub, "SigNoz HTTP 502");
 });
 
-Deno.test("prod errors: no SIGNOZ_URL / SIGNOZ_API_KEY -> gray, and nothing is fetched", async () => {
+test("prod errors: no SIGNOZ_URL / SIGNOZ_API_KEY -> gray, and nothing is fetched", async () => {
   let calls = 0;
   const collect = (env: Record<string, string>) =>
     withFetch(() => {
@@ -174,7 +175,7 @@ Deno.test("prod errors: no SIGNOZ_URL / SIGNOZ_API_KEY -> gray, and nothing is f
   assertEquals(calls, 0);
 });
 
-Deno.test("prod errors: the drill link prefers SIGNOZ_UI_URL over an in-cluster SIGNOZ_URL", async () => {
+test("prod errors: the drill link prefers SIGNOZ_UI_URL over an in-cluster SIGNOZ_URL", async () => {
   const collect = (env: Record<string, string>) =>
     withFetch(() => ok([]), () => prodErrors.collect(ctx(env)));
 
@@ -191,7 +192,7 @@ Deno.test("prod errors: the drill link prefers SIGNOZ_UI_URL over an in-cluster 
   assertEquals(inCluster.hint, undefined);
 });
 
-Deno.test("prod errors: asks SigNoz for one service's hourly all-span and errored-span counts over 14 days", async () => {
+test("prod errors: asks SigNoz for one service's hourly all-span and errored-span counts over 14 days", async () => {
   let req: Request | undefined;
   let sent: {
     start: number;
@@ -222,7 +223,7 @@ Deno.test("prod errors: asks SigNoz for one service's hourly all-span and errore
   assertEquals(specs[1].filter?.expression, "service.name = 'toolshed-production' AND has_error = true");
 });
 
-Deno.test("prod errors: PROD_SERVICE names the service, and an unsafe name cannot reach the query", async () => {
+test("prod errors: PROD_SERVICE names the service, and an unsafe name cannot reach the query", async () => {
   const specFor = async (env: Record<string, string>): Promise<string> => {
     let sent: { compositeQuery: { queries: { spec: { filter?: { expression: string } } }[] } };
     await withFetch(async (r) => {

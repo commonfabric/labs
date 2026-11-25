@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   observeDeliveryFailure,
   observeDeliveryRecovery,
@@ -9,6 +8,7 @@ import {
   ReplicaLoadFailureError,
   toReplicaLoadFailureError,
 } from "../src/storage/interface.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("served-event delivery failure policy", () => {
   it("accumulates failed episodes across recovery without charging recovery work", () => {

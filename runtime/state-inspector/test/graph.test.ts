@@ -8,6 +8,7 @@ import { Database } from "@db/sqlite";
 
 import { openSpace } from "../db.ts";
 import { buildSpaceGraph, graphToDot, subgraphAround } from "../graph.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -102,7 +103,7 @@ function seed(path: string) {
   db.close();
 }
 
-Deno.test("entity graph: nodes, edges, neighborhood, dot", async (t) => {
+test("entity graph: nodes, edges, neighborhood, dot", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-graph-" });
   const dbPath = `${dir}/space.sqlite`;
   try {

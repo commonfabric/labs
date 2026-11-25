@@ -12,6 +12,7 @@ import {
   CellHandle,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 import {
   type DomEventMessage,
   isDomEventMessage,
@@ -138,7 +139,7 @@ class MockCustomEvent extends MockEvent {
   }
 }
 
-Deno.test("events - isDomEventMessage", async (t) => {
+test("events - isDomEventMessage", async (t) => {
   await t.step("returns true for valid DomEventMessage", () => {
     const message: DomEventMessage = {
       type: "dom-event",
@@ -184,7 +185,7 @@ Deno.test("events - isDomEventMessage", async (t) => {
   });
 });
 
-Deno.test("events - serializeEvent", async (t) => {
+test("events - serializeEvent", async (t) => {
   await t.step("serializes basic event type", () => {
     const event = new MockEvent("click") as unknown as Event;
     const serialized = serializeEvent(event);

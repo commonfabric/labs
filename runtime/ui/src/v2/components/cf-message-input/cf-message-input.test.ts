@@ -2,9 +2,9 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFMessageInput } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 // The message input renders a `cf-input` and a `cf-button`, which this file
 // leaves undefined: `cf-input` needs `attachInternals()`, which happy-dom does

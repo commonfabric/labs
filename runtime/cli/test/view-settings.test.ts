@@ -1,6 +1,5 @@
 import { join } from "@std/path";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { Key } from "../lib/view/keys.ts";
 import { realPushIo } from "../lib/view/push.ts";
@@ -12,6 +11,7 @@ import {
   type ViewSettings,
 } from "../lib/view/settings.ts";
 import { cellOf, drawnRows, mouseKey, parseDocument } from "./view-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const RELAY = "github-webhooks.example.test:8081";
 

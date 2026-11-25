@@ -2,6 +2,7 @@ import { assert, assertEquals } from "@std/assert";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { validateFiles } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * These cases exercise the angle-bracket type-assertion (`<X>expr`) branches of
@@ -24,7 +25,7 @@ function types(diagnostics: readonly TransformationDiagnostic[]): string[] {
   return diagnostics.map((diagnostic) => diagnostic.type);
 }
 
-Deno.test(
+test(
   "angle-bracket cast to a cell-like type reports a cell-cast error",
   async () => {
     const source = `
@@ -39,7 +40,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "angle-bracket cast to Reactive reports a forbidden-cast error",
   async () => {
     const source = `
@@ -53,7 +54,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "double angle-bracket cast '<X><unknown>expr' reports double-unknown",
   async () => {
     const source = `
@@ -67,7 +68,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "mixed cast '<X>(expr as unknown)' reports double-unknown",
   async () => {
     const source = `
@@ -80,7 +81,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "mixed cast '<X>(<unknown>expr)' with parentheses reports double-unknown",
   async () => {
     const source = `
@@ -93,7 +94,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "angle-bracket cast wrapping 'expr as unknown' reports double-unknown",
   async () => {
     const source = `
@@ -111,7 +112,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "mixed cast '(<unknown>expr) as X' reports double-unknown",
   async () => {
     const source = `
@@ -126,7 +127,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "parenthesized cast '(expr as unknown) as X' reports double-unknown",
   async () => {
     const source = `
@@ -141,7 +142,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "angle-bracket cast to a benign type produces no diagnostic",
   async () => {
     const source = `

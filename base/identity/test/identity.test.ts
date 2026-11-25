@@ -4,6 +4,7 @@ import { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { decode } from "@commonfabric/text/utf8";
+import { test } from "@commonfabric/test-support/test";
 import { entropyToMnemonic, mnemonicToEntropy } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
 
@@ -11,14 +12,14 @@ import { NobleEd25519Verifier } from "../src/ed25519/noble.ts";
 import { isNativeEd25519Supported } from "../src/ed25519/utils.ts";
 import { Identity } from "../src/identity.ts";
 
-Deno.test("Identity generates mnemonics", async () => {
+test("Identity generates mnemonics", async () => {
   const [identity, mnemonic] = await Identity.generateMnemonic();
   const did = identity.verifier.did();
   const identity2 = await Identity.fromMnemonic(mnemonic);
   assert(did, identity2.verifier.did());
 });
 
-Deno.test("Can generate into/read from PKCS8", async () => {
+test("Can generate into/read from PKCS8", async () => {
   const pkcs8 = await Identity.generatePkcs8();
   assert(/^-----BEGIN PRIVATE KEY-----/.test(decode(pkcs8)));
   assert(/-----END PRIVATE KEY-----$/.test(decode(pkcs8)));
@@ -35,7 +36,7 @@ Deno.test("Can generate into/read from PKCS8", async () => {
   assert(throws, "Identity.fromPkcs8() throws with invalid pkcs8");
 });
 
-Deno.test("BIP39 entropy is the raw seed — no KDF between", async () => {
+test("BIP39 entropy is the raw seed — no KDF between", async () => {
   // THE contract device pairing rests on: `fromMnemonic` maps a phrase to BIP39
   // entropy and uses those bytes DIRECTLY as the ed25519 seed, so 32 bytes of
   // entropy and the 24 words encoding them name the same identity. A pairing QR
@@ -51,7 +52,7 @@ Deno.test("BIP39 entropy is the raw seed — no KDF between", async () => {
   assertEquals((await Identity.fromRaw(entropy)).did(), identity.did());
 });
 
-Deno.test("fromRaw matches the pinned all-zero BIP39 vector", async () => {
+test("fromRaw matches the pinned all-zero BIP39 vector", async () => {
   const identity = await Identity.fromRaw(new Uint8Array(32));
   assertEquals(
     identity.did(),
@@ -59,7 +60,7 @@ Deno.test("fromRaw matches the pinned all-zero BIP39 vector", async () => {
   );
 });
 
-Deno.test("toRaw round-trips an existing key back to its seed", async () => {
+test("toRaw round-trips an existing key back to its seed", async () => {
   // Closes the loop the pairing flow needs: a key that was NEVER generated from
   // a phrase can still be re-encoded as one, so nobody has to re-key. `toRaw`
   // is the exact inverse of `fromRaw`.
@@ -77,7 +78,7 @@ Deno.test("toRaw round-trips an existing key back to its seed", async () => {
   assertEquals((await Identity.fromMnemonic(mnemonic)).did(), identity.did());
 });
 
-Deno.test("toRaw is asymmetric — byte order is preserved", async () => {
+test("toRaw is asymmetric — byte order is preserved", async () => {
   // The all-zero vector is a fixed point of reversal, so a test using only it
   // would pass even if the seed were mangled on the way out.
   const seed = new Uint8Array(Array.from({ length: 32 }, (_, i) => i));
@@ -85,7 +86,7 @@ Deno.test("toRaw is asymmetric — byte order is preserved", async () => {
   assertEquals(identity.toRaw(), seed);
 });
 
-Deno.test("toRaw returns a COPY — mutating it cannot corrupt the identity", async () => {
+test("toRaw returns a COPY — mutating it cannot corrupt the identity", async () => {
   // The pair `keyPair` hands out is immutable; `toRaw()` answers with bytes a
   // caller owns, and so has a copy to make where that one does not.
   const identity = await Identity.fromRaw(new Uint8Array(32).fill(7), {
@@ -96,7 +97,7 @@ Deno.test("toRaw returns a COPY — mutating it cannot corrupt the identity", as
   assertEquals(identity.toRaw()[0], 7, "the identity's seed must be unchanged");
 });
 
-Deno.test("a native signer's key pair cannot be used to reach it", async () => {
+test("a native signer's key pair cannot be used to reach it", async () => {
   // The native arm holds `CryptoKey`s, which are opaque and carry no reachable
   // material. What remains to check is the pair around them: one instance
   // serves every call, so a holder able to reassign a key in it would reach
@@ -124,7 +125,7 @@ Deno.test("a native signer's key pair cannot be used to reach it", async () => {
   assertEquals(keyPair.cryptoKeyPair.privateKey, keyPair.privateCryptoKey);
 });
 
-Deno.test("fromKeyPair refuses a pair for another algorithm", async () => {
+test("fromKeyPair refuses a pair for another algorithm", async () => {
   // A pair holding material says which algorithm it is for and is otherwise
   // indistinguishable from an ed25519 one, both keys being 32 bytes.
   const seed = new Uint8Array(32).fill(7);
@@ -142,14 +143,14 @@ Deno.test("fromKeyPair refuses a pair for another algorithm", async () => {
   );
 });
 
-Deno.test("a signer copies the key material it is constructed from", async () => {
+test("a signer copies the key material it is constructed from", async () => {
   const seed = new Uint8Array(32).fill(7);
   const identity = await Identity.fromRaw(seed, { implementation: "noble" });
   seed[0] = 0xff;
   assertEquals(identity.toRaw()[0], 7, "the signing secret must be unchanged");
 });
 
-Deno.test("a verifier built from raw bytes copies them", async () => {
+test("a verifier built from raw bytes copies them", async () => {
   // `fromRaw()` is where a mutable array enters; the constructor itself takes
   // immutable bytes and so has nothing to defend against.
   //
@@ -172,7 +173,7 @@ Deno.test("a verifier built from raw bytes copies them", async () => {
   assert(result.ok, "verification must be unaffected by the caller's mutation");
 });
 
-Deno.test("two toRaw() callers cannot interfere with each other", async () => {
+test("two toRaw() callers cannot interfere with each other", async () => {
   const identity = await Identity.fromRaw(new Uint8Array(32).fill(7), {
     implementation: "noble",
   });
@@ -183,7 +184,7 @@ Deno.test("two toRaw() callers cannot interfere with each other", async () => {
   assertEquals(second[0], 7, "one caller must not reach another's seed");
 });
 
-Deno.test("toRaw throws cleanly for a non-noble implementation", async () => {
+test("toRaw throws cleanly for a non-noble implementation", async () => {
   // On Firefox ≥136 the DEFAULT (native/WebCrypto) implementation is used, and
   // it cannot export private material. The failure must be an honest error, not
   // a PKCS8-flavored red herring, and pairing callers pass NOBLE explicitly to

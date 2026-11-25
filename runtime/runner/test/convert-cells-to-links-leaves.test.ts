@@ -4,10 +4,10 @@
  * same reason every vetting of a value gives.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { type CellLinkInput, convertCellsToLinks } from "../src/cell.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("convert-cells-to-links-leaves", () => {
   it("returns `null` for `null`", () => {

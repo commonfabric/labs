@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Hono } from "@hono/hono";
 import { context, SpanStatusCode, trace } from "@opentelemetry/api";
@@ -10,6 +9,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { AsyncHooksContextManager } from "@opentelemetry/context-async-hooks";
 import { createSpan, otelTracing } from "@/middlewares/opentelemetry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Runs `body` with a global tracer provider that records every finished span,

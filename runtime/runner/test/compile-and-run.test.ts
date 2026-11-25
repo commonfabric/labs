@@ -1,11 +1,12 @@
 import { assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import { compileAndRun } from "../src/builtins/compile-and-run.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
-Deno.test("compileAndRun initializes outputs and handles invalid programs", async () => {
+test("compileAndRun initializes outputs and handles invalid programs", async () => {
   const identity = await Identity.fromPassphrase("compile and run coverage");
   const storageManager = StorageManager.emulate({ as: identity });
   const runtime = new Runtime({
@@ -75,7 +76,7 @@ Deno.test("compileAndRun initializes outputs and handles invalid programs", asyn
   }
 });
 
-Deno.test("compileAndRun runs a program that reads an attached data file", async () => {
+test("compileAndRun runs a program that reads an attached data file", async () => {
   const identity = await Identity.fromPassphrase("compile and run data file");
   const storageManager = StorageManager.emulate({ as: identity });
   const runtime = new Runtime({

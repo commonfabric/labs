@@ -25,7 +25,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { SlugResolutionError } from "@commonfabric/piece";
@@ -39,6 +38,7 @@ import { ValidationError } from "@cliffy/command";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { BaseFabricSpecialObject } from "@commonfabric/data-model/fabric-bases";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { pieceDataCommand } from "../commands/piece.ts";
 import {

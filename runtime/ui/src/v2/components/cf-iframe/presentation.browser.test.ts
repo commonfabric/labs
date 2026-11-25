@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { ContextProvider } from "@lit/context";
 
 import { CFIframe, iframePresentationContext } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** Returns the next presentation reported by the fixture's guest. */
 function report(id: string) {
@@ -15,7 +16,7 @@ function report(id: string) {
   });
 }
 
-Deno.test("cf-iframe inherits live presentation across a shadow root and supports opting out", async () => {
+test("cf-iframe inherits live presentation across a shadow root and supports opting out", async () => {
   const host = document.createElement("div");
   const shadow = host.attachShadow({ mode: "open" });
   const provider = new ContextProvider(host, {

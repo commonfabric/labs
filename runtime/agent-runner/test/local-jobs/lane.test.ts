@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import type { ACL } from "@commonfabric/memory/acl";
+import { describe, it } from "@commonfabric/test-support/test";
 import { join } from "@std/path";
 
 import type {

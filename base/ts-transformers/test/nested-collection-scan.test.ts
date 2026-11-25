@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { validateSource } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 async function warnings(body: string) {
   const result = await validateSource(

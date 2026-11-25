@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { jinjaSyntax } from "../../../../../lib/view/languages/jinja/jinja.ts";
 import { languageForName } from "../../../../../lib/view/languages/language.ts";
 import type { Line, TokenClass } from "../../../../../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Every distinct class the colored lines give to an exact fragment. */
 function classesOf(lines: readonly Line[], text: string): TokenClass[] {

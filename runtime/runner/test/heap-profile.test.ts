@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   collectedMemory,
@@ -10,6 +9,7 @@ import {
   startHeapSampling,
   writeThreadHeapProfile,
 } from "../src/heap-profile.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 type ProfileNode = {
   callFrame: { functionName: string };

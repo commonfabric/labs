@@ -5,9 +5,9 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl, join, toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const packageRoot = fromFileUrl(new URL("./", import.meta.url));
 const repositoryRoot = fromFileUrl(new URL("../../", import.meta.url));

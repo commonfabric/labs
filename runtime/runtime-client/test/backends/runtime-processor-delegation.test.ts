@@ -5,13 +5,13 @@
  * dispatches them.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { RealmEncodedValue } from "@commonfabric/data-model/codec-realm";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { getLogger, getLoggerCountsByKey } from "@commonfabric/logger";
 import { RuntimeTelemetry } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { type CellRef, NotificationType, RequestType } from "@/protocol/mod.ts";
 import type { ProcessorRequest } from "@/backends/runtime-processor.ts";

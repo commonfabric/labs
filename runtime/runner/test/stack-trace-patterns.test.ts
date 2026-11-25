@@ -9,6 +9,7 @@
 import { assertEquals, assertMatch } from "@std/assert";
 
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -24,7 +25,7 @@ function makeProgram(source: string): RuntimeProgram {
   };
 }
 
-Deno.test("lift error through CTS pipeline has correct source line", async () => {
+test("lift error through CTS pipeline has correct source line", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL("http://localhost"),
@@ -100,7 +101,7 @@ Deno.test("lift error through CTS pipeline has correct source line", async () =>
   await storageManager.close();
 });
 
-Deno.test("handler error through CTS pipeline has correct source line", async () => {
+test("handler error through CTS pipeline has correct source line", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL("http://localhost"),
@@ -182,7 +183,7 @@ Deno.test("handler error through CTS pipeline has correct source line", async ()
   await storageManager.close();
 });
 
-Deno.test("lift error stack has multiple frames with correct source line", async () => {
+test("lift error stack has multiple frames with correct source line", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL("http://localhost"),
@@ -251,7 +252,7 @@ Deno.test("lift error stack has multiple frames with correct source line", async
   await storageManager.close();
 });
 
-Deno.test("mapWithPattern synthetic pattern callsite keeps authored source lines", async () => {
+test("mapWithPattern synthetic pattern callsite keeps authored source lines", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL("http://localhost"),

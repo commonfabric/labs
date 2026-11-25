@@ -10,6 +10,7 @@ import {
   cloneBanner,
   storeRootPath,
 } from "@/lib/clone-banner.ts";
+import { test } from "@commonfabric/test-support/test";
 
 if (env.ENV !== "test") {
   throw new Error("ENV must be 'test'");
@@ -35,7 +36,7 @@ async function withStore(
   }
 }
 
-Deno.test("a served clone is announced with its provenance", async () => {
+test("a served clone is announced with its provenance", async () => {
   await withStore((dir) => {
     const banner = cloneBanner({ memoryDir: toFileUrl(`${dir}/`).href })!;
     assert(banner !== null, "a marked store must produce a banner");
@@ -48,7 +49,7 @@ Deno.test("a served clone is announced with its provenance", async () => {
   }, { marker: MARKER_BODY });
 });
 
-Deno.test("announcing a clone emits the banner exactly once", async () => {
+test("announcing a clone emits the banner exactly once", async () => {
   // `announceCloneIfServed` is what `startServer` calls, so its emitting path
   // is the one production takes — the other cases here exercise `cloneBanner`
   // underneath it.
@@ -64,7 +65,7 @@ Deno.test("announcing a clone emits the banner exactly once", async () => {
   }, { marker: MARKER_BODY });
 });
 
-Deno.test("an ordinary store says nothing", async () => {
+test("an ordinary store says nothing", async () => {
   await withStore((dir) => {
     assertEquals(cloneBanner({ memoryDir: toFileUrl(`${dir}/`).href }), null);
 
@@ -77,7 +78,7 @@ Deno.test("an ordinary store says nothing", async () => {
   });
 });
 
-Deno.test("single-file mode looks beside the database file", async () => {
+test("single-file mode looks beside the database file", async () => {
   // DB_PATH names a file; the marker lives in its directory.
   await withStore((dir) => {
     assertEquals(storeRootPath({ dbPath: `${dir}/store.sqlite` }), dir);
@@ -86,7 +87,7 @@ Deno.test("single-file mode looks beside the database file", async () => {
   }, { marker: MARKER_BODY });
 });
 
-Deno.test("DB_PATH wins over MEMORY_DIR, as it does in the engine", async () => {
+test("DB_PATH wins over MEMORY_DIR, as it does in the engine", async () => {
   await withStore(async (marked) => {
     await withStore((plain) => {
       // Single-file mode is selected by DB_PATH; MEMORY_DIR is then unused, so
@@ -102,7 +103,7 @@ Deno.test("DB_PATH wins over MEMORY_DIR, as it does in the engine", async () => 
   }, { marker: MARKER_BODY });
 });
 
-Deno.test("a store configuration it cannot interpret is not an error", async () => {
+test("a store configuration it cannot interpret is not an error", async () => {
   // MEMORY_DIR comes from the environment and may be junk, remote, or absent.
   // None of that should stop a server from starting.
   assertEquals(storeRootPath({}), null);
@@ -121,7 +122,7 @@ Deno.test("a store configuration it cannot interpret is not an error", async () 
   }, { marker: MARKER_BODY });
 });
 
-Deno.test("an unreadable marker does not take the server down", async () => {
+test("an unreadable marker does not take the server down", async () => {
   // A directory where the marker file should be: readTextFile fails with
   // IsADirectory, not NotFound. The banner is diagnostic — it must degrade to
   // silence rather than propagate.

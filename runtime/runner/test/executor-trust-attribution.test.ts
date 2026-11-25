@@ -33,13 +33,19 @@
 //   writer and no gesture, reached by another handler's `send()` from a plain
 //   fire, mints the entry's actor.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type { StreamEventsDocValue } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime, type ServerRunInfo } from "../src/runtime.ts";
@@ -58,6 +64,12 @@ import {
   type StoredDocumentReader,
   storedLabelEntries,
 } from "./cfc-stored-labels.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("trust attribution space");
 const space = spaceSigner.did() as MemorySpace;

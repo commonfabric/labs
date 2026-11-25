@@ -6,7 +6,6 @@
  * failure record on the run rather than a silent absence.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -30,6 +29,7 @@ import {
   SPACE_DB_DID,
 } from "./support/space-db.ts";
 import { INERT_RUNSC } from "./support/inert-runsc.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A reference into the labelled cell, of the shape an input cell carries. */
 const LABELED_REF = `/${LABELED_CELL_ID}/value/secret`;

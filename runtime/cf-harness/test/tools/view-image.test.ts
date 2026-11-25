@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -12,6 +11,12 @@ import {
   createToolsSmallContext,
   type ToolsSmallContextOptions,
 } from "../support/tools-small-context.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const ONE_PIXEL_PNG = new Uint8Array([
   0x89,

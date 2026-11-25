@@ -14,8 +14,8 @@ import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { inboxPieceLinkSchema } from "@commonfabric/piece/ops";
 import type { Cell } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   clickCfButton,
   clickTrustedAction,

@@ -32,9 +32,14 @@
  * re-triggered it, the count a breaker on that session would have kept.
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { getLogger } from "@commonfabric/logger";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { RemoteEchoBreaker } from "../src/scheduler/echo-breaker.ts";
 import { gunzip } from "./traverse-replay/gzip.ts";

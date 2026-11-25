@@ -16,7 +16,6 @@
  * path a value takes: encoding, decoding, hashing and comparing.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { hashStringOf, isValidFabricValue, valueEqual } from "@";
@@ -33,6 +32,7 @@ import {
 import { FabricError } from "@/fabric-instances";
 import { FabricKeyPair } from "@/fabric-primitives";
 import { SIZE_GUARANTEES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Mock runtime for decode calls. */
 class MockRuntime extends BaseLiveEnvironment {

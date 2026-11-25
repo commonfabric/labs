@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type {
   BuiltInLLMMessage,
@@ -13,6 +12,7 @@ import {
   loadConversationFixture,
 } from "@commonfabric/llm/client";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
 import { createLLMFriendlyLink } from "../src/link-types.ts";

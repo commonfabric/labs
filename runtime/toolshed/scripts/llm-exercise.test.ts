@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { main, USAGE } from "./llm-exercise.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const API_URL = "http://toolshed.test";
 

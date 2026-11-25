@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 
 import { createObject, gunzipToText, gzipChunks, gzipText } from "./store.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function fetchStub(
   status: number,

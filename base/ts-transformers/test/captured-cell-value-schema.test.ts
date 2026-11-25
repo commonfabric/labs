@@ -5,11 +5,11 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callSchemas, parseModule } from "./transformed-ast.ts";
 import { transformFiles } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const CONTACT = "interface Contact { name: string }";
 

@@ -19,7 +19,6 @@
  * alone.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -40,6 +39,7 @@ import { FabricError, FabricLink } from "@/fabric-instances";
 import { FabricHash } from "@/fabric-primitives";
 
 import { ProblematicValue, UnknownValue } from "@/codec-common";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // deno-lint-ignore no-explicit-any
 const obj = (v: unknown) => v as any;

@@ -12,6 +12,7 @@ import type {
   RunHarnessTranscriptOptions,
 } from "../src/prompt-loop.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const nextIsoNow = () => {
   let counter = 0;
@@ -76,7 +77,7 @@ const startSession = async (
   });
 };
 
-Deno.test("interactive chat service system prompt", async (t) => {
+test("interactive chat service system prompt", async (t) => {
   await t.step(
     "seeds the configured system prompt as the first message of a turn",
     async () => {

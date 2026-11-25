@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { cfcLabelDocumentHash } from "../src/cfc/label-documents.ts";
@@ -9,6 +8,7 @@ import {
 } from "../src/cfc/metadata.ts";
 import { wholeValueLabel } from "../src/cfc/consumed-label.ts";
 import type { CfcMetadata, LabelMapEntry } from "../src/cfc/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** An atom saying `subject` wrote what it labels. */
 const by = (subject: string) => ({ kind: "authored-by", subject });

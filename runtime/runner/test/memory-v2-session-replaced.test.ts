@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
 import {
@@ -16,6 +15,7 @@ import {
 } from "@commonfabric/memory/v2";
 import type * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import type {
   IStorageProvider,
   MemorySpace,

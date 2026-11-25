@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -10,6 +9,7 @@ import {
   callsNamed,
   parseModule,
 } from "../../transformed-ast.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The module head that imports `action()` from `commonfabric`. */
 const IMPORTED_ACTION =

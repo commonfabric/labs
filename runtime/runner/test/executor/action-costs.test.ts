@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   ACTION_COSTS_LISTED,
   ActionCostTable,
@@ -10,6 +9,7 @@ import {
 import type { ServingActionCost } from "../../src/executor/stats.ts";
 import { RuntimeTelemetry } from "../../src/telemetry.ts";
 import { captureLogs } from "../support/captured-logs.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A run of the action `actionId` that took `durationMs`. */
 const run = (

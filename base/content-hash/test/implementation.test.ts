@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createHasher, sha256 } from "@commonfabric/content-hash";
+import { describe, it } from "@commonfabric/test-support/test";
 import { chooseImplementation } from "@/implementation.ts";
 import { createHasherDeno, sha256Deno } from "@/sha256-deno.ts";
 import { createHasherNoble, sha256Noble } from "@/sha256-noble.ts";

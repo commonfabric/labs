@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as runnerBoard from "./runner-board.ts";
 import type { LargerRunner, Runner } from "./runner-board.ts";
@@ -13,6 +12,7 @@ import * as runnerView from "./runner-view.ts";
 import { LIVE_PAGE_BADGE, LIVE_PAGE_STYLES } from "./live-page.ts";
 import { runnersPage, runnersScript } from "./runners-page.ts";
 import { RUNNERS_KEY_PATH, RUNNERS_SOCKET_PATH } from "./runners-paths.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The modules are imported whole, so that the case reading the script can
 // range over everything they export.

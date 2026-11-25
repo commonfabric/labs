@@ -15,7 +15,6 @@
 //   design — delegated scoped reads are fail-closed until grant
 //   resolution lands).
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -74,6 +73,13 @@ import { parseLink } from "../src/link-utils.ts";
 import { toURI } from "../src/uri-utils.ts";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
+import {
   newSharedServer,
   TEST_MEMORY_SERVER_AUTH,
   writeDeletionTombstone,
@@ -83,6 +89,13 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up. Auto-advance turns its reactivation
+// backoff into a runaway.
+useRealClock();
 
 // The route the toolshed serves the profile-create surface from, which is what
 // the surface's `system:` origin resolves against.

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { ValidationError } from "@cliffy/command";
@@ -10,6 +9,12 @@ import {
 } from "@commonfabric/pattern-index/membership";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import type { JoinResult } from "@commonfabric/pattern-index/join";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   admit,
   type IndexDeps,

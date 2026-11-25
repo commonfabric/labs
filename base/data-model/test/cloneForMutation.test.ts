@@ -13,7 +13,6 @@
  * situations is an error carrying enough detail for a caller to act on.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -24,6 +23,7 @@ import {
 } from "@";
 import { FabricError } from "@/fabric-instances";
 import { FabricEpochNsec } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("cloneForMutation()", () => {
   describe("empty path", () => {

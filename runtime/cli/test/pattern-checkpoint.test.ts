@@ -1,8 +1,8 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import type { PatternIndexPublishResponse } from "@commonfabric/pattern-index/client";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { checkpoint } from "../commands/pattern.ts";
 import type {
   DeployedSource,

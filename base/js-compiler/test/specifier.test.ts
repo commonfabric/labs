@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Source } from "../interface.ts";
 import {
@@ -8,6 +7,7 @@ import {
   resolveDeclaredDataFile,
   resolveImportSpecifier,
 } from "../specifier.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const from = (name: string): Source => ({ name, contents: "" });
 

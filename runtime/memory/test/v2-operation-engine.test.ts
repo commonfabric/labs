@@ -1,11 +1,11 @@
 import { ChangeSet } from "@codemirror/state";
 import { Database } from "@db/sqlite";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 import type { FabricValue } from "@commonfabric/api";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { taggedHashStringOf } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   applyCommit,
   applyWaveCommit,

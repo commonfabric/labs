@@ -4,6 +4,7 @@ import {
   rendererVDOMSchema,
   vnodeSchema,
 } from "../src/schemas.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const hasUndefinedType = (schema: unknown): boolean => {
   return !!(
@@ -40,7 +41,7 @@ const getArrayVariant = (
   ) as Record<string, unknown> | undefined;
 };
 
-Deno.test("rendererVDOMSchema allows undefined child entries", () => {
+test("rendererVDOMSchema allows undefined child entries", () => {
   const vdomRenderNode = (rendererVDOMSchema.$defs as Record<string, unknown>)
     .vdomRenderNode;
   assert(
@@ -49,7 +50,7 @@ Deno.test("rendererVDOMSchema allows undefined child entries", () => {
   );
 });
 
-Deno.test("debugVDOMSchema allows undefined child entries", () => {
+test("debugVDOMSchema allows undefined child entries", () => {
   const vdomRenderNode = (debugVDOMSchema.$defs as Record<string, unknown>)
     .vdomRenderNode;
   assert(
@@ -58,7 +59,7 @@ Deno.test("debugVDOMSchema allows undefined child entries", () => {
   );
 });
 
-Deno.test("rendererVDOMSchema child arrays recurse through vdomRenderNode", () => {
+test("rendererVDOMSchema child arrays recurse through vdomRenderNode", () => {
   const defs = rendererVDOMSchema.$defs as Record<string, unknown>;
   const vdomNode = defs.vdomNode as {
     properties: Record<string, unknown>;
@@ -102,7 +103,7 @@ Deno.test("rendererVDOMSchema child arrays recurse through vdomRenderNode", () =
   );
 });
 
-Deno.test("debugVDOMSchema child arrays recurse through vdomRenderNode", () => {
+test("debugVDOMSchema child arrays recurse through vdomRenderNode", () => {
   const defs = debugVDOMSchema.$defs as Record<string, unknown>;
   const vdomNode = defs.vdomNode as {
     properties: Record<string, unknown>;
@@ -143,7 +144,7 @@ Deno.test("debugVDOMSchema child arrays recurse through vdomRenderNode", () => {
   );
 });
 
-Deno.test("vnodeSchema allows undefined in render-node and prop-value unions", () => {
+test("vnodeSchema allows undefined in render-node and prop-value unions", () => {
   const defs = vnodeSchema.$defs as Record<string, unknown>;
   const renderNodeSchema = defs.RenderNode;
   const propsSchema = defs.Props as {

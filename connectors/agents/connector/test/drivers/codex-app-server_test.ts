@@ -6,8 +6,9 @@ import {
   resolveCodexAppServerLaunch,
 } from "../../src/drivers/codex-app-server.ts";
 import type { AgentDriver } from "../../src/types.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("Codex unrestricted turn policy requires explicit opt-in", () => {
+test("Codex unrestricted turn policy requires explicit opt-in", () => {
   const source = {
     id: "codex:default",
     driver: "codex-app-server" as const,
@@ -26,7 +27,7 @@ Deno.test("Codex unrestricted turn policy requires explicit opt-in", () => {
   );
 });
 
-Deno.test("Codex server approval requests fail closed without a user surface", () => {
+test("Codex server approval requests fail closed without a user surface", () => {
   assertEquals(
     codexServerRequestPolicy("item/commandExecution/requestApproval"),
     { decision: "decline" },
@@ -198,7 +199,7 @@ for line in sys.stdin:
         print(json.dumps(completion), flush=True)
 `;
 
-Deno.test("Codex launch modes distinguish private stdio and shared proxies", () => {
+test("Codex launch modes distinguish private stdio and shared proxies", () => {
   const source = {
     id: "codex:default",
     driver: "codex-app-server" as const,
@@ -266,7 +267,7 @@ Deno.test("Codex launch modes distinguish private stdio and shared proxies", () 
   );
 });
 
-Deno.test("managed Codex mode starts the daemon before opening its proxy", async () => {
+test("managed Codex mode starts the daemon before opening its proxy", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/fake-codex`;
   const log = `${dir}/launch.log`;
@@ -290,7 +291,7 @@ Deno.test("managed Codex mode starts the daemon before opening its proxy", async
   }
 });
 
-Deno.test("managed Codex bootstrap observes owner abort", async () => {
+test("managed Codex bootstrap observes owner abort", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/blocked-codex`;
   const readyFifo = `${dir}/bootstrap-ready`;
@@ -428,7 +429,7 @@ Deno.test("managed Codex bootstrap observes owner abort", async () => {
   }
 });
 
-Deno.test("Codex sources keep child environments isolated", async () => {
+test("Codex sources keep child environments isolated", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/fake-codex`;
   const firstLog = `${dir}/first-env.json`;
@@ -479,7 +480,7 @@ Deno.test("Codex sources keep child environments isolated", async () => {
   }
 });
 
-Deno.test("Codex driver enumerates persisted active and archived threads", async () => {
+test("Codex driver enumerates persisted active and archived threads", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/fake-codex`;
   await Deno.writeTextFile(server, FAKE_SERVER);
@@ -528,7 +529,7 @@ Deno.test("Codex driver enumerates persisted active and archived threads", async
   }
 });
 
-Deno.test("Codex driver declines colliding numeric approval requests without hanging", async () => {
+test("Codex driver declines colliding numeric approval requests without hanging", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/fake-codex`;
   const log = `${dir}/approval.log`;
@@ -569,7 +570,7 @@ Deno.test("Codex driver declines colliding numeric approval requests without han
   }
 });
 
-Deno.test("Codex reserves a session while a turn is starting", async () => {
+test("Codex reserves a session while a turn is starting", async () => {
   const directory = await Deno.makeTempDir();
   const server = `${directory}/blocked-prompt-server`;
   const readyPath = `${directory}/ready`;
@@ -610,7 +611,7 @@ Deno.test("Codex reserves a session while a turn is starting", async () => {
   }
 });
 
-Deno.test("Codex driver handles provider edge cases and cancellation", async () => {
+test("Codex driver handles provider edge cases and cancellation", async () => {
   const directory = await Deno.makeTempDir();
   const server = `${directory}/edge-server`;
   await Deno.writeTextFile(server, EDGE_CASE_SERVER);
@@ -710,7 +711,7 @@ Deno.test("Codex driver handles provider edge cases and cancellation", async () 
   }
 });
 
-Deno.test("managed Codex mode reports bootstrap stderr", async () => {
+test("managed Codex mode reports bootstrap stderr", async () => {
   const directory = await Deno.makeTempDir();
   const server = `${directory}/failed-server`;
   await Deno.writeTextFile(

@@ -2,9 +2,9 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { defaultTheme } from "../theme-context.ts";
 import { CFHeading } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** The heading container a mounted `cf-heading` at `level` renders. */
 async function headingAt(level: number): Promise<Element> {

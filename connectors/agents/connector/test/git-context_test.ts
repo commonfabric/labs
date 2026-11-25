@@ -4,6 +4,7 @@ import {
   GitContextResolver,
 } from "../src/git-context.ts";
 import type { NativeSessionSnapshot } from "../src/types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const GIT_OBSERVED_AT = "2026-08-21T00:00:00.000Z";
 const gitClock = () => new Date(GIT_OBSERVED_AT);
@@ -13,7 +14,7 @@ function result(stdout: string, code = 0) {
   return { code, stdout };
 }
 
-Deno.test("git context refreshes the repo and branch for every observation", async () => {
+test("git context refreshes the repo and branch for every observation", async () => {
   const calls: string[][] = [];
   let observation = 0;
   const runner: GitCommandRunner = (args) => {
@@ -77,7 +78,7 @@ Deno.test("git context refreshes the repo and branch for every observation", asy
   assertEquals(calls.length, 10);
 });
 
-Deno.test("git context deduplicates directories and roots within one observation", async () => {
+test("git context deduplicates directories and roots within one observation", async () => {
   const calls: string[] = [];
   const runner: GitCommandRunner = (args) => {
     const command = args.slice(2).join(" ");
@@ -136,7 +137,7 @@ Deno.test("git context deduplicates directories and roots within one observation
   );
 });
 
-Deno.test("git context falls back to origin and enriches a session snapshot", async () => {
+test("git context falls back to origin and enriches a session snapshot", async () => {
   const runner: GitCommandRunner = (args) => {
     const command = args.slice(2).join(" ");
     if (command === "rev-parse --show-toplevel") {
@@ -217,7 +218,7 @@ Deno.test("git context falls back to origin and enriches a session snapshot", as
   }]);
 });
 
-Deno.test("checkout observations accept a repository with unborn HEAD", async () => {
+test("checkout observations accept a repository with unborn HEAD", async () => {
   const calls: string[] = [];
   const resolver = new GitContextResolver(
     (args) => {
@@ -266,7 +267,7 @@ Deno.test("checkout observations accept a repository with unborn HEAD", async ()
   );
 });
 
-Deno.test("checkout observations skip an invalid worktree marker", async () => {
+test("checkout observations skip an invalid worktree marker", async () => {
   const resolver = new GitContextResolver(
     () => Promise.resolve(result("", 128)),
     gitClock,
@@ -282,7 +283,7 @@ Deno.test("checkout observations skip an invalid worktree marker", async () => {
   );
 });
 
-Deno.test("checkout validation reports a Git process failure", async () => {
+test("checkout validation reports a Git process failure", async () => {
   const resolver = new GitContextResolver(() =>
     Promise.reject(new Deno.errors.NotFound("git"))
   );
@@ -294,7 +295,7 @@ Deno.test("checkout validation reports a Git process failure", async () => {
   );
 });
 
-Deno.test("checkout observation reports a Git process failure", async () => {
+test("checkout observation reports a Git process failure", async () => {
   const resolver = new GitContextResolver(() =>
     Promise.reject(new Deno.errors.NotFound("git"))
   );
@@ -306,7 +307,7 @@ Deno.test("checkout observation reports a Git process failure", async () => {
   );
 });
 
-Deno.test("checkout observation rejects a missing worktree root", async () => {
+test("checkout observation rejects a missing worktree root", async () => {
   const resolver = new GitContextResolver(() => Promise.resolve(result("")));
 
   await assertRejects(
@@ -316,7 +317,7 @@ Deno.test("checkout observation rejects a missing worktree root", async () => {
   );
 });
 
-Deno.test("checkout observation rejects a failed Git command", async () => {
+test("checkout observation rejects a failed Git command", async () => {
   const resolver = new GitContextResolver((args) => {
     const command = args.slice(2).join(" ");
     return Promise.resolve(
@@ -333,7 +334,7 @@ Deno.test("checkout observation rejects a failed Git command", async () => {
   );
 });
 
-Deno.test("checkout validation accepts a canonical path alias", async () => {
+test("checkout validation accepts a canonical path alias", async () => {
   const resolver = new GitContextResolver(
     () => Promise.resolve(result("/private/tmp/repo\n")),
     gitClock,
@@ -343,7 +344,7 @@ Deno.test("checkout validation accepts a canonical path alias", async () => {
   assertEquals(await resolver.validateCheckout("/tmp/repo"), true);
 });
 
-Deno.test("checkout observations fail when Git metadata is incomplete", async () => {
+test("checkout observations fail when Git metadata is incomplete", async () => {
   const resolver = new GitContextResolver((args) => {
     const command = args.slice(2).join(" ");
     if (command === "rev-parse --show-toplevel") {
@@ -371,7 +372,7 @@ Deno.test("checkout observations fail when Git metadata is incomplete", async ()
   );
 });
 
-Deno.test("checkout observations pass cancellation to Git commands", async () => {
+test("checkout observations pass cancellation to Git commands", async () => {
   const controller = new AbortController();
   const reason = new Error("checkout observation cancelled");
   const resolver = new GitContextResolver((_args, signal) => {
@@ -391,7 +392,7 @@ Deno.test("checkout observations pass cancellation to Git commands", async () =>
   );
 });
 
-Deno.test("git context returns null fields outside a repository", async () => {
+test("git context returns null fields outside a repository", async () => {
   const resolver = new GitContextResolver(
     () => Promise.resolve(result("", 128)),
     gitClock,
@@ -415,7 +416,7 @@ Deno.test("git context returns null fields outside a repository", async () => {
   });
 });
 
-Deno.test("git context observes a repository created after an earlier lookup", async () => {
+test("git context observes a repository created after an earlier lookup", async () => {
   let lookup = 0;
   const runner: GitCommandRunner = (args) => {
     const command = args.slice(2).join(" ");
@@ -464,7 +465,7 @@ Deno.test("git context observes a repository created after an earlier lookup", a
   });
 });
 
-Deno.test("git context degrades when spawning git fails", async () => {
+test("git context degrades when spawning git fails", async () => {
   const resolver = new GitContextResolver(
     () => Promise.reject(new Deno.errors.NotFound("git")),
     gitClock,

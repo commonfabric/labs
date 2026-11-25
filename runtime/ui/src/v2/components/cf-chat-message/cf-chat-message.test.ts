@@ -1,12 +1,12 @@
 // First, so that the document it installs is there when Lit loads.
 import { mount } from "../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type {
   BuiltInLLMToolCallPart,
   BuiltInLLMToolResultPart,
 } from "@commonfabric/api";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { CFChatMessage } from "./index.ts";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { defaultTheme } from "../theme-context.ts";

@@ -18,6 +18,7 @@ import {
 import { diffSource } from "../lib/view/diffedit.ts";
 import { renderLineColored } from "../lib/view/highlight.ts";
 import { columns } from "../lib/view/width.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const MARKDOWN = [
   "# **Title** &amp;",
@@ -44,7 +45,7 @@ function press(session: Session, ...names: string[]): void {
   }
 }
 
-Deno.test("markdown rendered view formats blocks and inline content", () => {
+test("markdown rendered view formats blocks and inline content", () => {
   const lines = renderMarkdownLines(MARKDOWN);
   assertEquals(lines.length, MARKDOWN.split("\n").length);
   assertEquals(lines.map((line) => line.text), [
@@ -95,7 +96,7 @@ Deno.test("markdown rendered view formats blocks and inline content", () => {
   assert(lines[0].renderedSourceHidden, "heading levels remain diff-visible");
 });
 
-Deno.test("markdown rendered view handles setext, rules, images, and fenced tables", () => {
+test("markdown rendered view handles setext, rules, images, and fenced tables", () => {
   const lines = renderMarkdownLines([
     "```",
     "a | b",
@@ -154,7 +155,7 @@ Deno.test("markdown rendered view handles setext, rules, images, and fenced tabl
   );
 });
 
-Deno.test("markdown rendered view covers nested blocks and table alignment", () => {
+test("markdown rendered view covers nested blocks and table alignment", () => {
   const lines = renderMarkdownLines([
     "[target]: https://example.com",
     "> > nested **[quote][target]**",
@@ -189,7 +190,7 @@ Deno.test("markdown rendered view covers nested blocks and table alignment", () 
   assertEquals(lines[13].text, "");
 });
 
-Deno.test("markdown rendered view follows block containers and literal syntax", () => {
+test("markdown rendered view follows block containers and literal syntax", () => {
   const lines = renderMarkdownLines([
     "    a | b",
     "    --- | ---",
@@ -218,7 +219,7 @@ Deno.test("markdown rendered view follows block containers and literal syntax", 
   assertEquals(lines[4].spans[1]?.cls, "string");
 });
 
-Deno.test("markdown rendered view preserves nested and multiline structure", () => {
+test("markdown rendered view preserves nested and multiline structure", () => {
   const nested = renderMarkdownLines([
     "- outer",
     "  - inner",
@@ -262,7 +263,7 @@ Deno.test("markdown rendered view preserves nested and multiline structure", () 
   assert(comment.every((line) => line.renderedSourceHidden));
 });
 
-Deno.test("markdown rendered view keeps inline content on its source lines", () => {
+test("markdown rendered view keeps inline content on its source lines", () => {
   const code = renderMarkdownLines("`first\nsecond`");
   assertEquals(code.map((line) => line.text), ["first", "second"]);
   assert(code.every((line) => line.spans[0]?.cls === "string"));
@@ -331,7 +332,7 @@ Deno.test("markdown rendered view keeps inline content on its source lines", () 
   }
 });
 
-Deno.test("markdown rendered view strips multiline block HTML", () => {
+test("markdown rendered view strips multiline block HTML", () => {
   const source = [
     "<section",
     '  class="note">',
@@ -470,7 +471,7 @@ Deno.test("markdown rendered view strips multiline block HTML", () => {
   ]);
 });
 
-Deno.test("rendered Markdown diff keeps changed multiline HTML tags visible", () => {
+test("rendered Markdown diff keeps changed multiline HTML tags visible", () => {
   const oldSource = [
     "<section",
     '  class="old">',
@@ -509,7 +510,7 @@ index 1234..5678 100644
   assertEquals(doc.lines[7].renderedSourceHidden, undefined);
 });
 
-Deno.test("rendered Markdown diff keeps contextless fragments in source form", () => {
+test("rendered Markdown diff keeps contextless fragments in source form", () => {
   const diffText = `diff --git a/notes.md b/notes.md
 index 1234..5678 100644
 --- a/notes.md
@@ -535,7 +536,7 @@ index 1234..5678 100644
   assertEquals(doc.lines[6].text, "+**new**");
 });
 
-Deno.test("markdown rendered view composes lines without prebuilt spans", () => {
+test("markdown rendered view composes lines without prebuilt spans", () => {
   const composed = new markdownInternals.RichLine();
   composed.appendLine({
     text: "plain",
@@ -557,7 +558,7 @@ Deno.test("markdown rendered view composes lines without prebuilt spans", () => 
   assert(padded.every((line) => line.renderedSourceHidden));
 });
 
-Deno.test("markdown rendered view retains readable source when lexing fails", () => {
+test("markdown rendered view retains readable source when lexing fails", () => {
   const originalStaticLex = Lexer.lex;
   const originalInstanceLex = Lexer.prototype.lex;
   const throwLex = () => {
@@ -599,7 +600,7 @@ Deno.test("markdown rendered view retains readable source when lexing fails", ()
   );
 });
 
-Deno.test("markdown rendered view links a link's text, and a bare address, to where it points", () => {
+test("markdown rendered view links a link's text, and a bare address, to where it points", () => {
   const [line] = renderMarkdownLines(
     "See [the spec](https://example.com/spec) or https://example.org/x.",
   );
@@ -618,7 +619,7 @@ Deno.test("markdown rendered view links a link's text, and a bare address, to wh
   );
 });
 
-Deno.test("markdown rendered view marks a line that continues a paragraph across a soft break, and not across a hard one", () => {
+test("markdown rendered view marks a line that continues a paragraph across a soft break, and not across a hard one", () => {
   const lines = renderMarkdownLines(
     ["one", "two  ", "three", "", "four"].join("\n"),
   );
@@ -631,7 +632,7 @@ Deno.test("markdown rendered view marks a line that continues a paragraph across
   ]);
 });
 
-Deno.test("markdown rendered view gives a list item's and a quote's lines the indent their further rows hang at", () => {
+test("markdown rendered view gives a list item's and a quote's lines the indent their further rows hang at", () => {
   const lines = renderMarkdownLines(
     ["- first", "  more", "> - quoted", ">   on"].join("\n"),
   );
@@ -646,7 +647,7 @@ Deno.test("markdown rendered view gives a list item's and a quote's lines the in
   );
 });
 
-Deno.test("markdown rendered view marks the lines of code blocks and tables as preformatted, and prose as not", () => {
+test("markdown rendered view marks the lines of code blocks and tables as preformatted, and prose as not", () => {
   const lines = renderMarkdownLines(
     [
       "prose",
@@ -674,7 +675,7 @@ Deno.test("markdown rendered view marks the lines of code blocks and tables as p
   );
 });
 
-Deno.test("markdown rendered view handles incomplete block token data", () => {
+test("markdown rendered view handles incomplete block token data", () => {
   assertEquals(
     markdownInternals.renderBlockToken(
       { type: "space", raw: "\n" },
@@ -731,7 +732,7 @@ Deno.test("markdown rendered view handles incomplete block token data", () => {
   assertEquals(markdownInternals.tokenLineRange("\n\n", 0, [0, 1, 2]), null);
 });
 
-Deno.test("markdown rendered view handles incomplete list token data", () => {
+test("markdown rendered view handles incomplete list token data", () => {
   assertEquals(
     markdownInternals.renderListBlock(
       { type: "list", raw: "- item" },
@@ -789,7 +790,7 @@ Deno.test("markdown rendered view handles incomplete list token data", () => {
   );
 });
 
-Deno.test("markdown rendered view handles uncommon inline token shapes", () => {
+test("markdown rendered view handles uncommon inline token shapes", () => {
   const line = new markdownInternals.RichLine();
   markdownInternals.appendInlineTokens(
     line,
@@ -835,7 +836,7 @@ Deno.test("markdown rendered view handles uncommon inline token shapes", () => {
   }]);
 });
 
-Deno.test("markdown rendered view handles incomplete HTML, fences, and tables", () => {
+test("markdown rendered view handles incomplete HTML, fences, and tables", () => {
   assertEquals(
     markdownInternals.stripHtmlTags("plain <![CDATA[visible]]> <span"),
     "plain visible <span",
@@ -895,7 +896,7 @@ Deno.test("markdown rendered view handles incomplete HTML, fences, and tables", 
   assert(literalBackslashes[2].text.includes("a\\\\b"));
 });
 
-Deno.test("markdown rendered view handles malformed HTML boundaries", () => {
+test("markdown rendered view handles malformed HTML boundaries", () => {
   assertEquals(
     markdownInternals.htmlDeclarationRanges(
       "<!DOCTYPE",
@@ -1030,7 +1031,7 @@ Deno.test("markdown rendered view handles malformed HTML boundaries", () => {
   );
 });
 
-Deno.test("markdown rendered view preserves unusual Unicode token data", () => {
+test("markdown rendered view preserves unusual Unicode token data", () => {
   const loneLowSurrogateLexer = {
     inlineTokens: () => [{
       type: "text",
@@ -1117,7 +1118,7 @@ Deno.test("markdown rendered view preserves unusual Unicode token data", () => {
   );
 });
 
-Deno.test("markdown rendered view makes decoded controls inert", () => {
+test("markdown rendered view makes decoded controls inert", () => {
   const line = renderMarkdownLines(
     "safe&#27;[31mred&#7;&#127;\u0085",
   )[0];
@@ -1140,7 +1141,7 @@ Deno.test("markdown rendered view makes decoded controls inert", () => {
   );
 });
 
-Deno.test("session toggles Markdown between source and rendered views", () => {
+test("session toggles Markdown between source and rendered views", () => {
   const built = buildView(MARKDOWN, "notes.md");
   const session = new Session(
     built.doc,
@@ -1196,7 +1197,7 @@ Deno.test("session toggles Markdown between source and rendered views", () => {
   assertEquals(selectionSession.view().selected?.endCol, 7);
 });
 
-Deno.test("session can start rendered and recomputes visible search matches", () => {
+test("session can start rendered and recomputes visible search matches", () => {
   const text = "# A [visible target](hidden-destination)\n";
   const built = buildView(text, "notes.md");
   const session = new Session(
@@ -1228,7 +1229,7 @@ Deno.test("session can start rendered and recomputes visible search matches", ()
   assertEquals(session.doc.lines[0].text, text.trim());
 });
 
-Deno.test("session preserves wrapping while changing Markdown views", () => {
+test("session preserves wrapping while changing Markdown views", () => {
   const built = buildView(
     "# Title\nA long line of Markdown content.\n",
     "notes.md",
@@ -1265,7 +1266,7 @@ Deno.test("session preserves wrapping while changing Markdown views", () => {
   );
 });
 
-Deno.test("languages without a renderer remain in source view", () => {
+test("languages without a renderer remain in source view", () => {
   const built = buildView("const value = 1;\n", "value.ts");
   const session = new Session(
     built.doc,
@@ -1295,7 +1296,7 @@ const MARKDOWN_DIFF = `diff --git a/notes.md b/notes.md
 +# New *title*
 `;
 
-Deno.test("rendered Markdown diff retains markers, tints, and source topology", () => {
+test("rendered Markdown diff retains markers, tints, and source topology", () => {
   const built = buildView(MARKDOWN_DIFF, undefined, true);
   const rendered = built.editSource.render?.(built.doc);
   assert(rendered, "Markdown diff offers a rendered view");
@@ -1468,7 +1469,7 @@ Deno.test("rendered Markdown diff retains markers, tints, and source topology", 
   );
 });
 
-Deno.test("rendered Markdown diff restores hidden old-file source", () => {
+test("rendered Markdown diff restores hidden old-file source", () => {
   const diffText = `diff --git a/notes.md b/notes.md
 index 1234..5678 100644
 --- a/notes.md
@@ -1496,7 +1497,7 @@ index 1234..5678 100644
   assertEquals(rendered.lines[5].renderedSourceHidden, undefined);
 });
 
-Deno.test("rendered Markdown diff restores source with every span fallback", () => {
+test("rendered Markdown diff restores source with every span fallback", () => {
   const lines: Line[] = [
     {
       text: "-rendered",
@@ -1553,7 +1554,7 @@ Deno.test("rendered Markdown diff restores source with every span fallback", () 
   assertEquals(lines[2].spans.map((span) => span.cls), ["diffDel", "plain"]);
 });
 
-Deno.test("diff expansion rebuilds the active rendered Markdown view", () => {
+test("diff expansion rebuilds the active rendered Markdown view", () => {
   const fileText = "# Title\nalpha\nnew **value**\nomega\n";
   const diffText = `diff --git a/notes.md b/notes.md
 --- a/notes.md
@@ -1603,7 +1604,7 @@ Deno.test("diff expansion rebuilds the active rendered Markdown view", () => {
   );
 });
 
-Deno.test("markdown rendered view lines a table's rules up by the columns a terminal draws", () => {
+test("markdown rendered view lines a table's rules up by the columns a terminal draws", () => {
   const lines = renderMarkdownLines(
     "| a | b |\n|---|---|\n| 👍🏽 | x |\n| 日本 | y |\n| ❤️ | z |",
   );
@@ -1616,7 +1617,7 @@ Deno.test("markdown rendered view lines a table's rules up by the columns a term
   for (const at of rules) assertEquals(at, rules[0]);
 });
 
-Deno.test("markdown rendered view gives each line of a table its row's cells and alignment", () => {
+test("markdown rendered view gives each line of a table its row's cells and alignment", () => {
   const lines = renderMarkdownLines("| a | b |\n|---|---:|\n| x | y z |");
 
   assertEquals(lines.map((line) => line.table?.header), [true, false, false]);

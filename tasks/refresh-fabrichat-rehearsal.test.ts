@@ -1,9 +1,14 @@
 import { join, relative } from "@std/path";
 import { walk } from "@std/fs";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { refreshRehearsal } from "./refresh-fabrichat-rehearsal.ts";
 import type { Git } from "./repository-files.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const COMMIT = "c".repeat(40);
 

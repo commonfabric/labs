@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { spy } from "@std/testing/mock";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   createLocalJobApi,
@@ -9,6 +8,7 @@ import {
 import { LocalJobBrowserHost } from "../../src/local-jobs/browser-host.ts";
 import type { LocalJobProfile } from "../../src/local-jobs/profiles.ts";
 import { LocalJobStore } from "../../src/local-jobs/store.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TOKEN = "t0ken";
 

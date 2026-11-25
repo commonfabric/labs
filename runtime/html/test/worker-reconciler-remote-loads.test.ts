@@ -18,6 +18,8 @@ import {
 } from "@commonfabric/runner/cfc";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -68,7 +70,7 @@ function texts(ops: readonly VDomOp[]): string[] {
   return ops.flatMap((op) => op.op === "create-text" ? [op.text] : []);
 }
 
-Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
+test("render-time URL fetches keep the pre-family ceiling", async (t) => {
   const signer = await Identity.fromPassphrase(
     "worker reconciler remote loads",
   );
@@ -149,7 +151,7 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
     const cancel = reconciler.mount(
       runtime.getCell(owner, id).asSchema(rendererVDOMSchema) as never,
     );
-    await t.settle();
+    await clock.settle();
     return { collector, cancel };
   };
 
@@ -560,7 +562,7 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
         assertEquals(setProps(collector.all(), "src"), [ATTACKER_URL]);
         collector.clear();
         await seed(embedding, [owner, unscreened], outer);
-        await t.settle();
+        await clock.settle();
         const ops = collector.all();
         assertEquals(setProps(ops, "src"), []);
         assertEquals(
@@ -586,7 +588,7 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
         assertEquals(setProps(collector.all(), "src"), [ATTACKER_URL]);
         collector.clear();
         await seed(pixelView(), [owner, unscreened], id);
-        await t.settle();
+        await clock.settle();
         const ops = collector.all();
         assertEquals(setProps(ops, "src"), []);
         // The fetching element is gone or its src removed.
@@ -751,7 +753,7 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
     const cancel = reconciler.accessForTestingOnly.mountWithRemoteLoadsBlocked(
       vnode as never,
     );
-    await t.settle();
+    await clock.settle();
     return { collector, cancel };
   };
 
@@ -848,7 +850,7 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
         assertEquals(setProps(collector.all(), "style"), ["color: red"]);
         collector.clear();
         await seed(styled(`background: url(${ATTACKER_URL})`), [owner], id);
-        await t.settle();
+        await clock.settle();
         const ops = collector.all();
         assertEquals(setProps(ops, "style"), []);
         assertEquals(
@@ -884,7 +886,7 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
         assertEquals(setProps(collector.all(), "style"), ["color: red"]);
         collector.clear();
         await seed(styled(`background: url(${ATTACKER_URL})`), [owner], id);
-        await t.settle();
+        await clock.settle();
         const ops = collector.all();
         assertEquals(setProps(ops, "style"), []);
         assertEquals(
@@ -1008,7 +1010,7 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
         assertEquals(setProps(collector.all(), "src"), [ATTACKER_URL]);
         collector.clear();
         await seed(section("second"), [owner], outer);
-        await t.settle();
+        await clock.settle();
         const ops = collector.all();
         assertEquals(setProps(ops, "title").includes("second"), true);
         assertEquals(

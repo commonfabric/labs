@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { entityNameKey } from "../../src/scheduler/keys.ts";
 import {
@@ -14,6 +13,7 @@ import type {
 } from "../../src/scheduler/types.ts";
 import type { NormalizedFullLink } from "../../src/link-utils.ts";
 import type { IMemorySpaceAddress } from "../../src/storage/interface.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:materializer-writers";
 

@@ -1,8 +1,14 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 
 import {
   createNativeMemorySocket,
@@ -13,6 +19,13 @@ import {
   RemoteSessionFactory,
 } from "../src/storage/v2-remote-session.ts";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
+
+// This file runs on the real clock because it uses real WebSockets.
+// Auto-advance treats I/O in flight as idle time and can jump to the next lease
+// renewal, 58 minutes away, which can expire a challenge or an authenticated
+// principal before the request reaches the server. The tests wait on socket
+// events and round trips.
+useRealClock();
 
 const SPACE = "did:key:z6Mk-remote-server-flags" as MemorySpace;
 

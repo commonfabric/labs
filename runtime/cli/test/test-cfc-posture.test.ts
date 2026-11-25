@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { argv, cf } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("test-cfc-posture", () => {
   const fixture = resolve(

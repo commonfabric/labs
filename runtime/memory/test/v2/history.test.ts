@@ -1,10 +1,15 @@
 import { ChangeSet } from "@codemirror/state";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { SPACE_INVITES_REVISION_DOC_ID } from "../../space-invites.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   type BranchName,
   encodeMemoryBoundary,

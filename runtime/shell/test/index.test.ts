@@ -10,10 +10,15 @@
  * commands, `Navigation`, and the address the `hashchange` listeners read.
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type Stub, stub } from "@std/testing/mock";
 import { Identity, KeyStore } from "@commonfabric/identity";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { installBrowserGlobals, installGlobals } from "./browser-globals.ts";
 import type * as EnvModule from "../src/lib/env.ts";

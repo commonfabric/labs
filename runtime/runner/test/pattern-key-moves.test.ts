@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { existsSync, walkSync } from "@std/fs";
 import { fromFileUrl, relative } from "@std/path";
@@ -16,6 +15,7 @@ import {
   resolveSystemPatternSource,
 } from "../src/pattern-source-scheme.ts";
 import { classifyPieceOriginString } from "../src/piece-origin-kind.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const repository = fromFileUrl(new URL("../../../", import.meta.url));
 const patterns = `${repository}patterns`;

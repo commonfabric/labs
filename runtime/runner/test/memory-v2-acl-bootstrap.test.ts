@@ -16,6 +16,7 @@ import {
   selectDocHead,
 } from "@commonfabric/memory/v2/engine";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { test } from "@commonfabric/test-support/test";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type Options,
@@ -137,7 +138,7 @@ const createServer = (
     subscriptionRefreshDelayMs: 0,
   });
 
-Deno.test("storage manager uses one session id across spaces and isolates managers", async () => {
+test("storage manager uses one session id across spaces and isolates managers", async () => {
   const alice = await Identity.fromPassphrase("manager session alice");
   const bob = await Identity.fromPassphrase("manager session bob");
   const firstSpace = "did:key:z6Mk-manager-session-first" as MemorySpace;
@@ -206,7 +207,7 @@ Deno.test("storage manager uses one session id across spaces and isolates manage
   }
 });
 
-Deno.test("storage ACL bootstrap claims a fresh home space privately", async () => {
+test("storage ACL bootstrap claims a fresh home space privately", async () => {
   const user = await Identity.fromPassphrase("acl bootstrap home user");
   const space = user.did();
   const server = createServer("runner-acl-bootstrap-home");
@@ -225,7 +226,7 @@ Deno.test("storage ACL bootstrap claims a fresh home space privately", async () 
   }
 });
 
-Deno.test("storage ACL bootstrap leaves a populated home space without an ACL as it stands", async () => {
+test("storage ACL bootstrap leaves a populated home space without an ACL as it stands", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "runner-acl-bootstrap-home-legacy-",
   });
@@ -263,7 +264,7 @@ Deno.test("storage ACL bootstrap leaves a populated home space without an ACL as
   }
 });
 
-Deno.test("storage ACL bootstrap does not recreate a retracted home ACL, which fails closed for its user", async () => {
+test("storage ACL bootstrap does not recreate a retracted home ACL, which fails closed for its user", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "runner-acl-bootstrap-home-retracted-",
   });
@@ -316,7 +317,7 @@ Deno.test("storage ACL bootstrap does not recreate a retracted home ACL, which f
   }
 });
 
-Deno.test("storage ACL bootstrap leaves populated named spaces public", async () => {
+test("storage ACL bootstrap leaves populated named spaces public", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "runner-acl-bootstrap-named-legacy-",
   });
@@ -354,7 +355,7 @@ Deno.test("storage ACL bootstrap leaves populated named spaces public", async ()
   }
 });
 
-Deno.test("opening a DID with no history writes nothing, and nothing can be written to it", async () => {
+test("opening a DID with no history writes nothing, and nothing can be written to it", async () => {
   const user = await Identity.fromPassphrase("acl bootstrap unused did user");
   const space = (await Identity.generate()).did();
   const server = createServer("runner-acl-bootstrap-unused-did");
@@ -395,7 +396,7 @@ Deno.test("opening a DID with no history writes nothing, and nothing can be writ
   }
 });
 
-Deno.test("createSpace writes its ACL as the new space's first and only commit, signed as the space", async () => {
+test("createSpace writes its ACL as the new space's first and only commit, signed as the space", async () => {
   const user = await Identity.fromPassphrase("acl create user");
   const server = createServer("runner-acl-create");
   const factory = new RecordingLoopbackSessionFactory(server);
@@ -423,7 +424,7 @@ Deno.test("createSpace writes its ACL as the new space's first and only commit, 
   }
 });
 
-Deno.test("createSpace returns the space its genesis created when the creating session's revocation reaches the client before the send settles", async () => {
+test("createSpace returns the space its genesis created when the creating session's revocation reaches the client before the send settles", async () => {
   // An ACL that does not name the space's key revokes the creating session
   // right after the genesis commit's verdict. Over this transport the verdict
   // and then the revocation reach the client before the commit's send
@@ -446,7 +447,7 @@ Deno.test("createSpace returns the space its genesis created when the creating s
   }
 });
 
-Deno.test("createSpace releases the new space's key from a shared connection", async () => {
+test("createSpace releases the new space's key from a shared connection", async () => {
   // A router counts every principal a shared connection authenticates; each
   // creation's key would otherwise stay counted until the connection ends.
   const user = await Identity.fromPassphrase("acl create release user");
@@ -494,7 +495,7 @@ Deno.test("createSpace releases the new space's key from a shared connection", a
   }
 });
 
-Deno.test("createSpace gives every space a new DID", async () => {
+test("createSpace gives every space a new DID", async () => {
   const user = await Identity.fromPassphrase("acl create twice user");
   const server = createServer("runner-acl-create-twice");
   const manager = TestStorageManager.overServer(
@@ -513,7 +514,7 @@ Deno.test("createSpace gives every space a new DID", async () => {
   }
 });
 
-Deno.test("createSpace grants nobody but the creator, unless the document says so", async () => {
+test("createSpace grants nobody but the creator, unless the document says so", async () => {
   const user = await Identity.fromPassphrase("acl create private user");
   const guest = await Identity.fromPassphrase("acl create private guest");
   const server = createServer("runner-acl-create-private");
@@ -559,7 +560,7 @@ Deno.test("createSpace grants nobody but the creator, unless the document says s
   }
 });
 
-Deno.test("createSpace rejects a document the server refuses, and the space stays uninitialized", async () => {
+test("createSpace rejects a document the server refuses, and the space stays uninitialized", async () => {
   const user = await Identity.fromPassphrase("acl create refused user");
   const server = createServer("runner-acl-create-refused");
   const factory = new RecordingLoopbackSessionFactory(server);
@@ -579,7 +580,7 @@ Deno.test("createSpace rejects a document the server refuses, and the space stay
   }
 });
 
-Deno.test("a manager reused after close() mounts its NEW session id (no stale detached resume survives close)", async () => {
+test("a manager reused after close() mounts its NEW session id (no stale detached resume survives close)", async () => {
   const user = await Identity.fromPassphrase("acl genesis reuse user");
   const server = createServer("runner-acl-genesis-reuse");
   const factory = new RecordingLoopbackSessionFactory(server);
@@ -606,7 +607,7 @@ Deno.test("a manager reused after close() mounts its NEW session id (no stale de
   }
 });
 
-Deno.test("createSpace reserves a custom root in the genesis commit, typed links intact", async () => {
+test("createSpace reserves a custom root in the genesis commit, typed links intact", async () => {
   const user = await Identity.fromPassphrase("root link snapshot user");
   const server = createServer("root-link-snapshot");
   const factory = new RecordingLoopbackSessionFactory(server);
@@ -635,7 +636,7 @@ Deno.test("createSpace reserves a custom root in the genesis commit, typed links
   }
 });
 
-Deno.test("a mount that declares a root intent must match the space's reserved root", async () => {
+test("a mount that declares a root intent must match the space's reserved root", async () => {
   const user = await Identity.fromPassphrase("root intent user");
   const server = createServer("root-intent");
   const genesisRoot = {
@@ -680,7 +681,7 @@ Deno.test("a mount that declares a root intent must match the space's reserved r
   }
 });
 
-Deno.test("createSpace refuses a root on a host that does not advertise reservations, and writes nothing", async () => {
+test("createSpace refuses a root on a host that does not advertise reservations, and writes nothing", async () => {
   const user = await Identity.fromPassphrase(
     "unsupported genesis root manager",
   );
@@ -723,7 +724,7 @@ Deno.test("createSpace refuses a root on a host that does not advertise reservat
   }
 });
 
-Deno.test("createSpace declares a kind in the genesis commit, which spaceKind() reads back as a member and reads as absent from a space declaring none", async () => {
+test("createSpace declares a kind in the genesis commit, which spaceKind() reads back as a member and reads as absent from a space declaring none", async () => {
   const user = await Identity.fromPassphrase("space kind manager");
   const member = await Identity.fromPassphrase("space kind member");
   const server = createServer("space-kind-genesis");
@@ -754,7 +755,7 @@ Deno.test("createSpace declares a kind in the genesis commit, which spaceKind() 
   }
 });
 
-Deno.test("spaceKind() reads the kind of a space whose genesis commits after the reader first opened it, opening one session of its own to do so", async () => {
+test("spaceKind() reads the kind of a space whose genesis commits after the reader first opened it, opening one session of its own to do so", async () => {
   const member = await Identity.fromPassphrase("space kind early reader");
   const server = createServer("space-kind-early-reader");
   const factory = new RecordingLoopbackSessionFactory(server);
@@ -795,7 +796,7 @@ Deno.test("spaceKind() reads the kind of a space whose genesis commits after the
   }
 });
 
-Deno.test("spaceKind() throws for a space whose access list admits the reader to nothing", async () => {
+test("spaceKind() throws for a space whose access list admits the reader to nothing", async () => {
   const user = await Identity.fromPassphrase("space kind refusing owner");
   const stranger = await Identity.fromPassphrase("space kind stranger");
   const server = createServer("space-kind-refused");
@@ -821,7 +822,7 @@ Deno.test("spaceKind() throws for a space whose access list admits the reader to
   }
 });
 
-Deno.test("createSpace refuses a kind on a host that does not advertise space kinds, and writes nothing; spaceKind() throws there", async () => {
+test("createSpace refuses a kind on a host that does not advertise space kinds, and writes nothing; spaceKind() throws there", async () => {
   const user = await Identity.fromPassphrase("unsupported space kind manager");
   const server = createServer("unsupported-space-kind");
   class UnadvertisedKindFactory extends RecordingLoopbackSessionFactory {
@@ -865,7 +866,7 @@ Deno.test("createSpace refuses a kind on a host that does not advertise space ki
   }
 });
 
-Deno.test("runtime.createSpace names the runtime's identity OWNER beside the grants", async () => {
+test("runtime.createSpace names the runtime's identity OWNER beside the grants", async () => {
   const user = await Identity.fromPassphrase("runtime create user");
   const server = createServer("runtime-create");
   const manager = TestStorageManager.overServer(
@@ -894,7 +895,7 @@ Deno.test("runtime.createSpace names the runtime's identity OWNER beside the gra
   }
 });
 
-Deno.test("a READ member can cold-start a shared piece without persisting its scoped default", async () => {
+test("a READ member can cold-start a shared piece without persisting its scoped default", async () => {
   const owner = await Identity.fromPassphrase("scoped-default-acl-owner");
   const reader = await Identity.fromPassphrase("scoped-default-acl-reader");
   const server = createServer("scoped-default-read-only-start");

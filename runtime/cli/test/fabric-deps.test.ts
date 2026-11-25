@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { InMemoryProgram } from "@commonfabric/js-compiler";
@@ -11,6 +10,12 @@ import { collectLocalProgram } from "../lib/dev.ts";
 import { pinProgramFabricImports } from "../lib/fabric-deps.ts";
 import { argv, cf, stripAnsi } from "./utils.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const signer = await Identity.fromPassphrase("cli fabric deps test");
 const space = signer.did();

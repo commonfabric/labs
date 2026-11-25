@@ -23,7 +23,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
@@ -32,6 +31,12 @@ import type { Runtime } from "@commonfabric/runner";
 import { createTrustResolver } from "@commonfabric/runner/cfc";
 import type { Options as StorageOptions } from "@commonfabric/runner/storage/cache";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { RuntimeClients } from "@/backends/client-registry.ts";
 import { RuntimeProcessor } from "@/backends/runtime-processor.ts";

@@ -7,9 +7,9 @@
  * rather than the answer, and the three would be free to drift apart again.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   requiredEventFieldsOwed,
   verbRunsWithoutPayload,

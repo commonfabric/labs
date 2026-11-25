@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";
 import {
   refreshTrackedGraph,

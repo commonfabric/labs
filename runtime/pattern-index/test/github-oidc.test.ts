@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { mintGithubOidcToken } from "../src/github-oidc.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ENV: Record<string, string> = {
   ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.test/token?api-version=2.0",

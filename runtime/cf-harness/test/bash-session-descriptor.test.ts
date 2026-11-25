@@ -16,6 +16,7 @@ import {
   CFC_ENFORCEMENT_MODES,
   type CfcEnforcementMode,
 } from "@commonfabric/runner/cfc";
+import { test } from "@commonfabric/test-support/test";
 
 import { CfHarnessEngine } from "../src/engine.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
@@ -74,7 +75,7 @@ const SESSIONS_USABLE: Readonly<Record<CfcEnforcementMode, boolean>> = {
   "enforce-strict": false,
 };
 
-Deno.test("the table covers every enforcement mode", () => {
+test("the table covers every enforcement mode", () => {
   assertEquals(
     Object.keys(SESSIONS_USABLE).sort(),
     [...CFC_ENFORCEMENT_MODES].sort(),
@@ -84,7 +85,7 @@ Deno.test("the table covers every enforcement mode", () => {
 for (const mode of CFC_ENFORCEMENT_MODES) {
   const run = { cfcEnforcementMode: mode };
 
-  Deno.test(`the bash descriptor for a runtime without sessions is main's, byte for byte, under ${mode}`, () => {
+  test(`the bash descriptor for a runtime without sessions is main's, byte for byte, under ${mode}`, () => {
     assertEquals(
       JSON.stringify(bashToolDescriptorForRuntime(sessionlessDescription, run)),
       MAIN_BASH_DESCRIPTOR_JSON,
@@ -108,7 +109,7 @@ for (const mode of CFC_ENFORCEMENT_MODES) {
   });
 
   if (SESSIONS_USABLE[mode]) {
-    Deno.test(`the bash descriptor for a runtime with sessions adds \`session\` and nothing else under ${mode}`, () => {
+    test(`the bash descriptor for a runtime with sessions adds \`session\` and nothing else under ${mode}`, () => {
       const descriptor = bashToolDescriptorForRuntime(runscDescription, run);
       const schema = descriptor.inputSchema as {
         properties: Record<string, Record<string, unknown>>;
@@ -146,7 +147,7 @@ for (const mode of CFC_ENFORCEMENT_MODES) {
       );
     });
   } else {
-    Deno.test(`the bash descriptor for a runtime with sessions is main's, byte for byte, under ${mode}, which refuses every session`, () => {
+    test(`the bash descriptor for a runtime with sessions is main's, byte for byte, under ${mode}, which refuses every session`, () => {
       assertEquals(
         JSON.stringify(bashToolDescriptorForRuntime(runscDescription, run)),
         MAIN_BASH_DESCRIPTOR_JSON,
@@ -161,7 +162,7 @@ for (const mode of CFC_ENFORCEMENT_MODES) {
   }
 }
 
-Deno.test("the descriptor a caller reads off the tool with no run in hand is main's", () => {
+test("the descriptor a caller reads off the tool with no run in hand is main's", () => {
   assertEquals(JSON.stringify(bashToolDescriptor), MAIN_BASH_DESCRIPTOR_JSON);
   assertEquals(JSON.stringify(bashTool.descriptor), MAIN_BASH_DESCRIPTOR_JSON);
 });
@@ -264,13 +265,13 @@ const toolsSentToTheModel = async (
   return bodies[0].tools ?? [];
 };
 
-Deno.test("a run on a runtime without sessions sends the model main's bash tool", async () => {
+test("a run on a runtime without sessions sends the model main's bash tool", async () => {
   const tools = await toolsSentToTheModel(sessionlessDescription);
   assertEquals(tools.map((tool) => tool.name), ["bash", "read_file"]);
   assertEquals(JSON.stringify(tools[0]), MAIN_BASH_WIRE_TOOL_JSON);
 });
 
-Deno.test("a run on a runtime with sessions sends the model a bash tool that takes `session`", async () => {
+test("a run on a runtime with sessions sends the model a bash tool that takes `session`", async () => {
   const withSessions = await toolsSentToTheModel(runscDescription, "observe");
   const without = await toolsSentToTheModel(sessionlessDescription, "observe");
   assertEquals(withSessions.map((tool) => tool.name), ["bash", "read_file"]);
@@ -288,7 +289,7 @@ Deno.test("a run on a runtime with sessions sends the model a bash tool that tak
   assertEquals(JSON.stringify(withSessions[1]), JSON.stringify(without[1]));
 });
 
-Deno.test("a run in the default mode on a runtime with sessions sends the model main's bash tool", async () => {
+test("a run in the default mode on a runtime with sessions sends the model main's bash tool", async () => {
   // The default mode enforces, and an enforcing run can use no session: a
   // `session` offered here would be refused on every call.
   const tools = await toolsSentToTheModel(runscDescription);

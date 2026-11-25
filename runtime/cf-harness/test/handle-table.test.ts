@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   ADDRESS_HANDLE_TOKEN_PREFIX,
@@ -22,6 +21,7 @@ import {
   swapLinksForTokens,
   swapTokensForRefs,
 } from "../src/handle-table.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HASH_A = "A".repeat(43);
 const HASH_B = "B".repeat(43);

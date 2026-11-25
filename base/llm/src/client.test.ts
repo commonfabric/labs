@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { fromFileUrl } from "@std/path";
@@ -33,6 +32,7 @@ import {
   type LLMRequest,
   type LLMResponse,
 } from "./types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const GUARD_MESSAGE =
   "LLMClient: live LLM calls are blocked in test environments.";

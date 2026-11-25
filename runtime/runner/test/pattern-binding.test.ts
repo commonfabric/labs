@@ -3,7 +3,6 @@ import {
   setContentAddressedSchemasConfig,
 } from "../src/schema-doc-config.ts";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
 import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
@@ -15,6 +14,12 @@ import {
   setServerExecutionConfig,
 } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { isAliasBinding } from "../src/alias-binding.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";

@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { BuiltInLLMMessage } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
@@ -16,6 +15,12 @@ import {
   LLMClient,
   loadConversationFixture,
 } from "@commonfabric/llm/client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";

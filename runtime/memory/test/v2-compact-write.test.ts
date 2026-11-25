@@ -6,7 +6,6 @@
  * stay refused against the tool's own output rather than a hand transform.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { relative, toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
@@ -43,6 +42,12 @@ import {
   planCompaction,
   refusals,
 } from "../v2/compact.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6MkTestSpace";
 const ACL = `of:${SPACE}`;

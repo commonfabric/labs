@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
@@ -25,6 +24,14 @@ import {
   setServerExecutionConfig,
   streamEntriesDocId,
 } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
+
+// This file runs on the real clock because it drives a live memory server and
+// waits on transport edges with bounded timeouts; its retry path's catch-up
+// rides those edges, not logical time, and auto-advance would fire the retry
+// backoff as fast as it arms.
+useRealClock();
 
 class LoopbackSessionFactory implements SessionFactory {
   readonly #serverForSpace: (

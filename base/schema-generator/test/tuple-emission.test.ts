@@ -12,10 +12,10 @@
  * added, gate that pruning first — then update these pins.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import { getTypeFromCode } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 async function generate(code: string, typeName: string) {
   const generator = new SchemaGenerator();

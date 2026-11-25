@@ -2,10 +2,10 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFTab } from "../cf-tab/index.ts";
 import { CFTabList } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A list mounted with `properties`, holding two tabs and a divider. */
 async function listWith(properties: Partial<CFTabList> = {}) {

@@ -3,10 +3,16 @@ import { decodeBase64 } from "@std/encoding/base64";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import type { CfcLabelView, CfcSandboxResult } from "@commonfabric/runner/cfc";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
 
 import { createHarnessCfcInvocationContext } from "../src/contracts/cfc-invocation-context.ts";
 import type {
@@ -308,7 +314,7 @@ const digestText = async (text: string): Promise<string> => {
   }`;
 };
 
-Deno.test("bash tool executes the command through the sandbox shell runtime", async () => {
+test("bash tool executes the command through the sandbox shell runtime", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "ok\n",
     stderr: "",
@@ -359,7 +365,7 @@ Deno.test("bash tool executes the command through the sandbox shell runtime", as
 // recoverable vs fatal tool-boundary narrowing (D9 / cf-review)
 //
 
-Deno.test("bash tool: a SandboxPathEscapeError on cwd is a recoverable result, not a throw", async () => {
+test("bash tool: a SandboxPathEscapeError on cwd is a recoverable result, not a throw", async () => {
   class PathEscapeSandbox extends FakeSandboxRuntime {
     override resolvePath(path: string, cwd = this.defaultWorkingDirectory()) {
       if (!this.isPathWithinWorkspace(path)) {
@@ -387,7 +393,7 @@ Deno.test("bash tool: a SandboxPathEscapeError on cwd is a recoverable result, n
   assertEquals(output.cwd, "/workspace");
 });
 
-Deno.test("bash tool: a non-escape resolvePath failure stays fatal (rethrows)", async () => {
+test("bash tool: a non-escape resolvePath failure stays fatal (rethrows)", async () => {
   class CorruptResolveSandbox extends FakeSandboxRuntime {
     override resolvePath(): string {
       // NOT a path escape — a corrupt-runtime/invariant failure that must not
@@ -403,7 +409,7 @@ Deno.test("bash tool: a non-escape resolvePath failure stays fatal (rethrows)", 
   );
 });
 
-Deno.test("bash tool: a ProcessTimeoutError from runShell is a recoverable result", async () => {
+test("bash tool: a ProcessTimeoutError from runShell is a recoverable result", async () => {
   class TimeoutRunShellSandbox extends FakeSandboxRuntime {
     override runShell(): Promise<SandboxCommandResult> {
       return Promise.reject(
@@ -423,7 +429,7 @@ Deno.test("bash tool: a ProcessTimeoutError from runShell is a recoverable resul
   assertEquals(output.stderr.includes("process timed out after"), false);
 });
 
-Deno.test("bash tool: a ProcessTimeoutError during CFC-context setup stays fatal", async () => {
+test("bash tool: a ProcessTimeoutError during CFC-context setup stays fatal", async () => {
   const sandbox = new FakeSandboxRuntime();
   const context = createContext(sandbox);
   // The invocation context is built (and run state persisted) BEFORE runShell.
@@ -440,7 +446,7 @@ Deno.test("bash tool: a ProcessTimeoutError during CFC-context setup stays fatal
   assertEquals(sandbox.calls.length, 0);
 });
 
-Deno.test("bash tool preserves currentDir inside a configured Fabric mount", async () => {
+test("bash tool preserves currentDir inside a configured Fabric mount", async () => {
   const sandbox = new MultiRootFakeSandboxRuntime([{
     stdout: "__CF_HARNESS_CWD__run-1:bash:1__/fabric/home",
     stderr: "",
@@ -455,7 +461,7 @@ Deno.test("bash tool preserves currentDir inside a configured Fabric mount", asy
   assertEquals(context.currentDir, "/fabric/home");
 });
 
-Deno.test("bash tool allows curl to localhost through the sandbox shell runtime", async () => {
+test("bash tool allows curl to localhost through the sandbox shell runtime", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "pong\n",
     stderr: "",
@@ -481,7 +487,7 @@ Deno.test("bash tool allows curl to localhost through the sandbox shell runtime"
   }]);
 });
 
-Deno.test("bash tool denies curl to non-localhost targets before sandbox execution", async () => {
+test("bash tool denies curl to non-localhost targets before sandbox execution", async () => {
   const sandbox = new FakeSandboxRuntime();
   const context = createContext(sandbox, "/workspace/old");
   const output = await bashTool.invoke(context, {
@@ -501,7 +507,7 @@ Deno.test("bash tool denies curl to non-localhost targets before sandbox executi
   assertEquals(context.currentDir, "/workspace/new");
 });
 
-Deno.test("bash tool updates currentDir in enforce mode from observed CFC stdout", async () => {
+test("bash tool updates currentDir in enforce mode from observed CFC stdout", async () => {
   const outputId = createToolOutputId("run-1", "bash", 1);
   const cwdMarker = `__CF_HARNESS_CWD__${outputId}__`;
   const sandbox = new FakeSandboxRuntime([{
@@ -552,7 +558,7 @@ const createBrowserContext = (
     browserAccess,
   );
 
-Deno.test("browser tool runs one agent-browser action attached to the lease endpoint", async () => {
+test("browser tool runs one agent-browser action attached to the lease endpoint", async () => {
   const hostRunner = new FakeProcessRunner([{
     stdout: '- heading "Example"\n',
     stderr: "",
@@ -581,7 +587,7 @@ Deno.test("browser tool runs one agent-browser action attached to the lease endp
   }]);
 });
 
-Deno.test("browser tool surfaces success-path stderr as detail", async () => {
+test("browser tool surfaces success-path stderr as detail", async () => {
   const hostRunner = new FakeProcessRunner([{
     stdout: "https://example.com/\n",
     stderr: "warning: slow page\n",
@@ -602,7 +608,7 @@ Deno.test("browser tool surfaces success-path stderr as detail", async () => {
   });
 });
 
-Deno.test("browser tool refuses an action when the run has no Browser Access lease", async () => {
+test("browser tool refuses an action when the run has no Browser Access lease", async () => {
   const hostRunner = new FakeProcessRunner();
   const context = createBrowserContext(hostRunner, undefined);
 
@@ -620,7 +626,7 @@ Deno.test("browser tool refuses an action when the run has no Browser Access lea
   });
 });
 
-Deno.test("browser tool refuses an expired Browser Access lease", async () => {
+test("browser tool refuses an expired Browser Access lease", async () => {
   const hostRunner = new FakeProcessRunner();
   const context = createBrowserContext(hostRunner, {
     ...BROWSER_LEASE,
@@ -640,7 +646,7 @@ Deno.test("browser tool refuses an expired Browser Access lease", async () => {
   });
 });
 
-Deno.test("browser tool refuses a lease whose CDP endpoint is not a local origin", async () => {
+test("browser tool refuses a lease whose CDP endpoint is not a local origin", async () => {
   const hostRunner = new FakeProcessRunner();
   const context = createBrowserContext(hostRunner, {
     ...BROWSER_LEASE,
@@ -660,7 +666,7 @@ Deno.test("browser tool refuses a lease whose CDP endpoint is not a local origin
   });
 });
 
-Deno.test("browser tool refuses input outside its action vocabulary before touching the host", async () => {
+test("browser tool refuses input outside its action vocabulary before touching the host", async () => {
   const hostRunner = new FakeProcessRunner();
   const context = createBrowserContext(hostRunner, BROWSER_LEASE);
 
@@ -686,7 +692,7 @@ Deno.test("browser tool refuses input outside its action vocabulary before touch
   });
 });
 
-Deno.test("browser tool defaults and caps host timeouts", async () => {
+test("browser tool defaults and caps host timeouts", async () => {
   const hostRunner = new FakeProcessRunner([
     { stdout: "", stderr: "", exitCode: 0 },
     { stdout: "", stderr: "", exitCode: 0 },
@@ -705,7 +711,7 @@ Deno.test("browser tool defaults and caps host timeouts", async () => {
   ]);
 });
 
-Deno.test("browser tool caps returned output", async () => {
+test("browser tool caps returned output", async () => {
   const hostRunner = new FakeProcessRunner([{
     stdout: "x".repeat(20_010),
     stderr: "",
@@ -724,7 +730,7 @@ Deno.test("browser tool caps returned output", async () => {
   });
 });
 
-Deno.test("browser tool reports a nonzero exit as command_failed with the failure text", async () => {
+test("browser tool reports a nonzero exit as command_failed with the failure text", async () => {
   const hostRunner = new FakeProcessRunner([{
     stdout: "",
     stderr: "error: ref @e5 not found\n",
@@ -746,7 +752,7 @@ Deno.test("browser tool reports a nonzero exit as command_failed with the failur
   });
 });
 
-Deno.test("browser tool falls back to resolving the current dir when no workspace host path is known", async () => {
+test("browser tool falls back to resolving the current dir when no workspace host path is known", async () => {
   const hostRunner = new FakeProcessRunner([{
     stdout: "",
     stderr: "",
@@ -764,7 +770,7 @@ Deno.test("browser tool falls back to resolving the current dir when no workspac
   assertEquals(hostRunner.calls[0]?.cwd, "/host/resolved");
 });
 
-Deno.test("browser tool reports a missing host mount as host_unavailable", async () => {
+test("browser tool reports a missing host mount as host_unavailable", async () => {
   const hostRunner = new FakeProcessRunner();
   const context = {
     ...createBrowserContext(hostRunner, BROWSER_LEASE),
@@ -785,7 +791,7 @@ Deno.test("browser tool reports a missing host mount as host_unavailable", async
   });
 });
 
-Deno.test("browser tool reports a spawn failure as host_unavailable", async () => {
+test("browser tool reports a spawn failure as host_unavailable", async () => {
   const hostRunner: ProcessRunner = {
     run() {
       return Promise.reject(new Error("No such file or directory"));
@@ -803,7 +809,7 @@ Deno.test("browser tool reports a spawn failure as host_unavailable", async () =
   });
 });
 
-Deno.test("browser tool scrubs the lease endpoint from a timeout error", async () => {
+test("browser tool scrubs the lease endpoint from a timeout error", async () => {
   const hostRunner: ProcessRunner = {
     run(request) {
       return Promise.reject(
@@ -830,7 +836,7 @@ Deno.test("browser tool scrubs the lease endpoint from a timeout error", async (
   });
 });
 
-Deno.test("browser tool scrubs the lease endpoint from what the browser prints", async () => {
+test("browser tool scrubs the lease endpoint from what the browser prints", async () => {
   const hostRunner = new FakeProcessRunner([
     {
       stdout: "connected to http://localhost:9362 for page\n",
@@ -865,7 +871,7 @@ Deno.test("browser tool scrubs the lease endpoint from what the browser prints",
   });
 });
 
-Deno.test("read_file tool resolves relative paths from the session currentDir", async () => {
+test("read_file tool resolves relative paths from the session currentDir", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "hello",
     stderr: "",
@@ -920,7 +926,7 @@ Deno.test("read_file tool resolves relative paths from the session currentDir", 
   );
 });
 
-Deno.test("read_file tool preserves CFC result on success", async () => {
+test("read_file tool preserves CFC result on success", async () => {
   const cfcResult = observedCfcResult("released file");
   const sandbox = new FakeSandboxRuntime([{
     stdout: "raw file",
@@ -941,7 +947,7 @@ Deno.test("read_file tool preserves CFC result on success", async () => {
   });
 });
 
-Deno.test("read_file tool rejects non-integer maxBytes", async () => {
+test("read_file tool rejects non-integer maxBytes", async () => {
   const sandbox = new FakeSandboxRuntime();
 
   await assertRejects(
@@ -957,7 +963,7 @@ Deno.test("read_file tool rejects non-integer maxBytes", async () => {
   assertEquals(sandbox.calls, []);
 });
 
-Deno.test("read_file tool returns a recoverable file_not_found result", async () => {
+test("read_file tool returns a recoverable file_not_found result", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "",
     stderr: "file not found: /workspace/notes/missing.txt",
@@ -983,7 +989,7 @@ Deno.test("read_file tool returns a recoverable file_not_found result", async ()
   });
 });
 
-Deno.test("read_file tool returns a recoverable not_a_file result", async () => {
+test("read_file tool returns a recoverable not_a_file result", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "",
     stderr: "not a file: /workspace/notes",
@@ -1009,7 +1015,7 @@ Deno.test("read_file tool returns a recoverable not_a_file result", async () => 
   });
 });
 
-Deno.test("read_file tool returns a recoverable path_outside_workspace result", async () => {
+test("read_file tool returns a recoverable path_outside_workspace result", async () => {
   const sandbox = new StrictFakeSandboxRuntime();
 
   const output = await readFileTool.invoke(createContext(sandbox), {
@@ -1031,7 +1037,7 @@ Deno.test("read_file tool returns a recoverable path_outside_workspace result", 
   assertEquals(sandbox.calls, []);
 });
 
-Deno.test("read_file tool denies reserved artifact paths before shelling out", async () => {
+test("read_file tool denies reserved artifact paths before shelling out", async () => {
   const sandbox = new FakeSandboxRuntime();
   const context = createContext(
     sandbox,
@@ -1211,7 +1217,7 @@ describe("readSkillResourceTool", () => {
   });
 });
 
-Deno.test({
+test({
   name:
     "read_skill_resource reads indexed text resources and records provenance",
   permissions: { read: true, write: true },
@@ -1287,7 +1293,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "read_skill_resource returns metadata only for binary resources",
   permissions: { read: true, write: true },
   async fn() {
@@ -1341,7 +1347,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "read_skill_resource rejects unindexed resources and invalid traversal paths",
   permissions: { read: true, write: true },
@@ -1392,7 +1398,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "read_skill_resource reports digest mismatches while returning call-time content",
   permissions: { read: true, write: true },
@@ -1451,7 +1457,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "run_skill_script executes exact allowlisted Deno scripts with provenance",
   permissions: { read: true, write: true },
@@ -1572,7 +1578,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "run_skill_script rejects Deno scripts with relative imports in v1",
   permissions: { read: true, write: true },
   async fn() {
@@ -1653,7 +1659,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "run_skill_script executes exact allowlisted Bash shebang scripts from stdin",
   permissions: { read: true, write: true },
@@ -1770,7 +1776,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "run_skill_script can execute exact allowlisted scripts through the host runner",
   permissions: { read: true, write: true },
@@ -1951,7 +1957,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "run_skill_script denies authenticated-session in the browser profile default allowlist",
   permissions: { read: true, write: true },
@@ -2054,7 +2060,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "run_skill_script rejects Bash scripts that source relative helpers",
   permissions: { read: true, write: true },
   async fn() {
@@ -2136,7 +2142,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "run_skill_script requires activation, exact allowlist, and run-start digest",
   permissions: { read: true, write: true },
@@ -2298,7 +2304,7 @@ Deno.test({
   },
 });
 
-Deno.test("edit_file applies exact replacements and returns a unified diff", async () => {
+test("edit_file applies exact replacements and returns a unified diff", async () => {
   const original = "one\ntwo\nthree\n";
   const edited = "one\nTWO\nthree\n";
   const sandbox = new FakeSandboxRuntime([
@@ -2366,7 +2372,7 @@ Deno.test("edit_file applies exact replacements and returns a unified diff", asy
   );
 });
 
-Deno.test("edit_file labels write stdin with internal read CFC labels", async () => {
+test("edit_file labels write stdin with internal read CFC labels", async () => {
   const original = "alpha\nbeta\n";
   const edited = "alpha\nBETA\n";
   const readLabel = { confidentiality: ["did:key:file-secret"] };
@@ -2442,7 +2448,7 @@ Deno.test("edit_file labels write stdin with internal read CFC labels", async ()
   );
 });
 
-Deno.test("edit_file omits CFC result when either internal read is unmediated", async () => {
+test("edit_file omits CFC result when either internal read is unmediated", async () => {
   const original = "alpha\nbeta\n";
   const edited = "alpha\nBETA\n";
   const sandbox = new FakeSandboxRuntime([
@@ -2467,7 +2473,7 @@ Deno.test("edit_file omits CFC result when either internal read is unmediated", 
   assertEquals("cfcResult" in output, false);
 });
 
-Deno.test("edit_file returns separate hunks for distant edits", async () => {
+test("edit_file returns separate hunks for distant edits", async () => {
   const original = Array.from(
     { length: 30 },
     (_, index) => `line ${String(index + 1).padStart(2, "0")}\n`,
@@ -2502,7 +2508,7 @@ Deno.test("edit_file returns separate hunks for distant edits", async () => {
   assertEquals(output.diff.match(/^@@ /gm)?.length, 2);
 });
 
-Deno.test("edit_file caps oversized diff output", async () => {
+test("edit_file caps oversized diff output", async () => {
   const original = Array.from(
     { length: 450 },
     (_, index) => `old ${String(index + 1).padStart(3, "0")}\n`,
@@ -2529,7 +2535,7 @@ Deno.test("edit_file caps oversized diff output", async () => {
   assertEquals(output.diff.split("\n").length, 401);
 });
 
-Deno.test("edit_file applies replaceAll edits with expected replacement counts", async () => {
+test("edit_file applies replaceAll edits with expected replacement counts", async () => {
   const original = "red blue red\n";
   const edited = "green blue green\n";
   const sandbox = new FakeSandboxRuntime([
@@ -2557,7 +2563,7 @@ Deno.test("edit_file applies replaceAll edits with expected replacement counts",
   assertEquals(output.editsApplied, 1);
 });
 
-Deno.test("edit_file rejects ambiguous single replacements without writing", async () => {
+test("edit_file rejects ambiguous single replacements without writing", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "name: alpha\nname: beta\n",
     stderr: "",
@@ -2579,7 +2585,7 @@ Deno.test("edit_file rejects ambiguous single replacements without writing", asy
   assertEquals(sandbox.calls.length, 1);
 });
 
-Deno.test("edit_file rejects stale expected digests without writing", async () => {
+test("edit_file rejects stale expected digests without writing", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "hello\n",
     stderr: "",
@@ -2602,7 +2608,7 @@ Deno.test("edit_file rejects stale expected digests without writing", async () =
   assertEquals(sandbox.calls.length, 1);
 });
 
-Deno.test("write_file tool supports append mode and passes content over stdin", async () => {
+test("write_file tool supports append mode and passes content over stdin", async () => {
   const sandbox = new FakeSandboxRuntime();
   const output = await writeFileTool.invoke(createContext(sandbox), {
     path: "notes/log.txt",
@@ -2671,7 +2677,7 @@ Deno.test("write_file tool supports append mode and passes content over stdin", 
   );
 });
 
-Deno.test("write_file tool merges explicit trusted CFC labels with write inputs", async () => {
+test("write_file tool merges explicit trusted CFC labels with write inputs", async () => {
   const sandbox = new FakeSandboxRuntime();
   const trustedLabels: CfcLabelView = {
     version: 1,
@@ -2699,7 +2705,7 @@ Deno.test("write_file tool merges explicit trusted CFC labels with write inputs"
   );
 });
 
-Deno.test("write_file uses the cwd established by an earlier bash call", async () => {
+test("write_file uses the cwd established by an earlier bash call", async () => {
   const sandbox = new FakeSandboxRuntime([
     { stdout: "", stderr: "", exitCode: 0 },
     { stdout: "", stderr: "", exitCode: 0 },
@@ -2759,7 +2765,7 @@ Deno.test("write_file uses the cwd established by an earlier bash call", async (
   );
 });
 
-Deno.test("write_file tool returns a recoverable permission_denied result", async () => {
+test("write_file tool returns a recoverable permission_denied result", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "",
     stderr: "permission denied",
@@ -2786,7 +2792,7 @@ Deno.test("write_file tool returns a recoverable permission_denied result", asyn
   });
 });
 
-Deno.test("write_file tool returns a recoverable path_outside_workspace result", async () => {
+test("write_file tool returns a recoverable path_outside_workspace result", async () => {
   const sandbox = new StrictFakeSandboxRuntime();
 
   const output = await writeFileTool.invoke(createContext(sandbox), {
@@ -2809,7 +2815,7 @@ Deno.test("write_file tool returns a recoverable path_outside_workspace result",
   assertEquals(sandbox.calls, []);
 });
 
-Deno.test("write_file tool denies reserved artifact paths before shelling out", async () => {
+test("write_file tool denies reserved artifact paths before shelling out", async () => {
   const sandbox = new FakeSandboxRuntime();
   const output = await writeFileTool.invoke(
     createContext(
@@ -2842,7 +2848,7 @@ Deno.test("write_file tool denies reserved artifact paths before shelling out", 
   assertEquals(sandbox.calls, []);
 });
 
-Deno.test("view_image tool attaches a workspace image without shelling out", async () => {
+test("view_image tool attaches a workspace image without shelling out", async () => {
   const workspace = await Deno.realPath(await Deno.makeTempDir());
   await Deno.writeFile(join(workspace, "capture.png"), ONE_PIXEL_PNG);
   const sandbox = new FakeSandboxRuntime();
@@ -2872,7 +2878,7 @@ Deno.test("view_image tool attaches a workspace image without shelling out", asy
   assertEquals(sandbox.calls, []);
 });
 
-Deno.test("view_image tool denies reserved artifact paths", async () => {
+test("view_image tool denies reserved artifact paths", async () => {
   const workspace = await Deno.realPath(await Deno.makeTempDir());
   const artifactRoot = join(workspace, ".cf-harness-artifacts");
   await Deno.mkdir(artifactRoot, { recursive: true });
@@ -2917,7 +2923,7 @@ const NO_SESSIONS_REFUSAL_TEXT =
 const INVALID_SESSION_NAME_REFUSAL_TEXT =
   "invalid `session` name: use 1 to 32 characters from letters, digits, `_`, `.` and `-`, starting with a letter or a digit; rerun the command with such a name, or without `session`";
 
-Deno.test("bash tool refuses a session on a runtime without sessions, recoverably", async () => {
+test("bash tool refuses a session on a runtime without sessions, recoverably", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "x\n",
     stderr: "",
@@ -3003,7 +3009,7 @@ const SESSION_REFUSAL_TEXTS: Array<
   ],
 ];
 
-Deno.test("bash tool turns the runtime's session refusal into a recoverable result", async () => {
+test("bash tool turns the runtime's session refusal into a recoverable result", async () => {
   using logged = stub(console, "error");
   const context = createContext(
     new RefusingSessionsRuntime(
@@ -3031,7 +3037,7 @@ Deno.test("bash tool turns the runtime's session refusal into a recoverable resu
   assertEquals(logged.calls.length, 1);
 });
 
-Deno.test("bash tool shows the model its own text for each reason a runtime refuses a session", async () => {
+test("bash tool shows the model its own text for each reason a runtime refuses a session", async () => {
   using _logged = stub(console, "error");
   for (const [reason, text] of SESSION_REFUSAL_TEXTS) {
     const context = createContext(
@@ -3056,7 +3062,7 @@ Deno.test("bash tool shows the model its own text for each reason a runtime refu
   );
 });
 
-Deno.test("bash tool shows the model a refusal of its own for a reason it does not know", async () => {
+test("bash tool shows the model a refusal of its own for a reason it does not know", async () => {
   using _logged = stub(console, "error");
   // A runtime is injected, and tests run unchecked: a reason outside the
   // set, or none, can arrive whatever the type says. The last three are not
@@ -3095,7 +3101,7 @@ Deno.test("bash tool shows the model a refusal of its own for a reason it does n
   }
 });
 
-Deno.test("bash tool logs the runtime's own words about a refused session for the operator", async () => {
+test("bash tool logs the runtime's own words about a refused session for the operator", async () => {
   using logged = stub(console, "error");
   const context = createContext(
     new RefusingSessionsRuntime(
@@ -3146,7 +3152,7 @@ const RAW_IN_LOG_LINE =
   // deno-lint-ignore no-control-regex
   /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/;
 
-Deno.test("bash tool logs the end of a runtime's message longer than 200 characters", async () => {
+test("bash tool logs the end of a runtime's message longer than 200 characters", async () => {
   // The cause is what a runtime's message ends in, so the end is what is
   // looked for.
   const message =
@@ -3162,7 +3168,7 @@ Deno.test("bash tool logs the end of a runtime's message longer than 200 charact
   assertEquals(line.includes("length:"), false);
 });
 
-Deno.test("bash tool logs every line of a runtime's message of more than five lines", async () => {
+test("bash tool logs every line of a runtime's message of more than five lines", async () => {
   const message = [
     "sandbox session could not start:",
     "line 2",
@@ -3179,7 +3185,7 @@ Deno.test("bash tool logs every line of a runtime's message of more than five li
   assertEquals(line.includes("length:"), false);
 });
 
-Deno.test("bash tool cuts a runtime's message at its bound in the log and says so", async () => {
+test("bash tool cuts a runtime's message at its bound in the log and says so", async () => {
   const bound = BASH_SESSION_REFUSAL_LOG_MESSAGE_MAX_LENGTH;
   assertEquals(bound >= 4000, true);
   const kept = `${"k".repeat(bound - 10)}KEPT-TAIL.`;
@@ -3198,7 +3204,7 @@ Deno.test("bash tool cuts a runtime's message at its bound in the log and says s
   assertEquals(cut.length < bound + 500, true);
 });
 
-Deno.test("bash tool logs a runtime's message as one line with nothing in it that drives a terminal", async () => {
+test("bash tool logs a runtime's message as one line with nothing in it that drives a terminal", async () => {
   const message =
     "start\ncf-harness: FORGED LINE\r\x1b[2J\x1b]0;title\x07 c1:\u009b31m nel:\u0085 del:\x7f ls:\u2028 ps:\u2029 rlo:\u202eDESREVER lri:\u2066 end";
 
@@ -3213,7 +3219,7 @@ Deno.test("bash tool logs a runtime's message as one line with nothing in it tha
   assertStringIncludes(line, "rlo:\\u202eDESREVER lri:\\u2066 end");
 });
 
-Deno.test("bash tool escapes what a run id holds that would break the log line", async () => {
+test("bash tool escapes what a run id holds that would break the log line", async () => {
   const line = await loggedSessionRefusal(
     RUNTIME_REFUSAL_MESSAGE,
     "run\ncf-harness: FORGED\u009b\u202e",
@@ -3223,7 +3229,7 @@ Deno.test("bash tool escapes what a run id holds that would break the log line",
   assertStringIncludes(line, "run\\ncf-harness: FORGED\\u009b\\u202e");
 });
 
-Deno.test("bash tool logs nothing of the call's input for a refused session", async () => {
+test("bash tool logs nothing of the call's input for a refused session", async () => {
   using logged = stub(console, "error");
   const runtime = new RefusingSessionsRuntime(
     new SandboxSessionUnavailableError(
@@ -3250,7 +3256,7 @@ Deno.test("bash tool logs nothing of the call's input for a refused session", as
   assertEquals(written.includes("MARKER-IN-CWD"), false);
 });
 
-Deno.test("bash tool names the run and the tool output in the log of a refused session", async () => {
+test("bash tool names the run and the tool output in the log of a refused session", async () => {
   // A run id the output id does not hold, so each is found by itself.
   const line = await loggedSessionRefusal(
     RUNTIME_REFUSAL_MESSAGE,
@@ -3281,7 +3287,7 @@ const countInvocationContexts = (
   return counter;
 };
 
-Deno.test("bash tool hands an accepted session to the runtime", async () => {
+test("bash tool hands an accepted session to the runtime", async () => {
   const sandbox = new SessionsFakeSandboxRuntime([{
     stdout: "built\n",
     stderr: "",
@@ -3307,7 +3313,7 @@ Deno.test("bash tool hands an accepted session to the runtime", async () => {
   assertEquals("session" in sandbox.calls[1].request, false);
 });
 
-Deno.test("bash tool accepts the longest session name the pattern allows", async () => {
+test("bash tool accepts the longest session name the pattern allows", async () => {
   const longest = "a".repeat(32);
   assertEquals(SANDBOX_SESSION_NAME_PATTERN.test(longest), true);
   const sandbox = new SessionsFakeSandboxRuntime();
@@ -3319,7 +3325,7 @@ Deno.test("bash tool accepts the longest session name the pattern allows", async
   assertEquals(sandbox.calls[0]?.request.session, longest);
 });
 
-Deno.test("bash tool refuses a session name that is not an identifier, recoverably", async () => {
+test("bash tool refuses a session name that is not an identifier, recoverably", async () => {
   const refused: Array<[string, unknown]> = [
     ["a path separator", "a/b"],
     ["a path that climbs out", "a/../../x"],
@@ -3355,7 +3361,7 @@ Deno.test("bash tool refuses a session name that is not an identifier, recoverab
   }
 });
 
-Deno.test("bash tool refuses a session before it records an invocation", async () => {
+test("bash tool refuses a session before it records an invocation", async () => {
   // A runtime without sessions: the refusal is the whole of the call.
   const sandbox = new FakeSandboxRuntime();
   const context = createContext(sandbox);

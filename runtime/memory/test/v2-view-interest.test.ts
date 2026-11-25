@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
 import { ChangeSet } from "@codemirror/state";
@@ -27,6 +26,12 @@ import {
 } from "../v2/operation-codec.ts";
 import { Server } from "../v2/server.ts";
 import { parseViewQuery } from "../v2/view-interest.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const space = "did:key:z6Mk-view-space";
 const principal = "did:key:z6Mk-view-reader";

@@ -15,10 +15,10 @@
 // observe it through runtime.scheduler.onError. The negative-control fixture
 // proves this harness actually catches a violation; the positive control proves
 // the sanctioned #now path does not trip the gate.
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { initializeCapabilityGateController } from "./capability-gate-controller.ts";
 import { moduleByteCache } from "./pieces-controller.ts";
 

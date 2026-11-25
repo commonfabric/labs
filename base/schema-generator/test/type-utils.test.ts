@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import {
@@ -8,6 +7,7 @@ import {
   resolvePropertyType,
 } from "../src/type-utils.ts";
 import { createTestProgram } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The checker of `code`'s program and the aliases and constants it declares. */
 async function programOf(code: string) {

@@ -1,6 +1,5 @@
 /** Unit tests for the durable transcript omission record. */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -21,6 +20,7 @@ import type {
   HarnessToolTranscriptMessage,
   HarnessTranscriptMessage,
 } from "../src/contracts/transcript.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("transcript omissions", () => {
   const runId = "omission-run";

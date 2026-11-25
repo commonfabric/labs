@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterAll, afterEach, beforeAll, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
 import { hashOf } from "@commonfabric/data-model";
@@ -13,6 +12,13 @@ import {
 } from "@commonfabric/memory/v2";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import router from "./blobs.index.ts";
 import env from "@/env.ts";

@@ -4,9 +4,9 @@
 // same turn for a fraction of the cost. A delayed turn is a real wait and
 // only the timer can give one.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { armTurn } from "../src/turn.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Counts zero-delay timers that are armed and have not yet run — what the
 // runner's fake-clock harness looks at to decide a test has settled.

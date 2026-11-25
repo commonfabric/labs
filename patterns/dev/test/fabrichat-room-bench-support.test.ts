@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   type FabrichatBenchmarkRooms,
   seedFabrichatBenchmarkRooms,
 } from "../../integration/fabrichat-room-bench-support.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("fabrichat-room-bench-support", () => {
   describe("seedFabrichatBenchmarkRooms()", () => {

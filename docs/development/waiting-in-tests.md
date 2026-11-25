@@ -764,31 +764,33 @@ flushes them from a `queueMicrotask` callback, which hands the batch to the
 ops are one microtask away, and a microtask the test queues afterwards runs
 after the flush, because microtasks run in the order they were queued.
 
-The reconciler tests in `runtime/html/test/` write plain `Deno.test` and wait
-through `t.settle`, added to the test context by a preload:
+The reconciler tests in `runtime/html/test/` wait through `clock.settle()`,
+`clock` coming from the shared fake-clock harness:
 
 ```ts
 // Shown for illustration only.
-Deno.test("...", async (t) => {
+import { clock } from "@commonfabric/test-support/fake-clock";
+import { test } from "@commonfabric/test-support/test";
+
+test("...", async () => {
   cell.set(next);
-  await t.settle();
+  await clock.settle();
   assertEquals(collector.getOpsOfType("set-prop"), expected);
 });
 ```
 
-Nothing is imported. The package's test task runs `test/clock-preload.ts`
-before the test modules (through Deno's `--preload`); it replaces `Deno.test`
-so each test runs under a clock that freezes only positive-delay timers, and it
-adds `settle` to the context. `test/clock.d.ts` gives `t.settle` its type, which
-`deno check` sees because it type-checks the package directory as one program.
-The preload is a thin wrapper: it calls `installFakeClock` from the shared
-harness in `base/test-support/test/clock-preload.ts`, selecting that harness's
-`freeze-all` mode. The runner preload calls the same harness in its
+The package's test task runs `test/clock-preload.ts` before the test modules
+(through Deno's `--preload`). That module calls `installFakeClock` from the
+shared harness, `base/test-support/src/fake-clock.ts`, selecting its
+`freeze-all` mode, and the harness installs itself through `wrapSuites` in
+`@commonfabric/test-support/test`. So each suite runs under a clock that
+freezes only positive-delay timers, and `clock` reaches the controls of
+whichever suite is running. The runner preload calls the same harness in its
 `auto-advance` mode (below), so the timer-faking core lives in one place.
 
 A zero-delay `setTimeout(fn, 0)` still fires, driven through the real event
 loop, so the scheduler's dispatch, the reconciler's flush, and teardown all
-resolve on their own. `t.settle` resolves once every zero-delay timer and
+resolve on their own. `clock.settle()` resolves once every zero-delay timer and
 microtask has run to a fixpoint, so it covers both the mock-cell and
 runtime-cell trees these tests mix, and needs no runtime argument.
 
@@ -799,7 +801,7 @@ batch and is counted by the same census. Without that it would run beside the
 harness rather than under it, ahead of every turn the harness was holding, and
 neither `settle()` nor `tick(ms)` could hold it back.
 
-`t.settle` is an ordering guarantee rather than a deadline, so it cannot lose a
+`clock.settle()` is an ordering guarantee rather than a deadline, so it cannot lose a
 race under load. It also holds for a test asserting that an op is *absent*: once
 it returns, every op the change was going to produce has been delivered, so no
 later batch can falsify the absence. Those tests pass vacuously when nothing has
@@ -846,10 +848,8 @@ using the immediate stack frame:
   the sleep and wait on `runtime.idle()`/`cell.pull()`/`runtime.settled()`,
   which now settle on their own.
 
-Because the runner tests are mostly `describe`/`it` blocks, whose callbacks
-receive the framework's context rather than the one the preload wraps, the
-controls are a global `clock` (typed in `test/clock.d.ts`) rather than methods
-on the test context. `clock.settle()` drains reactive work without moving time,
+The controls are the same `clock` from `@commonfabric/test-support/fake-clock`.
+`clock.settle()` drains reactive work without moving time,
 and pauses auto-advance while it does, so a test can observe a state partway
 through a window before the timer that ends it fires. `clock.tick(ms)` advances
 logical time explicitly, firing the runtime's and the test's own timers, so a
@@ -858,7 +858,7 @@ run, a backoff schedule — steps through its windows deterministically instead 
 sleeping. An intermediate "has not fired yet" check uses `clock.settle()`; the
 step that lets the window elapse uses `clock.tick`. `clock.reset()` returns
 logical time to zero and drops pending timers: one frozen clock wraps a whole
-`describe`, so a suite whose cases each read absolute coarsened time (the `#now`
+suite, so a suite whose cases each read absolute coarsened time (the `#now`
 grid tests) calls it from `beforeEach` to start each case from a known instant.
 
 The idle rule decides how a test may wait. A loop of round trips — `pull()`,
@@ -875,8 +875,8 @@ window — and the wait itself idles the loop, which is what fires the timer. A
 fetches nothing, so what it returns after another replica's write is what the
 fan-out has delivered so far.
 
-The files that stay on the real clock are listed, each with its reason, in the
-runner preload's `realClockFiles` list. One is a resume test that holds the
+A file that stays on the real clock calls `useRealClock()` from the harness at
+its top, beside a comment giving its reason. One is a resume test that holds the
 per-element documents in its transport so the coordinator reconciles while they
 are absent, which is the state it exists to observe. A commit carrying a read of
 a withheld document is rejected as stale, and the catch-up the rejection waits
@@ -891,7 +891,7 @@ document](waiting-in-tests-rationale.md#the-runner-clock-retired-exemptions-and-
 works that retry loop through in full.
 
 A suite whose round trips cross a real socket, such as a standalone memory
-server reached over a websocket, belongs on that list too. The pump cannot see
+server reached over a websocket, calls `useRealClock()` too. The pump cannot see
 I/O in flight, so a wait on a reply reads as an idle loop, and logical time
 jumps to the earliest pending production timer. Over an authenticated
 connection that timer is the memory client's lease renewal, 58 minutes out.
@@ -900,10 +900,10 @@ The server reads the same clock and gives a challenge five minutes, so a
 expired. The shared-connection cases of the storage admission-notice suite are
 that shape.
 
-Other entries have been retired from that list as the deadlines and test
+Other files have stopped calling `useRealClock()` as the deadlines and test
 designs behind them were fixed. [The rationale
 document](waiting-in-tests-rationale.md#the-runner-clock-retired-exemptions-and-converted-waits)
-records what each hang turned out to be; read it before adding a new entry,
+records what each hang turned out to be; read it before adding a new call,
 because every retired one looked like it needed the real clock and did not.
 
 The `test/` versus `src/` classification reads the scheduling frame from a
@@ -929,9 +929,10 @@ not be allowed to fire quietly. It fires the moment nothing else is pending, so
 a test whose awaited event never arrives passes anyway, riding a logical jump
 in place of the event; and where the module's logger sits above the warn the
 backstop logs, the count behind that warn is the only trace. The runner preload
-therefore installs a guard over every test, `test/support/silent-backstop-guard.ts`,
-that snapshots the count behind each listed backstop around the test body and
-fails the test when one moved, naming the backstop and what its firing means.
+therefore installs a guard over every suite, `test/support/silent-backstop-guard.ts`,
+through `wrapSuites`, inside the clock. It snapshots the count behind each listed
+backstop around the suite and fails the suite when one moved, naming the
+backstop and what its firing means.
 
 The listed backstop is the conflict read-repair wait in `src/storage/v2.ts`: a
 commit's rejection returns after `CONFLICT_READ_REPAIR_TIMEOUT_MS` when the
@@ -1029,9 +1030,9 @@ nothing.
 
 ## The async package: a fake clock the test imports
 
-The reconciler and runner harnesses above install their fake clock through a
-`--preload` that wraps every `Deno.test` in the package, so a test gets the
-frozen clock whether or not it asked for one. That default is deliberate there:
+The reconciler and runner harnesses above install their fake clock from a
+`--preload` around every suite in the package, so a test gets the frozen clock
+whether or not it asked for one. That default is deliberate there:
 it catches a wall-clock sleep written anywhere in a suite that is meant to wait
 on events instead. `base/async` does not want that default. Some of its tests
 are not about time at all, and some — the `yieldToEventLoop` test, for one —

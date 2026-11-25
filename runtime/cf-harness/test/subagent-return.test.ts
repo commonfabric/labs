@@ -5,8 +5,9 @@ import {
   validateAndSanitizeSubagentReturn,
 } from "../src/subagent-return.ts";
 import { WEB_SEARCH_STRUCTURED_RESULT_SCHEMA } from "../src/contracts/web-search.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("parseSubagentReturnSchema accepts JSON Schema objects, booleans, and strings", () => {
+test("parseSubagentReturnSchema accepts JSON Schema objects, booleans, and strings", () => {
   assertEquals(parseSubagentReturnSchema(true), {
     schema: true,
     bytes: 4,
@@ -22,7 +23,7 @@ Deno.test("parseSubagentReturnSchema accepts JSON Schema objects, booleans, and 
   assertEquals(parseSubagentReturnSchema(undefined), undefined);
 });
 
-Deno.test("parseSubagentReturnSchema rejects malformed or non-schema inputs", () => {
+test("parseSubagentReturnSchema rejects malformed or non-schema inputs", () => {
   const cases = [
     {
       input: "{",
@@ -53,7 +54,7 @@ Deno.test("parseSubagentReturnSchema rejects malformed or non-schema inputs", ()
   }
 });
 
-Deno.test("parseSubagentReturnJson fails closed without echoing malformed content", () => {
+test("parseSubagentReturnJson fails closed without echoing malformed content", () => {
   assertEquals(parseSubagentReturnJson('{"ok":true}'), { ok: true });
   assertThrows(
     () => parseSubagentReturnJson("not JSON with raw data"),
@@ -67,7 +68,7 @@ Deno.test("parseSubagentReturnJson fails closed without echoing malformed conten
   );
 });
 
-Deno.test("validateAndSanitizeSubagentReturn preserves control primitives and linkifies free-form strings", () => {
+test("validateAndSanitizeSubagentReturn preserves control primitives and linkifies free-form strings", () => {
   const schema = {
     type: "object",
     properties: {
@@ -124,7 +125,7 @@ Deno.test("validateAndSanitizeSubagentReturn preserves control primitives and li
   });
 });
 
-Deno.test("web search structured result schema preserves ranks and linkifies search text", () => {
+test("web search structured result schema preserves ranks and linkifies search text", () => {
   const sanitized = validateAndSanitizeSubagentReturn({
     schema: WEB_SEARCH_STRUCTURED_RESULT_SCHEMA,
     childRunId: "run-web-search.subagent.1",
@@ -163,7 +164,7 @@ Deno.test("web search structured result schema preserves ranks and linkifies sea
   });
 });
 
-Deno.test("validateAndSanitizeSubagentReturn resolves refs and allOf before deciding raw strings", () => {
+test("validateAndSanitizeSubagentReturn resolves refs and allOf before deciding raw strings", () => {
   const schema = {
     $defs: {
       Status: { type: "string", enum: ["approved", "not_approved"] },
@@ -215,7 +216,7 @@ Deno.test("validateAndSanitizeSubagentReturn resolves refs and allOf before deci
   });
 });
 
-Deno.test("validateAndSanitizeSubagentReturn makes objects with unmodeled keys opaque", () => {
+test("validateAndSanitizeSubagentReturn makes objects with unmodeled keys opaque", () => {
   const schema = {
     type: "object",
     properties: {
@@ -240,7 +241,7 @@ Deno.test("validateAndSanitizeSubagentReturn makes objects with unmodeled keys o
   });
 });
 
-Deno.test("validateAndSanitizeSubagentReturn keeps base object properties when selecting union branches", () => {
+test("validateAndSanitizeSubagentReturn keeps base object properties when selecting union branches", () => {
   const schema = {
     type: "object",
     properties: {
@@ -279,7 +280,7 @@ Deno.test("validateAndSanitizeSubagentReturn keeps base object properties when s
   });
 });
 
-Deno.test("validateAndSanitizeSubagentReturn preserves allOf additionalProperties constraints for known keys", () => {
+test("validateAndSanitizeSubagentReturn preserves allOf additionalProperties constraints for known keys", () => {
   const schema = {
     type: "object",
     additionalProperties: {
@@ -307,7 +308,7 @@ Deno.test("validateAndSanitizeSubagentReturn preserves allOf additionalPropertie
   assertEquals(sanitized.value, { status: "safe" });
 });
 
-Deno.test("validateAndSanitizeSubagentReturn traverses allOf array item schemas", () => {
+test("validateAndSanitizeSubagentReturn traverses allOf array item schemas", () => {
   const schema = {
     type: "array",
     allOf: [
@@ -327,7 +328,7 @@ Deno.test("validateAndSanitizeSubagentReturn traverses allOf array item schemas"
   assertEquals(sanitized.value, ["safe"]);
 });
 
-Deno.test("validateAndSanitizeSubagentReturn handles anyOf link branches and rejects schema mismatches", () => {
+test("validateAndSanitizeSubagentReturn handles anyOf link branches and rejects schema mismatches", () => {
   const schema = {
     type: "object",
     properties: {
@@ -382,7 +383,7 @@ Deno.test("validateAndSanitizeSubagentReturn handles anyOf link branches and rej
   );
 });
 
-Deno.test("validateAndSanitizeSubagentReturn preserves link objects when anyOf object branches overlap", () => {
+test("validateAndSanitizeSubagentReturn preserves link objects when anyOf object branches overlap", () => {
   const schema = {
     type: "object",
     properties: {

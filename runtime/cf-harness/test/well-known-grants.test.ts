@@ -6,8 +6,6 @@
  * never the address behind a token.
  */
 
-import { describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import {
   ADDRESS_HANDLE_TOKEN_PREFIX,
@@ -27,6 +25,7 @@ import {
   wellKnownGrantLabel,
   wellKnownGrantsContextMessage,
 } from "../src/well-known-grants.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE_DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 const REGISTRY_ID = `of:fid1:${"A".repeat(43)}`;

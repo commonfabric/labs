@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
 import { acceptedBreakKey } from "./pattern-compat-lib.ts";
 import { patternPath, PATTERNS_DIR } from "./pattern-files.ts";
 import { ACCEPTED_CONTRACT_BREAKS } from "./pattern-compat-accepted-breaks.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 const BASELINES_DIR = join(REPO_ROOT, PATTERNS_DIR, "baselines");

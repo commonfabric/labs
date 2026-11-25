@@ -1,6 +1,5 @@
 /** The book pattern stages live input handles without requiring a model host. */
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { fromFileUrl, join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
@@ -10,6 +9,7 @@ import {
   AgentRunRecordSchema,
 } from "@commonfabric/runner/agent-run";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { AgentResultSchema } from "../../runtime/runner/src/builtins/agent-schemas.ts";
 import { seedHomeAgentQueue } from "../../runtime/runner/test/support/agent-queue.ts";
 import { runTestPattern } from "../../runtime/cli/lib/test-runner.ts";

@@ -21,6 +21,7 @@ import {
   RunnersView,
   SOCKET_CHECK_MS,
 } from "./runner-view.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // The page's layout, as runners-page.ts sets it out, with the board away from
 // the window's corner so that a point on the board and the same point in the
@@ -493,7 +494,7 @@ function queuedNews(id: number, runId: number, repository: string): JobNews {
 
 const PROBLEM = "GitHub did not list the organization's runners.";
 
-Deno.test("RunnersView.show() lists each run in the legend alphabetically, numbers in order, with how many of its jobs show", async () => {
+test("RunnersView.show() lists each run in the legend alphabetically, numbers in order, with how many of its jobs show", async () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
@@ -530,7 +531,7 @@ Deno.test("RunnersView.show() lists each run in the legend alphabetically, numbe
   }
 });
 
-Deno.test("RunnersView draws a running job's ball in its run's color, names the job there, and names the idle runner beside it", async () => {
+test("RunnersView draws a running job's ball in its run's color, names the job there, and names the idle runner beside it", async () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
@@ -566,7 +567,7 @@ Deno.test("RunnersView draws a running job's ball in its run's color, names the 
   }
 });
 
-Deno.test("RunnersView sets the pointer cursor over a job's ball and not over an empty slot", async () => {
+test("RunnersView sets the pointer cursor over a job's ball and not over an empty slot", async () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
@@ -592,7 +593,7 @@ Deno.test("RunnersView sets the pointer cursor over a job's ball and not over an
   }
 });
 
-Deno.test("RunnersView clears the pointer cursor once the pointer moves off a ball to empty board, or off the board", async () => {
+test("RunnersView clears the pointer cursor once the pointer moves off a ball to empty board, or off the board", async () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
@@ -616,7 +617,7 @@ Deno.test("RunnersView clears the pointer cursor once the pointer moves off a ba
   }
 });
 
-Deno.test("RunnersView opens the page of a job whose ball is clicked, and none for a click on empty board", async () => {
+test("RunnersView opens the page of a job whose ball is clicked, and none for a click on empty board", async () => {
   const { elements, remove } = mount();
   try {
     const opened: string[] = [];
@@ -637,7 +638,7 @@ Deno.test("RunnersView opens the page of a job whose ball is clicked, and none f
   }
 });
 
-Deno.test("RunnersView opens no page for a ball whose job's address is not on GitHub", async () => {
+test("RunnersView opens no page for a ball whose job's address is not on GitHub", async () => {
   const { elements, remove } = mount();
   try {
     const opened: string[] = [];
@@ -654,7 +655,7 @@ Deno.test("RunnersView opens no page for a ball whose job's address is not on Gi
   }
 });
 
-Deno.test("RunnersView places its balls, the pointer, and what leaves the board within a border around the board", async () => {
+test("RunnersView places its balls, the pointer, and what leaves the board within a border around the board", async () => {
   const { elements, remove } = mount("bordered");
   try {
     const opened: string[] = [];
@@ -683,7 +684,7 @@ Deno.test("RunnersView places its balls, the pointer, and what leaves the board 
   }
 });
 
-Deno.test("RunnersView labels the board with its summary, and gives each line of the legend the role of a list item", () => {
+test("RunnersView labels the board with its summary, and gives each line of the legend the role of a list item", () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
@@ -704,7 +705,7 @@ Deno.test("RunnersView labels the board with its summary, and gives each line of
   }
 });
 
-Deno.test("RunnersView draws a problem too long for the board cut short with an ellipsis, keeping as much of it as fits", () => {
+test("RunnersView draws a problem too long for the board cut short with an ellipsis, keeping as much of it as fits", () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
@@ -717,7 +718,7 @@ Deno.test("RunnersView draws a problem too long for the board cut short with an 
   }
 });
 
-Deno.test("RunnersView.show() lets the balls grow again when asked to regrow, and only then", () => {
+test("RunnersView.show() lets the balls grow again when asked to regrow, and only then", () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
@@ -736,7 +737,7 @@ Deno.test("RunnersView.show() lets the balls grow again when asked to regrow, an
   }
 });
 
-Deno.test("RunnersView draws no more frames after showing a board that changes nothing, and goes on drawing while a ball moves", async () => {
+test("RunnersView draws no more frames after showing a board that changes nothing, and goes on drawing while a ball moves", async () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
@@ -760,7 +761,7 @@ Deno.test("RunnersView draws no more frames after showing a board that changes n
   }
 });
 
-Deno.test("RunnersView draws its balls again once the browser restores a WebGL context it lost", async () => {
+test("RunnersView draws its balls again once the browser restores a WebGL context it lost", async () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
@@ -786,7 +787,7 @@ Deno.test("RunnersView draws its balls again once the browser restores a WebGL c
   }
 });
 
-Deno.test("RunnersView names no queued job whose ball is still above its pool, and names it once it is in the heap", async () => {
+test("RunnersView names no queued job whose ball is still above its pool, and names it once it is in the heap", async () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
@@ -810,7 +811,7 @@ Deno.test("RunnersView names no queued job whose ball is still above its pool, a
   }
 });
 
-Deno.test("RunnersView.show() lets a job that ends simply go while the view is to stay still, and sends it off otherwise", async () => {
+test("RunnersView.show() lets a job that ends simply go while the view is to stay still, and sends it off otherwise", async () => {
   for (const still of [true, false]) {
     const { elements, remove } = mount();
     try {
@@ -827,7 +828,7 @@ Deno.test("RunnersView.show() lets a job that ends simply go while the view is t
   }
 });
 
-Deno.test("RunnersView.show() puts a running job in its new place at once while the view is to stay still, and moves it there otherwise", async () => {
+test("RunnersView.show() puts a running job in its new place at once while the view is to stay still, and moves it there otherwise", async () => {
   for (const still of [true, false]) {
     const { elements, remove } = mount();
     try {
@@ -856,7 +857,7 @@ Deno.test("RunnersView.show() puts a running job in its new place at once while 
   }
 });
 
-Deno.test("RunnersView.show() sets queued jobs out at rest in a row on their heap's floor at once while the view is to stay still, and pours them in otherwise", async () => {
+test("RunnersView.show() sets queued jobs out at rest in a row on their heap's floor at once while the view is to stay still, and pours them in otherwise", async () => {
   const queued = [1, 2, 3, 4, 5].map((id) => job(id, 7, { running: false }));
   const descriptions = queued.map((queuedJob) =>
     `labs · CI on main @ aaaaaaa\n${queuedJob.name}\nQueued\nfor a runner labeled self-hosted, labs`
@@ -890,7 +891,7 @@ Deno.test("RunnersView.show() sets queued jobs out at rest in a row on their hea
   }
 });
 
-Deno.test("RunnersView draws the same board at twice the size on a board shown twice as wide, at the device's pixels", async () => {
+test("RunnersView draws the same board at twice the size on a board shown twice as wide, at the device's pixels", async () => {
   const drawn = [];
   for (const look of ["", "double"] as const) {
     const { elements, remove } = mount(look);
@@ -921,7 +922,7 @@ Deno.test("RunnersView draws the same board at twice the size on a board shown t
   expect(Math.abs(double.problem - 2 * single.problem)).toBeLessThan(3);
 });
 
-Deno.test("RunnersView names a ball pointed at on a board shown twice as wide, with the tooltip beside the pointer", async () => {
+test("RunnersView names a ball pointed at on a board shown twice as wide, with the tooltip beside the pointer", async () => {
   const { elements, remove } = mount("double");
   try {
     const opened: string[] = [];
@@ -941,7 +942,7 @@ Deno.test("RunnersView names a ball pointed at on a board shown twice as wide, w
   }
 });
 
-Deno.test("RunnersView links each run in the legend to its page on GitHub, not to the page of one of its jobs, opening a tab of its own", () => {
+test("RunnersView links each run in the legend to its page on GitHub, not to the page of one of its jobs, opening a tab of its own", () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
@@ -969,7 +970,7 @@ Deno.test("RunnersView links each run in the legend to its page on GitHub, not t
   }
 });
 
-Deno.test("RunnersView.show() sends a job whose end is known off the board marked as it ended, and lets one without an end simply go", async () => {
+test("RunnersView.show() sends a job whose end is known off the board marked as it ended, and lets one without an end simply go", async () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
@@ -992,7 +993,7 @@ Deno.test("RunnersView.show() sends a job whose end is known off the board marke
   }
 });
 
-Deno.test("RunnersView.show() sends nothing off a board shown afresh, whatever the jobs' ends, and stops what was leaving", async () => {
+test("RunnersView.show() sends nothing off a board shown afresh, whatever the jobs' ends, and stops what was leaving", async () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
@@ -1016,7 +1017,7 @@ Deno.test("RunnersView.show() sends nothing off a board shown afresh, whatever t
   }
 });
 
-Deno.test("RunnersView.describe() returns a job's run, its name, and where and how long it has run, or waited and for what", () => {
+test("RunnersView.describe() returns a job's run, its name, and where and how long it has run, or waited and for what", () => {
   const now = Date.parse("2026-01-01T12:00:00Z");
   const board = boardOf(
     [
@@ -1035,7 +1036,7 @@ Deno.test("RunnersView.describe() returns a job's run, its name, and where and h
   ]);
 });
 
-Deno.test("RunnersView.duration() returns a length of time in its largest unit, rounded down", () => {
+test("RunnersView.duration() returns a length of time in its largest unit, rounded down", () => {
   expect([
     -5_000,
     0,
@@ -1048,7 +1049,7 @@ Deno.test("RunnersView.duration() returns a length of time in its largest unit, 
   ].map(RunnersView.duration)).toEqual(["0s", "0s", "59s", "1m", "59m", "1h", "23h", "3d"]);
 });
 
-Deno.test("followRunners() shows no jobs until its socket opens with a snapshot, and then the snapshot's", async () => {
+test("followRunners() shows no jobs until its socket opens with a snapshot, and then the snapshot's", async () => {
   const { elements, remove } = mount();
   try {
     const { view, opened } = await follow(elements);
@@ -1071,7 +1072,7 @@ Deno.test("followRunners() shows no jobs until its socket opens with a snapshot,
   }
 });
 
-Deno.test("followRunners() shows the news its socket delivers with the next frame, together", async () => {
+test("followRunners() shows the news its socket delivers with the next frame, together", async () => {
   const { elements, remove } = mount();
   try {
     const { view, opened } = await follow(elements);
@@ -1094,7 +1095,7 @@ Deno.test("followRunners() shows the news its socket delivers with the next fram
   }
 });
 
-Deno.test("followRunners() shows no jobs and a badge saying OFFLINE once its socket closes, and opens another at once", async () => {
+test("followRunners() shows no jobs and a badge saying OFFLINE once its socket closes, and opens another at once", async () => {
   const { elements, remove } = mount();
   try {
     const { view, opened } = await follow(elements);
@@ -1123,7 +1124,7 @@ Deno.test("followRunners() shows no jobs and a badge saying OFFLINE once its soc
   }
 });
 
-Deno.test("followRunners() shows the problems a snapshot names in red", async () => {
+test("followRunners() shows the problems a snapshot names in red", async () => {
   const { elements, remove } = mount();
   try {
     const { opened } = await follow(elements);
@@ -1137,7 +1138,7 @@ Deno.test("followRunners() shows the problems a snapshot names in red", async ()
   }
 });
 
-Deno.test("followRunners() shows the first snapshot afresh, and animates later ones, sending off the jobs they end", async () => {
+test("followRunners() shows the first snapshot afresh, and animates later ones, sending off the jobs they end", async () => {
   const { elements, remove } = mount();
   try {
     const { view, opened } = await follow(elements);
@@ -1169,7 +1170,7 @@ Deno.test("followRunners() shows the first snapshot afresh, and animates later o
   }
 });
 
-Deno.test("followRunners() lets the balls grow again with each snapshot, but not with a change of runners", async () => {
+test("followRunners() lets the balls grow again with each snapshot, but not with a change of runners", async () => {
   const { elements, remove } = mount();
   try {
     const { opened } = await follow(elements);
@@ -1186,7 +1187,7 @@ Deno.test("followRunners() lets the balls grow again with each snapshot, but not
   }
 });
 
-Deno.test("followRunners() waits for a socket that opens later, and shows it is not connected when one cannot open, trying again later", async () => {
+test("followRunners() waits for a socket that opens later, and shows it is not connected when one cannot open, trying again later", async () => {
   for (
     const refuse of [
       (): Promise<PageSocket> => Promise.reject(new Error("refused")),
@@ -1226,7 +1227,7 @@ Deno.test("followRunners() waits for a socket that opens later, and shows it is 
   }
 });
 
-Deno.test("followRunners() takes a ping as hearing from the server, and opens another socket at once only after a socket it heard from closes", async () => {
+test("followRunners() takes a ping as hearing from the server, and opens another socket at once only after a socket it heard from closes", async () => {
   const { elements, remove } = mount();
   try {
     const { opened } = await follow(elements);
@@ -1249,7 +1250,7 @@ Deno.test("followRunners() takes a ping as hearing from the server, and opens an
   }
 });
 
-Deno.test("followRunners() gives up on an open socket silent for more than three checks' time, closing it and opening another at once, and hears nothing more from it", async () => {
+test("followRunners() gives up on an open socket silent for more than three checks' time, closing it and opening another at once, and hears nothing more from it", async () => {
   const { elements, remove } = mount();
   try {
     const clock = checkedClock();
@@ -1288,7 +1289,7 @@ Deno.test("followRunners() gives up on an open socket silent for more than three
   }
 });
 
-Deno.test("followRunners() opens a socket on the next check when it has none, and none while one is open", async () => {
+test("followRunners() opens a socket on the next check when it has none, and none while one is open", async () => {
   const { elements, remove } = mount();
   try {
     const clock = checkedClock();
@@ -1312,7 +1313,7 @@ Deno.test("followRunners() opens a socket on the next check when it has none, an
   }
 });
 
-Deno.test("followRunners() keeps a socket that goes on carrying pings", async () => {
+test("followRunners() keeps a socket that goes on carrying pings", async () => {
   const { elements, remove } = mount();
   try {
     const clock = checkedClock();
@@ -1336,7 +1337,7 @@ Deno.test("followRunners() keeps a socket that goes on carrying pings", async ()
   }
 });
 
-Deno.test("followRunners() gives up on a socket that never finishes opening, trying another at once, and closes it should it open after", async () => {
+test("followRunners() gives up on a socket that never finishes opening, trying another at once, and closes it should it open after", async () => {
   const { elements, remove } = mount();
   try {
     const clock = checkedClock();
@@ -1376,7 +1377,7 @@ Deno.test("followRunners() gives up on a socket that never finishes opening, try
   }
 });
 
-Deno.test("followRunners() sets the badge to LIVE when a socket carries a message, to OFFLINE when it loses the socket, and to LIVE again when a new one is heard", async () => {
+test("followRunners() sets the badge to LIVE when a socket carries a message, to OFFLINE when it loses the socket, and to LIVE again when a new one is heard", async () => {
   const { elements, remove } = mount();
   try {
     const clock = checkedClock();
@@ -1416,7 +1417,7 @@ Deno.test("followRunners() sets the badge to LIVE when a socket carries a messag
   }
 });
 
-Deno.test("followRunners() first tells each socket it opens that the page is visible", async () => {
+test("followRunners() first tells each socket it opens that the page is visible", async () => {
   const { elements, remove } = mount();
   try {
     const clock = checkedClock();
@@ -1439,7 +1440,7 @@ Deno.test("followRunners() first tells each socket it opens that the page is vis
   }
 });
 
-Deno.test("followRunners() tells its open socket whether the page is visible each time that changes, and no socket while one is opening or none is open", async () => {
+test("followRunners() tells its open socket whether the page is visible each time that changes, and no socket while one is opening or none is open", async () => {
   const { elements, remove } = mount();
   try {
     const clock = checkedClock();
@@ -1476,7 +1477,7 @@ Deno.test("followRunners() tells its open socket whether the page is visible eac
   }
 });
 
-Deno.test("openedSocket() rejects for a socket whose server will not take it, and does not resolve", async () => {
+test("openedSocket() rejects for a socket whose server will not take it, and does not resolve", async () => {
   // The test's server serves files, and takes no socket.
   let resolved = false;
   const opening = openedSocket(`ws://${location.host}/runners/socket`).then((socket) => {
@@ -1487,7 +1488,7 @@ Deno.test("openedSocket() rejects for a socket whose server will not take it, an
   expect(resolved).toBe(false);
 });
 
-Deno.test("followRunners() on real sockets shows OFFLINE once one cannot open, leaving no rejection unhandled", async () => {
+test("followRunners() on real sockets shows OFFLINE once one cannot open, leaving no rejection unhandled", async () => {
   const { elements, remove } = mount();
   const unhandled: unknown[] = [];
   const noteUnhandled = (event: PromiseRejectionEvent) => unhandled.push(event.reason);
@@ -1517,7 +1518,7 @@ Deno.test("followRunners() on real sockets shows OFFLINE once one cannot open, l
   }
 });
 
-Deno.test("followRunners() draws the board again at its new size when it is resized, leaving what moves on it moving", async () => {
+test("followRunners() draws the board again at its new size when it is resized, leaving what moves on it moving", async () => {
   const { elements, remove } = mount();
   try {
     const { view, opened } = await follow(elements);
@@ -1556,7 +1557,7 @@ Deno.test("followRunners() draws the board again at its new size when it is resi
   }
 });
 
-Deno.test("followRunners() throws for a message it does not understand", async () => {
+test("followRunners() throws for a message it does not understand", async () => {
   const { elements, remove } = mount();
   try {
     const { opened } = await follow(elements);
@@ -1582,11 +1583,11 @@ for (const [kind, accelerated] of [["WebGL", true], ["2D", false]] as const) {
   const BLUE = "#0000ff";
   const CLEAR = [0, 0, 0, 0];
 
-  Deno.test(`BallRenderer (${kind}) says whether it draws with WebGL`, () => {
+  test(`BallRenderer (${kind}) says whether it draws with WebGL`, () => {
     expect(renderer().renderer.accelerated).toBe(accelerated);
   });
 
-  Deno.test(`BallRenderer (${kind}) draws each circle in its color, and nothing around it`, () => {
+  test(`BallRenderer (${kind}) draws each circle in its color, and nothing around it`, () => {
     const { canvas, renderer: balls } = renderer();
     balls.add(30, 40, 15, RED, null);
     balls.add(70, 40, 10, BLUE, null);
@@ -1602,7 +1603,7 @@ for (const [kind, accelerated] of [["WebGL", true], ["2D", false]] as const) {
     expect(rgba(image, 5, 5)).toEqual(CLEAR);
   });
 
-  Deno.test(`BallRenderer (${kind}) draws nothing of a clipped circle outside its rounded box`, () => {
+  test(`BallRenderer (${kind}) draws nothing of a clipped circle outside its rounded box`, () => {
     const { canvas, renderer: balls } = renderer();
     const clip: Clip = { x: 20, y: 20, width: 60, height: 40, radius: 15 };
     balls.add(50, 40, 100, RED, clip);
@@ -1618,7 +1619,7 @@ for (const [kind, accelerated] of [["WebGL", true], ["2D", false]] as const) {
     expect(rgba(image, 78, 58)).toEqual(CLEAR);
   });
 
-  Deno.test(`BallRenderer (${kind}) clears what it drew before, drawing only what was added since`, () => {
+  test(`BallRenderer (${kind}) clears what it drew before, drawing only what was added since`, () => {
     const { canvas, renderer: balls } = renderer();
     balls.add(30, 40, 15, RED, null);
     balls.draw(100, 80, 1);
@@ -1632,7 +1633,7 @@ for (const [kind, accelerated] of [["WebGL", true], ["2D", false]] as const) {
     expect(rgba(image, 70, 40)).toEqual(CLEAR);
   });
 
-  Deno.test(`BallRenderer (${kind}) draws at the scale it is given, on a canvas sized to match, with edges a device pixel sharp`, () => {
+  test(`BallRenderer (${kind}) draws at the scale it is given, on a canvas sized to match, with edges a device pixel sharp`, () => {
     const { canvas, renderer: balls } = renderer();
     balls.add(30, 20, 5, RED, null);
     balls.draw(50, 40, 2);
@@ -1651,7 +1652,7 @@ for (const [kind, accelerated] of [["WebGL", true], ["2D", false]] as const) {
     expect(rgba(image, 70, 40)[3]).toBeLessThanOrEqual(16);
   });
 
-  Deno.test(`BallRenderer (${kind}) draws every circle of a frame with more than a few hundred`, () => {
+  test(`BallRenderer (${kind}) draws every circle of a frame with more than a few hundred`, () => {
     const { canvas, renderer: balls } = renderer();
     const centers = Array.from({ length: 600 }, (_, i) => [5 + (i % 30) * 10, 5 + Math.floor(i / 30) * 10]);
     for (const [x, y] of centers) balls.add(x, y, 3, RED, null);
@@ -1662,7 +1663,7 @@ for (const [kind, accelerated] of [["WebGL", true], ["2D", false]] as const) {
   });
 }
 
-Deno.test("BallRenderer draws with WebGL again once the browser restores a context it lost", async () => {
+test("BallRenderer draws with WebGL again once the browser restores a context it lost", async () => {
   const canvas = document.createElement("canvas");
   const balls = new BallRenderer(canvas);
   const losing = canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context");
@@ -1682,7 +1683,7 @@ Deno.test("BallRenderer draws with WebGL again once the browser restores a conte
   expect(rgba(pixels(canvas), 5, 5)).toEqual([0, 0, 0, 0]);
 });
 
-Deno.test("BallRenderer made on a lost WebGL context draws nothing until the context is restored, then draws", async () => {
+test("BallRenderer made on a lost WebGL context draws nothing until the context is restored, then draws", async () => {
   const canvas = document.createElement("canvas");
   const losing = canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context");
   if (!losing) throw new Error("the browser cannot lose a WebGL context on purpose");
@@ -1752,7 +1753,7 @@ function refusingCanvas(id: string, className: string, later = false): RefusingC
   return canvas;
 }
 
-Deno.test("BallRenderer whose WebGL cannot be set up draws with the 2D context, on a canvas that takes the first's place", () => {
+test("BallRenderer whose WebGL cannot be set up draws with the 2D context, on a canvas that takes the first's place", () => {
   const holder = document.createElement("div");
   const canvas = refusingCanvas("refused", "layer");
   holder.append(canvas);
@@ -1776,7 +1777,7 @@ Deno.test("BallRenderer whose WebGL cannot be set up draws with the 2D context, 
   }
 });
 
-Deno.test("RunnersView whose WebGL cannot be set up draws its balls with the 2D context in the balls' place, where they can be pointed at", async () => {
+test("RunnersView whose WebGL cannot be set up draws its balls with the 2D context in the balls' place, where they can be pointed at", async () => {
   const { elements: mounted, remove } = mount();
   try {
     const balls = refusingCanvas("balls", "layer");
@@ -1815,7 +1816,7 @@ async function restoreRefusing(canvas: RefusingCanvas): Promise<void> {
   await restored;
 }
 
-Deno.test("BallRenderer whose WebGL cannot be set up again once restored draws with the 2D context, on a canvas that takes the first's place", async () => {
+test("BallRenderer whose WebGL cannot be set up again once restored draws with the 2D context, on a canvas that takes the first's place", async () => {
   const holder = document.createElement("div");
   const canvas = refusingCanvas("refused", "layer", true);
   holder.append(canvas);
@@ -1843,7 +1844,7 @@ Deno.test("BallRenderer whose WebGL cannot be set up again once restored draws w
   }
 });
 
-Deno.test("RunnersView whose WebGL cannot be set up again once restored draws its balls with the 2D context in the balls' place", async () => {
+test("RunnersView whose WebGL cannot be set up again once restored draws its balls with the 2D context in the balls' place", async () => {
   const { elements: mounted, remove } = mount();
   try {
     const balls = refusingCanvas("balls", "layer", true);

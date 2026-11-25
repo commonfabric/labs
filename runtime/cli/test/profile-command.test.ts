@@ -5,10 +5,10 @@
  * without a server. The create itself is covered in `profile-create.test.ts`.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   dataUrlByteLength,

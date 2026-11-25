@@ -20,11 +20,17 @@
 //   yielder — the OFF arm and flag-ON clients keep their settle loops'
 //   exact microtask shape.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type {
@@ -35,6 +41,12 @@ import { ExecutorHost } from "../src/executor/host.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { CooperativeYield } from "../src/scheduler/cooperative-yield.ts";
 import { awaitAdmitted, settleServing } from "./support/serving-waits.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost with a
+// real flush deadline: the yield's `setTimeout(0)` turns and the deadline timer
+// are the wall-clock behavior under test, and auto-advance would fire them as
+// fast as they arm.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("cooperative yield space");
 const space = spaceSigner.did() as MemorySpace;

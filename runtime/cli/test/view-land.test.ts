@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { stripAnsi } from "../lib/view/ansi.ts";
 import type { MergeRequest } from "../lib/view/github.ts";
@@ -7,6 +6,7 @@ import type { Key } from "../lib/view/keys.ts";
 import { helpOverlay, Session } from "../lib/view/session.ts";
 import { say } from "../lib/view/tasklog.ts";
 import { drawnRows, parseDocument } from "./view-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A session over a line wider than its 80 by 12 screen. */
 function session(color = false): Session {

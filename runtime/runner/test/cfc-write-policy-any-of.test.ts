@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/api";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
 import { droppedStoredClaim } from "../src/cfc/claim-preservation.ts";
 import { CfcEnvelopeStabilityError } from "../src/cfc/envelope-stability-reason.ts";

@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callSchemas, parseModule } from "./transformed-ast.ts";
 import { transformSource } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const IMPORTS =
   `import { computed, pattern, Writable, type Default, type PerSession, type PerUser } from "commonfabric";

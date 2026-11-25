@@ -1,8 +1,8 @@
 import { assert } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 
 import { createTestSpace, env } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { ShellIntegration } from "../../integration/shell-utils.ts";
 

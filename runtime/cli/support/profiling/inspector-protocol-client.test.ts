@@ -6,6 +6,7 @@ import {
   assertStrictEquals,
 } from "@std/assert";
 import { InspectorProtocolClient } from "./inspector-protocol-client.ts";
+import { test } from "@commonfabric/test-support/test";
 
 class FakeInspectorSocket extends EventTarget {
   readyState: number = WebSocket.OPEN;
@@ -48,7 +49,7 @@ class FakeInspectorSocket extends EventTarget {
   }
 }
 
-Deno.test("InspectorProtocolClient sends commands and resolves responses", async () => {
+test("InspectorProtocolClient sends commands and resolves responses", async () => {
   const socket = new FakeInspectorSocket();
   const client = new InspectorProtocolClient(socket.asWebSocket());
 
@@ -64,7 +65,7 @@ Deno.test("InspectorProtocolClient sends commands and resolves responses", async
   assertEquals(await stop, { profile });
 });
 
-Deno.test("InspectorProtocolClient exposes the profiling command set", async () => {
+test("InspectorProtocolClient exposes the profiling command set", async () => {
   const socket = new FakeInspectorSocket();
   const client = new InspectorProtocolClient(socket.asWebSocket());
 
@@ -95,7 +96,7 @@ Deno.test("InspectorProtocolClient exposes the profiling command set", async () 
   await Promise.all(commands);
 });
 
-Deno.test("InspectorProtocolClient forwards protocol events", () => {
+test("InspectorProtocolClient forwards protocol events", () => {
   const socket = new FakeInspectorSocket();
   const client = new InspectorProtocolClient(socket.asWebSocket());
   const received: unknown[] = [];
@@ -112,7 +113,7 @@ Deno.test("InspectorProtocolClient forwards protocol events", () => {
   assertEquals(received, [detail]);
 });
 
-Deno.test("InspectorProtocolClient rejects protocol errors", async () => {
+test("InspectorProtocolClient rejects protocol errors", async () => {
   const socket = new FakeInspectorSocket();
   const client = new InspectorProtocolClient(socket.asWebSocket());
 
@@ -133,7 +134,7 @@ Deno.test("InspectorProtocolClient rejects protocol errors", async () => {
   );
 });
 
-Deno.test("InspectorProtocolClient rejects commands while the socket is not open", async () => {
+test("InspectorProtocolClient rejects commands while the socket is not open", async () => {
   const socket = new FakeInspectorSocket();
   socket.readyState = WebSocket.CONNECTING;
   const client = new InspectorProtocolClient(socket.asWebSocket());
@@ -146,7 +147,7 @@ Deno.test("InspectorProtocolClient rejects commands while the socket is not open
   assertEquals(socket.sent, []);
 });
 
-Deno.test("InspectorProtocolClient rejects send failures and permits later commands", async () => {
+test("InspectorProtocolClient rejects send failures and permits later commands", async () => {
   const socket = new FakeInspectorSocket();
   const sendError = new Error("send failed");
   socket.sendError = sendError;
@@ -170,7 +171,7 @@ Deno.test("InspectorProtocolClient rejects send failures and permits later comma
   assertEquals(await enable, { enabled: true });
 });
 
-Deno.test("InspectorProtocolClient rejects pending commands after an invalid message", async () => {
+test("InspectorProtocolClient rejects pending commands after an invalid message", async () => {
   const socket = new FakeInspectorSocket();
   const client = new InspectorProtocolClient(socket.asWebSocket());
   const enable = client.Runtime.enable();
@@ -185,7 +186,7 @@ Deno.test("InspectorProtocolClient rejects pending commands after an invalid mes
   assertInstanceOf(error.cause, SyntaxError);
 });
 
-Deno.test("InspectorProtocolClient rejects malformed protocol message values", async (t) => {
+test("InspectorProtocolClient rejects malformed protocol message values", async (t) => {
   const malformedMessages = [
     { name: "null", value: null },
     { name: "primitive", value: "not a protocol message" },
@@ -214,7 +215,7 @@ Deno.test("InspectorProtocolClient rejects malformed protocol message values", a
   }
 });
 
-Deno.test("InspectorProtocolClient ignores responses for unknown command IDs", async () => {
+test("InspectorProtocolClient ignores responses for unknown command IDs", async () => {
   const socket = new FakeInspectorSocket();
   const client = new InspectorProtocolClient(socket.asWebSocket());
   const enable = client.Runtime.enable();
@@ -225,7 +226,7 @@ Deno.test("InspectorProtocolClient ignores responses for unknown command IDs", a
   assertEquals(await enable, { enabled: true });
 });
 
-Deno.test("InspectorProtocolClient rejects pending commands on socket errors", async () => {
+test("InspectorProtocolClient rejects pending commands on socket errors", async () => {
   const socket = new FakeInspectorSocket();
   const client = new InspectorProtocolClient(socket.asWebSocket());
   const enable = client.Runtime.enable();
@@ -244,7 +245,7 @@ Deno.test("InspectorProtocolClient rejects pending commands on socket errors", a
   assertStrictEquals(result.reason, socketError);
 });
 
-Deno.test("InspectorProtocolClient rejects commands when the socket closes", async () => {
+test("InspectorProtocolClient rejects commands when the socket closes", async () => {
   const socket = new FakeInspectorSocket();
   const client = new InspectorProtocolClient(socket.asWebSocket());
 
@@ -258,7 +259,7 @@ Deno.test("InspectorProtocolClient rejects commands when the socket closes", asy
   );
 });
 
-Deno.test("InspectorProtocolClient rejects commands when an earlier close listener closes the client", async () => {
+test("InspectorProtocolClient rejects commands when an earlier close listener closes the client", async () => {
   const socket = new FakeInspectorSocket();
   let closeFromListener: Promise<void> | undefined;
   socket.addEventListener("close", () => {
@@ -278,7 +279,7 @@ Deno.test("InspectorProtocolClient rejects commands when an earlier close listen
   await rejected;
 });
 
-Deno.test("InspectorProtocolClient closes its WebSocket", async () => {
+test("InspectorProtocolClient closes its WebSocket", async () => {
   const socket = new FakeInspectorSocket();
   const client = new InspectorProtocolClient(socket.asWebSocket());
 
@@ -287,7 +288,7 @@ Deno.test("InspectorProtocolClient closes its WebSocket", async () => {
   assertEquals(socket.readyState, WebSocket.CLOSED);
 });
 
-Deno.test("InspectorProtocolClient rejects when WebSocket close reports an error", async () => {
+test("InspectorProtocolClient rejects when WebSocket close reports an error", async () => {
   const socket = new FakeInspectorSocket();
   const closeError = new ErrorEvent("error", {
     message: "close failed",
@@ -308,7 +309,7 @@ Deno.test("InspectorProtocolClient rejects when WebSocket close reports an error
   await client.close();
 });
 
-Deno.test("InspectorProtocolClient close is idempotent", async () => {
+test("InspectorProtocolClient close is idempotent", async () => {
   const socket = new FakeInspectorSocket();
   const client = new InspectorProtocolClient(socket.asWebSocket());
 

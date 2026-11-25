@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import type { CellKind } from "@commonfabric/api";
+import { test } from "@commonfabric/test-support/test";
 import type { JSONSchema } from "commonfabric";
 import { schemaToTypeString } from "../src/schema-format.ts";
 
@@ -8,14 +9,14 @@ import { schemaToTypeString } from "../src/schema-format.ts";
 // Tests for schemaToTypeString - TypeScript-like schema representation
 //
 
-Deno.test("schemaToTypeString converts basic types", () => {
+test("schemaToTypeString converts basic types", () => {
   assertEquals(schemaToTypeString({ type: "string" } as any), "string");
   assertEquals(schemaToTypeString({ type: "number" } as any), "number");
   assertEquals(schemaToTypeString({ type: "boolean" } as any), "boolean");
   assertEquals(schemaToTypeString({ type: "null" } as any), "null");
 });
 
-Deno.test("schemaToTypeString converts arrays", () => {
+test("schemaToTypeString converts arrays", () => {
   const schema: any = {
     type: "array",
     items: { type: "string" },
@@ -23,7 +24,7 @@ Deno.test("schemaToTypeString converts arrays", () => {
   assertEquals(schemaToTypeString(schema), "string[]");
 });
 
-Deno.test("schemaToTypeString converts type arrays to unions", () => {
+test("schemaToTypeString converts type arrays to unions", () => {
   // The union formatter merges anyOf branches into type arrays; these used to
   // hit the String(type) fallback and render as "number,string"
   assertEquals(
@@ -40,7 +41,7 @@ Deno.test("schemaToTypeString converts type arrays to unions", () => {
   );
 });
 
-Deno.test("schemaToTypeString renders const literals like their enum twins", () => {
+test("schemaToTypeString renders const literals like their enum twins", () => {
   // The generator's node path emits const where its type path emits a
   // single-value enum; both should render as the TS literal type
   assertEquals(
@@ -54,7 +55,7 @@ Deno.test("schemaToTypeString renders const literals like their enum twins", () 
   );
 });
 
-Deno.test("schemaToTypeString keeps the index-signature value type", () => {
+test("schemaToTypeString keeps the index-signature value type", () => {
   assertEquals(
     schemaToTypeString({
       type: "object",
@@ -95,7 +96,7 @@ Deno.test("schemaToTypeString keeps the index-signature value type", () => {
   );
 });
 
-Deno.test("schemaToTypeString converts tuples (prefixItems)", () => {
+test("schemaToTypeString converts tuples (prefixItems)", () => {
   // CT-1895: tuples used to render as "unknown[]"
   const schema: any = {
     type: "array",
@@ -110,7 +111,7 @@ Deno.test("schemaToTypeString converts tuples (prefixItems)", () => {
   );
 });
 
-Deno.test("schemaToTypeString renders items alongside prefixItems as a rest element", () => {
+test("schemaToTypeString renders items alongside prefixItems as a rest element", () => {
   const schema: any = {
     type: "array",
     prefixItems: [{ type: "string" }, { type: "number" }],
@@ -119,7 +120,7 @@ Deno.test("schemaToTypeString renders items alongside prefixItems as a rest elem
   assertEquals(schemaToTypeString(schema), "[string, number, ...boolean[]]");
 });
 
-Deno.test("schemaToTypeString closes the tuple only for items: false", () => {
+test("schemaToTypeString closes the tuple only for items: false", () => {
   assertEquals(
     schemaToTypeString({
       type: "array",
@@ -130,7 +131,7 @@ Deno.test("schemaToTypeString closes the tuple only for items: false", () => {
   );
 });
 
-Deno.test("schemaToTypeString parenthesizes union rest elements", () => {
+test("schemaToTypeString parenthesizes union rest elements", () => {
   // PR #4969 review: `...number | string[]` means something else entirely.
   assertEquals(
     schemaToTypeString({
@@ -142,7 +143,7 @@ Deno.test("schemaToTypeString parenthesizes union rest elements", () => {
   );
 });
 
-Deno.test("schemaToTypeString parenthesizes function types in array elements", () => {
+test("schemaToTypeString parenthesizes function types in array elements", () => {
   // PR #4969 review round 2: `...({...}) => void[]` and `{...} => void[]`
   // are invalid/mean something else; function elements need grouping in
   // both rest and ordinary arrays.
@@ -167,7 +168,7 @@ Deno.test("schemaToTypeString parenthesizes function types in array elements", (
   );
 });
 
-Deno.test("schemaToTypeString escapes string literals and renders JSON constants", () => {
+test("schemaToTypeString escapes string literals and renders JSON constants", () => {
   // PR #4969 review: `"a"b"` was emitted for a legal string constant, and
   // object/array constants rendered as "[object Object]".
   assertEquals(
@@ -184,7 +185,7 @@ Deno.test("schemaToTypeString escapes string literals and renders JSON constants
   );
 });
 
-Deno.test("schemaToTypeString survives recursive $defs", () => {
+test("schemaToTypeString survives recursive $defs", () => {
   // PR #4969 review: ref hops recursed before the depth cap, so a ref
   // cycle overflowed the stack (reachable from CLI --help).
   const defs: any = { A: { $ref: "#/$defs/A" } };
@@ -199,14 +200,14 @@ Deno.test("schemaToTypeString survives recursive $defs", () => {
   );
 });
 
-Deno.test("schemaToTypeString renders type arrays at the depth cap", () => {
+test("schemaToTypeString renders type arrays at the depth cap", () => {
   assertEquals(
     schemaToTypeString({ type: ["string", "null"] } as any, { maxDepth: 0 }),
     "string | null",
   );
 });
 
-Deno.test("schemaToTypeString abbreviates tuples at max depth", () => {
+test("schemaToTypeString abbreviates tuples at max depth", () => {
   const schema: any = {
     type: "object",
     properties: {
@@ -217,7 +218,7 @@ Deno.test("schemaToTypeString abbreviates tuples at max depth", () => {
   assert(result.includes("pair?: [...]"));
 });
 
-Deno.test("schemaToTypeString converts objects with properties", () => {
+test("schemaToTypeString converts objects with properties", () => {
   const schema: any = {
     type: "object",
     properties: {
@@ -232,7 +233,7 @@ Deno.test("schemaToTypeString converts objects with properties", () => {
   assert(result.includes("number"));
 });
 
-Deno.test("schemaToTypeString marks required fields without ?", () => {
+test("schemaToTypeString marks required fields without ?", () => {
   const schema: any = {
     type: "object",
     properties: {
@@ -246,7 +247,7 @@ Deno.test("schemaToTypeString marks required fields without ?", () => {
   assert(result.includes("age?:"), "optional field should have ?");
 });
 
-Deno.test("schemaToTypeString converts Stream to function syntax", () => {
+test("schemaToTypeString converts Stream to function syntax", () => {
   const schema: any = {
     type: "object",
     asCell: ["stream"],
@@ -260,7 +261,7 @@ Deno.test("schemaToTypeString converts Stream to function syntax", () => {
   assert(result.includes("value"), "Stream props should be included");
 });
 
-Deno.test("schemaToTypeString converts Cell to Cell<T> syntax", () => {
+test("schemaToTypeString converts Cell to Cell<T> syntax", () => {
   const schema: any = {
     type: "object",
     asCell: ["cell"],
@@ -273,7 +274,7 @@ Deno.test("schemaToTypeString converts Cell to Cell<T> syntax", () => {
   assert(result.includes("count"), "Cell contents should be included");
 });
 
-Deno.test("schemaToTypeString converts opaque cells to FactoryInput", () => {
+test("schemaToTypeString converts opaque cells to FactoryInput", () => {
   assertEquals(
     schemaToTypeString({
       type: "string",
@@ -283,7 +284,7 @@ Deno.test("schemaToTypeString converts opaque cells to FactoryInput", () => {
   );
 });
 
-Deno.test('schemaToTypeString formats asCell: ["stream", "cell"] as Stream<Cell<T>>', () => {
+test('schemaToTypeString formats asCell: ["stream", "cell"] as Stream<Cell<T>>', () => {
   const schema: any = {
     type: "number",
     asCell: ["stream", "cell"],
@@ -293,7 +294,7 @@ Deno.test('schemaToTypeString formats asCell: ["stream", "cell"] as Stream<Cell<
   assertEquals(result, "(Cell<number>) => void");
 });
 
-Deno.test("schemaToTypeString names a sqlite handle SqliteDb", () => {
+test("schemaToTypeString names a sqlite handle SqliteDb", () => {
   // The shape a pattern's argument schema carries at a `SqliteDb` position:
   // the brand hoisted into `$defs` under its own name, with the sqlite cell
   // kind beside the reference to it.
@@ -320,7 +321,7 @@ Deno.test("schemaToTypeString names a sqlite handle SqliteDb", () => {
   );
 });
 
-Deno.test("schemaToTypeString names a sqlite handle at the depth cap", () => {
+test("schemaToTypeString names a sqlite handle at the depth cap", () => {
   assertEquals(
     schemaToTypeString({ type: "object", asCell: ["sqlite"] } as any, {
       depth: 9,
@@ -330,7 +331,7 @@ Deno.test("schemaToTypeString names a sqlite handle at the depth cap", () => {
   );
 });
 
-Deno.test("schemaToTypeString scopes a sqlite handle from its own entry", () => {
+test("schemaToTypeString scopes a sqlite handle from its own entry", () => {
   assertEquals(
     schemaToTypeString({
       type: "object",
@@ -340,7 +341,7 @@ Deno.test("schemaToTypeString scopes a sqlite handle from its own entry", () => 
   );
 });
 
-Deno.test("schemaToTypeString restores scope wrappers", () => {
+test("schemaToTypeString restores scope wrappers", () => {
   assertEquals(
     schemaToTypeString({
       type: "string",
@@ -364,7 +365,7 @@ Deno.test("schemaToTypeString restores scope wrappers", () => {
   );
 });
 
-Deno.test("schemaToTypeString handles enums as union literals", () => {
+test("schemaToTypeString handles enums as union literals", () => {
   const schema: any = {
     enum: ["open", "closed", "pending"],
   };
@@ -372,7 +373,7 @@ Deno.test("schemaToTypeString handles enums as union literals", () => {
   assertEquals(result, '"open" | "closed" | "pending"');
 });
 
-Deno.test("schemaToTypeString resolves $ref from $defs", () => {
+test("schemaToTypeString resolves $ref from $defs", () => {
   const schema: any = {
     $ref: "#/$defs/MyType",
   };
@@ -383,7 +384,7 @@ Deno.test("schemaToTypeString resolves $ref from $defs", () => {
   assertEquals(result, "string");
 });
 
-Deno.test("schemaToTypeString uses type name for large $ref definitions", () => {
+test("schemaToTypeString uses type name for large $ref definitions", () => {
   const schema: any = {
     $ref: "#/$defs/LargeType",
   };
@@ -403,7 +404,7 @@ Deno.test("schemaToTypeString uses type name for large $ref definitions", () => 
   assertEquals(result, "LargeType");
 });
 
-Deno.test("schemaToTypeString skips $-prefixed properties", () => {
+test("schemaToTypeString skips $-prefixed properties", () => {
   const schema: any = {
     type: "object",
     properties: {
@@ -418,7 +419,7 @@ Deno.test("schemaToTypeString skips $-prefixed properties", () => {
   assert(result.includes("name"), "regular props should be included");
 });
 
-Deno.test("schemaToTypeString handles anyOf as union", () => {
+test("schemaToTypeString handles anyOf as union", () => {
   const schema: any = {
     anyOf: [{ type: "string" }, { type: "number" }],
   };
@@ -426,7 +427,7 @@ Deno.test("schemaToTypeString handles anyOf as union", () => {
   assertEquals(result, "string | number");
 });
 
-Deno.test("schemaToTypeString limits recursion depth", () => {
+test("schemaToTypeString limits recursion depth", () => {
   const deepSchema: any = {
     type: "object",
     properties: {
@@ -452,7 +453,7 @@ Deno.test("schemaToTypeString limits recursion depth", () => {
   assert(result.includes("{...}"), "Deep nesting should be abbreviated");
 });
 
-Deno.test("schemaToTypeString produces compact output for complex schema", () => {
+test("schemaToTypeString produces compact output for complex schema", () => {
   // This is the example from the user's request
   const schema: any = {
     type: "object",
@@ -496,7 +497,7 @@ Deno.test("schemaToTypeString produces compact output for complex schema", () =>
   assert(result.includes("Cell<"), "aCell should use Cell wrapper");
 });
 
-Deno.test("schemaToTypeString converts PatternToolResult to function syntax", () => {
+test("schemaToTypeString converts PatternToolResult to function syntax", () => {
   // PatternToolResult<{ content: string }> schema
   const schema: any = {
     type: "object",
@@ -528,7 +529,7 @@ Deno.test("schemaToTypeString converts PatternToolResult to function syntax", ()
   );
 });
 
-Deno.test("schemaToTypeString handles nested PatternToolResult in object", () => {
+test("schemaToTypeString handles nested PatternToolResult in object", () => {
   // Schema for a piece output with handler properties
   const schema: any = {
     type: "object",
@@ -572,7 +573,7 @@ Deno.test("schemaToTypeString handles nested PatternToolResult in object", () =>
   assert(result.includes("void"), "handlers should return void");
 });
 
-Deno.test("schemaToTypeString formats fixture-style PatternToolResult without leaking internals", () => {
+test("schemaToTypeString formats fixture-style PatternToolResult without leaking internals", () => {
   const schema: any = {
     type: "object",
     properties: {
@@ -628,7 +629,7 @@ Deno.test("schemaToTypeString formats fixture-style PatternToolResult without le
 // block and its flag list cannot disagree about the same schema.
 //
 
-Deno.test("schemaToTypeString renders a conjunction's fields alongside its own", () => {
+test("schemaToTypeString renders a conjunction's fields alongside its own", () => {
   assertEquals(
     schemaToTypeString({
       type: "object",
@@ -639,7 +640,7 @@ Deno.test("schemaToTypeString renders a conjunction's fields alongside its own",
   );
 });
 
-Deno.test("schemaToTypeString renders fields a schema declares only through allOf", () => {
+test("schemaToTypeString renders fields a schema declares only through allOf", () => {
   // No `type` and no `properties` of its own, so this reaches the object
   // branch only because the conjunction was gathered before it was chosen.
   assertEquals(
@@ -650,7 +651,7 @@ Deno.test("schemaToTypeString renders fields a schema declares only through allO
   );
 });
 
-Deno.test("schemaToTypeString requires a field any conjunct requires", () => {
+test("schemaToTypeString requires a field any conjunct requires", () => {
   // Required is a union across members, not first-wins: every member's
   // constraint holds at once.
   assertEquals(
@@ -663,7 +664,7 @@ Deno.test("schemaToTypeString requires a field any conjunct requires", () => {
   );
 });
 
-Deno.test("schemaToTypeString keeps the first declaration of a repeated field", () => {
+test("schemaToTypeString keeps the first declaration of a repeated field", () => {
   assertEquals(
     schemaToTypeString({
       type: "object",
@@ -674,7 +675,7 @@ Deno.test("schemaToTypeString keeps the first declaration of a repeated field", 
   );
 });
 
-Deno.test("schemaToTypeString resolves a $defs reference inside a conjunction", () => {
+test("schemaToTypeString resolves a $defs reference inside a conjunction", () => {
   assertEquals(
     schemaToTypeString(
       {
@@ -692,7 +693,7 @@ Deno.test("schemaToTypeString resolves a $defs reference inside a conjunction", 
   );
 });
 
-Deno.test("schemaToTypeString terminates on a conjunction that references itself", () => {
+test("schemaToTypeString terminates on a conjunction that references itself", () => {
   assertEquals(
     schemaToTypeString(
       {
@@ -714,7 +715,7 @@ Deno.test("schemaToTypeString terminates on a conjunction that references itself
   );
 });
 
-Deno.test("schemaToTypeString leaves a disjunction a union", () => {
+test("schemaToTypeString leaves a disjunction a union", () => {
   // Only a conjunction states fields that all hold at once; `anyOf` is a
   // union and keeps rendering as one.
   assertEquals(
@@ -725,7 +726,7 @@ Deno.test("schemaToTypeString leaves a disjunction a union", () => {
   );
 });
 
-Deno.test("schemaToTypeString does not make an object of a scalar conjunction", () => {
+test("schemaToTypeString does not make an object of a scalar conjunction", () => {
   // `allOf: [{type: "string"}]` constrains a scalar and contributes no field.
   // Rendering it as `{}` would invent an object the schema never described.
   assertEquals(
@@ -734,7 +735,7 @@ Deno.test("schemaToTypeString does not make an object of a scalar conjunction", 
   );
 });
 
-Deno.test("schemaToTypeString steps over a conjunct that is not a schema", () => {
+test("schemaToTypeString steps over a conjunct that is not a schema", () => {
   // `allOf` is caller data and can hold anything. A member that is not an
   // object contributes no field rather than ending the walk, so the members
   // beside it are still read.
@@ -746,7 +747,7 @@ Deno.test("schemaToTypeString steps over a conjunct that is not a schema", () =>
   );
 });
 
-Deno.test("schemaToTypeString steps over a conjunct naming a definition that is absent", () => {
+test("schemaToTypeString steps over a conjunct naming a definition that is absent", () => {
   assertEquals(
     schemaToTypeString(
       {
@@ -760,7 +761,7 @@ Deno.test("schemaToTypeString steps over a conjunct naming a definition that is 
   );
 });
 
-Deno.test("schemaToTypeString stops following a conjunction past its depth bound", () => {
+test("schemaToTypeString stops following a conjunction past its depth bound", () => {
   // Nested `allOf` is followed 8 levels. The 10th level's field is beyond the
   // bound and does not appear; the levels within it still do. The bound is
   // what keeps a pathological schema from walking forever.
@@ -779,7 +780,7 @@ Deno.test("schemaToTypeString stops following a conjunction past its depth bound
   assert(!rendered.includes("level10"), "the level past the bound is not");
 });
 
-Deno.test("schemaToTypeString follows a definition that aliases another", () => {
+test("schemaToTypeString follows a definition that aliases another", () => {
   // A definition may be an alias for a second one. Stopping after a single hop
   // would collect the alias, which states no field, instead of what it names.
   assertEquals(
@@ -800,7 +801,7 @@ Deno.test("schemaToTypeString follows a definition that aliases another", () => 
   );
 });
 
-Deno.test("schemaToTypeString terminates on a definition that aliases itself", () => {
+test("schemaToTypeString terminates on a definition that aliases itself", () => {
   // The chain above has to end somewhere. A definition naming itself is the
   // shortest loop there is.
   assertEquals(
@@ -816,7 +817,7 @@ Deno.test("schemaToTypeString terminates on a definition that aliases itself", (
   );
 });
 
-Deno.test("schemaToTypeString renders an object conjunct that names no field", () => {
+test("schemaToTypeString renders an object conjunct that names no field", () => {
   // `type: "object"` makes the whole an object even with nothing named, and
   // `{}` is what that is. A scalar conjunct is the contrasting case below.
   assertEquals(
@@ -825,7 +826,7 @@ Deno.test("schemaToTypeString renders an object conjunct that names no field", (
   );
 });
 
-Deno.test("schemaToTypeString names a reference to an absent definition", () => {
+test("schemaToTypeString names a reference to an absent definition", () => {
   expect(schemaToTypeString({ $ref: "#/$defs/Missing" })).toBe("Missing");
   expect(
     schemaToTypeString({ $ref: "#/$defs/Missing" }, {
@@ -834,7 +835,7 @@ Deno.test("schemaToTypeString names a reference to an absent definition", () => 
   ).toBe("string");
 });
 
-Deno.test("schemaToTypeString keeps cell wrappers at the depth cap", () => {
+test("schemaToTypeString keeps cell wrappers at the depth cap", () => {
   const schema: JSONSchema = {
     type: "object",
     properties: { a: { type: "string" } },
@@ -846,7 +847,7 @@ Deno.test("schemaToTypeString keeps cell wrappers at the depth cap", () => {
   );
 });
 
-Deno.test("schemaToTypeString abbreviates an enum past five values", () => {
+test("schemaToTypeString abbreviates an enum past five values", () => {
   expect(schemaToTypeString({ enum: [1, 2, 3, 4, 5, 6] })).toBe(
     "1 | 2 | 3 | 4 | 5 | ...",
   );
@@ -855,7 +856,7 @@ Deno.test("schemaToTypeString abbreviates an enum past five values", () => {
   );
 });
 
-Deno.test("schemaToTypeString abbreviates a union past four variants", () => {
+test("schemaToTypeString abbreviates a union past four variants", () => {
   const variants: JSONSchema[] = [
     { const: 1 },
     { const: 2 },
@@ -869,13 +870,13 @@ Deno.test("schemaToTypeString abbreviates a union past four variants", () => {
   );
 });
 
-Deno.test("schemaToTypeString renders an array without an item schema as unknown[]", () => {
+test("schemaToTypeString renders an array without an item schema as unknown[]", () => {
   expect(schemaToTypeString({ type: "array" })).toBe("unknown[]");
   expect(schemaToTypeString({ type: "array", items: { type: "number" } }))
     .toBe("number[]");
 });
 
-Deno.test("schemaToTypeString renders an object of only $-prefixed properties as {}", () => {
+test("schemaToTypeString renders an object of only $-prefixed properties as {}", () => {
   expect(
     schemaToTypeString({ type: "object", properties: { $UI: {} } }),
   ).toBe("{}");
@@ -884,7 +885,7 @@ Deno.test("schemaToTypeString renders an object of only $-prefixed properties as
   ).toBe("{\n  a?: unknown\n}");
 });
 
-Deno.test("schemaToTypeString names each cell kind's wrapper", () => {
+test("schemaToTypeString names each cell kind's wrapper", () => {
   const wrapped = (kind: CellKind) =>
     schemaToTypeString({ type: "string", asCell: [kind] });
   expect(wrapped("readonly")).toBe("ReadonlyCell<string>");
@@ -893,7 +894,7 @@ Deno.test("schemaToTypeString names each cell kind's wrapper", () => {
   expect(wrapped("cell")).toBe("Cell<string>");
 });
 
-Deno.test("schemaToTypeString names a wrapper of a kind it does not know UnknownWrapper", () => {
+test("schemaToTypeString names a wrapper of a kind it does not know UnknownWrapper", () => {
   // Stored schemas arrive as JSON, so a kind outside `CellKind` reaches the
   // formatter that way.
   expect(
@@ -901,7 +902,7 @@ Deno.test("schemaToTypeString names a wrapper of a kind it does not know Unknown
   ).toBe("UnknownWrapper");
 });
 
-Deno.test("schemaToTypeString wraps a space-scoped cell in PerSpace", () => {
+test("schemaToTypeString wraps a space-scoped cell in PerSpace", () => {
   expect(
     schemaToTypeString({
       type: "string",

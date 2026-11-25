@@ -6,7 +6,6 @@
 
 import { expect } from "@std/expect";
 import { basename, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { caseNamed, measureCasePhases } from "./topics-cost-cases.ts";
 import {
@@ -19,6 +18,7 @@ import {
   TOPICS_READ_BUDGET_GROUPS,
 } from "./topics-read-budget.ts";
 import { TOPICS_READ_BUDGET_LIMITS } from "./topics-read-budget-limits.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Registers the read-budget tests of `group` inside the calling `describe()`,

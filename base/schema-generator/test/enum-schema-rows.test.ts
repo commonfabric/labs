@@ -6,10 +6,10 @@
 //     string -> { enum: ["on","off"] }, with $ref at non-root occurrences;
 //   - root enum occurrences stay inline.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { getTypeFromCode } from "./utils.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 async function gen(code: string, typeName: string) {
   const { type, checker, typeNode } = await getTypeFromCode(code, typeName);

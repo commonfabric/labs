@@ -15,10 +15,10 @@
  * rather than merely absent from it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { FabricValue } from "@";
 import { UnknownValue } from "@/codec-common";

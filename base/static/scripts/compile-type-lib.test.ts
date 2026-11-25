@@ -3,8 +3,9 @@ import { join } from "@std/path";
 import { stub } from "@std/testing/mock";
 
 import { compileMain, runCompileTypeLib, USAGE } from "./compile-type-lib.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("compileMain resolves references and strips withheld globals", async () => {
+test("compileMain resolves references and strips withheld globals", async () => {
   // The compiler resolves `/// <reference lib="...">` directives and emits one
   // file, dropping the withheld-global declarations on the way out. This
   // exercises that end to end against a temporary library rather than the real
@@ -36,7 +37,7 @@ Deno.test("compileMain resolves references and strips withheld globals", async (
   }
 });
 
-Deno.test("compileMain includes a library two others reference once", async () => {
+test("compileMain includes a library two others reference once", async () => {
   const dir = await Deno.makeTempDir();
   try {
     await Deno.writeTextFile(
@@ -66,7 +67,7 @@ Deno.test("compileMain includes a library two others reference once", async () =
   }
 });
 
-Deno.test("runCompileTypeLib writes the es2023 library given both paths", async () => {
+test("runCompileTypeLib writes the es2023 library given both paths", async () => {
   const dir = await Deno.makeTempDir();
   try {
     await Deno.writeTextFile(
@@ -85,7 +86,7 @@ Deno.test("runCompileTypeLib writes the es2023 library given both paths", async 
   }
 });
 
-Deno.test("runCompileTypeLib prints its usage and fails without both paths", async () => {
+test("runCompileTypeLib prints its usage and fails without both paths", async () => {
   using log = stub(console, "log");
 
   assertEquals(await runCompileTypeLib([]), 1);

@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { serverExecutionCiLane } from "../server-execution-ci.ts";
 import type {
   ServerExecutionOnSkip,
@@ -8,6 +7,7 @@ import type {
 } from "../server-execution-on-skips.ts";
 import { loadPackageIntegrationSuites } from "./package-integration.ts";
 import { type Suite, unavailableUnits } from "./suite.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const root = dirname(dirname(dirname(fromFileUrl(import.meta.url))));
 
@@ -98,6 +98,6 @@ describe("the package integration suites", () => {
       spoolDir: "/spool",
     });
     expect(invocation!.env?.HEADLESS).toBe("1");
-    expect(invocation!.junit?.[0]?.scope).toBe("shell");
+    expect(invocation!.results?.scope).toBe("shell");
   });
 });

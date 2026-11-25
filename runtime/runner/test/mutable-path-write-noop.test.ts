@@ -2,11 +2,11 @@
 // including Fabric-aware equality for FabricPrimitive elements: an equal
 // FabricBytes must be recognized as a no-op, and a different one as a change.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
+import { describe, it } from "@commonfabric/test-support/test";
 import { planMutablePathWrite } from "../src/storage/transaction/mutable-path-write.ts";
 import type { IMemoryAddress } from "../src/storage/interface.ts";
 

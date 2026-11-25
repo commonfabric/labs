@@ -1,4 +1,3 @@
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as path from "@std/path";
 import { cors } from "@hono/hono/cors";
@@ -7,6 +6,12 @@ import { browserAssetBase } from "@/lib/build-info.ts";
 import createApp, { createRouter } from "@/lib/create-app.ts";
 import { generateETag } from "@commonfabric/static/etag";
 import type { DeploymentMetaContent } from "@commonfabric/runner/deployment-meta";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   experimentalPosture,
   publishExperimentalPosture,

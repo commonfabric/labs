@@ -12,10 +12,10 @@
  * record, from the same configuration, and an audit reads both.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { presetCfcOptions } from "@commonfabric/runner";
 import { RUNTIME_CFC_DIAL_DEFAULTS } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   harnessFabricSessionPosture,

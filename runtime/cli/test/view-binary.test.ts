@@ -1,6 +1,5 @@
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { _internal as viewInternals, buildView } from "../lib/view/mod.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import {
@@ -20,6 +19,7 @@ import {
 } from "../lib/view/languages/language.ts";
 import { markdownLanguage } from "../lib/view/languages/markdown/language.ts";
 import { Session } from "../lib/view/session.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("view-binary", () => {
   it("round-trips UTF-8 text and raw bytes through their decoders", () => {

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -11,6 +10,7 @@ import {
   writtenAhead,
 } from "./selection.ts";
 import { sampleManifest } from "./selection-testing.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TEST = { k: "unit", s: "memory", n: "space > writes" };
 const CALIBRATION = {
@@ -604,7 +604,7 @@ describe("selection", () => {
         withField("unavailable", [{ suite: "s", reason: "r" }]),
       ],
       [
-        "an unavailable entry with no reason",
+        "an unavailable entry whose reason is not a string",
         withField("unavailable", [{ suite: "s", unit: "u", reason: 7 }]),
       ],
       [

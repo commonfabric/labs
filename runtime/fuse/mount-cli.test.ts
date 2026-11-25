@@ -9,6 +9,7 @@ import { existsSync } from "@std/fs";
 import { dirname, fromFileUrl, join } from "@std/path";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { test } from "@commonfabric/test-support/test";
 
 const packageDir = dirname(fromFileUrl(import.meta.url));
 const repoRoot = join(packageDir, "..", "..");
@@ -52,7 +53,7 @@ function unusedMountpoint(): string {
   );
 }
 
-Deno.test("daemon rejects an out-of-range attrcache-timeout", async () => {
+test("daemon rejects an out-of-range attrcache-timeout", async () => {
   const mountpoint = unusedMountpoint();
   const { code, stderr } = await runDaemon([
     mountpoint,
@@ -65,7 +66,7 @@ Deno.test("daemon rejects an out-of-range attrcache-timeout", async () => {
   assertEquals(existsSync(mountpoint), false);
 });
 
-Deno.test("daemon rejects an attrcache-timeout whose value was dropped", async () => {
+test("daemon rejects an attrcache-timeout whose value was dropped", async () => {
   // The argument parser does not read "-1" as this flag's value, and a mount
   // must not silently fall back to the default cache regime.
   const { code, stderr } = await runDaemon([
@@ -78,7 +79,7 @@ Deno.test("daemon rejects an attrcache-timeout whose value was dropped", async (
   assertStringIncludes(stderr, "Missing value for --attrcache-timeout");
 });
 
-Deno.test("daemon rejects a non-integer attrcache-timeout", async () => {
+test("daemon rejects a non-integer attrcache-timeout", async () => {
   const { code, stderr } = await runDaemon([
     unusedMountpoint(),
     "--attrcache-timeout",
@@ -89,7 +90,7 @@ Deno.test("daemon rejects a non-integer attrcache-timeout", async () => {
   assertStringIncludes(stderr, "Invalid --attrcache-timeout value: 1.5");
 });
 
-Deno.test("daemon rejects both cache flags together", async () => {
+test("daemon rejects both cache flags together", async () => {
   const { code, stderr } = await runDaemon([
     unusedMountpoint(),
     "--noattrcache",
@@ -104,7 +105,7 @@ Deno.test("daemon rejects both cache flags together", async () => {
   );
 });
 
-Deno.test("daemon accepts the cache flags it supports", async () => {
+test("daemon accepts the cache flags it supports", async () => {
   // A missing mountpoint is reported only once the flags have parsed, so
   // reaching the usage message proves the flags themselves were accepted.
   for (
@@ -120,7 +121,7 @@ Deno.test("daemon accepts the cache flags it supports", async () => {
   }
 });
 
-Deno.test("daemon rejects an unrecognized --cfc-mode", async () => {
+test("daemon rejects an unrecognized --cfc-mode", async () => {
   const mountpoint = unusedMountpoint();
   const { code, stderr } = await runDaemon([
     mountpoint,
@@ -139,7 +140,7 @@ Deno.test("daemon rejects an unrecognized --cfc-mode", async () => {
   assertEquals(existsSync(mountpoint), false);
 });
 
-Deno.test("daemon rejects an unrecognized CF_CFC_MODE", async () => {
+test("daemon rejects an unrecognized CF_CFC_MODE", async () => {
   const mountpoint = unusedMountpoint();
   const { code, stderr } = await runDaemon(
     [mountpoint],
@@ -158,7 +159,7 @@ Deno.test("daemon rejects an unrecognized CF_CFC_MODE", async () => {
   assertEquals(existsSync(mountpoint), false);
 });
 
-Deno.test("daemon accepts the CFC modes on the ladder", async () => {
+test("daemon accepts the CFC modes on the ladder", async () => {
   // Reaching the usage message proves the mode was accepted: it is reported
   // only once the flags have parsed.
   for (
@@ -175,7 +176,7 @@ Deno.test("daemon accepts the CFC modes on the ladder", async () => {
   }
 });
 
-Deno.test("a rejected mount flag reaches the parent on the status channel", async () => {
+test("a rejected mount flag reaches the parent on the status channel", async () => {
   // A background mount's stderr goes nowhere its parent reads. `cf fuse mount`
   // learns why a mount did not start from the supervisor status channel.
   const statusPath = join(

@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   type CfcConfClause,
   clauseAlternatives,
   isOrClause,
 } from "@commonfabric/memory/v2/cfc-release-authority";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { mergeCfcLabelViews, mergeLabel } from "../src/cfc/label-view-core.ts";
 

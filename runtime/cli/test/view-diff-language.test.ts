@@ -8,7 +8,6 @@
 
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { parseDiff } from "../lib/view/diff.ts";
 import { diffCounts } from "../lib/view/diffcounts.ts";
@@ -29,6 +28,7 @@ import { shellLanguage } from "../lib/view/languages/shell/language.ts";
 import { typeScriptLanguage } from "../lib/view/languages/typescript/language.ts";
 import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
 import type { Line, TokenClass } from "../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Shell and Python color through their synchronous entry points, which show
 // plain text until their parsers have loaded.

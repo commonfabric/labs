@@ -1,6 +1,5 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { CrossStageState, TransformationContext } from "../../src/core/mod.ts";
@@ -9,6 +8,7 @@ import {
   classifyCallbackBoundary,
   getCallbackBoundarySemantics,
 } from "../../src/policy/callback-boundary.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 const virtualLibraryFileName = "/virtual/es2023.d.ts";
 const virtualLibrarySource = `
@@ -135,7 +135,7 @@ function findFirstNode<T extends ts.Node>(
   return found;
 }
 
-Deno.test(
+test(
   "Callback support policy: plain array map callbacks stay plain-array value callbacks",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(
@@ -162,7 +162,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback support policy: readonly array map callbacks carry a wrapper site",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(
@@ -181,7 +181,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback support policy: virtual library array map callbacks carry a wrapper site",
   () => {
     const { sourceFile, checker, context, program } = createProgramAndContext(
@@ -205,7 +205,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback support policy: ambient Array declarations carry no wrapper site",
   () => {
     const { sourceFile, checker, context, program } = createProgramAndContext(
@@ -229,7 +229,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback support policy: plain array find callbacks stay plain-array value callbacks",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(
@@ -258,7 +258,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback support policy: a plain filter callback carries no wrapper site",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(
@@ -277,7 +277,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback support policy: a sort comparator carries no wrapper site",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(
@@ -295,7 +295,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback support policy: a map on some other type carries no wrapper site",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -314,7 +314,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback support policy: a source-defined `Array.map()` carries no wrapper site",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -333,7 +333,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback support policy: a callback past argument zero carries no wrapper site",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(
@@ -368,7 +368,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback support policy: reactive array-method callbacks stay reactive-owned",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -393,7 +393,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback boundary policy: non-transformed reactive array callbacks inherit parent body context",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -415,7 +415,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback boundary policy: transformed array callbacks stay explicit pattern boundaries",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -439,7 +439,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback boundary policy: reactive context for transformed array callbacks comes from the shared boundary classifier",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -495,7 +495,7 @@ describe("terminal array callback context", () => {
   }
 });
 
-Deno.test(
+test(
   "Callback support policy: event handlers stay outside the generic safe-wrapper callback bucket",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -525,7 +525,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback boundary policy: reactive context for event handlers comes from the shared boundary classifier",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -546,7 +546,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback boundary policy: unsupported callbacks inside JSX become boundary-owned callback-container errors",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -575,7 +575,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback boundary policy: unsupported callbacks outside JSX inherit parent context",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -597,7 +597,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback boundary policy: unresolved property-access pattern fallback stays pattern-owned",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -620,7 +620,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback boundary policy: unresolved property-access patternTool fallback stays compute-owned",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -643,7 +643,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback boundary policy: shadowed local pattern helper does not use name-only fallback",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -675,7 +675,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback boundary policy: shadowed local patternTool helper does not use name-only fallback",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -707,7 +707,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Callback support policy: foreign void array containers remain unsupported",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`

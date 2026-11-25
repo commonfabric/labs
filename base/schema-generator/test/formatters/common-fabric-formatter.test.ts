@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 import type { SchemaGenerationDiagnostic } from "../../src/interface.ts";
@@ -8,6 +7,7 @@ import {
   createTestProgram,
   getTypeFromCode,
 } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** `Cfc` and the label aliases the cases lower, declared as an author would. */
 const CFC_ALIASES = `

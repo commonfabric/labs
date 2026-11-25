@@ -1,7 +1,12 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { getPatternEnvironment, setPatternEnvironment } from "../src/env.ts";
 import type { PatternEnvironment } from "../src/builder/env.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("pattern environment", () => {
   let originalEnv: PatternEnvironment;

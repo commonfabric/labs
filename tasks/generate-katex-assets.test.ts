@@ -1,6 +1,5 @@
 import { join, toFileUrl } from "@std/path";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   KATEX_STYLES,
   KATEX_STYLES_VERSION,
@@ -12,6 +11,12 @@ import {
   type KatexDestination,
   readKatexRelease,
 } from "./generate-katex-assets.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The repository root. */
 const ROOT = new URL("../", import.meta.url);

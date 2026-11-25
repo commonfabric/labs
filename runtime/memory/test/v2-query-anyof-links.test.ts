@@ -6,12 +6,17 @@
  * whatever any option reaches.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 
 import type { JSONSchema } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { URI } from "../interface.ts";
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";

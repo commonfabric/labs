@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { evaluateHarnessWriteFileAuthorization } from "../../src/cfc/harness-write-policy.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("evaluateHarnessWriteFileAuthorization()", () => {
   it("returns allowed without a warning when enforcement is disabled", () => {

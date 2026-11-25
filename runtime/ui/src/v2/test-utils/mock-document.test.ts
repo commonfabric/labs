@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { installMockDocument } from "./mock-document.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("mock-document", () => {
   describe("installMockDocument()", () => {

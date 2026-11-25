@@ -16,6 +16,7 @@ import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import type { Cell, IExtendedStorageTransaction } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
@@ -42,7 +43,7 @@ function createOpsCollector() {
   };
 }
 
-Deno.test("worker reconciler diffing - same tag updates in place", async (t) => {
+test("worker reconciler diffing - same tag updates in place", async (t) => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),

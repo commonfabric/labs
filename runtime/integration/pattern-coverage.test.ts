@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { resolve } from "@std/path";
 import type { PatternCoverageSpan } from "@commonfabric/runner";
+import { test } from "@commonfabric/test-support/test";
 import {
   collectPatternCoverage,
   patternCoverageCollector,
@@ -29,7 +30,7 @@ const span = (fileName: string): PatternCoverageSpan => ({
 // evaporates rather than failing anything.
 //
 
-Deno.test("worker span file names resolve onto real pattern files", async () => {
+test("worker span file names resolve onto real pattern files", async () => {
   const cases = [
     {
       label: "fetched over HTTP, named by URL pathname",
@@ -68,7 +69,7 @@ Deno.test("worker span file names resolve onto real pattern files", async () => 
   }
 });
 
-Deno.test("a name that is not under the patterns route is left alone", () => {
+test("a name that is not under the patterns route is left alone", () => {
   // Fabric mounts carry their own identity-based path and are reported as-is.
   const mounted = "/~cf/abc123/main.tsx";
   const mapped = withRepositoryFileNames({
@@ -139,7 +140,7 @@ async function lcovCounts(
   return counts;
 }
 
-Deno.test("a dump carrying only hits credits the lines they name", async () => {
+test("a dump carrying only hits credits the lines they name", async () => {
   // The realm that compiled a pattern holds its spans; a realm that warm-loaded
   // the same instrumented bytes reports hits against them and holds none. The
   // second dump is the whole contribution of every page that ran a pattern
@@ -170,14 +171,14 @@ Deno.test("a dump carrying only hits credits the lines they name", async () => {
   assertEquals(warnings, []);
 });
 
-Deno.test("a page that never booted a runtime is collected in silence", async () => {
+test("a page that never booted a runtime is collected in silence", async () => {
   const warnings = await collectingWarnings(async () => {
     await collectPatternCoverage(respondingPage(() => ({ noRuntime: true })));
   });
   assertEquals(warnings, []);
 });
 
-Deno.test("a page that cannot be reached reports what it took with it", async () => {
+test("a page that cannot be reached reports what it took with it", async () => {
   const warnings = await collectingWarnings(async () => {
     await collectPatternCoverage(respondingPage(() => {
       throw new Error("Page is already closed.");
@@ -187,7 +188,7 @@ Deno.test("a page that cannot be reached reports what it took with it", async ()
   assert(warnings[0].includes("Page is already closed."), warnings[0]);
 });
 
-Deno.test("a runtime that does not answer the request reports the loss", async () => {
+test("a runtime that does not answer the request reports the loss", async () => {
   const warnings = await collectingWarnings(async () => {
     await collectPatternCoverage(
       respondingPage(() => ({ noCoverageRequest: true })),
@@ -197,7 +198,7 @@ Deno.test("a runtime that does not answer the request reports the loss", async (
   assert(warnings[0].includes("getPatternCoverage"), warnings[0]);
 });
 
-Deno.test("a worker built without a collector reports the loss", async () => {
+test("a worker built without a collector reports the loss", async () => {
   const warnings = await collectingWarnings(async () => {
     await collectPatternCoverage(respondingPage(() => ({ data: null })));
   });
@@ -205,7 +206,7 @@ Deno.test("a worker built without a collector reports the loss", async () => {
   assert(warnings[0].includes("without a collector"), warnings[0]);
 });
 
-Deno.test("a second runtime's dump adds to the first rather than replacing it", async () => {
+test("a second runtime's dump adds to the first rather than replacing it", async () => {
   // One page runs several runtimes, because the shell builds a new one for
   // every navigation and every identity set on it, and each is pulled from
   // before it goes. What the second hands over joins what the first did.
@@ -241,7 +242,7 @@ Deno.test("a second runtime's dump adds to the first rather than replacing it", 
   assertEquals(warnings, []);
 });
 
-Deno.test("a later dump leaves an earlier dump's record standing", async () => {
+test("a later dump leaves an earlier dump's record standing", async () => {
   // Each dump rewrites the whole merged report, which is what lets the file on
   // disk stand complete at every moment without a process-exit hook. A dump
   // that names one pattern carries every earlier pattern out with it.
@@ -279,7 +280,7 @@ Deno.test("a later dump leaves an earlier dump's record standing", async () => {
 // to collect from, has its hits written when it asks.
 //
 
-Deno.test("the process's own runtimes' hits are written when asked", async () => {
+test("the process's own runtimes' hits are written when asked", async () => {
   const fileName = "/system/favorites-manager/favorites-manager.tsx";
   const warnings = await collectingWarnings(async (dir) => {
     const collector = patternCoverageCollector();
@@ -296,7 +297,7 @@ Deno.test("the process's own runtimes' hits are written when asked", async () =>
   assertEquals(warnings, []);
 });
 
-Deno.test("a run that collects no coverage writes nothing when asked", async () => {
+test("a run that collects no coverage writes nothing when asked", async () => {
   const previousDir = Deno.env.get("CF_PATTERN_COVERAGE_DIR");
   Deno.env.delete("CF_PATTERN_COVERAGE_DIR");
   try {

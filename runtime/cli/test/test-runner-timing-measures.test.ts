@@ -9,7 +9,6 @@
  * which is why it is pinned here rather than left to a reading of the code.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { runTests } from "../lib/test-runner.ts";
@@ -19,6 +18,7 @@ import {
   setTimingMeasuresEnabled,
   TIMING_MEASURE_PREFIX,
 } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/step-kinds");
 const FIXTURE = resolve(FIXTURES, "marker-step.test.tsx");

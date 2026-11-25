@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { Key } from "../lib/view/keys.ts";
 import { firstShown, LineEdit } from "../lib/view/lineedit.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The key that types `char`. */
 function typed(char: string): Key {

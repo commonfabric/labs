@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { GlobalShortcutsController } from "../src/lib/global-shortcuts-controller.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Exercises the shell's global keyboard shortcut: Alt+W navigates to the space
 // the current view addresses. It goes through a single document keydown

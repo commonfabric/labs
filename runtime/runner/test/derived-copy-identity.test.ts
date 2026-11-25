@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   brandTrustedBuilderArtifact,
@@ -11,6 +10,7 @@ import {
   resolveOriginal,
   setArtifactEntryRef,
 } from "../src/builder/pattern-metadata.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Derived-copy identity carry (PR B of

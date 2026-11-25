@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
@@ -17,6 +16,8 @@ import {
   selectPendingExecutionOutboxRows,
 } from "@commonfabric/memory/v2/execution-outbox";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 
 import { ExecutorHost, SpaceNotServedError } from "../../src/executor/host.ts";
 import {
@@ -32,6 +33,10 @@ import { Runtime } from "../../src/runtime.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
+
+// This file runs on the real clock because it controls Date itself, while
+// scheduler and transport dispatch use ordinary zero-delay timers.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("activation lease space");
 const serviceSigner = await Identity.fromPassphrase("activation lease service");

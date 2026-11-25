@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { CrossStageState } from "../../src/core/mod.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("CrossStageState", () => {
   describe("instance members", () => {

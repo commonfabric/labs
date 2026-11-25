@@ -1,5 +1,4 @@
 import { deployedPieceRef } from "../src/client.ts";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 import {
@@ -10,6 +9,12 @@ import { checkIndexChain, issueIndexChain } from "../src/membership.ts";
 import { PatternIndexStore } from "../src/store.ts";
 import { encodeDelegationChains, Identity } from "@commonfabric/identity";
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const root = fromFileUrl(new URL("../../../", import.meta.url));
 const entry = fromFileUrl(new URL("../cli.ts", import.meta.url));

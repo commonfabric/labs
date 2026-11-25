@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type Stub, stub } from "@std/testing/mock";
 import {
@@ -7,6 +6,12 @@ import {
   setGlobalLogFloor,
 } from "../src/logger.ts";
 import { captureLogsForTestingOnly } from "../src/for-testing-only.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("captureLogsForTestingOnly()", () => {
   const logger = getLogger("capture-test");

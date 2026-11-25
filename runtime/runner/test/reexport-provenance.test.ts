@@ -1,7 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { afterEach, describe, it, test } from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import { resolvePolicyFacingImplementationIdentity } from "../src/cfc/implementation-identity.ts";
 import {
@@ -106,7 +106,7 @@ describe("re-export provenance", () => {
   });
 });
 
-Deno.test("defining-module stamps: non-function values are ignored; first write wins", () => {
+test("defining-module stamps: non-function values are ignored; first write wins", () => {
   // Non-functions never enter the WeakMap (mirrors recordVerifiedProvenance).
   recordDefiningModule({ not: "a function" }, "MODULE_X");
   expect(getDefiningModule({ not: "a function" })).toBe(undefined);

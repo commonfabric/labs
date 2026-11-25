@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { parseFunctionText } from "../src/sandbox/compiled-js-parser.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const statementsOf = (source: string): string[] =>
   parseFunctionText(source, 0, source.length).body.statements.map((s) =>

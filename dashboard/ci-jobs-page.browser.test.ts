@@ -13,6 +13,7 @@ import {
   type Job,
 } from "./ci-jobs-page.ts";
 import { updateMain } from "./live-page-client.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -99,12 +100,12 @@ function heading(fixture: HTMLElement, index: number): HTMLButtonElement {
   )!;
 }
 
-Deno.test("ci jobs sorting: the served order is worst first", () => {
+test("ci jobs sorting: the served order is worst first", () => {
   const fixture = arrange();
   assertEquals(column(fixture, 0), ["loom", "amp", "bay", "zed"]);
 });
 
-Deno.test("ci jobs sorting: a heading sorts up, then down", () => {
+test("ci jobs sorting: a heading sorts up, then down", () => {
   const fixture = arrange();
   const repository = heading(fixture, 0);
 
@@ -117,7 +118,7 @@ Deno.test("ci jobs sorting: a heading sorts up, then down", () => {
   assertEquals(repository.parentElement?.getAttribute("aria-sort"), "descending");
 });
 
-Deno.test("ci jobs sorting: duration sorts by the span, not by how it is spelled", () => {
+test("ci jobs sorting: duration sorts by the span, not by how it is spelled", () => {
   const fixture = arrange();
   // As text "1m 00s" sorts before "40m 00s" and "3h 20m" before both, which
   // is the wrong order twice over; the sort key is what puts them right.
@@ -127,7 +128,7 @@ Deno.test("ci jobs sorting: duration sorts by the span, not by how it is spelled
   assertEquals(column(fixture, 4), ["3h 20m", "40m 00s", "9m 00s", "1m 00s"]);
 });
 
-Deno.test("ci jobs sorting: age and start sort on the same moment", () => {
+test("ci jobs sorting: age and start sort on the same moment", () => {
   const fixture = arrange();
   heading(fixture, 5).click();
   const oldestFirst = ["amp", "bay", "zed", "loom"];
@@ -138,13 +139,13 @@ Deno.test("ci jobs sorting: age and start sort on the same moment", () => {
   assertEquals(column(again, 0), oldestFirst);
 });
 
-Deno.test("ci jobs sorting: the result sorts on how bad it is, then on what it says", () => {
+test("ci jobs sorting: the result sorts on how bad it is, then on what it says", () => {
   const fixture = arrange();
   heading(fixture, 3).click();
   assertEquals(column(fixture, 3), ["failure", "success", "success", "success"]);
 });
 
-Deno.test("ci jobs sorting: the trigger separates cron runs from the rest", () => {
+test("ci jobs sorting: the trigger separates cron runs from the rest", () => {
   const fixture = arrange();
   heading(fixture, 2).click();
   assertEquals(column(fixture, 2), [
@@ -155,7 +156,7 @@ Deno.test("ci jobs sorting: the trigger separates cron runs from the rest", () =
   ]);
 });
 
-Deno.test("ci jobs sorting: sorting one column clears the mark on the last", () => {
+test("ci jobs sorting: sorting one column clears the mark on the last", () => {
   const fixture = arrange();
   heading(fixture, 0).click();
   heading(fixture, 2).click();
@@ -167,7 +168,7 @@ Deno.test("ci jobs sorting: sorting one column clears the mark on the last", () 
   );
 });
 
-Deno.test("ci jobs sorting: equal values keep the order the page was served in", () => {
+test("ci jobs sorting: equal values keep the order the page was served in", () => {
   const fixture = arrange();
   // Two jobs share a trigger, and the worst of them was served first.
   heading(fixture, 2).click();
@@ -178,7 +179,7 @@ Deno.test("ci jobs sorting: equal values keep the order the page was served in",
   );
 });
 
-Deno.test("ci jobs sorting: a live update keeps the reader's sort and the rows that did not change", () => {
+test("ci jobs sorting: a live update keeps the reader's sort and the rows that did not change", () => {
   const fixture = arrange();
   const duration = heading(fixture, 4);
   duration.click();
@@ -212,7 +213,7 @@ Deno.test("ci jobs sorting: a live update keeps the reader's sort and the rows t
   assertEquals(column(fixture, 4), ["3h 20m", "40m 00s", "9m 00s", "1m 00s"]);
 });
 
-Deno.test("ci jobs sorting: a live update adding a job places it in the reader's sort", () => {
+test("ci jobs sorting: a live update adding a job places it in the reader's sort", () => {
   const fixture = arrange();
   heading(fixture, 0).click();
 
@@ -228,7 +229,7 @@ Deno.test("ci jobs sorting: a live update adding a job places it in the reader's
   );
 });
 
-Deno.test("ci jobs sorting: a live update to a page nobody sorted keeps the served order", () => {
+test("ci jobs sorting: a live update to a page nobody sorted keeps the served order", () => {
   const fixture = arrange();
 
   update(fixture, {
@@ -239,7 +240,7 @@ Deno.test("ci jobs sorting: a live update to a page nobody sorted keeps the serv
   assertEquals(column(fixture, 0), ["loom", "amp", "bay", "cat", "zed"]);
 });
 
-Deno.test("ci jobs sorting: a live update that moves a job keeps every row that did not change", () => {
+test("ci jobs sorting: a live update that moves a job keeps every row that did not change", () => {
   const fixture = arrange();
   heading(fixture, 2).click();
   const before = new Map(rows(fixture).map((row) => [row.cells[0].textContent, row]));
@@ -267,7 +268,7 @@ Deno.test("ci jobs sorting: a live update that moves a job keeps every row that 
   }
 });
 
-Deno.test("ci jobs sorting: a new column starts ascending after one sorted descending", () => {
+test("ci jobs sorting: a new column starts ascending after one sorted descending", () => {
   const fixture = arrange();
   heading(fixture, 0).click();
   heading(fixture, 0).click();

@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { CFButton } from "../cf-button/index.ts";
 import { CFInput } from "../cf-input/index.ts";
 import "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 type UpdatingModal = HTMLElement & {
   open: boolean;
@@ -202,7 +203,7 @@ function assertContained(
 }
 
 for (const variant of VARIANTS) {
-  Deno.test(`${variant.name} stays inside its fixed-position containing block`, async () => {
+  test(`${variant.name} stays inside its fixed-position containing block`, async () => {
     const mounted = await mountModal(variant, "320px");
     try {
       assertContained(variant, mounted);
@@ -211,7 +212,7 @@ for (const variant of VARIANTS) {
     }
   });
 
-  Deno.test(`${variant.name} preserves its viewport height limit`, async () => {
+  test(`${variant.name} preserves its viewport height limit`, async () => {
     const mounted = await mountModal(variant, "200vh");
     try {
       const dialogHeight = mounted.dialog.getBoundingClientRect().height;
@@ -232,7 +233,7 @@ for (const variant of VARIANTS) {
   });
 }
 
-Deno.test("dialog preserves a custom maximum height", async () => {
+test("dialog preserves a custom maximum height", async () => {
   const mounted = await mountModal(VARIANTS[0], "320px", "180px");
   try {
     assertAlmostEquals(
@@ -296,7 +297,7 @@ function tabFrom(
   return event;
 }
 
-Deno.test("dialog wraps focus inside a renderer shadow root", async () => {
+test("dialog wraps focus inside a renderer shadow root", async () => {
   const mounted = await mountKeyboardModal();
   try {
     mounted.modal.open = true;
@@ -311,7 +312,7 @@ Deno.test("dialog wraps focus inside a renderer shadow root", async () => {
   }
 });
 
-Deno.test("dialog restores the original control inside nested shadow roots", async () => {
+test("dialog restores the original control inside nested shadow roots", async () => {
   const mounted = await mountKeyboardModal();
   try {
     mounted.opener.focus();
@@ -339,7 +340,7 @@ Deno.test("dialog restores the original control inside nested shadow roots", asy
   }
 });
 
-Deno.test("dialog follows slotted shadow controls and excludes unavailable tab stops", async () => {
+test("dialog follows slotted shadow controls and excludes unavailable tab stops", async () => {
   const mounted = await mountKeyboardModal();
   try {
     mounted.done.remove();
@@ -383,7 +384,7 @@ function svgLink() {
   return { svg, link };
 }
 
-Deno.test("dialog wraps focus from a slotted SVG link", async () => {
+test("dialog wraps focus from a slotted SVG link", async () => {
   const mounted = await mountKeyboardModal();
   try {
     mounted.done.remove();
@@ -402,7 +403,7 @@ Deno.test("dialog wraps focus from a slotted SVG link", async () => {
   }
 });
 
-Deno.test("dialog restores focus to an SVG opener inside a shadow root", async () => {
+test("dialog restores focus to an SVG opener inside a shadow root", async () => {
   const mounted = await mountKeyboardModal();
   try {
     const { svg, link } = svgLink();
@@ -423,7 +424,7 @@ Deno.test("dialog restores focus to an SVG opener inside a shadow root", async (
 });
 
 for (const outsideLink of [false, true]) {
-  Deno.test(
+  test(
     outsideLink
       ? "dialog includes native links outside a disabled fieldset legend"
       : "dialog includes the enabled first legend of a disabled fieldset",

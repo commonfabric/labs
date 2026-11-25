@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type AgentRunRecord,
   INVALID_INPUT,
 } from "@commonfabric/runner/agent-run";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { createHarnessAgentRunExecutor } from "../src/agent-run-harness.ts";
 

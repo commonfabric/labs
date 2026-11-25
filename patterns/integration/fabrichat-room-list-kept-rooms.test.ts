@@ -14,11 +14,16 @@
  * the `fabrichat-room-list-*` files share.
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { DID, Identity } from "@commonfabric/identity";
 import { isDeletedSpaceError } from "@commonfabric/memory/v2/client";
 import type { Cell, MemorySpace } from "@commonfabric/runner";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   CHAT_START,
   closeMember,

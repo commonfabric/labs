@@ -1,5 +1,4 @@
 import { assertEquals, assertExists } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -8,6 +7,7 @@ import {
   getCellWrapperInfo,
 } from "../../src/typescript/cell-brand.ts";
 import { createTestProgram } from "../utils.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 function createProgram(source: string): {
   checker: ts.TypeChecker;
@@ -64,7 +64,7 @@ function getPropertyType(
   return checker.getTypeAtLocation(property);
 }
 
-Deno.test("getCellWrapperInfo handles unions containing branded cells", () => {
+test("getCellWrapperInfo handles unions containing branded cells", () => {
   const source = `
     declare const CELL_BRAND: unique symbol;
     interface BrandedCell<T, Brand extends string> {
@@ -104,7 +104,7 @@ Deno.test("getCellWrapperInfo handles unions containing branded cells", () => {
   assertEquals(checker.typeToString(nullableArg), "string");
 });
 
-Deno.test("getCellBrand ignores synthetic brand properties", () => {
+test("getCellBrand ignores synthetic brand properties", () => {
   const source = `
     declare const CELL_BRAND: unique symbol;
     type SyntheticBrand = { [Key in typeof CELL_BRAND]: "cell" };

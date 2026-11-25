@@ -15,12 +15,12 @@
  * would regress if the restoration were dropped from the wrong constructor.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   tagOfConvertibleJsValueElseNull,
   VALUE_TAGS,
 } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import { restoreErrorIsError } from "../src/sandbox/error-taming.ts";
 import {
   ensureSESLockdown,

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   followUpdates,
@@ -6,6 +5,7 @@ import {
   type UpdateSource,
   type UpdateStream,
 } from "../stream-client.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const CONNECTING = 0, OPEN = 1, CLOSED = 2;
 const SILENCE = 55_000;

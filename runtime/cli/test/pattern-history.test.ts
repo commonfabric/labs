@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import type {
@@ -7,6 +6,12 @@ import type {
   PatternIndexVersionSummary,
 } from "@commonfabric/pattern-index/client";
 import { decodeDataFile } from "@commonfabric/text/data-file";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   entryHistory,
   historyLines,

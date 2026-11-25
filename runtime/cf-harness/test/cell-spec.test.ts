@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { ConsolePolicyReport } from "../console/policy.ts";
@@ -7,6 +6,7 @@ import {
   describeCellSpecMismatches,
   parseCellSpec,
 } from "../scripts/cell-spec.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** What a correctly configured measurement console reports about itself. */
 const POLICY: ConsolePolicyReport = {

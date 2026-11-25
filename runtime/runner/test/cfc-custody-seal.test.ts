@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import {
@@ -9,6 +8,7 @@ import {
 } from "@commonfabric/data-model";
 import { type AsBytes, Identity, type Signer } from "@commonfabric/identity";
 import { utf8Compare } from "@commonfabric/text/utf8";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,

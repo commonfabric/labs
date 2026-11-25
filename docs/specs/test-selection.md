@@ -777,13 +777,13 @@ spends more than its batches' average.
 - What a batch's tests took counts only the records its suite places in
   a unit. A record placed in no unit, such as one a wrapper writes for a
   whole invocation, is part of what the batch spent beyond its tests.
-- What a unit's hooks took is read from the unit's JUnit report: the time
-  each outermost test took that no record holds, which is what the hooks
-  of its `describe`s took, and for a `Deno.test` whose leaves are steps,
-  what its own body took around them, less what a recorded container
-  among them holds. A unit whose report holds no such test, such as one a
-  runner other than `deno test` reports, has no hooks, and what it spends
-  beyond its tests is in the per-unit charge.
+- What a unit's hooks took is read from the results its tests wrote: the
+  time each outermost test took that no record holds, which is what the
+  hooks of its `describe`s took, and for a `test` whose leaves are steps,
+  what its own body took around them, less what a recorded group among
+  them holds. A unit whose results hold no such test, such as one whose
+  tests do not register through `@commonfabric/test-support/test`, has no
+  hooks, and what it spends beyond its tests is in the per-unit charge.
 - The correction is fitted only over at least `MIN_CORRECTION_SAMPLES`
   batches whose tests' times span at least `MIN_CORRECTION_SPAN_SECONDS`,
   and only where it comes out above zero. Otherwise the correction is

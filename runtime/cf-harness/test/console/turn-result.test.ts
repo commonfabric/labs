@@ -3,7 +3,6 @@
  * artifacts.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
@@ -16,6 +15,7 @@ import {
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
 import { persistAssignSlugOutputs } from "../support/assign-slug-outputs.ts";
 import { urlToAppView } from "@commonfabric/navigation";
+import { describe, it } from "@commonfabric/test-support/test";
 import { pieceUrl } from "../../src/piece-url.ts";
 
 /** A space created with a random key, which only its DID addresses. */

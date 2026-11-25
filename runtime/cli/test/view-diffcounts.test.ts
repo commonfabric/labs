@@ -1,7 +1,6 @@
 /** Tests the three line-count policies used by the diff jump list. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   commentOnlyFiles,
@@ -19,6 +18,7 @@ import {
   prepareLanguages,
 } from "../lib/view/languages/language.ts";
 import { rustLanguage } from "../lib/view/languages/rust/language.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function contextLines(path: string, lines: readonly string[]) {
   return languageForFile(path).highlightLines(lines.join("\n"), path);

@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 import config from "../../console/felt.config.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("felt.config", () => {
   const consoleRoot = fromFileUrl(new URL("../../console", import.meta.url));

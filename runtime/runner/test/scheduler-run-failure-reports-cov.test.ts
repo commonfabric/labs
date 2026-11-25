@@ -4,7 +4,6 @@
  * owed again.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
@@ -15,6 +14,12 @@ import {
   ExecutionLeaseCycle,
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { EngineWaveCommitSink } from "../src/executor/engine-wave-sink.ts";
 import { stampWaveRunContext, WaveAccumulator } from "../src/executor/wave.ts";

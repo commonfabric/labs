@@ -19,6 +19,7 @@ import type {
   SessionSync,
   SessionSyncUpsert,
 } from "@commonfabric/memory/v2";
+import { test } from "@commonfabric/test-support/test";
 import type { IStorageProvider } from "../src/storage/interface.ts";
 import {
   ScriptedSessionTransport,
@@ -183,7 +184,7 @@ async function drainAllPulls(
   await all;
 }
 
-Deno.test("single-flight by default: watch refreshes never overlap", async () => {
+test("single-flight by default: watch refreshes never overlap", async () => {
   const { transport, storageManager, provider } = makeProvider(false);
   try {
     const pulls: Promise<unknown>[] = [];
@@ -209,7 +210,7 @@ Deno.test("single-flight by default: watch refreshes never overlap", async () =>
   }
 });
 
-Deno.test("concurrent refresh overlaps up to the bounded window", async () => {
+test("concurrent refresh overlaps up to the bounded window", async () => {
   const { transport, storageManager, provider } = makeProvider(true);
   try {
     const pulls: Promise<unknown>[] = [];

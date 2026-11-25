@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { ClientCommit } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { EventAppendQueue } from "../../src/storage/event-append-queue.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";

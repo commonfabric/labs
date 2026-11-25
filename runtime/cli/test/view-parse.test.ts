@@ -3,6 +3,7 @@ import ts from "typescript";
 import { parseDocument, SAMPLE, TS_PARSER_REGRESSION } from "./view-helpers.ts";
 import { highlightDocument } from "../lib/view/languages/typescript/parse.ts";
 import type { Document, TokenClass } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // A blob exercising statement variety: a function with control flow and a
 // return, a plain expression statement, a throw, a synthetic helper and its
@@ -35,7 +36,7 @@ function classesOf(doc: Document, token: string): Set<TokenClass> {
   return set;
 }
 
-Deno.test("parse: spans reconstruct every line verbatim", () => {
+test("parse: spans reconstruct every line verbatim", () => {
   const doc = parseDocument(SAMPLE);
   for (let i = 0; i < doc.lines.length; i++) {
     const recon = doc.lines[i].spans.map((s) => s.text).join("");
@@ -43,7 +44,7 @@ Deno.test("parse: spans reconstruct every line verbatim", () => {
   }
 });
 
-Deno.test("parse: whole document is byte-for-byte verbatim", () => {
+test("parse: whole document is byte-for-byte verbatim", () => {
   const doc = parseDocument(SAMPLE);
   const whole = doc.lines.map((l) => l.spans.map((s) => s.text).join("")).join(
     "\n",
@@ -51,7 +52,7 @@ Deno.test("parse: whole document is byte-for-byte verbatim", () => {
   assertEquals(whole, SAMPLE);
 });
 
-Deno.test("parse: classifies Common Fabric builders and synthetic helpers", () => {
+test("parse: classifies Common Fabric builders and synthetic helpers", () => {
   const doc = parseDocument(SAMPLE);
   assert(classesOf(doc, "lift").has("builderCall"), "lift is a builder");
   assert(classesOf(doc, "pattern").has("builderCall"), "pattern is a builder");
@@ -65,7 +66,7 @@ Deno.test("parse: classifies Common Fabric builders and synthetic helpers", () =
   );
 });
 
-Deno.test("parse: schema keys differ from ordinary identifiers", () => {
+test("parse: schema keys differ from ordinary identifiers", () => {
   const doc = parseDocument(SAMPLE);
   const typeClasses = classesOf(doc, "type");
   assert(typeClasses.has("schemaKey"), "schema key `type` is a schemaKey");
@@ -79,7 +80,7 @@ Deno.test("parse: schema keys differ from ordinary identifiers", () => {
   );
 });
 
-Deno.test("parse: type positions are colored as types", () => {
+test("parse: type positions are colored as types", () => {
   const doc = parseDocument(SAMPLE);
   assert(classesOf(doc, "Foo").has("typeName"), "Foo type alias name");
   assert(classesOf(doc, "Bar").has("interfaceName"), "Bar interface name");
@@ -92,7 +93,7 @@ Deno.test("parse: type positions are colored as types", () => {
   assert(classesOf(doc, "number").has("typeKeyword"));
 });
 
-Deno.test("parse: strings, brackets and section headers", () => {
+test("parse: strings, brackets and section headers", () => {
   const doc = parseDocument(SAMPLE);
   assert(classesOf(doc, '"object"').has("string"), "string literal");
   // bracket spans carry a depth
@@ -114,7 +115,7 @@ Deno.test("parse: strings, brackets and section headers", () => {
   assertEquals(headerLine!.spans[0].cls, "sectionHeader");
 });
 
-Deno.test("parse: structure tree groups by section with builders and schemas", () => {
+test("parse: structure tree groups by section with builders and schemas", () => {
   const doc = parseDocument(SAMPLE);
   assertEquals(doc.structure.length, 2, "two sections");
   assertEquals(doc.structure[0].kind, "section");
@@ -140,7 +141,7 @@ Deno.test("parse: structure tree groups by section with builders and schemas", (
   );
 });
 
-Deno.test("parse: tuple (prefixItems) schema fields render as tuple types", () => {
+test("parse: tuple (prefixItems) schema fields render as tuple types", () => {
   // CT-1895: tuples used to summarize as bare "array"
   const doc = parseDocument(`// transformed: /app.ts
 const __cfLift_1 = lift({
@@ -165,7 +166,7 @@ const __cfLift_1 = lift({
   assertEquals(rest?.type, "[string, ...boolean[]]");
 });
 
-Deno.test("parse: closed tuples (items: false) and non-object slots", () => {
+test("parse: closed tuples (items: false) and non-object slots", () => {
   const doc = parseDocument(`// transformed: /app.ts
 const __cfLift_1 = lift({
     type: "object",
@@ -191,7 +192,7 @@ const __cfLift_1 = lift({
   assertEquals(loose?.type, "[any, ...unknown[]]");
 });
 
-Deno.test("parse: definition index resolves declarations", () => {
+test("parse: definition index resolves declarations", () => {
   const doc = parseDocument(SAMPLE);
   assert(doc.definitions.has("myPattern"), "myPattern defined");
   assert(doc.definitions.has("__cfLift_1"), "__cfLift_1 defined");
@@ -202,7 +203,7 @@ Deno.test("parse: definition index resolves declarations", () => {
   assert(foo.endLine > foo.startLine, "Foo spans multiple lines");
 });
 
-Deno.test("parse: no two structure nodes share the same source range", () => {
+test("parse: no two structure nodes share the same source range", () => {
   for (const src of [SAMPLE, RICH]) {
     const doc = parseDocument(src);
     const seen = new Set<string>();
@@ -217,7 +218,7 @@ Deno.test("parse: no two structure nodes share the same source range", () => {
   }
 });
 
-Deno.test("parse: every statement is reachable as a node at its own range", () => {
+test("parse: every statement is reachable as a node at its own range", () => {
   const doc = parseDocument(RICH);
   const ranges = new Set(
     doc.flatStructure.map((n) => `${n.startOffset}:${n.endOffset}`),
@@ -247,7 +248,7 @@ Deno.test("parse: every statement is reachable as a node at its own range", () =
   assertEquals(missing, [], `unreachable statements: ${missing.join(" | ")}`);
 });
 
-Deno.test("parse: return and plain-expression statements are reachable", () => {
+test("parse: return and plain-expression statements are reachable", () => {
   const doc = parseDocument(RICH);
   const kinds = doc.flatStructure.map((n) => `${n.kind}:${n.label}`);
   assert(
@@ -272,7 +273,7 @@ Deno.test("parse: return and plain-expression statements are reachable", () => {
   );
 });
 
-Deno.test("parse: a variable node covers the whole statement", () => {
+test("parse: a variable node covers the whole statement", () => {
   const doc = parseDocument("const x = 1;\n");
   const x = doc.flatStructure.find((n) => n.name === "x")!;
   assertEquals(x.startCol, 0, "starts at the `const` keyword");
@@ -280,7 +281,7 @@ Deno.test("parse: a variable node covers the whole statement", () => {
   assertEquals(doc.lines[x.endLine].text.slice(0, x.endCol), "const x = 1;");
 });
 
-Deno.test("parse: JSX in a pattern stays one node (parsed as TSX)", () => {
+test("parse: JSX in a pattern stays one node (parsed as TSX)", () => {
   // Transformed pattern output keeps its JSX. In plain-TS mode `<cf-vstack>`
   // reads as a comparison and shreds the statement from the tag onward; as TSX
   // the whole `export default pattern(...)` is one node.
@@ -318,7 +319,7 @@ export default pattern((_) => {
   );
 });
 
-Deno.test("parse: .ts files use the TypeScript parser", () => {
+test("parse: .ts files use the TypeScript parser", () => {
   const doc = parseDocument(TS_PARSER_REGRESSION, "fixture.ts");
   assert(
     doc.flatStructure.some((node) =>
@@ -332,7 +333,7 @@ Deno.test("parse: .ts files use the TypeScript parser", () => {
   );
 });
 
-Deno.test("parse: a parser failure falls back to verbatim plain text", () => {
+test("parse: a parser failure falls back to verbatim plain text", () => {
   const doc = parseDocument(TS_PARSER_REGRESSION, "fixture.tsx");
   assertEquals(doc.flatStructure, []);
   assertEquals(doc.definitions.size, 0);
@@ -352,7 +353,7 @@ Deno.test("parse: a parser failure falls back to verbatim plain text", () => {
   );
 });
 
-Deno.test("parse: handles empty and whitespace-only input without throwing", () => {
+test("parse: handles empty and whitespace-only input without throwing", () => {
   const empty = parseDocument("");
   assertEquals(empty.lines.length, 1);
   const ws = parseDocument("   \n\n  ");
@@ -366,7 +367,7 @@ Deno.test("parse: handles empty and whitespace-only input without throwing", () 
 // full-AST navigation
 //
 
-Deno.test("parse: the whole AST is navigable — RHS expression, chained calls, args", () => {
+test("parse: the whole AST is navigable — RHS expression, chained calls, args", () => {
   const doc = parseDocument(
     `const main = make().name("x").run(1, 2);\n`,
     "m.ts",
@@ -392,7 +393,7 @@ Deno.test("parse: the whole AST is navigable — RHS expression, chained calls, 
   );
 });
 
-Deno.test("highlight: a JSDoc {@link} tag stays one comment, not split into code", () => {
+test("highlight: a JSDoc {@link} tag stays one comment, not split into code", () => {
   const text = `/**
  * Builds a pager {@link Document} from a unified diff, plus more text after
  * the link, and a second line.
@@ -414,7 +415,7 @@ const x = 1;
   }
 });
 
-Deno.test("parse: comments are navigable nodes placed by source position", () => {
+test("parse: comments are navigable nodes placed by source position", () => {
   const doc = parseDocument(`const a = 1;\n// a note\nconst b = 2;\n`, "m.ts");
   const comment = doc.flatStructure.find((n) => n.kind === "comment");
   assert(comment, "the comment is a structure node");
@@ -422,7 +423,7 @@ Deno.test("parse: comments are navigable nodes placed by source position", () =>
   assertEquals(comment!.startLine, 1);
 });
 
-Deno.test("parse: a mid-chain comment is collected and navigable", () => {
+test("parse: a mid-chain comment is collected and navigable", () => {
   // A comment before a `.` is leading trivia of a punctuation token.
   const doc = parseDocument(`const x = a()\n  // step\n  .b();\n`, "m.ts");
   assert(
@@ -433,7 +434,7 @@ Deno.test("parse: a mid-chain comment is collected and navigable", () => {
   );
 });
 
-Deno.test("parse: nodes sharing an exact range merge into one", () => {
+test("parse: nodes sharing an exact range merge into one", () => {
   const doc = parseDocument(`const x = a as B;\n`, "m.ts");
   // In `a as B` the type `B` is a TypeReference wrapping an Identifier over the
   // exact same range, so the two AST kinds merge into one structure node.
@@ -450,7 +451,7 @@ Deno.test("parse: nodes sharing an exact range merge into one", () => {
   );
 });
 
-Deno.test("parse: recognized folds do not expand into raw AST children", () => {
+test("parse: recognized folds do not expand into raw AST children", () => {
   // A node classified as a recognized shape (import, schema, type alias,
   // interface) suppresses its children: the build descends only into the child
   // source nodes the classification chose (`recurseInto`), never into raw
@@ -482,7 +483,7 @@ Deno.test("parse: recognized folds do not expand into raw AST children", () => {
   }
 });
 
-Deno.test("parse: a schema binding does not leak schema keys or type machinery", () => {
+test("parse: a schema binding does not leak schema keys or type machinery", () => {
   // The over-expansion this guards against: descending into a folded schema
   // re-emitted every property key (`type:`, `properties:`) and the trailing
   // `as const satisfies __cfHelpers.JSONSchema` type position as navigable
@@ -501,7 +502,7 @@ Deno.test("parse: a schema binding does not leak schema keys or type machinery",
   );
 });
 
-Deno.test("parse: a return of a reactive call keeps the call as its own node", () => {
+test("parse: a return of a reactive call keeps the call as its own node", () => {
   // The statement still re-emits its primary expression as a node: the reactive
   // call inside a `return` is reachable, then descends into its arguments.
   const doc = parseDocument(

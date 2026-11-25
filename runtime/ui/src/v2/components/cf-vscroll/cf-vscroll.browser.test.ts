@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { CFVScroll } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const nextFrame = () =>
   new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -55,7 +56,7 @@ async function mount(children: HTMLElement[]): Promise<CFVScroll> {
   return element;
 }
 
-Deno.test("cf-vscroll snap-to-bottom opens at the bottom when its content is there at connect", async () => {
+test("cf-vscroll snap-to-bottom opens at the bottom when its content is there at connect", async () => {
   const element = await mount(rows(20));
   try {
     expect(container(element).scrollHeight).toBeGreaterThan(100);
@@ -65,7 +66,7 @@ Deno.test("cf-vscroll snap-to-bottom opens at the bottom when its content is the
   }
 });
 
-Deno.test("cf-vscroll without snap-to-bottom opens at the top", async () => {
+test("cf-vscroll without snap-to-bottom opens at the top", async () => {
   const element = document.createElement("cf-vscroll") as CFVScroll;
   element.height = "100px";
   element.append(...rows(20));
@@ -79,7 +80,7 @@ Deno.test("cf-vscroll without snap-to-bottom opens at the top", async () => {
   }
 });
 
-Deno.test("cf-vscroll snap-to-bottom jumps, rather than animates, to content that arrives after connect", async () => {
+test("cf-vscroll snap-to-bottom jumps, rather than animates, to content that arrives after connect", async () => {
   const element = await mount([]);
   try {
     element.append(...rows(20));
@@ -90,7 +91,7 @@ Deno.test("cf-vscroll snap-to-bottom jumps, rather than animates, to content tha
   }
 });
 
-Deno.test("cf-vscroll snap-to-bottom follows content appended while the reader is at the bottom", async () => {
+test("cf-vscroll snap-to-bottom follows content appended while the reader is at the bottom", async () => {
   const element = await mount(rows(20));
   try {
     element.append(...rows(3));
@@ -102,7 +103,7 @@ Deno.test("cf-vscroll snap-to-bottom follows content appended while the reader i
   }
 });
 
-Deno.test("cf-vscroll snap-to-bottom holds position when content is appended while the reader has scrolled up", async () => {
+test("cf-vscroll snap-to-bottom holds position when content is appended while the reader has scrolled up", async () => {
   const element = await mount(rows(20));
   try {
     const scrolled = new Promise((resolve) =>
@@ -118,7 +119,7 @@ Deno.test("cf-vscroll snap-to-bottom holds position when content is appended whi
   }
 });
 
-Deno.test("cf-vscroll snap-to-bottom keeps following content that streams in frame by frame", async () => {
+test("cf-vscroll snap-to-bottom keeps following content that streams in frame by frame", async () => {
   const element = await mount(rows(20));
   try {
     for (let i = 0; i < 30; i++) {
@@ -133,7 +134,7 @@ Deno.test("cf-vscroll snap-to-bottom keeps following content that streams in fra
   }
 });
 
-Deno.test("cf-vscroll snap-to-bottom follows content that grows inside a slotted element's shadow root", async () => {
+test("cf-vscroll snap-to-bottom follows content that grows inside a slotted element's shadow root", async () => {
   const host = document.createElement("div");
   const shadow = host.attachShadow({ mode: "open" });
   const element = await mount([host]);
@@ -146,7 +147,7 @@ Deno.test("cf-vscroll snap-to-bottom follows content that grows inside a slotted
   }
 });
 
-Deno.test("cf-vscroll snap-to-bottom opens at the bottom when shown after connecting hidden", async () => {
+test("cf-vscroll snap-to-bottom opens at the bottom when shown after connecting hidden", async () => {
   const panel = document.createElement("div");
   panel.hidden = true;
   document.body.append(panel);
@@ -166,7 +167,7 @@ Deno.test("cf-vscroll snap-to-bottom opens at the bottom when shown after connec
   }
 });
 
-Deno.test("cf-vscroll snap-to-bottom follows items added inside a display: contents wrapper", async () => {
+test("cf-vscroll snap-to-bottom follows items added inside a display: contents wrapper", async () => {
   // The renderer slots an array of children inside such a wrapper.
   const wrapper = document.createElement("span");
   wrapper.style.display = "contents";
@@ -180,7 +181,7 @@ Deno.test("cf-vscroll snap-to-bottom follows items added inside a display: conte
   }
 });
 
-Deno.test("cf-vscroll snap-to-bottom follows text streaming into a slotted text node", async () => {
+test("cf-vscroll snap-to-bottom follows text streaming into a slotted text node", async () => {
   const text = document.createTextNode("");
   const element = document.createElement("cf-vscroll") as CFVScroll;
   element.snapToBottom = true;
@@ -199,7 +200,7 @@ Deno.test("cf-vscroll snap-to-bottom follows text streaming into a slotted text 
   }
 });
 
-Deno.test("cf-vscroll snap-to-bottom follows an item that grows inside a display: contents wrapper", async () => {
+test("cf-vscroll snap-to-bottom follows an item that grows inside a display: contents wrapper", async () => {
   // As an image in a message does when it loads.
   const wrapper = document.createElement("span");
   wrapper.style.display = "contents";

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 // deno-lint-ignore no-external-import -- Deno types this builtin by its node: specifier.
 import { Socket } from "node:net";
@@ -8,6 +7,7 @@ import {
   createDenoMemorySocket,
   MEMORY_SOCKET_KEEPALIVE_IDLE_MS,
 } from "../../src/storage/memory-socket.deno.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("createDenoMemorySocket()", () => {
   it("turns on TCP keepalive for the connection it opens", async () => {

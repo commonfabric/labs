@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join, resolve } from "@std/path";
 import { test as testCommand } from "../commands/test-command.ts";
 import { runTests } from "../lib/test-runner.ts";
 import { argv, cf, checkStderr, withEnv } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/pattern-coverage");
 const SUBJECT = join(FIXTURES, "subject.tsx").replaceAll("\\", "/");

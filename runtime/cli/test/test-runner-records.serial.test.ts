@@ -7,10 +7,10 @@
  * is that test's data.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join, resolve } from "@std/path";
 import { recordsSpooledBy } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   createTestCommand,
   test as testCommand,

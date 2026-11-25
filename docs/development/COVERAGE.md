@@ -468,8 +468,9 @@ this one, and cannot. It replaces `performance.now` with logical time, and
 logical time moves only when a positive-delay timer fires. A synchronous call
 arms no timers, so a span timed around synchronous work measures exactly zero:
 under the runner package's preload, `elapsed > 100` is deterministically false
-in every test in the package. The `clock.tick(ms)` control is asynchronous and
-advances nothing until it is awaited, so there is no way to move logical time
+in every test in the package. The `clock.tick(ms)` control, which
+`@commonfabric/test-support/fake-clock` exports, is asynchronous and advances
+nothing until it is awaited, so there is no way to move logical time
 from inside a synchronous call either. A test that wants a chosen elapsed time
 therefore replaces `performance.now` outright, saving and restoring it rather
 than assuming it is the native one, since the preload already owns that

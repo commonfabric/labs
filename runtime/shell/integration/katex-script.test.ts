@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { build } from "@commonfabric/felt";
+import { describe, it } from "@commonfabric/test-support/test";
 import shellConfig from "../felt.config.ts";
 
 /**

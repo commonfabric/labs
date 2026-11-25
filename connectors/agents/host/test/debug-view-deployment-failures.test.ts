@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { fromFileUrl } from "@std/path";
 import { spy, stub } from "@std/testing/mock";
 
@@ -15,6 +14,7 @@ import { type Cell, Runtime } from "@commonfabric/runner";
 import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 import { createTransactionCommitReceipt } from "../../../../runtime/runner/src/storage/commit-receipt.ts";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   defaultDebugPatternLocation,

@@ -3,6 +3,7 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { defaultCacheDir, fetchSpaceDb, listRemoteSpaces } from "../remote.ts";
 import { discoverSpaceDbs, resolveSpacePath } from "../discover.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6MkRemoteTestSpace000000000000000000000000000000";
 const realFetch = globalThis.fetch;
@@ -30,7 +31,7 @@ async function withCacheDir(
   }
 }
 
-Deno.test("listRemoteSpaces parses the spaces payload and signs", async () => {
+test("listRemoteSpaces parses the spaces payload and signs", async () => {
   const stub = stubFetch(() =>
     new Response(
       JSON.stringify({ spaces: [{ space: SPACE, sizeBytes: 10, mtimeMs: 1 }] }),
@@ -57,7 +58,7 @@ Deno.test("listRemoteSpaces parses the spaces payload and signs", async () => {
   }
 });
 
-Deno.test("fetchSpaceDb caches: second call does not re-fetch", async () => {
+test("fetchSpaceDb caches: second call does not re-fetch", async () => {
   await withCacheDir(async (cacheDir) => {
     const stub = stubFetch(() =>
       new Response(new Uint8Array([1, 2, 3]), { status: 200 })
@@ -74,7 +75,7 @@ Deno.test("fetchSpaceDb caches: second call does not re-fetch", async () => {
   });
 });
 
-Deno.test("a pulled DB is discoverable and resolvable by full DID", async () => {
+test("a pulled DB is discoverable and resolvable by full DID", async () => {
   await withCacheDir(async (cacheDir) => {
     // A minimal-but-real SQLite header so quickStats/open don't choke on it.
     const stub = stubFetch(() =>
@@ -99,7 +100,7 @@ Deno.test("a pulled DB is discoverable and resolvable by full DID", async () => 
   });
 });
 
-Deno.test("fetchSpaceDb force re-downloads", async () => {
+test("fetchSpaceDb force re-downloads", async () => {
   await withCacheDir(async (cacheDir) => {
     const stub = stubFetch(() =>
       new Response(new Uint8Array([9]), { status: 200 })
@@ -114,7 +115,7 @@ Deno.test("fetchSpaceDb force re-downloads", async () => {
   });
 });
 
-Deno.test("error mapping is actionable across statuses", async () => {
+test("error mapping is actionable across statuses", async () => {
   for (
     const [status, needle] of [
       [401, "set CF_IDENTITY"],
@@ -138,7 +139,7 @@ Deno.test("error mapping is actionable across statuses", async () => {
   }
 });
 
-Deno.test("fetchSpaceDb rejects a space id that isn't a safe filename", async () => {
+test("fetchSpaceDb rejects a space id that isn't a safe filename", async () => {
   await withCacheDir(async (cacheDir) => {
     for (const bad of ["a/b", "a\\b"]) {
       await assertRejects(
@@ -150,7 +151,7 @@ Deno.test("fetchSpaceDb rejects a space id that isn't a safe filename", async ()
   });
 });
 
-Deno.test("defaultCacheDir namespaces by host", () => {
+test("defaultCacheDir namespaces by host", () => {
   assertStringIncludes(
     defaultCacheDir("https://rapids.example.ts.net/"),
     "rapids.example.ts.net",
@@ -159,7 +160,7 @@ Deno.test("defaultCacheDir namespaces by host", () => {
   assertStringIncludes(defaultCacheDir("not a url"), "not_a_url");
 });
 
-Deno.test("a non-JSON error body still maps to an actionable message", async () => {
+test("a non-JSON error body still maps to an actionable message", async () => {
   const stub = stubFetch(() =>
     new Response("<html>nope</html>", { status: 403 })
   );
@@ -174,7 +175,7 @@ Deno.test("a non-JSON error body still maps to an actionable message", async () 
   }
 });
 
-Deno.test("fetchSpaceDb maps its own HTTP errors", async () => {
+test("fetchSpaceDb maps its own HTTP errors", async () => {
   await withCacheDir(async (cacheDir) => {
     const stub = stubFetch(() =>
       new Response(JSON.stringify({ error: "space not found" }), {
@@ -193,7 +194,7 @@ Deno.test("fetchSpaceDb maps its own HTTP errors", async () => {
   });
 });
 
-Deno.test("an interrupted download leaves no partial or torn cache file", async () => {
+test("an interrupted download leaves no partial or torn cache file", async () => {
   await withCacheDir(async (cacheDir) => {
     const stub = stubFetch(() =>
       new Response(

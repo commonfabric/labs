@@ -12,6 +12,7 @@ import type {
   SqliteQueryInput,
 } from "../src/guest.ts";
 import { createFabricReact } from "../src/react.ts";
+import { test } from "@commonfabric/test-support/test";
 
 type Counter = { count: number };
 type Note = { id: number; title: string };
@@ -29,7 +30,7 @@ function perform(action: () => void): Promise<void> {
   });
 }
 
-Deno.test("React renders bridged Cells and SQLite invalidations", async () => {
+test("React renders bridged Cells and SQLite invalidations", async () => {
   const environment = globalThis as typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
   };
@@ -178,7 +179,7 @@ Deno.test("React renders bridged Cells and SQLite invalidations", async () => {
   }
 });
 
-Deno.test("React keeps supported SQLite parameter identities distinct", async () => {
+test("React keeps supported SQLite parameter identities distinct", async () => {
   const environment = globalThis as typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
   };

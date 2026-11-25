@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { createFabricBridge } from "@commonfabric/iframe-sandbox";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("cf-iframe JSX attributes", () => {
   it("accepts an explicit Fabric bridge", () => {

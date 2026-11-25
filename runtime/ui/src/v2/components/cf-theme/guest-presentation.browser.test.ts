@@ -11,6 +11,7 @@ import {
   CommonIframeSandboxElement,
   type IframePresentation,
 } from "@commonfabric/iframe-sandbox";
+import { test } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
 
 import { CFIframe } from "../cf-iframe/index.ts";
@@ -77,7 +78,7 @@ function reportingGuest(id: string) {
     </script>`;
 }
 
-Deno.test("a cf-iframe under a cf-theme receives the theme's text color and resolved scheme", async () => {
+test("a cf-iframe under a cf-theme receives the theme's text color and resolved scheme", async () => {
   const { iframe, done } = await themed({
     colorScheme: "light",
     colors: { text: TEXT },
@@ -92,7 +93,7 @@ Deno.test("a cf-iframe under a cf-theme receives the theme's text color and reso
   }
 });
 
-Deno.test("a nested tinting cf-theme gives its own iframe the tint's primary", async () => {
+test("a nested tinting cf-theme gives its own iframe the tint's primary", async () => {
   const { provider: outer, iframe: outerIframe, done } = await themed({
     colors: { text: TEXT },
   });
@@ -112,7 +113,7 @@ Deno.test("a nested tinting cf-theme gives its own iframe the tint's primary", a
   }
 });
 
-Deno.test("an explicit presentation on the cf-iframe wins, and null opts out", async () => {
+test("an explicit presentation on the cf-iframe wins, and null opts out", async () => {
   const { iframe, done } = await themed({ colors: { text: TEXT } });
   const own = {
     css: "h1 { color: red; }",
@@ -131,7 +132,7 @@ Deno.test("an explicit presentation on the cf-iframe wins, and null opts out", a
   }
 });
 
-Deno.test("cf-theme re-provides on theme-preference-changed, and sends nothing when unchanged", async () => {
+test("cf-theme re-provides on theme-preference-changed, and sends nothing when unchanged", async () => {
   const { provider, iframe, done } = await themed({ colors: { text: TEXT } });
   const override = document.createElement("style");
   try {
@@ -156,7 +157,7 @@ Deno.test("cf-theme re-provides on theme-preference-changed, and sends nothing w
   }
 });
 
-Deno.test("the theme reaches the guest's body, heading and root, and a theme change restyles it", async () => {
+test("the theme reaches the guest's body, heading and root, and a theme change restyles it", async () => {
   const provider = new CFThemeProvider();
   provider.theme = { colors: { text: TEXT } };
   const iframe = new CFIframe();
@@ -175,7 +176,7 @@ Deno.test("the theme reaches the guest's body, heading and root, and a theme cha
   }
 });
 
-Deno.test("a guest's plain element rules hold in every state against the base sheet", async () => {
+test("a guest's plain element rules hold in every state against the base sheet", async () => {
   const provider = new CFThemeProvider();
   const iframe = new CFIframe();
   const id = crypto.randomUUID();

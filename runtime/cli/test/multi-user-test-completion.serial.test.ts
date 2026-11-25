@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 import { runMultiUserTestPattern } from "../lib/multi-user-test-runner.ts";
@@ -8,6 +7,7 @@ import {
   type ControlledWorker,
   withWorkers,
 } from "./multi-user-controlled-worker.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The steps each participant reports, one of every kind the run sends. */
 const steps: StepMeta[] = [

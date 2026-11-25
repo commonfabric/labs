@@ -1,5 +1,6 @@
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { cellTx, sendEvent } from "../src/cell.ts";
 import {
   afterEach,

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import {
@@ -28,6 +27,12 @@ import {
   setTimingMeasuresEnabled,
   TIMING_MEASURE_PREFIX,
 } from "../src/logger.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("logger", () => {
   beforeEach(() => {

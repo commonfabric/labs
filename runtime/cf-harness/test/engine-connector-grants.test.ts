@@ -5,7 +5,6 @@
  * without the address behind any token.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -13,6 +12,7 @@ import type { HarnessFabricSession } from "../src/fabric-session.ts";
 import { resolveHandleToken } from "../src/handle-table.ts";
 import { wellKnownGrantsContextMessage } from "../src/well-known-grants.ts";
 import { INERT_RUNSC } from "./support/inert-runsc.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE_DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 const REGISTRY_ID = `of:fid1:${"A".repeat(43)}`;

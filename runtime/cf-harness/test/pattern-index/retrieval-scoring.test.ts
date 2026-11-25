@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   contentWords,
@@ -11,6 +10,7 @@ import {
   scoreQuery,
   scoreRetrieval,
 } from "../../src/pattern-index/retrieval-scoring.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const capability = (
   overrides: Partial<LabelledCapability> = {},

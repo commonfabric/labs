@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
@@ -23,6 +22,7 @@ import {
 } from "../src/schema-registry.ts";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("mergeCfcSchemaEnvelopes", () => {
   describe("a recursion meeting itself", () => {

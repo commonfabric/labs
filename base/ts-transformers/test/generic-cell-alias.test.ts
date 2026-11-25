@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { collect, emittedSchemas, parseModule } from "./transformed-ast.ts";

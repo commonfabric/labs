@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import {
@@ -13,6 +12,7 @@ import type {
 } from "@commonfabric/memory/interface";
 import type { FabricValue } from "@commonfabric/data-model";
 import { valueFromDataUri } from "@commonfabric/data-model/codec-data-uri";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   createDefaultTraversalContext,
   ManagedStorageTransaction,

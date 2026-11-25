@@ -6,17 +6,17 @@ import {
   type JWTVerifyGetKey,
   SignJWT,
 } from "@panva/jose";
+import { expect } from "@std/expect";
+import { Identity } from "@commonfabric/identity";
+import { cellRuntime, Runtime } from "@commonfabric/runner";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   afterEach,
   beforeAll,
   beforeEach,
   describe,
   it,
-} from "@std/testing/bdd";
-import { expect } from "@std/expect";
-import { Identity } from "@commonfabric/identity";
-import { cellRuntime, Runtime } from "@commonfabric/runner";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+} from "@commonfabric/test-support/test";
 
 import {
   fetchGmailMailbox,

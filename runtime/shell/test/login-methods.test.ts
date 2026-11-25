@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   AUTH_METHOD_KEYFILE,
@@ -12,6 +11,7 @@ import {
   methodsForFlow,
   storedCredentialLabel,
 } from "../src/lib/login-methods.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("login-methods", () => {
   describe("availableAuthMethods()", () => {

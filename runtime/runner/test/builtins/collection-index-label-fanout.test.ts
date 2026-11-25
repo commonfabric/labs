@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { Cell } from "../../src/cell.ts";
 import { collectionKeyBucket } from "../../src/builtins/collection-index-key.ts";

@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   applyCommit,
@@ -16,6 +15,12 @@ import {
   resetServerExecutionConfig,
   setServerExecutionConfig,
 } from "../../v2.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("findStaleReadSeq()", () => {
   // Every case reads `count` of one document at one address, so what the

@@ -9,6 +9,7 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import type { Ctx } from "../types.ts";
 import { themedChartSeries } from "../theme.ts";
 import { modelSpend } from "./model-spend.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const themedSwatch = (color: string) =>
   `<span class="swatch" style="background:${themedChartSeries(color).color}"></span>`;
@@ -99,7 +100,7 @@ const openrouterFive: Handler = () => json({ data: { usage_monthly: 5 } });
 const ALL_KEYS = { OPENAI_ADMIN_KEY: "oa", ANTHROPIC_ADMIN_KEY: "an", OPENROUTER_KEY: "or" };
 const allThree = { "api.openai.com": openaiPaged, "api.anthropic.com": anthropicPaged, "openrouter.ai": openrouterFive };
 
-Deno.test("model spend: all three providers read -> green, combined MTD, a line each, OpenRouter in the key", async () => {
+test("model spend: all three providers read -> green, combined MTD, a line each, OpenRouter in the key", async () => {
   const heads: Record<string, Record<string, string>> = {};
   const record = (h: Handler): Handler => (url, init) => {
     heads[url.hostname] = authOf(init);
@@ -143,7 +144,7 @@ Deno.test("model spend: all three providers read -> green, combined MTD, a line 
   );
 });
 
-Deno.test("model spend: the projected total is judged against MODEL_MONTHLY_BUDGET", async () => {
+test("model spend: the projected total is judged against MODEL_MONTHLY_BUDGET", async () => {
   await withFetch(allThree, async () => {
     const over = await modelSpend.collect(ctx({ ...ALL_KEYS, MODEL_MONTHLY_BUDGET: "0" }));
     assertEquals(over.status, "bad"); // $3/day projected against a $0 budget
@@ -152,7 +153,7 @@ Deno.test("model spend: the projected total is judged against MODEL_MONTHLY_BUDG
   });
 });
 
-Deno.test("model spend: a provider that errors -> $??? and gray, the rest still chart and total", async () => {
+test("model spend: a provider that errors -> $??? and gray, the rest still chart and total", async () => {
   await withFetch(
     { ...allThree, "api.anthropic.com": () => new Response("nope", { status: 500 }) },
     async () => {
@@ -187,7 +188,7 @@ const openaiQuiet: Handler = () =>
     next_page: null,
   });
 
-Deno.test("model spend: a provider whose report stopped -> $??? and gray, never days of $0", async () => {
+test("model spend: a provider whose report stopped -> $??? and gray, never days of $0", async () => {
   await withFetch({ "api.openai.com": openaiStalled, "openrouter.ai": openrouterFive }, async () => {
     const v = await modelSpend.collect(ctx({ OPENAI_ADMIN_KEY: "oa", OPENROUTER_KEY: "or" }));
     assertEquals(v.status, "unknown"); // OpenAI's recent days are unknown, not quiet
@@ -196,7 +197,7 @@ Deno.test("model spend: a provider whose report stopped -> $??? and gray, never 
   });
 });
 
-Deno.test("model spend: a provider reporting empty days is quiet, and still reads", async () => {
+test("model spend: a provider reporting empty days is quiet, and still reads", async () => {
   await withFetch({ "api.openai.com": openaiQuiet }, async () => {
     const v = await modelSpend.collect(ctx({ OPENAI_ADMIN_KEY: "oa" }));
     assertEquals(v.status, "good");
@@ -206,7 +207,7 @@ Deno.test("model spend: a provider reporting empty days is quiet, and still read
   });
 });
 
-Deno.test("model spend: a provider with no bucket at all draws no line of $0", async () => {
+test("model spend: a provider with no bucket at all draws no line of $0", async () => {
   // OpenAI answers with an empty report. Anthropic's days supply the chart's
   // day axis, but they are Anthropic's days: OpenAI reported on none of them,
   // so its total is $0 and its line is absent rather than flat along the floor.
@@ -220,7 +221,7 @@ Deno.test("model spend: a provider with no bucket at all draws no line of $0", a
   });
 });
 
-Deno.test("model spend: a one-key deployment still turns green (an unset key doesn't gate the budget)", async () => {
+test("model spend: a one-key deployment still turns green (an unset key doesn't gate the budget)", async () => {
   await withFetch({ "openrouter.ai": openrouterFive }, async () => {
     const v = await modelSpend.collect(ctx({ OPENROUTER_KEY: "or" }));
     assertEquals(v.status, "good");
@@ -232,7 +233,7 @@ Deno.test("model spend: a one-key deployment still turns green (an unset key doe
   });
 });
 
-Deno.test("model spend: one day of data draws no chart, so the provider's total moves into the key", async () => {
+test("model spend: one day of data draws no chart, so the provider's total moves into the key", async () => {
   const today = new Date(TODAY).toISOString().slice(0, 10);
   await withFetch({ "api.openai.com": () => json({ data: [oaBucket(today, 12)] }) }, async () => {
     const v = await modelSpend.collect(ctx({ OPENAI_ADMIN_KEY: "oa" }));
@@ -258,7 +259,7 @@ const UNUSABLE: Record<string, Handler> = {
 };
 
 for (const [how, handlers] of [["refused", REFUSED], ["answering without figures", UNUSABLE]] as const) {
-  Deno.test(`model spend: every provider ${how} -> gray, never a $0 green`, async () => {
+  test(`model spend: every provider ${how} -> gray, never a $0 green`, async () => {
     await withFetch(handlers, async () => {
       const v = await modelSpend.collect(ctx(ALL_KEYS));
       assertEquals(v.status, "unknown");
@@ -268,7 +269,7 @@ for (const [how, handlers] of [["refused", REFUSED], ["answering without figures
   });
 }
 
-Deno.test("model spend: no keys at all -> gray, naming the keys to set", async () => {
+test("model spend: no keys at all -> gray, naming the keys to set", async () => {
   const v = await modelSpend.collect(ctx({}));
   assertEquals(v.status, "unknown");
   assertEquals(v.value, "—");
@@ -288,7 +289,7 @@ const FEDERATION = {
   ANTHROPIC_SERVICE_ACCOUNT_ID: "svac_x",
 };
 
-Deno.test("model spend: Anthropic federation exchanges an identity token and reads with the bearer token", async () => {
+test("model spend: Anthropic federation exchanges an identity token and reads with the bearer token", async () => {
   const costHeads: Record<string, string>[] = [];
   let exchanges = 0;
   await withFetch(
@@ -321,7 +322,7 @@ Deno.test("model spend: Anthropic federation exchanges an identity token and rea
 
 // OpenAI still reads, so the tile renders rather than returning early: the
 // Anthropic line itself must show $???, and the total must not count it as $0.
-Deno.test("model spend: a denied Anthropic exchange marks Anthropic $??? and grays the tile", async () => {
+test("model spend: a denied Anthropic exchange marks Anthropic $??? and grays the tile", async () => {
   await withFetch(
     {
       "api.openai.com": openaiPaged,
@@ -347,7 +348,7 @@ Deno.test("model spend: a denied Anthropic exchange marks Anthropic $??? and gra
 // A half-finished federation setup still counts Anthropic as configured, so the
 // tile grays with Anthropic $??? instead of dropping the provider silently, and
 // the Admin key beside it is not used.
-Deno.test("model spend: a partial federation setup shows Anthropic $??? and sends nothing to Anthropic", async () => {
+test("model spend: a partial federation setup shows Anthropic $??? and sends nothing to Anthropic", async () => {
   // Both hosts answer, so a request to either would succeed rather than fail
   // quietly into the same $???; the recorded calls are what prove none is made.
   const touched: string[] = [];

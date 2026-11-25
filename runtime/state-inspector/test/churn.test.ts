@@ -11,6 +11,7 @@ import { Database } from "@db/sqlite";
 import { openSpace } from "../db.ts";
 import { commitChurn, commitsPerMinute } from "../churn.ts";
 import { hotEntities } from "../queries.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -75,7 +76,7 @@ function withStore(
   }
 }
 
-Deno.test("churn separates a burst from the same writes spread out", () => {
+test("churn separates a burst from the same writes spread out", () => {
   // Identical totals, opposite shapes. `hot` cannot tell these apart; that is
   // the whole reason churn exists.
   const burst: Parameters<typeof build>[1] = (commit) => {
@@ -110,7 +111,7 @@ Deno.test("churn separates a burst from the same writes spread out", () => {
   });
 });
 
-Deno.test("a storm that starts and settles is visible as a curve", () => {
+test("a storm that starts and settles is visible as a curve", () => {
   // Shaped like the July Topics incident: quiet, then a generated cell storms,
   // then it settles. The settle is the part a total can never show.
   withStore((commit) => {
@@ -146,7 +147,7 @@ Deno.test("a storm that starts and settles is visible as a curve", () => {
   });
 });
 
-Deno.test("bucket width changes resolution, not totals", () => {
+test("bucket width changes resolution, not totals", () => {
   withStore((commit) => {
     for (let i = 0; i < 10; i++) commit("2026-07-22 10:00:00", ["of:X"]);
     for (let i = 0; i < 10; i++) commit("2026-07-22 10:01:00", ["of:X"]);
@@ -160,7 +161,7 @@ Deno.test("bucket width changes resolution, not totals", () => {
   });
 });
 
-Deno.test("--since / --until bound the window, inclusive/exclusive", () => {
+test("--since / --until bound the window, inclusive/exclusive", () => {
   withStore((commit) => {
     commit("2026-07-22 09:59:00", ["of:early"]);
     commit("2026-07-22 10:00:00", ["of:inside"]);
@@ -176,7 +177,7 @@ Deno.test("--since / --until bound the window, inclusive/exclusive", () => {
   });
 });
 
-Deno.test("the curve covers the window asked for, not just its writes", () => {
+test("the curve covers the window asked for, not just its writes", () => {
   // "The rate returns to baseline AND STAYS THERE" is the runbook's settle
   // condition, and a curve that stops at its own last write can never show it:
   // a storm that has just stopped ends on its busiest bucket by construction.
@@ -221,7 +222,7 @@ Deno.test("the curve covers the window asked for, not just its writes", () => {
   });
 });
 
-Deno.test("a window bound SQLite cannot read is refused, not treated as quiet", () => {
+test("a window bound SQLite cannot read is refused, not treated as quiet", () => {
   // An unreadable bound compares as NULL and therefore matches NO commits, so
   // the report would say "no timed commits in window" — indistinguishable from
   // a genuinely quiet space. That is a false all-clear on the one check this
@@ -253,7 +254,7 @@ Deno.test("a window bound SQLite cannot read is refused, not treated as quiet", 
   });
 });
 
-Deno.test("an empty or backwards window is refused, not reported as quiet", () => {
+test("an empty or backwards window is refused, not reported as quiet", () => {
   // Two perfectly readable bounds in the wrong order match no commits and hit
   // the same false all-clear as an unparseable one. `until` is exclusive, so
   // equal bounds are empty too.
@@ -285,7 +286,7 @@ Deno.test("an empty or backwards window is refused, not reported as quiet", () =
   });
 });
 
-Deno.test("a commit with no revisions still counts as a commit", () => {
+test("a commit with no revisions still counts as a commit", () => {
   // LEFT JOIN, not JOIN: an empty commit is real activity and a fan-out over
   // revisions must not inflate the commit count either.
   withStore((commit) => {
@@ -298,7 +299,7 @@ Deno.test("a commit with no revisions still counts as a commit", () => {
   });
 });
 
-Deno.test("multiple writer sessions are counted per entity", () => {
+test("multiple writer sessions are counted per entity", () => {
   withStore((commit) => {
     commit("2026-07-22 10:00:00", ["of:X"], "session:did%3Akey%3AzAlice:s1");
     commit("2026-07-22 10:00:00", ["of:X"], "session:did%3Akey%3AzBob:s2");
@@ -308,7 +309,7 @@ Deno.test("multiple writer sessions are counted per entity", () => {
   });
 });
 
-Deno.test("an empty window reports nothing rather than failing", () => {
+test("an empty window reports nothing rather than failing", () => {
   withStore(() => {}, (space) => {
     const r = commitChurn(space, { bucketSeconds: 60 });
     assertEquals(r.totals.commits, 0);
@@ -319,7 +320,7 @@ Deno.test("an empty window reports nothing rather than failing", () => {
   });
 });
 
-Deno.test("untimed commits are surfaced, not silently dropped", () => {
+test("untimed commits are surfaced, not silently dropped", () => {
   // A curve missing rows must say so — otherwise it reads as a quiet period.
   withStore((commit) => {
     commit("2026-07-22 10:00:00", ["of:X"]);
@@ -331,7 +332,7 @@ Deno.test("untimed commits are surfaced, not silently dropped", () => {
   });
 });
 
-Deno.test("an over-wide span refuses instead of truncating the curve", () => {
+test("an over-wide span refuses instead of truncating the curve", () => {
   withStore((commit) => {
     commit("2020-01-01 00:00:00", ["of:X"]);
     commit("2026-07-22 10:00:00", ["of:X"]);
@@ -344,7 +345,7 @@ Deno.test("an over-wide span refuses instead of truncating the curve", () => {
   });
 });
 
-Deno.test("a non-positive bucket width is rejected", () => {
+test("a non-positive bucket width is rejected", () => {
   withStore(() => {}, (space) => {
     assertThrows(() => commitChurn(space, { bucketSeconds: 0 }), Error);
     assertThrows(() => commitChurn(space, { bucketSeconds: 1.5 }), Error);

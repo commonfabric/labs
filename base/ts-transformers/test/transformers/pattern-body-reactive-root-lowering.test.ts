@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -6,6 +5,7 @@ import { transformCfDirective } from "../../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { callsNamed, collect, parseModule } from "../transformed-ast.ts";
 import { validateSource } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HEAD = `/// <cts-enable />
 import { ifElse, pattern, UI, wish } from "commonfabric";

@@ -1,6 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { holdShapedCell, WakeShaper } from "../src/scheduler/wake-shaping.ts";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 // The old CellNotificationShaper surface, expressed over the unified WakeShaper
 // + holdShapedCell adapter, so the cell-path contract assertions below stay

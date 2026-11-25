@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { SourceDoc } from "../src/compilation-cache/cell-cache.ts";
@@ -11,6 +10,7 @@ import type {
   IPreconditionFailedError,
   IStorageTransactionAborted,
 } from "../src/storage/interface.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HASH_A = "A".repeat(43);
 const HASH_B = "B".repeat(43);

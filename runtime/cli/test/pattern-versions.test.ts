@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 import {
@@ -13,6 +12,12 @@ import {
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import { Identity } from "@commonfabric/identity";
 import type { RuntimeProgram } from "@commonfabric/runner";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   applyPieceSourceCommandAction,
   newPieceFromCommand,

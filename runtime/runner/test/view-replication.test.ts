@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   collectViewAncestors,
@@ -7,6 +6,7 @@ import {
   ViewDependencyGraph,
   type ViewExecutionNode,
 } from "../src/view-replication.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const address = (id: string, path: string[] = []) => ({
   space: "did:key:z6Mk-view" as const,

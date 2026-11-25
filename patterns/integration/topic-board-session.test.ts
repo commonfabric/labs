@@ -1,9 +1,9 @@
 /** Exercises board navigation across different creation and activity orders. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { env } from "@commonfabric/integration";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   seedIdentity,
   seedTopicBoard,

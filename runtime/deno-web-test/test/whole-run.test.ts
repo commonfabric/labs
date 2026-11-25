@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   readWholeRuns,
   RECORDS_DIR_VARIABLE,
   type WholeRun,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import { runDenoWebTest } from "./utils.ts";
 
 /**

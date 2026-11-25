@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import { createTestApp } from "@/lib/create-app.ts";
 import {

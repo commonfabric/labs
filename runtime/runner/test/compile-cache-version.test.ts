@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   getCompileCacheRuntimeVersion,
@@ -6,6 +5,7 @@ import {
   setCompileCacheRuntimeVersionForTesting,
 } from "../src/compilation-cache/cell-cache.ts";
 import { SOURCE_COMPILE_CACHE_RUNTIME_VERSION } from "../src/compilation-cache/compile-cache-version.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 type VersionGlobal = typeof globalThis & {
   __cfCompileCacheRuntimeVersion?: unknown;

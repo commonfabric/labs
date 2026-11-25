@@ -7,6 +7,8 @@ import type { CellScope } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { Result, Unit } from "../src/storage/interface.ts";
@@ -91,7 +93,7 @@ function hasDestroyNowProvider(
     "sync" in provider && typeof provider.sync === "function";
 }
 
-Deno.test("StorageManager.closeNow does not wait for a pending session sync", async () => {
+test("StorageManager.closeNow does not wait for a pending session sync", async () => {
   const signer = await Identity.fromPassphrase("storage-close-pending-sync");
   const storage = TestStorageManager.create({
     as: signer,
@@ -115,7 +117,7 @@ Deno.test("StorageManager.closeNow does not wait for a pending session sync", as
   assertEquals(result, "closed");
 });
 
-Deno.test("Provider.destroyNow force-closes after destroy is already pending", async () => {
+test("Provider.destroyNow force-closes after destroy is already pending", async () => {
   const signer = await Identity.fromPassphrase("storage-provider-destroy-now");
   const storage = TestStorageManager.create({
     as: signer,
@@ -152,7 +154,7 @@ Deno.test("Provider.destroyNow force-closes after destroy is already pending", a
   assertEquals(closeNowCalls, 1);
 });
 
-Deno.test("StorageManager.close drains a watch long-poll still in flight", async () => {
+test("StorageManager.close drains a watch long-poll still in flight", async () => {
   const signer = await Identity.fromPassphrase("storage-close-watch-inflight");
   const storage = TestStorageManager.create(
     { as: signer, memoryHost: new URL("memory://") },

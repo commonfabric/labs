@@ -6,8 +6,9 @@ import {
   TraceIdRatioBasedSampler,
 } from "@opentelemetry/sdk-trace-base";
 import { samplerFromEnv } from "@/lib/otel-sampler.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("samplerFromEnv maps OTEL_TRACES_SAMPLER to the right sampler", () => {
+test("samplerFromEnv maps OTEL_TRACES_SAMPLER to the right sampler", () => {
   assertInstanceOf(samplerFromEnv("always_on", "1.0"), AlwaysOnSampler);
   assertInstanceOf(samplerFromEnv("always_off", "1.0"), AlwaysOffSampler);
   assertInstanceOf(
@@ -32,7 +33,7 @@ Deno.test("samplerFromEnv maps OTEL_TRACES_SAMPLER to the right sampler", () => 
   );
 });
 
-Deno.test("traceidratio reflects the configured ratio", () => {
+test("traceidratio reflects the configured ratio", () => {
   assertEquals(
     samplerFromEnv("traceidratio", "0.25").toString(),
     "TraceIdRatioBased{0.25}",
@@ -50,7 +51,7 @@ Deno.test("traceidratio reflects the configured ratio", () => {
   }
 });
 
-Deno.test("the parent-based samplers take the root sampler their names say", () => {
+test("the parent-based samplers take the root sampler their names say", () => {
   const root = (name: string) =>
     samplerFromEnv(name, "1.0").toString().match(/^ParentBased\{root=(\w+),/)
       ?.[1];

@@ -13,6 +13,7 @@ import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 import { assertSpyCalls, spy } from "@std/testing/mock";
 import {
   materializeStableArrayCells,
@@ -51,7 +52,7 @@ const withRuntimeTransaction = async (
   }
 };
 
-Deno.test("stable values replace cells inside native errors", async () => {
+test("stable values replace cells inside native errors", async () => {
   const signer = await Identity.fromPassphrase("agent connector error test");
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
@@ -81,14 +82,14 @@ Deno.test("stable values replace cells inside native errors", async () => {
   }
 });
 
-Deno.test("stable values retain reserved keys for validation", () => {
+test("stable values retain reserved keys for validation", () => {
   assertThrows(
     () => stableFabricValue({ ["__proto__"]: "invalid" }),
     Error,
   );
 });
 
-Deno.test("stable graph writes keep child identity and hydrate linked values", async () => {
+test("stable graph writes keep child identity and hydrate linked values", async () => {
   const signer = await Identity.fromPassphrase("agent connector graph test");
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
@@ -147,7 +148,7 @@ Deno.test("stable graph writes keep child identity and hydrate linked values", a
   }
 });
 
-Deno.test("stable graph writes preserve native `FabricValue`s", async () => {
+test("stable graph writes preserve native `FabricValue`s", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector native graph test",
   );
@@ -187,7 +188,7 @@ Deno.test("stable graph writes preserve native `FabricValue`s", async () => {
   }
 });
 
-Deno.test("stable graph writes refuse populated unprotected cells", async () => {
+test("stable graph writes refuse populated unprotected cells", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector unprotected graph test",
   );
@@ -287,7 +288,7 @@ Deno.test("stable graph writes refuse populated unprotected cells", async () => 
   }
 });
 
-Deno.test("stable graph writes one new cell referenced twice", async () => {
+test("stable graph writes one new cell referenced twice", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector repeated graph cell test",
   );
@@ -329,7 +330,7 @@ Deno.test("stable graph writes one new cell referenced twice", async () => {
   }
 });
 
-Deno.test("stable graph deletes fields whose names exist on the prototype", async () => {
+test("stable graph deletes fields whose names exist on the prototype", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector inherited field test",
   );
@@ -362,7 +363,7 @@ Deno.test("stable graph deletes fields whose names exist on the prototype", asyn
   }
 });
 
-Deno.test("stable graph reads can preserve links in named fields", async () => {
+test("stable graph reads can preserve links in named fields", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector preserved graph link test",
   );
@@ -401,7 +402,7 @@ Deno.test("stable graph reads can preserve links in named fields", async () => {
   }
 });
 
-Deno.test("stable graph writes open no transaction for no entries", async () => {
+test("stable graph writes open no transaction for no entries", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector empty graph test",
   );
@@ -424,7 +425,7 @@ Deno.test("stable graph writes open no transaction for no entries", async () => 
   }
 });
 
-Deno.test("stable graph reads refuse a link without an id or space", async () => {
+test("stable graph reads refuse a link without an id or space", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector incomplete link test",
   );
@@ -462,7 +463,7 @@ Deno.test("stable graph reads refuse a link without an id or space", async () =>
   }
 });
 
-Deno.test("stable array planning preserves links to cell subpaths", async () => {
+test("stable array planning preserves links to cell subpaths", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector graph subpath test",
   );
@@ -505,7 +506,7 @@ Deno.test("stable array planning preserves links to cell subpaths", async () => 
   }
 });
 
-Deno.test("stable graph field writes preserve document metadata", async () => {
+test("stable graph field writes preserve document metadata", async () => {
   const signer = await Identity.fromPassphrase("agent connector field writes");
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
@@ -583,7 +584,7 @@ function fakeCell(id = "of:parent") {
   return cell;
 }
 
-Deno.test("stable graph hydrates the owner-schema cell before writing", async () => {
+test("stable graph hydrates the owner-schema cell before writing", async () => {
   await withRuntimeTransaction(async (fakeTransaction) => {
     let schemaBindings = 0;
     let syncs = 0;
@@ -653,7 +654,7 @@ Deno.test("stable graph hydrates the owner-schema cell before writing", async ()
   });
 });
 
-Deno.test("stable graph writes await one commit", async () => {
+test("stable graph writes await one commit", async () => {
   await withRuntimeTransaction(async (fakeTransaction) => {
     const commitStarted = Promise.withResolvers<void>();
     const commitResult = Promise.withResolvers<{
@@ -698,7 +699,7 @@ Deno.test("stable graph writes await one commit", async () => {
   });
 });
 
-Deno.test("stable graph writes surface a commit failure without retrying", async () => {
+test("stable graph writes surface a commit failure without retrying", async () => {
   await withRuntimeTransaction(async (fakeTransaction) => {
     const commitError = {
       name: "ConflictError",
@@ -745,7 +746,7 @@ Deno.test("stable graph writes surface a commit failure without retrying", async
   });
 });
 
-Deno.test("stable graph hydration bounds concurrent child syncs", async () => {
+test("stable graph hydration bounds concurrent child syncs", async () => {
   const space = "did:test:space";
   const firstBatchStarted = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();

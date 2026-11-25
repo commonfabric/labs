@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { existsSync } from "@std/fs/exists";
 import { type JSONSchema, patternKeyMovesIn } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   acceptedBreakKey,
   type Baseline,

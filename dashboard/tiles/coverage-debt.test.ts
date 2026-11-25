@@ -6,10 +6,10 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { join } from "@std/path";
 import { maxOf, minOf } from "@commonfabric/collections/math";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { Ctx } from "../types.ts";
 import {

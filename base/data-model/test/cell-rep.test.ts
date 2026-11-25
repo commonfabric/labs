@@ -16,7 +16,6 @@
  * arrived from outside.
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -40,6 +39,7 @@ import {
 } from "@/cell-rep.ts";
 import { FabricLink } from "@/fabric-instances";
 import { FabricHash } from "@/fabric-primitives";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A fixed 32-byte hash for deterministic tests. */
 const SAMPLE_HASH = new Uint8Array(32);

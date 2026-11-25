@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { NumberedCell } from "../src/cause-assignment.ts";
 import {

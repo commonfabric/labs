@@ -1,5 +1,4 @@
 import { assert, assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 
@@ -9,6 +8,7 @@ import {
   isReactiveOriginCall,
 } from "../../src/ast/mod.ts";
 import { analyzeExpression } from "./harness.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function getCallExpression(
   source: string,

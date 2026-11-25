@@ -8,7 +8,6 @@
  * without an edit here.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type {
@@ -19,6 +18,7 @@ import type {
 } from "@commonfabric/api";
 import type { Schema } from "@commonfabric/api/schema";
 import type { Equal, MustBeTrue } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The inference for each name in the vocabulary, keyed by the name. */
 type InferredByName = {

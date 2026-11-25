@@ -1,8 +1,13 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { InMemoryProgram } from "@commonfabric/js-compiler/program";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime, runtimePresets } from "../../src/index.ts";
 import { Engine } from "../../src/harness/engine.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";

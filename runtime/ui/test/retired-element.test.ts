@@ -3,6 +3,7 @@ import {
   resetRetiredElementWarnings,
   warnRetiredElementUsed,
 } from "../src/v2/core/retired-element.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // The warning has to be loud enough to find and quiet enough to leave on. A
 // retired element sits inside a `.map(...)` over durable data, so warning per
@@ -21,7 +22,7 @@ function captureWarnings(run: () => void): string[] {
   return lines;
 }
 
-Deno.test("a retired element warns once per session, not once per use", () => {
+test("a retired element warns once per session, not once per use", () => {
   resetRetiredElementWarnings();
   const lines = captureWarnings(() => {
     warnRetiredElementUsed("cf-cell-context", "cf-piece-menu");
@@ -31,7 +32,7 @@ Deno.test("a retired element warns once per session, not once per use", () => {
   assertEquals(lines.length, 1);
 });
 
-Deno.test("each retired element gets its own warning", () => {
+test("each retired element gets its own warning", () => {
   resetRetiredElementWarnings();
   const lines = captureWarnings(() => {
     warnRetiredElementUsed("cf-cell-context", "cf-piece-menu");
@@ -40,7 +41,7 @@ Deno.test("each retired element gets its own warning", () => {
   assertEquals(lines.length, 2);
 });
 
-Deno.test("the warning names the element and its replacement", () => {
+test("the warning names the element and its replacement", () => {
   resetRetiredElementWarnings();
   const [line] = captureWarnings(() => {
     warnRetiredElementUsed("cf-cell-context", "cf-piece-menu");
@@ -51,7 +52,7 @@ Deno.test("the warning names the element and its replacement", () => {
   assertEquals(line.includes("cf-piece-menu"), true);
 });
 
-Deno.test("a retired element with no successor still warns", () => {
+test("a retired element with no successor still warns", () => {
   resetRetiredElementWarnings();
   const [line] = captureWarnings(() => {
     warnRetiredElementUsed("cf-no-successor");

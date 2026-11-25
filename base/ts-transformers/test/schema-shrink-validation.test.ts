@@ -5,6 +5,7 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { test } from "@commonfabric/test-support/test";
 import { validateSource } from "./utils.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
@@ -75,7 +76,7 @@ function outputWindow(output: string, startNeedle: string, endNeedle: string) {
   return output.slice(start, end + endNeedle.length);
 }
 
-Deno.test("Schema Shrink Validation", async (t) => {
+test("Schema Shrink Validation", async (t) => {
   await t.step(
     "errors when parameter is 'unknown' but code accesses properties",
     async () => {
@@ -2397,7 +2398,7 @@ function fmtErrors(diagnostics: readonly TransformationDiagnostic[]): string {
   return getShrinkErrors(diagnostics).map((e) => e.message).join("; ");
 }
 
-Deno.test("fetchJson requires an explicit type argument", async (t) => {
+test("fetchJson requires an explicit type argument", async (t) => {
   await t.step("errors when called without a type argument", async () => {
     const source = [
       'import { fetchJson } from "commonfabric";',

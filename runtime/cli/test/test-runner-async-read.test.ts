@@ -4,11 +4,11 @@
  * reported as the assertion's failure.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { resolve } from "@std/path";
 import { Runtime } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import { runTests } from "../lib/test-runner.ts";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/async-read");

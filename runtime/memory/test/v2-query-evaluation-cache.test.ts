@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { spy } from "@std/testing/mock";
 import { applyCommit, open as openEngine } from "../v2/engine.ts";
@@ -21,6 +20,7 @@ import {
   type SessionSync,
   type WatchAddResult,
 } from "../v2.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TEST_AUDIENCE = "did:key:z6Mk-memory-v2-eval-cache-test-audience";
 

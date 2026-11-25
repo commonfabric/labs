@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
@@ -32,6 +31,12 @@ import {
   saveRegistration,
 } from "@/routes/ingest/ingest.utils.ts";
 import { linkRefPayloadToString } from "@commonfabric/runner/shared";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   getMailboxChannels,
   type MailboxLookup,

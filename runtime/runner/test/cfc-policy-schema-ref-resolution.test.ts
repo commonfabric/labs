@@ -12,11 +12,11 @@
  * document may fail closed.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { wildcardPolicyMatchesValue } from "../src/cfc/prepare.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("CFC policy value matching resolves $refs against the schema root", () => {
   const space = "did:key:policy-schema-refs" as const;

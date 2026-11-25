@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import {
@@ -8,6 +7,7 @@ import {
   RuntimeTelemetryEvent,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { RuntimeClient } from "@/runtime-client.ts";
 import type { ProcessorRequest } from "@/backends/runtime-processor.ts";

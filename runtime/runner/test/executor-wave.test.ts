@@ -35,7 +35,6 @@
 //   the handler requeues, the derivation drops, everything else commits,
 //   and no batch is ever built for the failed space.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
@@ -64,6 +63,12 @@ import {
   StorageManager,
 } from "../src/storage/v2.ts";
 import type { Signer } from "@commonfabric/memory/interface";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import type { Module, Pattern } from "../src/builder/types.ts";
 import type {

@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { dirname, fromFileUrl, join } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { test } from "@commonfabric/test-support/test";
 import {
   checkStep,
   extensionsOf,
@@ -32,14 +33,14 @@ function step(action: string, comment: string): Step {
   return { file: "workflows/x.yml", action, comment };
 }
 
-Deno.test("a commit the named release points at passes", async () => {
+test("a commit the named release points at passes", async () => {
   assertEquals(
     await checkStep(step(`actions/cache@${V6}`, "v6.1.0"), TAGS),
     null,
   );
 });
 
-Deno.test("a comment naming a moving alias fails", async () => {
+test("a comment naming a moving alias fails", async () => {
   // `v6` is true today and false after the next release, without anybody
   // touching the file, so the check asks for the release itself and says
   // which one.
@@ -48,7 +49,7 @@ Deno.test("a comment naming a moving alias fails", async () => {
   assert(problem?.includes("v6.1.0"));
 });
 
-Deno.test("a commit under the wrong release fails", async () => {
+test("a commit under the wrong release fails", async () => {
   const problem = await checkStep(
     step(`actions/cache@${V6_0_0}`, "v6.1.0"),
     TAGS,
@@ -57,14 +58,14 @@ Deno.test("a commit under the wrong release fails", async () => {
   assert(problem?.includes("but the step runs"));
 });
 
-Deno.test("a sub-action is checked against its repository", async () => {
+test("a sub-action is checked against its repository", async () => {
   assertEquals(
     await checkStep(step(`actions/cache/restore@${V6}`, "v6.1.0"), TAGS),
     null,
   );
 });
 
-Deno.test("a commit no release points at fails", async () => {
+test("a commit no release points at fails", async () => {
   const problem = await checkStep(
     step(`actions/cache@${OTHER}`, "v6.1.0"),
     TAGS,
@@ -72,22 +73,22 @@ Deno.test("a commit no release points at fails", async () => {
   assert(problem?.includes("but the step runs"));
 });
 
-Deno.test("a comment naming an absent release fails", async () => {
+test("a comment naming an absent release fails", async () => {
   const problem = await checkStep(step(`actions/cache@${V6}`, "v99"), TAGS);
   assert(problem?.includes("has no v99 release"));
 });
 
-Deno.test("a step naming a tag rather than a commit fails", async () => {
+test("a step naming a tag rather than a commit fails", async () => {
   const problem = await checkStep(step("actions/cache@v6", "v6.1.0"), TAGS);
   assert(problem?.includes("names no commit"));
 });
 
-Deno.test("a pinned step with no comment fails", async () => {
+test("a pinned step with no comment fails", async () => {
   const problem = await checkStep(step(`actions/cache@${V6}`, ""), TAGS);
   assert(problem?.includes("has no version comment"));
 });
 
-Deno.test("a comment that names no version fails", async () => {
+test("a comment that names no version fails", async () => {
   const problem = await checkStep(
     step(`actions/cache@${V6}`, "the good one"),
     TAGS,
@@ -95,7 +96,7 @@ Deno.test("a comment that names no version fails", async () => {
   assert(problem?.includes("the good one"));
 });
 
-Deno.test("pinOf drops a sub-action path and rejects a tag", () => {
+test("pinOf drops a sub-action path and rejects a tag", () => {
   assertEquals(pinOf(step(`actions/cache/save@${V6}`, "v6.1.0")), {
     repo: "actions/cache",
     sha: V6,
@@ -104,14 +105,14 @@ Deno.test("pinOf drops a sub-action path and rejects a tag", () => {
   assertEquals(pinOf(step("./.github/actions/deno-setup", "")), null);
 });
 
-Deno.test("extensionsOf finds the releases a name covers", () => {
+test("extensionsOf finds the releases a name covers", () => {
   const tags = new Map([["v4", "a"], ["v4.2.0", "b"], ["v41.0.0", "c"]]);
   // `v41.0.0` does not extend `v4`: the split is at the dot.
   assertEquals(extensionsOf(tags, "v4"), ["v4.2.0"]);
   assertEquals(extensionsOf(tags, "v4.2.0"), []);
 });
 
-Deno.test("parseSteps reads the action and the comment", () => {
+test("parseSteps reads the action and the comment", () => {
   const steps = parseSteps(
     [
       `      uses: actions/checkout@${V6} # v7`,
@@ -158,7 +159,7 @@ function stubFetch(
   };
 }
 
-Deno.test("resolveFromGitHub reads a lightweight tag", async () => {
+test("resolveFromGitHub reads a lightweight tag", async () => {
   const restore = stubFetch(() => ({
     status: 200,
     body: [{ ref: "refs/tags/v6.1.0", object: { type: "commit", sha: V6 } }],
@@ -173,7 +174,7 @@ Deno.test("resolveFromGitHub reads a lightweight tag", async () => {
   }
 });
 
-Deno.test("resolveFromGitHub follows an annotated tag", async () => {
+test("resolveFromGitHub follows an annotated tag", async () => {
   // An annotated tag answers with the tag object, so the commit is one more
   // request away.
   const restore = stubFetch((path) =>
@@ -200,7 +201,7 @@ Deno.test("resolveFromGitHub follows an annotated tag", async () => {
   }
 });
 
-Deno.test("resolveFromGitHub reads an absent version as empty", async () => {
+test("resolveFromGitHub reads an absent version as empty", async () => {
   const restore = stubFetch(() => ({ status: 404 }));
   try {
     assertEquals((await resolveFromGitHub("actions/cache", "v99")).size, 0);
@@ -209,7 +210,7 @@ Deno.test("resolveFromGitHub reads an absent version as empty", async () => {
   }
 });
 
-Deno.test("resolveFromGitHub reports a refused listing", async () => {
+test("resolveFromGitHub reports a refused listing", async () => {
   const restore = stubFetch(() => ({ status: 500 }));
   try {
     await assertRejects(
@@ -222,7 +223,7 @@ Deno.test("resolveFromGitHub reports a refused listing", async () => {
   }
 });
 
-Deno.test("resolveFromGitHub reports a refused peel", async () => {
+test("resolveFromGitHub reports a refused peel", async () => {
   const restore = stubFetch((path) =>
     path.includes("/git/tags/") ? { status: 500 } : {
       status: 200,
@@ -243,7 +244,7 @@ Deno.test("resolveFromGitHub reports a refused peel", async () => {
   }
 });
 
-Deno.test("resolveFromGitHub names the rate limit when refused", async () => {
+test("resolveFromGitHub names the rate limit when refused", async () => {
   // The unauthenticated limit is low enough to hit by accident, so the
   // message has to say what to do about it rather than just the status.
   const restore = stubFetch(() => ({
@@ -280,7 +281,7 @@ async function withGithubTree(
   }
 }
 
-Deno.test("main walks nested files and passes a sound tree", async () => {
+test("main walks nested files and passes a sound tree", async () => {
   await withGithubTree({
     "workflows/a.yml": `      uses: actions/cache@${V6} # v6.1.0\n`,
     // A nested directory, a second extension, and a step naming an action in
@@ -294,7 +295,7 @@ Deno.test("main walks nested files and passes a sound tree", async () => {
   });
 });
 
-Deno.test("main reports a step that does not match", async () => {
+test("main reports a step that does not match", async () => {
   await withGithubTree({
     "workflows/a.yml": `      uses: actions/cache@${OTHER} # v6.1.0\n`,
   }, async (root) => {
@@ -302,7 +303,7 @@ Deno.test("main reports a step that does not match", async () => {
   });
 });
 
-Deno.test("running the script as a command checks a tree", async () => {
+test("running the script as a command checks a tree", async () => {
   // Runs the script the way `deno task check-action-pins` does, which the
   // calls to main() above do not: they would still pass if the entry point
   // never ran it, or if the task's declared permissions were too narrow to

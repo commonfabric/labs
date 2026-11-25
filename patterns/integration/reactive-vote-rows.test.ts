@@ -9,8 +9,8 @@ import {
   experimentalOptionsFromEnv,
   type SchedulerGraphSnapshot,
 } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { MultiRuntimeHarness } from "./multi-runtime-harness.ts";
 

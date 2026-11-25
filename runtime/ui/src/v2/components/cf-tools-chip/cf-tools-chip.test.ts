@@ -2,7 +2,6 @@
 import { mount, settle, window } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import {
@@ -12,6 +11,12 @@ import {
 import { defaultTheme, themeProperties } from "../theme-context.ts";
 import type { ToolsRecord } from "./cf-tools-chip.ts";
 import { CFToolsChip, type ToolsChipTool } from "./index.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** What a chip's `tools` cell holds. */
 type Tools = ToolsChipTool[] | ToolsRecord;
