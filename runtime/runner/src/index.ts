@@ -486,8 +486,10 @@ export {
 export { schemaPathSelection } from "./schema-path.ts";
 export {
   acceptsOpaqueCellOrUnresolvedLink,
+  isStoredArgumentOwnData,
   materializeStoredValueForValidation,
   overlayUnreadableLinkPlaceholders,
+  readStoredLinkChainRaw,
   storedArgumentValidationIssue,
 } from "./stored-argument-validation.ts";
 
