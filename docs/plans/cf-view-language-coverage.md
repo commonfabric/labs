@@ -108,9 +108,8 @@ output streams the complete dump. Text saves use the encoder paired with the
 decoded source, including preservation of a UTF-8 byte order mark. Binary files
 remain outside diff editing and semantic source loading.
 
-Python, Go, Swift, Kotlin, Rust, TOML, HCL, CSS, shell, C, C++, and Starlark run
-on Tree-sitter through a shared, language-neutral adapter, which HTML will use
-as well. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
+Python, Go, Swift, Kotlin, Rust, TOML, HCL, CSS, HTML, shell, C, C++, and
+Starlark run on Tree-sitter through a shared, language-neutral adapter. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
 configuration files, XML, makefiles, Org mode, Lean, ignore files, Go's module
 and checksum files, Bazel rc files, Graphviz DOT, Dockerfiles, delimited tables,
 assembly, SQL, linker scripts, and systemd units use focused scanners. The order
@@ -926,8 +925,9 @@ speculation rules, or a data block of a JSON type, and uncolored for any other
 data block. An event handler attribute's value is JavaScript. A `style`
 element's text, when its type is absent or `text/css`, and a `style`
 attribute's value are CSS. JavaScript is colored by the pager's TypeScript and
-JavaScript language, and CSS by the CSS grammar. An edit colors again only the
-stretches it changed. Structure lists elements by tag name, with their `id` or
+JavaScript language, and CSS by the CSS grammar. An edit colors the page from
+the new parse, as for every language on the adapter, and colors again only the
+stretches of another language whose text it changed. Structure lists elements by tag name, with their `id` or
 `name`. The UI package's Lezer parsers were evaluated under "HTML and the Lezer
 parser", and its `happy-dom` dependency keeps no source positions, so it cannot
 color source.
