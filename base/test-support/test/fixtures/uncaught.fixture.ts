@@ -93,6 +93,20 @@ if (scenario === "step") {
   test("kills its own process", () => {
     Deno.kill(Deno.pid, "SIGKILL");
   });
+} else if (scenario === "late-handled") {
+  test("one", () => {});
+  afterAll(() => {});
+  // Registered as the file loads, before the module's listeners for the end
+  // of the file, so it has the late error first and handles it.
+  globalThis.addEventListener("error", (event) => event.preventDefault());
+  globalThis.addEventListener("unload", () => {
+    globalThis.dispatchEvent(
+      new ErrorEvent("error", {
+        error: new Error("handled as the file ended"),
+        cancelable: true,
+      }),
+    );
+  });
 } else if (scenario === "after-hang") {
   test("waits forever", async () => {
     await new Promise(() => {});

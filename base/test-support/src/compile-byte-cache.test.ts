@@ -108,6 +108,21 @@ describe("ProcessModuleByteCache", () => {
     expect(cache.get(RT, "b")).toEqual({ js: "67890", sourceMap });
   });
 
+  it("serializes one cached module, and nothing for one it does not hold", () => {
+    const cache = new ProcessModuleByteCache();
+    cache.put(RT, "x", { js: "JS_X", importSpecs: ["./y.tsx"] });
+    const one = cache.serialized(RT, "x");
+    expect(one).toEqual(cache.snapshot()[0]);
+    const restored = new ProcessModuleByteCache();
+    restored.restore([one!]);
+    expect(restored.get(RT, "x")).toEqual({
+      js: "JS_X",
+      importSpecs: ["./y.tsx"],
+    });
+    expect(cache.serialized(RT, "missing")).toBeUndefined();
+    expect(cache.serialized("another runtime", "x")).toBeUndefined();
+  });
+
   it("round-trips through snapshot/restore into a fresh cache", () => {
     const a = new ProcessModuleByteCache();
     a.put(RT, "x", { js: "JS_X" });

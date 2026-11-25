@@ -65,6 +65,7 @@ describe("results", () => {
           JSON.stringify({ ...result(["a"], "pass", 1), name: [] }),
           JSON.stringify({ ...result(["a"], "pass", 1), name: [1] }),
           JSON.stringify({ ...result(["a"], "pass", 1), name: ["a > b"] }),
+          JSON.stringify({ ...result(["a"], "pass", 1), listed: false }),
           JSON.stringify({ ...result(["a"], "pass", 1), outcome: "ok" }),
           JSON.stringify({ ...result(["a"], "pass", 1), durationMs: -1 }),
           JSON.stringify({ ...result(["a"], "pass", 1), container: false }),
@@ -266,6 +267,33 @@ describe("results", () => {
       }
     });
 
+    it("reads none of the results files it is told to ignore", async () => {
+      const dir = await spoolOf([result(["oven"], "pass", 1)], {
+        "results-02.ndjson": JSON.stringify(result(["toaster"], "pass", 1)) +
+          "\n",
+      });
+      try {
+        const { records } = await readResults(dir, {
+          kind: "unit",
+          scope: "bakery",
+          ignoring: new Set(["results-01.ndjson"]),
+        });
+        expect(records.map((record) => record.test.n)).toEqual(["toaster"]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("throws for a spool that is not a directory", async () => {
+      const file = await Deno.makeTempFile({ prefix: "results-test-" });
+      try {
+        await expect(readResults(file, { kind: "unit", scope: "bakery" }))
+          .rejects.toThrow();
+      } finally {
+        await Deno.remove(file);
+      }
+    });
+
     it("reads a spool that does not exist as holding nothing", async () => {
       const dir = await Deno.makeTempDir({ prefix: "results-test-" });
       await Deno.remove(dir);
@@ -307,6 +335,22 @@ describe("results", () => {
       expect(ResultsWriter.openForRun(() => "")).toBeUndefined();
     });
 
+    it("writes nothing, and warns, where it cannot open a results file", async () => {
+      const warnings: unknown[] = [];
+      using _warn = stub(console, "warn", (message: unknown) => {
+        warnings.push(message);
+      });
+      const file = await Deno.makeTempFile({ prefix: "results-test-" });
+      try {
+        expect(ResultsWriter.openForRun(() => file)).toBeUndefined();
+        expect(warnings).toEqual([
+          expect.stringContaining("cannot open a results file"),
+        ]);
+      } finally {
+        await Deno.remove(file);
+      }
+    });
+
     it("appends lines a reader reads back", async () => {
       const dir = await Deno.makeTempDir({ prefix: "results-test-" });
       try {
@@ -339,6 +383,8 @@ describe("results", () => {
         },
         close: () => {
           closed = true;
+          // A file a failed write already closed throws on closing again.
+          throw new Error("already closed");
         },
       });
       writer.write(result(["oven"], "pass", 1));

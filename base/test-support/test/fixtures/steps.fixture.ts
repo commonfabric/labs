@@ -23,6 +23,11 @@ if (scenario === "throws") {
     Promise.reject(new Error("this test left this"));
     await new Promise((resolve) => setTimeout(resolve, 40));
   });
+} else if (scenario === "forms") {
+  test({ name: "named by its options" }, async (t) => {
+    // A step given a name and no body is refused as it starts.
+    await Reflect.apply(t.step, t, ["bodiless"]);
+  });
 } else if (scenario === "skipped") {
   test("skips every step", async (t) => {
     await t.step({ name: "skipped", ignore: true, fn: () => {} });

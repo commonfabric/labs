@@ -314,12 +314,12 @@ describe("@commonfabric/test-support/test", () => {
   });
 
   it("refuses a skip list that is not one", async () => {
-    const refused = await run(`${FIXTURES}/wrappers.fixture.ts`, {
+    const refused = await run(`${FIXTURES}/refused-skip-list.fixture.ts`, {
       skips: "[]",
     });
-    expect(refused.code).not.toBe(0);
-    expect(refused.output).toContain("is not one");
-    expect(refused.logged).toEqual([]);
+    expect(refused.logged).toEqual([
+      expect.stringMatching(/^refused: the skip list .* is not one$/),
+    ]);
   });
 
   it("runs each installed wrapper around each suite, the first outermost", async () => {
@@ -356,15 +356,18 @@ describe("@commonfabric/test-support/test", () => {
 
   it("refuses a describe body that returns a promise", async () => {
     const refused = await run(`${FIXTURES}/async-describe.fixture.ts`);
-    expect(refused.code).not.toBe(0);
-    expect(refused.output).toContain("returned a value");
-    expect(refused.registered.size).toBe(0);
+    expect(refused.logged).toEqual([
+      expect.stringContaining("returned a value"),
+    ]);
+    const names = [...refused.registered.values()].flatMap((set) => [...set]);
+    expect(names.filter((name) => name.startsWith("waits"))).toEqual([]);
   });
 
   it("refuses test() inside a describe", async () => {
     const refused = await run(`${FIXTURES}/test-in-describe.fixture.ts`);
-    expect(refused.code).not.toBe(0);
-    expect(refused.output).toContain("test() declares a suite of its own");
+    expect(refused.logged).toEqual([
+      expect.stringContaining("test() declares a suite of its own"),
+    ]);
   });
 
   it("records a failure a wrapper throws as the suite's", async () => {
@@ -564,6 +567,14 @@ describe("@commonfabric/test-support/test", () => {
       expect(ran.hooks.map((record) => record.outcome)).toEqual(["pass"]);
     });
 
+    it("fails nothing where the file handles what arrives as it ends", async () => {
+      const ran = await scenario("late-handled");
+      expect(outcomes(ran.records)[file]).not.toBe("fail");
+      expect([...ran.failures.values()].join("\n")).not.toContain(
+        "handled as the file ended",
+      );
+    });
+
     it("fails only the test that hung, not the groups around it", async () => {
       const ran = await scenario("nested-hang");
       expect(outcomes(ran.records)).toEqual({
@@ -648,6 +659,18 @@ describe("@commonfabric/test-support/test", () => {
     expect(outcomes(ran.records)[file]).not.toBe("pass");
   });
 
+  it("names a test by its options, and fails a step given no body", async () => {
+    const ran = await run(`${FIXTURES}/steps.fixture.ts`, {
+      env: { FIXTURE_CASE: "forms" },
+    });
+    expect(outcomes(ran.records)).toMatchObject({
+      "named by its options": "fail",
+    });
+    expect([...ran.failures.values()].join("\n")).toContain(
+      'step("bodiless") was given no body',
+    );
+  });
+
   it("fails a test that returns with a step still running", async () => {
     const ran = await run(`${FIXTURES}/steps.fixture.ts`);
     expect(ran.code).not.toBe(0);
@@ -681,28 +704,30 @@ describe("@commonfabric/test-support/test", () => {
 
   it("refuses two tests of one name in one group", async () => {
     const ran = await run(`${FIXTURES}/duplicates.fixture.ts`);
-    expect(ran.code).not.toBe(0);
-    expect(ran.output).toContain(
-      'two tests or groups are named "group > again"',
-    );
-    expect(ran.registered.size).toBe(0);
+    expect(ran.logged).toEqual([
+      'refused: two tests or groups are named "group > again"',
+    ]);
+    expect(outcomes(ran.records)).toEqual({ "group > again": "pass" });
   });
 
   it("refuses two groups of one name", async () => {
     const ran = await run(`${FIXTURES}/duplicates.fixture.ts`, {
       env: { FIXTURE_CASE: "groups" },
     });
-    expect(ran.code).not.toBe(0);
-    expect(ran.output).toContain('two tests or groups are named "group"');
-    expect(ran.registered.size).toBe(0);
+    expect(ran.logged).toEqual([
+      'refused: two tests or groups are named "group"',
+    ]);
+    expect(outcomes(ran.records)).toEqual({ "group > first": "pass" });
   });
 
   it("refuses a name holding the separator", async () => {
     const ran = await run(`${FIXTURES}/duplicates.fixture.ts`, {
       env: { FIXTURE_CASE: "separator" },
     });
-    expect(ran.code).not.toBe(0);
-    expect(ran.output).toContain('"a > b" holds " > "');
+    expect(ran.logged).toEqual([
+      expect.stringContaining('refused: "a > b" holds " > "'),
+    ]);
+    expect(ran.records).toEqual([]);
   });
 
   it("fails a test that runs two steps of one name", async () => {
@@ -728,7 +753,11 @@ describe("@commonfabric/test-support/test", () => {
       const module = toFileUrl(join(ROOT, "base/test-support/src/testing.ts"));
       await Deno.writeTextFile(
         file,
-        `import { test } from "${module}";\ntest("runs", () => {});\n`,
+        // The module is loaded where a refusal can be caught and logged, so
+        // that the file ends as any other does.
+        `try {\n  const { test } = await import("${module}");\n` +
+          `  test("runs", () => {});\n` +
+          `} catch (error) {\n  console.log("LOG refused: " + error.name);\n}\n`,
       );
       const result = await runDenoCommandWithTemporaryLock({
         root: ROOT,
@@ -757,8 +786,8 @@ describe("@commonfabric/test-support/test", () => {
 
     it("refuses to load where its results are to be recorded", async () => {
       const ran = await outside({ CF_TEST_RECORDS_DIR: "/nonexistent" });
-      expect(ran.code).not.toBe(0);
-      expect(ran.output).toContain("NotCapable");
+      expect(ran.output).toContain("LOG refused: NotCapable");
+      expect(ran.output).not.toContain("runs ... ok");
     });
   });
 
