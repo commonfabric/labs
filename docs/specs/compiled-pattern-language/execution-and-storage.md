@@ -687,6 +687,21 @@ cell and from its own per-session `pickerOpen` cell
   the space, and every one for a key not evaluated for before. Whether
   such a document is made only for a key whose reader demands it is
   question 115.
+- **A collection of narrower scope in a row of another collection.** The
+  rows of a per-element construct whose assembly is of a scope key, standing
+  in a row of a collection whose rows are of the space, as a `map` over a
+  value of the scope `user` in each row of a `map` over an array of
+  references, over an array of plain values in place, or over the result of
+  another per-element construct. *Provisional (decision P474 of the
+  prototype):* the rows are stored whole in a document of their own for
+  the collection and the element keys around it, in the scope instance of
+  each key that evaluated them, and the outer row holds a link of that
+  scope to it, as for a value above. The writes of that document have the
+  records of the collection's outputs under the element keys around it and
+  the row's own. *Provisional (decision P475 of the prototype):* the
+  assembly of a collection of a scope key is set aside with its element
+  table while another key is evaluated for, as any entry of a scope key is,
+  so a derivation for one key forms no assembly another key formed.
 - **A value found to be of a narrower scope after it was stored.** The scope
   of a cone instance is known once it is evaluated, and a value can become of
   a narrower scope later, as a body over an array of references does when an
@@ -1134,6 +1149,19 @@ executor fails an evaluation that stores a marker at a position that the
 list does not cover; this design has neither. In its corpus run 2 stored
 positions hold a stream that is an input of the pattern, and 3 hold the
 stream of a binding that a function body makes and returns.
+
+On today's storage the prototype keeps the stream of a binding in a
+document of its own that holds the runtime's stream marker, in place of
+the row of the stream index (`plan-and-label-templates.md` §2.6). The
+transaction that first stores a link to the stream writes that document.
+By ruling (Z96) the marker carries the label of its row: for a binding in
+an element body, the membership label of each collection that holds the
+row, which the prototype gives as the record of the array that holds the
+row in the change that wrote it, and not the join of what the transaction
+read. *Provisional (decision P476 of the prototype):* the document is a
+store the instance owns, as the runner enrolls the cell of each stream of
+a piece. A marker of a binding with no element step is written with the
+join of the transaction, as before the ruling.
 
 **Value code compares two references through the host.** `equals(a, b)`
 in the reactive tier compares what its operands name once the links

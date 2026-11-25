@@ -27111,3 +27111,526 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    array of references through `get()` of the whole array stores no clause of
    the elements at its outputs. If the body consumed those labels, the outputs
    are under-labeled.
+
+## Round twenty-six: the rows' reactions, the labels of a body that iterates `get()`, and the rulings Z96 and Z97
+
+Round twenty-six (2026-11-25), on the branch
+`claude/compiled-pattern-scoped-rows` from `8442957f6f`. The notes are numbered
+from 1077, the provisional decisions from P474. The logs are in the folder
+`r26-reactions-rulings/` of the session. Whenever a note says `map` or `filter`,
+it names the case. Times are on an Apple M5 Max with 18 cores at the load
+averages given, from other sessions; the counts do not depend on the load.
+
+1077. **Findings, first.**
+      - _Correctness, fixed: every message row's reactions were an error state._
+        A collection of a scope key below a row of another collection, as each
+        FabriChat message row's `tallies.map(...)` (a `map` over the result of a
+        `computed` of the scope `user`) below the rows of the main conversation,
+        was stored as the error state "a collection of a scope narrower than the
+        space, in a row of another collection". Its rows are now stored per row
+        and scope key (P474, note 1078); the FabriChat dumps hold no error state
+        at 100, 500 and 1,000 messages, where they held 103, 503 and 1,003.
+      - _Scaling, fixed: a derivation for one principal after another acted
+        formed every scoped assembly again._ The assembly of a collection of a
+        scope key was not set aside with its element table, so each change of
+        the acting key formed it again and marked what used it. With a
+        collection of a scope key in each row that is two evaluations per row at
+        every change of principal: 20 at 10 rows, 200 at 100. The assembly is
+        now set aside with its table (P475, note 1078): 0.
+      - _Scaling, open: the places of the inner rows are compared at every
+        derivation._ The elements of a `map` over the result of a `computed` are
+        read through references by key into the document of that output, which
+        no write announces (ruling Z53), so every entry that uses the assembly
+        is compared on every pull: one comparison per row and acting key per
+        derivation, with no evaluation (10 pulls at 10 rows, 100 at 100;
+        `Counts.scopedPulls`). In FabriChat that is one pull per message held at
+        each send (note 1083).
+      - _Liveness, fixed: the marker of a row's stream was refused at every
+        derivation while an element carried a confidentiality clause_ (note
+        1027). By Z96 the marker carries the membership label of its row, and
+        its document is a store the instance owns (P476, P477, note 1080).
+        `apps/redactor/vault.tsx` handles 4 of 4 events with no refusal in each
+        of the four modes, where it handled 3 of 4 with 8 refusals, a whole
+        resume was refused, and the serving loop with a resume woke no piece;
+        `examples/fair-share/main.tsx` gives no refusal where it gave 10, and
+        its resume goes through; `system/profile-embed/profile-embed.tsx`
+        handles 5 of 5 events where it handled 1 of 5 (note 1084).
+      - _Liveness, open, found by step 2: a start whose first derivation reads a
+        value under a clause is refused._ The start of a compiled piece runs its
+        first derivation in the start's own transaction, which also writes a
+        document under no record of the plan (not the result, not in the
+        executor's store; not identified further). That document takes the join
+        of the transaction and is refused for writer fit (note 1079). Today's
+        path runs each node in a transaction of its own and commits.
+      - _Soundness, checked (step 2): a body that iterates `items.get()` and
+        reads `item.title` stores the items' clauses on the compiled path as on
+        today's_, in six layouts on both paths (note 1079). The observation of
+        note 1067 holds in the harness of `followed-rows-labels.test.ts` alone,
+        not traced.
+      - _Structure, found and not fixed: the crate gives no value function to a
+        `computed` of a pattern compiled into an element body whose result is
+        the source of a collection._ `items.map((item) => Row({ item }))` with
+        `Row` declaring `const marks = computed(...)` and returning
+        `marks.map(...)` emits the `const` as a local of the setup and no
+        `$rt.value`, and the executor fails with "an output that no value
+        function computes" (note 1082).
+      - _Z97 built: a spread of a record a body builds is a pass_ (note 1081).
+        The room's result document holds 110.5 KB where it held 183 KB at 100
+        messages.
+      - _Scaling, found in this round's own code by the profiles and fixed:_ the
+        search for the stream of a new marker walked the whole array of rows a
+        splice wrote into (70 ms per FabriChat send at 1,000 messages), and once
+        the reactions' rows, which read their position, were evaluated, every
+        collection named each element a change moved, since the test was whether
+        any collection had a reader of positions (40 ms per send at 1,000). Both
+        now follow what changed (note 1083).
+      - _Not reproduced: a Topics create of 205 to 206 records with a first
+        create refused once_ (note 1074). Four commits from `5fc3cf732c` to the
+        merge and this round's head give 111 to 123 records, 9 derivations and
+        no refusal in this session; the refusal is the race of the runs of
+        several sessions (P450, note 1005), which depends on timing (note 1082).
+      - _Harness: the Topics serving harness went idle before the load in 9 of
+        14 starts_, at every commit run (note 1082).
+      - _Traced, not a defect: `system/fabrichat/message-row.tsx` handles 2
+        events fewer._ `deleteMessage` and `obliterateMessage` read `get()` of
+        the event's message, which gives the message since the link-following
+        work (P471), where it gave nothing; the handlers then refuse by the
+        module's own authorship check (note 1082).
+
+1078. **The rows of a collection of a scope key in a row of another collection
+      (step 1; provisional decisions P474 and P475).**
+      - _What was stored._ `Instance.#scopedRows` stores the rows of an assembly
+        of a scope key whole in the scope instance of the document of the scoped
+        outputs, at the path of the result where the collection stands. Below a
+        row of another collection the collection has no path of the result, and
+        the form was an error state. FabriChat's message row holds
+        `tallies.map(...)`, a `map` over the result of a `computed` that reads
+        `myProfile`, of the scope `user`; while the rows of the main
+        conversation were of that scope the inner collection stood in a row of
+        that scope, and the link-following work made the rows of the space (note
+        1075).
+      - _P474: a place per row and scope key, as P455 has for a value._ Below a
+        row of another collection the rows are stored whole in a document of
+        their own for the collection and the element keys around it
+        (`#rowsDocument`,
+        `#identifier("scoped rows", within, keys, { collection })`), with a
+        scope instance for each key that evaluated them, and the outer row holds
+        a link of that scope to it. The entry that stores them (`#rowsPlace`,
+        named `scoped ["rows", collection, ...keys]`) is kept under the outer
+        element keys, so it is dropped with them, is set aside per scope key and
+        pulled where its inputs changed for the acting key (P456), and is marked
+        alone by the restore of a refused commit (`restore`, `#scopedRowsOf`).
+        The writes of the document have the records of the output that holds the
+        collection, at the array, under the outer keys, and of each output of
+        the collection's body at its position in a row, under the outer keys and
+        the row's own (`#rowsWrites`); a position below those, such as the rows
+        of a collection inside an inner row (`tally.reactors.map` in FabriChat),
+        has the record of the nearest of them above it. The same code covers an
+        outer `map` over an array of references, over an array of plain values
+        in place, and over the result of another per-element construct. Chosen
+        as P455's form for a value, a document per row and key; today's runtime
+        keeps the result of a row's node in a cell of its own for the row.
+      - _P475: the assembly of a collection of a scope key is set aside with its
+        element table._ `#forActing` set every entry of another key aside but an
+        assembly, whose element table stands beside the entry: the assembly was
+        dropped and formed again for each key, and what used it was marked for
+        the other key (P458's fourth part). With a collection of a scope key in
+        each row, each change of the acting principal formed every row's inner
+        assembly again and evaluated every row's place. The table is now set
+        aside with the entry (`#asideTables`) and brought back with it; the slot
+        stays registered, so a change marks it while it is set aside, as for any
+        other entry. This holds for an assembly at a path of the result as well.
+      - _Tests_ (`exec/test/scoped-view.test.ts` over
+        `fixtures/scoped-nested-rows.tsx`, `-plain` and `-filter`: a `map` over
+        an array of references, over an array of plain values in place and over
+        the result of a `filter` over an array of references, each row holding a
+        `map` over marks of the scope `user`, a `computed` with a block body
+        that is not promoted; two principals at 10 and 100 rows): each principal
+        reads its own inner rows and no error state is stored; one place per row
+        and principal, of a size that does not follow the rows; an edit of one
+        item writes that row's place once per principal and the same documents
+        at both sizes; a principal's nickname writes its own places alone; a
+        refused commit of a place stores that place again and evaluates 1 entry;
+        a derivation for a principal after another acted evaluates nothing.
+        Before: the error state, 0 places where 90 more at 100 rows, 1 scoped
+        write where 2; with P474 and without P475, 20 entries evaluated after
+        the restore where 1, and 30 after another principal acted where 0.
+      - _What the pulls cost_ (finding of note 1077): the elements of the inner
+        `map` are read through references by key into the document of the
+        `computed`'s output, so each element entry, the assembly and the place
+        are compared on every pull (Z53): R pulls per derivation for the acting
+        key, with no evaluation. The tests count evaluations, not pulls, for
+        that reason.
+
+1079. **A body that iterates `items.get()` (step 2).**
+      - _The comparison._ `compare/both-paths.ts` compares, for a scenario that
+        sets `labels`, the confidentiality clauses stored at and below each
+        member of each result. `fixtures/get-iterated.tsx` reads the titles of
+        an array of references once through the elements `items.get()` gives
+        (`for (const item of items.get())`, `item.title`) and once by
+        `items.key(i).key("title").get()`, both after an event `show`, so the
+        start reads no title. Its type of an item declares no clause; each item
+        is a document whose own type declares the clause `item-title`. Six
+        layouts were run: the items' titles a state cell the item's result holds
+        (`labeled-item.tsx`) or a copy in place (`labeled-item-copy.tsx`); the
+        reader's type declaring the clause or not; an item type that declares a
+        handle among its members, so a read gives each element as a record of
+        reads by position; the array given directly or as the `items` of a list
+        piece, behind a link (`labeled-list.tsx`). In every layout both paths
+        store `item-title` at both outputs after `show`, and the values are
+        equal. Two are kept as scenarios of the test (`fixtures/get-iterated`
+        and `... through a
+        list`), whose only differences are the `flow`
+        atoms of a known class.
+      - _What today's path does._ The `computed` is a node whose action reads
+        through the argument's links into each item document and logs each read;
+        the label of the output joins what was read. Where the reader's own type
+        declared the clause, today's path stored it at the outputs also before
+        `show`, when the body had read no title (the declared clause of the
+        argument schema), and the compiled path did not.
+      - _The observation of note 1067_ is reproduced only in its own harness:
+        `fixtures/followed-rows.tsx` with `facts` iterating `items.get()`, run
+        on the executor with `RuntimeTransactions` and the documents handed to
+        it (`compare/test/followed-rows-labels.test.ts`), stores at `count` the
+        list's clause alone, and each row's look-up its own item's clause alone,
+        where by `items.key(i)` both hold every item's. The reads of the items'
+        titles are made in both (logged from `Store.read`); what the record's
+        slot `items/*/title` resolves to in that harness was not traced. Not
+        changed: in the runtime both paths store the same.
+      - _Found on the way: the start refusal of note 1077._ With the reader's
+        `computed` reading the titles at once, the compiled start is refused for
+        writer fit ("misfit ... at /: item-title") on a document the start's
+        transaction writes under no record; the piece's result stays empty. Not
+        traced further; the scenarios read the titles behind an event for that
+        reason.
+
+1080. **The marker of a row's stream (step 3; ruling Z96; provisional decisions
+      P476 and P477).**
+      - _The reproduction._ `fixtures/labeled-rows.tsx`: a `map` over an array
+        of plain values in place whose elements' names declare the clause
+        `person`, each row with a stream and reading its name and `badge`, an
+        input of another clause; the handler `add` copies `secret`, stored under
+        `person`, into a new element, as fair-share's `joinWithProfile` copies
+        the profile's name. Each derivation that made a row wrote the row's
+        marker under no record, so the marker took the join (`person` and
+        `badge`) and, as a document no schema declares a policy on, was refused
+        for writer fit, at every derivation after the first.
+      - _P477, Z96's label._ The marker of a stream with element keys has the
+        record that the change writing it gave the array that holds the row
+        (`membersChanged`, `membersAppended`), with the marker's document as
+        target (`RuntimeTransactions.#recordsOfMarkers`, the stream's path in
+        the written value found by `streamPaths`). That is the membership of the
+        collection, which `plan-and-label-templates.md` §2.6 gives the row of
+        the stream index: a stream of an element body exists while the
+        collection has the element. The records are taken from what the change
+        was given before the array's own record is set apart (`memberships`). A
+        marker of a binding with no element step, or of a row whose array the
+        change gave no record, keeps the join.
+      - _P476: the marker's document is a store the instance owns_ (`#enroll` in
+        `#streamEntity`), as the runner enrolls the cell of each stream of a
+        piece among its derived internal cells (`pieceOwnedStores`). Without it
+        the membership label still misfits: in the fixture, and in fair-share,
+        the handler that added the element read the clause, so the membership
+        carries it.
+      - _Test_ (`runtime/runner/test/compiled/stream-marker-label.test.ts`):
+        three adds, no refusal, three rows, and each marker holds `person` and
+        not `badge`. Before: a refusal at each derivation after the first; with
+        P476 alone, each marker holds `person` and `badge`.
+      - _The corpus, each module alone in the four modes_ (before: the run of
+        note 1074). `apps/redactor/vault.tsx`: runner 4 of 4, no refusal, equal
+        (3 of 4, 8 refusals); after a resume, resumed and 4 of 4 with no refusal
+        (the whole resume refused); serving 4 of 4, no refusal, equal (3 of 4,
+        8); serving with a resume 4 of 4, no refusal, equal (2 of 4, 4 refusals,
+        "the piece did not wake"). `examples/fair-share/main.tsx`: runner 5 of 6
+        with no refusal (5 of 6 with 10); after a resume, resumed and 5 of 6
+        with no refusal (the whole resume refused); under the serving loop,
+        skipped for its `wish`, before and after. Its one event left, "no stream
+        of the binding is stored", and its difference from the executor in
+        memory (`$value` of a select, "Ada Lovelace" against `myName-text`) are
+        those of before, not traced.
+      - _Classification_ (`docs/development/cfc-spec-correspondence.md`). The
+        label: a conforming implementation. The existence of an element is the
+        membership dimension of a collection's structural confidentiality (CFC
+        §8.5.6.1, "Member Confidentiality vs Structural Confidentiality": "Child
+        paths like `/items/0` carry `shape` (membership/domain)"), and the
+        record that gives it is a plan template applied as every compiled record
+        is, as a trusted flow-precision claim (§8.9.1). The enrollment: a host
+        arrangement, which stores are runtime-owned, under the existing recorded
+        gap of derived admission for runtime-owned stores (specs#78; conformance
+        statement §5), as today's runner enrolls a stream's cell. No change of
+        the specification is needed. Not verified against specs `main` beyond
+        the sections quoted.
+
+1081. **A spread of a record a body builds (step 4; ruling Z97; provisional
+      decision P478).**
+      - _What was built._ `structure` in `src/emit.rs`: a spread into a record
+        whose argument is a record of the reactive tier (`Place::Record`, a
+        literal the body builds whose members it declares) is rendered with
+        `Want::Pass`, `...$rt.force(view, $h)`, where it was
+        `...$h.v($rt.force(view, $h))`, which read the record whole and followed
+        each reference to the place of a scoped value. A spread of a value of
+        another cone keeps P454's form (`$h.spreadMembers`), and any other
+        spread reads the value whole. A spread of a value of record type into a
+        record of the reactive tier is refused by the crate as before ("a spread
+        into a record in the reactive tier"), so §3.4's template at `*` is not
+        reached there.
+      - _P478._ The test is the place of the argument: a record of the reactive
+        tier is one whose members the literal declares. Chosen over the declared
+        type of the argument, which the crate does not carry to the emitter.
+      - _Tests._ `tests/emit.rs`,
+        `a_spread_of_a_record_the_body_builds_is_a_pass`, seen failing with
+        `$h.v(`. `exec/test/scoped-view.test.ts` over
+        `fixtures/scoped-spread.tsx` (a result that spreads a record holding a
+        value of the scope `session` beside the rows of a `map` over an array of
+        references), two principals at 10 and 100 items: the result stays in the
+        document of the space and holds a link at `named`, and the scope
+        instances hold the same bytes at both sizes; with the code the crate
+        emitted before, `named` is no link. No other emitted fixture changes.
+      - _Classification._ A conforming implementation: the template of each
+        declared path of a spread is that of `a.p`
+        (`plan-and-label-templates.md` §3.4), and a member placed as a reference
+        consumes nothing (CFC §8.2, "Pass-Through via References"). It stores
+        less label than the code did: a position the spread gives no longer
+        joins the labels of the record's other members. No change of the
+        specification is needed.
+
+1082. **What the merge changed (step 5).**
+      - _`system/fabrichat/message-row.tsx`._ Run alone with each event's
+        outcome logged, at `5fc3cf732c` and at `34677573f1` in scratch
+        worktrees: `deleteMessage` and `obliterateMessage` commit at the first
+        and are refused at the second ("Only its author can delete a message."
+        and "Only an owner of this chat can remove someone else's message.").
+        `commitDelete` reads `current = link.get()` of the event's message; at
+        `5fc3cf732c` that gave nothing and the handler returned before its
+        authorship check, and since P471 it gives the message, so the check runs
+        and the generated message names no author. That is the module's own rule
+        and today's `get()`; not a defect. Each refused handler then logs
+        `StorageTransactionAborted` from `CompiledPiece.#keepMinted`, which
+        writes into the aborted transaction (the open item of the carry round).
+      - _The crate defect found while writing the fixture of step 1_: a pattern
+        compiled into an element body (`Row({ item })`) that declares
+        `const marks = computed(...)` and returns `marks.map(...)` emits
+        `const marks = $h.invoke(0, {})` in the inlined setup and no
+        `$rt.value`, so the inner collection's source, output 2, has no value
+        function; the standalone pattern registers it. `register_local` finds no
+        local for the value in the inlined context. Not fixed; the fixtures
+        declare the `computed` in the callback's block body.
+      - _A Topics create_ (the arm `serving` on `filing-order` at 1,000 topics,
+        the boards of the measurement branch copied into scratch worktrees at
+        `5fc3cf732c`, `34677573f1` and `59d09d45d1`, one run each, loads 3.1 to
+        4.3): each gives 111 to 123 records, 9 derivations and no refusal for
+        every create, the first included; so does this round's head, at 1,000
+        and 2,000 topics (note 1084). Note 1074 had 205 to 206 records and a
+        first create refused once behind 16 derivations at `0f9b207a49` and at
+        round twenty-five's head; no commit between `5fc3cf732c` and the merge
+        gives that here. The refusal note 1074 names, a stale read of the
+        piece's own document whose list of recent documents another session's
+        run changed, is the race between the runs of one pass for several
+        sessions (P450, note 1005), whose outcome depends on timing. Not a
+        defect of the merge's code; the race itself is note 1005's open item,
+        not fixed.
+      - _The Topics serving harness went idle before the load_ in 9 of 14 starts
+        this round (1.4 to 2.5 s of processor time, then nothing), at every
+        commit run, the round's head included; note 931 had 3 to 4 in 24 to 66.
+        Two ran beside another serving harness, most of the others beside a
+        FabriChat run of the arm `runner`. Each was stopped by its process
+        identifier; the runs at `e413cd4eb7` and `042fdb86cf` (this round's
+        steps 1 and 3) never got past it and are not reported. Not diagnosed.
+
+1083. **Measured: FabriChat.** `SCALE_STAND_INS=table SCALE_CHANGES=1`,
+      `compare/fabrichat/scale.ts runner room <n>`, one process per size
+      (`fab.sh`), three timed sends each, at the round's last code commit
+      (`ad312e986a`). "Before" is note 1073's after row (`8442957f6f`'s code,
+      the run of 1,000 alone). Times in milliseconds, the piece's own time in
+      brackets; "KB" is the size as JSON after the commit of each document a
+      send's commits changed; "copied" the containers the reads of a send
+      copied.
+
+      | messages | when   | load | ms per send (own) | records | evaluations | element evaluations | documents | KB changed | copied      | error states |
+      | -------- | ------ | ---- | ----------------- | ------- | ----------- | ------------------- | --------- | ---------- | ----------- | ------------ |
+      | 100      | before | 2.5  | 96–123 (45–48)    | 282     | 49          | 31                  | 68–69     | 320–322    | 936–946     | 103          |
+      | 100      | after  | 2.3  | 83–95 (37–38)     | 304     | 50          | 31                  | 70–71     | 256–257    | 114–116     | 0            |
+      | 500      | before | 2.6  | 270–338 (146–152) | 282     | 49          | 31                  | 67–69     | 447–451    | 2,936–2,946 | 503          |
+      | 500      | after  | 2.8  | 236–248 (118–122) | 304     | 50          | 31                  | 69–71     | 387–392    | 514–516     | 0            |
+      | 1,000    | before | 2.7  | 539–826 (287–367) | 282     | 49          | 31                  | 68–70     | 646–658    | 5,436–5,446 | 1,003        |
+      | 1,000    | after  | 5.1  | 582–714 (293–324) | 304     | 50          | 31                  | 70–72     | 592–605    | 1,014–1,016 | 0            |
+
+      - _The error states_ (`errors` of the step `read`, every error state the
+        executor's documents hold): none at any size, where each message row's
+        reactions held one. The reader's rights of every message read back (103,
+        503, 1,003).
+      - _What changed in a send._ One evaluation more (the new row's reactions,
+        P474) and 22 records more: the place of the reactions' rows and its
+        records, and the members the spread `...view` gives, which are now
+        positions of the result with records of their own (Z97). One or two
+        documents more: the new row's reactions document. Fewer bytes: the
+        result document holds 110.5 KB where it held 183 KB at 100 messages,
+        since the members of `view` are links to their places and not copies
+        (Z97). The reads copy about one container per message held where they
+        copied about five: the copies of `view`'s members are gone.
+      - _The growth gate_ (`SCALE_GROWTH=1 ... runner room 100,200`): passes,
+        exit 0, no count differs.
+      - _The seeds._ 6.7 s at 100 (1.09 GB peak resident), 72.6 s at 500 (3.49
+        GB), 262 s at 1,000 (4.64 GB); before 8 s (1.10 GB), 84 s (3.50 GB) and
+        287 s (4.66 GB).
+      - _Phases per send at 1,000_ (`profile-phases.py`, the three timed sends;
+        before load 2.7, after 5.1), in milliseconds:
+
+        | phase                                     | before | after |
+        | ----------------------------------------- | ------ | ----- |
+        | all                                       | 709.4  | 644.6 |
+        | garbage collection                        | 144.4  | 63.6  |
+        | memory server: apply commit               | 90.9   | 43.4  |
+        | client: CFC preparation of a commit       | 80.1   | 136.2 |
+        | client: transaction commit (encode, send) | 35.8   | 49.9  |
+        | executor: `#pullScoped`                   | 2.4    | 3.8   |
+        | executor: `#storeResult`                  | 121.6  | 151.4 |
+        | executor: `#reassemble`                   | 1.2    | 1.2   |
+        | executor: other of a derivation           | 131.1  | 100.2 |
+        | handler event                             | 18.2   | 20.5  |
+        | scheduler: resubscribe after a commit     | 8.9    | 9.9   |
+        | client: receive and decode                | 53.6   | 37.0  |
+        | other                                     | 21.3   | 27.4  |
+
+        `#storeResult` is mostly `#storeUnit` bringing the rows of
+        `messageRights` up to date (`#current` comparing what each row's entry
+        read, 55 ms), as in note 1073. Two defects of this round were found by
+        the profiles and fixed before these runs: the search for a new marker's
+        stream walked the whole array of rows (70 ms per send at 1,000), and a
+        collection named every moved element once any collection had a reader of
+        positions, which the reactions' rows now are (40 ms;
+        `#indexedCollections`). The CFC preparation and the commit took longer
+        in this run under a load of 5.1; a run at 1,000 under 3.3 before the two
+        fixes gave 74.2 ms of preparation. The pulls of the reactions' places
+        that are compared on every pull (note 1077) take part of `#pullScoped`'s
+        3.8 ms.
+
+1084. **Measured: Topics, the serving path, and the corpus.**
+      - _Topics, the arm `serving` on `filing-order`_, the boards of the
+        measurement branch copied in for the runs and removed after, one run
+        each at this round's head after its two idle starts were stopped (loads
+        2.9 to 3.8, beside a FabriChat seed). An edit of a title runs 1
+        derivation and 5 evaluations and gives 2 to 8 records at 1,000 and 2,000
+        topics, as in note 1074; the second client reads it after 15 to 37 ms at
+        1,000 and 12 to 36 ms at 2,000 (note 1074: 13 to 34 and 14 to 37 at 2.2
+        to 2.9). A create runs 9 derivations with no refusal and gives 111 to
+        123 records at both sizes (note 1074: 205 to 206, and the first create
+        16 derivations, 245 records and a refusal); the second client reads it
+        after 233 to 525 ms at 1,000 and 420 to 966 ms at 2,000 (note 1074: 109
+        to 168 and 134 to 191), with 76 to 158 and 121 to 266 ms of the piece's
+        own (note 1074: 40 to 68 and 52 to 76). The runs of `5fc3cf732c`,
+        `34677573f1` and `59d09d45d1` in this session, at loads of 3.1 to 4.3,
+        give 71 to 158 ms of the piece's own for a create at 1,000, so the
+        creates were slower in this session's conditions at every commit, and
+        the difference from note 1074 is not this round's (note 1082).
+      - _`compare/serving-path.ts 1000`_: the piece is found current after the
+        takeover with no evaluation, 6 evaluations at the wake, 11 derivations,
+        no refusal, 20.5 ms of its own for its ten events and derivations (load
+        3.2; note 1074: 20.8 ms at 2.0 to 2.6). - _The corpus,_
+        `compare/runner-corpus.ts` in its four modes, run side by side once at
+        `ad312e986a` (loads 3.7 to 6.8), against note 1074: started, every event
+        handled, no commit refused, equal to the executor in memory, and for the
+        resumes, resumed, found current, wrote no document.
+
+        | Mode                  | Note 1074                        | This round                       |
+        | --------------------- | -------------------------------- | -------------------------------- |
+        | runner                | 259, 215, 249, 230               | 259, 217, 253, 231               |
+        | serving               | 235, 201, 221, 211               | 235, 202, 222, 212               |
+        | after a resume        | 259, 215, 251, 227; 148, 121, 82 | 259, 217, 252, 229; 150, 121, 82 |
+        | serving with a resume | 235, 201, 221, 210; 81, 72, 0    | 235, 202, 222, 211; 82, 72, 0    |
+
+        - _Modules whose line changes_ (`compare.py` over the lines of each
+          module against the run of note 1074). `apps/redactor/vault.tsx`, in
+          every mode: 4 of 4 events, no refusal, equal, and resumed where the
+          resume went (before: 3 of 4 with 8 refusals; a whole resume refused;
+          under the serving loop with a resume 2 of 4, 4 refusals, the piece did
+          not wake). `examples/fair-share/main.tsx`, runner and after a resume:
+          no refusal where 10, and the resume goes through; 5 of 6 events and
+          the same difference as before.
+          `examples/group-chat-lobby/group-chat-lobby.tsx`, runner: no refusal
+          where 1. `system/profile-embed/profile-embed.tsx`, runner and after a
+          resume: 5 of 5 events and no refusal, where 1 of 5 with 4 refusals (2
+          after a resume), and equal after a resume. Its writer-fit refusals
+          (note 1006), each of a document outside the executor's store at its
+          root, are gone with P476, the one change of this round that admits a
+          document, so they were the markers of streams its handlers'
+          transactions write (`markedStream`), which now store the join of the
+          handler's transaction (CFC question 5 below); the entities were not
+          traced. Under the serving loop no other line differs.
+          `system/fabrichat/message-row.tsx` is as in note 1074 (note 1082).
+
+1085. **Planned, not built.**
+      - _The pulls of entries that use an assembly over the result of a
+        `computed`_ (note 1077): every such entry is compared on every pull,
+        since a read through a reference by key into the document of a computed
+        output brings the output up to date and no write announces it (Z53,
+        `Instance.#watch`). An element of an assembly over a value the instance
+        computes in the same instance could depend on that output's entry, which
+        marks its users when it changes, and be registered as a reader of the
+        element's position; then nothing of it is compared on every pull. That
+        changes which entries Z53 holds and needs a test over each per-element
+        construct over the result of a `computed`; not built.
+      - _The start's transaction_ (note 1079): run the first derivation of a
+        compiled start in a transaction of its own, or give the document the
+        start writes under no record a record, so that a start that reads a
+        value under a clause commits; first identify the document.
+      - _The crate's inlined `computed` that is the source of a collection_
+        (note 1082): register the value function in the inlined context as the
+        standalone pattern does (`register_local` in `src/emit.rs` needs the
+        local of the inlined pattern's body), with a test in `tests/emit.rs` and
+        over a fixture on the executor.
+      - _Places on a reader's demand_, which would also bound the R times K
+        documents of P474, as of P455 (the handoff's "a session no client holds
+        any more").
+      - _The documents of the places and inner rows of a key that left_, which
+        no derivation removes (note 1016).
+
+1086. **Provisional decisions, and what was not verified.** P474 and P475: as
+      note 1078. P476 and P477: as note 1080. P478: as note 1081. Z96 and Z97
+      are the owner's rulings; P476 to P478 are how this round built them. Not
+      verified: the stored labels of the documents of inner rows under clauses
+      that differ between principals (the tests compare values and writes);
+      FabriChat with two users, where P475's set-aside of the reactions'
+      assemblies and the per-row pulls of note 1077 would show; FabriChat under
+      the serving loop; the start refusal of note 1079 on a corpus module; the
+      cause of note 1067's observation in its harness;
+      `examples/fair-share/main.tsx` under the serving loop (skipped for its
+      `wish`) and on today's path; the times beyond one run of each cell.
+
+### CFC questions deferred, round twenty-six
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. P474: the outer row's position that holds the link to the document of the
+   inner rows has the template of the output that holds the collection, the
+   membership of the inner collection, resolved with the inputs of the run that
+   stored the row, which is the run of one scope key; where the inner
+   collection's membership label differs between keys, the row of the space
+   joins that key's label (question 2 of round twenty-one, for a collection). An
+   over-label of the row.
+2. P474: a position of an inner row below the outputs of the collection's body,
+   such as a row of a collection inside an inner row, has the record of the
+   nearest output above it in that row, where the result gives such a position
+   the record of the deeper collection's own outputs.
+3. P475: no rule of a label changes; an assembly set aside keeps the labels its
+   records gave, and a change marks it while it is set aside as it marks any
+   entry set aside (question 5 of round twenty-one).
+4. Z96 as built (P477): the membership record is the one the change that wrote
+   the marker gave the array; a marker written by a change that gave the array
+   no record keeps the join of the transaction, an over-label. A marker is
+   written once, when its stream is first stored, so a later change of the
+   membership label does not reach it.
+5. P476: the marker's document is admitted as a store the instance owns, so
+   writer fit no longer measures it against an empty ceiling. A marker of a
+   binding with no element step now stores the join of the transaction where it
+   was refused before (FabriChat round two, question 4): what was a refusal is
+   an over-label.
+6. Z97 (P478): the members a spread gives are placed with their own labels; the
+   record of the whole object is no longer joined into them. A change that
+   stores less label, ruled.
+7. Note 1079: in the harness of `followed-rows-labels.test.ts`, the output
+   `count` of a body that iterates `items.get()` stores the list's clause alone,
+   and the look-up of each row its own item's clause alone, where the runtime's
+   compiled piece stores every item's clause at the output of such a body. Which
+   of the two the template's slot `items/*/title` gives in the harness was not
+   traced; `count` itself depends on the enumeration alone.
