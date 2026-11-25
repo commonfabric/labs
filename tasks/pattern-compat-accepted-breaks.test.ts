@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
+import { formerPatternKeys } from "@commonfabric/runner";
 import { acceptedBreakKey } from "./pattern-compat-lib.ts";
 import { patternPath, PATTERNS_DIR } from "./pattern-files.ts";
 import { ACCEPTED_CONTRACT_BREAKS } from "./pattern-compat-accepted-breaks.ts";
@@ -38,13 +39,22 @@ describe("pattern-compat-accepted-breaks", () => {
     it("names a baseline file that exists for every forgiven pair", async () => {
       for (const accepted of ACCEPTED_CONTRACT_BREAKS) {
         expect(accepted.baselines.length).toBeGreaterThan(0);
+        // A pattern's baselines stay under the key each was recorded under,
+        // so one recorded before the pattern moved is found under a former
+        // key.
+        const keys = [
+          accepted.pattern,
+          ...formerPatternKeys(accepted.pattern),
+        ];
         for (const baseline of accepted.baselines) {
-          expect(
-            await exists(
-              join(BASELINES_DIR, accepted.pattern, `${baseline}.json`),
-            ),
-            `${accepted.pattern} has no baseline ${baseline}`,
-          ).toBe(true);
+          let found = false;
+          for (const key of keys) {
+            if (await exists(join(BASELINES_DIR, key, `${baseline}.json`))) {
+              found = true;
+            }
+          }
+          expect(found, `${accepted.pattern} has no baseline ${baseline}`)
+            .toBe(true);
         }
       }
     });

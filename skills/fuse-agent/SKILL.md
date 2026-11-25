@@ -176,8 +176,8 @@ const id = `${now.toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
 
 This specifically matters for:
 
-- `activity-log.tsx` event creation / timestamps
-- `agent.tsx` lifecycle handlers (`markIdle`, `markError`)
+- `activity-log/main.tsx` event creation / timestamps
+- `agent/main.tsx` lifecycle handlers (`markIdle`, `markError`)
 - any handler-generated IDs or timestamps in experiment support patterns
 
 For event IDs in authored patterns, `Math.random()` is fine inside a handler:
@@ -390,7 +390,7 @@ for x in p:
     ref = x.get('patternRef', {})
     source = ref.get('source', {}) if isinstance(ref, dict) else {}
     locator = (source.get('entry') or source.get('origin', '')) if isinstance(source, dict) else ''
-    if locator.rsplit('/', 1)[-1] == 'agent.tsx':
+    if locator.endswith('/agent/main.tsx'):
         print(x['name'], '—', x.get('summary','')[:60])
 "
 ```
