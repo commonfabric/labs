@@ -1138,9 +1138,12 @@ export function sqliteQuery(
   _awaitSync?: boolean,
   publicationBinding?: NormalizedFullLink,
 ): RawBuiltinResult {
-  let initialized = false;
-  let selectedResult: Cell<QueryState>;
-  let resultScope: CellScope | undefined;
+  /**
+   * The result cell an accepted transaction linked into the node's output,
+   * with the scope it was minted at. Unset until a transaction that links one
+   * has been accepted, so that every run until then links it again.
+   */
+  let published: { result: Cell<QueryState>; scope: CellScope } | undefined;
 
   // One owner signal covers query work and completion writebacks. Unsent
   // endings also observe it: cancellation releases the result store's
@@ -1246,16 +1249,17 @@ export function sqliteQuery(
         "sqlite: cross-space served queries require a complete scoped reader identity",
       );
     }
-    const needsPublication = !initialized || resultScope !== scope;
+    const kept = published?.scope === scope ? published.result : undefined;
+    const needsPublication = kept === undefined;
+    const result = kept ?? makeResultCell<QueryState>(
+      runtime,
+      parentCell,
+      cause,
+      "sqliteQuery",
+      tx,
+      scope,
+    );
     if (needsPublication) {
-      selectedResult = makeResultCell<QueryState>(
-        runtime,
-        parentCell,
-        cause,
-        "sqliteQuery",
-        tx,
-        scope,
-      );
       // The control state this node keeps — `/pending`, `/requestHash`,
       // `/requestKey`, `/error` — holds what the issuing transaction read. A
       // request hash is a function of the parameters, so a parameter derived
@@ -1272,13 +1276,10 @@ export function sqliteQuery(
       // stays `makeResultCell` rather than `ownedCell` because the cause and
       // the result link it sets are this builtin's, and the cause is the
       // stored cell's identity.
-      recordRuntimeOwnedStore(tx, parentCell, selectedResult);
-      enrollRuntimeOwnedStore(tx, parentCell, selectedResult);
-      initialized = true;
-      resultScope = scope;
+      recordRuntimeOwnedStore(tx, parentCell, result);
+      enrollRuntimeOwnedStore(tx, parentCell, result);
     }
 
-    const result = selectedResult;
     const instanceKey = effectTargetKey(
       "sqliteQuery:staging",
       result,
@@ -1352,6 +1353,15 @@ export function sqliteQuery(
     if (servedRun || needsPublication) {
       sendResult(tx, result);
       recordPublication(tx);
+    }
+    // The scheduler runs this same action again after a stale-basis
+    // rejection, and a serving runtime's wave can still withdraw a commit
+    // that succeeded. A run whose link did not land leaves the next run to
+    // make it.
+    if (needsPublication) {
+      onAcceptance(tx, () => {
+        published = { result, scope };
+      });
     }
 
     if (!inputs?.db || typeof inputs.sql !== "string") return;
