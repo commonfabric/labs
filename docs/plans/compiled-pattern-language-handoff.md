@@ -226,22 +226,27 @@ twenty).
   stores no clause of the item at its outputs, where reading by
   `items.key(i).key("title").get()` stores it (CFC question 3 of the
   round).
-  Round twenty-six (`a184f568a0`, notes 1077 to 1086, P474 to P478) closed
-  those: the rows of a scoped collection below a row of another collection
+  Round twenty-six (`a184f568a0`, notes 1077 to 1086, P474 to P478) fixed
+  the reactions and answered the label question, and did not reproduce the
+  Topics create: the rows of a scoped collection below a row of another collection
   are stored in a document per collection and outer element keys, with an
   instance per scope key, and an assembly is set aside with its element
   table when the acting principal changes (P474, P475), so FabriChat's
   dumps hold no error state at any size; Z96 is built (a row's stream
   marker carries the membership label of its row, P477, in a document the
-  piece owns, P476), and `vault`, `fair-share`, `profile-embed` and
-  `group-chat-lobby` commit every event in the corpus; Z97 is built (P478),
+  piece owns, P476), and `vault`, `fair-share` and `group-chat-lobby`
+  commit every event in the corpus, and `profile-embed` handles 5 of 5
+  (see its open item below); Z97 is built (P478),
   and the room's result document is 110 KB where it was 183 KB at 100
   messages. Both rulings were classified as conforming implementation, with
   no change of the specification (note 1083). The possible under-label
   does not hold: on today's path and the compiled path alike, a body that
   iterates `items.get()` stores the items' clauses once the titles are
   read (`compare/both-paths.ts`, option `labels`). The Topics create's 205
-  records did not reproduce at any commit and fit the race of P450; the
+  records and refused first create did not reproduce at any commit,
+  including those where round twenty-five saw them, so the cause is
+  unresolved; the race between sessions' runs of P450 is one possible
+  reading, not confirmed by a run. The
   `message-row` change is the module's own authorship check, reached now
   that `get()` follows one link. A send gives 304 records at every size and
   takes 37 to 38, 118 to 122 and 293 to 324 ms of the piece's own time at
@@ -367,7 +372,11 @@ twenty).
     one run of two, so P451 does not record a larger label (note 1006).
     Whether the copy owes that label, so that the runs that handled every
     event under-labeled it, is open: a CFC question deferred by Z88, not
-    settled. Today's path was not run on it.
+    settled. Today's path was not run on it. In round twenty-six's corpus
+    runs the module handles 5 of 5 events; which change admitted the two
+    documents is not traced (the round inferred P476, which enrolls a
+    stream marker's document as a store the piece owns, but did not
+    identify the refused entities), so the question stands.
   - No test checks the stored labels of the positions around a scoped
     value under clauses that differ between principals.
   - Note 892's rule stands: a piece with scoped documents resumes whole.
