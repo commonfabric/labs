@@ -469,6 +469,17 @@ describe("repo-sync", () => {
       ]);
     });
 
+    it("walks a path reached twice with the same moves used only once", () => {
+      // `a/c.tsx` reaches `b/a/c.tsx` both by `b/a/` then `a/` then `b/`, and
+      // by `b/` then `a/` then `b/a/`, having spent the same three moves.
+      const table = { "b/a/": "a/", "b/": "a/", "a/": "b/" };
+      expect(formerPathsIn("p", table)("p/a/c.tsx")).toEqual([
+        "p/b/a/c.tsx",
+        "p/b/c.tsx",
+        "p/a/a/c.tsx",
+      ]);
+    });
+
     it("is what the plan records for each entry, compiled or not", async () => {
       const plan = await planRepo(
         {

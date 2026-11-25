@@ -44,6 +44,8 @@ export default 1;
   // empty path.
   "file-for-directory.json": JSON.stringify({ "tally/": "counter/main.tsx" }),
   "empty-path.json": JSON.stringify({ "": "counter/main.tsx" }),
+  "list.json": JSON.stringify(["counter/main.tsx"]),
+  "not-a-path.json": JSON.stringify({ "tally/": 3 }),
   "moves.json": JSON.stringify({
     "count.tsx": "tally/main.tsx",
     "tally/": "counter/",
@@ -214,7 +216,15 @@ describe("sync-plan", () => {
   });
 
   it("exits nonzero, writing no plan, when `--moves-table` names an empty path or an invalid table", async () => {
-    for (const table of ["", "file-for-directory.json", "empty-path.json"]) {
+    for (
+      const table of [
+        "",
+        "file-for-directory.json",
+        "empty-path.json",
+        "list.json",
+        "not-a-path.json",
+      ]
+    ) {
       const output = await runPlan([
         "--repo-root",
         repo,
