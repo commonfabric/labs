@@ -45,7 +45,9 @@ function wordBuiltin(
       runtime: Runtime,
     ) =>
     (tx: IExtendedStorageTransaction) => {
-      const store = runtime.getCell<{ seen?: Seen[] }>(
+      // The list reads as absent until the first write; `seen_words` reads it
+      // with that in mind.
+      const store = runtime.getCell<{ seen: Seen[] }>(
         parentCell.space,
         { words: cause },
         undefined,
