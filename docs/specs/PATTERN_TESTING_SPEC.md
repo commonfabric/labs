@@ -220,6 +220,11 @@ The `cf test` runner processes the `[TESTS]` array **in order**:
 2. Report pass/fail for each assertion
 3. Await cleanup before returning the results
 
+The runner's own runtime runs an assertion only when its step demands it. With
+server execution on, the serving loop also derives the test pattern's values,
+so it runs each assertion before that step and again whenever what the
+assertion reads changes, and an error thrown there fails the file.
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  [TESTS]: [                                                  │
@@ -338,8 +343,8 @@ async function runTestPattern(testPath: string, options: TestOptions): Promise<T
   await tx.commit().settled;
   await runtime.idle();
 
-  // No renderer is mounted by default. Values run only when a test step
-  // explicitly demands them.
+  // No renderer is mounted by default. This runtime runs a value only when a
+  // test step explicitly demands it.
 
   // 4. Get the [TESTS] array from pattern output
   const testsCell = patternResult.key(TESTS) as Cell<unknown>;
