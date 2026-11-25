@@ -18,10 +18,6 @@ import type { VDomOp } from "../src/vdom-ops.ts";
 // everything it emits and everything it logs by default. The explanation names
 // a label this viewer was not cleared to see, and both the emitted operations
 // and the worker console belong to the page the gate scrubbed.
-//
-// `Deno.test` rather than `describe`/`it`: this package installs its fake
-// clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
-// a `@std/testing/bdd` `it()` callback never receives that context.
 
 Deno.test("worker reconciler CFC denials", async (t) => {
   const signer = await Identity.fromPassphrase(

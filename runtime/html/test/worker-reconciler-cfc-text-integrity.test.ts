@@ -19,10 +19,6 @@ import type { WorkerVNode } from "../src/worker/types.ts";
 // documents the read passed through on the way to it carry. Every
 // unendorsed string below appears nowhere else, so a search of the emitted
 // operations for it is a search for the text having been shown.
-//
-// `Deno.test` rather than `describe`/`it`: this package installs its fake
-// clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
-// a `@std/testing/bdd` `it()` callback never receives that context.
 
 Deno.test("worker reconciler CFC text integrity across links", async (t) => {
   const signer = await Identity.fromPassphrase(

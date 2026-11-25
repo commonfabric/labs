@@ -185,7 +185,8 @@
       "./tasks/lint-import-list.ts",
       "./tasks/lint-inline-imports.ts",
       "./tasks/lint-self-import.ts",
-      "./tasks/lint-spread-arguments.ts"
+      "./tasks/lint-spread-arguments.ts",
+      "./tasks/lint-test-registration.ts"
     ]
   },
   "fmt": {
@@ -242,12 +243,6 @@
     "@std/jsonc": "jsr:@std/jsonc@^1.0.2",
     "@std/path": "jsr:@std/path@^1.1.6",
     "@std/testing": "jsr:@std/testing@^1.0.19",
-    // Every test file's `@std/testing/bdd` resolves to a module of ours
-    // that re-exports the real one and applies this invocation's skip
-    // list. The real module keeps a specifier of its own, which is the
-    // only thing that imports it.
-    "@std/testing/bdd": "./base/test-support/src/records/bdd.ts",
-    "@std/testing/bdd/real": "jsr:@std/testing@^1.0.19/bdd",
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
     "dagre": "npm:dagre@^0.8.5",
     "hash-wasm": "npm:hash-wasm@^4.12.0",

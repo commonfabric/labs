@@ -150,3 +150,33 @@ Deno.test("nested frozen checks reject dependency graph drift", async () => {
   assert(!check.success, "a drifted dependency graph should fail the check");
   assertMatch(decode(check.stderr), /lockfile is out of date/i);
 });
+
+Deno.test("a child records nothing and skips nothing unless the caller says so", async () => {
+  // A child's tests are the caller's fixtures, so the recording variables the
+  // caller's own run carries do not reach it.
+
+  const read = (env?: Record<string, string>) =>
+    runDenoCommandWithTemporaryLock({
+      root: ROOT,
+      args: (lock) => [
+        "eval",
+        `--lock=${lock}`,
+        "console.log(JSON.stringify([" +
+        'Deno.env.get("CF_TEST_RECORDS_DIR"), ' +
+        'Deno.env.get("CF_TEST_SKIP_LIST")]))',
+      ],
+      ...(env === undefined ? {} : { env }),
+    });
+  assertEquals(JSON.parse(decode((await read()).stdout)), ["", ""]);
+  assertEquals(
+    JSON.parse(
+      decode(
+        (await read({
+          CF_TEST_RECORDS_DIR: "/spool",
+          CF_TEST_SKIP_LIST: "/skip.json",
+        })).stdout,
+      ),
+    ),
+    ["/spool", "/skip.json"],
+  );
+});

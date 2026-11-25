@@ -1,5 +1,5 @@
-// Flat `Deno.test` cases: this package's tests also run in a browser through
-// `deno-web-test`, which does not support `@std/testing/bdd`.
+// Flat `test()` cases: this package's tests also run in a browser through
+// `deno-web-test`, where `describe()` is not available.
 //
 // Which of the two Ed25519 implementations a call reaches depends on the
 // platform, so each case here names the implementation it is about, or hands

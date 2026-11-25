@@ -48,8 +48,6 @@ const labeledAssertionSchema: JSONSchema = {
   ifc: { addIntegrity: [INTEGRITY] },
 };
 
-// Plain `Deno.test`, as the other reconciler tests here are written, because
-// the package's clock preload attaches `t.settle()` to its context.
 Deno.test("profile-home shows every fresh verified identity with a badge bound to its labeled value", async (t) => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({

@@ -20,7 +20,7 @@ const identity = await Identity.fromPassphrase("test operator", keyConfig);
 
 console.log("\n=== TEST: Simple object persistence ===");
 
-async function test() {
+async function runScenario() {
   // First runtime - save data
   const runtime1 = new Runtime({
     apiUrl: new URL(API_URL),
@@ -96,7 +96,7 @@ async function test() {
 
 async function runTest() {
   for (let i: number = 1; i <= 20; i++) {
-    const [result1, result2] = await test();
+    const [result1, result2] = await runScenario();
     if (!deepEqual(result1, result2)) {
       console.error("Mismatched results for iteration", i, result1, result2);
       throw new Error(`Mismatched results for iteration ${i}`);

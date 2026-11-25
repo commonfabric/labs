@@ -1,3 +1,4 @@
+// deno-lint-ignore-file cf-test/registration -- a fixture testing the browser harness's own `Deno.test`
 import { pressKey } from "@commonfabric/deno-web-test/commands";
 import { focusedPair } from "./mod.ts";
 

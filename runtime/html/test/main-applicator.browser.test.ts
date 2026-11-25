@@ -4,8 +4,8 @@
  * `main-applicator.test.ts` run the same code against a mock document. These
  * tests check it against the browser's own rules for which properties set
  * which attributes. They run under deno-web-test, which registers tests
- * through `Deno.test`. The functions from `@std/testing/bdd` are therefore not
- * available here.
+ * through `Deno.test` alone, so they use `test()` and steps rather than
+ * `describe()`.
  */
 
 import { assertEquals, assertStrictEquals } from "@std/assert";

@@ -71,18 +71,22 @@ describe("run-member-tests", () => {
       // A caller appends to the task line, so its flags arrive after
       // whatever names that line already carried.
       expect(
-        readInvocation([DENO_TEST_TASK, "--junit-path=/x.xml", "--preload=/p"]),
+        readInvocation([
+          DENO_TEST_TASK,
+          "--allow-write=/spool",
+          "--allow-read=/skip.json",
+        ]),
       ).toEqual({
         tasks: [DENO_TEST_TASK],
-        forwarded: ["--junit-path=/x.xml", "--preload=/p"],
+        forwarded: ["--allow-write=/spool", "--allow-read=/skip.json"],
       });
     });
 
     it("returns no tasks for a line that names none", () => {
       expect(readInvocation([])).toEqual({ tasks: [], forwarded: [] });
-      expect(readInvocation(["--junit-path=/x.xml"])).toEqual({
+      expect(readInvocation(["--allow-write=/spool"])).toEqual({
         tasks: [],
-        forwarded: ["--junit-path=/x.xml"],
+        forwarded: ["--allow-write=/spool"],
       });
     });
 
@@ -141,7 +145,7 @@ describe("run-member-tests", () => {
     });
 
     it("returns false for flags that select nothing by name", () => {
-      expect(selectsByName(["--junit-path=/x.xml", "--filtered"])).toBe(false);
+      expect(selectsByName(["--allow-write=/spool", "--filtered"])).toBe(false);
     });
   });
 

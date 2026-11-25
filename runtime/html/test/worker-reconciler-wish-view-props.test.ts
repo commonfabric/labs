@@ -17,10 +17,6 @@ Deno.test("worker reconciler over the props of the view a wish shows", async (t)
   // reads an object or array prop under the schema `true`, which takes its
   // shape from the references it crosses. The values below are the ones that
   // read would lose if it took the handle's.
-  //
-  // `Deno.test` rather than `describe`/`it`: this package installs its fake
-  // clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`,
-  // and a `@std/testing/bdd` `it()` callback never receives that context.
 
   const owner = await Identity.fromPassphrase("wish view props owner");
   const patternSpace = (await Identity.fromPassphrase(

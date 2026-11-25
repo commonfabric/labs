@@ -6,8 +6,8 @@
 // checked against the entry's schema. A read outside it is listed below with
 // the reason the component makes it, or the entry is not complete.
 //
-// `Deno.test` rather than `describe`/`it`: `deno-web-test` runs this file, and
-// does not support `@std/testing/bdd`.
+// `test` rather than `describe`/`it`: `deno-web-test` runs this file, and runs
+// flat tests alone.
 
 import { expect } from "@std/expect";
 

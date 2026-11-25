@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl, join } from "@std/path";
 
 import {
   createCompileByteCache,
@@ -10,6 +11,7 @@ import {
   writeCompileByteCacheAtUnload,
   writeCompileByteCacheForTesting,
 } from "./compile-byte-cache.ts";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 const RT = "rtv";
 const SPAN = {
@@ -246,37 +248,60 @@ describe("createCompileByteCache", () => {
     }
   });
 
-  it("restores from CF_COMPILE_CACHE_FILE and writes on unload", () => {
-    const previous = Deno.env.get("CF_COMPILE_CACHE_FILE");
-    const originalLog = console.log;
-    const messages: string[] = [];
-    const dir = Deno.makeTempDirSync({ prefix: "compile-byte-cache-env-" });
+  it("restores from CF_COMPILE_CACHE_FILE and writes on unload", async () => {
+    // The cache is written as its process unloads, so a process of its own
+    // shows it: this one's unload is the test runner's.
+    const dir = await Deno.makeTempDir({ prefix: "compile-byte-cache-env-" });
     const cacheFile = `${dir}/cache.json`;
-    let registeredUnloadWriter = false;
-
-    console.log = (...args: unknown[]) => {
-      messages.push(args.map(String).join(" "));
-    };
-
+    const script = `${dir}/child.ts`;
     try {
-      Deno.writeTextFileSync(
+      await Deno.writeTextFile(
         cacheFile,
         JSON.stringify([{ key: `${RT}\0from-env`, js: "ENV" }]),
       );
-      Deno.env.set("CF_COMPILE_CACHE_FILE", cacheFile);
-
-      const cache = createCompileByteCache();
-      registeredUnloadWriter = true;
-      expect(cache.getCompleteSet(RT, ["from-env"])).toEqual(
-        new Map([["from-env", { js: "ENV" }]]),
+      const module = new URL("./compile-byte-cache.ts", import.meta.url);
+      await Deno.writeTextFile(
+        script,
+        [
+          `import { createCompileByteCache, flushCompileByteCache } from ` +
+          `${JSON.stringify(module.href)};`,
+          `const cache = createCompileByteCache();`,
+          `console.log("RESTORED", JSON.stringify([...cache.getCompleteSet(` +
+          `${JSON.stringify(RT)}, ["from-env"])]));`,
+          `console.log("FLUSHED", flushCompileByteCache(cache));`,
+          `cache.putAll(${JSON.stringify(RT)}, ` +
+          `[{ identity: "from-unload", js: "UNLOAD" }]);`,
+        ].join("\n"),
       );
-      cache.putAll(RT, [{ identity: "from-unload", js: "UNLOAD" }]);
-      expect(flushCompileByteCache(cache)).toBe(2);
-
-      globalThis.dispatchEvent(new Event("unload"));
+      const root = fromFileUrl(new URL("../../../", import.meta.url));
+      const result = await runDenoCommandWithTemporaryLock({
+        root,
+        args: (lock) => [
+          "run",
+          "--no-check",
+          "-A",
+          `--config=${join(root, "deno.jsonc")}`,
+          `--lock=${lock}`,
+          "--frozen",
+          script,
+        ],
+        env: { CF_COMPILE_CACHE_FILE: cacheFile },
+      });
+      const printed = new TextDecoder().decode(result.stdout);
+      expect(result.code).toBe(0);
+      expect(printed).toContain(
+        `RESTORED ${JSON.stringify([["from-env", { js: "ENV" }]])}`,
+      );
+      expect(printed).toContain("FLUSHED 1");
+      expect(printed).toContain(
+        `[compile-byte-cache] restored 1 modules from ${cacheFile}`,
+      );
+      expect(printed).toContain(
+        `[compile-byte-cache] wrote 2 modules to ${cacheFile}`,
+      );
 
       const restored = new ProcessModuleByteCache();
-      restored.restore(JSON.parse(Deno.readTextFileSync(cacheFile)));
+      restored.restore(JSON.parse(await Deno.readTextFile(cacheFile)));
       expect(restored.getCompleteSet(RT, ["from-env", "from-unload"]))
         .toEqual(
           new Map([
@@ -284,37 +309,8 @@ describe("createCompileByteCache", () => {
             ["from-unload", { js: "UNLOAD" }],
           ]),
         );
-      expect(
-        messages.some((message) =>
-          message.includes("[compile-byte-cache] restored 1 modules")
-        ),
-      ).toBe(true);
-      expect(
-        messages.some((message) =>
-          message.includes("[compile-byte-cache] wrote 2 modules")
-        ),
-      ).toBe(true);
     } finally {
-      console.log = originalLog;
-      if (previous === undefined) {
-        Deno.env.delete("CF_COMPILE_CACHE_FILE");
-      } else {
-        Deno.env.set("CF_COMPILE_CACHE_FILE", previous);
-      }
-      if (registeredUnloadWriter) {
-        globalThis.addEventListener("unload", () => {
-          try {
-            Deno.removeSync(dir, { recursive: true });
-          } catch {
-            // The test may have already removed the directory.
-          }
-        });
-      }
-      try {
-        Deno.removeSync(dir, { recursive: true });
-      } catch {
-        // The unload cleanup listener also removes this directory.
-      }
+      await Deno.remove(dir, { recursive: true });
     }
   });
 

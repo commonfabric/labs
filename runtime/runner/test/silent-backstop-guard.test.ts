@@ -104,7 +104,7 @@ describe("silent-backstop-guard", () => {
         `the guard did not fail a body that rode the backstop\n${transcript}`,
       ).toBe(false);
       expect(transcript).toContain("silent backstop fired during this test");
-      expect(transcript).toContain("The test body failed as well.");
+      expect(transcript).toContain("The suite failed as well.");
       expect(transcript).toContain("Caused by:");
       expect(transcript).toContain(
         "the body's own assertion, deliberately failing",

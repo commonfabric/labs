@@ -4,10 +4,6 @@
  * releases the room clause on evidence that the tally wrote a value; it runs
  * at each location the reads behind the value consumed, so the tally's count
  * is released and Alice's note beside it is not.
- *
- * `Deno.test` rather than `describe`/`it`: this package installs its fake
- * clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
- * a `@std/testing/bdd` `it()` callback never receives that context.
  */
 
 import { expect } from "@std/expect";

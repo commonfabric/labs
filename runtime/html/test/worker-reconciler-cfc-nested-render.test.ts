@@ -61,10 +61,6 @@ import type {
 // its `$items` list to a `cf-render` of its own. Every value a viewer may not
 // see carries a string that appears nowhere else, so a search of the
 // operations for it is a search for the value having escaped.
-//
-// `Deno.test` rather than `describe`/`it`: this package installs its fake
-// clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
-// a `@std/testing/bdd` `it()` callback never receives that context.
 
 Deno.test("worker reconciler CFC decisions over a cf-render's nested render", async (t) => {
   const owner = await Identity.fromPassphrase("nested render owner");

@@ -44,7 +44,7 @@ describe("cli id", () => {
     checkStderr(stderr);
   });
 
-  it("Reads DID from key", async () => {
+  it("Derives a key from a passphrase", async () => {
     const { code, stdout, stderr } = await cf(
       argv`id derive ${"example passphrase"}`,
     );

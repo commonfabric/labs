@@ -74,8 +74,13 @@ tests clearer or less repetitive. Being sensible beats holding the line.
 
 ## Structure
 
-Use the BDD functions from `@std/testing/bdd` — `describe()`, `it()`,
-`beforeEach()`, `afterEach()` — and `@std/expect` for assertions.
+Use `describe()`, `it()`, `beforeEach()` and `afterEach()` from
+`@commonfabric/test-support/test`, and `@std/expect` for assertions. That
+module is what applies a run's skip list and records each test, so a test
+registered with `Deno.test` or through `@std/testing/bdd` runs unrecorded and
+cannot be skipped; the `cf-test/registration` lint rule reports either. A file
+that also runs in a browser through `deno-web-test` uses `test()` from the
+same module, since the browser harness runs flat tests alone.
 
 ### One top-level `describe()`
 
@@ -136,8 +141,8 @@ turn holds `it()`s. Either may grow another layer of `describe()` when a group
 of related cases earns one.
 
 ```ts
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { describe, it } from "@commonfabric/test-support/test";
 
 class DonutWeight {
   static readonly zero = new DonutWeight(0);
@@ -224,8 +229,8 @@ A comment about a test, or about a group of tests, goes inside the block it
 describes, as the first thing in the callback, followed by a blank line:
 
 ```ts
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { describe, it } from "@commonfabric/test-support/test";
 
 declare class DonutWeight {
   constructor(grams: number);
@@ -257,7 +262,7 @@ one, the comment is about the block. Without one, it is about the statement
 directly beneath it, which is the ordinary use and is untouched by any of this.
 
 This holds for a test and for a group of them: `describe()`, `it()`, and
-`Deno.test()`, `Deno.bench()` and `t.step()` where a file uses them. It does
+`test()`, `Deno.bench()` and `t.step()` where a file uses them. It does
 not reach the `beforeEach()` family. A hook is setup rather than a case, and
 reads the way any other statement does with a line or two of `//` over it.
 
@@ -270,8 +275,8 @@ the name of a function declared elsewhere:
 // Shown for illustration only.
 
 it("returns `undefined` for a bad name", () => expect(f(x)).toBeUndefined());
-Deno.test("would-pass", function () {});
-Deno.test({ name: "derive array leak", fn: runTest, sanitizeOps: false });
+test("would-pass", function () {});
+test({ name: "derive array leak", fn: runTest, sanitizeOps: false });
 ```
 
 This is the same allowance

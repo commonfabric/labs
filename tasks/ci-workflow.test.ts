@@ -1228,7 +1228,7 @@ Deno.test("Status ships its gates' records from every run, and the run's coverag
   const status = (await parsedWorkflow("deno.yml")).jobs.status;
 
   // It reads what every lane of the run produced, so no lane can be asked to
-  // run it: no wrapper, and no JUnit file gathered. What its spool holds is
+  // run it: no wrapper, and no tests of its own. What its spool holds is
   // the record of each coverage gate it judged, which every run ships, and
   // the run's coverage measurements, which only a push writes, because every
   // reader takes a figure from a push to main alone.
@@ -1411,9 +1411,9 @@ Deno.test("the CFC Property Suite workflow records no tests", async () => {
 
   // Both of the job's steps fall outside what a record is for, and for the
   // two different reasons `docs/specs/test-records.md` gives under
-  // "Recording". The suite step runs `deno test` directly, with no
-  // `--junit-path` to ingest and no registration preload, so nothing under
-  // it records; a wrapper passes recording through to what it runs, so one
+  // "Recording". The suite step runs `deno test` directly, with no spool
+  // for its tests to write into, so nothing under it records; a wrapper
+  // passes recording through to what it runs, so one
   // here would file a line summarizing the invocation and nothing else.
   // Those tests are units of `workspace-unit` and record when CI runs
   // them. The audit step reads the corpus the step before it wrote, so no

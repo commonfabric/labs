@@ -43,10 +43,6 @@ import type { WorkerReconcilerOptions } from "../src/worker/types.ts";
 // owns is beyond the viewer's display ceiling. Each step builds the
 // reconciler as the worker builds one for a mount, under the shell's default
 // display ceiling for the viewer.
-//
-// `Deno.test` rather than `describe`/`it`: this package installs its fake
-// clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
-// a `@std/testing/bdd` `it()` callback never receives that context.
 
 Deno.test("worker reconciler CFC decisions over a cf-cell-link's binding", async (t) => {
   const owner = await Identity.fromPassphrase("cell link owner");

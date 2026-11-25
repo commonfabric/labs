@@ -604,7 +604,7 @@ describe("selection", () => {
         withField("unavailable", [{ suite: "s", reason: "r" }]),
       ],
       [
-        "an unavailable entry with no reason",
+        "an unavailable entry whose reason is not a string",
         withField("unavailable", [{ suite: "s", unit: "u", reason: 7 }]),
       ],
       [

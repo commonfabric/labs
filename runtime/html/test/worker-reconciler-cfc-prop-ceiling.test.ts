@@ -33,10 +33,6 @@ import type {
 // does as a text child read from its own document. Every secret below
 // carries a string that appears nowhere else, so a search of the emitted
 // operations for it is a search for the value having escaped.
-//
-// `Deno.test` rather than `describe`/`it`: this package installs its fake
-// clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
-// a `@std/testing/bdd` `it()` callback never receives that context.
 
 Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => {
   const signer = await Identity.fromPassphrase(

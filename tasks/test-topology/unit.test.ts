@@ -1,43 +1,11 @@
-import { expect } from "@std/expect";
-import { parse as parseJsonc } from "@std/jsonc";
 import { describe, it } from "@std/testing/bdd";
-import {
-  parseJUnit,
-  recordedCases,
-  RECORDS_DIR_VARIABLE,
-  SKIP_LIST_VARIABLE,
-} from "@commonfabric/test-support/records";
+import { expect } from "@std/expect";
+import { SKIP_LIST_VARIABLE } from "@commonfabric/test-support/records";
 import { shuffleFlag, shuffleSeed } from "@commonfabric/test-support/shuffle";
 import { loadUnitSuites } from "./unit.ts";
 import type { Suite } from "./suite.ts";
 import { EXCLUDED_FROM_COVERAGE_GATE } from "../test-selection/policy.ts";
 import { withoutPackageParent } from "../package-layout.ts";
-
-/** This repository's root. A fixture takes its import map from here. */
-const REPOSITORY = new URL("../../", import.meta.url);
-
-/**
- * The import map the registration preload's modules resolve through. Deno
- * takes `--preload` as a path rather than through the import map, so a
- * fixture that runs the preload has to supply the specifiers it imports.
- *
- * The map is the repository's own, with each relative entry resolved against
- * the repository so it still names the same file. The preload's
- * `@commonfabric/` imports need no entry here, and the case that runs the
- * preload shows that they resolve without one.
- */
-async function preloadImports(): Promise<Record<string, string>> {
-  const manifest = parseJsonc(
-    await Deno.readTextFile(new URL("deno.jsonc", REPOSITORY)),
-  ) as { imports?: Record<string, string> };
-  const imports: Record<string, string> = {};
-  for (const [specifier, target] of Object.entries(manifest.imports ?? {})) {
-    imports[specifier] = target.startsWith(".")
-      ? new URL(target, REPOSITORY).href
-      : target;
-  }
-  return imports;
-}
 
 /** A workspace holding the members a case describes. */
 async function workspace(
@@ -55,14 +23,11 @@ async function workspace(
   await Deno.writeTextFile(
     `${root}/deno.jsonc`,
     JSON.stringify(
-      { workspace: Object.keys(members), imports: await preloadImports() },
+      { workspace: Object.keys(members) },
       null,
       2,
     ),
   );
-  // The preload names a test file relative to the directory holding
-  // `.git`. Without one, no registration is attributed to a file.
-  await Deno.mkdir(`${root}/.git`, { recursive: true });
   for (const [member, contents] of Object.entries(members)) {
     const dir = `${root}/${member}`;
     await Deno.mkdir(dir, { recursive: true });
@@ -249,52 +214,7 @@ describe("the workspace unit suites", () => {
     expect(invocation!.command).toContain("test/glaze.test.ts");
     expect(invocation!.command).not.toContain("test/proof.test.ts");
     expect(invocation!.env?.ENV).toBe("test");
-    expect(invocation!.junit?.[0]?.scope).toBe("bakery");
-  });
-
-  it("stops a listed test running, and leaves its neighbor alone", async () => {
-    // Running the invocation the suite built shows which key works. The preload
-    // looks a name up under the file that registered it, so a list keyed by
-    // anything else is never read.
-
-    const root = await workspace({
-      "./runtime/bakery": {
-        tasks: { test: "deno test -A test/glaze.test.ts" },
-        files: {
-          "test/glaze.test.ts": 'Deno.test("sets overnight", () => {});\n' +
-            'Deno.test("proofs the dough", () => {});\n',
-        },
-      },
-    });
-    const suite = workspaceUnit(await loadUnitSuites(root));
-    const outputDir = await Deno.makeTempDir({ prefix: "unit-out-" });
-    const [invocation] = await suite.command(
-      [{
-        unit: "runtime/bakery/test/glaze.test.ts",
-        skip: ["sets overnight"],
-      }],
-      { root, outputDir, spoolDir: `${outputDir}/spool` },
-    );
-    const run = await new Deno.Command(invocation!.command[0]!, {
-      args: invocation!.command.slice(1),
-      cwd: invocation!.cwd,
-      // The lane running this test has its own spool. Clearing the variable
-      // keeps the child's name map out of that lane's records.
-      env: { ...invocation!.env, [RECORDS_DIR_VARIABLE]: "" },
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
-    expect(run.success).toBe(true);
-    const report = parseJUnit(
-      await Deno.readTextFile(invocation!.junit![0]!.path),
-    );
-    expect(
-      new Map(
-        recordedCases(report).map((leaf) => [leaf.name, leaf.outcome]),
-      ),
-    ).toEqual(
-      new Map([["sets overnight", "skip"], ["proofs the dough", "pass"]]),
-    );
+    expect(invocation!.results).toEqual({ kind: "unit", scope: "bakery" });
   });
 
   it("names a skip list only where something inside a unit is skipped", async () => {
@@ -311,6 +231,8 @@ describe("the workspace unit suites", () => {
       { root, outputDir, spoolDir: "/spool" },
     );
     expect(whole!.env?.[SKIP_LIST_VARIABLE]).toBeUndefined();
+    expect(whole!.command.filter((word) => word.startsWith("--allow-read")))
+      .toEqual([]);
 
     const [partial] = await suite.command(
       [{
@@ -324,12 +246,13 @@ describe("the workspace unit suites", () => {
     expect(JSON.parse(await Deno.readTextFile(listPath!))).toEqual({
       "runtime/bakery/test/glaze.test.ts": ["glaze > sets overnight"],
     });
+    expect(partial!.command).toContain(`--allow-read=${listPath}`);
   });
 });
 
 describe("running a member that cannot be handed a subset", () => {
   it("runs the member's own task, and registers nothing as ignored", async () => {
-    // The skip list the preload reads is keyed by the file that registered each
+    // The skip list the test module reads is keyed by the file that registered each
     // test. This unit is the member's own directory, which is not such a file,
     // so the lane writes no skip list for it.
 
@@ -376,8 +299,7 @@ describe("running a member that cannot be handed a subset", () => {
   it("runs the files the runner sets apart in a `deno test` each", async () => {
     // A serial file cannot run beside another test file in one process, and an
     // all-access file needs every permission. A lane that selects some of each
-    // runs them apart, as the runner does, with a report and a skip list of
-    // their own.
+    // runs them apart, as the runner does, each with a skip list of its own.
 
     const root = await workspace({
       "./runtime/bakery": {
@@ -420,9 +342,9 @@ describe("running a member that cannot be handed a subset", () => {
     expect(allAccess!.command).not.toContain("--allow-read");
     expect(serial!.command).not.toContain("--parallel");
     expect(serial!.command).toContain("--allow-read");
-    expect(
-      new Set(invocations.map((invocation) => invocation.junit![0]!.path)).size,
-    ).toBe(3);
+    expect(invocations.map((invocation) => invocation.results)).toEqual(
+      Array(3).fill({ kind: "unit", scope: "bakery" }),
+    );
     expect(plain!.env?.[SKIP_LIST_VARIABLE]).toBeUndefined();
     expect(
       JSON.parse(await Deno.readTextFile(serial!.env![SKIP_LIST_VARIABLE]!)),
@@ -990,8 +912,8 @@ describe("a member whose tests a lane cannot hand a file list", () => {
     "list, so it would run the member whole";
 
   it("throws for one naming its own import map, where nothing records it", async () => {
-    // Run whole, the member's tests would run in a lane with no preload and
-    // no report path, so they would pass there and record nothing.
+    // Run whole, the member's tests would run in a lane that reads no
+    // results for them, so they would pass there and record nothing.
 
     const root = await workspace(
       bakery("deno test -A --import-map ./test-map.json ."),
@@ -1024,8 +946,8 @@ describe("a member whose tests a lane cannot hand a file list", () => {
 
   it("gives no unit to one whose task reaches no test file", async () => {
     // Its task is one a lane can hand a file list, so nothing about it runs
-    // whole. A unit for it would run the task with no preload and no report
-    // path.
+    // whole. A unit for it would run the task with nothing reading its
+    // results.
 
     const root = await workspace(bakery("deno test -A test/missing.test.ts"));
     const suite = workspaceUnit(await loadUnitSuites(root));

@@ -6,13 +6,14 @@ functionality.
 
 ## Usage
 
-Write a test using `Deno.test`:
+Write a test using `test` from `@commonfabric/test-support/test`:
 
 ```ts
 // add.test.ts
 import { assert } from "@std/assert";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("add", function () {
+test("add", function () {
   assert((5 + 5) === 10, "math checks out");
 });
 ```
@@ -55,8 +56,9 @@ instead, and the browser handles it as the person's own:
 
 ```ts
 import { pressKey } from "@commonfabric/deno-web-test/commands";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("Tab reaches the switch", async () => {
+test("Tab reaches the switch", async () => {
   // ... a focused element before the switch ...
   await pressKey("Tab");
   // document.activeElement is now the switch
@@ -148,8 +150,10 @@ integration tests also use.
 
 ## Support
 
-Currently only the `Deno.test(string, fn)` signature works. Using other
-signatures, or the BDD framework in `@std/testing/bdd` is not yet supported.
+In a browser, `test` hands each test to the page's `Deno.test`, which the
+harness defines. That `Deno.test` reads only the test's name and function, and
+ignores every other option. `describe`, `it`, and the hooks throw in a browser,
+so a test file that runs there uses `test` alone.
 
 ## Testing
 

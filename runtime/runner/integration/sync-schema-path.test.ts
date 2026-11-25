@@ -41,7 +41,7 @@ function read(
   return value?.value;
 }
 
-async function test() {
+async function runScenario() {
   const runId = crypto.randomUUID();
   // First runtime - save data
   const runtime1 = new Runtime({
@@ -176,7 +176,7 @@ async function test() {
 }
 
 async function runTest() {
-  await test();
+  await runScenario();
   console.log("\nDone");
 }
 

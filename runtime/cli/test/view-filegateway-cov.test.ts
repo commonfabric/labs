@@ -163,7 +163,7 @@ Deno.test("realFileGateway.open: keeps shebang selection in the editable source"
 });
 
 describe("realFileGateway.open() buffered input", () => {
-  const portableIt = Deno.build.os === "windows" ? it.skip : it;
+  const portableIt = Deno.build.os === "windows" ? it.ignore : it;
 
   it("reads an empty regular file", async () => {
     await withTempDir((dir) => {

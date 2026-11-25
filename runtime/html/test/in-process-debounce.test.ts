@@ -5,8 +5,6 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { renderInProcess } from "../src/in-process.ts";
 import { MockDoc } from "../src/mock-doc.ts";
 
-// The preload supplies `settle()` on the outer `Deno.TestContext`; BDD
-// callbacks receive a different context, so this test uses `Deno.test()`.
 Deno.test("in-process render empties a list when debounce expires during continuation", async (t) => {
   const signer = await Identity.fromPassphrase("in-process-debounce");
   const space = signer.did();

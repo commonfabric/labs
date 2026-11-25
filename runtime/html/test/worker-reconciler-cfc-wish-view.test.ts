@@ -28,10 +28,6 @@ import type {
 // Mounted under a ceiling, that read is refused and the sealed value never
 // reaches the emitted operations; mounted with no ceiling, it does, which is
 // what makes the search of the operations a search for a leak.
-//
-// `Deno.test` rather than `describe`/`it`: this package installs its fake
-// clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
-// a `@std/testing/bdd` `it()` callback never receives that context.
 
 Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) => {
   const owner = await Identity.fromPassphrase("wish view ceiling owner");

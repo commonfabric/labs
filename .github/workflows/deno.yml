@@ -328,8 +328,8 @@ jobs:
           if-no-files-found: ignore
 
       # The lane has already gathered every batch's records into its spool and
-      # marked each with its suite's variant, so this carries no variant and
-      # no JUnit specification of its own.
+      # marked each with its suite's variant, so this carries no variant of its
+      # own.
       - name: 📤 Ship test records
         if: always()
         uses: ./.github/actions/test-records-ship

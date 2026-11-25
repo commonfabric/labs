@@ -13,7 +13,7 @@ const CLI_PACKAGE_DIR = join(import.meta.dirname!, "..");
 const REPO_ROOT = join(CLI_PACKAGE_DIR, "..", "..");
 
 describe("view-procfs", () => {
-  const linuxIt = Deno.build.os === "linux" ? it : it.skip;
+  const linuxIt = Deno.build.os === "linux" ? it : it.ignore;
 
   linuxIt("reads zero-sized virtual files through EOF", async () => {
     expect(Deno.statSync(PROCFS_PATH).size).toBe(0);

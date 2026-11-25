@@ -238,7 +238,7 @@ describe("buildProseDecorations", () => {
   });
 
   describe("blockquotes", () => {
-    it("hides > marker when inactive but always applies line decoration", () => {
+    it("hides the `>` marker when inactive but always applies line decoration", () => {
       // Cursor elsewhere: marker hidden, line class present
       const far = createState("> quote\nnext", 10);
       const farDecos = buildProseDecorations(far, true);

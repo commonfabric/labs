@@ -98,6 +98,6 @@ describe("the package integration suites", () => {
       spoolDir: "/spool",
     });
     expect(invocation!.env?.HEADLESS).toBe("1");
-    expect(invocation!.junit?.[0]?.scope).toBe("shell");
+    expect(invocation!.results?.scope).toBe("shell");
   });
 });

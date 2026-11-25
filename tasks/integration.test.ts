@@ -2,9 +2,11 @@ import { assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import ports from "@commonfabric/ports" with { type: "json" };
+import { exists } from "@std/fs";
 import {
-  preloadArgument,
+  readSpool,
   RECORD_SCHEMA_VERSION,
+  type ResultLine,
 } from "@commonfabric/test-support/records";
 import { shuffledPaths } from "@commonfabric/test-support/shuffle";
 import {
@@ -168,7 +170,6 @@ Deno.test("filteredTestCommand passes files as explicit paths under relDir", () 
       "runner",
       "integration",
       ["a.test.ts", "b.test.ts"],
-      "out/junit",
       20260922,
     ),
     [
@@ -177,8 +178,6 @@ Deno.test("filteredTestCommand passes files as explicit paths under relDir", () 
       "--no-check",
       "-A",
       "--shuffle=20260922",
-      "--junit-path=out/junit/runner.xml",
-      preloadArgument(),
       "./integration/a.test.ts",
       "./integration/b.test.ts",
     ],
@@ -191,7 +190,6 @@ Deno.test("filteredTestCommand adds patterns memory and leak flags", () => {
       "patterns",
       "integration",
       ["home-profile.test.ts"],
-      "out/junit",
       20260922,
     ),
     [
@@ -202,8 +200,6 @@ Deno.test("filteredTestCommand adds patterns memory and leak flags", () => {
       "--shuffle=20260922",
       "--v8-flags=--max-old-space-size=4096",
       "--trace-leaks",
-      "--junit-path=out/junit/patterns.xml",
-      preloadArgument(),
       "./integration/home-profile.test.ts",
     ],
   );
@@ -215,7 +211,6 @@ Deno.test("filteredTestCommand uses the generated-patterns subdir and flags", ()
       "generated-patterns",
       "integration/patterns",
       ["simple-counter.test.ts"],
-      "out/junit",
       20260922,
     ),
     [
@@ -226,31 +221,7 @@ Deno.test("filteredTestCommand uses the generated-patterns subdir and flags", ()
       "--shuffle=20260922",
       "--trace-leaks",
       "--parallel",
-      "--junit-path=out/junit/generated-patterns.xml",
-      preloadArgument(),
       "./integration/patterns/simple-counter.test.ts",
-    ],
-  );
-});
-
-Deno.test("filteredTestCommand adds a junit path when a junit dir is given", () => {
-  assertEquals(
-    filteredTestCommand(
-      "shell",
-      "integration",
-      ["a.test.ts"],
-      "out/junit",
-      20260922,
-    ),
-    [
-      "deno",
-      "test",
-      "--no-check",
-      "-A",
-      "--shuffle=20260922",
-      "--junit-path=out/junit/shell.xml",
-      preloadArgument(),
-      "./integration/a.test.ts",
     ],
   );
 });
@@ -266,7 +237,6 @@ Deno.test("runFilteredIntegration fails without running when no file matches", a
       pkgDir,
       {},
       "no-such-test",
-      "/junit",
       0,
       () => {
         ran = true;
@@ -292,7 +262,6 @@ Deno.test("runFilteredIntegration runs deno test with the matching explicit path
       pkgDir,
       { LOG_LEVEL: "warn" },
       "home-profile",
-      "/junit",
       20260922,
       (cmd, options) => {
         captured = { cmd, cwd: options?.cwd };
@@ -309,8 +278,6 @@ Deno.test("runFilteredIntegration runs deno test with the matching explicit path
       "--shuffle=20260922",
       "--v8-flags=--max-old-space-size=4096",
       "--trace-leaks",
-      "--junit-path=/junit/patterns.xml",
-      preloadArgument(),
       "./integration/home-profile.test.ts",
     ]);
   } finally {
@@ -332,7 +299,6 @@ Deno.test("runFilteredIntegration uses the generated-patterns subdir", async () 
       pkgDir,
       {},
       "simple-counter",
-      "/junit",
       42,
       (cmd) => {
         captured = cmd;
@@ -347,8 +313,6 @@ Deno.test("runFilteredIntegration uses the generated-patterns subdir", async () 
       "--shuffle=42",
       "--trace-leaks",
       "--parallel",
-      "--junit-path=/junit/generated-patterns.xml",
-      preloadArgument(),
       "./integration/patterns/simple-counter.test.ts",
     ]);
   } finally {
@@ -453,10 +417,12 @@ async function capturing<T>(
 
 /**
  * A temporary repository root holding an empty directory for each package
- * named, where `packageDirNamed()` looks for it, and every pattern tree.
+ * named, where `packageDirNamed()` looks for it, every pattern tree, and
+ * `scratch`, the directory a run of its own makes.
  */
 async function makeRoot(packages: readonly string[]): Promise<string> {
   const rootDir = await Deno.makeTempDir();
+  await Deno.mkdir(`${rootDir}/scratch`);
   for (const pkg of packages) {
     const dir = pkg === "patterns" ? pkg : `runtime/${pkg}`;
     await Deno.mkdir(`${rootDir}/${dir}`, { recursive: true });
@@ -467,12 +433,18 @@ async function makeRoot(packages: readonly string[]): Promise<string> {
   return rootDir;
 }
 
-/** The `--junit-path` a package's command was handed. */
-function junitPathOf({ options }: Ran): string {
-  const flags = options.env?.INTEGRATION_TEST_FLAGS?.split(" ") ?? [];
-  const flag = flags.find((flag) => flag.startsWith("--junit-path="));
-  if (flag === undefined) throw new Error("the command names no report path");
-  return flag.slice("--junit-path=".length);
+/** The spool a package's command was handed to write its results into. */
+function spoolOf({ options }: Ran): string {
+  const spool = options.env?.CF_TEST_RECORDS_DIR;
+  if (spool === undefined) throw new Error("the command names no spool");
+  return spool;
+}
+
+/** The names of the entries `dir` holds, sorted. */
+async function entriesOf(dir: string): Promise<string[]> {
+  return (await Array.fromAsync(Deno.readDir(dir)))
+    .map((entry) => entry.name)
+    .sort();
 }
 
 /** Runs `pkg`'s integration tests from `rootDir` on `fake`. */
@@ -480,12 +452,12 @@ function runPackage(
   pkg: string,
   rootDir: string,
   fake: FakeHost,
-  extra: { filter?: string; only?: readonly string[] } = {},
+  extra: { filter?: string; only?: readonly string[]; records?: boolean } = {},
 ): Promise<PackageOutcome> {
   return runPackageIntegration(pkg, {
     apiUrl: "http://localhost:8000",
     rootDir,
-    junitDir: `${rootDir}/junit`,
+    scratch: `${rootDir}/scratch`,
     seed: 7,
     host: fake.host,
     ...extra,
@@ -529,8 +501,6 @@ Deno.test("runPackageIntegration runs a matching filtered test with the run's se
       "--no-check",
       "-A",
       "--shuffle=7",
-      `--junit-path=${rootDir}/junit/runner.xml`,
-      preloadArgument(),
       "./integration/counter.test.ts",
     ]]);
   } finally {
@@ -539,40 +509,53 @@ Deno.test("runPackageIntegration runs a matching filtered test with the run's se
 });
 
 /**
- * A host whose package command writes `xml` where its flags say the report
- * goes, or writes nothing for no `xml`, and fails.
+ * A host whose package command writes `lines` into the spool it is handed,
+ * as one test file's results, or writes nothing for no `lines`, and fails.
  */
 function reportingHost(
-  xml?: string,
+  lines?: readonly ResultLine[],
   env: Record<string, string> = {},
 ): FakeHost {
   return fakeHost({
     env,
     run: async (cmd, options) => {
-      if (xml !== undefined) {
-        await Deno.writeTextFile(junitPathOf({ cmd, options }), xml);
+      if (lines !== undefined) {
+        await Deno.writeTextFile(
+          `${spoolOf({ cmd, options })}/results-counter.ndjson`,
+          lines.map((line) => JSON.stringify(line) + "\n").join(""),
+        );
       }
       return { success: false, code: 1 };
     },
   });
 }
 
-Deno.test("runPackageIntegration reads each test, and how to rerun a failing one, from the report", async () => {
+/** One results line for `name` in the runner's counter test file. */
+function counterResult(
+  name: string,
+  fields: Partial<ResultLine> = {},
+): ResultLine {
+  return {
+    line: "result",
+    file: "runtime/runner/integration/counter.test.ts",
+    name: [name],
+    outcome: "pass",
+    durationMs: 1,
+    ...fields,
+  };
+}
+
+/** A counter test that passes and one that fails. */
+const COUNTER_RESULTS = [
+  counterResult("counts"),
+  counterResult("resets", { outcome: "fail", failure: "Error: still 3" }),
+];
+
+Deno.test("runPackageIntegration reads each test, and how to rerun a failing one, from the results its tests wrote", async () => {
   const rootDir = await makeRoot(["runner"]);
   const spool = await Deno.makeTempDir();
   try {
-    // A spool with no name maps in it leaves each file to the report.
-    const fake = reportingHost(
-      `<testsuites>
-  <testsuite name="./integration/counter.test.ts">
-    <testcase name="counts" classname="./integration/counter.test.ts"/>
-    <testcase name="resets" classname="./integration/counter.test.ts">
-      <failure message="Uncaught Error: still 3">stack</failure>
-    </testcase>
-  </testsuite>
-</testsuites>`,
-      { CF_TEST_RECORDS_DIR: spool },
-    );
+    const fake = reportingHost(COUNTER_RESULTS, { CF_TEST_RECORDS_DIR: spool });
     const { result: outcome, lines } = await capturing(() =>
       runPackage("runner", rootDir, fake)
     );
@@ -601,7 +584,7 @@ Deno.test("runPackageIntegration reads each test, and how to rerun a failing one
       name: "resets",
       outcome: "fail",
       file: "runtime/runner/integration/counter.test.ts",
-      message: "Uncaught Error: still 3",
+      message: "Error: still 3",
       rerun: "deno task integration runner counter",
     }]);
   } finally {
@@ -610,68 +593,67 @@ Deno.test("runPackageIntegration reads each test, and how to rerun a failing one
   }
 });
 
-Deno.test("runPackageIntegration does not read a report an earlier run left", async () => {
+Deno.test("runPackageIntegration has the package's tests write into the run's spool", async () => {
+  const rootDir = await makeRoot(["runner"]);
+  const spool = await Deno.makeTempDir();
+  try {
+    const fake = reportingHost(COUNTER_RESULTS, { CF_TEST_RECORDS_DIR: spool });
+    await capturing(() => runPackage("runner", rootDir, fake));
+    expect(spoolOf(fake.ran[0]!)).toBe(spool);
+    expect(await entriesOf(spool)).toEqual(["results-counter.ndjson"]);
+    expect(await Deno.readTextFile(`${spool}/results-counter.ndjson`))
+      .toContain('"name":["resets"]');
+    expect(await entriesOf(`${rootDir}/scratch`)).toEqual([]);
+  } finally {
+    await Deno.remove(rootDir, { recursive: true });
+    await Deno.remove(spool, { recursive: true });
+  }
+});
+
+Deno.test("runPackageIntegration has the package's tests write into its scratch directory where the run has no spool", async () => {
   const rootDir = await makeRoot(["runner"]);
   try {
-    await Deno.mkdir(`${rootDir}/junit`);
-    await Deno.writeTextFile(
-      `${rootDir}/junit/runner.xml`,
-      `<testsuites><testsuite name="x"><testcase name="stale"/></testsuite></testsuites>`,
-    );
+    const fake = reportingHost(COUNTER_RESULTS);
     const { result: outcome } = await capturing(() =>
-      runPackage("runner", rootDir, reportingHost())
+      runPackage("runner", rootDir, fake)
     );
-    expect(outcome).toEqual({ success: false, code: 1, tests: [] });
+    expect(outcome.tests.map(({ record }) => record.test.n)).toEqual([
+      "counts",
+      "resets",
+    ]);
+    expect(spoolOf(fake.ran[0]!)).toBe(`${rootDir}/scratch`);
   } finally {
     await Deno.remove(rootDir, { recursive: true });
   }
 });
 
-Deno.test("runPackageIntegration warns of a report it cannot read, and names no test", async () => {
+Deno.test("runPackageIntegration does not read results an earlier package left in the run's spool", async () => {
   const rootDir = await makeRoot(["runner"]);
+  const spool = await Deno.makeTempDir();
   try {
-    const { result: outcome, lines } = await capturing(() =>
+    await Deno.writeTextFile(
+      `${spool}/results-stale.ndjson`,
+      JSON.stringify(counterResult("stale")) + "\n",
+    );
+    const { result: outcome } = await capturing(() =>
       runPackage(
         "runner",
         rootDir,
-        reportingHost(
-          "<testsuites><testsuite><testcase/></testsuite></testsuites>",
-        ),
+        reportingHost(undefined, { CF_TEST_RECORDS_DIR: spool }),
       )
     );
-    expect(outcome.tests).toEqual([]);
-    expect(
-      lines.some((line) =>
-        line.startsWith(
-          `test summary: reading ${rootDir}/junit/runner.xml failed: `,
-        )
-      ),
-    ).toBe(true);
+    expect(outcome).toEqual({ success: false, code: 1, tests: [] });
+    expect(await entriesOf(spool)).toEqual(["results-stale.ndjson"]);
   } finally {
     await Deno.remove(rootDir, { recursive: true });
-  }
-});
-
-Deno.test("runPackageIntegration rejects where the earlier report cannot be removed", async () => {
-  const rootDir = await makeRoot(["runner"]);
-  try {
-    // A directory holding a file is not removed without `recursive`.
-    await Deno.mkdir(`${rootDir}/junit/runner.xml`, { recursive: true });
-    await Deno.writeTextFile(`${rootDir}/junit/runner.xml/keep`, "");
-    const fake = fakeHost();
-    await capturing(async () => {
-      await expect(runPackage("runner", rootDir, fake)).rejects.toThrow();
-    });
-    expect(fake.ran).toEqual([]);
-  } finally {
-    await Deno.remove(rootDir, { recursive: true });
+    await Deno.remove(spool, { recursive: true });
   }
 });
 
 Deno.test("runPackageIntegration runs the CLI suite's script against the server", async () => {
   const rootDir = await makeRoot(["cli"]);
   try {
-    const fake = fakeHost({ env: { INTEGRATION_TEST_FLAGS: "--quiet" } });
+    const fake = fakeHost();
     const { result: outcome, lines } = await capturing(() =>
       runPackage("cli", rootDir, fake)
     );
@@ -682,8 +664,7 @@ Deno.test("runPackageIntegration runs the CLI suite's script against the server"
     ]);
     expect(fake.ran[0].options.env).toEqual({
       LOG_LEVEL: "warn",
-      INTEGRATION_TEST_FLAGS:
-        `--quiet --junit-path=${rootDir}/junit/cli.xml ${preloadArgument()}`,
+      CF_TEST_RECORDS_DIR: spoolOf(fake.ran[0]!),
       API_URL: "http://localhost:8000",
       CF_CLI_INTEGRATION_USE_LOCAL: "1",
     });
@@ -822,19 +803,6 @@ Deno.test("runPackageIntegration runs each pattern test the filter matches, and 
         `deno task integration pattern-tests ${FAILING_PATTERN}`,
       ],
     ]);
-    const junit = await Deno.readTextFile(
-      `${rootDir}/junit/pattern-unit-tests.xml`,
-    );
-    expect(junit).toContain(`tests="2" failures="1"`);
-    expect(junit).toMatch(
-      new RegExp(
-        `<testcase name="${FAILING_PATTERN}" time="[0-9.]+">\\n` +
-          `    <failure message="Test failed" />\\n  </testcase>`,
-      ),
-    );
-    expect(junit).toMatch(
-      new RegExp(`<testcase name="${PASSING_PATTERN}" time="[0-9.]+" />`),
-    );
     // The orchestrator records one line per file into the run's spool.
     let recorded = "";
     for (const entry of Deno.readDirSync(spool)) {
@@ -1461,29 +1429,35 @@ Deno.test("runIntegration reports a run that stops on an error, and still finish
   }
 });
 
-Deno.test("runIntegration writes each package's report into the --junit-dir named, and keeps it", async () => {
+Deno.test("runIntegration summarizes a package from the results its tests wrote, and removes the scratch directory it gave them", async () => {
   const rootDir = await makeRoot(["generated-patterns"]);
   try {
-    const xml =
-      `<testsuites><testsuite name="s"><testcase name="renders"/></testsuite></testsuites>`;
+    const spools: string[] = [];
     const fake = fakeHost({
       cwd: rootDir,
       run: async (cmd, options) => {
-        await Deno.writeTextFile(junitPathOf({ cmd, options }), xml);
+        const spool = spoolOf({ cmd, options });
+        spools.push(spool);
+        await Deno.writeTextFile(
+          `${spool}/results-renders.ndjson`,
+          JSON.stringify({
+            line: "result",
+            file: "runtime/generated-patterns/integration/patterns/a.test.ts",
+            name: ["renders"],
+            outcome: "pass",
+            durationMs: 1,
+          }) + "\n",
+        );
         return undefined;
       },
     });
     const { result, lines } = await capturing(() =>
-      runIntegration(
-        [`--junit-dir=${rootDir}/reports`, "generated-patterns"],
-        fake.host,
-      )
+      runIntegration(["generated-patterns"], fake.host)
     );
     expect(result).toBe(0);
     expect(summaryOf(lines)[1]).toMatch(/^PASSED: 0 failed, 1 passed, /);
-    expect(
-      await Deno.readTextFile(`${rootDir}/reports/generated-patterns.xml`),
-    ).toBe(xml);
+    expect(spools).toHaveLength(1);
+    expect(await exists(spools[0]!)).toBe(false);
   } finally {
     await Deno.remove(rootDir, { recursive: true });
   }
@@ -1499,20 +1473,16 @@ Deno.test("runIntegration fails, saying why, when the --files list cannot be rea
   expect(fake.finished).toEqual([{ mode: "off" }]);
 });
 
-Deno.test("runIntegration reads a relative --files list and --junit-dir in its working directory", async () => {
+Deno.test("runIntegration reads a relative --files list in its working directory", async () => {
   const rootDir = await makePatternRoot();
   try {
     await Deno.writeTextFile(`${rootDir}/list`, `${OTHER_PATTERN}\n`);
     const fake = fakeHost({ cwd: rootDir });
     const { result } = await capturing(() =>
-      runIntegration(
-        ["pattern-tests", "--files=list", "--junit-dir=reports"],
-        fake.host,
-      )
+      runIntegration(["pattern-tests", "--files=list"], fake.host)
     );
     expect(result).toBe(0);
     expect(fake.ran.map(({ cmd }) => cmd.at(-1))).toEqual([OTHER_PATTERN]);
-    expect((await Deno.stat(`${rootDir}/reports`)).isDirectory).toBe(true);
   } finally {
     await Deno.remove(rootDir, { recursive: true });
   }
@@ -1572,6 +1542,47 @@ Deno.test("runIntegration leaves the spool of an enclosing run in place", async 
     });
     await capturing(() => runIntegration(["generated-patterns"], fake.host));
     expect(fake.env.get("CF_TEST_RECORDS_DIR")).toBe(spool);
+  } finally {
+    await Deno.remove(rootDir, { recursive: true });
+    await Deno.remove(spool, { recursive: true });
+  }
+});
+
+Deno.test("runPackageIntegration records what the package's tests wrote where the run owns its spool", async () => {
+  // A run that owns its spool ships it, and a spool ships only records, so the
+  // results become records there under the package's scope. A run that joined
+  // another's spool leaves them for that run.
+
+  const rootDir = await makeRoot(["runner"]);
+  const spool = await Deno.makeTempDir();
+  try {
+    await capturing(() =>
+      runPackage(
+        "runner",
+        rootDir,
+        reportingHost(COUNTER_RESULTS, { CF_TEST_RECORDS_DIR: spool }),
+        { records: true },
+      )
+    );
+    const owned = (await readSpool(spool)).records;
+    expect(owned.map((record) => [record.test, record.outcome])).toEqual([
+      [{ k: "integration", s: "runner", n: "counts" }, "pass"],
+      [{ k: "integration", s: "runner", n: "resets" }, "fail"],
+    ]);
+
+    const joined = await Deno.makeTempDir();
+    try {
+      await capturing(() =>
+        runPackage(
+          "runner",
+          rootDir,
+          reportingHost(COUNTER_RESULTS, { CF_TEST_RECORDS_DIR: joined }),
+        )
+      );
+      expect((await readSpool(joined)).records).toEqual([]);
+    } finally {
+      await Deno.remove(joined, { recursive: true });
+    }
   } finally {
     await Deno.remove(rootDir, { recursive: true });
     await Deno.remove(spool, { recursive: true });

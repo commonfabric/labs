@@ -396,9 +396,9 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
           await rt.runtime.idle();
           // Let the failure-surfacing bookkeeping transaction (spawned from a
           // commit callback, with its own bounded retries) land. This file is
-          // on the REAL clock (clock-preload.ts realClockFiles): the
-          // two-writer journey drives live cross-runtime storage transport,
-          // the class the fake clock's auto-advance mode cannot pace.
+          // on the REAL clock (`useRealClock()` above): the two-writer
+          // journey drives live cross-runtime storage transport, the class
+          // the fake clock's auto-advance mode cannot pace.
           await new Promise((resolve) => setTimeout(resolve, 200));
           await rt.runtime.idle();
           const readTx = rt.runtime.edit();

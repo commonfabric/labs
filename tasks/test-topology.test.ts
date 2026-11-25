@@ -131,8 +131,8 @@ describe("the test topology", () => {
 
   it("gives every unit a lane may subset a file the skip list keys on", async () => {
     // A lane running part of a unit registers the rest as ignored. The
-    // registration preload looks each ignored name up under the
-    // repository-relative file that registered the test. A unit that is not
+    // test module looks each ignored name up under the repository-relative
+    // file that registered the test. A unit that is not
     // such a file therefore cannot be handed a subset, and has to be listed in
     // `whole`. An unlisted unit of that kind would get a skip list that matches
     // nothing, and its lane would run every test while being charged for one.

@@ -76,7 +76,7 @@ async function renderAndCollect(
 Deno.test(
   "worker reconciler preserves sync state across VDOM asCell cuts",
   async (t) => {
-    const { syncCalls } = await renderAndCollect(t.settle, {
+    const { syncCalls } = await renderAndCollect(clock.settle, {
       type: "vnode",
       name: "main",
       props: {},
@@ -108,7 +108,7 @@ Deno.test(
   "worker reconciler reuses VDOM schema coverage for style objects",
   async (t) => {
     const { syncCalls, updateOps } = await renderAndCollect(
-      t.settle,
+      clock.settle,
       {
         type: "vnode",
         name: "div",

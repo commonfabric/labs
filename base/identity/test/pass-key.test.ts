@@ -1,5 +1,5 @@
-// Flat `Deno.test` cases: this package's tests also run in a browser through
-// `deno-web-test`, which does not support `@std/testing/bdd`.
+// Flat `test()` cases: this package's tests also run in a browser through
+// `deno-web-test`, where `describe()` is not available.
 //
 // A real ceremony needs an authenticator and a user gesture, so these cases
 // hand `PassKey` a host whose credential store answers as an authenticator

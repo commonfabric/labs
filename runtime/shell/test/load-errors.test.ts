@@ -393,327 +393,7 @@ describe("load-errors", () => {
             restore();
           }
         });
-      });
-    });
-  });
 
-  describe("XAppView", () => {
-    describe("instance members", () => {
-      describe("render()", () => {
-        it("passes a space root load error to the body view", async () => {
-          const restore = installBrowserGlobals();
-          const originalError = console.error;
-          console.error = () => {};
-          try {
-            const { XAppView } = await import("../src/views/AppView.ts");
-            const space = "did:key:z6Mk-shell-space-load-error" as DID;
-            const error = new Error("Space storage is unavailable");
-            const view = new XAppView();
-            view.app = {
-              identity: {},
-              config: {},
-              view: { spaceDid: space },
-            } as never;
-            view.space = space;
-            view.rt = {
-              signal: new AbortController().signal,
-              getSpaceRootPattern: () => Promise.reject(error),
-            } as never;
-
-            view._spaceRootPattern.run();
-            await view._spaceRootPattern.taskComplete.catch(() => undefined);
-
-            expect(findLoadError(view.render())).toEqual({
-              kind: "space",
-              error,
-            });
-          } finally {
-            console.error = originalError;
-            restore();
-          }
-        });
-
-        describe("when the space root lookup returns no root", () => {
-          /** An app view on the space home of `space`, over `rt`. */
-          const spaceHome = async (space: DID, rt: unknown) => {
-            const { XAppView } = await import("../src/views/AppView.ts");
-            const view = new XAppView();
-            view.app = {
-              identity: {},
-              config: {},
-              view: { spaceDid: space },
-            } as never;
-            view.space = space;
-            view.rt = rt as never;
-            return view;
-          };
-
-          it("tells the body view the space has no root once the lookup completes, and not while it is pending", async () => {
-            const restore = installBrowserGlobals();
-            try {
-              const lookup = Promise.withResolvers<undefined>();
-              const view = await spaceHome(
-                "did:key:z6Mk-shell-space-no-root" as DID,
-                {
-                  signal: new AbortController().signal,
-                  getSpaceRootPattern: () => lookup.promise,
-                },
-              );
-
-              view._spaceRootPattern.run();
-              const pending = boundValue(view.render(), '.spaceHasNoRoot="');
-              lookup.resolve(undefined);
-              await view._spaceRootPattern.taskComplete;
-
-              expect(pending).toBe(false);
-              expect(boundValue(view.render(), '.spaceHasNoRoot="')).toBe(true);
-              expect(findLoadError(view.render())).toBeUndefined();
-            } finally {
-              restore();
-            }
-          });
-
-          it("does not tell the body view the space has no root when there is no runtime to look it up with", async () => {
-            const restore = installBrowserGlobals();
-            try {
-              const view = await spaceHome(
-                "did:key:z6Mk-shell-space-no-runtime" as DID,
-                undefined,
-              );
-
-              view._spaceRootPattern.run();
-              await view._spaceRootPattern.taskComplete;
-
-              expect(boundValue(view.render(), '.spaceHasNoRoot="')).toBe(
-                false,
-              );
-            } finally {
-              restore();
-            }
-          });
-        });
-
-        it("passes a selected piece load error to the body view", async () => {
-          const restore = installBrowserGlobals();
-          const originalError = console.error;
-          console.error = () => {};
-          try {
-            const { XAppView } = await import("../src/views/AppView.ts");
-            const space = "did:key:z6Mk-shell-piece-load-error" as DID;
-            const error = new Error("Piece data could not be read");
-            const view = new XAppView();
-            view.app = {
-              identity: {},
-              config: {},
-              view: { spaceDid: space, pieceId: "fid1:missing-piece" },
-            } as never;
-            view.space = space;
-            view.rt = {
-              signal: new AbortController().signal,
-              getPattern: () => Promise.reject(error),
-            } as never;
-
-            view._selectedPattern.run();
-            await view._selectedPattern.taskComplete.catch(() => undefined);
-
-            expect(findLoadError(view.render())).toEqual({
-              kind: "piece",
-              error,
-            });
-          } finally {
-            console.error = originalError;
-            restore();
-          }
-        });
-
-        it("passes an earlier space load error to the body view", async () => {
-          const restore = installBrowserGlobals();
-          try {
-            const { XAppView } = await import("../src/views/AppView.ts");
-            const error = new Error("The space address could not be resolved");
-            const view = new XAppView();
-            view.app = {
-              identity: {},
-              config: {},
-              view: { spaceName: "unavailable-space" },
-            } as never;
-            view.spaceLoadError = { kind: "space", error };
-
-            expect(findLoadError(view.render())).toEqual({
-              kind: "space",
-              error,
-            });
-          } finally {
-            restore();
-          }
-        });
-
-        it("passes a runtime error for the selected piece to the body view", async () => {
-          const restore = installBrowserGlobals();
-          try {
-            const { XAppView } = await import("../src/views/AppView.ts");
-            const space = "did:key:z6Mk-shell-runtime-piece-error" as DID;
-            const view = new XAppView();
-            view.app = {
-              identity: {},
-              config: {},
-              view: { spaceDid: space, pieceId: "fid1:broken-piece" },
-            } as never;
-            view.space = space;
-            view.runtimeLoadErrors = [{
-              type: NotificationType.ErrorReport,
-              message: "The piece failed while it was starting",
-              space,
-              pieceId: "of:fid1:broken-piece",
-            }];
-
-            expect(findLoadError(view.render())).toEqual({
-              kind: "piece",
-              error: view.runtimeLoadErrors[0],
-            });
-          } finally {
-            restore();
-          }
-        });
-
-        it("ignores a runtime error from another piece", async () => {
-          const restore = installBrowserGlobals();
-          try {
-            const { XAppView } = await import("../src/views/AppView.ts");
-            const space = "did:key:z6Mk-shell-other-piece-error" as DID;
-            const view = new XAppView();
-            view.app = {
-              identity: {},
-              config: {},
-              view: { spaceDid: space, pieceId: "fid1:working-piece" },
-            } as never;
-            view.space = space;
-            view.runtimeLoadErrors = [{
-              type: NotificationType.ErrorReport,
-              message: "A background piece failed",
-              space,
-              pieceId: "of:fid1:background-piece",
-            }];
-
-            expect(findLoadError(view.render())).toBeUndefined();
-          } finally {
-            restore();
-          }
-        });
-
-        it("keeps a matching error when a background piece fails later", async () => {
-          const restore = installBrowserGlobals();
-          try {
-            const { XAppView } = await import("../src/views/AppView.ts");
-            const space = "did:key:z6Mk-shell-preserved-piece-error" as DID;
-            const view = new XAppView();
-            view.app = {
-              identity: {},
-              config: {},
-              view: { spaceDid: space, pieceId: "fid1:selected-piece" },
-            } as never;
-            view.space = space;
-            const selectedError = {
-              type: NotificationType.ErrorReport,
-              message: "The selected piece failed",
-              space,
-              pieceId: "of:fid1:selected-piece",
-            } as const;
-            view.runtimeLoadErrors = [selectedError, {
-              type: NotificationType.ErrorReport,
-              message: "A background piece failed later",
-              space,
-              pieceId: "of:fid1:background-piece",
-            }];
-
-            expect(findLoadError(view.render())).toEqual({
-              kind: "piece",
-              error: selectedError,
-            });
-          } finally {
-            restore();
-          }
-        });
-
-        it("resolves a slug reference before starting the piece it names", async () => {
-          const restore = installBrowserGlobals();
-          try {
-            const { XAppView } = await import("../src/views/AppView.ts");
-            const space = "did:key:z6Mk-shell-slug-target-error" as DID;
-            // One log, so the ORDER the name claims is what is checked;
-            // two arrays would prove both calls happened and nothing about
-            // which came first.
-            const calls: Array<{ call: string; args: unknown[] }> = [];
-            const view = new XAppView();
-            view.app = {
-              identity: {},
-              config: {},
-              view: { spaceDid: space, pieceSlug: "broken-piece" },
-            } as never;
-            view.space = space;
-            view.rt = {
-              signal: new AbortController().signal,
-              resolveSlug: (...args: unknown[]) => {
-                calls.push({ call: "resolveSlug", args });
-                return Promise.resolve({
-                  pieceId: "fid1:slug-target",
-                  pathAfter: [],
-                  scope: "space",
-                });
-              },
-              getPattern: (...args: unknown[]) => {
-                calls.push({ call: "getPattern", args });
-                return Promise.resolve({ id: () => "fid1:slug-target" });
-              },
-            } as never;
-
-            view._selectedPattern.run();
-            await view._selectedPattern.taskComplete;
-
-            expect(calls).toEqual([
-              {
-                call: "resolveSlug",
-                args: [space, "broken-piece", undefined],
-              },
-              {
-                call: "getPattern",
-                args: [space, "fid1:slug-target", { scope: "space" }],
-              },
-            ]);
-          } finally {
-            restore();
-          }
-        });
-
-        it("ignores a runtime error without space context", async () => {
-          const restore = installBrowserGlobals();
-          try {
-            const { XAppView } = await import("../src/views/AppView.ts");
-            const space = "did:key:z6Mk-shell-context-free-error" as DID;
-            const view = new XAppView();
-            view.app = {
-              identity: {},
-              config: {},
-              view: { spaceDid: space, pieceId: "fid1:working-piece" },
-            } as never;
-            view.space = space;
-            view.runtimeLoadErrors = [{
-              type: NotificationType.ErrorReport,
-              message: "An unrelated renderer failed",
-            }];
-
-            expect(findLoadError(view.render())).toBeUndefined();
-          } finally {
-            restore();
-          }
-        });
-      });
-    });
-  });
-
-  describe("XBodyView", () => {
-    describe("instance members", () => {
-      describe("render()", () => {
         it("shows a clear space error with the reported detail", async () => {
           const restore = installBrowserGlobals();
           try {
@@ -1102,6 +782,320 @@ describe("load-errors", () => {
               restore();
             }
           });
+        });
+      });
+    });
+  });
+
+  describe("XAppView", () => {
+    describe("instance members", () => {
+      describe("render()", () => {
+        it("passes a space root load error to the body view", async () => {
+          const restore = installBrowserGlobals();
+          const originalError = console.error;
+          console.error = () => {};
+          try {
+            const { XAppView } = await import("../src/views/AppView.ts");
+            const space = "did:key:z6Mk-shell-space-load-error" as DID;
+            const error = new Error("Space storage is unavailable");
+            const view = new XAppView();
+            view.app = {
+              identity: {},
+              config: {},
+              view: { spaceDid: space },
+            } as never;
+            view.space = space;
+            view.rt = {
+              signal: new AbortController().signal,
+              getSpaceRootPattern: () => Promise.reject(error),
+            } as never;
+
+            view._spaceRootPattern.run();
+            await view._spaceRootPattern.taskComplete.catch(() => undefined);
+
+            expect(findLoadError(view.render())).toEqual({
+              kind: "space",
+              error,
+            });
+          } finally {
+            console.error = originalError;
+            restore();
+          }
+        });
+
+        describe("when the space root lookup returns no root", () => {
+          /** An app view on the space home of `space`, over `rt`. */
+          const spaceHome = async (space: DID, rt: unknown) => {
+            const { XAppView } = await import("../src/views/AppView.ts");
+            const view = new XAppView();
+            view.app = {
+              identity: {},
+              config: {},
+              view: { spaceDid: space },
+            } as never;
+            view.space = space;
+            view.rt = rt as never;
+            return view;
+          };
+
+          it("tells the body view the space has no root once the lookup completes, and not while it is pending", async () => {
+            const restore = installBrowserGlobals();
+            try {
+              const lookup = Promise.withResolvers<undefined>();
+              const view = await spaceHome(
+                "did:key:z6Mk-shell-space-no-root" as DID,
+                {
+                  signal: new AbortController().signal,
+                  getSpaceRootPattern: () => lookup.promise,
+                },
+              );
+
+              view._spaceRootPattern.run();
+              const pending = boundValue(view.render(), '.spaceHasNoRoot="');
+              lookup.resolve(undefined);
+              await view._spaceRootPattern.taskComplete;
+
+              expect(pending).toBe(false);
+              expect(boundValue(view.render(), '.spaceHasNoRoot="')).toBe(true);
+              expect(findLoadError(view.render())).toBeUndefined();
+            } finally {
+              restore();
+            }
+          });
+
+          it("does not tell the body view the space has no root when there is no runtime to look it up with", async () => {
+            const restore = installBrowserGlobals();
+            try {
+              const view = await spaceHome(
+                "did:key:z6Mk-shell-space-no-runtime" as DID,
+                undefined,
+              );
+
+              view._spaceRootPattern.run();
+              await view._spaceRootPattern.taskComplete;
+
+              expect(boundValue(view.render(), '.spaceHasNoRoot="')).toBe(
+                false,
+              );
+            } finally {
+              restore();
+            }
+          });
+        });
+
+        it("passes a selected piece load error to the body view", async () => {
+          const restore = installBrowserGlobals();
+          const originalError = console.error;
+          console.error = () => {};
+          try {
+            const { XAppView } = await import("../src/views/AppView.ts");
+            const space = "did:key:z6Mk-shell-piece-load-error" as DID;
+            const error = new Error("Piece data could not be read");
+            const view = new XAppView();
+            view.app = {
+              identity: {},
+              config: {},
+              view: { spaceDid: space, pieceId: "fid1:missing-piece" },
+            } as never;
+            view.space = space;
+            view.rt = {
+              signal: new AbortController().signal,
+              getPattern: () => Promise.reject(error),
+            } as never;
+
+            view._selectedPattern.run();
+            await view._selectedPattern.taskComplete.catch(() => undefined);
+
+            expect(findLoadError(view.render())).toEqual({
+              kind: "piece",
+              error,
+            });
+          } finally {
+            console.error = originalError;
+            restore();
+          }
+        });
+
+        it("passes an earlier space load error to the body view", async () => {
+          const restore = installBrowserGlobals();
+          try {
+            const { XAppView } = await import("../src/views/AppView.ts");
+            const error = new Error("The space address could not be resolved");
+            const view = new XAppView();
+            view.app = {
+              identity: {},
+              config: {},
+              view: { spaceName: "unavailable-space" },
+            } as never;
+            view.spaceLoadError = { kind: "space", error };
+
+            expect(findLoadError(view.render())).toEqual({
+              kind: "space",
+              error,
+            });
+          } finally {
+            restore();
+          }
+        });
+
+        it("passes a runtime error for the selected piece to the body view", async () => {
+          const restore = installBrowserGlobals();
+          try {
+            const { XAppView } = await import("../src/views/AppView.ts");
+            const space = "did:key:z6Mk-shell-runtime-piece-error" as DID;
+            const view = new XAppView();
+            view.app = {
+              identity: {},
+              config: {},
+              view: { spaceDid: space, pieceId: "fid1:broken-piece" },
+            } as never;
+            view.space = space;
+            view.runtimeLoadErrors = [{
+              type: NotificationType.ErrorReport,
+              message: "The piece failed while it was starting",
+              space,
+              pieceId: "of:fid1:broken-piece",
+            }];
+
+            expect(findLoadError(view.render())).toEqual({
+              kind: "piece",
+              error: view.runtimeLoadErrors[0],
+            });
+          } finally {
+            restore();
+          }
+        });
+
+        it("ignores a runtime error from another piece", async () => {
+          const restore = installBrowserGlobals();
+          try {
+            const { XAppView } = await import("../src/views/AppView.ts");
+            const space = "did:key:z6Mk-shell-other-piece-error" as DID;
+            const view = new XAppView();
+            view.app = {
+              identity: {},
+              config: {},
+              view: { spaceDid: space, pieceId: "fid1:working-piece" },
+            } as never;
+            view.space = space;
+            view.runtimeLoadErrors = [{
+              type: NotificationType.ErrorReport,
+              message: "A background piece failed",
+              space,
+              pieceId: "of:fid1:background-piece",
+            }];
+
+            expect(findLoadError(view.render())).toBeUndefined();
+          } finally {
+            restore();
+          }
+        });
+
+        it("keeps a matching error when a background piece fails later", async () => {
+          const restore = installBrowserGlobals();
+          try {
+            const { XAppView } = await import("../src/views/AppView.ts");
+            const space = "did:key:z6Mk-shell-preserved-piece-error" as DID;
+            const view = new XAppView();
+            view.app = {
+              identity: {},
+              config: {},
+              view: { spaceDid: space, pieceId: "fid1:selected-piece" },
+            } as never;
+            view.space = space;
+            const selectedError = {
+              type: NotificationType.ErrorReport,
+              message: "The selected piece failed",
+              space,
+              pieceId: "of:fid1:selected-piece",
+            } as const;
+            view.runtimeLoadErrors = [selectedError, {
+              type: NotificationType.ErrorReport,
+              message: "A background piece failed later",
+              space,
+              pieceId: "of:fid1:background-piece",
+            }];
+
+            expect(findLoadError(view.render())).toEqual({
+              kind: "piece",
+              error: selectedError,
+            });
+          } finally {
+            restore();
+          }
+        });
+
+        it("resolves a slug reference before starting the piece it names", async () => {
+          const restore = installBrowserGlobals();
+          try {
+            const { XAppView } = await import("../src/views/AppView.ts");
+            const space = "did:key:z6Mk-shell-slug-target-error" as DID;
+            // One log, so the ORDER the name claims is what is checked;
+            // two arrays would prove both calls happened and nothing about
+            // which came first.
+            const calls: Array<{ call: string; args: unknown[] }> = [];
+            const view = new XAppView();
+            view.app = {
+              identity: {},
+              config: {},
+              view: { spaceDid: space, pieceSlug: "broken-piece" },
+            } as never;
+            view.space = space;
+            view.rt = {
+              signal: new AbortController().signal,
+              resolveSlug: (...args: unknown[]) => {
+                calls.push({ call: "resolveSlug", args });
+                return Promise.resolve({
+                  pieceId: "fid1:slug-target",
+                  pathAfter: [],
+                  scope: "space",
+                });
+              },
+              getPattern: (...args: unknown[]) => {
+                calls.push({ call: "getPattern", args });
+                return Promise.resolve({ id: () => "fid1:slug-target" });
+              },
+            } as never;
+
+            view._selectedPattern.run();
+            await view._selectedPattern.taskComplete;
+
+            expect(calls).toEqual([
+              {
+                call: "resolveSlug",
+                args: [space, "broken-piece", undefined],
+              },
+              {
+                call: "getPattern",
+                args: [space, "fid1:slug-target", { scope: "space" }],
+              },
+            ]);
+          } finally {
+            restore();
+          }
+        });
+
+        it("ignores a runtime error without space context", async () => {
+          const restore = installBrowserGlobals();
+          try {
+            const { XAppView } = await import("../src/views/AppView.ts");
+            const space = "did:key:z6Mk-shell-context-free-error" as DID;
+            const view = new XAppView();
+            view.app = {
+              identity: {},
+              config: {},
+              view: { spaceDid: space, pieceId: "fid1:working-piece" },
+            } as never;
+            view.space = space;
+            view.runtimeLoadErrors = [{
+              type: NotificationType.ErrorReport,
+              message: "An unrelated renderer failed",
+            }];
+
+            expect(findLoadError(view.render())).toBeUndefined();
+          } finally {
+            restore();
+          }
         });
       });
     });
