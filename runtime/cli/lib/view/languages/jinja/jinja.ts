@@ -27,7 +27,7 @@ import type {
  * unclosed quote, is one character of its own.
  */
 const TOKEN =
-  /(\s+)|("(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*')|(\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?)|([A-Za-z_]\w*)|(\/\/|\*\*|==|!=|<=|>=|[-+*\/%~<>=|!])|([()[\]{}])|([.,:])|([\s\S])/y;
+  /(\s+)|("(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*')|(\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?)|([\p{ID_Start}_][\p{ID_Continue}]*)|(\/\/|\*\*|==|!=|<=|>=|[-+*\/%~<>=|!])|([()[\]{}])|([.,:])|([\s\S])/uy;
 
 /** The opening bracket each closing bracket closes. */
 const MATCHING: Readonly<Record<string, string>> = {
@@ -212,7 +212,13 @@ class Scanner {
         cls = "bracket";
         if ("([{".includes(bracket)) open.push(bracket);
         else if (MATCHING[bracket] === open.at(-1)) open.pop();
-      } else if (punctuation !== undefined) cls = "punctuation";
+      } else if (punctuation !== undefined) {
+        cls = "punctuation";
+        // Each of a `with` tag's comma-separated assignments binds a name.
+        if (tag === "with" && punctuation === "," && open.length === 0) {
+          binding = true;
+        }
+      }
       if (cls !== undefined) this.classes.fill(cls, at, end);
       previous = word;
       at = end;

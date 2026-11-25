@@ -187,6 +187,36 @@ describe("jinja", () => {
       ]);
     });
 
+    it("colors names written in any script as names", () => {
+      expect(spans("{{ café | upper }}")).toEqual([
+        "template:{{",
+        "identifier:café",
+        "operator:|",
+        "callName:upper",
+        "template:}}",
+      ]);
+    });
+
+    it("colors each name a `with` tag's assignments bind", () => {
+      expect(spans("{% with a = f(1, 2), b = 3 %}")).toEqual([
+        "template:{%",
+        "keyword:with",
+        "binding:a",
+        "operator:=",
+        "callName:f",
+        "bracket:(",
+        "number:1",
+        "punctuation:,",
+        "number:2",
+        "bracket:)",
+        "punctuation:,",
+        "binding:b",
+        "operator:=",
+        "number:3",
+        "template:%}",
+      ]);
+    });
+
     it("colors the name a macro or block declares", () => {
       expect(spans("{% macro row(cell) %} {% block body %}")).toEqual([
         "template:{%",

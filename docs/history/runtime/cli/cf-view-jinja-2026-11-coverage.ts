@@ -19,7 +19,7 @@ import {
 import { jinjaSyntax } from "../../../../runtime/cli/lib/view/languages/jinja/jinja.ts";
 
 const [checkout, list] = Deno.args;
-const paths = Deno.readTextFileSync(list).trim().split("\n");
+const paths = Deno.readTextFileSync(list).trim().split(/\r?\n/);
 
 interface Counts {
   templates: number;

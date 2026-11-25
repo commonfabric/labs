@@ -793,7 +793,8 @@ with the keys in each.
 OpenSSH authorized keys files, named `authorized_keys` or `authorized_keys2` or
 with a name ending in either after `_`, `-`, or `.`, and `.pub` public key files
 use their own syntax highlighting, which colors each key's options, type, data,
-and comment. The structure tree lists the keys by their comments.
+and comment. The structure tree lists each key by its comment, or by its type
+when it has none.
 
 A Jinja template, named with a `.j2`, `.jinja`, or `.jinja2` suffix, is colored
 as the file it produces, whose language the rest of the name selects, with

@@ -15,7 +15,6 @@ import type {
   TokenClass,
 } from "../model.ts";
 import { flattenStructure } from "../model.ts";
-import { remapStructure } from "../diffremap.ts";
 import { linesFromClasses } from "./classes.ts";
 import { lineIndexOf } from "../lines.ts";
 import { structureSource } from "./structure.ts";
@@ -205,7 +204,7 @@ function layer(syntax: TemplateSyntax, host: Language): Language {
       };
     },
 
-    hunkStructure: (ctx) => remapStructure(ctx),
+    hunkStructure: (ctx) => host.hunkStructure(ctx),
   };
 }
 
@@ -294,7 +293,10 @@ const CUT_NAME_MARK = /_[02-8a-zA-Z]*(?=…)/g;
 const CUT_NUMBER_MARK = /1[02-8]*(?=…)/g;
 
 /** Color `text` with the template's classes inside its regions and the
- * host's, read from the host's lines, everywhere else. */
+ * host's, read from the host's lines, everywhere else. A region whose
+ * brackets do not balance, as one being typed may not, colors them as
+ * punctuation, so that they leave the nesting of the host's brackets as it
+ * is. */
 function overlay(
   text: string,
   scan: TemplateScan,
@@ -315,7 +317,18 @@ function overlay(
     throw new Error("The host's lines do not reconstruct the hidden source");
   }
   for (const { start, end } of scan.regions) {
-    for (let i = start; i < end; i++) classes[i] = scan.classes[i];
+    let depth = 0;
+    let balanced = true;
+    for (let i = start; i < end; i++) {
+      classes[i] = scan.classes[i];
+      if (classes[i] !== "bracket") continue;
+      depth += "([{".includes(text[i]) ? 1 : -1;
+      if (depth < 0) balanced = false;
+    }
+    if (balanced && depth === 0) continue;
+    for (let i = start; i < end; i++) {
+      if (classes[i] === "bracket") classes[i] = "punctuation";
+    }
   }
   return linesFromClasses(text, classes);
 }

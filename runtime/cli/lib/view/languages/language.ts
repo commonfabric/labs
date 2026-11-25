@@ -755,6 +755,23 @@ export function languageMatchingFilename(
 }
 
 /**
+ * Whether `fileName` alone settles its language, so that no source has to be
+ * read to select it: a language claims the name, and, for a template, its
+ * host's name settles the host.
+ */
+export function filenameSettlesLanguage(fileName: string | undefined): boolean {
+  if (fileName === undefined) return false;
+  let hostSettled = true;
+  const template = languageUnderTemplate(fileName, (hostName) => {
+    hostSettled = filenameSettlesLanguage(hostName);
+    return languageMatchingFilename(hostName);
+  });
+  return template === undefined
+    ? languageMatchingFilename(fileName) !== undefined
+    : hostSettled;
+}
+
+/**
  * The template syntax that `fileName`'s suffix names, over the host that
  * `hostFor` selects for the rest of the name, or plain text when it selects
  * none or a byte language. Undefined when no template suffix ends the name.

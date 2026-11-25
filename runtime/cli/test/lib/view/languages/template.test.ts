@@ -2,7 +2,10 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { parseDiff } from "../../../../lib/view/diff.ts";
-import { buildDiffDocument } from "../../../../lib/view/diffdoc.ts";
+import {
+  buildDiffDocument,
+  diffLanguages,
+} from "../../../../lib/view/diffdoc.ts";
 import {
   decodeLanguageInput,
   languageForFile,
@@ -163,6 +166,47 @@ describe("template", () => {
           "jinja-systemd",
         ]);
       }
+    });
+
+    it("reads a template's old version in a diff when only its source can select the host", () => {
+      const diff = (path: string) =>
+        [
+          `diff --git a/${path} b/${path}`,
+          "index 1111111..2222222 100755",
+          `--- a/${path}`,
+          `+++ b/${path}`,
+          "@@ -5,1 +5,1 @@",
+          "-cd {{ old }}",
+          "+cd {{ new }}",
+          "",
+        ].join("\n");
+      const requested: string[][] = [];
+      const workspace = {
+        resolve: () => null,
+        read: () => null,
+        readBlobs: (objects: readonly string[]) => {
+          requested.push([...objects]);
+          return new Map(
+            objects.map((object) => [object, "#!/bin/bash\n\n\n\ncd x\n"]),
+          );
+        },
+      };
+      const [unsettled] = diffLanguages(
+        diff("deploy.j2"),
+        parseDiff(diff("deploy.j2"))!,
+        workspace,
+      );
+      expect(unsettled.oldLanguage.id).toBe("jinja-shell");
+      expect(requested).toEqual([["1111111"]]);
+
+      requested.length = 0;
+      const [settled] = diffLanguages(
+        diff("deploy.sh.j2"),
+        parseDiff(diff("deploy.sh.j2"))!,
+        workspace,
+      );
+      expect(settled.oldLanguage.id).toBe("jinja-shell");
+      expect(requested).toEqual([[]]);
     });
 
     it("strips each suffix without regard to case, and nothing else", () => {
@@ -369,6 +413,53 @@ describe("template", () => {
           jinjaShell.highlightLines(next, "a.sh.j2"),
         );
       }
+    });
+
+    it("leaves the nesting of the host's brackets alone around a region whose brackets do not balance", () => {
+      const lines = jinjaShell.highlightLines("a=( {{ f( }} )\n");
+      const depths = lines[0].spans.filter((span) => span.cls === "bracket")
+        .map((span) => [span.text, span.bracketDepth]);
+      expect(depths).toEqual([["(", 0], [")", 0]]);
+      expect(
+        lines[0].spans.find((span) => span.text === "(" && span.col === 8)
+          ?.cls,
+      ).toBe("punctuation");
+    });
+
+    it("places its host's structure in a diff hunk as its host does", () => {
+      // Markdown lists only the headings a hunk shows, so the headings that
+      // enclose the hunk from above stay out of its outline.
+      const source = "# Tool\n\n## Usage\n\n### Deep\n\nRun it now.\n\n" +
+        "## Notes\n";
+      const outline = (path: string) => {
+        const diff = [
+          `diff --git a/${path} b/${path}`,
+          `--- a/${path}`,
+          `+++ b/${path}`,
+          "@@ -5,5 +5,5 @@",
+          " ### Deep",
+          " ",
+          "-Run it.",
+          "+Run it now.",
+          " ",
+          " ## Notes",
+          "",
+        ].join("\n");
+        const { doc } = buildDiffDocument(diff, parseDiff(diff)!, {
+          resolve: (name) => name === path ? path : null,
+          read: (name) => name === path ? source : null,
+        });
+        // The first entry names the file itself.
+        return doc.flatStructure.slice(1).map((node) =>
+          `${node.depth}:${node.label}`
+        );
+      };
+      expect(outline("README.md")).toEqual([
+        "1:@@ -5,5 +5,5",
+        "2:### Deep",
+        "2:## Notes",
+      ]);
+      expect(outline("README.md.j2")).toEqual(outline("README.md"));
     });
 
     it("colors both sides of a template's diff over its host", () => {

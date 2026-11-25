@@ -125,7 +125,7 @@ not landed when this was measured.
 ## Owned source
 
 The layer that puts a template syntax over a host is
-`runtime/cli/lib/view/languages/template.ts`, 535 lines, which the other
+`runtime/cli/lib/view/languages/template.ts`, 548 lines, which the other
 template syntaxes in the plan use as well. The Jinja scanner is
 `runtime/cli/lib/view/languages/jinja/jinja.ts`, 251 lines. `languages/language.ts`,
 which selects languages and declares which hosts have only literal values, grew
