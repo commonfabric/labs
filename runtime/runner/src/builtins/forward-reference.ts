@@ -23,7 +23,7 @@ import { ownedResultCause } from "./scope-policy.ts";
 /** What a forwarding builtin's action is built from. */
 export interface ForwardReferenceOptions {
   /** The builtin's name, which keys the result cell it owns. */
-  name: Parameters<typeof ownedResultCause>[0];
+  name: "ifElse" | "when" | "unless";
 
   /**
    * The builtin's inputs. `condition` decides; the rest are the positions the

@@ -546,9 +546,10 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "kotlin",
-    // Directive configuration colors the word that opens a statement as a
-    // keyword, as Kotlin colors the `suspend` modifier that opens a line.
-    highlightingPeers: ["directive", ...CPP_GRAMMAR],
+    // Directive configuration and assembly color the word that opens a
+    // statement as a keyword, as Kotlin colors the `suspend` modifier that
+    // opens a line.
+    highlightingPeers: ["directive", ...CPP_GRAMMAR, "assembly"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "776e81bca0cbee698d99808973212273b62af8d0",
     surveyPath:
@@ -646,9 +647,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "toml",
-    // An INI section header is a TOML table header, and INI colors its name
-    // as TOML colors a table's.
-    highlightingPeers: ["ini"],
+    // An INI or Git configuration section header is a TOML table header, and
+    // INI and Git configuration color its name as TOML colors a table's.
+    highlightingPeers: ["ini", "git-config"],
     surveyRepository: "labs",
     surveyCommit: "fbdd14d3fa220dfffcb52a423d1180e514c5134b",
     surveyPath: "mise.toml",
@@ -804,9 +805,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "cuda",
-    // Directive configuration colors the word that opens a line as a keyword,
-    // as CUDA colors its qualifiers.
-    highlightingPeers: ["cpp", "c-family-header", "directive"],
+    // Directive configuration and assembly color the word that opens a line as
+    // a keyword, as CUDA colors its qualifiers.
+    highlightingPeers: ["cpp", "c-family-header", "directive", "assembly"],
     surveyRepository: "gvisor",
     surveyCommit: "7c2bcddc13c1729e345cfd9a75b910822e4ddcd1",
     surveyPath: "images/gpu/cuda-tests/cuda_malloc.cu",
@@ -826,7 +827,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "c-family-header",
-    highlightingPeers: ["c", "cpp", "cuda", "lean"],
+    // Assembly reads `#define` lines as the C preprocessor does, and colors a
+    // macro's name as headers do.
+    highlightingPeers: ["c", "cpp", "cuda", "lean", "assembly"],
     surveyRepository: "gvisor",
     surveyCommit: "2c1c4a5516248ba575cc17a4fbe569e540469160",
     surveyPath: "test/util/fs_util.h",
@@ -950,6 +953,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "make",
+    // A rule's `target:` is valid assembly label syntax, and assembly colors a
+    // label as make colors a target.
+    highlightingPeers: ["assembly"],
     surveyRepository: "infra",
     surveyCommit: "574f4a94cebb04cd12134146a25f0d7ba804da67",
     surveyPath: "tofu/postmark/Makefile",
@@ -971,11 +977,82 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     incompleteEvidence: { text: "if", className: "callName" },
   },
   {
+    languageId: "dockerfile",
+    surveyRepository: "common-cluster",
+    surveyCommit: "5abd12028c06b63ff953fa09ed56918461ac209a",
+    surveyPath: "Dockerfile",
+    before: new URL("./dockerfile-common-cluster/before.dockerfile", import.meta.url),
+    after: new URL("./dockerfile-common-cluster/after.dockerfile", import.meta.url),
+    incomplete: new URL(
+      "./dockerfile-common-cluster/incomplete.dockerfile",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: [
+        "Dockerfile",
+        "Dockerfile.k8s-sandbox-service",
+        "memory-router/Dockerfile.build",
+        "images/arm-qemu/Dockerfile.x86_64",
+        "images/benchmarks/build-grpc/Dockerfile.aarch64",
+        "dockerfile",
+        "Containerfile",
+        "Containerfile.dev",
+        "images/build.dockerfile",
+        "images/build.Containerfile",
+      ],
+      aliases: ["dockerfile", "docker", "containerfile"],
+    },
+    beforeEvidence: { text: "builder", className: "functionName" },
+    afterEvidence: { text: "builder", className: "functionName" },
+    incompleteEvidence: { text: "--from", className: "parameter" },
+  },
+  {
+    languageId: "dockerfile",
+    // An instruction line is a directive statement, a word and its arguments,
+    // and the directive configuration and assembly languages color its first
+    // word as a keyword, as this fixture's evidence is.
+    highlightingPeers: ["directive", "assembly"],
+    surveyRepository: "infra",
+    surveyCommit: "5b65688a0431cda75329734aa7784ba6fb3f76bb",
+    surveyPath: "fly/pds/Dockerfile",
+    before: new URL("./dockerfile-infra/before.dockerfile", import.meta.url),
+    after: new URL("./dockerfile-infra/after.dockerfile", import.meta.url),
+    incomplete: new URL("./dockerfile-infra/incomplete.dockerfile", import.meta.url),
+    beforeEvidence: { text: "build", className: "functionName" },
+    afterEvidence: { text: "build", className: "functionName" },
+    incompleteEvidence: { text: "EXPOSE", className: "keyword" },
+  },
+  {
+    languageId: "dockerfile",
+    // An instruction line is a directive statement, a word and its arguments,
+    // and the directive configuration and assembly languages color its first
+    // word as a keyword, as this fixture's evidence is.
+    highlightingPeers: ["directive", "assembly"],
+    surveyRepository: "gvisor",
+    surveyCommit: "90dc8548a354d618d05c968111931ba2c4764dd6",
+    surveyPath: "images/default/Dockerfile",
+    before: new URL("./dockerfile-gvisor/before.dockerfile", import.meta.url),
+    after: new URL("./dockerfile-gvisor/after.dockerfile", import.meta.url),
+    incomplete: new URL("./dockerfile-gvisor/incomplete.dockerfile", import.meta.url),
+    beforeEvidence: { text: "ENTRYPOINT", className: "keyword" },
+    afterEvidence: { text: "gcloud", className: "functionName" },
+    incompleteEvidence: { text: "WORKDIR", className: "keyword" },
+  },
+  {
     languageId: "properties",
-    // A shell or make variable assignment, an HCL or DOT attribute, and an INI
-    // key are each a `name=value` line, and shell, make, HCL, DOT, and INI
-    // color the name as properties files color their keys.
-    highlightingPeers: ["hcl", "shell", "make", "ini", "dot"],
+    // A shell or make variable assignment, an HCL or DOT attribute, an INI
+    // key, a dotenv variable, and a Git configuration variable are each a
+    // `name=value` line, and shell, make, HCL, DOT, INI, dotenv, and Git
+    // configuration color the name as properties files color their keys.
+    highlightingPeers: [
+      "hcl",
+      "shell",
+      "make",
+      "ini",
+      "dot",
+      "dotenv",
+      "git-config",
+    ],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "b457431c6f5e32305a2e6feb7901f8d05a9b2f6e",
     surveyPath: "android/gradle/wrapper/gradle-wrapper.properties",
@@ -1040,6 +1117,81 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "subgraph", className: "storageKeyword" },
     afterEvidence: { text: "subgraph", className: "storageKeyword" },
     incompleteEvidence: { text: "subgraph", className: "storageKeyword" },
+  },
+  {
+    languageId: "dotenv",
+    // A dotenv line is a `name=value` line, and properties files, INI, shell,
+    // make, HCL, and DOT color the name as dotenv colors a variable's.
+    highlightingPeers: ["properties", "ini", "shell", "make", "hcl", "dot"],
+    surveyRepository: "labs",
+    surveyCommit: "60cd866374f5b59bdf16c8469ad3f71cd35ac040",
+    surveyPath: "runtime/toolshed/.env.example",
+    before: new URL("./dotenv-labs/before.env", import.meta.url),
+    after: new URL("./dotenv-labs/after.env", import.meta.url),
+    incomplete: new URL("./dotenv-labs/incomplete.env", import.meta.url),
+    selection: {
+      filenames: [
+        "runtime/toolshed/.env.example",
+        "runtime/toolshed/.env.test",
+        ".env",
+        ".env.development.local",
+        "airtable/config.env.example",
+        "memory-router/deploy/toolshed-env.example",
+      ],
+      aliases: ["dotenv"],
+      unclaimedFilenames: [
+        "ansible/roles/ci-mac/files/brew.env",
+        "k8s/components/kyverno/release.env",
+      ],
+    },
+    beforeEvidence: { text: "LOG_LEVEL", className: "propertyName" },
+    afterEvidence: { text: "LOG_LEVEL", className: "propertyName" },
+    incompleteEvidence: { text: "LOG_LEVEL", className: "propertyName" },
+  },
+  {
+    languageId: "dotenv",
+    // Shell, and a Dockerfile's shell commands, color the operator of a
+    // `${NAME:-default}` expansion as dotenv does.
+    highlightingPeers: ["shell", "dockerfile"],
+    surveyRepository: "commonfabric-weaver",
+    surveyCommit: "c62f7166d063baab093da0874f745b490c02c643",
+    surveyPath: "apple/scripts/asc-account.env",
+    before: new URL("./dotenv-weaver/before.env", import.meta.url),
+    after: new URL("./dotenv-weaver/after.env", import.meta.url),
+    incomplete: new URL("./dotenv-weaver/incomplete.env", import.meta.url),
+    beforeEvidence: { text: ":-", className: "operator" },
+    afterEvidence: { text: ":-", className: "operator" },
+    incompleteEvidence: { text: ":-", className: "operator" },
+  },
+  {
+    languageId: "git-config",
+    // A Git configuration section header reads as an INI section header, and
+    // INI colors the section name as Git configuration does.
+    highlightingPeers: ["ini"],
+    surveyRepository: "pond",
+    surveyCommit: "b812bb02648ef3017fa45f28ad0f4e38f9080028",
+    surveyPath: ".gitmodules",
+    before: new URL("./git-config-pond/before.gitconfig", import.meta.url),
+    after: new URL("./git-config-pond/after.gitconfig", import.meta.url),
+    incomplete: new URL(
+      "./git-config-pond/incomplete.gitconfig",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: [
+        ".gitmodules",
+        "vendor/labs/.gitmodules",
+        ".gitconfig",
+        "etc/gitconfig",
+        "config/work.gitconfig",
+        ".git/worktrees/VF/config.worktree",
+        ".lfsconfig",
+      ],
+      aliases: ["git-config", "gitconfig", "gitmodules"],
+    },
+    beforeEvidence: { text: "submodule", className: "interfaceName" },
+    afterEvidence: { text: "submodule", className: "interfaceName" },
+    incompleteEvidence: { text: "submodule", className: "interfaceName" },
   },
   {
     languageId: "proguard",
@@ -1150,6 +1302,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "xml",
+    // An attribute alone on its line is a dotenv `name=value` line, and dotenv
+    // colors the name as XML colors an attribute's.
+    highlightingPeers: ["dotenv"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "6cc0468bdafdf8dc44cd86faba60ff5912ead945",
     surveyPath: "android/app/src/main/AndroidManifest.xml",
@@ -1236,6 +1391,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "directive",
+    // Assembly colors the word that opens a statement as a mnemonic, a
+    // keyword, as directive configuration colors its directives.
+    highlightingPeers: ["assembly"],
     surveyRepository: "gvisor",
     surveyCommit: "82e8d12aed0ff0b736b1c937799b910beec68eb9",
     surveyPath: "images/benchmarks/nginx/nginx.conf",
@@ -1245,6 +1403,148 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "daemon", className: "keyword" },
     afterEvidence: { text: "sendfile", className: "keyword" },
     incompleteEvidence: { text: "root", className: "keyword" },
+  },
+  {
+    languageId: "csv",
+    surveyRepository: "gvisor",
+    surveyCommit: "dc7baff57a0eeec4aa0de4246ae8d690ae4d29f6",
+    surveyPath: "website/performance/applications.csv",
+    before: new URL("./csv-gvisor/before.csv", import.meta.url),
+    after: new URL("./csv-gvisor/after.csv", import.meta.url),
+    incomplete: new URL("./csv-gvisor/incomplete.csv", import.meta.url),
+    selection: {
+      filenames: [
+        "website/performance/applications.csv",
+        "test/runtimes/exclude/java21.csv",
+        "data/manual-signatories.csv",
+        "docs/history/development/performance/RESULTS.CSV",
+      ],
+      aliases: ["csv"],
+    },
+    beforeEvidence: { text: "transfer_rate", className: "string" },
+    afterEvidence: { text: "transfer_rate", className: "string" },
+    incompleteEvidence: { text: "transfer_rate", className: "string" },
+  },
+  {
+    languageId: "csv",
+    surveyRepository: "labs",
+    surveyCommit: "da9c9b589c39254d29ff0a5069bf898fa3a973dd",
+    surveyPath:
+      "docs/history/development/performance/2026-09-14-loom-person-inbox-attempts.csv",
+    before: new URL("./csv-labs/before.csv", import.meta.url),
+    after: new URL("./csv-labs/after.csv", import.meta.url),
+    incomplete: new URL("./csv-labs/incomplete.csv", import.meta.url),
+    beforeEvidence: { text: "visible source counts", className: "string" },
+    afterEvidence: { text: "visible source counts", className: "string" },
+    incompleteEvidence: {
+      text: "visible source counts",
+      className: "string",
+    },
+  },
+  {
+    languageId: "tsv",
+    // A line of tab-separated fields that hold no space is also a row of a
+    // whitespace-separated `.dat` table, which colors its fields the same way.
+    // A YAML plain scalar colors each of its words as a string, as a table
+    // colors each field that is not a number. A Git attributes line starts
+    // with a pattern, which it colors as a string, as a table colors a
+    // field.
+    highlightingPeers: ["dat", "yaml", "gitattributes"],
+    surveyRepository: "loom",
+    surveyCommit: "3f94e7c902804bdf819a42e6af485c52af3e1a35",
+    surveyPath:
+      "tests/fixtures/canonical/people/name_frequencies/given_1990_male.tsv",
+    before: new URL("./tsv-loom/before.tsv", import.meta.url),
+    after: new URL("./tsv-loom/after.tsv", import.meta.url),
+    incomplete: new URL("./tsv-loom/incomplete.tsv", import.meta.url),
+    selection: {
+      filenames: [
+        "tests/fixtures/canonical/people/name_frequencies/given_1990_male.tsv",
+        "docs/development/archive/docs-reorg/map.tsv",
+      ],
+      aliases: ["tsv"],
+    },
+    beforeEvidence: { text: "JAMES", className: "string" },
+    afterEvidence: { text: "WILLIAM", className: "string" },
+    incompleteEvidence: { text: "JAMES", className: "string" },
+  },
+  {
+    languageId: "dat",
+    // A YAML plain scalar colors each of its words as a string, as a table
+    // colors each field that is not a number. A Go checksum line is
+    // whitespace-separated words, and Go's checksum language colors the
+    // first of them as a string, as a table colors a field. A dotenv line that
+    // names a variable without `=` colors the words after the name as strings.
+    highlightingPeers: ["yaml", "go-sum", "dotenv"],
+    surveyRepository: "specs",
+    surveyCommit: "c313c1e5e12afb4abf6dd245aef3167d5f9c6180",
+    surveyPath: "economical-model/theory/paper/cliff-baseline.dat",
+    before: new URL("./dat-specs/before.dat", import.meta.url),
+    after: new URL("./dat-specs/after.dat", import.meta.url),
+    incomplete: new URL("./dat-specs/incomplete.dat", import.meta.url),
+    selection: {
+      filenames: [
+        "economical-model/theory/paper/cliff-baseline.dat",
+        "economical-model/theory/paper/depth-scratch.dat",
+        "plots/RESULTS.DAT",
+      ],
+      aliases: ["dat"],
+    },
+    beforeEvidence: { text: "breadth_sd", className: "string" },
+    afterEvidence: { text: "breadth_sd", className: "string" },
+    incompleteEvidence: { text: "breadth_sd", className: "string" },
+  },
+  {
+    languageId: "assembly",
+    surveyRepository: "gvisor",
+    surveyCommit: "dc7baff57a0eeec4aa0de4246ae8d690ae4d29f6",
+    surveyPath: "pkg/sentry/time/muldiv_amd64.s",
+    before: new URL("./assembly-gvisor/before.s", import.meta.url),
+    after: new URL("./assembly-gvisor/after.s", import.meta.url),
+    incomplete: new URL("./assembly-gvisor/incomplete.s", import.meta.url),
+    selection: {
+      filenames: [
+        "pkg/sentry/time/muldiv_amd64.s",
+        "pkg/goid/goid_arm64.tmpl.s",
+        "test/syscalls/linux/rseq/critical_amd64.S",
+      ],
+      aliases: ["assembly", "asm"],
+    },
+    beforeEvidence: { text: "·muldiv64", className: "functionName" },
+    afterEvidence: { text: "·muldiv64", className: "functionName" },
+    incompleteEvidence: { text: "·muldiv64", className: "functionName" },
+  },
+  {
+    languageId: "sql",
+    surveyRepository: "crm",
+    surveyCommit: "e1283449152faf61a4fdfb6b7116a1f5f4e36d83",
+    surveyPath: "packages/crm/migrations/011_same_mail_once.sql",
+    before: new URL("./sql-crm/before.sql", import.meta.url),
+    after: new URL("./sql-crm/after.sql", import.meta.url),
+    incomplete: new URL("./sql-crm/incomplete.sql", import.meta.url),
+    selection: {
+      filenames: [
+        "packages/crm/migrations/011_same_mail_once.sql",
+        "test/image/mysql.sql",
+        "db/Schema.SQL",
+      ],
+      aliases: ["sql"],
+    },
+    beforeEvidence: { text: "sends_content_hash", className: "interfaceName" },
+    afterEvidence: { text: "content_hashed_at", className: "binding" },
+    incompleteEvidence: { text: "trigger", className: "typeKeyword" },
+  },
+  {
+    languageId: "sql",
+    surveyRepository: "gvisor",
+    surveyCommit: "5e59860ad647eb4c10b761b3e5ddc6641a9fc600",
+    surveyPath: "test/image/mysql.sql",
+    before: new URL("./sql-gvisor/before.sql", import.meta.url),
+    after: new URL("./sql-gvisor/after.sql", import.meta.url),
+    incomplete: new URL("./sql-gvisor/incomplete.sql", import.meta.url),
+    beforeEvidence: { text: "foo", className: "interfaceName" },
+    afterEvidence: { text: "name", className: "binding" },
+    incompleteEvidence: { text: "foo", className: "interfaceName" },
   },
   {
     languageId: "plain-text",
@@ -1299,67 +1599,5 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
       text: "# THE SOFTWARE IS PROVIDED “AS IS",
       className: "plain",
     },
-  },
-  {
-    languageId: "dockerfile",
-    surveyRepository: "common-cluster",
-    surveyCommit: "5abd12028c06b63ff953fa09ed56918461ac209a",
-    surveyPath: "Dockerfile",
-    before: new URL("./dockerfile-common-cluster/before.dockerfile", import.meta.url),
-    after: new URL("./dockerfile-common-cluster/after.dockerfile", import.meta.url),
-    incomplete: new URL(
-      "./dockerfile-common-cluster/incomplete.dockerfile",
-      import.meta.url,
-    ),
-    selection: {
-      filenames: [
-        "Dockerfile",
-        "Dockerfile.k8s-sandbox-service",
-        "memory-router/Dockerfile.build",
-        "images/arm-qemu/Dockerfile.x86_64",
-        "images/benchmarks/build-grpc/Dockerfile.aarch64",
-        "dockerfile",
-        "Containerfile",
-        "Containerfile.dev",
-        "images/build.dockerfile",
-        "images/build.Containerfile",
-      ],
-      aliases: ["dockerfile", "docker", "containerfile"],
-    },
-    beforeEvidence: { text: "builder", className: "functionName" },
-    afterEvidence: { text: "builder", className: "functionName" },
-    incompleteEvidence: { text: "--from", className: "parameter" },
-  },
-  {
-    languageId: "dockerfile",
-    // An instruction line is a directive statement, a word and its arguments,
-    // and the directive configuration language colors its first word as a
-    // keyword, as this fixture's evidence is.
-    highlightingPeers: ["directive"],
-    surveyRepository: "infra",
-    surveyCommit: "5b65688a0431cda75329734aa7784ba6fb3f76bb",
-    surveyPath: "fly/pds/Dockerfile",
-    before: new URL("./dockerfile-infra/before.dockerfile", import.meta.url),
-    after: new URL("./dockerfile-infra/after.dockerfile", import.meta.url),
-    incomplete: new URL("./dockerfile-infra/incomplete.dockerfile", import.meta.url),
-    beforeEvidence: { text: "build", className: "functionName" },
-    afterEvidence: { text: "build", className: "functionName" },
-    incompleteEvidence: { text: "EXPOSE", className: "keyword" },
-  },
-  {
-    languageId: "dockerfile",
-    // An instruction line is a directive statement, a word and its arguments,
-    // and the directive configuration language colors its first word as a
-    // keyword, as this fixture's evidence is.
-    highlightingPeers: ["directive"],
-    surveyRepository: "gvisor",
-    surveyCommit: "90dc8548a354d618d05c968111931ba2c4764dd6",
-    surveyPath: "images/default/Dockerfile",
-    before: new URL("./dockerfile-gvisor/before.dockerfile", import.meta.url),
-    after: new URL("./dockerfile-gvisor/after.dockerfile", import.meta.url),
-    incomplete: new URL("./dockerfile-gvisor/incomplete.dockerfile", import.meta.url),
-    beforeEvidence: { text: "ENTRYPOINT", className: "keyword" },
-    afterEvidence: { text: "gcloud", className: "functionName" },
-    incompleteEvidence: { text: "WORKDIR", className: "keyword" },
   },
 ];

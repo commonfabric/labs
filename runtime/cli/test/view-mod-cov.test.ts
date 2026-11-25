@@ -192,10 +192,12 @@ Deno.test("buildPreparedView: a rename loads the parser of the side left behind"
 });
 
 Deno.test("buildPreparedView: deferring parses leaves a large complete file for later", async () => {
-  // The test runs in this package's directory, whose files the diff's
-  // workspace reads. This one is larger than the budget parsed at once.
+  // The diff names one of this package's own files, which the diff's
+  // workspace reads from disk. This one is larger than the budget parsed
+  // at once.
   const path = "runtime/cli/lib/view/session.ts";
-  const text = Deno.readTextFileSync("lib/view/session.ts");
+  const source = new URL("../lib/view/session.ts", import.meta.url);
+  const text = Deno.readTextFileSync(source);
   assert(text.length > IN_PLACE_PARSE_BUDGET, "the file is past the budget");
   const diff = [
     `diff --git a/${path} b/${path}`,
@@ -218,7 +220,7 @@ Deno.test("buildPreparedView: deferring parses leaves a large complete file for 
 
   assertEquals(
     deferred.parses.map(({ kind, fileName }) => [kind, fileName]),
-    [["document", Deno.realPathSync("lib/view/session.ts")], ["lines", path]],
+    [["document", Deno.realPathSync(source)], ["lines", path]],
   );
   assertEquals(whole.parses, []);
   for (const job of deferred.parses) {

@@ -153,6 +153,15 @@ execution observer and decides which worker serves which space:
   left to serve, which also clears its count. Spaces whose heaps reach the
   limit only taken together are separated the same way and stay separate
   until then.
+
+  A thread with a heap limit that runs out of memory in a served handler's
+  run has that run's event failed as a watchdog kill fails one (§2, "The
+  watchdog"): its run beacon shows the run it ended in, and the worker the
+  space is placed on next writes the error as the event's consequence. The
+  event would otherwise be the earliest pending one in its space, and run
+  first on every placement. A worker the pool ends for the heap its
+  heartbeat reports fails no event, since the heartbeat's timer runs only
+  between runs, and whatever run the beacon shows then started after it.
 - The workers' runtimes compile in compile workers the process holds, not
   each worker its own: `SERVER_EXECUTION_COMPILE_WORKERS` of them in the
   toolshed (default 1), each started at its first compile. They read and put
@@ -813,6 +822,53 @@ the lease:
   process that was suspended, fires it once on waking.
 - The count starts at the worker's first message. Until its modules have loaded
   a worker has no timer to post from and no lease to release.
+- Each worker has a run beacon, which the pool hands it at its start: three
+  slots of a `SharedArrayBuffer` that its thread shares with the main thread
+  (`run-beacon.ts`). The worker's schedulers write it around the body of
+  every action run, a derivation's and a handler's alike: `epoch` counts the
+  starts and ends of runs, so it is odd while a run's body holds the thread
+  (a body that returns a promise has let go of the thread once it returns);
+  `run` holds the number the worker gave the run; and `reads` counts the
+  reads the run has made at the read sites (`read-stats.ts`), so a count that
+  moves tells a run doing work from one in a loop of its own. Only the
+  outermost of runs started inside one another is marked. The worker numbers
+  an action the first time it runs it, and a served handler's run for an
+  event afresh for each run, and posts what a number stands for once, before
+  the run's body starts: the space, the scheduler's id for the action (the key
+  §7's `actions` lists it under), its module or pattern name and its piece
+  where known, and for a handler's run the event's stream entry. The post
+  reaches the main thread without the worker's thread yielding, so it arrives
+  while the run holds the thread, and a post per run, which would make every
+  run a message the watchdog counts, is not made. Once the worker's realm has collected an
+  action, the worker posts its number as forgotten, with the others collected
+  in the same turn (`worker.runsForgotten`), and the pool drops what it kept
+  for it, so that what the pool keeps of a worker's numbers is bounded by the
+  actions the worker can still run. Each of the watchdog's checks reads the
+  beacon (`Atomics.load`), reading `epoch` again after the run's number and
+  discarding a reading whose `epoch` moved, since the run may have ended and
+  another started while the slots were read. It counts the checks in a row
+  that find the same odd `epoch`; `workers.running` reports that, with the
+  run's name, without asking the worker (§7). Pattern code cannot reach the
+  buffer: `SharedArrayBuffer` and `Atomics` are withheld from pattern
+  compartments.
+- A kill names, in its log line, the run its worker's beacon showed. When
+  that run is a served handler's run for an event, the event is failed and
+  not run again: the pool hands it to the worker the space is placed on
+  next, ahead of anything else it sends that worker for the space
+  (`host.failEvent`), and that worker's drain writes the error as the event's
+  consequence in place of running the handler (events.md §5), at the event's
+  arrival position: an earlier event that is still pending, including one the
+  same drain pass has just queued, holds it (events.md §2, "Terminal
+  positions"). The error says
+  that the handler held its worker's thread until the watchdog ended the
+  worker, and it is the outcome the event's sender reads. Like every terminal
+  notice it holds the space's later arrivals until its wave commits. Every
+  other pending event, and the space's placement, go on as for any failed
+  worker. The pool hands the event to that one worker, which holds it until
+  the wave carrying the error commits; a worker that fails before then
+  leaves the event pending for the next, which runs it, and so does a process
+  restarted between the kill and that commit. A kill whose worker was in a
+  derivation's run, or in no run, fails no event.
 - A long stretch of work on the worker's thread silences the heartbeat too, since
   the heartbeat is a timer on that thread. So a serving runtime runs the
   type-check, transform and emit step of a compile in the compile workers its
@@ -2802,7 +2858,7 @@ carriedRefused, heldUpstream, upstreamAbandoned},
 settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
-drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
+drainInFlightSkips, failedWithWorker, visibilityBarriers, visibilityRecoveries,
 visibilityDeferrals, deferredRescansArmed, deferredRescansFired,
 lt1LeftoversPurged, lt1LateSealsRefused, orphanDeliveriesRefused,
 handlerNotRunDeferrals, handlerNotRunWaits, staleReadRequeues,
@@ -2815,8 +2871,8 @@ needsAttentionSealFailures, deliveryCheckpointWriteFailures, explicitRetries,
 dropped}, memo: {hits, misses, inflight}, outbox: {queued, completed, failed,
 budgetDeferrals}, lease: {held, lost}, parkedRuntimes: {retained, reused,
 discarded, held}, workers: {serving, spare, parked, heapUsed, heapStopped,
-started, retired, evicted, failed, shared, heapLimited}, actions: {entries,
-dropped, droppedMs}, push: {prioritizedSessions,
+running, started, retired, evicted, failed, shared, heapLimited}, actions:
+{entries, dropped, droppedMs}, push: {prioritizedSessions,
 followerSessions, mixedFlushes} }`
 (where the loop runs in workers, the block is every worker's counters taken
 together with the last counters of each worker that has closed
@@ -2834,7 +2890,13 @@ while parked for the parked-worker cap or the heap budget, and failed or
 killed; `shared` counts placements that joined a worker already serving
 another space at the cap; `heapLimited` counts the workers, among the
 failed, that reached their heap limit, and `heapStopped` is how many spaces
-are on no worker now because a worker they were alone on did; §1's Workers;
+are on no worker now because a worker they were alone on did; `running` lists
+each worker whose run beacon showed a run holding its thread at the
+watchdog's last check: its spaces; where the worker has named the run, the
+run's space, its action id (the key `actions` lists the action under), its
+name and piece, and the event of a served handler's run; how many checks in
+a row found it; and the reads it had made (§2, "The watchdog"). A run still
+going, which `actions` has no row for yet, shows there; §1's Workers;
 `actions` lists up to 50 of the actions the serving runtimes spent the most
 wall time on, fed from each completed run's `scheduler.run.complete` marker and
 ranked by total time: a host tracks at most 512, a run of an action with no row
@@ -3090,6 +3152,10 @@ completed-run sentence; stage C tuning + stage-C design build W3,
 2026-08-19): `drainInFlightSkips` — re-drains that found the entry's
 earlier drain copy still queued, held, running, or marked into an
 uncommitted wave and did not queue it again (the drain against itself);
+`failedWithWorker` — entries whose handler's run held the thread of a worker
+the pool ended, which the drain sealed with the error as their consequence
+in place of running the handler (§2, "The watchdog"; events.md §5), counted
+at the decision, so a seal whose wave is refused counts again;
 `lt1LeftoversPurged` — LT1 same-space in-process copies the flush
 deadline found still QUEUED and purged synchronously at the deadline
 decision (their durable entry stays pending; the next drain delivers it

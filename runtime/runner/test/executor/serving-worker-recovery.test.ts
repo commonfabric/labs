@@ -901,6 +901,56 @@ describe("serving-worker-recovery", () => {
       });
     });
 
+    it("has the space's next worker write the error of the served handler's event the thread ran out of memory in", async () => {
+      const reports: ServingThreadOptions["onFailed"][] = [];
+      startLimited({
+        startThread: (module, { onFailed }) => {
+          reports.push(onFailed);
+          return startServingThread(module, { onFailed });
+        },
+      });
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const event = { sidecarId: "of:sidecar", eventId: "evt-grew", seq: 3 };
+      workers()[0].startRun(space, "growing-handler", event);
+      await clock.settle();
+
+      reports[0]("JS heap out of memory", { atHeapLimit: true });
+      await clock.tick(60_000);
+      expect(workers()).toHaveLength(1);
+      server.admit(admittedNotice(space, { seq: 2 }));
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+      expect(workers()[1].received[0]).toEqual({
+        method: "host.failEvent",
+        params: {
+          space,
+          event,
+          reason: expect.stringContaining(
+            "was running when its serving worker's heap reached its limit",
+          ),
+        },
+      });
+    });
+
+    it("fails no event for a worker ended for the heap its heartbeat reported, whatever run its beacon shows", async () => {
+      startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [grown] = workers();
+      grown.startRun(space, "later-handler", {
+        sidecarId: "of:sidecar",
+        eventId: "evt-later",
+        seq: 4,
+      });
+      grown.beat(MB, { heapLimitReached: true });
+      await clock.tick(60_000);
+      server.admit(admittedNotice(space, { seq: 2 }));
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+      expect(workers()[1].receivedOf("host.failEvent")).toEqual([]);
+    });
+
     it("throws for a limit no thread can be started with", () => {
       for (const heapLimitMb of [0, 4, 15, 100.5, Number.MAX_VALUE]) {
         expect(() => start({ heapLimitMb })).toThrow("heapLimitMb");
@@ -1044,6 +1094,136 @@ describe("serving-worker-recovery", () => {
       }
       expect(silent.terminated).toBe(true);
       expect(talking.terminated).toBe(false);
+    });
+
+    describe("reading the worker's run beacon", () => {
+      /** The stream entry a served handler's run in these cases handles. */
+      const event = { sidecarId: "of:sidecar", eventId: "evt-held", seq: 3 };
+
+      /** Whether `calls` hold a logged argument that contains `text`. */
+      const logged = (
+        calls: readonly { args: readonly unknown[] }[],
+        text: string,
+      ): boolean =>
+        calls.some((call) =>
+          call.args.some((arg) => typeof arg === "string" && arg.includes(text))
+        );
+
+      it("reports the run that holds a worker's thread on the health route, with how many checks in a row have found it, until it ends", async () => {
+        const started = start();
+        server.openSession(space, "session-1");
+        await clock.settle();
+        const [worker] = workers();
+        worker.startRun(space, "slow-derivation");
+        await clock.settle();
+        expect(started.stats().workers.running).toEqual([]);
+
+        await pass(2);
+        expect(started.stats().workers.running).toEqual([{
+          spaces: [space],
+          space,
+          action: "slow-derivation",
+          checks: 2,
+          reads: 0,
+        }]);
+
+        worker.endRun();
+        await pass(1);
+        expect(started.stats().workers.running).toEqual([]);
+      });
+
+      it("forgets what a number stands for once the worker's realm has collected the action it named", async () => {
+        const started = start();
+        server.openSession(space, "session-1");
+        await clock.settle();
+        const [worker] = workers();
+        worker.startRun(space, "collected-derivation");
+        worker.endRun();
+        await clock.settle();
+        const placed = started.accessForTestingOnly.placements.get(space)!;
+        expect([...placed.runs.values()].map(({ action }) => action))
+          .toEqual(["collected-derivation"]);
+
+        worker.collected(1);
+        await clock.settle();
+        expect(placed.runs.size).toBe(0);
+      });
+
+      it("names the run in the kill, and has the space's next worker write the error of the served handler's event before anything else for the space", async () => {
+        using reported = stub(console, "error", () => {});
+        start();
+        server.openSession(space, "session-1");
+        await clock.settle();
+        const [silent] = workers();
+        silent.startRun(space, "slow-handler", event);
+        await clock.settle();
+        await pass(7);
+        await clock.settle();
+        expect(silent.terminated).toBe(true);
+        expect(logged(reported.calls, "in a run of `slow-handler`")).toBe(true);
+
+        await clock.tick(10);
+        await clock.settle();
+        const successor = workers()[1];
+        expect(successor.received[0]).toEqual({
+          method: "host.failEvent",
+          params: {
+            space,
+            event,
+            reason: expect.stringContaining(
+              "held its serving worker's thread until the watchdog ended",
+            ),
+          },
+        });
+        expect(successor.receivedOf("host.failEvent")).toHaveLength(1);
+        expect(successor.receivedOf("observer.sessionOpened")).toEqual([
+          { space },
+        ]);
+      });
+
+      it("hands a failed event to one worker, and to none of the space's later ones", async () => {
+        start();
+        server.openSession(space, "session-1");
+        await clock.settle();
+        workers()[0].startRun(space, "slow-handler", event);
+        await clock.settle();
+        await pass(7);
+        await clock.tick(10);
+        await clock.settle();
+        const successor = workers()[1];
+        expect(successor.receivedOf("host.failEvent")).toHaveLength(1);
+
+        successor.fail();
+        await clock.tick(20);
+        await clock.settle();
+        expect(workers()).toHaveLength(3);
+        expect(workers()[2].receivedOf("host.failEvent")).toEqual([]);
+      });
+
+      it("fails no event for a kill of a worker whose thread a derivation's run held, or no run", async () => {
+        using reported = stub(console, "error", () => {});
+        start();
+        server.openSession(space, "session-1");
+        server.openSession(other, "session-2");
+        await clock.settle();
+        const [deriving, idle] = workers();
+        deriving.startRun(space, "slow-derivation");
+        await clock.settle();
+        await pass(7);
+        await clock.tick(10);
+        await clock.settle();
+        expect(deriving.terminated).toBe(true);
+        expect(idle.terminated).toBe(true);
+        expect(logged(reported.calls, "in a run of `slow-derivation`")).toBe(
+          true,
+        );
+
+        const successors = workers().slice(2);
+        expect(successors).toHaveLength(2);
+        for (const successor of successors) {
+          expect(successor.receivedOf("host.failEvent")).toEqual([]);
+        }
+      });
     });
 
     it("fences a commit the killed worker left in flight", async () => {
