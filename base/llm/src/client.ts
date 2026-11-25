@@ -56,8 +56,8 @@ export function normalizeLLMResponse(data: unknown, id: string): LLMResponse {
  * The LLM endpoint a process starts with: the one on the host that served the
  * page at `location`, else the one on the API at `apiUrl`, else none. An
  * `apiUrl` that is not a URL is passed over the way a missing one is. A
- * process with none learns its endpoint from `setLLMUrl()`, which a `Runtime`
- * calls when its host names the deployment its patterns talk to.
+ * process with none can be given one by `setLLMUrl()`; a call can also name
+ * its own, as a runtime's builtins do for the deployment its host named.
  */
 export function initialLLMUrl(
   location: Pick<Location, "protocol" | "host"> | undefined,
@@ -108,10 +108,10 @@ function endpointFor(endpoint: string | URL | undefined): string {
   const url = endpoint?.toString() ?? llmApiUrl;
   if (url === undefined) {
     throw new Error(
-      "LLMClient: this process has no LLM endpoint. It is set by a Runtime " +
-        "whose options name a `patternEnvironment` (the runtime presets do, " +
-        "from `apiUrl`), by `setLLMUrl()`, by the `API_URL` environment " +
-        "variable, or by the http(s) page the process runs in.",
+      "LLMClient: this call names no endpoint and this process has no LLM " +
+        "endpoint. A runtime built from a deployment-facing preset names " +
+        "its own; otherwise one comes from `setLLMUrl()`, the `API_URL` " +
+        "environment variable, or the http(s) page the process runs in.",
     );
   }
   return url;
