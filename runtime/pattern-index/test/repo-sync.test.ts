@@ -460,6 +460,15 @@ describe("repo-sync", () => {
       ]);
     });
 
+    it("follows a path reached again with other moves used, which can reach further", () => {
+      const table = { "a/": "b/", "b/": "a/x/", "a/x/": "b/x/" };
+      expect(formerPathsIn("p", table)("p/b/x/file.tsx")).toEqual([
+        "p/a/x/file.tsx",
+        "p/b/file.tsx",
+        "p/a/file.tsx",
+      ]);
+    });
+
     it("is what the plan records for each entry, compiled or not", async () => {
       const plan = await planRepo(
         {

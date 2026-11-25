@@ -240,24 +240,36 @@ export const formerPathsIn = (
   return (path) => {
     if (!path.startsWith(prefix)) return [];
     const start = path.slice(prefix.length);
-    const seen = new Set([start]);
+    const listed = new Set([start]);
     const former: string[] = [];
     // Each move applies at most once along a file's history. Without that, a
     // cycle of directory moves (`a/` to `b/`, `b/sub/` to `a/`) would grow
-    // the path forever, since no exact path repeats.
+    // the path forever, since no exact path repeats. Two histories can reach
+    // the same path having used different moves, and the one with fewer
+    // spent can reach further, so a path is passed over only when reached
+    // again with the same moves used.
     type Step = { key: string; used: ReadonlySet<number> };
+    const stateOf = ({ key, used }: Step) =>
+      `${[...used].sort((a, b) => a - b).join(",")}:${key}`;
+    const visited = new Set<string>();
     for (
       let next: Step[] = [{ key: start, used: new Set() }];
       next.length > 0;
     ) {
       next = next.flatMap(({ key, used }) =>
         movedTo(key).flatMap(({ from, move }) => {
-          if (used.has(move) || seen.has(from)) return [];
-          seen.add(from);
-          return [{ key: from, used: new Set([...used, move]) }];
+          if (used.has(move)) return [];
+          const step = { key: from, used: new Set([...used, move]) };
+          if (visited.has(stateOf(step))) return [];
+          visited.add(stateOf(step));
+          return [step];
         })
       );
-      for (const { key } of next) former.push(key);
+      for (const { key } of next) {
+        if (listed.has(key)) continue;
+        listed.add(key);
+        former.push(key);
+      }
     }
     return former.map((key) => prefix + key);
   };
