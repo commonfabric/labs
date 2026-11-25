@@ -25,7 +25,6 @@ import { DID, Identity, type Session } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import type { Program } from "@commonfabric/js-compiler";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
-import { setLLMUrl } from "@commonfabric/llm";
 import { type ACL, isACLUser, isCapability } from "@commonfabric/memory/acl";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
@@ -5184,7 +5183,6 @@ export class RuntimeProcessor {
     const space = data.spaceDid;
     const telemetry = new RuntimeTelemetry();
 
-    setLLMUrl(data.apiUrl);
     setPatternEnvironment({ apiUrl: apiUrlObj });
 
     const session = {

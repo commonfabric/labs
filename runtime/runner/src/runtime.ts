@@ -41,6 +41,7 @@ import { isDeno } from "@commonfabric/platform/env";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
+import { setLLMUrl } from "@commonfabric/llm";
 import { PatternEnvironment, setPatternEnvironment } from "./builder/env.ts";
 import { namesInstances } from "./builder/instance-name.ts";
 import { popFrame, pushRuntimeDefaultFrame } from "./builder/pattern.ts";
@@ -2480,8 +2481,16 @@ export class Runtime {
       // server-side (the toolshed) pass `patternEnvironment` so handler `fetch`es
       // reach the right toolshed rather than the hardcoded `localhost:<port>`
       // fallback in builder/env.ts. This is still a singleton. TODO(seefeld).
+      //
+      // The LLM builtins' default endpoint is the same fact about the same
+      // deployment, so it is set from the same place: a host that runs
+      // patterns in its own process (a deployed client with server execution
+      // off) would otherwise send their model calls nowhere unless it also
+      // remembered `setLLMUrl()`. A space mapped to another host still routes
+      // its calls there per call.
       if (options.patternEnvironment) {
         setPatternEnvironment(options.patternEnvironment);
+        setLLMUrl(options.patternEnvironment.apiUrl.toString());
       }
 
       if (options.debug) {
