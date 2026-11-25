@@ -194,6 +194,7 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
       ".github/workflows/benchmarks.yml",
       "dashboard/bench-report.ts",
       "dashboard/machine-calibration.bench.ts",
+      "patterns/integration/fabrichat-setup.bench.ts",
       "patterns/integration/topic-board-navigation.bench.ts",
       "patterns/integration/topic-board-scale.bench.ts",
       "tasks/check-bench-workflow.ts",

@@ -162,7 +162,10 @@ and those whose `result` back-link, which setup writes and no pattern can,
 names it. Otherwise, and for a `target` of `undefined`, it returns `undefined`.
 It is the rule `profileOwnerAt()` in `runtime/runner/src/profile-owner.ts`
 states, which hosts apply through `profileOwnership()`. It can be called where
-`principalOf()` can; in a handler, a profile or name document still loading
+`principalOf()` can. It loads the profile and each document its name links
+through when the local replica has not seen them, including a profile reached
+through `linksOf()`, which loads no list targets. A computation runs again as
+those documents arrive; in a handler, a profile or name document still loading
 withdraws the handler, which runs again once it arrives.
 
 ## Whom a value's own cell represents
@@ -182,7 +185,8 @@ cell in another space is refused, since its label says who wrote the value
 there, not that anyone put it at this field. A reader therefore names the field
 through the document holding it, as `profile.key("picture")` does: a write
 redirect of the reader's own to the field, stored in another space, is refused
-like any other. A profile's space lets anyone write, so within it a visitor can
+like any other. A profile's space lets anyone write, so within it a client that
+ignores write policies, or any writer while the field stores no policy, can
 still point a face field at another cell the owner wrote there. A write declared
 `RepresentsCurrentUser`, as a profile's `setPicture` is, labels the value with
 the principal it acts for, so `profileFace()` in

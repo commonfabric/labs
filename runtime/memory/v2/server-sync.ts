@@ -6,7 +6,6 @@ import {
   DEFAULT_BRANCH,
   type EntitySnapshot,
   type GraphQuery,
-  type OperationWatchSpec,
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
@@ -16,7 +15,7 @@ import {
   type SessionSyncUpsert,
   type WatchSpec,
 } from "../v2.ts";
-import { toDirtyKey } from "./query.ts";
+import { partitionGraphQuery, toDirtyKey } from "./query.ts";
 
 /**
  * A session's cached snapshot of one tracked doc INSTANCE. `scopeKey` is
@@ -324,52 +323,67 @@ export const compareSyncAddress = (
   (left.scope ?? DEFAULT_SCOPE).localeCompare(right.scope ?? DEFAULT_SCOPE) ||
   left.id.localeCompare(right.id);
 
-export const groupedQueries = (
+/** One tracked graph's share of a session's graph-query watches. */
+export type WatchGraphGroup = {
+  /** Key the session keeps the group's graph under. */
+  key: string;
+
+  /** Branch the group's roots are read on. */
+  branch: string;
+
+  /** Identity the group's roots are walked under. */
+  identity: ScopeKeyIdentity;
+
+  /**
+   * Scope instance that identity belongs to, or `undefined` where the roots
+   * are walked under the session's own.
+   */
+  instance: ScopeKey | undefined;
+
+  /** The group's roots as one query, in watch order. */
+  query: GraphQuery;
+};
+
+/**
+ * Groups the roots of the graph-query watches among `watches` into the graphs
+ * a session of `identity` tracks them in, by graph key. A branch has one
+ * graph for the roots walked under `identity`, keyed by the branch, and one
+ * more for each scope instance of another identity that its roots name
+ * (`partitionGraphQuery()`). The key of such a graph holds a NUL, which no
+ * branch name does, so it is the key of no branch's own graph.
+ */
+export const watchGraphGroups = (
   watches: readonly WatchSpec[],
-): Map<string, GraphQuery> => {
-  const grouped = new Map<string, GraphQuery>();
+  identity: ScopeKeyIdentity,
+): Map<string, WatchGraphGroup> => {
+  const rootsByBranch = new Map<string, GraphQuery["roots"]>();
   for (const watch of watches) {
     if (watch.kind === "operation") continue;
     const branch = watch.query.branch ?? "";
-    const existing = grouped.get(branch);
-    if (existing === undefined) {
-      grouped.set(branch, {
-        branch,
-        roots: [...watch.query.roots],
-      });
-      continue;
+    let roots = rootsByBranch.get(branch);
+    if (roots === undefined) {
+      roots = [];
+      rootsByBranch.set(branch, roots);
     }
-    for (const root of watch.query.roots) existing.roots.push(root);
+    for (const root of watch.query.roots) roots.push(root);
   }
-  return grouped;
-};
-
-/** A watch whose query is a graph query, which is every kind but `operation`. */
-export type GraphQueryWatchSpec = Exclude<WatchSpec, OperationWatchSpec>;
-
-/** The graph-query watches among `watches`, by branch, each in list order. */
-export const graphWatchesByBranch = (
-  watches: readonly WatchSpec[],
-): Map<string, GraphQueryWatchSpec[]> => {
-  const grouped = new Map<string, GraphQueryWatchSpec[]>();
-  for (const watch of watches) {
-    if (watch.kind === "operation") continue;
-    const branch = watch.query.branch ?? "";
-    const existing = grouped.get(branch);
-    if (existing === undefined) grouped.set(branch, [watch]);
-    else existing.push(watch);
+  const groups = new Map<string, WatchGraphGroup>();
+  for (const [branch, roots] of rootsByBranch) {
+    for (const partition of partitionGraphQuery({ branch, roots }, identity)) {
+      const key = partition.instance === undefined
+        ? branch
+        : `instance\0${partition.instance}\0${branch}`;
+      groups.set(key, {
+        key,
+        branch,
+        identity: partition.identity,
+        instance: partition.instance,
+        query: partition.query,
+      });
+    }
   }
-  return grouped;
+  return groups;
 };
-
-/** The roots of `watches` as one query on `branch`. */
-export const unionQuery = (
-  branch: string,
-  watches: readonly GraphQueryWatchSpec[],
-): GraphQuery => ({
-  branch,
-  roots: watches.flatMap((watch) => watch.query.roots),
-});
 
 export const mergeWatchesById = (
   current: readonly WatchSpec[],

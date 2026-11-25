@@ -730,8 +730,8 @@ runtime holding the inbox refuses to let another principal's code copy the
 offers anywhere. The label does not stop another principal's runtime reading
 them, as the access section says.
 
-An offer is the envelope a loom share inbox keeps, its nine fields, and one
-more, `receivedAt`:
+An offer is the envelope a loom share inbox keeps, its nine fields, and two
+more, `receivedAt` and, on a notice, `changes`:
 
 - `kind`: what is offered, such as `loom` or `fabrichat-room`. A reader acts
   only on the kinds it knows.
@@ -760,6 +760,14 @@ more, `receivedAt`:
   registers it naming no profile.
 - `receivedAt`: when the inbox received the offer, by its own clock. A
   handler's clock reads to the second, so two offers can share it.
+- `changes`: on a notice that the offered thing changed, rather than an offer
+  of it, the kinds of thing that changed, each set to `true`, such as
+  `{ title: true }`; absent on an offer. A notice carries none of the thing's
+  data, so its `title` is typically empty, and a reader that acts on one reads
+  what changed from the thing itself. A room's notice keeps the room space's
+  `kind`, `fabrichat-room`, and is keyed `changed:` followed by the room's
+  space DID, so the inbox holds one per sender and room. Like `from`, the
+  change set is the sender's claim.
 
 ## Sending one
 
@@ -798,13 +806,22 @@ does, and then checks the sender:
   that is absent or `null`, or whose `space` is absent, `null` or empty once
   trimmed, is kept as `null`. Any other `toProfile`, one that is not a record
   or whose `space` is not a string naming a well-formed DID, is not kept,
-  since the inbox cannot read it as naming no profile. Any other field the
+  since the inbox cannot read it as naming no profile. A `changes` that is a
+  record is kept as the first `OFFER_CHANGES_MAX_KEYS` (8) of its keys that
+  are camelCase identifiers of at most 32 characters, opening with a lowercase
+  letter, and set to `true`; one that is absent or `null` is not kept; and any
+  other is kept as a record naming no change, so a notice the inbox cannot
+  read stays a notice rather than becoming an offer. Any other field the
   envelope does not name is not kept.
 - The event is dropped when its `from` is not the principal sending it, or
   when an offer in the inbox already has its `from` and `id`. So a resend of
   one offer is kept once, the first one kept stays as it was, and no sender
   can take another sender's `id` first. A loom share inbox keys on `id` alone,
-  so this inbox is the stricter of the two.
+  so this inbox is the stricter of the two. A notice is the exception: one
+  whose sender already has a row in the inbox under its `id` replaces that
+  row where it stands, whatever the `sharedAt` of either, so the inbox holds
+  each sender's latest notice of each thing and the rows never accumulate. A
+  reader tells a replaced notice from the one it acted on by its `sharedAt`.
 
 The sender is not told of a drop, but it can read the offers back and look
 for a row with its offer's `id`, `from` and `space`, as a loom sender does.
@@ -813,8 +830,9 @@ for a row with its offer's `id`, `from` and `space`, as a loom sender does.
 
 The owner reads `offers`. Nothing marks an offer as read or removes it, so a
 reader keeps its own record of the offers it has handled, keyed by `from` and
-`id`, wherever it keeps its own state. Two senders may choose the same `id`,
-and the inbox keeps an offer from each.
+`id`, wherever it keeps its own state, and a notice by its `sharedAt` too,
+since a later notice from the same sender takes the earlier one's row. Two
+senders may choose the same `id`, and the inbox keeps an offer from each.
 
 A row's `from` is the sender's claim, not a fact the inbox vouches for.
 `receive` keeps an offer only when `from` is the principal sending it, but
@@ -1008,9 +1026,63 @@ while it was down is taken up then, or when its inbox next changes or Home's
 profile records do. A lone offer
 is so taken up once what kept it waiting changes, with no other offer, profile
 change or restart. A catalog that cannot be read is taken to hold no receipts,
-since Home's handler refuses a duplicate in any case. The intake removes and marks nothing, so every
-offer stays in its inbox, and another reader, such as a loom daemon, reads them
-all.
+since Home's handler refuses a duplicate in any case, and to list no rooms, so
+every notice that a room changed is ignored. The intake removes and marks
+nothing in an inbox, so every offer stays in its inbox, and another reader,
+such as a loom daemon, reads them all.
+
+### A notice that a room changed
+
+A row carrying `changes` is a notice that a room changed, not an offer: the
+intake never registers one, whatever else it holds, so a notice can add no
+room to the person's list. A notice carries no room data. It says only which
+kinds of thing changed, and the person's host reads what changed from the room
+itself, under the person's own access. The envelope is an offer's: `kind` is
+the room space's kind, `fabrichat-room`, `id` is `changed:` followed by the
+room's space DID, so there is one row per sender and room, `title` is empty,
+and `changes` is a record of the kinds of change, such as `{ title: true }`.
+The intake acts on a title change, and ignores every other key.
+
+The intake acts on a notice when its envelope is well formed and its `host`
+is the intake's own, as an offer's must be, its `kind`, `id` and `changes` are
+as above with `title` set to `true`, Home's catalog lists its space as a saved
+`fabrichat-room`, Home's chat manager has a `joinRoom`, and the space passes
+the vetting a room's space does, the sender included: `from` holds a `WRITE`
+or `OWNER` entry of its own in the space's access list, the owner can open it,
+it declares `fabrichat-room`, and its root is at the reserved address. Acting
+on it sends the space's root to the manager's `joinRoom`, with the notice's
+`from`, `id` and `sharedAt` as `notice`. For a room the person's chats list as
+saved, the manager brings the title the catalog lists the room under up to the
+room's own, where the two differ, as it does the activity its membership holds
+([`ChatIndexEntry`](../specs/fabrichat/ChatIndexEntry.md)), and marks the
+notice acted on in the catalog's `notices`, under its sender and `id`, in the
+same transaction (see
+[`shared-space-catalog.md`](shared-space-catalog.md#notice-marks)). It does
+nothing for any other room, so a notice never restores an archived entry, nor
+records a membership.
+
+The intake reads that mark before it acts: a notice whose `sharedAt` is the
+one the catalog marks is decided as acted on, and its room is not read. So the
+catalog, not the runtime, holds which notices were acted on, and a runtime
+that starts with many notices in the inbox reads only the rooms of those not
+yet marked. A row holding a `sharedAt` other than the marked one, an earlier
+one included, is acted on again. Any other notice is ignored, its room unread,
+for the life of the runtime worker. A row holding the same sender, `id` and
+`sharedAt` as a notice the intake has already sent is decided as acted on,
+since the first one's mark covers it. While Home's catalog cannot be read, a
+notice is left undecided, and taken up when its inbox next changes or a lost
+connection to the host comes back. A notice whose vetting fails other than by
+a refusal waits on its space's state, and one whose send fails is left
+undecided, as an offer is.
+
+Anyone can append to an inbox, so a notice proves nothing about its sender. A
+forged one can make the intake read again the title of a room the person's
+catalog already lists, under the person's own access, and no more: it cannot
+list a room, restore one, reach a room the catalog does not list, or give a
+room a title the room does not hold. A forger naming a `from` that is no
+member of the room costs the intake the read of the room's access list; one
+naming a member's DID costs one read of the room per row, as a forged offer
+costs one vetting of its space.
 
 ## Joining a room the user visits
 

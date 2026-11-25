@@ -1,0 +1,3 @@
+[submodule "vendor/labs"]
+  path = vendor/labs
+  url = ssh://git@ssh.github.com:443/commonfabric/labs.git

@@ -1089,10 +1089,10 @@ export const DEFAULT_CFC_DECOMPOSED_ENVELOPES: CfcDecomposedEnvelopes = false;
  * Whether the envelope persist path stores version-2 envelopes, whose
  * labels above the inline limit are references to content-addressed label
  * documents (`docs/specs/content-addressed-cfc-labels.md`). Off stores
- * version 1, every label inline. Reading resolves either version. Ships
- * behind a flag because a reader that predates version 2 fails closed on
- * it, which is correct and also unusable: every deployed reader must
- * interpret version 2 before any space sees one.
+ * version 1, every label inline. Reading resolves either version. A
+ * `Runtime` writes version 2 unless told otherwise
+ * (`RUNTIME_CFC_DIAL_DEFAULTS`); the constant below is the floor of a
+ * transaction no runtime configured, which keeps version 1.
  */
 export type CfcContentAddressedLabels = boolean;
 
@@ -1244,7 +1244,10 @@ export type CfcTxState = {
   // as `writePolicyInputIdentities` above: attribution must not borrow an
   // identity a later run in the same transaction happens to set. The
   // runtime's own privileged persistence writes are excluded — bookkeeping,
-  // not authorship.
+  // not authorship — and so is a served event's processed claim, which §6.2.2
+  // makes the runtime's write, apart from the handler's: only the claim's own
+  // value, under no identity, at a path the runtime named a claim, which is
+  // the write the join's stamp leaves out too.
   writeIdentity: {
     sawWrite: boolean;
     multiple: boolean;

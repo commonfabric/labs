@@ -29,7 +29,10 @@ import {
 } from "../v2.ts";
 import {
   appendWatchSetPart,
+  encodeSyncParts,
+  encodeUnlessTooLong,
   halveSyncPart,
+  halveTooLong,
   type PartLimits,
   payloadFits,
   serverMessageSync,
@@ -40,6 +43,7 @@ import {
 } from "../v2/message-parts.ts";
 import type { JSONSchema } from "@commonfabric/api";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
+import { compressServerMessageSchemas } from "../v2/sync-schema-table.ts";
 import { countValues } from "./support/routed-slots.ts";
 import {
   testSessionOpenAuthFactory,
@@ -188,6 +192,209 @@ Deno.test("a halved part keeps its place in the sequence", () => {
   );
 });
 
+Deno.test("a split part that says more follow keeps saying so on its last part", () => {
+  const parts = splitSyncMessage(
+    responseWith(syncOf(30, { more: true })),
+    SESSION,
+    { bytes: 2048, values: null },
+  );
+  assert(parts.length > 1);
+  assertEquals(
+    parts.map((part) => serverMessageSync(part)!.more),
+    parts.map(() => true as const),
+  );
+});
+
+// Each document links with a schema of its own. The connection's schema
+// table holds all of them, so the whole message is mostly table, and a part
+// carries only the schemas its documents use.
+const schemaOf = (n: number): JSONSchema => ({
+  type: "object",
+  properties: Object.fromEntries(
+    Array.from({ length: 60 }, (_, i) => [`field${n}x${i}`, {
+      type: "string",
+    }]),
+  ),
+});
+const linking = (count: number) =>
+  responseWith({
+    type: "sync",
+    fromSeq: 0,
+    toSeq: 40,
+    upserts: Array.from({ length: count }, (_, n) => ({
+      branch: "",
+      id: `of:linking-${n}`,
+      seq: n + 1,
+      doc: {
+        value: {
+          link: linkRefFrom({
+            id: `of:target-${n}`,
+            path: [],
+            schema: schemaOf(n),
+          }),
+        },
+      },
+    })),
+    removes: [],
+  } as unknown as SessionSync);
+const prepareSchemas = (message: ServerMessage) =>
+  compressServerMessageSchemas(message);
+// The engine's refusal of text past its longest string, at a smaller size.
+const encodeWithin = (ceiling: number) => (message: ServerMessage) => {
+  const encoded = encodeMemoryBoundary(message);
+  if (encoded.length > ceiling) throw new RangeError("Invalid string length");
+  return encoded;
+};
+// A third of the whole, which its schema table alone passes.
+const ceilingFor = (message: ServerMessage) =>
+  Math.floor(encodeMemoryBoundary(prepareSchemas(message)).length / 3);
+
+describe("halveTooLong()", () => {
+  const prepare = prepareSchemas;
+
+  it("halves a sync whose tables alone pass the ceiling until each half encodes", () => {
+    const message = linking(48);
+    const whole = serverMessageSync(prepare(message)) as SessionSync & {
+      schemaTable: Record<string, unknown>;
+    };
+    const ceiling = ceilingFor(message);
+    assert(encodeMemoryBoundary(whole.schemaTable as never).length > ceiling);
+
+    const halves = halveTooLong(
+      message,
+      SESSION,
+      prepare,
+      encodeWithin(ceiling),
+    );
+
+    assert(halves.length > 2);
+    for (const { part, prepared, payload } of halves) {
+      assert(payload.length <= ceiling);
+      assertEquals(payload, encodeMemoryBoundary(prepared));
+      const sync = serverMessageSync(prepared) as SessionSync & {
+        schemaTable: Record<string, unknown>;
+      };
+      assertEquals(
+        Object.keys(sync.schemaTable).length,
+        serverMessageSync(part)!.upserts.length,
+      );
+    }
+    assertEquals(join(halves.map(({ part }) => part)), message);
+  });
+
+  it("throws the engine's error for a single entry it cannot encode", () => {
+    assertThrows(
+      () => halveTooLong(linking(1), SESSION, prepare, encodeWithin(100)),
+      RangeError,
+      "Invalid string length",
+    );
+  });
+});
+
+describe("encodeSyncParts()", () => {
+  // The parts as the server sends them: each one prepared and encoded, the
+  // payload the prepared part's encoding, and the parts joining back to the
+  // sync they divide.
+  const assertDivides = (
+    parts: [ServerMessage, string][],
+    message: ServerMessage,
+  ) => {
+    for (const [prepared, payload] of parts) {
+      assertEquals(payload, encodeMemoryBoundary(prepared));
+    }
+    const syncs = parts.map(([prepared]) => serverMessageSync(prepared)!);
+    syncs.forEach((sync, index) =>
+      assertEquals(sync.more, index < syncs.length - 1 ? true : undefined)
+    );
+    const upserts = syncs.flatMap((sync) =>
+      sync.upserts.map((upsert) => upsert.id)
+    );
+    assertEquals(
+      upserts,
+      serverMessageSync(message)!.upserts.map((upsert) => upsert.id),
+    );
+  };
+
+  it("sends as they are the halves of a sync too long to encode whole, whose tables alone are too", () => {
+    const message = linking(48);
+    const prepared = prepareSchemas(message);
+    const ceiling = ceilingFor(message);
+    // Bounds every half fits, so a half goes as it is.
+    const limits: PartLimits = {
+      bytes: encodeMemoryBoundary(prepared).length,
+      values: null,
+    };
+
+    const parts = encodeSyncParts(
+      message,
+      prepared,
+      undefined,
+      SESSION,
+      limits,
+      prepareSchemas,
+      encodeWithin(ceiling),
+    );
+
+    assert(parts.length > 2);
+    for (const [, payload] of parts) assert(payload.length <= ceiling);
+    assertDivides(parts, message);
+  });
+
+  it("splits in turn a half that encodes but passes the bounds", () => {
+    const message = linking(48);
+    const limits: PartLimits = { bytes: 4096, values: null };
+
+    const parts = encodeSyncParts(
+      message,
+      prepareSchemas(message),
+      undefined,
+      SESSION,
+      limits,
+      prepareSchemas,
+      encodeWithin(ceilingFor(message)),
+    );
+
+    assert(parts.length > 12);
+    assertDivides(parts, message);
+  });
+
+  it("splits a sync that encodes whole but passes the bounds", () => {
+    const message = linking(48);
+    const prepared = prepareSchemas(message);
+    const limits: PartLimits = { bytes: 4096, values: null };
+
+    const parts = encodeSyncParts(
+      message,
+      prepared,
+      encodeMemoryBoundary(prepared),
+      SESSION,
+      limits,
+      prepareSchemas,
+    );
+
+    assert(parts.length > 1);
+    assertDivides(parts, message);
+  });
+
+  it("throws the engine's error for a single entry it cannot encode", () => {
+    const message = linking(1);
+    assertThrows(
+      () =>
+        encodeSyncParts(
+          message,
+          prepareSchemas(message),
+          undefined,
+          SESSION,
+          { bytes: 4096, values: null },
+          prepareSchemas,
+          encodeWithin(100),
+        ),
+      RangeError,
+      "Invalid string length",
+    );
+  });
+});
+
 Deno.test("the assembler passes other sessions' messages between a split sync's parts", () => {
   const parts = splitSyncMessage(responseWith(syncOf(10)), SESSION, {
     bytes: 1500,
@@ -278,6 +485,62 @@ Deno.test("the assembler refuses a split sync's parts out of sequence", () => {
   >;
   odd.ok!.sync.more = false;
   refuses([odd as ServerMessage]);
+});
+
+describe("encodeUnlessTooLong()", () => {
+  const message = {
+    type: "response",
+    requestId: "too-long",
+    ok: {},
+  } as unknown as ServerMessage;
+
+  it("returns the message's encoding", () => {
+    assertEquals(encodeUnlessTooLong(message), encodeMemoryBoundary(message));
+  });
+
+  it("returns `undefined` when the encoding is longer than the engine's longest string", () => {
+    // The engine's own refusal of text past 2^29 - 24 UTF-16 units, which
+    // it raises before building any of it.
+    const tooLong = () => "x".repeat(2 ** 29);
+    assertEquals(encodeUnlessTooLong(message, tooLong), undefined);
+  });
+
+  it("throws any other failure to encode", () => {
+    const failing = () => {
+      throw new TypeError("Do not know how to serialize a BigInt");
+    };
+    assertThrows(() => encodeUnlessTooLong(message, failing), TypeError);
+  });
+
+  it("throws a stack overflow, which is a `RangeError` of another kind", () => {
+    // Nested deeper than the codec's recursion reaches.
+    let deep: unknown = 0;
+    for (let depth = 0; depth < 100_000; depth++) deep = [deep];
+    const nested = { ...message, ok: { deep } } as unknown as ServerMessage;
+    const error = assertThrows(() => encodeUnlessTooLong(nested), RangeError);
+    assertEquals(error.message, "Maximum call stack size exceeded");
+  });
+});
+
+Deno.test("payloadFits counts the UTF-8 bytes of characters of every width", () => {
+  // Two-, three- and four-byte characters, and lone surrogates, which the
+  // encoder writes as U+FFFD in three bytes, alone and among the others.
+  for (
+    const text of [
+      "é",
+      "中",
+      "😀",
+      "\ud800",
+      "\udc00",
+      "a\ud83d",
+      "é中😀\ud800x",
+    ]
+  ) {
+    const payload = `fvj1:"${text.repeat(50)}"`;
+    const bytes = new TextEncoder().encode(payload).length;
+    assert(payloadFits(payload, { bytes, values: null }), text);
+    assert(!payloadFits(payload, { bytes: bytes - 1, values: null }), text);
+  }
 });
 
 Deno.test("payloadFits counts the values of text long enough to exceed the bound", () => {

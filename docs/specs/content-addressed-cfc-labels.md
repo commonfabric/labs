@@ -8,13 +8,13 @@ document that any number of entries, maps, and tables share.
 
 ## Status
 
-Design and implementation, behind the `cfcContentAddressedLabels` runtime
-flag (off by default). Readers interpret both envelope versions; the flag
-decides only which spelling the persist path writes.
+Implemented. The `cfcContentAddressedLabels` runtime flag is on by default,
+so a `Runtime` writes version 2. Readers interpret both envelope versions;
+the flag decides only which spelling the persist path writes.
 
 ## Last Updated
 
-2026-09-15
+2026-11-23
 
 ## Motivation
 
@@ -268,13 +268,14 @@ document do not rewrite it at each other.
 - **Readers first.** Both versions read; an envelope of either version
   resolves to the same metadata. Ships regardless of the flag.
 - **Writers behind `cfcContentAddressedLabels`** (registered in
-  [EXPERIMENTAL_OPTIONS.md](../development/EXPERIMENTAL_OPTIONS.md)). Off,
-  the persist path writes version 1 and leaves a stored version 2 as it
-  is. On, it writes version 2, stages the label documents, and rewrites a
-  version-1 envelope it would otherwise leave alone. The flip is gated on deployment reach: a reader that
-  predates version 2 fails closed on a version-2 envelope, which is
-  correct and also unusable, so every deployed reader must interpret
-  version 2 before any space sees one.
+  [EXPERIMENTAL_OPTIONS.md](../development/EXPERIMENTAL_OPTIONS.md)), on
+  by default. On, the persist path writes version 2, stages the label
+  documents, and rewrites a version-1 envelope it would otherwise leave
+  alone. Off, it writes version 1 and leaves a stored version 2 as it is.
+  A reader that predates version 2 fails closed on a version-2 envelope,
+  which is correct and also unusable, and nothing configures it otherwise;
+  while such a reader shares a space with newer builds, those builds'
+  writers run with the flag off until it updates.
 - **No data migration.** Version-1 envelopes read forever and age out as
   documents persist.
 

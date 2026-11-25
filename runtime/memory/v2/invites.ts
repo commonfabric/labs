@@ -13,6 +13,7 @@ import {
   type CreateInvite,
   type InviteAccess,
   inviteCodeVerifier,
+  type InviteLedgerRevision,
   type InviteMetadata,
   type InvitePreview,
   type InviteProfileSuggestion,
@@ -24,10 +25,12 @@ import {
   isInviteSecret,
   type RedeemReceipt,
   SPACE_INVITE_CAPABILITY,
+  SPACE_INVITES_REVISION_DOC_ID,
   SpaceInviteError,
 } from "../space-invites.ts";
 import {
   type AppliedCommit,
+  type ApplyCommitOptions,
   type Engine,
   read,
   runAtomicCommit,
@@ -155,8 +158,9 @@ export type InviteRequest = InviteOperation & {
   implicitOwner?: boolean;
 };
 
-/** Result and optional durable ACL commit for server publication. */
+/** Result and optional durable commits for server publication. */
 export interface InviteResult {
+  /** What the operation returns to its caller. */
   result:
     | InviteMetadata
     | InviteMetadata[]
@@ -164,8 +168,30 @@ export interface InviteResult {
     | RedeemReceipt
     | InvitePreview
     | { revoked: true };
+
+  /** A redemption's grant: the ACL-only commit raising the redeemer's access. */
   commit?: AppliedCommit;
+
+  /**
+   * The commit that moved the ledger's revision document on
+   * ({@link SPACE_INVITES_REVISION_DOC_ID}), present when the operation changed
+   * what `list` or `receipts` return.
+   */
+  revision?: AppliedCommit;
 }
+
+/**
+ * What {@link applyInvite} did: the operation's result, or the code the service
+ * refused it with, beside every commit it made. A refusal can have committed
+ * too, since cleanup is committed whatever the outcome, and so is the
+ * retirement of an invitation whose issuer no longer owns the space.
+ */
+export type InviteOutcome =
+  | InviteResult
+  | { failure: string; commit?: never; revision?: AppliedCommit };
+
+/** The `apply` a {@link runAtomicCommit} callback is given. */
+type Apply = (options: ApplyCommitOptions) => AppliedCommit;
 
 interface ActiveRow {
   inviteId: string;
@@ -204,12 +230,23 @@ CREATE TABLE IF NOT EXISTS space_invite_previews (
   spaceName TEXT, issuerName TEXT, expiresAt REAL NOT NULL
 );`;
 
-/** Applies admission, receipts, and any ACL grant in one durable transaction. */
-export function executeInvite(
+/**
+ * Applies admission, receipts, and any ACL grant in one durable transaction,
+ * and in that same transaction moves the ledger's revision document on when the
+ * operation changed what `list` or `receipts` return. Returns a refusal as a
+ * value beside what it committed, so that a caller can publish the commits
+ * before it reports the refusal; {@link executeInvite} throws it instead.
+ *
+ * @throws SpaceInviteError for an operation it cannot attempt at all: an
+ *   invalid envelope (`invalid-request`), or a deleted space (`space-deleted`).
+ */
+export function applyInvite(
   engine: Engine,
   request: InviteRequest,
-): InviteResult {
-  const outcome = runAtomicCommit(engine, (apply) => {
+): InviteOutcome {
+  // Whether the operation changed what `list` or `receipts` return.
+  let moved = false;
+  const decide = (apply: Apply) => {
     const db = engine.database;
     db.exec(TABLES);
     const { space, principal } = request;
@@ -226,13 +263,16 @@ export function executeInvite(
     if (isDeletionTombstone(read(engine, { id: aclDocId(space) })?.value)) {
       throw new SpaceInviteError("space-deleted");
     }
+    // Returns whether an active row was deleted.
     const remove = (inviteId: string) => {
-      db.prepare("DELETE FROM space_invites WHERE inviteId = ?").run(inviteId);
+      const deleted = db.prepare("DELETE FROM space_invites WHERE inviteId = ?")
+        .run(inviteId) > 0;
       if (usedCount(inviteId) === 0) {
         db.prepare(
           "INSERT INTO space_invite_rejections VALUES (?, ?) ON CONFLICT(inviteId) DO UPDATE SET rejectUntil = max(rejectUntil, excluded.rejectUntil)",
         ).run(inviteId, now + CREATE_REPLAY_WINDOW_MS);
       }
+      return deleted;
     };
     const usedCount = (inviteId: string) =>
       db.prepare(
@@ -316,6 +356,8 @@ export function executeInvite(
     db.prepare("DELETE FROM space_invite_previews WHERE expiresAt <= ?").run(
       now,
     );
+    // Deleting an expired row moves no revision: every reader already
+    // treats the invitation as gone from `expiresAt` on.
     for (
       const row of db.prepare(
         "SELECT inviteId FROM space_invites WHERE expiresAt <= ?",
@@ -365,7 +407,7 @@ export function executeInvite(
         // As redemption does, an issuer who no longer owns the space retires
         // the invitation and what it shows, so restoring their ownership
         // later does not bring back an invitation they could not honour.
-        if (row !== undefined) remove(inviteId);
+        if (row !== undefined && remove(inviteId)) moved = true;
         forgetSuggestion(inviteId);
         return failure("invite-unavailable");
       }
@@ -404,7 +446,7 @@ export function executeInvite(
         .get<ActiveRow>(inviteId);
       if (!row) return failure("invite-unavailable");
       if (!acl || acl[row.issuedBy as keyof ACL] !== "OWNER") {
-        remove(inviteId);
+        if (remove(inviteId)) moved = true;
         forgetSuggestion(inviteId);
         return failure("invite-unavailable");
       }
@@ -437,6 +479,7 @@ export function executeInvite(
         inviteId,
         principal,
       );
+      moved = true;
       if (usedCount(inviteId) === row.maxUses) remove(inviteId);
       return {
         result: withSuggestion({
@@ -520,6 +563,7 @@ export function executeInvite(
             row.maxUses,
             row.ttlSeconds,
           );
+        moved = true;
         if (suggestedProfile !== undefined) {
           db.prepare(
             "INSERT INTO space_invite_suggestions VALUES (?, ?, ?, ?, ?)",
@@ -569,12 +613,68 @@ export function executeInvite(
         if (!isInviteId(request.body.inviteId)) {
           return failure("invalid-request");
         }
-        remove(request.body.inviteId);
+        if (remove(request.body.inviteId)) moved = true;
         forgetSuggestion(request.body.inviteId);
         return { result: { revoked: true } as const };
       }
     }
+  };
+  return runAtomicCommit(engine, (apply) => {
+    const outcome = decide(apply);
+    return moved
+      ? { ...outcome, revision: moveRevision(engine, apply, request) }
+      : outcome;
   }, { durable: true });
+}
+
+/**
+ * Applies an invitation operation as {@link applyInvite} does, and returns its
+ * result with the commits it made.
+ *
+ * @throws SpaceInviteError with the code the service refused the operation
+ *   with, after the transaction holding its cleanup has committed.
+ */
+export function executeInvite(
+  engine: Engine,
+  request: InviteRequest,
+): InviteResult {
+  const outcome = applyInvite(engine, request);
   if ("failure" in outcome) throw new SpaceInviteError(outcome.failure);
   return outcome;
+}
+
+/**
+ * Helper for {@link applyInvite}, which moves the ledger's revision document on
+ * by one in a system commit of its own, so that a redemption's grant stays the
+ * ACL-only commit INV-12 requires. The commit is the service's and names no
+ * principal: a space's history, which every reader of the space may list,
+ * would otherwise name whoever's operation moved the ledger, a stranger whose
+ * refused preview retired an invitation among them.
+ */
+function moveRevision(
+  engine: Engine,
+  apply: Apply,
+  { space }: InviteRequest,
+): AppliedCommit {
+  const held = read(engine, { id: SPACE_INVITES_REVISION_DOC_ID })?.value;
+  const value: InviteLedgerRevision = {
+    revision: (isPlainObject(held) && typeof held.revision === "number" &&
+        Number.isSafeInteger(held.revision)
+      ? held.revision
+      : 0) + 1,
+  };
+  return apply({
+    sessionId: "invite-service",
+    space,
+    commitClass: "system",
+    commit: {
+      localSeq: serverSeq(engine) + 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set",
+        id: SPACE_INVITES_REVISION_DOC_ID,
+        value: { value },
+      }],
+    },
+  });
 }

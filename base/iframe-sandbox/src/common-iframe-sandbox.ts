@@ -29,14 +29,19 @@ type CommonIframeLoadState = "" | "loading" | "loaded";
 // @event {CustomEvent} common-iframe-error - An error from the iframe.
 // @event {CustomEvent} load - The iframe was successfully loaded.
 export class CommonIframeSandboxElement extends LitElement {
-  get src() {
+  /**
+   * Guest document, or the empty string while no source is available.
+   * Assigning `null` or `undefined`, or removing the `src` attribute, clears
+   * the guest and releases its capability sessions.
+   */
+  get src(): string {
     return this.#src;
   }
 
   @property()
-  set src(value: string) {
+  set src(value: string | null | undefined) {
     const previousValue = this.#src;
-    this.#src = value;
+    this.#src = value ?? "";
     this.requestUpdate("src", previousValue);
   }
 

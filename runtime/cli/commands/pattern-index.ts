@@ -113,8 +113,12 @@ export async function join(
         "Join with an invite link or with --chain, not both.",
       );
     }
+    // `-` is stdin, so a chain fetched from the service the identity's
+    // membership is kept on pipes straight in, with no file to clean up.
     const chains = decodeDelegationChains(
-      await Deno.readTextFile(options.chain),
+      options.chain === "-"
+        ? await new Response(stdin ?? Deno.stdin.readable).text()
+        : await Deno.readTextFile(options.chain),
     );
     if (chains.length !== 1) {
       throw new ValidationError(
@@ -187,7 +191,7 @@ export const sharingLines = (
     ];
   }
   return [
-    "Sharing: on. Patterns agents make for you are shared anonymously once you open them in your loom and they pass the privacy check, and you see what others share.",
+    "Sharing: on. Patterns agents make for you are shared anonymously once you have used them in your loom for a day with no newer version and they pass the privacy check, and you see what others share.",
     settings.selfBuilt
       ? "Patterns you build yourself (cf, Claude Code): shared the same way. Turn that off with cf index sharing --self-built off."
       : "Patterns you build yourself (cf, Claude Code): kept private unless you run cf pattern share. Share them by default with cf index sharing --self-built on.",
@@ -304,7 +308,8 @@ export const index = new Command()
         .option(
           "--chain <path:string>",
           "A chain file your root issued to this identity " +
-            "(cf delegation issue --index on the machine holding the root).",
+            "(cf delegation issue --index on the machine holding the root), " +
+            "or - to read it from stdin.",
         )
         .example(
           cliText("pbpaste | cf index join -i ~/.cf/me.key"),
@@ -358,8 +363,8 @@ export const index = new Command()
         .description(
           "Show or change your give-to-get setting, the same one your " +
             "loom's settings change. On (the default), your patterns are " +
-            "shared anonymously once you open them in your loom and they " +
-            "pass the privacy " +
+            "shared anonymously once you have used them in your loom " +
+            "for a day with no newer version and they pass the privacy " +
             "check, and you see what others share; off, nothing of yours " +
             "is shared on its own (what you shared with cf pattern share " +
             "stays shared until cf pattern unshare), and search and " +

@@ -1,3 +1,11 @@
+/**
+ * A group chat with per-user profiles, a room list with room creation, admin
+ * controls, and a transcript that shows each message with a verified author
+ * badge.
+ * Demonstrates building an ordinary chat interface from small reviewed CFC
+ * trusted surfaces for sending, saving profiles, adding rooms, and managing
+ * admins, with authorship checked by `cf-cfc-authorship`.
+ */
 import {
   action,
   computed,

@@ -120,10 +120,13 @@ repository decides to ship is declared instead, in
   unconditionally are the ones that can least afford it. For those, fixing
   the pattern is the only move.
 
-An already-recorded contract is not re-validated. It was proved when recorded
-and has not changed since, and both the definition validator and the subset
-proof blow up combinatorially on some real schemas — so the steady state, where
-no contract changed, costs nothing beyond the compile.
+An already-recorded contract is not validated on its own. It was validated when
+recorded and has not changed since, apart from the module hashes described
+under "Write permissions and module hashes" below, which no validation reads,
+and the definition validator blows up combinatorially on some real schemas. The
+subset proof against every other baseline still runs each time, and it
+validates both of the contracts it compares, so a pattern with many baselines
+costs a proof per baseline even when no contract changed.
 
 Compatibility is directional by role. Existing invocations must still satisfy
 the candidate argument schema, so a newly required argument needs a default or
@@ -142,7 +145,13 @@ below its stream marker (a newly required event field is rescued by a valid
 default the candidate carries, including a newly introduced one), and a
 durable-link proof whose target declares a default below a cell. The metadata
 itself must still compare equal across an update: a changed `asCell`, `scope`,
-`readOnly`, or `writeOnly` is refused on its own. Value constraints that
+`readOnly`, or `writeOnly` is refused on its own. The one exception is in an
+argument contract or a link proof: a node that declared no cell becoming a
+comparable one (`asCell: ["comparable"]`, with no scope). A comparable handle
+says how a reader receives the value, as a reference it can compare, not what
+is stored there or what the node accepts, and it writes nothing, so every value
+the node held reads under it. A result contract keeps the marker exact either
+way, since its proof reads from the candidate to the previous contract. Value constraints that
 default insertion can invalidate, such as `maxProperties`, continue to require
 equal defaults beneath them.
 
@@ -157,6 +166,74 @@ exemption for newly required fields that a pattern generates itself. A field
 the candidate event newly requires therefore needs a valid default, exactly
 as an argument does. Dispatch fills missing fields in a present event object
 from defaults; an entirely absent event payload remains absent.
+
+### Write permissions and module hashes
+
+A field in a schema can carry a write permission meaning "only this handler may
+write here". The compiler records the handler by the content hash of the module
+it is written in:
+
+```json
+{
+  "type": "boolean",
+  "ifc": {
+    "writeAuthorizedBy": {
+      "__ctWriterIdentityOf": {
+        "file": "/patterns/demo/main.tsx",
+        "path": ["setFlag"],
+        "moduleIdentity": "UVJh2ChHuLkknYrVet0Iu"
+      }
+    }
+  }
+}
+```
+
+`path` names the handler, and it is part of the contract. `moduleIdentity` is
+a hash of the module's source, so any edit to that module, even to a comment,
+changes it, and with it the contract of every pattern that imports the module.
+`file` is the module's path as one particular build spelled it, which changes
+with the build. Neither matters to a running piece: the runtime checks the live
+writer when a write happens, and never holds a stored contract to either value.
+These two, and the older `bundleId`, are the permission's **volatile
+identity**. The same applies to each permission listed in an
+`ifc.writePolicyAnyOf`.
+
+So both checks ignore the volatile identity:
+
+- **Is the current contract already recorded?** The gate hashes the contract
+  with the volatile identity removed (`contractHash` in
+  `tasks/pattern-compat-lib.ts`). An edit that only changes a writer's module
+  hash therefore produces no new contract and needs no new baseline. Two pull
+  requests that each make such an edit cannot leave `main` with a contract no
+  baseline records, which they could if each had to record the contract as it
+  looked on its own branch.
+- **Can the current contract replace every old one?** The subset proof removes
+  the volatile identity from both contracts before it starts, and from each
+  shared schema document that a `$ref` brings in, using
+  `schemaWithoutVolatileWriterIdentity` in
+  `runtime/piece/src/schema-compatibility.ts`.
+
+The proof removes it before it starts, rather than ignoring it only when it
+compares two permissions, because three parts of the proof look at whole
+schemas. It reuses one in-memory copy for schemas whose content is identical,
+it stops recursing when it meets a pair of schemas it is already checking,
+which it recognizes by object identity, and it gives up on unions nested more
+than eight deep. If those three saw the module hash, two otherwise identical
+definitions with different hashes would be two different objects to the proof,
+and two contracts that differ only in a hash could recurse to different depths
+and get different answers. With the hash removed first, they get the same
+answer and the same issues against every other contract. That is what makes
+it safe for the gate to treat them as one contract.
+
+One case still counts as different. A `$ref` can point at a shared schema
+document by that document's own content hash, so if two such documents differ
+only in a writer's module hash, the two references differ, and the contracts
+holding them are different contracts to both the gate and the proof.
+
+A baseline file holds the contract as compiled, module hashes included. The
+hash in its file name is for people reading the directory: the gate recomputes
+every baseline's hash from the file's contents, so a name that does not match
+the recomputed hash is not an error.
 
 ## Tier 2 — state continuity
 

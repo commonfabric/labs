@@ -1023,19 +1023,19 @@ describe("stage F serving loop", () => {
     expect(stats.structureLoadFailures).toBe(0);
   });
 
-  it("registers NO piece demand for never-a-piece id classes: computed:/cid:/watermark roots neither retry nor count as deferred (RULED 2026-08-07)", async () => {
+  it("counts no deferral and no failure for demanded roots that lead to no piece: the watermark doc, a `cid:` doc, and a `computed:` doc that holds no back-link", async () => {
     host = newHost({ flushDeadlineMs: 2_000, idleParkMs: 600_000 });
     onServingRuntime = () => Promise.resolve();
     openClient();
     const engine = await server.engineForSpace(space);
 
-    // The client demands ONLY never-a-piece roots: the watermark doc
-    // (every settledness subscription's watch), a `computed:` doc, and
-    // a `cid:` doc (a content-addressed bundle — the ruled class this
-    // exclusion test previously left unexercised). None can ever carry
-    // `patternIdentity` meta, so a piece-demand attempt on them is
-    // structurally futile churn — the ruled exclusion. The demand
-    // SINKs still register (value-granular pull is not piece demand).
+    // The client demands ONLY roots that lead to no piece. The watermark
+    // doc (every settledness subscription's watch) and a `cid:` doc (a
+    // content-addressed bundle) are of the never-a-piece id classes: no
+    // piece-demand attempt is made on them (RULED 2026-08-07). A
+    // `computed:` doc is loaded through its back-link, and this one holds
+    // none, so its load parks terminal with no retry. The demand SINKs
+    // still register (value-granular pull is not piece demand).
     const wmCell = clientRuntime.getCellFromLink<{ seq?: number }>(
       watermarkDocLink(space),
     );
@@ -1056,8 +1056,8 @@ describe("stage F serving loop", () => {
 
     // Drive several demand cycles with UNWATCHED authored input: an
     // address-level blind write mints no watch root (the cell route
-    // registers a watch), so the demanded-root set stays exactly the
-    // three never-a-piece ids.
+    // registers a watch), so the demanded-root set stays exactly those
+    // three ids.
     const kickId = "of:r2-exclusion-kick";
     for (const n of [1, 2, 3]) {
       const tx = clientRuntime.edit();
@@ -1081,9 +1081,9 @@ describe("stage F serving loop", () => {
       await awaitEach(cycles, () => readWatermarkSeq(engine) >= kickSeq);
     }
 
-    // The ruled counter behavior: excluded roots produce ZERO deferral
-    // churn (the counter stays meaningful for genuinely
-    // not-yet-loadable pieces) and no failures.
+    // The counter behavior: these roots produce ZERO deferral churn (the
+    // counter stays meaningful for genuinely not-yet-loadable pieces) and
+    // no failures.
     const stats = host.stats();
     expect(stats.structureLoadDeferred).toBe(0);
     expect(stats.structureLoadFailures).toBe(0);
@@ -2126,6 +2126,26 @@ describe("stage F serving loop", () => {
     expect(host.stats().parkedRuntimes.held).toBe(0);
   });
 
+  it("drops the events failed for a deleted space when it refuses the space", async () => {
+    const engine = await server.engineForSpace(space);
+    writeDeletionTombstone(engine, space, spaceSigner.did());
+    host = newHost();
+    host.failEvent(
+      space,
+      {
+        sidecarId: "of:deleted-failed-sidecar",
+        eventId: "deleted-failed",
+        seq: 1,
+      },
+      "ended",
+    );
+    expect(host.accessForTestingOnly.failedEvents.has(space)).toBe(true);
+
+    warmNotice(engine, "deleted-failed-warm");
+    await refused();
+    expect(host.accessForTestingOnly.failedEvents.has(space)).toBe(false);
+  });
+
   it("ends a tenure for good on the host's notice that its space's access list became a deletion tombstone", async () => {
     onServingRuntime = () => Promise.resolve();
     host = newHost({ idleParkMs: 600_000 });
@@ -3142,8 +3162,14 @@ describe("stage F serving loop", () => {
       );
     await awaitAdmitted(server, () => demandedKeyCommits().length >= 2);
     expect(demandedKeyCommits().length).toBe(2);
+    // A commit also annotates the writes of runs that act as nobody, which
+    // name their action alone.
     for (const annotations of demandedKeyCommits()) {
       for (const annotation of annotations) {
+        if (
+          annotation.scopeKey === undefined &&
+          annotation.actingUser === undefined
+        ) continue;
         expect(annotation.actingUser).toBe(demanded.principal);
         expect(annotation.actingSession).toBeUndefined();
       }

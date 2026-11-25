@@ -43,6 +43,7 @@ import {
 import type { HostOccupancy } from "./host.ts";
 import type { HostMemoryServer } from "./host-memory-server.ts";
 import type { LoopbackPlane } from "./loopback-storage.ts";
+import type { RunEvent, RunIdentity } from "./run-beacon.ts";
 import {
   type BridgeNotices,
   type BridgeRequests,
@@ -106,6 +107,9 @@ export type ServingPlaneHost = {
 
   /** @see ExecutorHost.noteSpaceAclChanged */
   noteSpaceAclChanged: (space: MemorySpace) => void;
+
+  /** @see ExecutorHost.failEvent */
+  failEvent: (space: MemorySpace, event: RunEvent, reason: string) => void;
 
   close: () => Promise<void>;
 };
@@ -309,7 +313,7 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     doc: { id: string; scope?: CellScope; scopeKey: string },
     sinceSeq: number,
     session: { principal: string; sessionId: string },
-  ): Promise<ReadonlyArray<readonly string[]>> {
+  ): Promise<ReadonlyArray<Engine.SessionOverwrite>> {
     return this.#reads.sessionOverwritePathsSince(
       space,
       doc,
@@ -501,6 +505,60 @@ class PlaneMemoryServer implements HostMemoryServer {
   }
 
   /** @inheritDoc */
+  advanceCurrency(
+    space: string,
+  ): ReturnType<HostMemoryServer["advanceCurrency"]> {
+    return this.#endpoint.request("server.advanceCurrency", { space });
+  }
+
+  /** @inheritDoc */
+  storeCurrencyRecords(
+    space: string,
+    batch: Parameters<HostMemoryServer["storeCurrencyRecords"]>[1],
+  ): ReturnType<HostMemoryServer["storeCurrencyRecords"]> {
+    return this.#endpoint.request("server.storeCurrencyRecords", {
+      space,
+      batch,
+    });
+  }
+
+  /** @inheritDoc */
+  judgeCurrencyRoots(
+    space: string,
+    roots: readonly string[],
+    options: {
+      excludePrincipal?: string;
+      epoch: string;
+      running?: readonly string[];
+    },
+  ): ReturnType<HostMemoryServer["judgeCurrencyRoots"]> {
+    return this.#endpoint.request("server.judgeCurrencyRoots", {
+      space,
+      roots: [...roots],
+      excludePrincipal: options.excludePrincipal,
+      epoch: options.epoch,
+      running: options.running === undefined ? undefined : [
+        ...options.running,
+      ],
+    });
+  }
+
+  /** @inheritDoc */
+  setCarriedDemand(
+    space: string,
+    reader: string,
+    rows: Parameters<HostMemoryServer["setCarriedDemand"]>[2],
+    options: { excludePrincipal?: string } = {},
+  ): ReturnType<HostMemoryServer["setCarriedDemand"]> {
+    return this.#endpoint.request("server.setCarriedDemand", {
+      space,
+      reader,
+      rows: [...rows],
+      excludePrincipal: options.excludePrincipal,
+    });
+  }
+
+  /** @inheritDoc */
   foreignWriteAuthorityFor(
     space: string,
     principal: string | undefined,
@@ -665,6 +723,9 @@ export class ServingPlane {
       this.#viewInterests.noteChanged(space);
       this.#observer?.viewsChanged?.(space, sessionId);
     });
+    endpoint.onNotice("observer.currencyChanged", ({ space }) => {
+      this.#observer?.currencyChanged?.(space);
+    });
     endpoint.onNotice("observer.sessionChanged", ({ event }) => {
       this.#sessions.apply(event);
       this.#viewInterests.noteChanged(event.space);
@@ -788,6 +849,26 @@ export class ServingPlane {
     this.#endpoint.onNotice("observer.spaceAclChanged", ({ space }) => {
       host.noteSpaceAclChanged(space as MemorySpace);
     });
+    this.#endpoint.onNotice("host.failEvent", ({ space, event, reason }) => {
+      host.failEvent(space, event, reason);
+    });
+  }
+
+  /**
+   * Posts what a number on the worker's run beacon stands for. The post
+   * reaches the server's thread without this thread yielding, so it arrives
+   * while the run it names holds the thread.
+   */
+  reportRunNamed(identity: RunIdentity): void {
+    this.#endpoint.notify("worker.runNamed", identity);
+  }
+
+  /**
+   * Posts numbers on the worker's run beacon whose actions the worker's realm
+   * has collected.
+   */
+  reportRunsForgotten(runs: readonly number[]): void {
+    this.#endpoint.notify("worker.runsForgotten", { runs });
   }
 
   /** Posts the host's counters for the server's thread to keep. */

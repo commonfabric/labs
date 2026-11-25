@@ -714,6 +714,109 @@ Deno.test("assert leaves a body with no return alone", async () => {
 });
 
 describe("AssertDiagnosticsTransformer", () => {
+  describe("transform()", () => {
+    /** Runs the assertion's lowered callback with its captured inputs. */
+    async function compileAssertion(expression: string): Promise<
+      (inputs: unknown) => { ok: boolean }
+    > {
+      const root = await transformed(
+        `import { assert, cell, pattern } from "commonfabric";
+export default pattern(() => {
+  const holder = cell<{ revision: string } | null | undefined>(undefined);
+  const prefix = cell<string>("1:");
+  const check = assert(() => ${expression} ?? false);
+  return { check };
+});`,
+      );
+      const [lift] = callsNamed(root, "lift");
+      const callback = lift.arguments[0];
+      const printed = ts.createPrinter().printNode(
+        ts.EmitHint.Expression,
+        callback,
+        root,
+      );
+      const { outputText } = ts.transpileModule(`const run = (${printed});`, {
+        compilerOptions: { target: ts.ScriptTarget.ESNext },
+      });
+      return new Function("__cfHelpers", `${outputText}\nreturn run;`)({
+        assertCapture: (_parts: unknown, _source: string, value: unknown) =>
+          value,
+        assertRenderParts: () => [],
+      });
+    }
+
+    for (
+      const expression of [
+        'holder.get()?.revision.startsWith("1:")',
+        'holder.get()?.["revision"].startsWith("1:")',
+        'holder.get()?.revision.toUpperCase().startsWith("1:")',
+        'holder.get()?.revision.startsWith?.("1:")',
+      ]
+    ) {
+      it(`preserves the optional chain in \`${expression}\``, async () => {
+        const run = await compileAssertion(expression);
+        for (const value of [undefined, null, "1:current", "2:later"]) {
+          let reads = 0;
+          let revisionReads = 0;
+          const ok = run({
+            holder: {
+              get: () => {
+                reads++;
+                return value == null ? value : {
+                  get revision() {
+                    revisionReads++;
+                    return value;
+                  },
+                };
+              },
+            },
+          }).ok;
+          expect(ok).toBe(value === "1:current");
+          expect(reads).toBe(1);
+          expect(revisionReads).toBe(value == null ? 0 : 1);
+        }
+      });
+    }
+
+    it("skips argument evaluation when the receiver is absent", async () => {
+      const run = await compileAssertion(
+        "holder.get()?.revision.startsWith(prefix.get())",
+      );
+      let argumentsRead = 0;
+      const prefix = {
+        get: () => {
+          argumentsRead++;
+          return "1:";
+        },
+      };
+      expect(run({ holder: { get: () => undefined }, prefix }).ok).toBe(false);
+      expect(argumentsRead).toBe(0);
+      expect(
+        run({ holder: { get: () => ({ revision: "1:current" }) }, prefix })
+          .ok,
+      ).toBe(true);
+      expect(argumentsRead).toBe(1);
+    });
+
+    it("keeps an unguarded missing member inside a present chain throwing", async () => {
+      const run = await compileAssertion(
+        'holder.get()?.revision.startsWith("1:")',
+      );
+      expect(() => run({ holder: { get: () => ({}) } })).toThrow(TypeError);
+    });
+
+    it("keeps parentheses that end an optional chain", async () => {
+      const run = await compileAssertion(
+        '(holder.get()?.revision).startsWith("1:")',
+      );
+      expect(() => run({ holder: { get: () => undefined } })).toThrow(
+        TypeError,
+      );
+      expect(run({ holder: { get: () => ({ revision: "1:current" }) } }).ok)
+        .toBe(true);
+    });
+  });
+
   describe("filter()", () => {
     /** What `filter()` returns for a module holding `source`. */
     function filterResult(source: string): boolean | undefined {

@@ -83,13 +83,10 @@ export const DISCRETIONARY_SECONDS = 575;
 export const LANES_MAX = 30;
 
 /**
- * Like `LANES_MAX`, except for the full run: the run on `main`, and a pull
- * request labelled `FULL_RUN_LABEL`. Two thirds of the sixty runners, so that a
- * full run still leaves room for what runs beside it, and two at this size
- * overlap only by queueing; `tasks/ci-workflow.test.ts` holds this to that
- * share.
+ * The most lanes a full run may take: GitHub's job-matrix limit. The
+ * workflow limits how many run at once independently of this count.
  */
-export const FULL_LANES_MAX = 40;
+export const FULL_LANES_MAX = 256;
 
 /** The label that runs everything on a pull request. */
 export const FULL_RUN_LABEL = "ci: full";
@@ -604,10 +601,9 @@ export const DIALS: readonly Dial[] = [
     value: FULL_LANES_MAX,
     unit: "lanes",
     setBy: "chosen",
-    why: "`LANES_MAX` for the full run. Up when the lane-count job says the " +
-      "full run needs more lanes than this and its lanes near the lane " +
-      "step's bound, and the organization's runner limit has room; down when " +
-      "one full run crowds out the runs behind it.",
+    why: "The full run may use up to GitHub's job-matrix limit. Concurrency " +
+      "per run is limited by the workflow's `max-parallel`, independently " +
+      "of how many lanes the work needs.",
   },
   {
     name: "FULL_RUN_LABEL",

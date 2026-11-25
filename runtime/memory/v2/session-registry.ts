@@ -1,4 +1,5 @@
 import type {
+  BranchName,
   OpCursor,
   OperationWatchSpec,
   SessionDescriptor,
@@ -9,6 +10,7 @@ import type {
   ViewQuery,
   WatchSpec,
 } from "../v2.ts";
+import { DEFAULT_BRANCH } from "../v2.ts";
 import type { ClientInfo } from "./client-info.ts";
 import {
   type DocumentInterestQuery,
@@ -18,6 +20,26 @@ import {
 import type { TrackedGraphState } from "./query.ts";
 import type { SessionCacheEntry } from "./server-sync.ts";
 import { trackedIdsFromEntries } from "./server-sync.ts";
+
+/**
+ * Why a session owes a full watch evaluation:
+ * - `first-selection`: the planner sent the first selection for a view, or
+ *   the first for a new revision of one;
+ * - `resume`: the session was resumed over a new connection, which replaced
+ *   the delivery state its next sync diffs against;
+ * - `lost-frame`: a frame that never reached the client was rolled back,
+ *   leaving delivery state only a full evaluation re-diffs;
+ * - `failed-pass`: a refresh pass failed after it may have advanced the
+ *   session's tracking state;
+ * - `routed-restore`: a routed context's retained interests were cleared
+ *   ahead of a fresh-context restore.
+ */
+export type FullResyncCause =
+  | "first-selection"
+  | "resume"
+  | "lost-frame"
+  | "failed-pass"
+  | "routed-restore";
 
 export type SessionState = {
   id: string;
@@ -95,11 +117,10 @@ export type SessionState = {
   caughtUpLocalSeq: number;
   pendingCaughtUpLocalSeq: number;
 
-  /** Set when delivery-state rollback re-inserted tombstone cache entries
-   * for a lost frame's removes: the incremental refresh retracts only what
-   * its own re-walks retire, so the next sync must run a FULL watch
-   * evaluation to re-diff them out. Self-clearing. */
-  forceFullResync: boolean;
+  /** Why the session's next sync runs a FULL watch evaluation instead of
+   * an incremental refresh, or `false` when it owes none. Self-clearing.
+   * The cause is carried into the slow-query record of that evaluation. */
+  forceFullResync: FullResyncCause | false;
 
   /**
    * Set when a planner selection changed what the session's views may run
@@ -158,12 +179,22 @@ export type SessionState = {
    * mode. */
   servingOwn?: true;
 
-  /** Whether the session's latest open declared that it is not demand
-   * (`SessionDescriptor.demand`). Such a session is not client demand on
-   * any server, whoever signed it, where a serving loop's own session of
-   * another kind is left out only by the server whose loop it belongs to
-   * (`isServingSessionOf()`). Fresh per open, in every access-list mode. */
+  /**
+   * Whether the session is not client demand: its latest open declared so
+   * (`SessionDescriptor.demand`), or it is a session of a branch, which no
+   * serving loop runs. Such a session is not client demand on any server,
+   * whoever signed it, where a serving loop's own session of another kind
+   * is left out only by the server whose loop it belongs to
+   * (`isServingSessionOf()`). Fresh per open, in every access-list mode.
+   */
   notDemand?: true;
+
+  /**
+   * The branch the session is of (`SessionDescriptor.branch`), which its
+   * commits, queries and watches read and write when they name none.
+   * Absent for a session of the default branch.
+   */
+  branch?: BranchName;
 
   /** Client report supplied by the latest admitted open. */
   client?: ClientInfo;
@@ -175,7 +206,8 @@ export type SessionState = {
   principal?: string;
 
   /** The delegated READ binding (OW31; `SessionDescriptor.actingAs`):
-   * the acting user — the space's ACL owner at open time — this
+   * the acting user — the space's ACL owner at open time, or the owner an
+   * access list first names after an open that found none — this
    * session's READ-class capability decisions resolve as. Never
    * consulted for WRITE/OWNER requirements, the lease-holder read row,
    * or scoped-read identity (those key on `principal`, the envelope).
@@ -287,8 +319,8 @@ const openedEvent = (session: SessionState): SessionLifecycleEvent => ({
 /**
  * Whether the serving loop of `principal` leaves `session` out of client
  * demand: the session is one of that loop's own
- * (`SessionState.servingOwn`, signed by `principal`), or it declared that it
- * is not demand (`SessionState.notDemand`), whoever signed it. A session of
+ * (`SessionState.servingOwn`, signed by `principal`), or it is not
+ * demand (`SessionState.notDemand`), whoever signed it. A session of
  * that principal from a client that made no such declaration, and any
  * session when `principal` is `undefined`, is not left out.
  */
@@ -401,6 +433,18 @@ export class SessionRegistry {
         `session ${sessionId} is already bound to ${existing.principal}`,
       );
     }
+    // A session's replica holds one branch's documents, which a resume on
+    // another branch would leave it holding as though they were that one's.
+    if (
+      existing !== undefined &&
+      (existing.branch ?? DEFAULT_BRANCH) !== (session.branch ?? DEFAULT_BRANCH)
+    ) {
+      throw authorizationError(
+        `session ${sessionId} is of another branch`,
+      );
+    }
+    const onBranch = session.branch !== undefined &&
+      session.branch !== DEFAULT_BRANCH;
     if (
       existing !== undefined &&
       session.sessionToken !== existing.sessionToken &&
@@ -505,7 +549,12 @@ export class SessionRegistry {
           session.demand === false
         ? { servingOwn: true as const }
         : {}),
-      ...(session.demand === false ? { notDemand: true as const } : {}),
+      // No serving loop runs a branch, so a session of one is demand on
+      // nothing.
+      ...(session.demand === false || onBranch
+        ? { notDemand: true as const }
+        : {}),
+      ...(onBranch ? { branch: session.branch } : {}),
       // Fresh per open, like the binding: the chain THIS open presented.
       ...(capabilityPrincipal !== undefined ? { capabilityPrincipal } : {}),
       ...(chainIssuers !== undefined ? { chainIssuers } : {}),
@@ -605,7 +654,7 @@ export class SessionRegistry {
     session.viewSelections = new Map();
     session.viewDemandGraphs = new Map();
     session.viewDemandEntities = new Map();
-    session.forceFullResync = true;
+    session.forceFullResync = "routed-restore";
     session.viewPlansPending = false;
     session.viewSupportGrown = false;
     session.viewSupportReplaced = false;

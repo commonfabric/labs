@@ -84,6 +84,10 @@ An entry's description, hashtags and keywords come from its opening doc comment,
 as for `cf pattern publish`. An entry with no description is compiled but not
 published, and the job summary lists it.
 
+An entry named `main.tsx` is published as standalone, offered to a person
+choosing what to place; every other entry is published as a part. The index
+still stores an entry as a part when it has a required input with no default.
+
 A lineage belongs to a path. When the globs stop selecting a path (the file is
 deleted, moved, or newly excluded), its lineage is withdrawn: unlisted, and
 still readable by id. A path that comes back resumes the same lineage.
@@ -110,10 +114,16 @@ still readable by id. A path that comes back resumes the same lineage.
    version, named under the brand and listed at once. Lineages whose paths the
    globs no longer select are withdrawn.
 4. It writes a summary to the job: what it published, what failed, which entries
-   lack a description, and what was withdrawn. It also shows the privacy
-   gardener's findings on each newest version. The gardener judges every brand
-   version and never holds one back, so its findings are reported, not enforced.
+   lack a description or are too large for the index, and what was withdrawn. It
+   also shows the privacy gardener's findings on each newest version. The
+   gardener judges every brand version and never holds one back, so its findings
+   are reported, not enforced.
 
 The publish job fails if any entry failed to compile or publish, or the
-withdrawals were refused, after publishing the others. Nothing about past runs
-is kept outside the index, so the next run after a failure catches up.
+withdrawals were refused, after publishing the others. An entry with no
+description, one the index refuses as larger than its size limit, and a privacy
+finding are reported in the summary and do not fail it: each is fixed in the
+pattern. An entry with no description or too large for the index is not
+published, so until it is fixed the index keeps listing the path's earlier
+version, if it has one. Nothing about past runs is kept outside the index, so
+the next run after a failure catches up.

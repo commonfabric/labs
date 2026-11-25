@@ -1,4 +1,11 @@
 /// <cts-enable />
+/**
+ * An autonomous-worker record with an editable name, a markdown directive
+ * describing its role, a collapsible log of what it has learned, and a status
+ * badge (idle, running, or error) with the time and summary of its last run. It
+ * has a checkbox to enable or disable the agent, and other patterns can mark it
+ * running, idle, or failed and append to what it has learned.
+ */
 import {
   action,
   computed,

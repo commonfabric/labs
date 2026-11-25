@@ -14,10 +14,14 @@ import { resolveScopeKey } from "@commonfabric/memory/v2";
 import {
   dirtyFanOutAll,
   dirtyFanOutForCause,
+  fanOutHoldsSlot,
   fanOutInstances,
   fanOutInstancesToRun,
+  fanOutRunApplied,
   fanOutRunFinished,
+  fanOutRunOpened,
   fanOutRunStarted,
+  fanOutSlotChanged,
   fanOutUnionLog,
   keyAtRatchet,
   newFanOutNodeState,
@@ -240,5 +244,207 @@ describe("fan-out stage B: run outcomes and B7 precise dirtiness", () => {
     pruneFanOutInstances(state, fanOutInstances(state, [aliceS1]));
     expect(fanOutUnionLog(state).reads.map((r) => r.id)).toEqual(["of:a"]);
     expect(state.clean.has(userKey(bobS1))).toBe(false);
+  });
+});
+
+describe("fan-out: which run an instance holds the write of", () => {
+  // Two viewers' runs of one node each write, besides the instance at their
+  // own key, the instance of `of:shared` at the space's key. The helpers
+  // below drive one run through the points the scheduler does: the run
+  // opens its transaction, hands its writes over, and the replica then
+  // reports each instance those writes changed, with that transaction as
+  // the source.
+
+  const shared = "of:shared";
+  const narrowed = () => {
+    const state = newFanOutNodeState();
+    state.narrowed = true;
+    return state;
+  };
+  const alice = { identity: aliceS1, key: userKey(aliceS1) };
+  const bob = { identity: bobS1, key: userKey(bobS1) };
+
+  /** Runs `instance` once, changing the instances at `changed`. */
+  const run = (
+    state: ReturnType<typeof newFanOutNodeState>,
+    instance: typeof alice,
+    changed: readonly string[],
+  ) => {
+    const transaction = {};
+    const startGen = fanOutRunStarted(state, instance);
+    fanOutRunOpened(state, instance, transaction);
+    fanOutRunFinished(state, instance, {
+      discovered: "user",
+      startGen,
+      log: emptyLog(),
+      transaction,
+    });
+    for (const scopeKey of changed) {
+      fanOutSlotChanged(state, scopeKey, shared, transaction);
+    }
+    if (changed.length > 0) fanOutRunApplied(state, transaction);
+  };
+
+  it("returns `true` for an instance nothing has changed since the node was first run", () => {
+    const state = narrowed();
+    run(state, alice, []);
+
+    expect(fanOutHoldsSlot(state, alice.key, "space", shared)).toBe(true);
+  });
+
+  it("returns `true` for the run that changed the instance last and `false` for the one before it", () => {
+    const state = narrowed();
+    run(state, alice, ["space"]);
+    run(state, bob, ["space"]);
+
+    expect(fanOutHoldsSlot(state, bob.key, "space", shared)).toBe(true);
+    expect(fanOutHoldsSlot(state, alice.key, "space", shared)).toBe(false);
+  });
+
+  it("returns `true` for both runs where the later one changed nothing of the instance", () => {
+    // Bob's run writes what Alice's left, so the replica reports no change
+    // of the shared instance, only of Bob's own.
+
+    const state = narrowed();
+    run(state, alice, ["space"]);
+    run(state, bob, [bob.key]);
+
+    expect(fanOutHoldsSlot(state, alice.key, "space", shared)).toBe(true);
+    expect(fanOutHoldsSlot(state, bob.key, "space", shared)).toBe(true);
+  });
+
+  it("returns `true` for a later run whose writes the replica applied after the instance changed, though it handed them over before", () => {
+    // Bob's run hands its writes over before the replica reports Alice's
+    // change, and the replica then applies Bob's with no change of the
+    // shared instance: it holds what Bob wrote as well.
+
+    const state = narrowed();
+    const aliceTransaction = {};
+    const bobTransaction = {};
+    for (
+      const [instance, transaction] of [
+        [alice, aliceTransaction],
+        [bob, bobTransaction],
+      ] as const
+    ) {
+      const startGen = fanOutRunStarted(state, instance);
+      fanOutRunOpened(state, instance, transaction);
+      fanOutRunFinished(state, instance, {
+        discovered: "user",
+        startGen,
+        log: emptyLog(),
+        transaction,
+      });
+    }
+    fanOutSlotChanged(state, "space", shared, aliceTransaction);
+    fanOutRunApplied(state, aliceTransaction);
+    expect(fanOutHoldsSlot(state, bob.key, "space", shared)).toBe(false);
+
+    fanOutSlotChanged(state, bob.key, shared, bobTransaction);
+    fanOutRunApplied(state, bobTransaction);
+
+    expect(fanOutHoldsSlot(state, bob.key, "space", shared)).toBe(true);
+    expect(fanOutHoldsSlot(state, alice.key, "space", shared)).toBe(true);
+  });
+
+  it("returns `false` for every run once something that is no run of the node changed the instance", () => {
+    const state = narrowed();
+    run(state, alice, ["space"]);
+    run(state, bob, [bob.key]);
+    fanOutSlotChanged(state, "space", shared, undefined);
+
+    expect(fanOutHoldsSlot(state, alice.key, "space", shared)).toBe(false);
+    expect(fanOutHoldsSlot(state, bob.key, "space", shared)).toBe(false);
+  });
+
+  it("returns `true` again for a run made after the change", () => {
+    const state = narrowed();
+    run(state, alice, ["space"]);
+    run(state, bob, ["space"]);
+    run(state, alice, []);
+
+    expect(fanOutHoldsSlot(state, alice.key, "space", shared)).toBe(true);
+    expect(fanOutHoldsSlot(state, bob.key, "space", shared)).toBe(true);
+  });
+
+  it("returns `false` where a change names no one instance of the document", () => {
+    const state = narrowed();
+    run(state, alice, ["space"]);
+    fanOutSlotChanged(state, "*", shared, undefined);
+
+    expect(fanOutHoldsSlot(state, alice.key, "space", shared)).toBe(false);
+  });
+
+  it("names the run under the key it was recorded under once it narrowed", () => {
+    // The probe runs at the space's key and discovers the user's scope, so
+    // the instance it leaves is Alice's, and the change its writes make is
+    // that instance's.
+
+    const state = newFanOutNodeState();
+    const probe = { identity: aliceS1, key: "space" as const };
+    const transaction = {};
+    const startGen = fanOutRunStarted(state, probe);
+    fanOutRunOpened(state, probe, transaction);
+    fanOutRunFinished(state, probe, {
+      discovered: "user",
+      startGen,
+      log: emptyLog(),
+      transaction,
+    });
+    run(state, bob, [bob.key]);
+    fanOutSlotChanged(state, "space", shared, transaction);
+
+    expect(fanOutHoldsSlot(state, alice.key, "space", shared)).toBe(true);
+    expect(fanOutHoldsSlot(state, bob.key, "space", shared)).toBe(false);
+  });
+
+  it("keeps a change for the key its run was recorded under, whatever the ratchet gives the run's identity later", () => {
+    // Alice's run at her user's key hands its writes over, and before the
+    // replica applies them another run narrows her to her session. The
+    // change is the user instance's run's, and no instance of hers at the
+    // session's depth made it.
+
+    const state = narrowed();
+    const transaction = {};
+    const startGen = fanOutRunStarted(state, alice);
+    fanOutRunOpened(state, alice, transaction);
+    fanOutRunFinished(state, alice, {
+      discovered: "user",
+      startGen,
+      log: emptyLog(),
+      transaction,
+    });
+    const deeper = { identity: aliceS1, key: sessionKey(aliceS1) };
+    const deeperGen = fanOutRunStarted(state, deeper);
+    fanOutRunFinished(state, deeper, {
+      discovered: "session",
+      startGen: deeperGen,
+      log: emptyLog(),
+    });
+    fanOutSlotChanged(state, "space", shared, transaction);
+
+    expect(fanOutHoldsSlot(state, deeper.key, "space", shared)).toBe(false);
+  });
+
+  it("counts a change whose transaction no run of the node handed over as no run's", () => {
+    const state = narrowed();
+    run(state, alice, []);
+    const transaction = {};
+    fanOutRunOpened(state, alice, transaction);
+    fanOutSlotChanged(state, "space", shared, transaction);
+
+    expect(fanOutHoldsSlot(state, alice.key, "space", shared)).toBe(false);
+  });
+
+  it("forgets the changes to the instances of a viewer who left and keeps those the remaining runs reach", () => {
+    const state = narrowed();
+    run(state, alice, ["space", alice.key]);
+    run(state, bob, ["space", bob.key]);
+    pruneFanOutInstances(state, fanOutInstances(state, [aliceS1]));
+
+    expect([...state.slotChanges.keys()].sort()).toEqual(
+      [`${alice.key}\0${shared}`, `space\0${shared}`].sort(),
+    );
+    expect(fanOutHoldsSlot(state, alice.key, "space", shared)).toBe(false);
   });
 });

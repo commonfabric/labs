@@ -17,7 +17,11 @@ import type { NormalizedFullLink } from "../src/link-types.ts";
 import { getMetaLink, parseLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { systemPatternSource } from "../src/pattern-source-scheme.ts";
-import { getPatternIdentityRef, setPatternSource } from "../src/runner.ts";
+import {
+  getPatternIdentityRef,
+  type RunnerStartOptions,
+  setPatternSource,
+} from "../src/runner.ts";
 import { setResultCell } from "../src/result-utils.ts";
 import { type ExperimentalOptions, Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
@@ -249,6 +253,93 @@ const MAP_PROGRAM: RuntimeProgram = {
   }],
 };
 
+// `MAP_PROGRAM` with each row in a list of its own, which `flatMap` flattens.
+const FLAT_MAP_PROGRAM: RuntimeProgram = {
+  ...MAP_PROGRAM,
+  files: [{
+    ...MAP_PROGRAM.files[0],
+    contents: MAP_PROGRAM.files[0].contents.replace(
+      "doubled.map((each) => recorder({ doubled: each }))",
+      "doubled.flatMap((each) => [recorder({ doubled: each })])",
+    ),
+  }],
+};
+
+// The rows of `MAP_PROGRAM`, built from a list the piece's argument links to.
+const LINKED_MAP_PROGRAM: RuntimeProgram = {
+  ...MAP_PROGRAM,
+  files: [{
+    ...MAP_PROGRAM.files[0],
+    contents: MAP_PROGRAM.files[0].contents.replace(
+      /export default pattern<[\s\S]*$/,
+      [
+        "export default pattern<",
+        "  { list: number[] },",
+        "  { rows: { record: Stream<unknown>; seen: number }[] }",
+        ">(({ list }) => ({",
+        "  rows: list.map((each) => recorder({ doubled: each })),",
+        "}));",
+      ].join("\n"),
+    ),
+  }],
+};
+
+// A `filter` over what the enclosing instance derives, whose predicate
+// instances take each element as their input.
+const FILTER_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern } from 'commonfabric';",
+      "",
+      "export default pattern<{ value: number }, { rows: number[] }>(",
+      "  ({ value }) => {",
+      "    const doubled = computed(() => [value * 2]);",
+      "    return { rows: doubled.filter((each) => each > 0) };",
+      "  },",
+      ");",
+    ].join("\n"),
+  }],
+};
+
+// The recorder of `MAP_PROGRAM`, as the branch `ifElse` selects.
+const IF_ELSE_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, handler, ifElse, pattern, Stream, Writable } from 'commonfabric';",
+      "",
+      "const record = handler<",
+      "  unknown,",
+      "  { doubled?: number; seen: Writable<number> }",
+      ">((_event, { doubled, seen }) => {",
+      "  seen.set(doubled ?? -1);",
+      "});",
+      "",
+      "const recorder = pattern<",
+      "  { doubled?: number },",
+      "  { record: Stream<unknown>; seen: number }",
+      ">(({ doubled }) => {",
+      "  const seen = new Writable<number>(0);",
+      "  return { record: record({ doubled, seen }), seen };",
+      "});",
+      "",
+      "export default pattern<{ value: number }>(({ value }) => {",
+      "  const doubled = computed(() => value * 2);",
+      "  const positive = computed(() => value > 0);",
+      "  const chosen = ifElse(",
+      "    positive,",
+      "    recorder({ doubled }),",
+      "    recorder({ doubled: 0 }),",
+      "  );",
+      "  return { chosen };",
+      "});",
+    ].join("\n"),
+  }],
+};
+
 const ARGUMENT_CAUSE = "input sources argument";
 const RESULT_CAUSE = "input sources result";
 
@@ -472,15 +563,28 @@ describe("ensure-piece-running", () => {
       options?: StartWithInputSourcesOptions,
     ) => {
       const owner = await nestedOwner(opener, stream);
-      const started = await startWithInputSources(
-        opener,
-        owner,
-        () => opener.start(owner),
-        options,
-      );
+      const started = await startWithInputSources(opener, owner, options);
       opener.scheduler.queueEvent(stream, {});
       await opener.idle();
       return { owner, started, seen: await seenIn(opener) };
+    };
+
+    /** A runtime whose patterns route serves the sources under `root`. */
+    const routedRuntime = (root: string): Runtime => {
+      const route = new PatternsRoute(root);
+      const runtime = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager,
+        fetch: async (input, init) =>
+          await route.serve(
+            new Request(
+              input instanceof Request ? input.url : input.toString(),
+              init,
+            ),
+          ) ?? new Response("not found", { status: 404 }),
+      });
+      runtimes.push(runtime);
+      return runtime;
     };
 
     /** How many input-source warnings an open has logged so far. */
@@ -499,6 +603,32 @@ describe("ensure-piece-running", () => {
       expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
         true,
       );
+    });
+
+    it("calls the opened piece's start before the enclosing piece runs, with work to wait for that settles once it runs", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime();
+      const owner = await nestedOwner(opener, stream);
+      const enclosingCell = opener.getCellFromLink(enclosing);
+      const start = opener.start.bind(opener);
+      let enclosingRanAtStart: boolean | undefined;
+      let enclosingRanAtRelease: boolean | undefined;
+      opener.start = ((cell, options) => {
+        enclosingRanAtStart = opener.runner.isRunning(enclosingCell);
+        return start(cell, {
+          ...options,
+          instantiateAfter: options?.instantiateAfter?.then(() => {
+            enclosingRanAtRelease = opener.runner.isRunning(enclosingCell);
+          }),
+        });
+      }) as typeof start;
+
+      const started = await startWithInputSources(opener, owner);
+
+      expect(started).toBe(true);
+      expect(enclosingRanAtStart).toBe(false);
+      expect(enclosingRanAtRelease).toBe(true);
+      expect(opener.runner.isRunning(owner)).toBe(true);
     });
 
     it("leaves the opened nested piece running when its enclosing piece stops", async () => {
@@ -540,11 +670,7 @@ describe("ensure-piece-running", () => {
       const owner = await nestedOwner(opener, stream);
       const warned = openWarnings();
 
-      const started = await startWithInputSources(
-        opener,
-        owner,
-        () => opener.start(owner),
-      );
+      const started = await startWithInputSources(opener, owner);
 
       expect(started).toBe(true);
       expect(opener.runner.isRunning(owner)).toBe(true);
@@ -571,7 +697,7 @@ describe("ensure-piece-running", () => {
             : load(identity, symbol, ...rest)) as typeof load;
       const warned = openWarnings();
 
-      await startWithInputSources(opener, owner, () => opener.start(owner));
+      await startWithInputSources(opener, owner);
 
       expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
         false,
@@ -596,11 +722,7 @@ describe("ensure-piece-running", () => {
             : load(identity, symbol, ...rest)) as typeof load;
       const warned = openWarnings();
 
-      const started = await startWithInputSources(
-        opener,
-        owner,
-        () => opener.start(owner),
-      );
+      const started = await startWithInputSources(opener, owner);
 
       expect(started).toBe(true);
       expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
@@ -621,14 +743,16 @@ describe("ensure-piece-running", () => {
         return sync(cell, options);
       }) as typeof storageManager.syncCell;
 
-      let calledStart = false;
-      const started = await startWithInputSources(opener, owner, () => {
-        calledStart = true;
+      const calls: (RunnerStartOptions | undefined)[] = [];
+      opener.start = ((_cell, options) => {
+        calls.push(options);
         return Promise.resolve(true);
-      });
+      }) as typeof opener.start;
+
+      const started = await startWithInputSources(opener, owner);
 
       expect(started).toBe(true);
-      expect(calledStart).toBe(true);
+      expect(calls).toEqual([undefined]);
       expect(walked).toEqual([]);
     });
 
@@ -638,9 +762,7 @@ describe("ensure-piece-running", () => {
       const owner = await nestedOwner(opener, stream);
 
       const opened = await Promise.all(
-        [0, 1].map(() =>
-          startWithInputSources(opener, owner, () => opener.start(owner))
-        ),
+        [0, 1].map(() => startWithInputSources(opener, owner)),
       );
       opener.scheduler.queueEvent(stream, {});
       await opener.idle();
@@ -760,7 +882,7 @@ describe("ensure-piece-running", () => {
         const opened = opener.getCellFromLink({ ...child, path: [] });
         await opened.sync();
 
-        await startWithInputSources(opener, opened, () => opener.start(opened));
+        await startWithInputSources(opener, opened);
 
         expect(opener.runner.isRunning(opened)).toBe(true);
         expect(
@@ -791,10 +913,11 @@ describe("ensure-piece-running", () => {
       const opened = opener.getCellFromLink({ ...spawnedLink, path: [] });
       await opened.sync();
 
+      opener.start = () => Promise.resolve(true);
+
       const most = await mostLoadsAtOnce(
         internal,
-        () =>
-          startWithInputSources(opener, opened, () => Promise.resolve(true)),
+        () => startWithInputSources(opener, opened),
       );
 
       expect(most).toBe(internal.length);
@@ -806,15 +929,41 @@ describe("ensure-piece-running", () => {
     });
 
     /**
+     * The instances a list builtin builds in `runtime` from here on, each
+     * with the root of the piece whose graph holds the builtin, which the
+     * builtin passes the instance's run as `parentPieceRootId`, in the order
+     * they are built.
+     */
+    const elementsBuiltIn = (runtime: Runtime) => {
+      const built: { element: NormalizedFullLink; builder: string }[] = [];
+      const runInTransaction = runtime.runner.runInTransaction.bind(
+        runtime.runner,
+      );
+      runtime.runner.runInTransaction = (tx, pattern, input, cell, options) => {
+        if (options?.parentPieceRootId !== undefined) {
+          built.push({
+            element: cell.getAsNormalizedFullLink(),
+            builder: options.parentPieceRootId,
+          });
+        }
+        return runInTransaction(tx, pattern, input, cell, options);
+      };
+      return built;
+    };
+
+    /**
      * Runs `program` with `value` 1, then stops it and moves `value` to 5
      * with nothing running, and returns the stream `streamPath` names in its
-     * result and the enclosing instance's result.
+     * result, the enclosing instance's result, and the result of each
+     * instance a list builtin built for an element, in the order they were
+     * built.
      */
     const stopProgramAfterInputChanges = async (
       program: RuntimeProgram,
       streamPath: (string | number)[],
     ) => {
       const first = newRuntime();
+      const built = elementsBuiltIn(first);
       const compiled = await first.patternManager.compilePattern(program, {
         space,
       });
@@ -848,7 +997,11 @@ describe("ensure-piece-running", () => {
       }
       await first.idle();
       await first.storageManager.synced();
-      return { stream, enclosing: result.getAsNormalizedFullLink() };
+      return {
+        stream,
+        enclosing: result.getAsNormalizedFullLink(),
+        elements: built.map(({ element }) => element),
+      };
     };
 
     for (
@@ -859,6 +1012,12 @@ describe("ensure-piece-running", () => {
           ["record"],
         ],
         ["that `map` builds as a row", MAP_PROGRAM, ["rows", 0, "record"]],
+        [
+          "that `flatMap` builds into its output",
+          FLAT_MAP_PROGRAM,
+          ["rows", 0, "record"],
+        ],
+        ["that `ifElse` selects", IF_ELSE_PROGRAM, ["chosen", "record"]],
       ] as const
     ) {
       it(`starts the piece enclosing a nested piece ${shape}`, async () => {
@@ -869,7 +1028,7 @@ describe("ensure-piece-running", () => {
         const opener = newRuntime();
         const owner = await nestedOwner(opener, stream);
 
-        await startWithInputSources(opener, owner, () => opener.start(owner));
+        await startWithInputSources(opener, owner);
         opener.scheduler.queueEvent(stream, {});
         await opener.idle();
 
@@ -879,30 +1038,210 @@ describe("ensure-piece-running", () => {
       });
     }
 
-    it("starts the piece that built a row with `map` when the row itself is opened", async () => {
-      const { stream, enclosing } = await stopProgramAfterInputChanges(
-        MAP_PROGRAM,
-        ["rows", 0, "record"],
-      );
-      const opener = newRuntime();
-      const recorder = await nestedOwner(opener, stream);
-      // The row is the instance `map` built, whose graph sets the recorder up
-      // as a nested node; the recorder's argument belongs to it.
-      const recorderArgument = opener.getCellFromLink(
-        getMetaLink(recorder, "argument")!,
-      );
-      await recorderArgument.sync();
-      const row = opener.getCellFromLink({
-        ...getMetaLink(recorderArgument, "result")!,
-        path: [],
+    for (
+      const [builtin, program, instance] of [
+        ["map", MAP_PROGRAM, "row"],
+        ["flatMap", FLAT_MAP_PROGRAM, "row"],
+        ["filter", FILTER_PROGRAM, "predicate instance"],
+      ] as const
+    ) {
+      it(`starts the piece that built a ${instance} with \`${builtin}\` when the ${instance} itself is opened`, async () => {
+        const { enclosing, elements } = await stopProgramAfterInputChanges(
+          program,
+          [],
+        );
+        expect(elements.length).toBe(1);
+        const opener = newRuntime();
+        const element = opener.getCellFromLink({ ...elements[0], path: [] });
+        await element.sync();
+
+        await startWithInputSources(opener, element);
+        await opener.idle();
+
+        // The instance's input is the element the enclosing piece derives.
+        const argument = opener.getCellFromLink(
+          getMetaLink(element, "argument")!,
+        );
+        expect(await argument.key("element" as never).pull()).toBe(10);
+        expect(opener.runner.isRunning(element)).toBe(true);
+        expect(opener.runner.isRunning(opener.getCellFromLink(enclosing)))
+          .toBe(true);
       });
-      await row.sync();
+    }
 
-      await startWithInputSources(opener, row, () => opener.start(row));
+    describe("with the suggestion surface a free-form wish builds", () => {
+      // The surface the patterns route serves for the wish: its handler
+      // records the `doubled` the wish's context links to.
+      const SUGGESTION_SOURCE = [
+        "import { handler, pattern, Stream, Writable } from 'commonfabric';",
+        "",
+        "const record = handler<",
+        "  unknown,",
+        "  { doubled?: number; seen: Writable<number> }",
+        ">((_event, { doubled, seen }) => {",
+        "  seen.set(doubled ?? -1);",
+        "});",
+        "",
+        "export default pattern<",
+        "  { situation: string; context: { doubled?: number } },",
+        "  { record: Stream<unknown>; seen: number }",
+        ">(({ context }) => {",
+        "  const seen = new Writable<number>(0);",
+        "  return { record: record({ doubled: context.doubled, seen }), seen };",
+        "});",
+      ].join("\n");
 
-      expect(opener.runner.isRunning(row)).toBe(true);
-      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing)))
-        .toBe(true);
+      // A piece whose free-form wish passes what it derives as context.
+      const WISHER_PROGRAM: RuntimeProgram = {
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: [
+            "import { computed, pattern, Stream, wish } from 'commonfabric';",
+            "",
+            "export default pattern<{ value: number }>(({ value }) => {",
+            "  const doubled = computed(() => value * 2);",
+            "  const found = wish<{ record: Stream<unknown>; seen: number }>({",
+            "    query: 'something to find',",
+            "    context: { doubled },",
+            "  });",
+            "  return { found };",
+            "});",
+          ].join("\n"),
+        }],
+      };
+
+      let root: string;
+
+      beforeEach(async () => {
+        root = await Deno.makeTempDir({ prefix: "input-sources-wish-" });
+        await Deno.mkdir(`${root}/system/suggestion`, { recursive: true });
+        await Deno.writeTextFile(
+          `${root}/system/suggestion/suggestion.tsx`,
+          SUGGESTION_SOURCE,
+        );
+      });
+
+      afterEach(async () => {
+        for (const runtime of runtimes) {
+          await runtime.sourceReconciler.idle();
+          await runtime.patternManager.flushCompileCacheWrites();
+        }
+        await Deno.remove(root, { recursive: true });
+      });
+
+      it("starts the wishing piece before the surface opened on its own, so a later event's handler reads what the wishing piece derives now", async () => {
+        const first = routedRuntime(root);
+        const compiled = await first.patternManager.compilePattern(
+          WISHER_PROGRAM,
+          { space },
+        );
+        const argument = first.getCell<{ value: number }>(
+          space,
+          ARGUMENT_CAUSE,
+          compiled.argumentSchema,
+        );
+        const result = first.getCell<{ found: unknown }>(
+          space,
+          RESULT_CAUSE,
+          compiled.resultSchema,
+        );
+        {
+          const tx = first.edit();
+          argument.withTx(tx).set({ value: 1 });
+          first.run(tx, compiled, argument, result);
+          expect((await tx.commit().settled).error).toBeUndefined();
+        }
+        await first.idle();
+        // The wish node's output document links the surface's root.
+        const slot = first.getCellFromLink(
+          parseLink(result.key("found").getRaw(), result)!,
+        );
+        await slot.pull();
+        const surfaceLink = parseLink(slot.getRaw(), slot)!;
+        const stream = first.getCellFromLink(surfaceLink).key("record" as never)
+          .resolveAsCell().getAsNormalizedFullLink();
+        first.runner.stop(result);
+        {
+          const tx = first.edit();
+          argument.withTx(tx).key("value").set(5);
+          expect((await tx.commit().settled).error).toBeUndefined();
+        }
+        await first.idle();
+        await first.storageManager.synced();
+        const opener = routedRuntime(root);
+        const surface = opener.getCellFromLink({ ...surfaceLink, path: [] });
+        await surface.sync();
+
+        await startWithInputSources(opener, surface);
+        opener.scheduler.queueEvent(stream, {});
+        await opener.idle();
+
+        expect(await surface.key("seen" as never).pull()).toBe(10);
+        expect(
+          opener.runner.isRunning(
+            opener.getCellFromLink(result.getAsNormalizedFullLink()),
+          ),
+        ).toBe(true);
+      });
+    });
+
+    it("starts the piece that built a row, and neither the piece its list comes from nor a piece linking the row", async () => {
+      const first = newRuntime();
+      const built = elementsBuiltIn(first);
+      const [producerPattern, builderPattern, linkerPattern] = await Promise
+        .all(
+          [FILTER_PROGRAM, LINKED_MAP_PROGRAM, PROGRAM].map((program) =>
+            first.patternManager.compilePattern(program, { space })
+          ),
+        );
+      const [producer, builder, linker] = ["producer", "builder", "linker"]
+        .map((name) =>
+          first.getCell<Record<string, unknown>>(
+            space,
+            `input sources ${name} result`,
+            undefined,
+          )
+        );
+      {
+        const tx = first.edit();
+        first.run(tx, producerPattern, { value: 1 }, producer);
+        first.run(tx, builderPattern, { list: producer.key("rows") }, builder);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await builder.pull();
+      const rows = built.filter(({ builder: id }) =>
+        id === builder.getAsNormalizedFullLink().id
+      );
+      expect(rows.length).toBe(1);
+      const row = first.getCellFromLink({ ...rows[0].element, path: [] });
+      {
+        const tx = first.edit();
+        first.run(tx, linkerPattern, { value: 1 }, linker);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      {
+        const tx = first.edit();
+        first.getCellFromLink(getMetaLink(linker, "argument")!).withTx(tx)
+          .key("others").set([row]);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      for (const piece of [producer, builder, linker]) first.runner.stop(piece);
+      await first.idle();
+      await first.storageManager.synced();
+      const opener = newRuntime();
+      const opened = opener.getCellFromLink(row.getAsNormalizedFullLink());
+      await opened.sync();
+
+      await startWithInputSources(opener, opened);
+
+      expect(
+        [opened, builder, producer, linker].map((piece) =>
+          opener.runner.isRunning(
+            opener.getCellFromLink(piece.getAsNormalizedFullLink()),
+          )
+        ),
+      ).toEqual([true, true, false, false]);
     });
 
     /**
@@ -934,11 +1273,7 @@ describe("ensure-piece-running", () => {
         opener.getCellFromLink(producer.getAsNormalizedFullLink())
       );
       await openedHub.sync();
-      await startWithInputSources(
-        opener,
-        openedHub,
-        () => opener.start(openedHub),
-      );
+      await startWithInputSources(opener, openedHub);
 
       expect(opener.runner.isRunning(openedHub)).toBe(true);
       expect(openedLinked.map((piece) => opener.runner.isRunning(piece)))
@@ -953,10 +1288,11 @@ describe("ensure-piece-running", () => {
       const openedHub = opener.getCellFromLink(hub.getAsNormalizedFullLink());
       await openedHub.sync();
 
+      opener.start = () => Promise.resolve(true);
+
       const most = await mostLoadsAtOnce(
         linked.map((producer) => producer.getAsNormalizedFullLink().id),
-        () =>
-          startWithInputSources(opener, openedHub, () => Promise.resolve(true)),
+        () => startWithInputSources(opener, openedHub),
       );
 
       expect(most).toBe(linked.length);
@@ -1061,30 +1397,12 @@ describe("ensure-piece-running", () => {
           await Deno.remove(root, { recursive: true });
         });
 
-        /** A runtime whose patterns route serves `root`. */
-        const routedRuntime = (): Runtime => {
-          const route = new PatternsRoute(root);
-          const runtime = new Runtime({
-            apiUrl: new URL("http://toolshed.test"),
-            storageManager,
-            fetch: async (input, init) =>
-              await route.serve(
-                new Request(
-                  input instanceof Request ? input.url : input.toString(),
-                  init,
-                ),
-              ) ?? new Response("not found", { status: 404 }),
-          });
-          runtimes.push(runtime);
-          return runtime;
-        };
-
         /**
          * `stopAfterInputChanges()` for the stored enclosing source, whose
          * piece records the `system:` origin the route serves.
          */
         const stopAfterInputChangesWithOrigin = async () => {
-          const first = routedRuntime();
+          const first = routedRuntime(root);
           const compiled = await first.patternManager.compilePattern({
             main: ROUTE_PATH,
             files: [{ name: ROUTE_PATH, contents: outerSource(2) }],
@@ -1132,7 +1450,7 @@ describe("ensure-piece-running", () => {
         it("follows the enclosing piece's origin before starting it, for an open that follows origins", async () => {
           const stream = await stopAfterInputChangesWithOrigin();
 
-          const { seen } = await openThenEvent(routedRuntime(), stream, {
+          const { seen } = await openThenEvent(routedRuntime(root), stream, {
             followOrigins: true,
           });
 
@@ -1142,7 +1460,7 @@ describe("ensure-piece-running", () => {
         it("starts the enclosing piece on its stored source for an open that does not follow origins", async () => {
           const stream = await stopAfterInputChangesWithOrigin();
 
-          const { seen } = await openThenEvent(routedRuntime(), stream);
+          const { seen } = await openThenEvent(routedRuntime(root), stream);
 
           expect(seen).toBe(stored);
         });

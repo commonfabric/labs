@@ -142,6 +142,21 @@ Deno.test("renderFrame: node highlight covers the whole statement, not the paddi
   assertEquals(cols1.some((c) => c), false, "other lines are not highlighted");
 });
 
+Deno.test("renderFrame: the status bar shows a label's control characters as pictures", () => {
+  // A label can carry control characters decoded from the source, such as an
+  // HTML `id` written with character references.
+  const doc = parseDocument("const x = 1;");
+  const node = doc.flatStructure.find((n) => n.name === "x")!;
+  const rows = renderFrame(
+    doc,
+    baseView({ selected: { ...node, label: "div \x1b]0;title\x07x" } }),
+  );
+  const status = rows[rows.length - 1];
+  assertEquals(status.includes("\x1b]"), false, "no escape sequence opens");
+  assertEquals(status.includes("\x07"), false, "no bell is sent");
+  assertEquals(status.includes("div ␛]0;title␇x"), true, "pictures are shown");
+});
+
 Deno.test("renderFrame: node highlight includes leading indentation", () => {
   const doc = parseDocument("  const x = 1;");
   const node = doc.flatStructure.find((n) => n.name === "x")!;

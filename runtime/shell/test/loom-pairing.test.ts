@@ -476,6 +476,19 @@ describe("loom-pairing", () => {
       expect(error.message).toContain("http://localhost:9900");
     });
 
+    it("never follows a redirect, and throws `unreachable` for one", async () => {
+      const { calls, fetchImpl } = fakeFetch(() =>
+        Response.redirect("https://elsewhere.example/", 307)
+      );
+      const error = await redeemPairingCode(REQUEST, DEVICE, fetchImpl).then(
+        () => null,
+        (e) => e,
+      );
+      expect(calls[0].init.redirect).toBe("manual");
+      expect(error.reason).toBe("unreachable");
+      expect(error.message).toContain("redirected");
+    });
+
     it("throws `unreachable` for a Loom without the redeem route", async () => {
       const { fetchImpl } = fakeFetch(() => new Response("", { status: 404 }));
       const error = await redeemPairingCode(REQUEST, DEVICE, fetchImpl).then(

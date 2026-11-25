@@ -14,6 +14,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type {
@@ -141,9 +142,14 @@ async function fixture(scope: "space" | "session") {
       clients.push(client);
       return client;
     };
-    // Alice reads under a ceiling naming herself; bob reads unbounded.
+    // Alice reads under a ceiling naming herself (the reader atom
+    // `User(alice)`, the form `dbOwner()` labels rows with); bob reads
+    // unbounded.
     const first = openClient(alice, {
-      cfcReadMaxConfidentiality: [alice.did()],
+      cfcReadMaxConfidentiality: [{
+        type: CFC_ATOM_TYPE.User,
+        subject: alice.did(),
+      }],
       cfcReadOnExceed: "skip",
     });
     const scoped = scope === "space"

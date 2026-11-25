@@ -43,7 +43,7 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
 root lists when the room is not that root (`wish({ query: "#default" })`), and
 the messages' authors, keyed by profile cell. A room with `about`, which only a
 manager creates, is its space's root, and reads only its own roster: its
-`#default` is itself. `roster` is computed from those who joined alone.
+`#default` is itself. `roster` is a link to the roster the room stores.
 `messages` (its `count`, `oldestAt`, `newestAt`, `latest`, and `threads`) is
 computed from the messages when it's read, and isn't stored. The reader's
 profile is what the room's `#profile` wish finds, in a `PerSession` instance,
@@ -126,6 +126,18 @@ store is meant to be reachable and managed directly, through its own view
 removed like any other; the composer's removal keeps the common case tidy, and
 an entry it leaves is not lost.
 
+A room that is its space's root shows its space's files itself, as a root
+offering file storage does ([`FileStoreView`](../fabrifile/FileStoreView.md)).
+Beside the attach control, such a room offers a **Files** control once it names
+a store (`fileStore`). A room that names none offers none, and so does a room
+that isn't its space's root, whose files are its root's to show. Pressing it
+opens the files for that session alone, which it keeps in a `PerSession` value
+of its own, and the room then instantiates `FileStoreView` on the store, under
+the composer. Pressing it again, as **Hide files**, closes them. The view is mapped from a list of the
+session's own that holds the store only while its files are open, so a session
+that hasn't opened them holds no view, and nothing reads the store's entries
+for it. What the view offers each viewer is the view's own decision.
+
 ## Writers
 
 Every write goes through one handler per stream:
@@ -187,7 +199,9 @@ membership and lists or restores the conversation. Joining an already listed
 room without a `requestId` changes no membership and records nothing. A join
 from a message or a reaction, marked `messageAct`, leaves the title the
 manager's catalog lists the room under as it is, and any other join brings that
-title up to the room's (see
+title up to the room's. A message's join carries the message count and the
+message's `sentAt` as its `activity`, which the manager keeps as where the
+conversation stands (see
 [`joinRoom`](ChatManagerOutput.md#joinroomrequestid-string-room-cellchatroomoutput)).
 Room write handlers send their
 local `joined` stream after recording the write. Its `tellManagerJoined`

@@ -1,3 +1,11 @@
+/**
+ * Three chat messages that each ask for a verified author avatar: one whose
+ * author claim matches its authorship integrity, one that claims a different
+ * author than the integrity names, and an imported one with no integrity at
+ * all.
+ * Demonstrates `cf-cfc-authorship` checking a message's persisted
+ * `authored-by` integrity label before rendering a trusted avatar.
+ */
 import {
   type Cfc,
   computed,

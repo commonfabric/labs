@@ -12,12 +12,21 @@ import { link, name, say, type TaskOutput, type TaskText } from "./tasklog.ts";
  * fails. Nothing is shown. */
 export type GitQuery = (args: readonly string[]) => string | null;
 
+/** Runs git for its standard output, which it resolves with, or with null
+ * when git fails. */
+export type GitQueryAsync = (args: readonly string[]) => Promise<string | null>;
+
 /** The git and browser operations a push performs, and where it says what
  * it does and shows what git writes. */
 export interface PushIo extends TaskOutput {
   /** Runs git for its standard output, which it returns, or null when git
    * fails. Nothing is shown. */
   readonly query: GitQuery;
+
+  /** Runs git for its standard output, as {@link query} does, but without
+   * holding up the viewer while git waits, as it does for a server. Shows
+   * what git wrote to its standard error only when it fails. */
+  readonly queryAsync: GitQueryAsync;
 
   /** Runs git with its output shown as it arrives. Resolves to whether git
    * succeeded, and to everything it printed. */
@@ -71,19 +80,22 @@ export interface PushedBranch {
 /**
  * Force-pushes the checked-out branch to the same-named branch on `origin`,
  * unless that branch has commits the checked-out branch has never included.
- * The branch `origin` names as its default is never pushed, so the push
- * refuses when `origin` names none. When `origin` already has the branch and
- * there is an `ask`, pushes nothing, and returns what `ask` returns, given
- * the branch's name and how `origin`'s branch stands; otherwise it pushes,
- * and returns one line saying how that ended. Shows a step, with `io`, that
- * says which branch it pushes before git starts, and that is done once git
- * succeeds. Once the push succeeds, calls `onPushed` with
- * the branch's name and the address of the page the server offers for
- * creating a pull request, or null when it offers none; by default, it opens
- * the page, and the line it returns ends with what `onPushed` returns. When
- * git fails, calls `onFailed` with what git printed, and the line it returns
- * says the push was aborted when it failed after `signal` aborted; git's own
- * output has been shown by then.
+ * The branch `origin` names as its default is never pushed: that is `main`
+ * when given, and otherwise what {@link defaultBranch} asks `origin`, with a
+ * step, shown with `io`, that says so. The push refuses when `origin` names
+ * none or cannot be asked. When `origin` already has the branch and there is
+ * an `ask`, pushes nothing, and returns what `ask` returns, given the
+ * branch's name, how `origin`'s branch stands, and `origin`'s default branch;
+ * otherwise it pushes, and returns one line saying how that ended. Shows a
+ * step that says which branch it pushes before git starts, and that is done
+ * once git succeeds. Once the push succeeds, calls `onPushed` with the
+ * branch's name and the address of the page the server offers for creating a
+ * pull request, or null when it offers none; by default, it opens the page,
+ * and the line it returns ends with what `onPushed` returns. When git fails
+ * to push, or to say which branch is the default, calls `onFailed` with what
+ * the push printed, which is nothing in the second case, and `origin`'s
+ * default branch, in the first case; the line it returns says the push was aborted when it failed after `signal` aborted;
+ * git's own output has been shown by then.
  */
 export async function pushBranch<Asked = never>(
   io: PushIo,
@@ -93,8 +105,13 @@ export async function pushBranch<Asked = never>(
     url: string | null,
   ) => Promise<TaskText> | TaskText = (_, url) =>
     url === null ? [] : openPage(io, url),
-  onFailed: (output: string) => void = () => {},
-  ask?: (branch: string, remote: PushedBranch) => Promise<Asked>,
+  onFailed: (output: string, main?: string) => void = () => {},
+  ask?: (
+    branch: string,
+    remote: PushedBranch,
+    main: string,
+  ) => Promise<Asked>,
+  main?: string,
 ): Promise<TaskText | Asked> {
   const gitDir = io.query(["rev-parse", "--absolute-git-dir"])?.trim();
   if (!gitDir) return say`This is not a git repository.`;
@@ -111,19 +128,26 @@ export async function pushBranch<Asked = never>(
   if (!branch) {
     return say`This checkout is not on a branch. Check out or create a branch first.`;
   }
-  const main = io.query(["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"])
-    ?.trim().slice("refs/remotes/origin/".length);
-  if (!main) {
-    return say`Not pushing: ${
-      name("origin")
-    }'s default branch is unknown. \`git remote set-head origin --auto\` finds it.`;
+  if (main === undefined) {
+    const asking = io.step(
+      say`Asking ${name("origin")} which branch is its default`,
+    );
+    const named = await defaultBranch(io.queryAsync, "origin");
+    if (named === null || signal?.aborted) {
+      onFailed("");
+      return signal?.aborted
+        ? say`Push aborted.`
+        : say`Not pushing: ${name("origin")}'s default branch is unknown.`;
+    }
+    asking();
+    main = named;
   }
   if (branch === main) {
     return say`Rename the branch first. You were about to push your ${main} branch.`;
   }
   if (ask) {
     const remote = pushedBranch(io.query, branch);
-    if (remote !== null) return await ask(branch, remote);
+    if (remote !== null) return await ask(branch, remote, main);
   }
   const pushing = io.step(say`Pushing ${branch} to ${name("origin")}`);
   const push = await io.run([
@@ -135,7 +159,7 @@ export async function pushBranch<Asked = never>(
     `HEAD:refs/heads/${branch}`,
   ]);
   if (!push.success) {
-    onFailed(push.output);
+    onFailed(push.output, main);
     return signal?.aborted
       ? say`Push aborted.`
       : say`Pushing ${branch} to ${name("origin")} failed.`;
@@ -144,6 +168,22 @@ export async function pushBranch<Asked = never>(
   const then = await onPushed(branch, offeredPullRequestUrl(push.output));
   const pushed = say`Pushed ${branch} to ${name("origin")}.`;
   return then.length === 0 ? pushed : say`${pushed} ${then}`;
+}
+
+/**
+ * Resolves with the branch that the server of the remote named `remote` says
+ * is its repository's default now, or with null when the server names none or
+ * git cannot ask it. Git sets `refs/remotes/<remote>/HEAD` when it clones and
+ * leaves it as it is when the default branch changes, so that ref is not
+ * consulted.
+ */
+export async function defaultBranch(
+  query: GitQueryAsync,
+  remote: string,
+): Promise<string | null> {
+  const listed = await query(["ls-remote", "--symref", remote, "HEAD"]);
+  return /^ref: refs\/heads\/([^\t]+)\tHEAD$/m.exec(listed ?? "")?.[1] ??
+    null;
 }
 
 /**
@@ -292,21 +332,45 @@ export function realPushIo({
     SSH_ASKPASS: env.SSH_ASKPASS ?? "false",
     SSH_ASKPASS_REQUIRE: "force",
   };
+  // Runs git, passing what it writes to its standard output and to its
+  // standard error to `out` and `err`, and resolves to whether it succeeded.
+  // Git does not start once `signal` has aborted, since a process started
+  // then cannot be stopped.
+  const spawn = async (
+    args: readonly string[],
+    out: (text: string) => void,
+    err: (text: string) => void,
+  ) => {
+    if (signal?.aborted) return false;
+    const child = git(args, repoEnv).spawn();
+    const [status] = await Promise.all([
+      child.status,
+      relayText(child.stdout, out, signal),
+      relayText(child.stderr, err, signal),
+    ]);
+    return status.success;
+  };
   return {
     query: (args) => capture(args, repoEnv),
+    queryAsync: async (args) => {
+      let output = "";
+      let errors = "";
+      const success = await spawn(
+        args,
+        (text) => output += text,
+        (text) => errors += text,
+      );
+      if (success) return output;
+      write(errors);
+      return null;
+    },
     run: async (args) => {
-      const child = git(args, repoEnv).spawn();
       let output = "";
       const shown = (text: string) => {
         write(text);
         output += text;
       };
-      const [status] = await Promise.all([
-        child.status,
-        relayText(child.stdout, shown, signal),
-        relayText(child.stderr, shown, signal),
-      ]);
-      return { success: status.success, output };
+      return { success: await spawn(args, shown, shown), output };
     },
     write,
     step,

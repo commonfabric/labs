@@ -13,18 +13,42 @@ import ProfileHome, {
   identityProvider,
   isFreshIdentity,
   isShownIdentity,
+  type ProfilePictureBlob,
   type ShareInboxPiece,
   VerifiedIdentitiesSection,
   VerifiedIdentityRow,
 } from "./profile-home.tsx";
 
-// Stand-ins for two pictures. The profile stores the bytes it is sent and
-// never decodes them.
+// Stand-ins for two pictures. The profile stores the bytes it is sent as a
+// blob and never decodes them.
 const PICTURE = [0x89, 0x50, 0x4e, 0x47];
 const PICKED_PICTURE = [0xff, 0xd8, 0xff];
 
 const bytesAre = (actual: FabricBytes | undefined, expected: number[]) =>
   actual?.slice().join() === expected.join();
+
+/** A profile's picture fields. */
+type PictureFields = {
+  picture?: FabricBytes;
+  pictureBlob?: ProfilePictureBlob;
+};
+
+/** A blob a host stored a picture in, and another. */
+const PICTURE_BLOB = { space: "did:key:z6MkPictureSpace", id: "fid1:picture" };
+const PICKED_BLOB = { space: "did:key:z6MkPictureSpace", id: "fid1:picked" };
+
+/**
+ * Whether `profile` holds its picture as the blob `blob`, `{}` for none, and
+ * as the bytes `bytes`, `[]` for none.
+ */
+const holds = (
+  profile: PictureFields,
+  blob: ProfilePictureBlob,
+  bytes: number[],
+): boolean =>
+  (profile.pictureBlob?.space ?? "") === (blob.space ?? "") &&
+  (profile.pictureBlob?.id ?? "") === (blob.id ?? "") &&
+  bytesAre(profile.picture, bytes);
 
 export default pattern(() => {
   const profile = ProfileHome({ initialName: "Ada Lovelace" });
@@ -143,14 +167,26 @@ export default pattern(() => {
       picture: new FabricBytes(new Uint8Array(PICTURE)),
     });
   });
+  // A picture a host stored as a blob, sent as the blob.
+  const action_set_picture_blob = action(() => {
+    profile.setPicture.send({ pictureBlob: PICTURE_BLOB });
+  });
   // `<cf-avatar-input>` carries the picked picture as its change event's
-  // `detail.bytes`.
+  // `detail.bytes`, and the blob it stored them in as `detail.blob`.
   const action_pick_picture = action(() => {
+    profile.setPicture.send({
+      detail: {
+        bytes: new FabricBytes(new Uint8Array(PICKED_PICTURE)),
+        blob: PICKED_BLOB,
+      },
+    });
+  });
+  const action_pick_picture_bytes = action(() => {
     profile.setPicture.send({
       detail: { bytes: new FabricBytes(new Uint8Array(PICKED_PICTURE)) },
     });
   });
-  // An event without bytes leaves the picture alone.
+  // An event without a picture leaves the picture alone.
   const action_send_no_picture = action(() => {
     profile.setPicture.send({ picture: new FabricBytes(new Uint8Array()) });
     profile.setPicture.send({});
@@ -266,19 +302,26 @@ export default pattern(() => {
   // The avatar the badge binds resolves (single context — owner-protected reads
   // are clean here; cross-stamp masking is the browser-only CT-1740 issue).
   const assert_avatar_set = assert(() => profile.avatar === "AL");
-  const assert_no_picture = assert(() => profile.picture === undefined);
-  const assert_picture_set = assert(() => bytesAre(profile.picture, PICTURE));
-  const assert_picture_picked = assert(() =>
-    bytesAre(profile.picture, PICKED_PICTURE)
+  // No picture is empty bytes and a reference to no blob.
+  const assert_no_picture = assert(() => holds(profile, {}, []));
+  const assert_picture_set = assert(() => holds(profile, {}, PICTURE));
+  // A blob replaces the bytes, and bytes replace a blob.
+  const assert_picture_blob_set = assert(() =>
+    holds(profile, PICTURE_BLOB, [])
+  );
+  // A picked picture is held as the blob it was stored in.
+  const assert_picture_picked = assert(() => holds(profile, PICKED_BLOB, []));
+  const assert_picture_picked_bytes = assert(() =>
+    holds(profile, {}, PICKED_PICTURE)
   );
   const assert_picture_unchanged_after_empty = assert(() =>
-    bytesAre(profile.picture, PICKED_PICTURE) && profile.avatar === "AL"
+    holds(profile, {}, PICKED_PICTURE) && profile.avatar === "AL"
   );
   const assert_picture_cleared = assert(() =>
-    profile.picture === undefined && profile.avatar === "AL"
+    holds(profile, {}, []) && profile.avatar === "AL"
   );
   const assert_avatar_cleared = assert(() =>
-    profile.picture === undefined && profile.avatar === ""
+    bytesAre(profile.picture, []) && profile.avatar === ""
   );
   // CT-1828: an empty send must not clear a previously-set avatar.
   const assert_avatar_unchanged_after_empty = assert(() =>
@@ -436,10 +479,18 @@ export default pattern(() => {
       { assertion: assert_no_picture },
       { action: action_set_picture },
       { assertion: assert_picture_set },
+      { action: action_set_picture_blob },
+      { assertion: assert_picture_blob_set },
+      { action: action_set_picture },
+      { assertion: assert_picture_set },
       { action: action_pick_picture },
       { assertion: assert_picture_picked },
+      { action: action_pick_picture_bytes },
+      { assertion: assert_picture_picked_bytes },
       { action: action_send_no_picture },
       { assertion: assert_picture_unchanged_after_empty },
+      { action: action_set_picture_blob },
+      { assertion: assert_picture_blob_set },
       { action: action_clear_picture },
       { assertion: assert_picture_cleared },
       { action: action_clear_avatar_text },

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/assets/cf.svg" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <script>
+    // Apply saved theme preference before first paint to prevent flash
+    try {
+      const t = localStorage.getItem("cf-theme-preference");
+      if (t === "light" || t === "dark") {
+        document.documentElement.setAttribute("data-theme", t);
+      }
+    } catch (e) {}
+    </script>
+    <title>Common Fabric</title>
+    <!-- cf-code-editor loads KaTeX by this name when it first draws math. -->
+    <script type="importmap">
+    { "imports": { "cf-katex-render": "/scripts/katex-render.js" } }
+    </script>
+    <link rel="stylesheet" href="/styles/index.css" />
+  </head>
+  <body>
+    <x-root-view></x-root-view>
+    <script type="module" src="/scripts/index.js"></script>
+  </body>
+</html>

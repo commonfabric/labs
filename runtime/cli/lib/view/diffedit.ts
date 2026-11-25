@@ -17,6 +17,7 @@ import { spliceAll } from "@commonfabric/collections/splice";
 import { maxOf } from "@commonfabric/collections/math";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
+import type { PendingParses } from "./backgroundparse.ts";
 import type { BlameRequest, BlameTarget } from "./blame.ts";
 import type { Document, Line, Span, ViewMode } from "./model.ts";
 import { cpLen } from "./ansi.ts";
@@ -62,11 +63,17 @@ import type {
 } from "./editsource.ts";
 import { shortName } from "./editsource.ts";
 
+/**
+ * The editable source behind a diff view, whose edits write to the files of
+ * `ws` that `edit` maps, and whose re-parses share `cache` and leave the
+ * parses that `pending` holds as plain text until they finish.
+ */
 export function diffSource(
   ws: DiffWorkspace,
   edit: DiffEdit,
   cache?: WorkspaceCache,
   git?: GitRunner,
+  pending?: PendingParses,
 ): EditableSource {
   const files = [...edit.fileText.keys()];
   const expectedFiles = new Map(edit.fileText);
@@ -76,13 +83,23 @@ export function diffSource(
   const shownHead = git?.headSha() ?? null;
   const shownRef = git?.headRef?.() ?? null;
   let expectedHead = shownHead;
+  const parseText = rememberedDiffParse();
   const renderedView =
     edit.languages.some(({ oldLanguage, newLanguage }) =>
         canRenderDiffLines(oldLanguage) || canRenderDiffLines(newLanguage)
       )
       ? {
         render: (source: Document) =>
-          reparse(ws, edit, source.text, cache, completeFiles, "rendered"),
+          reparse(
+            ws,
+            edit,
+            source.text,
+            parseText,
+            cache,
+            pending,
+            stateful.edits,
+            "rendered",
+          ),
       }
       : {};
   const resolvedCommits = new Map<string, string | null>();
@@ -124,6 +141,10 @@ export function diffSource(
     fileText: expectedFiles,
     hunks: saveHunks,
   };
+  // The diff as opened writes the workspace files back unchanged, so it edits
+  // no file. Saving and expanding context change `expectedFiles` and
+  // `saveHunks`, and so forget that and the edits found of the text before.
+  const stateful = rememberedStatefulEdits(completeFiles, edit.sourceText);
   let blameRoot: string | null | undefined;
   let saved: { baseline: string; commits: CommitLines } | undefined;
   const blameTargets = (text: string, baseline: string) => {
@@ -135,15 +156,8 @@ export function diffSource(
       return blameRoot;
     });
   };
-  let countContextText: string | undefined;
-  let countContexts: readonly DiffCountFileContext[] = [];
-  const diffCountContexts = (text: string) => {
-    if (text !== countContextText) {
-      countContextText = text;
-      countContexts = buildDiffCountContexts(ws, edit, text);
-    }
-    return countContexts;
-  };
+  const diffCountContexts = (text: string) =>
+    buildDiffCountContexts(ws, edit, text);
 
   // No file on disk backs this diff (nothing resolved or verified): read-only.
   // A deletion of an entire file has no new-side lines, but its empty workspace
@@ -161,7 +175,7 @@ export function diffSource(
       editable: false,
       reason:
         "This diff doesn't match any file on disk, so there is nothing to edit.",
-      parse: (text) => reparse(ws, edit, text, cache),
+      parse: (text) => reparse(ws, edit, text, parseText, cache, pending),
       ...renderedView,
       save: () => "Nothing to save — this diff matches no file on disk.",
     };
@@ -282,7 +296,17 @@ export function diffSource(
     logicalEnd: (lines, row) =>
       diffLogicalEnd(classify(lines).model, lines, row),
     parse: (text, lineEndings) =>
-      reparse(ws, edit, text, cache, completeFiles, "source", lineEndings),
+      reparse(
+        ws,
+        edit,
+        text,
+        parseText,
+        cache,
+        pending,
+        stateful.edits,
+        "source",
+        lineEndings,
+      ),
     ...renderedView,
     // Live highlighting recolors the lines an edit changes and reuses the seed
     // (buildDiffDocument's colors, including the file/hunk headers and the
@@ -317,12 +341,23 @@ export function diffSource(
         lineEndings,
         diffLineEndingProvenance(original, expectedFiles, saveHunks),
       ),
-    expandContext: (current, baseline, cursorLine, up) =>
-      expandContext(ws, cache, saveHunks, current, baseline, cursorLine, up),
+    expandContext: (current, baseline, cursorLine, up) => {
+      stateful.forget();
+      return expandContext(
+        ws,
+        cache,
+        saveHunks,
+        current,
+        baseline,
+        cursorLine,
+        up,
+      );
+    },
     expandRoom: (current) => expandRoom(ws, cache, saveHunks, current),
     lineEndingProvenance: (text) =>
       diffLineEndingProvenance(text, expectedFiles, saveHunks),
     save: (text, lineEndings, baseline, options) => {
+      stateful.forget();
       if (!lineEndings || lineEndings.length !== text.split("\n").length) {
         throw new Error("Edited diff row provenance is incomplete.");
       }
@@ -466,7 +501,7 @@ export function diffSource(
         }
         for (const [path, contents] of changes) {
           expectedFiles.set(path, contents);
-          cache?.delete(path);
+          cache?.forget(path);
         }
         for (const { hunk, newStart, newCount } of advancedHunks) {
           hunk.newStart = newStart;
@@ -515,6 +550,11 @@ export function diffSource(
   };
 }
 
+/**
+ * The count context of each file in `text`. Each complete side is highlighted
+ * when it is asked for, and kept only by the caller, so that counting a diff
+ * that names many files holds one file's highlighting at a time.
+ */
 function buildDiffCountContexts(
   ws: DiffWorkspace,
   edit: DiffEdit,
@@ -526,16 +566,15 @@ function buildDiffCountContexts(
   const decided = editedLanguages(edit.languages, text, model, ws);
   return model.files.map((file, fileIndex) => {
     const languages = decided[fileIndex];
-    const oldLines = edit.oldFileLines[fileIndex] ?? undefined;
-    const newText = oldLines
-      ? reconstructNewSide(file, oldLines, raw, model.lines)
-      : undefined;
-    const newLines = newText === undefined
-      ? undefined
-      : languages.newLanguage.highlightLines(
-        newText,
-        file.newPath ?? file.oldPath,
-      );
+    const oldLines = () => edit.oldFileLines(fileIndex) ?? undefined;
+    const newLines = () => {
+      const old = oldLines();
+      return old &&
+        languages.newLanguage.highlightLines(
+          reconstructNewSide(file, old, raw, model.lines),
+          file.newPath ?? file.oldPath,
+        );
+    };
     return { languages, oldLines, newLines };
   });
 }
@@ -900,58 +939,82 @@ function hunkFooting(
   downFrom: number;
   room: HunkRoom;
 } | null {
-  if (file.newPath === undefined) return null;
-  const absPath = ws.resolve(file.newPath);
-  if (!absPath) return null;
-  const content = cache?.get(absPath)?.fileText ?? ws.read(absPath);
+  const content = newSideText(ws, cache, file);
   if (content === null) return null;
-  const fileLines = content.split("\n");
-  const fileLineEndings = fileContentLines(content).map((line) => line.ending);
-  const fileLen = fileLines.length > 0 && fileLines[fileLines.length - 1] === ""
-    ? fileLines.length - 1
-    : fileLines.length;
-
-  // File-range coordinates come from the save map (the original new-file range,
-  // which an inserted line does not extend), not the display `@@` counts (which
-  // an insert grows past the file range). Insertion positions and the global
-  // index come from the parse. Clamp how far context may grow by the
-  // neighboring hunks of the SAME file, so an expansion never overlaps another
-  // hunk's file range — that would splice the two ranges into each
-  // other (silently dropping edits or duplicating lines) and malform the diff.
   const range = hunks[index];
   if (!range) return null;
-  const rangeStart = spliceStart(range);
-  const rangeEnd = rangeStart + range.newCount;
-  const sameFile = hunks.filter((hunk, otherIndex) =>
-    otherIndex !== index && hunk.absPath === range.absPath
-  );
-  const prev = sameFile
-    .filter((hunk) => spliceStart(hunk) + hunk.newCount <= rangeStart)
-    .sort((a, b) =>
-      spliceStart(b) + b.newCount - (spliceStart(a) + a.newCount)
-    )[0] ??
-    null;
-  const next = sameFile
-    .filter((hunk) => spliceStart(hunk) >= rangeEnd)
-    .sort((a, b) => spliceStart(a) - spliceStart(b))[0] ?? null;
-  const prevEnd = prev ? spliceStart(prev) + prev.newCount : 0;
-  const downFrom = rangeEnd;
-  const nextStart = next ? spliceStart(next) : fileLen;
+  const fileLineEndings = fileContentLines(content).map((line) => line.ending);
   return {
-    fileLines,
+    fileLines: content.split("\n"),
     fileLineEndings,
     fileHasTrailingNewline: content.endsWith("\n"),
     range,
+    ...hunkRoom(range, hunks, fileLineEndings.length),
+  };
+}
+
+/** The workspace text of the new side of `file`, or null when it has none. */
+function newSideText(
+  ws: DiffWorkspace,
+  cache: WorkspaceCache | undefined,
+  file: DiffModel["files"][number],
+): string | null {
+  if (file.newPath === undefined) return null;
+  const absPath = ws.resolve(file.newPath);
+  if (!absPath) return null;
+  return cache?.file(absPath)?.fileText ?? ws.read(absPath);
+}
+
+/** How far the new-side range of `range` could grow each way in its file of
+ * `fileLen` lines, given the other hunks among `hunks` that name the same file,
+ * and the line it grows down from. */
+function hunkRoom(
+  range: MutableHunk,
+  hunks: readonly MutableHunk[],
+  fileLen: number,
+): { downFrom: number; room: HunkRoom } {
+  // File-range coordinates come from the save map (the original new-file range,
+  // which an inserted line does not extend), not the display `@@` counts (which
+  // an insert grows past the file range). Clamp how far context may grow by the
+  // neighboring hunks of the SAME file, so an expansion never overlaps another
+  // hunk's file range — that would splice the two ranges into each
+  // other (silently dropping edits or duplicating lines) and malform the diff.
+  const rangeStart = spliceStart(range);
+  const downFrom = rangeStart + range.newCount;
+  let prevEnd = 0;
+  let nextStart: number | undefined;
+  for (const hunk of hunks) {
+    if (hunk === range || hunk.absPath !== range.absPath) continue;
+    const start = spliceStart(hunk);
+    const end = start + hunk.newCount;
+    if (end <= rangeStart) prevEnd = Math.max(prevEnd, end);
+    if (start >= downFrom) nextStart = Math.min(nextStart ?? start, start);
+  }
+  return {
     downFrom,
     room: {
       up: Math.max(0, rangeStart - prevEnd),
-      down: Math.max(0, nextStart - downFrom),
+      down: Math.max(0, (nextStart ?? fileLen) - downFrom),
       // Nothing left is the file running out only where the range reaches its
       // edge; otherwise it is the neighboring hunk in the way.
       atFileTop: rangeStart <= 0,
       atFileBottom: downFrom >= fileLen,
     },
   };
+}
+
+/** How many lines `content` holds, not counting the empty string after a final
+ * newline. */
+function fileLineCount(content: string): number {
+  let count = content.length === 0 || content.endsWith("\n") ? 0 : 1;
+  for (
+    let at = content.indexOf("\n");
+    at >= 0;
+    at = content.indexOf("\n", at + 1)
+  ) {
+    count++;
+  }
+  return count;
 }
 
 /** The hunk `line` sits in, with its file and its index across the whole diff. */
@@ -974,7 +1037,8 @@ function hunkAt(model: DiffModel, line: number): {
 }
 
 /** How much context each hunk of `current` could still reveal, keyed by the line
- * its header sits on. */
+ * its header sits on. Each file is read and its lines counted once, and each
+ * hunk is compared only with the hunks of its own file. */
 function expandRoom(
   ws: DiffWorkspace,
   cache: WorkspaceCache | undefined,
@@ -984,12 +1048,29 @@ function expandRoom(
   const out = new Map<number, HunkRoom>();
   const model = parseDiff(current);
   if (!model) return out;
+  const byFile = Map.groupBy(hunks, (hunk) => hunk.absPath);
+  const lineCounts = new Map<string | undefined, number | null>();
+  const lineCount = (file: DiffModel["files"][number]): number | null => {
+    if (!lineCounts.has(file.newPath)) {
+      const content = newSideText(ws, cache, file);
+      lineCounts.set(
+        file.newPath,
+        content === null ? null : fileLineCount(content),
+      );
+    }
+    return lineCounts.get(file.newPath) ?? null;
+  };
   let gi = 0;
   for (const f of model.files) {
     for (const h of f.hunks) {
-      const footing = hunkFooting(ws, cache, hunks, f, gi);
-      if (footing) out.set(h.headerLine, footing.room);
-      gi++;
+      const range = hunks[gi++];
+      const fileLen = range ? lineCount(f) : null;
+      if (fileLen !== null) {
+        out.set(
+          h.headerLine,
+          hunkRoom(range, byFile.get(range.absPath) ?? [], fileLen).room,
+        );
+      }
     }
   }
   return out;
@@ -1332,7 +1413,7 @@ function applyExpansion(
 export function createDiffHighlighter(
   initialText: string,
   seed?: readonly Line[],
-  oldFileLines?: readonly (readonly Line[] | null)[],
+  oldFileLines?: (fileIndex: number) => readonly Line[] | null,
   languagesFor: (
     text: string,
     model: DiffModel,
@@ -1530,7 +1611,7 @@ function rehighlightTouchedHunks(
   lines: Line[],
   changedStart: number,
   changedEnd: number,
-  oldFileLines: readonly (readonly Line[] | null)[] | undefined,
+  oldFileLines: ((fileIndex: number) => readonly Line[] | null) | undefined,
   languages: readonly DiffFileLanguages[],
   completeFiles?: DiffHighlightFiles,
   completeHighlighters?: Map<string, Highlighter>,
@@ -1571,7 +1652,7 @@ function rehighlightTouchedHunks(
   const appliedNewPaths = new Set<string>();
   for (const { fileIndex, oldSide, newSide, touched } of statefulFiles) {
     if (oldSide.language.highlightFullFileOnDiffEdit) {
-      const completeOld = oldFileLines?.[fileIndex];
+      const completeOld = oldFileLines?.(fileIndex);
       for (const { hunk } of touched) {
         if (completeOld) {
           applyCompleteHunkSide(
@@ -1907,13 +1988,13 @@ function diffLineRender(
 function oldLineSpansAt(
   model: DiffModel | null,
   line: number,
-  oldFileLines?: readonly (readonly Line[] | null)[],
+  oldFileLines?: (fileIndex: number) => readonly Line[] | null,
 ): readonly Span[] | undefined {
   const entry = model?.lines[line];
   if (!model || entry?.kind !== "del" || entry.oldLine === undefined) {
     return undefined;
   }
-  return oldFileLines?.[diffFileIndexAt(model, line)]?.[entry.oldLine]?.spans;
+  return oldFileLines?.(diffFileIndexAt(model, line))?.[entry.oldLine]?.spans;
 }
 
 /** The index of the diff file containing `line`, or -1 outside every file. */
@@ -1984,6 +2065,136 @@ function editedLanguages(
 }
 
 /**
+ * Returns {@link parseDiff}, except that given the text of the call before, it
+ * returns that call's model.
+ */
+function rememberedDiffParse(): (text: string) => DiffModel | null {
+  let last: { text: string; model: DiffModel | null } | undefined;
+  return (text) => {
+    if (last?.text !== text) last = { text, model: parseDiff(text) };
+    return last.model;
+  };
+}
+
+/**
+ * A function returning the complete files that the diff text `text`, parsed
+ * as `model` with `languages`, edits, of those whose language reads the whole
+ * file, as the edits make them, by path. `lineEndings` gives each diff row's
+ * line ending, when it is known.
+ */
+type StatefulEdits = (
+  text: string,
+  model: DiffModel,
+  languages: readonly DiffFileLanguages[],
+  lineEndings?: readonly (LineEndingProvenance | undefined)[],
+) => ReadonlyMap<string, string>;
+
+/**
+ * Returns the {@link StatefulEdits} of the files `completeFiles` holds. Given
+ * the text, model, languages, and row endings of the latest call that gave
+ * row endings, or of the latest that gave none, it returns what that call
+ * returned, and given the diff text `opened`, it returns that no file is
+ * edited. `forget()` ends both, for when the files or their hunks change.
+ */
+function rememberedStatefulEdits(
+  completeFiles: DiffHighlightFiles,
+  opened: string | undefined,
+): { readonly edits: StatefulEdits; forget(): void } {
+  let unedited = opened;
+  const latest = new Map<boolean, {
+    readonly text: string;
+    readonly model: DiffModel;
+    readonly languages: readonly DiffFileLanguages[];
+    readonly lineEndings:
+      | readonly (LineEndingProvenance | undefined)[]
+      | undefined;
+    readonly edits: ReadonlyMap<string, string>;
+  }>();
+  const edits: StatefulEdits = (text, model, languages, lineEndings) => {
+    if (text === unedited) return new Map();
+    const known = latest.get(lineEndings !== undefined);
+    if (
+      known?.text === text && known.model === model &&
+      known.languages === languages &&
+      sameEntries(known.lineEndings, lineEndings)
+    ) {
+      return known.edits;
+    }
+    const found = {
+      text,
+      model,
+      languages,
+      lineEndings: lineEndings?.slice(),
+      edits: statefulEdits(completeFiles, text, model, languages, lineEndings),
+    };
+    latest.set(lineEndings !== undefined, found);
+    return found.edits;
+  };
+  return {
+    edits,
+    forget: () => {
+      unedited = undefined;
+      latest.clear();
+    },
+  };
+}
+
+/** Returns whether `a` and `b` are both missing, or hold the same entries. */
+function sameEntries<T>(
+  a: readonly T[] | undefined,
+  b: readonly T[] | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.length === b.length && a.every((entry, index) => entry === b[index]);
+}
+
+/** Computes the {@link StatefulEdits} of the files `completeFiles` holds. */
+function statefulEdits(
+  completeFiles: DiffHighlightFiles,
+  text: string,
+  model: DiffModel,
+  languages: readonly DiffFileLanguages[],
+  lineEndings?: readonly (LineEndingProvenance | undefined)[],
+): ReadonlyMap<string, string> {
+  const statefulPaths = new Set<string>();
+  let hunkIndex = 0;
+  for (const [fileIndex, file] of model.files.entries()) {
+    const { oldLanguage, newLanguage } = languages[fileIndex];
+    const needsCompleteFile = oldLanguage.highlightFullFileOnDiffEdit ||
+      newLanguage.highlightFullFileOnDiffEdit;
+    for (const _hunk of file.hunks) {
+      const path = completeFiles.hunks[hunkIndex++]?.absPath;
+      if (needsCompleteFile && path) statefulPaths.add(path);
+    }
+  }
+  if (statefulPaths.size === 0) return new Map();
+  // Only the files read whole need their edited text, and each of those needs
+  // every hunk that writes it.
+  const statefulHunks = new Set<number>();
+  for (const [index, hunk] of completeFiles.hunks.entries()) {
+    if (hunk.absPath && statefulPaths.has(hunk.absPath)) {
+      statefulHunks.add(index);
+    }
+  }
+  return changedStatefulFileOutputs(
+    collectFileOutputs(
+      text,
+      completeFiles.fileText,
+      completeFiles.hunks,
+      lineEndings ?? diffLineEndingProvenance(
+        text,
+        completeFiles.fileText,
+        completeFiles.hunks,
+      ),
+      statefulHunks,
+      model,
+    ),
+    completeFiles.fileText,
+    statefulPaths,
+  );
+}
+
+/**
  * Rebuild an edited diff's document, reading each file side in the language
  * `edit` decided for it.
  */
@@ -1991,12 +2202,14 @@ function reparse(
   ws: DiffWorkspace,
   edit: DiffEdit,
   text: string,
-  cache?: WorkspaceCache,
-  completeFiles?: DiffHighlightFiles,
+  parseText: (text: string) => DiffModel | null,
+  cache: WorkspaceCache | undefined,
+  pending: PendingParses | undefined,
+  editedFiles?: StatefulEdits,
   viewMode: ViewMode = "source",
   lineEndings?: readonly (LineEndingProvenance | undefined)[],
 ): Document {
-  const model = parseDiff(text);
+  const model = parseText(text);
   // An edit keeps every line's marker, so the text still parses as a diff; if a
   // pathological edit breaks that, fall back to a plain parse so highlighting
   // still updates.
@@ -2010,34 +2223,10 @@ function reparse(
       buildCache,
       viewMode,
       languages,
+      pending,
     ).doc;
-  if (!completeFiles) return build(ws, cache);
-  const editedFiles = collectFileOutputs(
-    text,
-    completeFiles.fileText,
-    completeFiles.hunks,
-    lineEndings ?? diffLineEndingProvenance(
-      text,
-      completeFiles.fileText,
-      completeFiles.hunks,
-    ),
-  );
-  const statefulPaths = new Set<string>();
-  let hunkIndex = 0;
-  for (const [fileIndex, file] of model.files.entries()) {
-    const { oldLanguage, newLanguage } = languages[fileIndex];
-    const needsCompleteFile = oldLanguage.highlightFullFileOnDiffEdit ||
-      newLanguage.highlightFullFileOnDiffEdit;
-    for (const _hunk of file.hunks) {
-      const path = completeFiles.hunks[hunkIndex++]?.absPath;
-      if (needsCompleteFile && path) statefulPaths.add(path);
-    }
-  }
-  const statefulEdits = changedStatefulFileOutputs(
-    editedFiles,
-    completeFiles.fileText,
-    statefulPaths,
-  );
+  const statefulEdits = editedFiles?.(text, model, languages, lineEndings) ??
+    new Map();
   if (statefulEdits.size === 0) return build(ws, cache);
   // Reconstructed files make the edited new side the complete source used for
   // syntax highlighting and diff verification.
@@ -2064,9 +2253,7 @@ function reparse(
       }
       : {}),
   };
-  const editedCache: WorkspaceCache = new Map(cache);
-  for (const path of statefulEdits.keys()) editedCache.delete(path);
-  return build(editedWorkspace, editedCache);
+  return build(editedWorkspace, cache?.editing(statefulEdits.keys()));
 }
 
 function writeWorkspaceFile(
@@ -2610,8 +2797,8 @@ function collectFileOutputs(
   hunks: readonly MutableHunk[],
   lineEndings: readonly (LineEndingProvenance | undefined)[],
   changedHunks?: ReadonlySet<number>,
+  model: DiffModel | null = parseDiff(text),
 ): Map<string, string> {
-  const model = parseDiff(text);
   const rawLines = text.split("\n");
   const byFile = new Map<string, FileSplice[]>();
   let hunkIndex = 0;

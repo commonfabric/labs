@@ -425,6 +425,73 @@ describe("shell-failure-reports", () => {
       expect(probe.identityDid).toBe("did:key:zBootedShellFixture");
     });
 
+    it("reports a pending creation before the shell publishes a runtime", async () => {
+      await load("/booted-shell");
+      await page.evaluate(() => {
+        Object.assign(globalThis.app, {
+          accessForTestingOnly: {
+            rt: { status: 1 },
+            runtimeGeneration: 2,
+          },
+        });
+      });
+
+      const probe = await readShellPageProbe(page);
+      expect(probe.runtime).toBe(false);
+      expect(probe.runtimeTask).toEqual({ status: 1, generation: 2 });
+      expect(describeShellPage(probe)).toContain(
+        "runtime creation task: status 1, generation 2",
+      );
+      expect(describeShellPage(probe)).not.toContain("runtime creation error:");
+    });
+
+    it("reports a creation rejection before the shell publishes a runtime", async () => {
+      await load("/booted-shell");
+      await page.evaluate(() => {
+        Object.assign(globalThis.app, {
+          accessForTestingOnly: {
+            rt: { status: 3 },
+            runtimeTaskError: new Error("worker module could not initialize"),
+            runtimeGeneration: 2,
+          },
+        });
+      });
+
+      const probe = await readShellPageProbe(page);
+      expect(probe.runtime).toBe(false);
+      expect(probe.runtimeTask).toEqual({
+        status: 3,
+        generation: 2,
+        error: "Error: worker module could not initialize",
+      });
+      const report = describeShellPage(probe);
+      expect(report).toContain("runtime creation task: status 3, generation 2");
+      expect(report).toContain(
+        "runtime creation error: Error: worker module could not initialize",
+      );
+      expect(report).not.toContain("runtime creation task: status 1");
+    });
+
+    it("reports a task getter's failure without losing the rest of the page", async () => {
+      await load("/booted-shell");
+      await page.evaluate(() => {
+        Object.defineProperty(globalThis.app, "accessForTestingOnly", {
+          get() {
+            throw new Error("task cannot be read");
+          },
+        });
+      });
+
+      const probe = await readShellPageProbe(page);
+      expect(probe.runtimeTask).toBeUndefined();
+      expect(probe.runtimeTaskError).toBe("Error: task cannot be read");
+      const report = describeShellPage(probe);
+      expect(report).toContain(
+        "runtime creation task: reading it threw: Error: task cannot be read",
+      );
+      expect(report).toContain("did:key:zBootedShellFixture");
+    });
+
     it("returns the requests the page's runtime is still waiting on", async () => {
       await load("/unresponsive-runtime");
 

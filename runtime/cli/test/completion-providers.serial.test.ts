@@ -278,6 +278,7 @@ Deno.test("live candidates: unmapped slots ask for nothing", async () => {
 const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf piece ls -i ", "files", "*.key"],
   ["cf id did ", "files", "*.key"],
+  ["cf id pair https://example.test ", "files", "*.key"],
   // A delegation chain file, wherever the identity holds one and where
   // `cf delegation show` reads one.
   ["cf piece ls --delegations ", "files", "*.json"],
@@ -303,11 +304,14 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf pattern history ", "files", "*.tsx"],
   ["cf pattern rollback ", "files", "*.tsx"],
   ["cf pattern unpublish ", "files", "*.tsx"],
+  ["cf pattern stable ", "files", "*.tsx"],
+  ["cf pattern link ", "files", "*.tsx"],
   ["cf pattern unshare ", "files", "*.tsx"],
   ["cf piece setsrc ", "files", "*.tsx"],
   ["cf check ", "files", "*.tsx"],
   ["cf test ", "files", "*.tsx"],
   ["cf piece new --datafile ", "files", undefined],
+  ["cf piece new --version-entry ", "files", "*.tsx"],
   ["cf piece new --input-file ", "files", undefined],
   ["cf view ", "files", undefined],
   ["cf exec ", "files", undefined],

@@ -1103,6 +1103,8 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
   // A data file has no fixed extension; the shell's own file completion is the
   // only honest candidate set.
   datafile: () => Promise.resolve(directive({ kind: "files" })),
+  // The original entry a deploy of a copy continues the lineage of.
+  "version-entry": patternFiles,
   "input-file": onlyOn(
     ["piece new"],
     () => Promise.resolve(directive({ kind: "files" })),
@@ -1264,6 +1266,8 @@ const ARGUMENT_PROVIDERS: Readonly<Record<string, Provider>> = {
   "pattern history:entry": patternFiles,
   "pattern rollback:entry": patternFiles,
   "pattern unpublish:entry": patternFiles,
+  "pattern stable:entry": patternFiles,
+  "pattern link:entry": patternFiles,
   "pattern unshare:entry": patternFiles,
   "index sharing:state": () =>
     Promise.resolve(values([{ value: "on" }, { value: "off" }])),
@@ -1275,6 +1279,8 @@ const ARGUMENT_PROVIDERS: Readonly<Record<string, Provider>> = {
   "view:file": () => Promise.resolve(directive({ kind: "files" })),
   "exec:mountedFile": () => Promise.resolve(directive({ kind: "files" })),
   "id did:keypath": () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.key" })),
+  "id pair:keypath": () =>
     Promise.resolve(directive({ kind: "files", glob: "*.key" })),
   "piece getsrc:outpath": () => Promise.resolve(directive({ kind: "files" })),
   "deps update:file": () => Promise.resolve(directive({ kind: "files" })),

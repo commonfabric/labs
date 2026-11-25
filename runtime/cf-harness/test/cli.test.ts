@@ -4273,8 +4273,60 @@ Deno.test("runCfHarnessCli uses plain stdout and no operator guidance in batch m
       systemPrompt: "You are a Loom batch worker.",
     }),
   );
+  assertEquals(runPromptOptions?.systemPromptLayers, []);
   assertEquals(stdout, ["Batch result.\n"]);
   assertEquals(stderr, []);
+});
+
+Deno.test("runCfHarnessCli gives a batch run's result schema its own system message after the system prompt", async () => {
+  const { io } = createIoBuffers();
+  let runPromptOptions: RunHarnessPromptOptions | undefined;
+  const schema = { type: "object", properties: { ok: { type: "boolean" } } };
+  await runCfHarnessCli(
+    [
+      "--model-provider",
+      "openai-compatible-gateway",
+      "--workspace",
+      "/tmp/project",
+      "--prompt",
+      "Execute the batch task",
+      "--output-mode",
+      "batch",
+      "--system-prompt",
+      "You are a Loom batch worker.",
+      "--structured-result-path",
+      "out/result.json",
+      "--structured-result-schema",
+      JSON.stringify(schema),
+      "--gateway-auth-mode",
+      "none",
+    ],
+    {
+      io,
+      env: {},
+      readTextFile: () => Promise.resolve('{"ok":true}'),
+      createPromptLoop: () => ({
+        runPrompt: (options) => {
+          runPromptOptions = options;
+          return Promise.reject(new Error("captured"));
+        },
+        runTranscript: () =>
+          Promise.reject(new Error("unexpected resume path")),
+      }),
+    },
+  );
+
+  assertEquals(runPromptOptions?.systemPromptLayers, [
+    `Result schema (JSON):\n${JSON.stringify(schema)}`,
+  ]);
+  assertStringIncludes(
+    runPromptOptions?.systemPrompt ?? "",
+    "You are a Loom batch worker.",
+  );
+  assertEquals(
+    runPromptOptions?.systemPrompt?.includes(JSON.stringify(schema)),
+    false,
+  );
 });
 
 Deno.test("runCfHarnessCli writes a structured batch result sidecar when requested", async () => {

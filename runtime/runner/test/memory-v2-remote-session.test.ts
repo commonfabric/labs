@@ -1133,6 +1133,52 @@ describe("WebSocketTransport failure signaling", () => {
       });
     });
 
+    it("rejects as unsent a payload whose first record waits for credit when its socket closes", async () => {
+      await withTransport(async (transport, socket) => {
+        try {
+          const active = await selectCredits(
+            transport,
+            socket,
+            ROUTER_CHUNK_BYTES + 5,
+          );
+          // A body of exactly one chunk: once its chunk and completion record
+          // are sent, with only the header's bytes and the completion's
+          // credited, its records fill the window.
+          const shell = `fvj1:${
+            JSON.stringify({ type: "transact", value: "" })
+          }`;
+          const filling = transport.send(`fvj1:${
+            JSON.stringify({
+              type: "transact",
+              value: "x".repeat(ROUTER_CHUNK_BYTES - shell.length),
+            })
+          }`);
+          await active.whenSent(3);
+          await clock.settle();
+          grantCredit(active, requireRecord(active.sent[2]).length);
+          await active.whenSent(4);
+          await clock.settle();
+          grantCredit(active, 5);
+          await filling;
+          expect(active.sent).toHaveLength(5);
+
+          const waiting = transport.send(
+            `fvj1:${JSON.stringify({ type: "transact", value: "y" })}`,
+          ).then(() => undefined, (error) => error);
+          await clock.settle();
+          // Its header waits for credit, and nothing of it is written.
+          expect(active.sent).toHaveLength(5);
+          active.close();
+          const failure = await waiting;
+          expect((failure as Error).name).toBe("ConnectionError");
+          expect(MemoryClient.isUnsentConnectionError(failure)).toBe(true);
+          expect(active.sent).toHaveLength(5);
+        } finally {
+          await transport.close();
+        }
+      });
+    });
+
     it("rejects a partially woken credit waiter when reset precedes its continuation", async () => {
       await withTransport(async (transport, socket) => {
         try {
@@ -1154,6 +1200,9 @@ describe("WebSocketTransport failure signaling", () => {
           queueMicrotask(() => transport.reset());
           await rejected;
           expect(active.sent).toHaveLength(3);
+          // Its header reached the socket, so the server may hold part of it.
+          const failure = await upload.then(() => undefined, (error) => error);
+          expect(MemoryClient.isUnsentConnectionError(failure)).toBe(false);
         } finally {
           await transport.close();
         }
@@ -2314,6 +2363,8 @@ describe("WebSocketTransport failure signaling", () => {
       expect((failure as Error).name).toBe("ConnectionError");
       expect((failure as Error).message).toBe("Memory websocket write failed");
       expect((failure as Error).cause).toBe("socket gone");
+      // The write began, so the frame may have reached the server.
+      expect(MemoryClient.isUnsentConnectionError(failure)).toBe(false);
       await transport.close();
     }, () => write.promise);
   });
@@ -2359,6 +2410,8 @@ describe("WebSocketTransport failure signaling", () => {
       expect((failure as Error).message).toBe(
         "Memory websocket changed before send",
       );
+      // None of it was written, and the error says so.
+      expect(MemoryClient.isUnsentConnectionError(failure)).toBe(true);
       expect(activeSocket.sent).toEqual(["first"]);
     }, () => write.promise);
   });

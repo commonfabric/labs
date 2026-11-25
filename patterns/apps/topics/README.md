@@ -180,14 +180,15 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   mention pivot from it; `cardRowsByActivity` takes the seven scalars a card
   uses per topic (`CardSource`: the six it shows, and `createdAt` as the sort's
   fallback for a topic that has never run), orders the topics by activity and
-  builds one row per card — the badge, title, snippet and caption as plain
-  strings, plus the topic as a reference for the Open link; `mentionableIndex`
-  takes the three display strings per topic and builds the mention universe;
-  `namesTable` takes the namespace map and builds one row per numbered member,
-  for a caller's reverse lookup, without reading through any of them. None
-  expands a topic's thread, verbs, or rendered UI. The card derivation alone
-  reads prose: the body string, whole, which it cuts to its 120-character
-  snippet — and nothing else of the topic.
+  builds one row per card for the `CARD_LIMIT` (200) most recently active — the
+  badge, title, snippet and caption as plain strings, plus the topic as a
+  reference for the Open link; `mentionableIndex` takes the three display
+  strings per topic and builds the mention universe; `namesTable` takes the
+  namespace map and builds one row per numbered member, for a caller's reverse
+  lookup, without reading through any of them. None expands a topic's thread,
+  verbs, or rendered UI. The card derivation alone reads prose: the body string,
+  whole, which it cuts to its 120-character snippet — and nothing else of the
+  topic.
 
   The card rows are strings, and that is deliberate: the card list is a mapped
   sub-pattern, and every helper call or conditional in a mapped body —
@@ -199,6 +200,16 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   pays the board-wide walk, once per change, in place of every card paying it on
   every load. The card keeps only the two conditionals it cannot precompute (the
   badge and the snippet line are present or absent).
+
+  The board shows at most `CARD_LIMIT` cards because each card costs a piece per
+  viewer, not just a row. Every card is an instance of the mapped sub-pattern,
+  and a browser rendering the list watches each one. Under server execution each
+  watched instance is demand, so the server starts every card, and the topic it
+  links to, for every viewer. On a copy of the team's board at 3,441 topics, one
+  viewer of the unbounded list took a serving worker past its 8 GB heap limit;
+  bounded to 200, the worker settled at 2.6 GB with the board open in two tabs.
+  When the board holds more, a caption gives the limit and how many topics the
+  board holds.
 
   What each reader of a topic gets is then its own declared schema's business.
   The published `index` declares the six scalars a survey reads, so a survey
@@ -266,8 +277,13 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   comparison is of a field nested inside a row, and what lets it is that row's
   declaration — the field is declared a `ComparableCell`, the annotation that
   makes it arrive as something `equals` can follow rather than a value to look
-  at. The published row declares both sides `unknown` instead, so a consumer
-  that only carries the graph onward expands neither.
+  at. A topic declares the rows it is handed the same way, `topic` a cell and
+  `mentionedBy` a list of cells, and that reader's declaration is what keeps a
+  read of its input from expanding the topics behind them: a query walks through
+  a link it reaches under `unknown`, which put every Topic's piece document in
+  each Topic's input sync while the topic declared the rows that way. The pivot
+  the board publishes still reads `unknown` at both fields, because a result's
+  schema keeps cell markers only for streams.
 
   The pivot works over the board's distinct topics, with distinctness decided by
   the same `equals`: a topic the board lists at two entries, whether as the same

@@ -3128,9 +3128,11 @@ nothing for a mutable engine:
   `ProblematicValue` fallback, and the unknown-tag arm's `UnknownValue`. A
   plain-container arm calls `Object.freeze()` on the array or object it has
   just built, whose children the leaf arms have already deep-frozen, so the
-  guarantee holds without walking them a second time. Which arm produced a
-  value is therefore not something a caller has to know. See Section 4.5
-  step 4.
+  guarantee holds without walking them a second time. The JSON walker reuses a
+  parsed container when every child decodes unchanged and no hole run expands:
+  the parse boundary already gave that container the required frozenness. Which
+  arm produced a value is therefore not something a caller has to know. See
+  Section 4.5 step 4.
 
 - **`ProblematicStateError.asProblematicValue()`.** The rendering of a thrown
   refusal as a returned value is deep-frozen where it is built, unless asked

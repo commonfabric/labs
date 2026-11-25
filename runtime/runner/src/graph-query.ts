@@ -89,6 +89,19 @@ export type GraphQueryWalkStats = {
   dagTraversals: number;
   getDocAtPathCalls: number;
   schemaMemoHits: number;
+
+  /** Positions the traversal ran from its own stack rather than on the
+   * JavaScript stack, which it does once the data is deep enough
+   * (`SchemaObjectTraverser.nativeDepthHandoffs`). */
+  nativeDepthHandoffs: number;
+
+  /**
+   * Session-scoped links left unfollowed because the walk acts as a
+   * principal with no session. A walk that counts none reached nothing that
+   * depends on who walked it beyond the scope instances its tracker keys
+   * name.
+   */
+  unresolvedLinkScopes: number;
 };
 
 export const createGraphQueryWalkStats = (): GraphQueryWalkStats => ({
@@ -100,6 +113,8 @@ export const createGraphQueryWalkStats = (): GraphQueryWalkStats => ({
   dagTraversals: 0,
   getDocAtPathCalls: 0,
   schemaMemoHits: 0,
+  nativeDepthHandoffs: 0,
+  unresolvedLinkScopes: 0,
 });
 
 /**
@@ -142,8 +157,8 @@ export type GraphQueryWalkOptions = {
    * The acting identity the walk's tracker keys resolve scoped addresses
    * against (key-vocabulary.md §1 sites 5–6): coverage proven for one scope
    * INSTANCE is not coverage of another. The identity arrives with the work
-   * — the memory server's query path supplies the querying session's —
-   * never from ambient state (key-vocabulary.md §3).
+   * — the memory server's query path supplies the one it walks a graph's
+   * roots under — never from ambient state (key-vocabulary.md §3).
    */
   identity: ScopeKeyIdentity;
 
@@ -545,6 +560,9 @@ export class GraphQueryWalk {
         },
       };
     }
+    this.#context.onUnresolvedLinkScope = () => {
+      this.stats.unresolvedLinkScopes++;
+    };
     // The manager serves stored documents and nothing is handed back to be
     // written elsewhere, so an inline array element is walked where it is
     // stored.
@@ -722,5 +740,6 @@ export class GraphQueryWalk {
     this.stats.dagTraversals += traverser.traverseDAGCalls;
     this.stats.getDocAtPathCalls += traverser.getDocAtPathCalls;
     this.stats.schemaMemoHits += traverser.schemaMemoHits;
+    this.stats.nativeDepthHandoffs += traverser.nativeDepthHandoffs;
   }
 }

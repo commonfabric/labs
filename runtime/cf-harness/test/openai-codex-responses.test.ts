@@ -175,6 +175,60 @@ Deno.test("Codex Responses supports stable affinity and reasoning controls", asy
   assertEquals(body?.prompt_cache_options, undefined);
 });
 
+Deno.test("Codex Responses sends the first system message as instructions and each later one as its own developer message", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 0,
+    credentialResolver: { resolve: () => Promise.resolve(credential) },
+    fetchFn: (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(sse({
+        type: "response.completed",
+        response: {
+          status: "completed",
+          output: [{
+            type: "message",
+            content: [{ type: "output_text", text: "done" }],
+          }],
+        },
+      }));
+    },
+  });
+  const turn = (transcript: HarnessModelTurnRequest["transcript"]) =>
+    client.complete({
+      model: "gpt-6.1-sol",
+      transcript,
+      tools: [],
+      nativeModelToolIds: [],
+      runId: "run-1",
+      cacheAffinityKey: "stable-session",
+    });
+
+  await turn([
+    { role: "system", content: "Standing instructions." },
+    { role: "system", content: "Result schema (JSON):\ntrue" },
+    { role: "system", content: "" },
+    { role: "user", content: "Do the task." },
+  ]);
+  await turn([
+    { role: "system", content: "Standing instructions." },
+    { role: "user", content: "Do the task." },
+  ]);
+
+  assertEquals(bodies[0].instructions, "Standing instructions.");
+  assertEquals(bodies[0].input, [
+    {
+      role: "developer",
+      content: [{ type: "input_text", text: "Result schema (JSON):\ntrue" }],
+    },
+    { role: "user", content: [{ type: "input_text", text: "Do the task." }] },
+  ]);
+  assertEquals(bodies[1].instructions, "Standing instructions.");
+  assertEquals(bodies[1].input, [
+    { role: "user", content: [{ type: "input_text", text: "Do the task." }] },
+  ]);
+});
+
 Deno.test("Codex Responses asks for a reasoning summary and carries it beside the message", async () => {
   let body: Record<string, unknown> | undefined;
   const client = new OpenAICodexResponsesClient({

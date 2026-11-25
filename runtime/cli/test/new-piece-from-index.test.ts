@@ -10,7 +10,13 @@ import {
   piece,
   recordIndexedPiece,
 } from "../commands/piece.ts";
+import {
+  PatternIndexError,
+  type PatternIndexGetRequest,
+  type PatternIndexPattern,
+} from "@commonfabric/pattern-index/client";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import { DEFAULT_PATTERN_INDEX_URL } from "@commonfabric/pattern-index/access";
 import { newPiece, newPieceWithReceipt } from "../lib/piece.ts";
 import { captureStderr } from "./utils.ts";
 
@@ -119,14 +125,21 @@ describe("piece new --from-index", () => {
       expect(recorded).toEqual([[INDEX_URL, "fid1:created", "pat-1"]]);
     });
 
+    it("reads the deployment's index when no index URL is given", async () => {
+      for (const options of [{}, { patternIndexUrl: "  " }]) {
+        const { recorded } = await run(
+          { fromIndex: "pat-1", ...options },
+          undefined,
+        );
+
+        expect(recorded).toEqual([
+          [DEFAULT_PATTERN_INDEX_URL, "fid1:created", "pat-1"],
+        ]);
+      }
+    });
+
     for (
       const [name, options, main, message] of [
-        [
-          "no index URL",
-          { fromIndex: "pat-1" },
-          undefined,
-          "--from-index needs the pattern index to read from",
-        ],
         [
           "an index URL that does not parse",
           { fromIndex: "pat-1", patternIndexUrl: "not a url" },
@@ -181,10 +194,197 @@ describe("piece new --from-index", () => {
     }
   });
 
+  describe("--from-link", () => {
+    /** What the index answers for a ref: the link resolved, or a refusal. */
+    const resolved = (request: PatternIndexGetRequest) =>
+      Promise.resolve(pattern(`pat-for-${request.ref}`));
+
+    const pattern = (
+      patternId: string,
+      link: PatternIndexPattern["link"] = {
+        ref: "a-k3x9AbCdEf",
+        channel: "stable",
+        number: 3,
+        stable: true,
+      },
+    ): PatternIndexPattern => ({
+      patternId,
+      createdAt: "2026-11-20T00:00:00Z",
+      description: "",
+      hashtags: [],
+      dependencies: [],
+      ...(link === undefined ? {} : { link }),
+    });
+
+    /** Runs the action against an index answering `answer`. */
+    const run = async (
+      options: Record<string, unknown>,
+      main: string | undefined = undefined,
+      answer: (
+        request: PatternIndexGetRequest,
+      ) => Promise<PatternIndexPattern> = resolved,
+    ) => {
+      let entry: unknown;
+      const opened: string[][] = [];
+      const asked: PatternIndexGetRequest[] = [];
+      const recorded: string[][] = [];
+      const error = await captureStderr(() =>
+        newPieceFromCommand({ ...CONFIG, ...options }, main, {
+          newPiece: (_config, received) => {
+            entry = received;
+            return Promise.resolve({ pieceId: "fid1:created" });
+          },
+          openIndexClient: (url, identity) => {
+            opened.push([url, identity]);
+            return Promise.resolve({
+              getPattern: (request) => {
+                asked.push(request);
+                return answer(request);
+              },
+            });
+          },
+          recordIndexedPiece: (url, pieceId, patternId) => {
+            recorded.push([url, pieceId, patternId]);
+            return Promise.resolve();
+          },
+        })
+      ).then(() => undefined, (e) => e);
+      return { entry, opened, asked, recorded, error };
+    };
+
+    it("deploys and records the pattern id the link names, asked as the space's identity", async () => {
+      const { entry, opened, asked, recorded, error } = await run({
+        fromLink: " a-k3x9AbCdEf@beta ",
+        patternIndexUrl: INDEX_URL,
+      });
+
+      expect(error).toBeUndefined();
+      expect(opened).toEqual([[INDEX_URL, CONFIG.identity]]);
+      expect(asked).toEqual([{ ref: "a-k3x9AbCdEf@beta" }]);
+      expect(entry).toEqual({
+        patternId: "pat-for-a-k3x9AbCdEf@beta",
+        patternIndexUrl: INDEX_URL,
+      });
+      expect(recorded).toEqual([
+        [INDEX_URL, "fid1:created", "pat-for-a-k3x9AbCdEf@beta"],
+      ]);
+    });
+
+    it("never asks the index under --from-index", async () => {
+      const { opened, entry } = await run({
+        fromIndex: "pat-1",
+        patternIndexUrl: INDEX_URL,
+      });
+
+      expect(opened).toEqual([]);
+      expect(entry).toEqual({ patternId: "pat-1", patternIndexUrl: INDEX_URL });
+    });
+
+    for (
+      const [name, link, answer, kind, message] of [
+        [
+          "the index has nothing under a bare link, naming its beta",
+          "a-k3x9AbCdEf",
+          () => Promise.reject(new PatternIndexError("getPattern", 404)),
+          ValidationError,
+          "No shared pattern answers to the link a-k3x9AbCdEf: it may be mistyped, withdrawn, or not shared on that channel yet (a-k3x9AbCdEf@beta names its beta).",
+        ],
+        [
+          "the index has nothing under a channel link",
+          "a-k3x9AbCdEf@beta",
+          () => Promise.reject(new PatternIndexError("getPattern", 404)),
+          ValidationError,
+          "No shared pattern answers to the link a-k3x9AbCdEf@beta: it may be mistyped, withdrawn, or not shared on that channel yet.",
+        ],
+        [
+          "the index fails otherwise",
+          "a-k3x9AbCdEf",
+          () => Promise.reject(new PatternIndexError("getPattern", 503)),
+          Error,
+          "pattern index lookup failed for the link a-k3x9AbCdEf",
+        ],
+        [
+          "the index answers without resolving a link",
+          "a-k3x9AbCdEf",
+          () => {
+            const { link: _link, ...bare } = pattern("pat-1");
+            return Promise.resolve(bare);
+          },
+          Error,
+          "did not resolve a-k3x9AbCdEf as a link",
+        ],
+      ] as const
+    ) {
+      it(`creates nothing when ${name}`, async () => {
+        const { entry, recorded, error } = await run(
+          { fromLink: link, patternIndexUrl: INDEX_URL },
+          undefined,
+          answer,
+        );
+
+        expect(error).toBeInstanceOf(kind);
+        expect(error.message).toContain(message);
+        expect(entry).toBeUndefined();
+        expect(recorded).toEqual([]);
+      });
+    }
+
+    for (
+      const [name, options, main, message] of [
+        [
+          "a blank link",
+          { fromLink: "  ", patternIndexUrl: INDEX_URL },
+          undefined,
+          "--from-link requires a non-blank link",
+        ],
+        [
+          "a source file as well",
+          { fromLink: "a-k3x9AbCdEf", patternIndexUrl: INDEX_URL },
+          "/repo/main.tsx",
+          "drop --from-link",
+        ],
+        [
+          "--from-index as well",
+          { fromLink: "a-k3x9AbCdEf", fromIndex: "pat-1" },
+          undefined,
+          "Pass --from-index or --from-link, not both",
+        ],
+        [
+          "a request key, which replays one fixed version",
+          { fromLink: "a-k3x9AbCdEf", requestKey: "k1" },
+          undefined,
+          "pass --from-index <patternId> instead",
+        ],
+        [
+          "an index URL that does not parse",
+          { fromLink: "a-k3x9AbCdEf", patternIndexUrl: "not a url" },
+          undefined,
+          "--pattern-index-url must be an http(s) URL",
+        ],
+        [
+          "version facts, which a piece from the index keeps none of",
+          { fromLink: "a-k3x9AbCdEf", versionOrigin: "agent" },
+          undefined,
+          "a piece from the index keeps none",
+        ],
+      ] as const
+    ) {
+      it(`throws a ValidationError for ${name}, before asking the index`, async () => {
+        const { opened, entry, error } = await run(options, main);
+
+        expect(error).toBeInstanceOf(ValidationError);
+        expect(error.message).toContain(message);
+        expect(opened).toEqual([]);
+        expect(entry).toBeUndefined();
+      });
+    }
+  });
+
   it("declares --from-index as conflicting with the local-source options", () => {
     const option = piece.getCommand("new")?.getOption("from-index");
 
     expect(option?.conflicts).toEqual([
+      "version-entry",
       "main-export",
       "root",
       "repository",

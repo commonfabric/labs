@@ -47,7 +47,7 @@
 // the memory server to admit and commit on its own.
 
 import { aclDocId } from "@commonfabric/memory/acl";
-import type { Engine } from "@commonfabric/memory/v2/engine";
+import type { Engine, SessionOverwrite } from "@commonfabric/memory/v2/engine";
 import {
   applyCommit,
   applyWaveCommit,
@@ -509,7 +509,7 @@ export class EngineWaveCommitSink implements WaveCommitSink {
     doc: { id: string; scope?: CellScope; scopeKey: string },
     sinceSeq: number,
     session: { principal: string; sessionId: string },
-  ): Promise<ReadonlyArray<readonly string[]>> {
+  ): Promise<ReadonlyArray<SessionOverwrite>> {
     return Promise.resolve(
       selectSessionOverwritePathsSince(this.#engineFor(space), {
         id: doc.id,

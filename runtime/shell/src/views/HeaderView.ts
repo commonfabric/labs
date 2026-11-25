@@ -30,6 +30,7 @@ import {
   iconChevronRight,
   iconClose,
   iconFolder,
+  iconHistory,
   iconLink,
   iconLogOut,
   iconStar,
@@ -559,6 +560,9 @@ export class XHeaderView extends BaseView {
   @property()
   accessor showDebuggerView = false;
 
+  @property()
+  accessor showHistoryView = false;
+
   @property({ attribute: false })
   accessor isViewingDefaultPattern = false;
 
@@ -858,6 +862,18 @@ export class XHeaderView extends BaseView {
       type: "set-config",
       key: "showDebuggerView",
       value: !this.showDebuggerView,
+    });
+    this.menuOpen = false;
+  }
+
+  /** Toggle the history panel visibility via app state command. */
+  #handleHistoryToggleClick(e: Event) {
+    e.preventDefault();
+    e.stopPropagation();
+    this.command({
+      type: "set-config",
+      key: "showHistoryView",
+      value: !this.showHistoryView,
     });
     this.menuOpen = false;
   }
@@ -1265,6 +1281,15 @@ export class XHeaderView extends BaseView {
                   </button>
                 `
                 : nothing}
+
+              <button
+                class="menu-item"
+                role="menuitem"
+                @click="${this.#handleHistoryToggleClick}"
+              >
+                <span class="menu-item-icon">${iconHistory()}</span>
+                <span class="menu-item-label">Toggle history</span>
+              </button>
 
               <button
                 class="menu-item"

@@ -86,11 +86,12 @@ participants.push({ profile: myProfile, joinedAt: Date.now() });
 Copy the resolved `name` and the profile's face into the roster entry when the
 user joins. `profileFace()` from `patterns/system/profile-face/profile-face.ts`,
 given the profile cell, reads the face: the picture, or else the avatar text,
-only as the profile's owner set it.
-Anyone can write a profile's picture, so a picture copied any other way may be a
-visitor's. The copy carries no claim of its own: a reader of the roster cannot
-tell it from anything else a roster writer stored, and only a live
-`<cf-profile-badge>` checks the face it draws.
+only as the profile's owner set it. A stored picture may not be its owner's:
+earlier releases let anyone set one through `setPicture`, and bytes can be
+stored without a label, so a picture copied any other way may be someone else's.
+The copy carries no claim of its own: a reader of the roster cannot tell it from
+anything else a roster writer stored, and only a live `<cf-profile-badge>`
+checks the face it draws.
 
 ```ts
 // Shown inside a handler.
@@ -99,7 +100,9 @@ participants.push({ name, ...profileFace(myProfile), joinedAt: Date.now() });
 
 - **Pros:** Self-contained — every other viewer renders from plain values
   already in the shared space, no cross-space resolution, no dependency on the
-  joiner's profile space being reachable later. Durable and trivially
+  joiner's profile space being reachable later, except that a picture held as
+  a blob is copied as its reference: drawing it fetches it from the blob's
+  space, and it shows as initials while that space's host is unreachable. Durable and trivially
   serializable. Renders identically and immediately for all viewers. Best when
   the roster must stay legible with remote profile spaces offline, or when you
   explicitly do not want a live cross-space dependency.
@@ -186,7 +189,11 @@ export interface Participant {
   profile: ParticipantProfileCell;
   /** Display name, snapshotted from the joiner's profile at join time. */
   name: string;
-  /** Picture bytes, snapshotted from the joiner's profile, if its owner set one. */
+  /** The picture's blob, snapshotted from the joiner's profile, if its owner
+   * set one. */
+  pictureBlob?: { space: string; id: string };
+  /** Picture bytes, snapshotted instead from a profile that holds its owner's
+   * picture inline. */
   picture?: FabricBytes;
   /** Avatar text, snapshotted instead when its owner set no picture. */
   avatar?: string;
@@ -344,6 +351,7 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
               {participants.map((p) => (
                 <cf-hstack gap="2" align="center">
                   <cf-avatar
+                    blob={p.pictureBlob}
                     bytes={p.picture}
                     src={p.avatar}
                     name={p.name}
@@ -437,7 +445,8 @@ Two deployable versions:
   contributor's profile. Verified end-to-end across multiple real identities.
 - **Snapshot (self-containment variant):**
   [`patterns/examples/shared-profile-roster/main.tsx`](../../patterns/examples/shared-profile-roster/main.tsx)
-  renders participants via **`<cf-avatar bytes={p.picture} name={p.name} />`**
+  renders participants via
+  **`<cf-avatar blob={p.pictureBlob} bytes={p.picture} name={p.name} />`**
   from values copied at join time, with the current viewer's own identity on a
   trusted `<cf-profile-badge>`. Verified deployed (`cf piece new … main.tsx`): 0
   console errors; participant rows show avatars; the viewer

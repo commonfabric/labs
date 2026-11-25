@@ -321,6 +321,14 @@ design, as below.
   with `#chatManager`. `accept` takes a direct room's counterpart from the
   label on its `about.record`, and refuses one the event names otherwise (see
   [writers and labels](#writers-and-labels)).
+- **A direct room is labeled by its counterpart's principal.** The manager's
+  rendering labels a direct room with no title `With` and its counterpart's
+  principal, shortened by `shortDid()`, rather than by the counterpart's
+  profile name, as [`ChatRoomAbout`](ChatRoomAbout.md) says a client shows it.
+  The room's entry names the counterpart by principal alone. Their profile is
+  reached through the room's roster, in the room's space, or through `people`,
+  which reads every listed room's roster, so a label read from it would open
+  the room's space and the profile's whenever the rooms are listed.
 - **Creation takes one transaction.** The space comes with its grants, so
   writing the room, the manager's notices, and its index entry happens in one
   commit, rather than in the design's resumable steps, and a request's outcome
@@ -395,9 +403,11 @@ design, as below.
   The sender adds to the room's participants each member it offers the room to,
   and queues a notice only for a member offered nothing. An `openDirect` that
   names `profile` and finds a direct room with a notice for its counterpart
-  still waiting offers them the room then, unless its roster lists them, and
-  keeps the notice, which is no longer listed once the offer puts them on the
-  room's roster. A room is offered only
+  still waiting offers them the room then, unless its roster lists them, in
+  which case it drops the notice. Any other notice whose
+  recipient has joined, the one an offer adds them for included, is dropped
+  when its sender's manager next joins the room, which reads the room's roster
+  only when it holds a notice of the room. A room is offered only
   to someone the request names by profile, when the profile points at an inbox:
   an `openDirect` naming `profile`, a participant's chip, whose click names
   the participant's profile, or a `createGroup` naming `profiles`, as the

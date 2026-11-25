@@ -170,7 +170,7 @@ describe("rapids-workflows", () => {
     ).not.toBe(0);
   });
 
-  it("collects all 21 workers and HTTPS and uploads only a complete bound Estuary receipt", async () => {
+  it("collects the workers of the host's recorded Toolshed layout and HTTPS and uploads only a complete bound Estuary receipt", async () => {
     const { steps } =
       (await workflow("deploy-production.yml")).jobs["deploy-estuary"];
     const remote = oneStep(steps, (step) => step.id === "evidence");
@@ -179,12 +179,20 @@ describe("rapids-workflows", () => {
     const script = z.string().parse(remote.with.script);
     expect(script).toContain("deploy@estuary.saga-castor.ts.net python3 -");
     const python = script.split("<<'PY'\n")[1].split("\nPY")[0];
-    const collect = (fault: string) =>
+    // The script reads the marker infra writes on the host; `undefined` stands
+    // for a host that has none.
+    const collect = (fault: string, marker?: string) =>
       runStep(
         {
           ...remote,
           run: `python3 - <<'PY'\n${
-            `import io, json, sys, urllib.request\nsys.argv = ["verify", "${infraSha}"]\n` +
+            `import builtins, io, json, sys, urllib.request\nsys.argv = ["verify", "${infraSha}"]\n` +
+            `def open(path, *args, **kwargs):\n` +
+            `    if path != "/opt/cf/releases/toolshed-capacity.json": return builtins.open(path, *args, **kwargs)\n` +
+            `    if ${
+              marker === undefined ? "True" : "False"
+            }: raise FileNotFoundError(path)\n` +
+            `    return io.StringIO(${JSON.stringify(marker ?? "")})\n` +
             `class Response(io.StringIO):\n` +
             `    status = 200\n` +
             `    def __init__(self, url):\n` +
@@ -203,6 +211,20 @@ describe("rapids-workflows", () => {
     for (const fault of ["sha", "https", "redirect"]) {
       expect((await collect(fault)).code).not.toBe(0);
     }
+    for (
+      const marker of [
+        '{"api": 5, "storage": 12}\n',
+        '{"api": 4, "storage": 12, "spare": 1}\n',
+        "[]\n",
+      ]
+    ) {
+      const refused = await collect("", marker);
+      expect(refused.code).not.toBe(0);
+      expect(refused.stderr).toContain(
+        "records an unsupported Toolshed layout",
+      );
+    }
+    expect((await collect("", "not json")).code).not.toBe(0);
     const save = oneStep(
       steps,
       (step) => step.run?.includes("base64.b64decode") ?? false,
@@ -220,6 +242,32 @@ describe("rapids-workflows", () => {
       GITHUB_RUN_ID: "123",
       GITHUB_RUN_ATTEMPT: "2",
     };
+    const ports = (count: number) =>
+      Array.from({ length: count }, (_, index) => 8001 + index);
+    for (
+      const [marker, capacity] of [
+        [undefined, { api: 5, storage: 16 }],
+        ['{"api": 5, "storage": 16}\n', { api: 5, storage: 16 }],
+        ['{\n  "api": 4,\n  "storage": 12\n}\n', { api: 4, storage: 12 }],
+      ] as const
+    ) {
+      const layout = await collect("", marker);
+      expect(layout.code).toBe(0);
+      const saved = await runStep(
+        run,
+        { ...env, REMOTE_OUTPUT: layout.stdout },
+        {},
+      );
+      expect(saved.code).toBe(0);
+      const receipt = JSON.parse(saved.stdout);
+      const expected = ports(capacity.api + capacity.storage);
+      expect(receipt.capacity).toEqual(capacity);
+      expect(receipt.expected_workers).toEqual({
+        "estuary.saga-castor.ts.net": expected,
+      });
+      expect(receipt.workers.map((worker: { port: number }) => worker.port))
+        .toEqual(expected);
+    }
     const saved = await runStep(run, env, {});
     expect(saved.code).toBe(0);
     const receipt = JSON.parse(saved.stdout);
@@ -254,6 +302,24 @@ describe("rapids-workflows", () => {
         0,
       );
     }
+    // A receipt is held to the layout it records, and only to a known one.
+    const mismatched = "ESTUARY_RECEIPT:" +
+      btoa(JSON.stringify({ ...receipt, capacity: { api: 4, storage: 12 } }));
+    expect(
+      (await runStep(run, { ...env, REMOTE_OUTPUT: mismatched }, {})).code,
+    ).not.toBe(0);
+    const unknown = ports(17);
+    const REMOTE_OUTPUT = "ESTUARY_RECEIPT:" + btoa(JSON.stringify({
+      ...receipt,
+      capacity: { api: 5, storage: 12 },
+      expected_workers: { "estuary.saga-castor.ts.net": unknown },
+      workers: unknown.map((port) => ({ ...receipt.workers[0], port })),
+    }));
+    const refused = await runStep(run, { ...env, REMOTE_OUTPUT }, {});
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain(
+      "Receipt records an unsupported Toolshed layout",
+    );
     const upload = oneStep(
       steps,
       (step) => step.uses?.startsWith("actions/upload-artifact@") ?? false,
@@ -388,7 +454,7 @@ describe("rapids-workflows", () => {
       "app-id": "${{ vars.RAPIDS_APP_ID }}",
       "private-key": "${{ secrets.RAPIDS_APP_PRIVATE_KEY }}",
       owner: "commonfabric",
-      repositories: "infra,loom,labs,commonfabric-weaver,gvisor",
+      repositories: "infra,cfs,labs,weaver,gvisor",
       "permission-contents": "read",
       "permission-actions": "read",
     });
@@ -414,6 +480,196 @@ describe("rapids-workflows", () => {
       "GITHUB_RUN_ATTEMPT",
     ]);
     expect(deploy.with.capture_stdout).toBe(true);
+  });
+
+  it("installs Estuary's replica service only from an infra commit on main", async () => {
+    const replica = await workflow("estuary-replica-service.yml");
+    expect(replica.name).toBe("Deploy Estuary replica service");
+    expect(Object.keys(replica.on)).toEqual(["workflow_dispatch"]);
+    const dispatch = z.object({
+      inputs: z.record(
+        z.string(),
+        z.object({ type: z.string(), required: z.boolean() }),
+      ),
+    }).parse(replica.on.workflow_dispatch);
+    expect(dispatch.inputs).toEqual({
+      infra_sha: { type: "string", required: true },
+    });
+    // A group of its own, so installs run independently. In the production
+    // deployment's group, a production run waiting for approval would hold
+    // the group and an install would queue behind it.
+    expect(replica.concurrency).toEqual({
+      group: "estuary-replica-service-deployment",
+      "cancel-in-progress": false,
+    });
+    expect(replica.permissions).toEqual({ contents: "read" });
+    expect(Object.keys(replica.jobs)).toEqual(["deploy"]);
+    const job = replica.jobs.deploy;
+    expect(job.if).toBe("github.ref == 'refs/heads/main'");
+    // No approval while the service is being brought up: `toolshed` holds the
+    // bastion credentials without reviewers, as it does for the Rapids
+    // release. When the service is in use this becomes `estuary`, which holds
+    // them behind a production deployment's reviewers.
+    expect(job.environment).toBe("toolshed");
+    expect((await workflow("rapids-release.yml")).jobs.deploy.environment)
+      .toBe("toolshed");
+    expect(job.permissions).toEqual({ contents: "read" });
+    expect(job.env).toEqual({ INFRA_SHA: "${{ inputs.infra_sha }}" });
+
+    const { steps } = job;
+    expect(steps.map((step) => step.id)).toEqual([
+      "validate-input",
+      "reader",
+      "validate-ancestry",
+      "validate-selection",
+      "deploy",
+    ]);
+    // The runner executes no code from any repository.
+    expect(steps.filter((step) => step.uses?.startsWith("actions/checkout@")))
+      .toEqual([]);
+
+    const guard = oneStep(steps, (step) => step.id === "validate-input");
+    expect((await runStep(guard, { INFRA_SHA: infraSha }, {})).code).toBe(0);
+    for (
+      const sha of [
+        "",
+        "main",
+        infraSha.slice(1),
+        `${infraSha}0`,
+        infraSha.toUpperCase(),
+        `${infraSha}\n`,
+        `${infraSha}^`,
+        "$(exit 0)",
+        `${infraSha}; true`,
+      ]
+    ) {
+      expect((await runStep(guard, { INFRA_SHA: sha }, {})).code).not.toBe(0);
+    }
+
+    const ancestry = oneStep(steps, (step) => step.id === "validate-ancestry");
+    expect(ancestry.env.GH_TOKEN).toBe(readerToken);
+    const check = (status: string, code = "0") =>
+      runStep(ancestry, {
+        INFRA_SHA: infraSha,
+        STATUS: status,
+        GH_EXIT: code,
+      }, {
+        gh:
+          'printf "%s\\n" "$@" > "$CALLS"\nprintf "%s\\n" "$STATUS"\nexit "$GH_EXIT"',
+      });
+    for (const status of ["ahead", "identical"]) {
+      const result = await check(status);
+      expect(result.code).toBe(0);
+      expect(result.calls.split("\n")).toEqual([
+        "api",
+        `repos/commonfabric/infra/compare/${infraSha}...main`,
+        "--jq",
+        ".status",
+      ]);
+    }
+    for (const status of ["behind", "diverged", "", "null", "unknown"]) {
+      expect((await check(status)).code).not.toBe(0);
+    }
+    expect((await check("ahead", "42")).code).not.toBe(0);
+  });
+
+  it("installs only the replica service build that infra's main selects now", async () => {
+    // No reviewer stands between a dispatch and the bastion, so naming an
+    // older commit must not select an older build.
+    const { steps } = (await workflow("estuary-replica-service.yml")).jobs
+      .deploy;
+    const guard = oneStep(steps, (step) => step.id === "validate-selection");
+    const deploy = oneStep(steps, (step) => step.id === "deploy");
+    expect(steps.indexOf(guard)).toBeLessThan(steps.indexOf(deploy));
+    expect(guard.env.GH_TOKEN).toBe(readerToken);
+    const selection =
+      "repos/commonfabric/infra/contents/ansible/vars/replica-service-release.yml";
+    const blob = "a".repeat(40);
+    const check = (named: string, current: string, failOn = "") =>
+      runStep(guard, {
+        INFRA_SHA: infraSha,
+        NAMED: named,
+        CURRENT: current,
+        FAIL_ON: failOn,
+      }, {
+        gh: [
+          'printf "%s\\n" "$*" >> "$CALLS"',
+          'case "$2" in',
+          '  *"ref=main") answer=$CURRENT; which=main ;;',
+          "  *) answer=$NAMED; which=named ;;",
+          "esac",
+          '[ "$FAIL_ON" = "$which" ] && exit 22',
+          'printf "%s\\n" "$answer"',
+        ].join("\n"),
+      });
+    const same = await check(blob, blob);
+    expect(same.code).toBe(0);
+    expect(same.calls.split("\n")).toEqual([
+      `api ${selection}?ref=${infraSha} --jq .sha`,
+      `api ${selection}?ref=main --jq .sha`,
+    ]);
+    for (
+      const [named, current] of [
+        [blob, "b".repeat(40)], // an older commit's selection
+        ["", ""], // the file is on neither
+        ["null", "null"],
+        ["", blob],
+        [blob, ""],
+        [blob.slice(1), blob.slice(1)],
+      ]
+    ) {
+      expect((await check(named, current)).code).not.toBe(0);
+    }
+    expect((await check(blob, blob, "named")).code).not.toBe(0);
+    expect((await check(blob, blob, "main")).code).not.toBe(0);
+  });
+
+  it("gives the replica service's bastion run a token that only reads infra and Loom", async () => {
+    const { steps } = (await workflow("estuary-replica-service.yml")).jobs
+      .deploy;
+    const reader = oneStep(steps, (step) => step.id === "reader");
+    expect(reader.uses).toBe(
+      "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+    );
+    expect(reader.with).toEqual({
+      "app-id": "${{ vars.RAPIDS_APP_ID }}",
+      "private-key": "${{ secrets.RAPIDS_APP_PRIVATE_KEY }}",
+      owner: "commonfabric",
+      repositories: "infra,cfs",
+      "permission-contents": "read",
+    });
+    const deploy = oneStep(steps, (step) => step.id === "deploy");
+    expect(deploy.uses).toBe(
+      "appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2",
+    );
+    expect(deploy.env).toEqual({ GH_TOKEN: readerToken });
+    expect(deploy.with.host).toBe("${{ secrets.BASTION_HOST }}");
+    expect(deploy.with.key).toBe("${{ secrets.BASTION_SSH_PRIVATE_KEY }}");
+    expect(deploy.with.username).toBe("bastion");
+    expect(deploy.with.command_timeout).toBe("30m");
+    // The wrapper takes one full infra SHA and nothing else.
+    expect(commandWords(z.string().parse(deploy.with.script))).toEqual([
+      "/opt/cf/deploy-replica-service.sh",
+      '"$INFRA_SHA"',
+    ]);
+    expect(z.string().parse(deploy.with.envs).split(",")).toEqual([
+      "GH_TOKEN",
+      "INFRA_SHA",
+    ]);
+    // Nothing else the repository holds reaches this workflow: no vault
+    // password exists for it to take.
+    const text = await Deno.readTextFile(
+      new URL(
+        "../.github/workflows/estuary-replica-service.yml",
+        import.meta.url,
+      ),
+    );
+    expect([...text.matchAll(/secrets\.([A-Z_]+)/g)].map((m) => m[1]).sort())
+      .toEqual([
+        "BASTION_HOST",
+        "BASTION_SSH_PRIVATE_KEY",
+        "RAPIDS_APP_PRIVATE_KEY",
+      ]);
   });
 
   it("authenticates manifest reads after trusted checkout and confines the access token to candidate validation", async () => {
@@ -511,7 +767,7 @@ describe("rapids-workflows", () => {
     });
   });
 
-  it("notifies infra of every main deployment outcome and Loom only of green main CI", async () => {
+  it("notifies infra of every main deployment outcome and cfs only of green main CI", async () => {
     const notify = await workflow("notify-rapids.yml");
     expect(notify.permissions).toEqual({});
     expect(notify.on).toEqual({
@@ -532,7 +788,7 @@ describe("rapids-workflows", () => {
       head_branch: "main",
       head_repository: { full_name: "commonfabric/labs" },
     };
-    for (const target of ["infra", "loom"]) {
+    for (const target of ["infra", "cfs"]) {
       const job = notify.jobs[`notify-${target}`];
       // These guards use the shared boolean/property subset of Actions and JS.
       const accepts = new Function(
@@ -587,7 +843,7 @@ describe("rapids-workflows", () => {
 
   it("sends paired producer hints for CI and an empty-input reconciliation for deployment", async () => {
     const notify = await workflow("notify-rapids.yml");
-    for (const target of ["infra", "loom"]) {
+    for (const target of ["infra", "cfs"]) {
       const job = notify.jobs[`notify-${target}`];
       const send = oneStep(
         job.steps,

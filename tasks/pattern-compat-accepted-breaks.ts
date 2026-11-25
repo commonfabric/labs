@@ -169,6 +169,21 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/agent-run-invalid-result-error-code-break.md",
   },
   {
+    // A run's error taxonomy gained `CFC_REFUSED`, for a run a read above the
+    // session's read ceiling ended. The baselines before these three are
+    // forgiven on this path by the two entries above.
+    pattern: "system/agent-run/agent-run.tsx",
+    baselines: [
+      "20261005T225922Z-ul1dLrvToVQT19gi",
+      "20261022T203732Z-tj02an-tceghMatZ",
+      "20261104T010939Z-L1bgKjZof1YeAWr9",
+    ],
+    paths: ["result.run.errorCode"],
+    reason:
+      "a run's errorCode gained CFC_REFUSED for a run a read above the session's read ceiling ended; no stored record holds it until a runner reports one, and every reader shows the code as text",
+    record: "docs/history/agent-run-cfc-refused-error-code-break.md",
+  },
+  {
     // The same ruling seen from the profile itself: both fields that left,
     // in the pointer it publishes and in the event `setInbox` takes.
     pattern: "system/profile-home/profile-home.tsx",
@@ -1354,10 +1369,11 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // manager's request outcomes carry the policy through the rooms they
     // link.
     //
-    // These baselines also report the scope the manager's `people` declares,
-    // which `fabrichat-view-scopes-per-user-break.md` records, in the result
-    // role. The entry names both paths, and the last baseline, recorded with
-    // that scope, reports the policy alone.
+    // The last baseline, recorded with `people` declared per user, also
+    // reports the scope `people` declares now, per session, which
+    // `fabrichat-people-asked-break.md` records, in the result role; the
+    // baselines before it declare `people` per session as well. The entry
+    // names both paths.
     pattern: "system/fabrichat/manager.tsx",
     baselines: [
       "20261011T221322Z-ESDR30hfSt52JJjG",
@@ -1404,7 +1420,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a room's policy states `maxAttachments`, an optional number, where its schema took any value; no stored policy holds the key" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
       "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
-      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)" +
+      "; and the people are declared per session, listed only for a session that has asked for them (docs/history/fabrichat-people-asked-break.md)",
     record: "docs/history/fabrichat-max-attachments-break.md",
   },
   {
@@ -1549,22 +1566,17 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // `space-own-chat` alone, so a stored outcome admitted either of any
     // type; the candidate types them.
     //
-    // The proof also blames the scope the manager's `people` declares, which
-    // `fabrichat-view-scopes-per-user-break.md` records. The entry names both
-    // paths.
     pattern: "system/fabrichat/manager.tsx",
     baselines: [
       "20261011T170652Z-2XdZAneyCTt2Teex",
     ],
     paths: [
       "result.$VIEWS.chats.requests.*",
-      "result.$VIEWS.chats.people",
       "result.requests.*",
       // The paths from here on are recorded in
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
       // recorded change each one comes from.
       "result.$VIEWS.chats.rooms",
-      "result.people",
       "result.rooms",
       // The outgoing notices, declared per user as well, which
       // `fabrichat-outgoing-notices-per-user-break.md` records.
@@ -1630,10 +1642,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The same ruling, against the home baselines recorded with the scope
     // the manager's views declare, and with the action that replaces a
-    // refused private inbox. The proof also blames the scope the manager's
-    // `people` declares, which `fabrichat-view-scopes-per-user-break.md`
-    // records under the ruling its own entry carries. The entry names both
-    // paths.
+    // refused private inbox.
     pattern: "system/home/home.tsx",
     baselines: [
       "20261011T170655Z-AJPqLNiOact-MHN0",
@@ -1641,13 +1650,11 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     ],
     paths: [
       "result.chatManager.$VIEWS.chats.requests.*",
-      "result.chatManager.$VIEWS.chats.people",
       "result.chatManager.requests.*",
       // The paths from here on are recorded in
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
       // recorded change each one comes from.
       "result.chatManager.$VIEWS.chats.rooms",
-      "result.chatManager.people",
       "result.chatManager.rooms",
       // The outgoing notices, declared per user as well, which
       // `fabrichat-outgoing-notices-per-user-break.md` records.
@@ -1948,13 +1955,18 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.canSend",
       "result.canAdd",
       "result.canSend",
+      // The room's roster, optional, a link to the stored participant list,
+      // which `fabrichat-room-roster-stored-break.md` records.
+      "result.$VIEWS.room.roster",
+      "result.roster",
     ],
     reason:
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its activity log is gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
       "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
       "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
-      "; the session's windows, which the room offers again, name messages in the shape the break gives every message",
+      "; the session's windows, which the room offers again, name messages in the shape the break gives every message" +
+      "; and the room's `roster` is optional, a link to the stored participant list (docs/history/fabrichat-room-roster-stored-break.md)",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -2086,13 +2098,18 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.canSend",
       "result.canAdd",
       "result.canSend",
+      // The room's roster, optional, a link to the stored participant list,
+      // which `fabrichat-room-roster-stored-break.md` records.
+      "result.$VIEWS.room.roster",
+      "result.roster",
     ],
     reason:
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its per-user act outcomes are gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
       "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
       "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
-      "; the session's windows, which the room offers again, name messages in the shape the break gives every message",
+      "; the session's windows, which the room offers again, name messages in the shape the break gives every message" +
+      "; and the room's `roster` is optional, a link to the stored participant list (docs/history/fabrichat-room-roster-stored-break.md)",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -2254,13 +2271,18 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.canSend",
       "result.messageRights",
       "result.viewer",
+      // The room's roster, optional, a link to the stored participant list,
+      // which `fabrichat-room-roster-stored-break.md` records.
+      "result.$VIEWS.room.roster",
+      "result.roster",
     ],
     reason:
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its message windows are gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
       "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
       "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
-      "; the session's windows, which the room offers again, name messages in the shape the break gives every message",
+      "; the session's windows, which the room offers again, name messages in the shape the break gives every message" +
+      "; and the room's `roster` is optional, a link to the stored participant list (docs/history/fabrichat-room-roster-stored-break.md)",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -2345,10 +2367,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.canSend",
       "result.messageRights",
       "result.viewer",
+      // The room's roster, optional, a link to the stored participant list,
+      // which `fabrichat-room-roster-stored-break.md` records.
+      "result.$VIEWS.room.roster",
+      "result.roster",
     ],
     reason:
       "a message's reply names its thread and its quote apart, in place of the one message a reply named; stored replies are left as they are, counted and shown as replying to nothing" +
-      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)",
+      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
+      "; and the room's `roster` is optional, a link to the stored participant list (docs/history/fabrichat-room-roster-stored-break.md)",
     record: "docs/history/fabrichat-reply-split-break.md",
   },
   {
@@ -2400,10 +2427,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.canSend",
       "result.messageRights",
       "result.viewer",
+      // The room's roster, optional, a link to the stored participant list,
+      // which `fabrichat-room-roster-stored-break.md` records.
+      "result.$VIEWS.room.roster",
+      "result.roster",
     ],
     reason:
       "a message's reply names its thread and its quote apart, in place of the one message a reply named; stored replies are left as they are, counted and shown as replying to nothing" +
-      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)",
+      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
+      "; and the room's `roster` is optional, a link to the stored participant list (docs/history/fabrichat-room-roster-stored-break.md)",
     record: "docs/history/fabrichat-reply-split-break.md",
   },
   {
@@ -2428,10 +2460,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.canSend",
       "result.messageRights",
       "result.viewer",
+      // The room's roster, optional, a link to the stored participant list,
+      // which `fabrichat-room-roster-stored-break.md` records.
+      "result.$VIEWS.room.roster",
+      "result.roster",
     ],
     reason:
       "a message's reply names its thread and its quote apart, in place of the one message a reply named; stored replies are left as they are, counted and shown as replying to nothing" +
-      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)",
+      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
+      "; and the room's `roster` is optional, a link to the stored participant list (docs/history/fabrichat-room-roster-stored-break.md)",
     record: "docs/history/fabrichat-reply-split-break.md",
   },
   {
@@ -2526,9 +2563,14 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.canSend",
       "result.messageRights",
       "result.viewer",
+      // The room's roster, optional, a link to the stored participant list,
+      // which `fabrichat-room-roster-stored-break.md` records.
+      "result.$VIEWS.room.roster",
+      "result.roster",
     ],
     reason:
-      "a room's answers about its reader, `canSend`, `canAdd`, `viewer` and `messageRights`, are per session, as its `#profile` wish is, so one session's answer is not another's",
+      "a room's answers about its reader, `canSend`, `canAdd`, `viewer` and `messageRights`, are per session, as its `#profile` wish is, so one session's answer is not another's" +
+      "; and the room's `roster` is optional, a link to the stored participant list (docs/history/fabrichat-room-roster-stored-break.md)",
     record: "docs/history/fabrichat-room-viewer-per-session-reland.md",
   },
   {
@@ -2620,19 +2662,16 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/book-recommendations-picks-break.md",
   },
   {
-    // The manager's views derived under the reader's access (`rooms`,
-    // `people`) are declared per user where they were declared per session.
-    // The proof reads that as a changed scope at each. The baselines that
-    // also report the room policy's `maxAttachments` are in that break's
-    // entry, which names both paths.
+    // The manager's `rooms`, derived under the reader's access, is declared
+    // per user where it was declared per session. The proof reads that as a
+    // changed scope. The baselines that also report the room policy's
+    // `maxAttachments` are in that break's entry, which names both paths.
     pattern: "system/fabrichat/manager.tsx",
     baselines: [
       "20261024T000755Z-abyOKppwBZufFk_m",
     ],
     paths: [
-      "result.$VIEWS.chats.people",
       "result.$VIEWS.chats.rooms",
-      "result.people",
       "result.rooms",
       // The outgoing notices, declared per user as well, which
       // `fabrichat-outgoing-notices-per-user-break.md` records.
@@ -2657,7 +2696,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // Home types its `chatManager` as the manager's output, so the manager's
-    // per-user `people` reaches home's contract too. Home is a required
+    // per-user `rooms` reaches home's contract too. Home is a required
     // pattern, so it carries the ruling that lets it name one.
     pattern: "system/home/home.tsx",
     baselines: [
@@ -2688,9 +2727,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261025T215338Z-AZsOpv9_QnlOYBuD",
     ],
     paths: [
-      "result.chatManager.$VIEWS.chats.people",
       "result.chatManager.$VIEWS.chats.rooms",
-      "result.chatManager.people",
       "result.chatManager.rooms",
       // The outgoing notices, declared per user as well, which
       // `fabrichat-outgoing-notices-per-user-break.md` records.
@@ -2744,10 +2781,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.roomMembership[].container",
       "result.roomMembership[].room",
       "result.rooms[].room",
+      // The people, declared per session, which
+      // `fabrichat-people-asked-break.md` records.
+      "result.$VIEWS.chats.people",
+      "result.people",
     ],
     reason:
       "the manager's outgoing notices, derived under the reader's access, are declared per user as the value behind them is stored; a manager rolled forward lists them" +
-      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)" +
+      "; and the people are declared per session, listed only for a session that has asked for them (docs/history/fabrichat-people-asked-break.md)",
     record: "docs/history/fabrichat-outgoing-notices-per-user-break.md",
   },
   {
@@ -2774,10 +2816,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.chatManager.roomMembership[].container",
       "result.chatManager.roomMembership[].room",
       "result.chatManager.rooms[].room",
+      // The people, declared per session, which
+      // `fabrichat-people-asked-break.md` records.
+      "result.chatManager.$VIEWS.chats.people",
+      "result.chatManager.people",
     ],
     reason:
       "home's chat manager's outgoing notices, derived under the reader's access, are declared per user as the value behind them is stored; a home rolled forward lists them" +
-      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)" +
+      "; and the people are declared per session, listed only for a session that has asked for them (docs/history/fabrichat-people-asked-break.md)",
     record: "docs/history/fabrichat-outgoing-notices-per-user-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -2913,9 +2960,14 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.roomMembership[].container",
       "result.roomMembership[].room",
       "result.rooms[].room",
+      // The people, declared per session, which
+      // `fabrichat-people-asked-break.md` records.
+      "result.$VIEWS.chats.people",
+      "result.people",
     ],
     reason:
-      "the manager's room links are handles that declare nothing of the room, so reading the list loads no room; each record holds the same link, and a reader declaring the room's shape reads it as before",
+      "the manager's room links are handles that declare nothing of the room, so reading the list loads no room; each record holds the same link, and a reader declaring the room's shape reads it as before" +
+      "; and the people are declared per session, listed only for a session that has asked for them (docs/history/fabrichat-people-asked-break.md)",
     record: "docs/history/fabrichat-room-handles-break.md",
   },
   {
@@ -2960,9 +3012,14 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.chatManager.roomMembership[].container",
       "result.chatManager.roomMembership[].room",
       "result.chatManager.rooms[].room",
+      // The people, declared per session, which
+      // `fabrichat-people-asked-break.md` records.
+      "result.chatManager.$VIEWS.chats.people",
+      "result.chatManager.people",
     ],
     reason:
-      "the manager's room links are handles that declare nothing of the room, so reading the list loads no room; each record holds the same link, and a reader declaring the room's shape reads it as before",
+      "the manager's room links are handles that declare nothing of the room, so reading the list loads no room; each record holds the same link, and a reader declaring the room's shape reads it as before" +
+      "; and the people are declared per session, listed only for a session that has asked for them (docs/history/fabrichat-people-asked-break.md)",
     record: "docs/history/fabrichat-room-handles-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -2970,5 +3027,169 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       reason:
         "This changes a type parameter in a way that makes it possible to avoid sending large amounts of unnecessary data. It doesn't affect the actual stored data, so it's a safe change.",
     },
+  },
+  {
+    pattern: "system/pattern-catalog/fake-catalog.tsx",
+    baselines: [
+      "20261115T040149Z-wpQ711UAcMmyeWw7",
+      "20261115T231252Z-zcGvv30wqSKYEMK7",
+      "20261116T011727Z-x7lnp7Wavmm2mwx8",
+      "20261119T015645Z-GeQ9sl5yAPihNip6",
+    ],
+    paths: ["argument.getItRequests", "result.getItRequests"],
+    reason:
+      "each request to get a pattern carries its own write policy and author label, so a host can check who asked and which handler wrote it; the list-wide policy cannot be changed in place",
+    record: "docs/history/pattern-catalog-get-it-entries-break.md",
+  },
+  {
+    // The manager's `people` lists the people its rooms hold only for a
+    // session that has asked for them, as `askedPeople` does, and is declared
+    // per session where it was declared per user. The proof reads that as a
+    // changed scope, against the baselines no other entry names.
+    pattern: "system/fabrichat/manager.tsx",
+    baselines: [
+      "20261111T230550Z-gGNAa1HKKzzzOKYX",
+      "20261112T000024Z-3K0_VVakXfJja421",
+      "20261114T021310Z-APiUowPeoFC6yo_B",
+      "20261119T211430Z-GdCaFv49zsugqGOK",
+      "20261120T213238Z-qcvW4c2WzsZqibqT",
+      "20261120T220430Z-Tz51uSxP-lFH4vY1",
+      "20261121T030140Z-VsnHKCYIqJUZnbMz",
+      "20261121T171637Z--s14RoKM9EJo7GwI",
+    ],
+    paths: [
+      "result.$VIEWS.chats.people",
+      "result.people",
+    ],
+    reason:
+      "the manager's people are declared per session, listed only for a session that has asked for them; reading them reads no room's roster until a session asks",
+    record: "docs/history/fabrichat-people-asked-break.md",
+  },
+  {
+    // Home types its `chatManager` as the manager's output, so the manager's
+    // per-session `people` reaches home's contract too. Home is a required
+    // pattern, so it carries the ruling that lets it name one.
+    pattern: "system/home/home.tsx",
+    baselines: [
+      "20261111T230600Z-Cvfw6c5D0LpInHI7",
+      "20261112T000027Z-S9BQ6zYOXrpFzf5V",
+      "20261112T161336Z-MsAH_UVCwt4xqSdx",
+      "20261113T013200Z-13j7iAKsyFM3DySe",
+      "20261114T021316Z-aDTn7SopnE1tsqQi",
+      "20261116T185451Z-5pCQXaJAgMaRVAih",
+      "20261119T020149Z-rlOFpU87S3kLzQIW",
+      "20261119T181942Z-ci6GmGzVbTur3uVY",
+      "20261119T190040Z-vBgIaAh9ZAxD7_MB",
+      "20261119T205952Z-yB_bEhEQ0l2iqDs3",
+      "20261119T213238Z-opdkdzV_YNpOUgrw",
+      "20261119T224746Z-CjeolrDygCT3l9o7",
+      "20261120T213238Z-RaEfzMIJEb3mpvGc",
+      "20261120T220430Z-AwI2bF8fudZM-Xff",
+      "20261121T030140Z-x0OTiFkuH7N0xd-E",
+      "20261121T164334Z-oqTduIk7YrgvCahZ",
+      "20261121T171637Z-1W0uIpKHQMvh3Dg-",
+      "20261121T182936Z-NnAChpdhdSxpHNbq",
+      "20261121T232108Z-hE89tfIQ15Le-h-R",
+    ],
+    paths: [
+      "result.chatManager.$VIEWS.chats.people",
+      "result.chatManager.people",
+    ],
+    reason:
+      "home's chat manager's people are declared per session, listed only for a session that has asked for them; reading them reads no room's roster until a session asks",
+    record: "docs/history/fabrichat-people-asked-break.md",
+    requiredPatternOverride: {
+      rulingBy: "Dan",
+      on: "2026-11-22",
+      reason:
+        "accepting the break: `people` becomes per-session and is derived only from rooms a session has asked about, so a served Home no longer reads every room's roster (wording proposed by the lead and accepted by Dan)",
+    },
+  },
+  {
+    // A room's `roster` is a link to the participant list the room stores,
+    // absent until someone joins, where it was a computed copy of that list
+    // that read `[]` in an empty room. The proof reads that as a result field
+    // that is no longer required. These are the baselines no other entry
+    // names.
+    pattern: "system/fabrichat/room.tsx",
+    baselines: [
+      "20261029T035049Z-H1WYs_4rIJVXq3N5",
+      "20261030T163418Z-Ly5SuQqRwG8yxuAW",
+      "20261031T200130Z-n-EinGB53ZgN6XgK",
+      "20261031T203328Z-v6gLHhQzSk5u2z3R",
+      "20261101T231410Z-PSoysNGsE7ZmVFQT",
+      "20261102T185721Z-DJo8ZnaHMWe37vwV",
+      "20261102T194200Z-7eKOm441KnGoY5hh",
+      "20261102T220407Z-oqVH51BC2nRYjOaa",
+      "20261102T221724Z-O3itYmycilfJOQuj",
+      "20261102T232151Z-sIwMzuuTvR5gz0d8",
+      "20261102T235630Z-WnKUOIu1ejafKquo",
+      "20261103T004949Z--RhxvcDCPZB84AUQ",
+      "20261103T185855Z-eV9BsE18z1TW5hKu",
+      "20261103T192102Z-8FOrbPuFTLfBoVl9",
+      "20261103T221927Z-KalMzf71QQTKG-JF",
+      "20261103T232113Z-D1IbaaGDc38bSwZu",
+      "20261104T052224Z-f9_7K-gUtTfHfHvD",
+      "20261104T063433Z-4Ca2gCsvYhGMlDOh",
+      "20261105T001341Z-cmu4cRxv61GPOqNe",
+      "20261105T003752Z-1-zz28UZtyWpISM8",
+      "20261105T012348Z-lao3NJ9107eFwQbr",
+      "20261108T002539Z-iTg_pS3NE-HuuCfV",
+      "20261109T181158Z-1qA1DLcnlrjvoRXs",
+      "20261109T194159Z-9E0Eou19xKPA6uIS",
+      "20261110T005133Z-OOeMcT5SLn9cetzw",
+      "20261111T162308Z-rF2CwMALhZFwrLpI",
+      "20261111T164222Z--UerBoWB8FnidbxO",
+      "20261111T230554Z-5vDMp5IhOMtuxOWB",
+      "20261112T001612Z-oKO6qfAzUTEMY5FV",
+      "20261112T032733Z-ZAJwkqqq56k_ZmeJ",
+      "20261112T035209Z-HTc1bleKzL06u31g",
+      "20261112T035645Z-esjyyQqXzeeJQFqF",
+      "20261112T180250Z-GqUMM7TczKjy7GeP",
+      "20261112T190150Z-ivGQqnPfuBfkCJ4L",
+      "20261112T222240Z-s8ZCtxYWrJRwZlcI",
+      "20261113T000521Z-DoFXIcp6g2T6hyxM",
+      "20261113T013155Z-Q5O898WlUUZ1AhMD",
+      "20261113T191832Z-LGbCl79l4jBYRPL4",
+      "20261113T192632Z-kUpSYrrBC-wMFGMA",
+      "20261113T204015Z-mZ7lac1cYO_8Pb9x",
+      "20261113T204057Z-mZ7lac1cYO_8Pb9x",
+      "20261114T021313Z-o-SV6cee6Ll25oDW",
+      "20261114T185901Z-JY_w6qGhmOUeJpO6",
+      "20261116T181146Z-Wtuggv5mSURvkKzo",
+      "20261116T215305Z-5748cbSqU_ZuUrZi",
+      "20261118T181100Z-kfkj7FoQ0u4XZMLB",
+      "20261119T163735Z-UFr-WTq4WYqu0knh",
+      "20261119T172530Z-lF_EXQ6H6v9-IK7w",
+      "20261119T181942Z-B_sMQe5DM9Ox6uAD",
+      "20261119T190040Z-XFQuKBLL1-1Oot37",
+      "20261119T204428Z-DWhsaydkJSa2Udzx",
+      "20261119T205952Z-C0Vxrb8yw4eH1urY",
+      "20261119T213238Z-NWkMSV5SKCIQo65z",
+      "20261119T224746Z-dAcHIN2D8QlZPIsM",
+      "20261120T044820Z-866xZ1YsDIkviXaR",
+      "20261120T152015Z-lvphVMnirr6Vr93D",
+      "20261120T155347Z-I64hZlNuMBBv6pdX",
+      "20261120T155824Z-9pLEBJYMDAkpD-ml",
+      "20261120T161202Z-6cqxd4oFNbUgMHOB",
+      "20261120T162601Z-709wVT1KDa34rbhO",
+      "20261120T165128Z-DlRIi5favo-pw87A",
+      "20261120T170438Z-7J2OhjENetjtHLXl",
+      "20261120T174236Z-70xCYOzp4hCQn62E",
+      "20261120T205626Z-Zyv8lPNXlc5N9rlx",
+      "20261120T213238Z-4jetj7bVLcHk_-aM",
+      "20261120T220430Z-sjZfShAv3uUnv0hD",
+      "20261121T030140Z-eH71VxfMkWqhPoBo",
+      "20261121T164334Z-fHK2rkzdkEQ07wv0",
+      "20261121T164735Z-1sDlrRVUsCqpHp_6",
+      "20261121T171637Z-e6XfRcaL84N6rMck",
+      "20261121T182932Z-a_8hBrpi3aMhQZlx",
+      "20261121T182936Z-j58c1v59ElDgijPv",
+      "20261121T222045Z-KCrKrNPKmcLFjZMB",
+    ],
+    paths: ["result.$VIEWS.room.roster", "result.roster"],
+    reason:
+      "the room's `roster` is optional, a link to the stored participant list, so a handler reading it reads the list as stored rather than as some runtime last derived it",
+    record: "docs/history/fabrichat-room-roster-stored-break.md",
   },
 ];

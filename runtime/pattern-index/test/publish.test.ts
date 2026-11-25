@@ -127,6 +127,16 @@ describe("publish", () => {
       });
     });
 
+    it("returns `standalone` only when the caller states it", () => {
+      expect(Object.hasOwn(publishRequestFor(fields), "standalone")).toBe(
+        false,
+      );
+      expect(publishRequestFor({ ...fields, standalone: true }).standalone)
+        .toBe(true);
+      expect(publishRequestFor({ ...fields, standalone: false }).standalone)
+        .toBe(false);
+    });
+
     it("returns no dependency a data file's text names", () => {
       expect(publishRequestFor(fields).dependencies).toEqual([]);
     });

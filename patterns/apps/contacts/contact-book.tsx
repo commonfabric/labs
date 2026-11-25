@@ -1,3 +1,9 @@
+/**
+ * A contact book listing people with their email and company, searchable by
+ * name, email, or company. You add contacts, open one to edit its details, and
+ * record labeled relationships between two contacts, which show on each
+ * contact's card.
+ */
 import {
   action,
   computed,

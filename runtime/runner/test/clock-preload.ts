@@ -57,6 +57,7 @@ installFakeClock({
     "executor-fetch-program-instances",
     "executor-sqlite-instances",
     "executor-home-sqlite",
+    "executor-indexed-collection",
     // Same wall-clock pacing, same machinery (the SpaceServer's flush
     // deadline), one level down: the stage-G recovery-seam tests drive a real
     // SpaceServer directly.
@@ -192,14 +193,17 @@ installFakeClock({
     "serving-worker-watchdog",
     "serving-memory-server",
     "watermark-settled-through-head",
-    // The shared-connection cases reach a standalone memory server over a real
-    // websocket, so each round trip waits on real I/O, which auto-advance
-    // reads as an idle loop. Each such wait jumps logical time to the memory
-    // client's next lease renewal, 58 minutes out, which outlives the server's
-    // 5-minute connection challenge: a `connection.auth` in flight across the
-    // jump is refused as expired. The cases wait on round trips, never on a
-    // delay.
+    // These suites use real WebSockets. Auto-advance treats I/O in flight
+    // as idle time and can jump to the next lease renewal, 58 minutes away.
+    // That can expire a challenge or an authenticated principal before the
+    // request reaches the server. The tests wait on socket events and round
+    // trips.
+    "remote-session-server-flags",
+    "remote-session-shared-connection",
     "storage-admission-notice",
+    "storage-delegation-chain",
+    "storage-first-handshake",
+    "v2-remote-session-websocket",
   ],
 });
 

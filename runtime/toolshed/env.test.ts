@@ -12,6 +12,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { MAX_UNTRUSTED_MESSAGE_SLOTS } from "@commonfabric/memory/v2";
 import { EnvSchema, loadEnv } from "@/env.ts";
 import { Exited } from "@/test/support/exited.ts";
 
@@ -34,6 +35,45 @@ Deno.test("MEMORY_SYNC_CID_REFERENCES parses strictly: on by default, off only f
   const enabled = (v: string | undefined) =>
     EnvSchema.parse(v === undefined ? {} : { MEMORY_SYNC_CID_REFERENCES: v })
       .MEMORY_SYNC_CID_REFERENCES;
+
+  assertEquals(enabled(undefined), true);
+  assertEquals(enabled("false"), false);
+  assertEquals(enabled("0"), false);
+  assertEquals(enabled("true"), true);
+  assertEquals(enabled("1"), true);
+  // A misspelled setting must not silently leave the deployment either way.
+  expect(() => enabled("TRUE")).toThrow();
+  expect(() => enabled("on")).toThrow();
+});
+
+Deno.test("a leftover MEMORY_MARKED_SPLICES is ignored, whatever its spelling", () => {
+  // The setting is gone: a deployment that still sets it, as an override
+  // file written while it existed does, starts as one that does not.
+  for (const value of ["true", "false", "on"]) {
+    const parsed = EnvSchema.parse({ MEMORY_MARKED_SPLICES: value });
+    assertEquals("MEMORY_MARKED_SPLICES" in parsed, false);
+  }
+});
+
+Deno.test("MEMORY_RETIRE_BARE_DID_LABELS parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+  const enabled = (v: string | undefined) =>
+    EnvSchema.parse(
+      v === undefined ? {} : { MEMORY_RETIRE_BARE_DID_LABELS: v },
+    ).MEMORY_RETIRE_BARE_DID_LABELS;
+
+  assertEquals(enabled(undefined), true);
+  assertEquals(enabled("false"), false);
+  assertEquals(enabled("0"), false);
+  assertEquals(enabled("true"), true);
+  assertEquals(enabled("1"), true);
+  expect(() => enabled("TRUE")).toThrow();
+  expect(() => enabled("on")).toThrow();
+});
+
+Deno.test("MEMORY_STORE_READS_DIGEST parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+  const enabled = (v: string | undefined) =>
+    EnvSchema.parse(v === undefined ? {} : { MEMORY_STORE_READS_DIGEST: v })
+      .MEMORY_STORE_READS_DIGEST;
 
   assertEquals(enabled(undefined), true);
   assertEquals(enabled("false"), false);
@@ -360,6 +400,15 @@ Deno.test("EXPOSE_GC parses strictly, and only on a development or test server",
   }
 });
 
+Deno.test("HEAP_PROFILE_MAIN_THREAD is off unless set", () => {
+  const sample = (env: Record<string, string>) =>
+    EnvSchema.parse(env).HEAP_PROFILE_MAIN_THREAD;
+
+  assertEquals(sample({}), false);
+  assertEquals(sample({ HEAP_PROFILE_MAIN_THREAD: "false" }), false);
+  assertEquals(sample({ HEAP_PROFILE_MAIN_THREAD: "true" }), true);
+});
+
 Deno.test("MEMORY_DUMP_ENABLED is on, off, or left to the default", () => {
   const dump = (v: string | undefined) =>
     EnvSchema.parse(v === undefined ? {} : { MEMORY_DUMP_ENABLED: v })
@@ -423,4 +472,27 @@ describe("PLAID_ENV", () => {
   it("refuses `development`, which the Plaid SDK has no address for", () => {
     expect(() => EnvSchema.parse({ PLAID_ENV: "development" })).toThrow();
   });
+});
+
+Deno.test("MEMORY_UNTRUSTED_MESSAGE_SLOTS is unset by default and only raises the default", () => {
+  expect(EnvSchema.parse({}).MEMORY_UNTRUSTED_MESSAGE_SLOTS).toBe(undefined);
+  for (const accepted of [MAX_UNTRUSTED_MESSAGE_SLOTS, 10_000_000]) {
+    expect(
+      EnvSchema.parse({ MEMORY_UNTRUSTED_MESSAGE_SLOTS: String(accepted) })
+        .MEMORY_UNTRUSTED_MESSAGE_SLOTS,
+    ).toBe(accepted);
+  }
+  for (
+    const refused of [
+      String(MAX_UNTRUSTED_MESSAGE_SLOTS - 1),
+      "1000",
+      "0",
+      "-1",
+      "1500000.5",
+      "lots",
+    ]
+  ) {
+    expect(() => EnvSchema.parse({ MEMORY_UNTRUSTED_MESSAGE_SLOTS: refused }))
+      .toThrow();
+  }
 });

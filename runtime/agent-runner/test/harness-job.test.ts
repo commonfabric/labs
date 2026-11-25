@@ -11,7 +11,9 @@ import type { HarnessModelUsage } from "@commonfabric/cf-harness/model/client";
 import type { HarnessImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import { materializeImageAttachmentContentPart } from "@commonfabric/cf-harness/image-attachments";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
+import { FileHarnessProviderSettingsStore } from "@commonfabric/cf-harness/auth/provider-settings";
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
+import { CfcReadCeilingError } from "@commonfabric/runner/cfc";
 import { renderCellReference } from "@commonfabric/runner/shared";
 
 import {
@@ -633,6 +635,109 @@ describe("runHarnessJob()", () => {
       expect(plain.seen.loopOptions?.reasoningEffort).toBeUndefined();
     });
 
+    for (
+      const [preference, pinned, provider] of [
+        [
+          "openai-codex",
+          "openai-compatible-gateway",
+          "openai-compatible-gateway",
+        ],
+        ["openai-compatible-gateway", "openai-codex", "openai-codex"],
+        ["openai-codex", undefined, "openai-codex"],
+      ] as const
+    ) {
+      it(
+        `runs on ${provider} where the machine prefers ${preference} and the spec names ${
+          pinned ?? "no provider"
+        }`,
+        async () => {
+          const settings = new FileHarnessProviderSettingsStore({
+            path: join(runRoot, "harness-home", "config.json"),
+          });
+          await settings.initialize(preference);
+          // No provider and no gateway setting from the environment: the
+          // machine's preference decides unless the spec names a provider, and
+          // a gateway setting would refuse `openai-codex`.
+          const {
+            CF_HARNESS_MODEL_PROVIDER: _provider,
+            CF_HARNESS_GATEWAY_AUTH_MODE: _authMode,
+            ...sandbox
+          } = SCRIPTED_ENV;
+          let ranOn: string | undefined;
+          const result = await runHarnessJob(
+            plainSpec({
+              resultSchema: undefined,
+              ...(pinned !== undefined ? { modelProvider: pinned } : {}),
+            }),
+            {
+              runRoot,
+              signal: new AbortController().signal,
+              harnessDeps: {
+                env: { ...sandbox, CF_HARNESS_API_KEY: "unused-test-key" },
+                providerSettingsStore: settings,
+                createModelClient: ({ provider }) => ({
+                  providerId: provider,
+                  complete: () => Promise.reject(new Error("no model call")),
+                }),
+                createPromptLoop: (loopOptions) => {
+                  ranOn = loopOptions.engine?.config.modelProvider;
+                  return {
+                    runPrompt: () => Promise.resolve(loopResult(runRoot)),
+                    runTranscript: () =>
+                      Promise.reject(new Error("not a resume")),
+                  };
+                },
+              },
+            },
+          );
+
+          expect(result.outcome).toBe("completed");
+          expect(ranOn).toBe(provider);
+        },
+      );
+    }
+
+    it("runs a job pinned to openai-codex on a runner whose environment names a gateway", async () => {
+      // A runner that also serves gateway profiles keeps the gateway's settings
+      // in its environment; the harness refuses them beside openai-codex.
+      const settings = new FileHarnessProviderSettingsStore({
+        path: join(runRoot, "harness-home", "config.json"),
+      });
+      await settings.initialize("openai-compatible-gateway");
+      const { CF_HARNESS_MODEL_PROVIDER: _provider, ...sandbox } = SCRIPTED_ENV;
+      let ranOn: string | undefined;
+      const result = await runHarnessJob(
+        plainSpec({ resultSchema: undefined, modelProvider: "openai-codex" }),
+        {
+          runRoot,
+          signal: new AbortController().signal,
+          harnessDeps: {
+            env: {
+              ...sandbox,
+              CF_HARNESS_API_KEY: "unused-test-key",
+              CF_HARNESS_GATEWAY_BASE_URL: "https://gateway.example.test",
+              CF_HARNESS_GATEWAY_AUTH_MODE: "bearer",
+            },
+            providerSettingsStore: settings,
+            createModelClient: ({ provider }) => ({
+              providerId: provider,
+              complete: () => Promise.reject(new Error("no model call")),
+            }),
+            createPromptLoop: (loopOptions) => {
+              ranOn = loopOptions.engine?.config.modelProvider;
+              return {
+                runPrompt: () => Promise.resolve(loopResult(runRoot)),
+                runTranscript: () => Promise.reject(new Error("not a resume")),
+              };
+            },
+          },
+        },
+      );
+
+      expect(result.outcome).toBe("completed");
+      expect(ranOn).toBe("openai-codex");
+    });
+
     it("leaves usage out of the report when the loop reports none", async () => {
       const { result } = await runScripted(plainSpec(), async (context) => {
         await answering("Titan")(context);
@@ -917,11 +1022,12 @@ describe("runHarnessJob()", () => {
       expect(result).toEqual({
         outcome: "failed",
         errorCode: "LIMIT_REACHED",
+        errorDetail: "exceeded max model turns (8)",
         recordedRun: false,
       });
     });
 
-    it("ends `failed` as `PROVIDER_FAILURE` when the loop failed any other way", async () => {
+    it("ends `failed` as `PROVIDER_FAILURE`, saying why, when the loop failed any other way", async () => {
       const { result } = await runScripted(
         plainSpec(),
         () => Promise.reject(new Error("the provider answered 500")),
@@ -930,7 +1036,41 @@ describe("runHarnessJob()", () => {
       expect(result).toEqual({
         outcome: "failed",
         errorCode: "PROVIDER_FAILURE",
+        errorDetail: "the provider answered 500",
         recordedRun: false,
+      });
+    });
+
+    it("ends `failed` as `CFC_REFUSED`, saying why, when a read the session's read ceiling withholds ended the loop", async () => {
+      // Not a provider's failure, and not `REFUSED`: a job in the `refused`
+      // state is one its owner's bookkeeping does not count as ended.
+      const { result } = await runScripted(
+        plainSpec(),
+        () => Promise.reject(new CfcReadCeilingError()),
+      );
+
+      expect(result).toEqual({
+        outcome: "failed",
+        errorCode: "CFC_REFUSED",
+        errorDetail: "the runtime read ceiling withholds this value",
+        recordedRun: false,
+      });
+    });
+
+    it("ends `failed` as `CFC_REFUSED` when the read ceiling's refusal is the cause of the error that ended the loop", async () => {
+      const { result } = await runScripted(
+        plainSpec(),
+        () =>
+          Promise.reject(
+            new Error("exceeded max model turns while sealing", {
+              cause: new CfcReadCeilingError(),
+            }),
+          ),
+      );
+
+      expect(result).toMatchObject({
+        outcome: "failed",
+        errorCode: "CFC_REFUSED",
       });
     });
 

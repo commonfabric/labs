@@ -1784,15 +1784,26 @@ describe("loom-commands tools", () => {
     it("returns `write` when the turn is cancelled during the catalog read", async () => {
       const { context } = contextWith();
       const controller = new AbortController();
+      const requested = Promise.withResolvers<void>();
       const listing = Promise.withResolvers<Response>();
-      answers.list = () => listing.promise;
+      answers.list = () => {
+        requested.resolve();
+        return listing.promise;
+      };
       const pending = effectOf(
         { command: "people-discovery.dossier", args: {} },
         { ...context, signal: controller.signal },
       );
-      controller.abort();
-      listing.resolve(new Response(JSON.stringify(MANIFEST)));
-      expect(await pending).toBe("write");
+      try {
+        await requested.promise;
+        controller.abort();
+        expect(await pending).toBe("write");
+      } finally {
+        // The catalog read outlives its cancelled caller. Finish it while
+        // this fixture still owns the shared host's answers and requests.
+        listing.resolve(new Response(JSON.stringify(MANIFEST)));
+        await context.loomCommandCatalog!.current();
+      }
     });
   });
 

@@ -36,6 +36,7 @@ import {
 import { overlaySpanStyle, spanStyle } from "./highlight.ts";
 import { firstShown } from "./lineedit.ts";
 import { charColumns, columns, graphemes, visibleWidth } from "./width.ts";
+import { SPINNER } from "./tasklog.ts";
 import { lineBg, styleFor, ui } from "./theme.ts";
 import {
   buildWrapPlan,
@@ -305,6 +306,11 @@ export interface ViewState {
    * the file being edited — shown on the right of the status bar. Null when
    * there is none (a bare pipe). */
   currentFile?: string | null;
+
+  /** How much of the source left to color in the background has been parsed,
+   * from 0 to 1, and how far its spinner has turned, shown on the status bar.
+   * Null or absent when nothing is left. */
+  highlighting?: { readonly fraction: number; readonly frame: number } | null;
 }
 
 /** The line-number gutter width: 0 when off, else wide enough for the largest
@@ -1285,7 +1291,9 @@ function renderStatus(
   } else if (view.editHint) {
     hints = view.editHint;
   } else if (view.selected) {
-    text = `${kindGlyph(view.selected.kind)} ${view.selected.label}`;
+    text = `${kindGlyph(view.selected.kind)} ${
+      showControls(view.selected.label)
+    }`;
   } else {
     hints = browseHints(view);
   }
@@ -1305,15 +1313,37 @@ function renderStatus(
   const file = view.currentFile
     ? truncate(showControls(view.currentFile), fileMax, false)
     : "";
-  const rightPlain = file ? `${file}  ${pos}` : pos;
-  const rightW = visibleWidth(rightPlain);
+  const placePlain = file ? `${file}  ${pos}` : pos;
 
-  // The left is truncated to whatever space the right leaves it.
-  const leftBudget = Math.max(0, view.width - rightW - 2);
-  const leftHints = hints ? fitHints(hints, leftBudget) : null;
+  // The left is truncated to whatever space the right leaves it. Key hints
+  // leave room for highlighting progress, with its label if they can, as long
+  // as the first two still fit.
+  const leftBudget = Math.max(0, view.width - visibleWidth(placePlain) - 2);
+  const firstHints = hints ? visibleWidth(hintsPlain(hints.slice(0, 2))) : 0;
+  const gaugeRoom = HIGHLIGHT_GAUGE_WIDTH + 4;
+  const hintBudget = !view.highlighting || !hints
+    ? leftBudget
+    : [gaugeRoom + HIGHLIGHT_LABEL.length, gaugeRoom, 0]
+      .map((room) => leftBudget - room)
+      .find((budget) => budget >= firstHints) ?? leftBudget;
+  const leftHints = hints ? fitHints(hints, hintBudget) : null;
   const leftPlain = leftHints
     ? hintsPlain(leftHints)
     : truncate(text, leftBudget, true);
+  const leftW = visibleWidth(leftPlain);
+
+  // Highlighting progress goes before the file, in the space the rest leaves,
+  // without its label when only the gauge fits.
+  const progress = view.highlighting
+    ? highlightingProgress(
+      view.highlighting,
+      view.width - leftW - visibleWidth(placePlain) - 4,
+    )
+    : null;
+  const rightPlain = progress
+    ? `${progress.spinner} ${progress.label}${progress.filled}${progress.empty}  ${placePlain}`
+    : placePlain;
+  const rightW = visibleWidth(rightPlain);
 
   if (!view.color) {
     return padTo(`${leftPlain}  ${rightPlain}`, view.width);
@@ -1321,14 +1351,48 @@ function renderStatus(
   const leftAnsi = leftHints
     ? hintsAnsi(leftHints)
     : linkAddresses(text, leftPlain, (part) => paint(part, ui.statusBar));
-  const rightAnsi =
+  const rightAnsi = (progress
+    ? paint(`${progress.spinner} `, ui.statusBusy) +
+      paint(progress.label, ui.statusBar) +
+      paint(progress.filled, ui.statusBusy) +
+      paint(progress.empty, ui.statusDim) + paint("  ", ui.statusBar)
+    : "") +
     (file ? paint(file, ui.statusFile) + paint("  ", ui.statusBar) : "") +
     paint(pos, ui.statusBar);
-  const leftW = visibleWidth(leftPlain);
   const space = Math.max(1, view.width - leftW - rightW);
   const line = leftAnsi + paint(" ".repeat(space), ui.statusBar) + rightAnsi;
   const pad = view.width - (leftW + space + rightW);
   return pad > 0 ? line + paint(" ".repeat(pad), ui.statusBar) : line;
+}
+
+/** Columns of the status bar's highlighting gauge. */
+const HIGHLIGHT_GAUGE_WIDTH = 10;
+
+/** The label of the status bar's highlighting progress. */
+const HIGHLIGHT_LABEL = "Highlighting ";
+
+/**
+ * The parts of the status bar's highlighting progress that fit in `room`
+ * columns: a spinner, a label when it fits too, and a gauge whose filled cells
+ * show the fraction of the source parsed. Null when not even the spinner and
+ * the gauge fit.
+ */
+function highlightingProgress(
+  highlighting: NonNullable<ViewState["highlighting"]>,
+  room: number,
+): { spinner: string; label: string; filled: string; empty: string } | null {
+  const width = 2 + HIGHLIGHT_GAUGE_WIDTH;
+  if (room < width) return null;
+  const filled = Math.min(
+    HIGHLIGHT_GAUGE_WIDTH,
+    Math.floor(highlighting.fraction * HIGHLIGHT_GAUGE_WIDTH),
+  );
+  return {
+    spinner: SPINNER[highlighting.frame % SPINNER.length],
+    label: room >= width + HIGHLIGHT_LABEL.length ? HIGHLIGHT_LABEL : "",
+    filled: "█".repeat(filled),
+    empty: "░".repeat(HIGHLIGHT_GAUGE_WIDTH - filled),
+  };
 }
 
 /**

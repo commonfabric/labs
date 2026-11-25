@@ -2662,11 +2662,23 @@ const appendStructuredResultInstructions = (
   }
   lines.push(
     "- Object schemas are closed by default: include only properties the schema declares unless it explicitly allows additional properties.",
-    "",
-    "Result schema (JSON):",
-    JSON.stringify(structuredResult.schema),
+    "- The result schema follows these instructions as a message of its own.",
   );
 };
+
+/**
+ * The run's result schema as a system message of its own, sent after the
+ * system prompt, or `undefined` when the run configures none. The schema is
+ * commonly different in every run while the prompt before it is the same, and
+ * a provider that caches through message ends can reuse the prompt only when
+ * it ends where the runs stop agreeing (`toResponsesInput`).
+ */
+export const buildStructuredResultSchemaPrompt = (
+  structuredResult: CfHarnessStructuredResultConfig | undefined,
+): string | undefined =>
+  structuredResult === undefined
+    ? undefined
+    : `Result schema (JSON):\n${JSON.stringify(structuredResult.schema)}`;
 
 const appendHostMountInstructions = (
   lines: string[],
@@ -2731,9 +2743,10 @@ export const buildCfHarnessOperatorSystemPrompt = (
     "- Stop once you have enough evidence to answer.",
   ];
   appendHostMountInstructions(lines, config);
-  // The caller's instructions come before the result contract: a caller's
-  // standing instructions are commonly the same in every run while its result
-  // schema is per call, and the provider caches only the prefix runs share.
+  // The caller's standing instructions come before the result contract, which
+  // carries no schema: the schema is its own system message
+  // (`buildStructuredResultSchemaPrompt`), so the prompt is the same in every
+  // run of a caller whose schema is per call.
   appendAdditionalInstructions(lines, config.systemPrompt);
   appendStructuredResultInstructions(
     lines,
@@ -2780,9 +2793,10 @@ export const buildCfHarnessBatchSystemPrompt = (
     lines.push("");
     appendHostMountInstructions(lines, config);
   }
-  // The caller's instructions come before the result contract: a caller's
-  // standing instructions are commonly the same in every run while its result
-  // schema is per call, and the provider caches only the prefix runs share.
+  // The caller's standing instructions come before the result contract, which
+  // carries no schema: the schema is its own system message
+  // (`buildStructuredResultSchemaPrompt`), so the prompt is the same in every
+  // run of a caller whose schema is per call.
   appendAdditionalInstructions(lines, config.systemPrompt);
   appendStructuredResultInstructions(
     lines,
@@ -4059,12 +4073,15 @@ export const runCfHarnessCli = async (
           taskTags: shape.tags,
           taskDomains: shape.domains,
         });
-        if (systemPrompt !== undefined) {
-          continuation.transcript.unshift({
-            role: "system",
-            content: systemPrompt,
-          });
-        }
+        const schemaPrompt = buildStructuredResultSchemaPrompt(
+          effectiveStructuredResult,
+        );
+        continuation.transcript = [
+          ...[systemPrompt, schemaPrompt].flatMap((content) =>
+            content === undefined ? [] : [{ role: "system" as const, content }]
+          ),
+          ...continuation.transcript,
+        ];
       }
       requestAccepted = true;
       const engine = continuedEngine ??
@@ -4252,6 +4269,9 @@ export const runCfHarnessCli = async (
           ),
         ),
         systemPrompt: resolveCfHarnessCliSystemPrompt(promptConfig),
+        systemPromptLayers: [
+          buildStructuredResultSchemaPrompt(effectiveStructuredResult),
+        ].flatMap((layer) => layer === undefined ? [] : [layer]),
         contextMessages: orientContextMessages(contextMessages, shape),
         model: parsed.model,
         maxModelTurns: parsed.maxModelTurns,

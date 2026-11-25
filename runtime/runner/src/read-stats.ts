@@ -1,6 +1,8 @@
 /**
- * Accounts for reactive reads within one scheduler action's transaction.
- * The disabled path skips lookup and allocation at every read site.
+ * Accounts for reactive reads within one scheduler action's transaction, and
+ * counts every read on a serving worker's run beacon where the realm has one.
+ * The disabled path skips lookup and allocation at every read site, and the
+ * beacon's count alone costs a site one increment.
  */
 
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
@@ -27,8 +29,33 @@ export type ReadAttemptCounts = Pick<
 const counters = new WeakMap<object, ReadCounter>();
 let activeCount = 0;
 
-/** Whether any action is collecting reads in this process. */
+/**
+ * The memory every read site of this realm counts into, a serving worker's
+ * run beacon (`executor/run-beacon.ts`), and the slot in it.
+ */
+let beaconSlots: Int32Array | undefined;
+let beaconSlot = 0;
+
+/**
+ * Whether a read site has anything to record in this realm: an action
+ * collecting its reads, or a run beacon counting them.
+ */
 export let readStatsActive = false;
+
+/**
+ * Has every read site of this realm count into `slots` at `slot`, a serving
+ * worker's run beacon, or into nothing for `undefined`. Only this realm's
+ * thread writes the slot, so a plain increment is the whole of a count; the
+ * reader loads it atomically.
+ */
+export function countReadsInto(
+  slots: Int32Array | undefined,
+  slot: number,
+): void {
+  beaconSlots = slots;
+  beaconSlot = slot;
+  readStatsActive = activeCount > 0 || beaconSlots !== undefined;
+}
 
 /**
  * Starts accounting for `tx` and returns a body checkpoint function.
@@ -52,7 +79,7 @@ export function startReadStats(
   const stop = () => {
     if (!finished) {
       counters.delete(tx.tx);
-      readStatsActive = --activeCount > 0;
+      readStatsActive = --activeCount > 0 || beaconSlots !== undefined;
       finished = true;
     }
   };
@@ -81,17 +108,23 @@ export function startReadStats(
 
 /** Records a property or element read, including a cached view read. */
 export function recordProxyAccess(tx: IExtendedStorageTransaction): void {
+  if (beaconSlots !== undefined) beaconSlots[beaconSlot]++;
+  if (activeCount === 0) return;
   const counter = counters.get(tx.tx);
   if (counter) counter.proxyAccesses++;
 }
 
 /** Records a stored-link traversal attempt, excluding memo hits. */
 export function recordLinkResolution(tx: IExtendedStorageTransaction): void {
+  if (beaconSlots !== undefined) beaconSlots[beaconSlot]++;
+  if (activeCount === 0) return;
   const counter = counters.get(tx.tx);
   if (counter) counter.linkResolutions++;
 }
 
 /** Records the replica document selected by a storage read. */
 export function recordDocumentRead(tx: object, document: object): void {
+  if (beaconSlots !== undefined) beaconSlots[beaconSlot]++;
+  if (activeCount === 0) return;
   counters.get(tx)?.documents.add(document);
 }

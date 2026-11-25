@@ -1,3 +1,10 @@
+/**
+ * The default home view of a space, listing its pieces with a button to remove
+ * each and a link to a grid view of them. A menu creates new notes and
+ * notebooks, and dragging a note onto a notebook files it there. It also lists
+ * the space's participants with a button to join, links to the Mentions and
+ * Search indexes, and builds the indexes other patterns look up.
+ */
 import {
   computed,
   equals,

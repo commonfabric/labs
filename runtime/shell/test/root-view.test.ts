@@ -4,6 +4,8 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
+import { Task } from "@lit/task";
 import { Identity } from "@commonfabric/identity";
 import {
   type ErrorNotification,
@@ -11,7 +13,7 @@ import {
   NotificationType,
   RuntimeErrorCode,
 } from "@commonfabric/runtime-client";
-import { templateMarkup } from "./lit-template-markup.ts";
+import { templateBindings, templateMarkup } from "./lit-template-markup.ts";
 
 // XRootView is a Lit element; load and exercise it under a minimal browser
 // shim, mirroring login-view.test.ts. Constructing it runs its field
@@ -516,6 +518,35 @@ describe("XRootView", () => {
       expect(view.spaceResolved()).not.toBe(lookup);
       await view.spaceResolved();
       expect(view.getRuntimeSpaceDID()).toBe(atlas);
+    } finally {
+      restore();
+    }
+  });
+
+  it("reports a runtime task's rejection only while that task is in error", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XRootView } = await import("../src/views/RootView.ts");
+      const view = new XRootView();
+      const previous = view.accessForTestingOnly.rt;
+      const error = new Error("worker initialization failed");
+      const resumed = Promise.withResolvers<typeof previous.value>();
+      const task = new Task<
+        [typeof view.app | undefined],
+        typeof previous.value
+      >(view, {
+        task: ([app]) =>
+          app === undefined ? resumed.promise : Promise.reject(error),
+      });
+      view.accessForTestingOnly.rt = task;
+      await task.run([view.app]);
+      expect(view.accessForTestingOnly.runtimeTaskError).toBe(error);
+
+      const pending = task.run([undefined]);
+      expect(view.accessForTestingOnly.runtimeTaskError).toBeUndefined();
+      resumed.resolve(undefined);
+      await pending;
+      expect(view.accessForTestingOnly.runtimeTaskError).toBeUndefined();
     } finally {
       restore();
     }
@@ -1679,6 +1710,1233 @@ describe("XRootView", () => {
       } finally {
         restore();
       }
+    });
+  });
+
+  describe("the history fork", () => {
+    const space = "did:key:z6Mk-shell-history-fork";
+    const otherSpace = "did:key:z6Mk-shell-history-fork-other";
+
+    /** A fork the stand-in runtime handed out, and what was asked of it. */
+    type Fork = {
+      seq: number;
+      space: string;
+      runtime: { runtime(): object };
+      discards: number;
+      restores: number;
+      discard(): Promise<void>;
+      restore(): Promise<void>;
+    };
+
+    /**
+     * A connected root view on `space` with the history panel showing, over
+     * a runtime that hands out a fork for each one asked for. `how` settles
+     * what a fork's opening, restoring and discarding wait on or fail with.
+     * `restore` undoes what mounting replaced.
+     */
+    async function mounted(
+      how: {
+        opening?: () => Promise<void>;
+        restoring?: () => Promise<void>;
+        discarding?: () => Promise<void>;
+      } = {},
+    ) {
+      const restoreGlobals = installBrowserGlobals();
+      const errors = stub(console, "error");
+      const logs = stub(console, "log");
+      const { XRootView } = await import("../src/views/RootView.ts");
+      const view = new XRootView();
+      connectWithoutRendering(view);
+      const identity = await Identity.fromPassphrase(
+        "root-view-history-fork-test",
+      );
+      const lifecycle = view as unknown as {
+        willUpdate(changed: Map<string, unknown>): void;
+      };
+      const show = (shown: object) => {
+        const previous = view.app;
+        view.app = {
+          ...previous,
+          identity,
+          config: { ...previous.config, showHistoryView: true },
+          view: shown as typeof view.app.view,
+        };
+        lifecycle.willUpdate(new Map([["app", previous]]));
+      };
+      show({ spaceDid: space });
+      const forks: Fork[] = [];
+      // The runtime task's value is all of the task these cases read, and a
+      // fork is all they ask of the runtime.
+      const asked: [string, number][] = [];
+      const rt = {
+        forkSpace: async (of: string, seq: number) => {
+          asked.push([of, seq]);
+          await how.opening?.();
+          const fork: Fork = {
+            seq,
+            space: of,
+            runtime: { runtime: () => ({}) },
+            discards: 0,
+            restores: 0,
+            discard: () => {
+              fork.discards++;
+              return how.discarding?.() ?? Promise.resolve();
+            },
+            restore: () => {
+              fork.restores++;
+              return how.restoring?.() ?? Promise.resolve();
+            },
+          };
+          forks.push(fork);
+          return fork;
+        },
+      };
+      view.accessForTestingOnly.rt = { value: rt } as never;
+      const navigations: unknown[] = [];
+      const navigated = (event: Event) => {
+        navigations.push((event as CustomEvent).detail);
+      };
+      globalThis.addEventListener("cf-navigate", navigated);
+      return {
+        view,
+        rt,
+        /** The space and seq of each fork the runtime was asked for. */
+        asked,
+        forks,
+        errors,
+        navigations,
+        show,
+        /**
+         * Sends `detail` as a command. A command returns nothing to wait
+         * on, so a case reads what it did before its first suspension.
+         */
+        send: (detail: object) =>
+          view.onCommand(new CustomEvent("command", { detail })),
+        /** What the history panel is handed as its `open`, where rendered. */
+        open: () => templateBindings(view.render(), "open"),
+        /** What the history panel is handed as its `error`. */
+        error: () => templateBindings(view.render(), "error")[0],
+        /** The runtime the app view is handed. */
+        shown: () => templateBindings(view.render(), "rt")[0],
+        restore: () => {
+          globalThis.removeEventListener("cf-navigate", navigated);
+          view.disconnectedCallback();
+          logs.restore();
+          errors.restore();
+          restoreGlobals();
+        },
+      };
+    }
+
+    describe("openHistory()", () => {
+      it("asks the runtime for a fork of the space at the step, and shows the app view the fork's runtime", async () => {
+        const { view, asked, forks, open, rt, shown, restore } =
+          await mounted();
+        try {
+          expect(shown()).toBe(rt);
+
+          await view.openHistory(3);
+
+          expect(asked).toEqual([[space, 3]]);
+          expect(open()).toEqual([{ seq: 3, busy: false }]);
+          expect(shown()).toBe(forks[0].runtime);
+        } finally {
+          restore();
+        }
+      });
+
+      it("starts opening the step an `open-history` command names", async () => {
+        const { asked, open, send, restore } = await mounted({
+          opening: () => Promise.withResolvers<void>().promise,
+        });
+        try {
+          send({ type: "open-history", seq: 3 });
+
+          expect(asked).toEqual([[space, 3]]);
+          expect(open()).toEqual([{ seq: 3, busy: true }]);
+        } finally {
+          restore();
+        }
+      });
+
+      it("hands the panel a busy fork until the runtime answers, and asks for no other meanwhile", async () => {
+        const opening = Promise.withResolvers<void>();
+        const { view, forks, open, restore } = await mounted({
+          opening: () => opening.promise,
+        });
+        try {
+          const opened = view.openHistory(3);
+          expect(open()).toEqual([{ seq: 3, busy: true }]);
+
+          await view.openHistory(5);
+          opening.resolve();
+          await opened;
+
+          expect(forks.map((fork) => fork.seq)).toEqual([3]);
+          expect(open()).toEqual([{ seq: 3, busy: false }]);
+        } finally {
+          restore();
+        }
+      });
+
+      it("asks for no second fork of the step already open", async () => {
+        const { view, forks, restore } = await mounted();
+        try {
+          await view.openHistory(3);
+          await view.openHistory(3);
+
+          expect(forks).toHaveLength(1);
+          expect(forks[0].discards).toBe(0);
+        } finally {
+          restore();
+        }
+      });
+
+      it("replaces the open fork with one of another step, discarding the one replaced", async () => {
+        const { view, forks, open, shown, restore } = await mounted();
+        try {
+          await view.openHistory(3);
+          await view.openHistory(5);
+
+          expect(forks.map((fork) => [fork.seq, fork.discards])).toEqual([
+            [3, 1],
+            [5, 0],
+          ]);
+          expect(open()).toEqual([{ seq: 5, busy: false }]);
+          expect(shown()).toBe(forks[1].runtime);
+        } finally {
+          restore();
+        }
+      });
+
+      it("hands the panel the failure and no fork when the runtime rejects, and logs it", async () => {
+        const { view, error, errors, open, restore } = await mounted({
+          opening: () => Promise.reject(new Error("no such step")),
+        });
+        try {
+          await view.openHistory(3);
+
+          expect(error()).toBe("no such step");
+          expect(open()).toEqual([undefined]);
+          expect(errors.calls[0].args[0]).toBe(
+            "[RootView] Failed to open history:",
+          );
+        } finally {
+          restore();
+        }
+      });
+
+      it("hands the panel the fork still open, and the failure, when a second fork cannot be opened", async () => {
+        let failing = false;
+        const { view, error, forks, open, shown, restore } = await mounted({
+          opening: () =>
+            failing
+              ? Promise.reject(new Error("no such step"))
+              : Promise.resolve(),
+        });
+        try {
+          await view.openHistory(3);
+          failing = true;
+
+          await view.openHistory(5);
+
+          expect(error()).toBe("no such step");
+          expect(open()).toEqual([{ seq: 3, busy: false }]);
+          expect(shown()).toBe(forks[0].runtime);
+          expect(forks[0].discards).toBe(0);
+
+          // The next attempt clears the failure as it starts.
+          failing = false;
+          await view.openHistory(5);
+          expect(error()).toBeUndefined();
+        } finally {
+          restore();
+        }
+      });
+
+      describe("when the view moves to another space while the fork is opening", () => {
+        it("discards the fork once the runtime hands it over, and shows none", async () => {
+          const opening = Promise.withResolvers<void>();
+          const { view, forks, open, rt, show, shown, restore } = await mounted(
+            { opening: () => opening.promise },
+          );
+          try {
+            const opened = view.openHistory(3);
+            show({ spaceDid: otherSpace });
+
+            opening.resolve();
+            await opened;
+
+            expect(forks.map((fork) => fork.discards)).toEqual([1]);
+            expect(open()).toEqual([undefined]);
+            expect(shown()).toBe(rt);
+          } finally {
+            restore();
+          }
+        });
+
+        it("hands the panel no failure when the runtime rejects, though it is logged", async () => {
+          const opening = Promise.withResolvers<void>();
+          const { view, error, errors, show, restore } = await mounted({
+            opening: () => opening.promise,
+          });
+          try {
+            const opened = view.openHistory(3);
+            show({ spaceDid: otherSpace });
+
+            opening.reject(new Error("no such step"));
+            await opened;
+
+            expect(error()).toBeUndefined();
+            expect(errors.calls).toHaveLength(1);
+          } finally {
+            restore();
+          }
+        });
+      });
+    });
+
+    describe("closeHistory()", () => {
+      it("discards the open fork and shows the app view the space's own runtime again", async () => {
+        const { view, forks, navigations, open, rt, send, shown, restore } =
+          await mounted();
+        try {
+          await view.openHistory(3);
+
+          // Closing lets go of the fork before it first suspends.
+          send({ type: "close-history" });
+
+          expect(forks[0].discards).toBe(1);
+          expect(open()).toEqual([undefined]);
+          expect(shown()).toBe(rt);
+          // The view did not move while the fork was shown.
+          expect(navigations).toEqual([]);
+        } finally {
+          restore();
+        }
+      });
+
+      it("navigates back to the view the fork was opened from, where the view moved inside the fork", async () => {
+        const { view, navigations, show, restore } = await mounted();
+        try {
+          await view.openHistory(3);
+          show({ spaceDid: space, pieceId: "fid1:reached-in-fork" });
+
+          await view.closeHistory();
+
+          expect(navigations).toEqual([{ spaceDid: space }]);
+        } finally {
+          restore();
+        }
+      });
+
+      it("discards nothing with no fork open, or while one is opening", async () => {
+        const opening = Promise.withResolvers<void>();
+        const { view, forks, open, restore } = await mounted({
+          opening: () => opening.promise,
+        });
+        try {
+          await view.closeHistory();
+          const opened = view.openHistory(3);
+
+          await view.closeHistory();
+
+          expect(open()).toEqual([{ seq: 3, busy: true }]);
+          opening.resolve();
+          await opened;
+          expect(forks[0].discards).toBe(0);
+        } finally {
+          restore();
+        }
+      });
+
+      it("resolves, logging the failure, when the fork cannot be discarded", async () => {
+        const { view, errors, open, restore } = await mounted({
+          discarding: () => Promise.reject(new Error("the branch is in use")),
+        });
+        try {
+          await view.openHistory(3);
+
+          await view.closeHistory();
+
+          expect(open()).toEqual([undefined]);
+          expect(errors.calls).toHaveLength(1);
+          expect(errors.calls[0].args[0]).toBe(
+            "[RootView] Failed to discard a fork:",
+          );
+        } finally {
+          restore();
+        }
+      });
+    });
+
+    describe("restoreHistory()", () => {
+      it("restores the space from the open fork, then shows the space's own runtime with no fork, discarding nothing", async () => {
+        const { view, forks, navigations, open, rt, shown, restore } =
+          await mounted();
+        try {
+          await view.openHistory(3);
+
+          await view.restoreHistory();
+
+          expect([forks[0].restores, forks[0].discards]).toEqual([1, 0]);
+          expect(open()).toEqual([undefined]);
+          expect(shown()).toBe(rt);
+          expect(navigations).toEqual([]);
+        } finally {
+          restore();
+        }
+      });
+
+      it("starts restoring from the open fork on a `restore-history` command", async () => {
+        const { view, forks, open, send, restore } = await mounted({
+          restoring: () => Promise.withResolvers<void>().promise,
+        });
+        try {
+          await view.openHistory(3);
+
+          send({ type: "restore-history" });
+
+          expect(forks[0].restores).toBe(1);
+          expect(open()).toEqual([{ seq: 3, busy: true }]);
+        } finally {
+          restore();
+        }
+      });
+
+      it("hands the panel a busy fork until the restore ends, and starts no second restore or close meanwhile", async () => {
+        const restoring = Promise.withResolvers<void>();
+        const { view, forks, open, restore } = await mounted({
+          restoring: () => restoring.promise,
+        });
+        try {
+          await view.openHistory(3);
+          const restored = view.restoreHistory();
+          expect(open()).toEqual([{ seq: 3, busy: true }]);
+
+          await view.restoreHistory();
+          await view.closeHistory();
+
+          expect([forks[0].restores, forks[0].discards]).toEqual([1, 0]);
+          restoring.resolve();
+          await restored;
+          expect(open()).toEqual([undefined]);
+        } finally {
+          restore();
+        }
+      });
+
+      it("restores nothing with no fork open", async () => {
+        const { view, forks, open, restore } = await mounted();
+        try {
+          await view.restoreHistory();
+
+          expect(forks).toEqual([]);
+          expect(open()).toEqual([undefined]);
+        } finally {
+          restore();
+        }
+      });
+
+      it("navigates to the space where the view moved inside the fork, keeping an embedded view embedded", async () => {
+        const { view, navigations, show, restore } = await mounted();
+        try {
+          await view.openHistory(3);
+          show({ spaceDid: space, pieceId: "fid1:reached-in-fork" });
+          await view.restoreHistory();
+
+          await view.openHistory(4);
+          show({
+            spaceDid: space,
+            pieceId: "fid1:reached-in-fork",
+            mode: "embed",
+          });
+          await view.restoreHistory();
+
+          expect(navigations).toEqual([
+            { spaceDid: space },
+            { spaceDid: space, mode: "embed" },
+          ]);
+        } finally {
+          restore();
+        }
+      });
+
+      it("hands the panel the failure and keeps the fork open when the restore rejects, and logs it", async () => {
+        const { view, error, errors, forks, open, shown, restore } =
+          await mounted({
+            restoring: () => Promise.reject(new Error("the space moved on")),
+          });
+        try {
+          await view.openHistory(3);
+
+          await view.restoreHistory();
+
+          expect(error()).toBe("the space moved on");
+          expect(open()).toEqual([{ seq: 3, busy: false }]);
+          expect(shown()).toBe(forks[0].runtime);
+          expect(forks[0].discards).toBe(0);
+          expect(errors.calls[0].args[0]).toBe(
+            "[RootView] Failed to restore from history:",
+          );
+
+          // The fork is still there to return from.
+          await view.closeHistory();
+          expect(forks[0].discards).toBe(1);
+          expect(error()).toBeUndefined();
+        } finally {
+          restore();
+        }
+      });
+
+      describe("when the view moves to another space while the fork is restoring", () => {
+        it("leaves the fork for the restore to end, discarding nothing, and shows none", async () => {
+          const restoring = Promise.withResolvers<void>();
+          const { view, forks, navigations, open, show, restore } =
+            await mounted({ restoring: () => restoring.promise });
+          try {
+            await view.openHistory(3);
+            const restored = view.restoreHistory();
+            show({ spaceDid: otherSpace });
+            expect(open()).toEqual([undefined]);
+
+            restoring.resolve();
+            await restored;
+
+            expect(forks[0].discards).toBe(0);
+            expect(open()).toEqual([undefined]);
+            expect(navigations).toEqual([]);
+          } finally {
+            restore();
+          }
+        });
+
+        it("discards the fork when the restore then rejects, and hands the panel no failure", async () => {
+          const restoring = Promise.withResolvers<void>();
+          const { view, error, forks, open, show, restore } = await mounted({
+            restoring: () => restoring.promise,
+          });
+          try {
+            await view.openHistory(3);
+            const restored = view.restoreHistory();
+            show({ spaceDid: otherSpace });
+
+            restoring.reject(new Error("the space moved on"));
+            await restored;
+
+            expect(forks[0].discards).toBe(1);
+            expect(error()).toBeUndefined();
+            expect(open()).toEqual([undefined]);
+          } finally {
+            restore();
+          }
+        });
+      });
+    });
+
+    describe("hiding the history panel", () => {
+      it("discards the open fork and shows the space's own runtime", async () => {
+        const { view, forks, navigations, rt, send, shown, restore } =
+          await mounted();
+        try {
+          await view.openHistory(3);
+
+          // Hiding the panel lets go of the fork before it first suspends.
+          send({
+            type: "set-config",
+            key: "showHistoryView",
+            value: false,
+          });
+
+          expect(forks[0].discards).toBe(1);
+          expect(shown()).toBe(rt);
+          expect(view.state().config.showHistoryView).toBe(false);
+          expect(navigations).toEqual([]);
+        } finally {
+          restore();
+        }
+      });
+
+      it("navigates back to the view the fork was opened from, where the view moved inside the fork", async () => {
+        const { view, navigations, show, restore } = await mounted();
+        try {
+          await view.openHistory(3);
+          show({ spaceDid: space, pieceId: "fid1:reached-in-fork" });
+
+          await view.setConfig("showHistoryView", false);
+
+          expect(navigations).toEqual([{ spaceDid: space }]);
+        } finally {
+          restore();
+        }
+      });
+
+      it("discards nothing when the panel is shown, or another panel is hidden", async () => {
+        const { view, forks, open, restore } = await mounted();
+        try {
+          await view.openHistory(3);
+
+          await view.setConfig("showHistoryView", true);
+          await view.setConfig("showDebuggerView", false);
+
+          expect(forks[0].discards).toBe(0);
+          expect(open()).toEqual([{ seq: 3, busy: false }]);
+        } finally {
+          restore();
+        }
+      });
+    });
+  });
+
+  describe("the history panel's piece", () => {
+    const space = "did:key:z6Mk-shell-history-piece";
+
+    /**
+     * Returns what a root view showing `shown` in `space`, with the history
+     * panel open, hands the panel as its property `name`: one entry, the
+     * panel being rendered once.
+     */
+    async function bound(shown: object, name: string): Promise<unknown[]> {
+      const restore = installBrowserGlobals();
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const view = new XRootView();
+        view.app = {
+          ...view.app,
+          identity: await Identity.fromPassphrase("root-view-history-piece"),
+          config: { ...view.app.config, showHistoryView: true },
+          view: { spaceDid: space, ...shown } as typeof view.app.view,
+        };
+        return templateBindings(view.render(), name);
+      } finally {
+        restore();
+      }
+    }
+
+    describe("pieceId", () => {
+      it("is the piece a view names by id", async () => {
+        expect(await bound({ pieceId: "fid1:viewed" }, "pieceId")).toEqual([
+          "fid1:viewed",
+        ]);
+      });
+
+      it("is none for a view that names its piece by slug, though it carries an id as well", async () => {
+        expect(
+          await bound(
+            { pieceSlug: "lunch", pieceId: "fid1:viewed" },
+            "pieceId",
+          ),
+        ).toEqual([undefined]);
+        expect(await bound({ pieceSlug: "lunch" }, "pieceId")).toEqual([
+          undefined,
+        ]);
+      });
+
+      it("is none for a view of a space with no piece, or with an empty piece id", async () => {
+        expect(await bound({}, "pieceId")).toEqual([undefined]);
+        expect(await bound({ pieceId: "" }, "pieceId")).toEqual([undefined]);
+      });
+    });
+
+    describe("pieceScope", () => {
+      it("is the scope of a view that names its piece by id", async () => {
+        expect(
+          await bound(
+            { pieceId: "fid1:viewed", pieceScope: "user" },
+            "pieceScope",
+          ),
+        ).toEqual(["user"]);
+      });
+
+      it("is none for a view that names its piece by id with no scope", async () => {
+        expect(await bound({ pieceId: "fid1:viewed" }, "pieceScope")).toEqual([
+          undefined,
+        ]);
+      });
+
+      it("is none for a view that names no piece by id, though it carries a scope", async () => {
+        expect(
+          await bound(
+            { pieceSlug: "lunch", pieceId: "fid1:viewed", pieceScope: "user" },
+            "pieceScope",
+          ),
+        ).toEqual([undefined]);
+        expect(await bound({ pieceScope: "user" }, "pieceScope")).toEqual([
+          undefined,
+        ]);
+      });
+    });
+  });
+
+  describe("restorePattern()", () => {
+    const space = "did:key:z6Mk-shell-restore-pattern";
+    const otherSpace = "did:key:z6Mk-shell-restore-pattern-other";
+
+    type RestoreAnswer = {
+      compatibilityWarning?: string;
+      confirmationToken?: string;
+      executionWarning?: string;
+    };
+
+    /**
+     * A root view on `space` with the history panel showing, over a runtime
+     * that answers each pattern restore with what `answer` returns, and
+     * records what it was asked. `restore` undoes what mounting replaced.
+     */
+    async function mounted(answer: () => Promise<RestoreAnswer>) {
+      const restoreGlobals = installBrowserGlobals();
+      const errors = stub(console, "error");
+      const { XRootView } = await import("../src/views/RootView.ts");
+      const view = new XRootView();
+      const identity = await Identity.fromPassphrase(
+        "root-view-restore-pattern-test",
+      );
+      const lifecycle = view as unknown as {
+        willUpdate(changed: Map<string, unknown>): void;
+      };
+      const showSpace = (did: string) => {
+        const previous = view.app;
+        view.app = {
+          ...previous,
+          identity,
+          config: { ...previous.config, showHistoryView: true },
+          view: { spaceDid: did } as typeof view.app.view,
+        };
+        lifecycle.willUpdate(new Map([["app", previous]]));
+      };
+      showSpace(space);
+      const asked: unknown[][] = [];
+      const forks: number[] = [];
+      // The runtime task's value is all of the task these cases read, and a
+      // pattern restore and a fork are all they ask of the runtime.
+      view.accessForTestingOnly.rt = {
+        value: {
+          restorePiecePattern: (...args: unknown[]) => {
+            asked.push(args);
+            return answer();
+          },
+          forkSpace: (_space: string, seq: number) => {
+            forks.push(seq);
+            return Promise.resolve({
+              seq,
+              runtime: { runtime: () => ({}) },
+              discard: () => Promise.resolve(),
+            });
+          },
+        },
+      } as never;
+      return {
+        view,
+        asked,
+        /** The seq of each fork the runtime was asked for. */
+        forks,
+        /** What the history panel is handed as its `open`. */
+        openHistory: () => templateBindings(view.render(), "open")[0],
+        errors,
+        showSpace,
+        /** What the history panel is handed as its `patternRestore`. */
+        patternRestore: () =>
+          templateBindings(view.render(), "patternRestore")[0],
+        /** What the history panel is handed as its `changes`. */
+        changes: () => templateBindings(view.render(), "changes")[0],
+        restore: () => {
+          errors.restore();
+          restoreGlobals();
+        },
+      };
+    }
+
+    it("asks the runtime to restore the revision, then hands the panel no restore and one more change", async () => {
+      const { view, asked, changes, patternRestore, restore } = await mounted(
+        () => Promise.resolve({}),
+      );
+      try {
+        expect(changes()).toBe(0);
+        const change = { pieceId: "fid1:a", revisionId: "r1" };
+
+        await view.restorePattern(change);
+
+        expect(asked).toEqual([[space, change, undefined]]);
+        expect(patternRestore()).toBeUndefined();
+        expect(changes()).toBe(1);
+      } finally {
+        restore();
+      }
+    });
+
+    it("hands the panel a busy restore of that revision until the runtime answers", async () => {
+      const answer = Promise.withResolvers<RestoreAnswer>();
+      const { view, changes, patternRestore, restore } = await mounted(
+        () => answer.promise,
+      );
+      try {
+        const restoring = view.restorePattern({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+        });
+
+        expect(patternRestore()).toEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: true,
+        });
+        expect(changes()).toBe(0);
+
+        answer.resolve({});
+        await restoring;
+        expect(patternRestore()).toBeUndefined();
+      } finally {
+        restore();
+      }
+    });
+
+    it("hands the panel the runtime's compatibility warning with its token and the scope, and counts no change", async () => {
+      const { view, changes, patternRestore, restore } = await mounted(
+        () =>
+          Promise.resolve({
+            compatibilityWarning: "The source does not fit the data.",
+            confirmationToken: "token-1",
+          }),
+      );
+      try {
+        await view.restorePattern({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          scope: "user",
+        });
+
+        expect(patternRestore()).toStrictEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: false,
+          scope: "user",
+          warning: "The source does not fit the data.",
+          confirmationToken: "token-1",
+        });
+        expect(changes()).toBe(0);
+      } finally {
+        restore();
+      }
+    });
+
+    it("hands the panel a warning with no token or scope member where the runtime and the change gave none", async () => {
+      const { view, patternRestore, restore } = await mounted(
+        () => Promise.resolve({ compatibilityWarning: "It does not fit." }),
+      );
+      try {
+        await view.restorePattern({ pieceId: "fid1:a", revisionId: "r1" });
+
+        // `toStrictEqual` tells an absent member from one holding
+        // `undefined`.
+        expect(patternRestore()).toStrictEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: false,
+          warning: "It does not fit.",
+        });
+      } finally {
+        restore();
+      }
+    });
+
+    it("sends a second request carrying the token after a warning, and counts the change once that one lands", async () => {
+      const confirmedAnswer = Promise.withResolvers<RestoreAnswer>();
+      const answers: Promise<RestoreAnswer>[] = [
+        Promise.resolve({
+          compatibilityWarning: "It does not fit.",
+          confirmationToken: "t1",
+        }),
+        confirmedAnswer.promise,
+      ];
+      const { view, asked, changes, patternRestore, restore } = await mounted(
+        () => answers.shift()!,
+      );
+      try {
+        const change = { pieceId: "fid1:a", revisionId: "r1" };
+        await view.restorePattern(change);
+        const confirmed = { ...change, confirmationToken: "t1" };
+
+        // The panel's "Restore it anyway" arrives as a command, which
+        // returns nothing to wait on.
+        view.onCommand(
+          new CustomEvent("command", {
+            detail: { type: "restore-pattern", ...confirmed },
+          }),
+        );
+
+        expect(asked).toEqual([
+          [space, change, undefined],
+          [space, { type: "restore-pattern", ...confirmed }, "t1"],
+        ]);
+        expect(patternRestore()).toEqual({ ...change, busy: true });
+
+        confirmedAnswer.resolve({});
+        // The restore was waiting on this promise before this case was, so
+        // it has been resumed by the time this case is.
+        await confirmedAnswer.promise;
+        expect(patternRestore()).toBeUndefined();
+        expect(changes()).toBe(1);
+      } finally {
+        restore();
+      }
+    });
+
+    it("hands the panel the failure's message when the runtime rejects, logs it, and counts no change", async () => {
+      const { view, changes, errors, patternRestore, restore } = await mounted(
+        () => Promise.reject(new Error("the piece is gone")),
+      );
+      try {
+        await view.restorePattern({ pieceId: "fid1:a", revisionId: "r1" });
+
+        expect(patternRestore()).toEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: false,
+          error: "the piece is gone",
+        });
+        expect(changes()).toBe(0);
+        expect(errors.calls).toHaveLength(1);
+        expect(errors.calls[0].args[0]).toBe(
+          "[RootView] Failed to restore a pattern:",
+        );
+      } finally {
+        restore();
+      }
+    });
+
+    it("hands the panel the runtime's execution warning as the restore's failure, and counts the change all the same", async () => {
+      const { view, changes, errors, patternRestore, restore } = await mounted(
+        () =>
+          Promise.resolve({
+            executionWarning: "The restored pattern threw as it started.",
+          }),
+      );
+      try {
+        await view.restorePattern({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          scope: "user",
+        });
+
+        expect(patternRestore()).toStrictEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: false,
+          scope: "user",
+          error: "The restored pattern threw as it started.",
+        });
+        expect(changes()).toBe(1);
+        // The restore landed, so nothing is logged as a failure of it.
+        expect(errors.calls).toHaveLength(0);
+
+        // A restore that is not busy leaves the way open for another.
+        await view.restorePattern({ pieceId: "fid1:a", revisionId: "r0" });
+        expect(changes()).toBe(2);
+      } finally {
+        restore();
+      }
+    });
+
+    it("hands the panel the change's scope with a busy restore and with a failed one", async () => {
+      const answer = Promise.withResolvers<RestoreAnswer>();
+      const { view, patternRestore, restore } = await mounted(
+        () => answer.promise,
+      );
+      try {
+        const restoring = view.restorePattern({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          scope: "session",
+        });
+        expect(patternRestore()).toStrictEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          scope: "session",
+          busy: true,
+        });
+
+        answer.reject(new Error("the piece is gone"));
+        await restoring;
+
+        expect(patternRestore()).toStrictEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          scope: "session",
+          busy: false,
+          error: "the piece is gone",
+        });
+      } finally {
+        restore();
+      }
+    });
+
+    it("hands the panel a busy restore and a failed one with no scope member where the change has none", async () => {
+      const answer = Promise.withResolvers<RestoreAnswer>();
+      const { view, patternRestore, restore } = await mounted(
+        () => answer.promise,
+      );
+      try {
+        const restoring = view.restorePattern({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+        });
+        // `toStrictEqual` tells an absent member from one holding
+        // `undefined`.
+        expect(patternRestore()).toStrictEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: true,
+        });
+
+        answer.reject(new Error("the piece is gone"));
+        await restoring;
+
+        expect(patternRestore()).toStrictEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: false,
+          error: "the piece is gone",
+        });
+      } finally {
+        restore();
+      }
+    });
+
+    it("sends a new request after a failure", async () => {
+      let failing = true;
+      const { view, asked, changes, patternRestore, restore } = await mounted(
+        () =>
+          failing ? Promise.reject(new Error("offline")) : Promise.resolve({}),
+      );
+      try {
+        const change = { pieceId: "fid1:a", revisionId: "r1" };
+        await view.restorePattern(change);
+        failing = false;
+
+        await view.restorePattern(change);
+
+        expect(asked).toHaveLength(2);
+        expect(patternRestore()).toBeUndefined();
+        expect(changes()).toBe(1);
+      } finally {
+        restore();
+      }
+    });
+
+    it("sends nothing for a restore asked for while another is busy, and leaves the busy one in place", async () => {
+      const answer = Promise.withResolvers<RestoreAnswer>();
+      const { view, asked, patternRestore, restore } = await mounted(
+        () => answer.promise,
+      );
+      try {
+        const first = view.restorePattern({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+        });
+
+        await view.restorePattern({ pieceId: "fid1:b", revisionId: "r2" });
+
+        expect(asked).toHaveLength(1);
+        expect(patternRestore()).toEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: true,
+        });
+        answer.resolve({});
+        await first;
+      } finally {
+        restore();
+      }
+    });
+
+    it("sends nothing while a fork is open, and sends again once it is closed", async () => {
+      const { view, asked, patternRestore, restore } = await mounted(
+        () => Promise.resolve({}),
+      );
+      try {
+        const change = { pieceId: "fid1:a", revisionId: "r1" };
+        await view.openHistory(3);
+
+        await view.restorePattern(change);
+
+        expect(asked).toEqual([]);
+        expect(patternRestore()).toBeUndefined();
+
+        await view.closeHistory();
+        await view.restorePattern(change);
+        expect(asked).toHaveLength(1);
+      } finally {
+        restore();
+      }
+    });
+
+    it("sends nothing with no runtime, or with no space resolved", async () => {
+      const { view, asked, showSpace, restore } = await mounted(
+        () => Promise.resolve({}),
+      );
+      try {
+        const change = { pieceId: "fid1:a", revisionId: "r1" };
+        const task = view.accessForTestingOnly.rt;
+        view.accessForTestingOnly.rt = { value: undefined } as never;
+        await view.restorePattern(change);
+
+        view.accessForTestingOnly.rt = task;
+        const previous = view.app;
+        view.app = { ...previous, view: { builtin: "settings" } as never };
+        (view as unknown as {
+          willUpdate(changed: Map<string, unknown>): void;
+        }).willUpdate(new Map([["app", previous]]));
+        expect(view.getRuntimeSpaceDID()).toBeUndefined();
+        await view.restorePattern(change);
+
+        expect(asked).toEqual([]);
+
+        // The same view sends once it is on a space again.
+        showSpace(space);
+        await view.restorePattern(change);
+        expect(asked).toHaveLength(1);
+      } finally {
+        restore();
+      }
+    });
+
+    describe("openHistory() beside it", () => {
+      it("asks for no fork while a restore is busy, and for one once the runtime has answered", async () => {
+        const answer = Promise.withResolvers<RestoreAnswer>();
+        const { view, forks, openHistory, patternRestore, restore } =
+          await mounted(() => answer.promise);
+        try {
+          const restoring = view.restorePattern({
+            pieceId: "fid1:a",
+            revisionId: "r1",
+          });
+
+          await view.openHistory(3);
+
+          expect(forks).toEqual([]);
+          expect(openHistory()).toBeUndefined();
+          expect(patternRestore()).toEqual({
+            pieceId: "fid1:a",
+            revisionId: "r1",
+            busy: true,
+          });
+
+          answer.resolve({});
+          await restoring;
+          await view.openHistory(3);
+          expect(forks).toEqual([3]);
+          expect(openHistory()).toEqual({ seq: 3, busy: false });
+        } finally {
+          restore();
+        }
+      });
+
+      it("hands the panel no restore once a fork starts opening over a compatibility warning", async () => {
+        const { view, forks, patternRestore, restore } = await mounted(
+          () =>
+            Promise.resolve({
+              compatibilityWarning: "It does not fit.",
+              confirmationToken: "t1",
+            }),
+        );
+        try {
+          await view.restorePattern({ pieceId: "fid1:a", revisionId: "r1" });
+          expect(patternRestore()).toBeDefined();
+
+          const opening = view.openHistory(3);
+
+          // The warning is gone as the fork starts opening, before the
+          // runtime has answered with it.
+          expect(patternRestore()).toBeUndefined();
+          await opening;
+          expect(forks).toEqual([3]);
+          expect(patternRestore()).toBeUndefined();
+        } finally {
+          restore();
+        }
+      });
+
+      it("hands the panel no restore once a fork starts opening over a failed restore", async () => {
+        const { view, patternRestore, restore } = await mounted(
+          () => Promise.reject(new Error("the piece is gone")),
+        );
+        try {
+          await view.restorePattern({ pieceId: "fid1:a", revisionId: "r1" });
+          expect(patternRestore()).toBeDefined();
+
+          await view.openHistory(3);
+
+          expect(patternRestore()).toBeUndefined();
+        } finally {
+          restore();
+        }
+      });
+
+      it("leaves a warning in place for a step that opens no fork", async () => {
+        const { view, forks, patternRestore, restore } = await mounted(
+          () => Promise.resolve({ compatibilityWarning: "It does not fit." }),
+        );
+        try {
+          await view.restorePattern({ pieceId: "fid1:a", revisionId: "r1" });
+
+          await view.openHistory(1.5);
+
+          expect(forks).toEqual([]);
+          expect(patternRestore()).toEqual({
+            pieceId: "fid1:a",
+            revisionId: "r1",
+            busy: false,
+            warning: "It does not fit.",
+          });
+        } finally {
+          restore();
+        }
+      });
+    });
+
+    describe("when the view moves to another space before the runtime answers", () => {
+      it("drops a success: the panel is handed no restore, and no change is counted", async () => {
+        const answer = Promise.withResolvers<RestoreAnswer>();
+        const { view, changes, patternRestore, showSpace, restore } =
+          await mounted(() => answer.promise);
+        try {
+          const restoring = view.restorePattern({
+            pieceId: "fid1:a",
+            revisionId: "r1",
+          });
+          showSpace(otherSpace);
+          expect(patternRestore()).toBeUndefined();
+
+          answer.resolve({ compatibilityWarning: "It does not fit." });
+          await restoring;
+
+          expect(patternRestore()).toBeUndefined();
+          expect(changes()).toBe(0);
+        } finally {
+          restore();
+        }
+      });
+
+      it("drops a failure: the panel is handed no restore, though the failure is logged", async () => {
+        const answer = Promise.withResolvers<RestoreAnswer>();
+        const { view, errors, patternRestore, showSpace, restore } =
+          await mounted(() => answer.promise);
+        try {
+          const restoring = view.restorePattern({
+            pieceId: "fid1:a",
+            revisionId: "r1",
+          });
+          showSpace(otherSpace);
+
+          answer.reject(new Error("the piece is gone"));
+          await restoring;
+
+          expect(patternRestore()).toBeUndefined();
+          expect(errors.calls).toHaveLength(1);
+        } finally {
+          restore();
+        }
+      });
     });
   });
 

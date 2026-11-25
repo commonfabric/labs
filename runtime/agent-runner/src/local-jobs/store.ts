@@ -140,6 +140,18 @@ export interface LocalJobMessageRequest extends LocalJobAttachments {
   instructions?: string;
 }
 
+/** A refusal to add a job the host's profiles do not admit. */
+export interface LocalJobEnqueueRefusal {
+  code: "unknown_profile" | "beyond_profile";
+  error: string;
+}
+
+/** Asks whether the host's profiles admit a job about to be added. */
+export type LocalJobEnqueueAdmission = (
+  profile: string,
+  request: LocalJobRequest,
+) => LocalJobEnqueueRefusal | undefined;
+
 /** A refusal to accept a message. */
 export interface LocalJobMessageRefusal {
   code:
@@ -366,15 +378,40 @@ export class LocalJobStore {
    * Adds a job, or returns the one `caller` already added under
    * `idempotencyKey` when its request is the same; `created` says which. A
    * key that already names a different request is a `conflict`, and adds
-   * nothing.
+   * nothing. `admit` is asked about a job only when it would be added, so a
+   * request the store already holds is answered with its job whatever the
+   * host's profiles say now; its refusal adds nothing.
    */
   enqueue(
     caller: string,
     profile: string,
     idempotencyKey: string,
     request: LocalJobRequest,
-  ): { job: LocalJob; created: boolean } | { conflict: string } {
-    const result = this.#write(() => {
+  ): { job: LocalJob; created: boolean } | { conflict: string };
+  enqueue(
+    caller: string,
+    profile: string,
+    idempotencyKey: string,
+    request: LocalJobRequest,
+    options: { admit: LocalJobEnqueueAdmission },
+  ):
+    | { job: LocalJob; created: boolean }
+    | { conflict: string }
+    | { refusal: LocalJobEnqueueRefusal };
+  enqueue(
+    caller: string,
+    profile: string,
+    idempotencyKey: string,
+    request: LocalJobRequest,
+    options: { admit?: LocalJobEnqueueAdmission } = {},
+  ):
+    | { job: LocalJob; created: boolean }
+    | { conflict: string }
+    | { refusal: LocalJobEnqueueRefusal } {
+    const result = this.#write(():
+      | { id: string; created: boolean }
+      | { conflict: string }
+      | { refusal: LocalJobEnqueueRefusal } => {
       const conflict = {
         conflict:
           `The idempotency key \`${idempotencyKey}\` already names a different request.`,
@@ -393,6 +430,8 @@ export class LocalJobStore {
         ) return conflict;
         return { id: existing.id, created: false };
       }
+      const refusal = options.admit?.(profile, request);
+      if (refusal !== undefined) return { refusal };
       return {
         id: this.#insert(
           caller,
@@ -404,7 +443,7 @@ export class LocalJobStore {
         created: true,
       };
     });
-    return "conflict" in result
+    return "conflict" in result || "refusal" in result
       ? result
       : { job: this.get(result.id)!, created: result.created };
   }

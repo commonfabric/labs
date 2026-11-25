@@ -1,3 +1,9 @@
+/**
+ * A GitHub repository viewer: enter a repository URL and it fetches the
+ * repo's name, owner, description, stars, forks, and language from the GitHub
+ * API. It demonstrates the `fetchJson` built-in with a typed response and a
+ * fallback while the data loads.
+ */
 import {
   computed,
   Default,

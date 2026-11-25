@@ -53,6 +53,10 @@ import type {
   Pattern,
   Schema,
 } from "./builder/types.ts";
+import {
+  IndexedCollectionMaintainer,
+  type IndexedCollectionMaintenance,
+} from "./builtins/indexed-collection/maintainer.ts";
 import { registerBuiltins } from "./builtins/index.ts";
 import type { Cancel } from "./cancel.ts";
 import {
@@ -117,6 +121,7 @@ import {
   memoryHostForForeignOrigin,
 } from "./deployment-meta.ts";
 import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
+import type { SpaceRunBeacon } from "./executor/run-beacon.ts";
 import {
   type DelegatedCarriage,
   waveRunActorOf,
@@ -783,6 +788,27 @@ export interface RuntimeOptions {
    */
   servingPosture?: boolean;
 
+  /**
+   * Where this runtime's scheduler marks the body of each action run while it
+   * holds the thread: the run beacon of the serving worker this runtime
+   * serves a space in (`executor/run-beacon.ts`; serving-loop.md §2, "The
+   * watchdog"). Absent, the scheduler marks nothing.
+   */
+  runBeacon?: SpaceRunBeacon;
+
+  /**
+   * Which indexed collections this runtime keeps current: every collection
+   * the registries of the spaces it hears of list, as well as those it
+   * declares or writes (`"listed"`); only those it declares or writes
+   * (`"own"`); or none (`"none"`). Unset, a runtime in the serving posture
+   * maintains `"listed"`, any other runtime under server execution `"none"`,
+   * and the rest `"own"`. One runtime maintains a space's collections, so
+   * the presets for a runtime that talks to a deployed toolshed set
+   * `"none"`: the toolshed's serving runtime, or its `IndexedCollectionHost`
+   * while server execution is off, maintains them.
+   */
+  indexedCollectionMaintenance?: IndexedCollectionMaintenance;
+
   /** Rollout mode for commit-boundary CFC enforcement. Defaults to `enforce-strict`. */
   cfcEnforcementMode?: CfcEnforcementMode;
 
@@ -842,7 +868,7 @@ export interface RuntimeOptions {
   cfcDecomposedEnvelopes?: CfcDecomposedEnvelopes;
 
   /**
-   * Defaults to `false`. When true, the envelope persist path stores
+   * Defaults to `true`. When true, the envelope persist path stores
    * version-2 envelopes: each label above the inline limit is a reference
    * to a content-addressed label document shared by every envelope that
    * carries the label (`docs/specs/content-addressed-cfc-labels.md`). Off
@@ -1528,6 +1554,7 @@ export class Runtime {
 
   readonly id: string;
   readonly scheduler: Scheduler;
+  readonly indexedCollections: IndexedCollectionMaintainer;
   readonly patternManager: PatternManager;
   readonly sourceReconciler: SourceReconciler;
   readonly moduleRegistry: ModuleRegistry;
@@ -1709,6 +1736,9 @@ export class Runtime {
    * value).
    */
   #serverExecutionRelease: (() => void) | undefined;
+
+  /** Where the scheduler marks each run's body (`RuntimeOptions.runBeacon`). */
+  readonly #runBeacon: SpaceRunBeacon | undefined;
 
   /** Serving posture (RuntimeOptions.servingPosture): true only for the
    * SpaceServer's own runtime. Gates the Phase-2 speculation-overlay
@@ -2222,6 +2252,7 @@ export class Runtime {
     this.experimental.serverExecution = this.#explicitServerExecution ??
       getServerExecutionConfig();
     this.servingPosture = options.servingPosture === true;
+    this.#runBeacon = options.runBeacon;
     // Everything below can throw (URL parsing, host validation, engine
     // construction). The enabler claimed above is process-global state,
     // so a THROWING construction must roll it back — a leaked enabler
@@ -2404,6 +2435,15 @@ export class Runtime {
 
       // Register built-in modules with runtime injection
       registerBuiltins(this);
+      this.indexedCollections = new IndexedCollectionMaintainer(
+        this,
+        options.indexedCollectionMaintenance ??
+          (this.servingPosture
+            ? "listed"
+            : this.experimental.serverExecution === true
+            ? "none"
+            : "own"),
+      );
 
       // Set this runtime as the current runtime for global cell compatibility
       // Removed setCurrentRuntime call - no longer using singleton pattern
@@ -2461,6 +2501,9 @@ export class Runtime {
     } catch (error) {
       this.#releaseServerExecutionEnabler();
       immutableCellsFor(this).dispose();
+      // Unset when the failure came before the maintainer was constructed.
+      (this as { indexedCollections?: IndexedCollectionMaintainer })
+        .indexedCollections?.dispose();
       throw error;
     }
   }
@@ -2807,6 +2850,7 @@ export class Runtime {
     // `stopAll()` below would release.
     this.scheduler.endPieceStartWaits();
     this.scheduler.endPatternChangeWaits();
+    this.indexedCollections.dispose();
     try {
       // A kept store keeps RECORDING, so this path drains what could still write
       // into it. In-flight async builtin work is that shape: a fetch / llm call or
@@ -3226,6 +3270,14 @@ export class Runtime {
     this.#speculationDestination()?.trackIntent(space, sidecarId, eventId);
   }
 
+  /**
+   * Where the scheduler marks the body of each action run while it holds the
+   * thread (`RuntimeOptions.runBeacon`); `undefined` off a serving worker.
+   */
+  get runBeacon(): SpaceRunBeacon | undefined {
+    return this.#runBeacon;
+  }
+
   /** The client-effect channel of a flag-ON non-serving runtime
    * (server-execution v2 Phase 4, protocol.md §5): the overlay's
    * optimistic navigateTo enactment records its nonce here, and the
@@ -3472,6 +3524,16 @@ export class Runtime {
             }\0${address.id}`,
           );
         }
+      }),
+      // A released space opens again on its next use, as a first open does:
+      // its loads are kicked again, and the effects channel subscribes to
+      // it again.
+      manager.subscribeSpacesReleased?.((space) => {
+        const prefix = `${space}\0`;
+        for (const key of this.#missingDocLoadKicks) {
+          if (key.startsWith(prefix)) this.#missingDocLoadKicks.delete(key);
+        }
+        this.#effectsChannel?.forgetSpace(space);
       }),
     ];
     for (const cancel of cancels) {

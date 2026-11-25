@@ -29,6 +29,17 @@ import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 export const MEMORY_PROTOCOL = "memory" as const;
 export const DEFAULT_BRANCH = "" as const;
 
+/**
+ * Prefix of the name of a branch opened to look at an earlier step of a
+ * space: a history fork, named with this prefix and a UUID. A page that goes
+ * away with one open leaves the branch active in the store, and nothing but
+ * its name says it is one, so compaction takes every active branch whose name
+ * starts with this for a leftover history fork and deletes it. The prefix is
+ * reserved for that use: a branch meant to outlive a compaction is named
+ * otherwise.
+ */
+export const HISTORY_FORK_BRANCH_PREFIX = "history:" as const;
+
 export type EntityId = string;
 export type BranchName = string;
 export type SessionId = string;
@@ -787,8 +798,8 @@ export const identityOfScopeKey = (
  * (protocol.md §1's transaction identity model, §7's closed metadata list).
  * The wave's envelope carries the SpaceServer's service identity — no user
  * principal, no session — so the identity the envelope can no longer
- * express rides here, per write, at action-run granularity. Two distinct
- * things, never conflated:
+ * express rides here, per write, at action-run granularity. Three
+ * distinct things, the first two never conflated:
  *
  * - ADDRESSING — `scopeKey`, the explicit instance a scoped write lands
  *   in. The engine keys rows by it; admission REQUIRES it on every scoped
@@ -798,9 +809,14 @@ export const identityOfScopeKey = (
  *   to prevent).
  * - ATTRIBUTION — `actingUser`/`actingSession`, the acting identity of the
  *   action RUN that produced the write (`action × instance`, never the
- *   action). Recorded, not read: no enforcement path consumes it today
- *   (protocol.md §1 — audit/forensics, and the anticipated signature
- *   graduation).
+ *   action). No enforcement path consumes it (protocol.md §1 —
+ *   audit/forensics, and the anticipated signature graduation). Its one
+ *   reader is the currency index's count of false cleans, which decides
+ *   nothing (serving-loop.md §3b).
+ * - PRODUCER — `action`, the durable identity of the action whose run
+ *   made the write, the one the run's basis rows are keyed by
+ *   (serving-loop.md §3b). With the attribution it names the run, so a
+ *   stored write says which run produced it. Recorded, not read.
  *
  * Server-internal carriage like `commitClass` and `holder`: `ClientCommit`
  * cannot express annotations, and no session-facing path supplies them.
@@ -815,6 +831,7 @@ export type DerivedWriteAnnotation = {
   scopeKey?: string;
   actingUser?: string;
   actingSession?: string;
+  action?: string;
 };
 
 export type Reference = string & {
@@ -873,6 +890,17 @@ export type PatchOp =
     index: number;
     remove: number;
     add: FabricValue[];
+    /**
+     * Marks a splice its writer diffed under a recursive read of the array or
+     * of a path above it, so that it stands for the per-index writes of the
+     * same change: the store reads the indices whose values it changed as
+     * overwritten (server execution's supersession, serving-loop.md §3d),
+     * where an unmarked splice, such as a tail splice of the per-index form,
+     * overwrites nothing. A writer sends it only to a server that advertises
+     * `markedSplicesV1`, and the store admits it only under that read and
+     * alone on its array in the commit. Absent means unmarked.
+     */
+    pinned?: true;
   }
   // A tail-relative append: `values` are inserted at the array's current tail,
   // with the array (and the path to it) created if absent, or if its slot holds
@@ -1263,6 +1291,17 @@ export type ClientCommit = {
   eventAppends?: EventAppendDecl[];
 };
 
+/** Whether `commit` carries a marked splice (`PatchOp`'s `pinned`). */
+export const carriesMarkedSplice = (
+  commit: { readonly operations: readonly Operation[] },
+): boolean =>
+  commit.operations.some((operation) =>
+    operation.op === "patch" &&
+    operation.patches.some((patch) =>
+      patch.op === "splice" && patch.pinned === true
+    )
+  );
+
 export type SessionOpenResult = {
   /** Serving Toolshed process commit, not the router or a compatibility gate. */
   serverBuild?: string;
@@ -1466,6 +1505,18 @@ export type MemoryProtocolFlags = {
   sessionReadCeiling?: boolean;
 
   /**
+   * Server capability: the server admits marked splices (`PatchOp`'s
+   * `pinned`) and reads each one's overwritten indices for server
+   * execution's supersession. A client sends a change to an array as marked
+   * splices only to a server that advertises it, and otherwise index by
+   * index. Build-inherent; absent, as from a server that predates marked
+   * splices, it parses to false. Such a server reads a stored marked splice
+   * as overwriting nothing, so under server execution a deployment must not
+   * roll back to one (docs/specs/memory-v2/08-conflict-granularity.md).
+   */
+  markedSplicesV1?: boolean;
+
+  /**
    * Server capability: the server relays ephemeral presence rooms under a
    * space over this connection — `presence.join`, `presence.publish`,
    * `presence.leave`, and the `presence/upsert` and `presence/remove`
@@ -1588,6 +1639,19 @@ export type MemoryProtocolFlags = {
   spaceInvites?: boolean;
 
   /**
+   * Server capability: the server's invitation service moves a space's
+   * invitation ledger revision document (`SPACE_INVITES_REVISION_DOC_ID` in
+   * `space-invites.ts`) in the transaction that changes the ledger, and tells
+   * its own sessions on the space of the move. A session here learns of each
+   * change to the ledger by watching that document, provided the deployment
+   * runs the space's invitations in the process that holds its sessions.
+   * Build-inherent. Absent (an older server) parses to false: such a server
+   * writes no such document, and a client that wants to learn of a change it
+   * did not make reads the ledger again itself.
+   */
+  spaceInvitesRevision?: boolean;
+
+  /**
    * Server capability: the server records a space's instance-naming mark and
    * enforces INV-16 (04-protocol.md §4.1.1): a marked space admits only
    * sessions, and commits, that declare `instanceNames: true`; the first
@@ -1598,6 +1662,14 @@ export type MemoryProtocolFlags = {
    * declaring session's commits and marks nothing.
    */
   instanceNameMark?: boolean;
+
+  /**
+   * Server capability: the server opens sessions on a branch
+   * (`SessionDescriptor.branch`) and serves the `branch.*` and
+   * `history.list` requests (04-protocol.md §4.3.8). Absent (an older
+   * server) parses to false, and a client then sends none of them.
+   */
+  branches?: boolean;
 
   /** The peer supports router-scoped binary connection authentication. */
   routedAuthV1?: boolean;
@@ -1648,6 +1720,7 @@ export type WireMemoryProtocolFlags = {
   sessionHoldings?: boolean;
   viewScopedReplicationV1?: boolean;
   sessionReadCeiling?: boolean;
+  markedSplicesV1?: boolean;
   presenceV1?: boolean;
   sessionClose?: boolean;
   connectionAuth?: boolean;
@@ -1660,7 +1733,9 @@ export type WireMemoryProtocolFlags = {
   patternLifecycleScopes?: boolean;
   servedRequests?: boolean;
   spaceInvites?: boolean;
+  spaceInvitesRevision?: boolean;
   instanceNameMark?: boolean;
+  branches?: boolean;
   routedAuthV1?: boolean;
   routedCompressionV1?: boolean;
 };
@@ -1676,6 +1751,14 @@ export type HelloOkMessage = {
   protocol: typeof MEMORY_PROTOCOL;
   flags: WireMemoryProtocolFlags;
   sessionOpen?: SessionOpenAuthMetadata;
+
+  /**
+   * The most slots the server reads in one message from this connection's
+   * client, when it was given a limit other than
+   * {@link MAX_UNTRUSTED_MESSAGE_SLOTS}. Absent, the limit is that default.
+   * A direct client holds its own requests to it.
+   */
+  messageSlots?: number;
 };
 
 export type SessionOpenChallenge = {
@@ -1782,9 +1865,10 @@ export type SessionDescriptor = {
    * resolving against the ENVELOPE principal: the binding grants no
    * write path (served writes ride the wave's §2b delegated carriage).
    * A non-delegating principal sending the marker is refused, and a
-   * bound session whose principal leaves the class is revoked. Spaces
-   * with no valid concrete-owner ACL bind nothing (today's rules
-   * apply). Signed into the session.open invocation with the rest of
+   * bound session whose principal leaves the class is revoked. A space
+   * with no valid concrete-owner ACL binds nothing at open (today's rules
+   * apply), and the session binds to the owner an access list later
+   * names. Signed into the session.open invocation with the rest of
    * this descriptor.
    */
   actingAs?: "space-owner";
@@ -1799,6 +1883,30 @@ export type SessionDescriptor = {
    * on the resumes after it.
    */
   invite?: { inviteId: string; code: string };
+
+  /**
+   * The branch the session is of (`06-branching.md` §6.16): every commit,
+   * query and watch the session sends without naming a branch reads and
+   * writes this one, so a runtime that knows nothing of branches runs a
+   * space as the branch holds it. Absent, the default branch. Signed into
+   * the session.open invocation with the rest of this descriptor, declared
+   * afresh on every open, and admitted only by a server advertising
+   * `branches`. A session of a branch other than the default is never
+   * client demand, whatever `demand` says: no serving loop runs a branch,
+   * and the session's own runtime computes what the branch stores.
+   */
+  branch?: BranchName;
+
+  /**
+   * Asks the server to fork `branch` from the default branch's head when the
+   * space has no branch of that name, so that a runtime showing a fork of
+   * one space keeps what it writes to every other space apart as well. The
+   * fork is made only for a principal that may write to the space; any
+   * other is given a session of the default branch, to which it can write
+   * nothing. A branch that was deleted is not made again, and the open is
+   * refused as it is without this.
+   */
+  forkBranch?: true;
 };
 
 /**
@@ -1831,8 +1939,11 @@ export type SessionOpenRequest = {
 
   /**
    * The authenticated principal of the connection the session opens as. A
-   * request naming one carries no signature of its own, and the server reads
-   * neither `invocation` nor `authorization` from it.
+   * request naming one carries no signature of its own: the server reads no
+   * `invocation` from it, and from `authorization` only `proofs`, a proof
+   * chain the request may present (04-protocol.md section 4.5.1), which is
+   * also the one `authorization` a routed open may carry
+   * (`carriesOnlySessionOpenProofs`).
    */
   principal?: string;
 
@@ -2171,6 +2282,152 @@ export type EntityIdLookupRequest = {
   space: string;
   sessionId: SessionId;
   id: EntityId;
+};
+
+/**
+ * A branch as the server reports it. `forkSeq` is the point of
+ * `parentBranch`'s history the branch holds; both are `null` for the default
+ * branch. A `deleted` branch takes no more commits.
+ */
+export type BranchInfo = {
+  name: BranchName;
+  parentBranch: BranchName | null;
+  forkSeq: number | null;
+  createdSeq: number;
+  headSeq: number;
+  status: "active" | "deleted";
+};
+
+/** One commit of a branch's history, without the documents it wrote. */
+export type CommitSummary = {
+  seq: number;
+
+  /** The branch the commit landed on, which a fork's history inherits from. */
+  branch: BranchName;
+
+  /** Who made the commit: a client, a serving loop, or the server itself. */
+  class: CommitClass;
+
+  /** When the server admitted the commit, as an ISO 8601 UTC time. */
+  createdAt: string;
+
+  /** The user a server-produced authored commit acted for. */
+  actingPrincipal?: string;
+
+  /**
+   * Who made the commit: the user a server-produced commit acted for, and
+   * otherwise the principal of the session that committed. Absent for a
+   * commit of a session with no principal. This is the store's record and
+   * no more than the server verified: where a server admits sessions
+   * without a principal, such a session chooses its own id, and can choose
+   * one in the form the store keeps a principal's session under.
+   */
+  principal?: string;
+
+  /** How many events the commit appended to streams. */
+  events: number;
+
+  /** The ids of the events whose handler consequences the commit carries. */
+  consequenceOf?: string[];
+
+  /**
+   * On a serving loop's commit, the seq through which the loop had then
+   * computed everything the branch's authored commits called for: the state
+   * as of this commit is settled when no authored commit lies between
+   * `derivedThrough` and it.
+   */
+  derivedThrough?: number;
+
+  /** The point of history the commit restored its branch to. */
+  restored?: { branch: BranchName; seq: number };
+
+  /** How many documents the commit wrote. */
+  writes: number;
+};
+
+/**
+ * Forks `name` from `parentBranch` (absent, the default branch) as of
+ * `forkSeq` (absent, the parent's head). Needs write access to the space.
+ */
+export type BranchCreateRequest = {
+  type: "branch.create";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  name: BranchName;
+  parentBranch?: BranchName;
+  forkSeq?: number;
+};
+
+export type BranchCreateResult = {
+  serverSeq: number;
+  branch: BranchInfo;
+};
+
+/** Deletes the branch `name`. Needs write access to the space. */
+export type BranchDeleteRequest = {
+  type: "branch.delete";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  name: BranchName;
+};
+
+export type BranchDeleteResult = {
+  serverSeq: number;
+};
+
+/** Lists the space's branches, deleted ones included. */
+export type BranchListRequest = {
+  type: "branch.list";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+};
+
+export type BranchListResult = {
+  serverSeq: number;
+  branches: BranchInfo[];
+};
+
+/**
+ * Lists the commits of `branch`'s history (absent, the session's branch),
+ * newest first, those below `before` only, and at most `limit` of them.
+ */
+export type HistoryListRequest = {
+  type: "history.list";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  branch?: BranchName;
+  before?: number;
+  limit?: number;
+};
+
+export type HistoryListResult = {
+  serverSeq: number;
+  commits: CommitSummary[];
+};
+
+/**
+ * Restores the default branch to the state `source` (absent, the default
+ * branch) held as of `sourceSeq` (absent, its head), as one commit on the
+ * default branch. Needs owner access to the space.
+ */
+export type BranchRestoreRequest = {
+  type: "branch.restore";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  source?: BranchName;
+  sourceSeq?: number;
+};
+
+export type BranchRestoreResult = {
+  serverSeq: number;
+
+  /** The restoring commit's seq, absent when nothing differed. */
+  seq?: number;
 };
 
 //
@@ -2888,6 +3145,11 @@ export type ClientMessage =
   | OperationFieldQueryRequest
   | EntityIdListRequest
   | EntityIdLookupRequest
+  | BranchCreateRequest
+  | BranchDeleteRequest
+  | BranchListRequest
+  | HistoryListRequest
+  | BranchRestoreRequest
   | SqliteQueryRequest
   | SqliteRegisterDiskSourceRequest
   | WatchSetRequest
@@ -3074,12 +3336,15 @@ export function resetMessageCompressionConfig(): void {
 
 /**
  * Ambient server behavior for own-write echo on sync frames (CT-1965): a
- * session's own accepted patch-produced heads ride the covering frame as full
- * post-apply documents, so promotion retires the pending overlay against
- * delivered truth instead of extrapolating merged state it never saw. Set- and
- * delete-produced heads stay elided — the client provably holds their outcome.
- * Off restores full echo suppression (the pre-CT-1965 behavior). Not a
- * protocol capability: every client generation handles the echoed frames.
+ * session's own accepted patch-produced head rides the covering frame as the
+ * full post-apply document, so promotion retires the pending overlay against
+ * delivered truth instead of extrapolating merged state it never saw. The
+ * head is left out where the server can show the session holds the revision
+ * its patches were applied over, since replaying them there yields the head.
+ * Set- and delete-produced heads stay elided — the client provably holds
+ * their outcome. Off restores full echo suppression (the pre-CT-1965
+ * behavior). Not a protocol capability: every client generation handles a
+ * frame with the document and a frame without it.
  */
 export function setOwnWriteEchoConfig(enabled?: boolean): void {
   ownWriteEchoEnabled = enabled ?? true;
@@ -3128,6 +3393,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records a session's declared read
   // ceiling and its serving runtime stamps it onto the runs it serves.
   sessionReadCeiling: true,
+  // Build-inherent: this build's server reads marked splices and admits them
+  // as `refuseUnfoundedMarkedSplices()` allows.
+  markedSplicesV1: true,
   // Build-inherent: this build's server relays presence rooms.
   presenceV1: true,
   // Build-inherent: this build's server ends one session on request.
@@ -3153,10 +3421,16 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records a space's instance-naming
   // mark and admits sessions and commits by it (INV-16).
   instanceNameMark: true,
+  // Build-inherent: this build's server opens sessions on a branch and
+  // serves the branch and history requests.
+  branches: true,
   // Build-inherent: this build's lifecycle verbs take an origin.
   patternLifecycleOrigins: true,
   // Build-inherent: this build's `setsrc` and `follow` take a scope.
   patternLifecycleScopes: true,
+  // Build-inherent: this build's invitation service moves the ledger's
+  // revision document with every change to the ledger.
+  spaceInvitesRevision: true,
   // Configuration rather than build-inherent: a `Server` advertises each
   // from what it was given (`Server.memoryProtocolFlags()`).
   patternLifecycle: false,
@@ -3226,6 +3500,7 @@ const BOOLEAN_MEMORY_PROTOCOL_FLAGS: Record<BooleanMemoryProtocolFlag, true> = {
   entityIdLookup: true,
   viewScopedReplicationV1: true,
   sessionReadCeiling: true,
+  markedSplicesV1: true,
   sessionHoldings: true,
   presenceV1: true,
   sessionClose: true,
@@ -3239,7 +3514,9 @@ const BOOLEAN_MEMORY_PROTOCOL_FLAGS: Record<BooleanMemoryProtocolFlag, true> = {
   patternLifecycleScopes: true,
   servedRequests: true,
   spaceInvites: true,
+  spaceInvitesRevision: true,
   instanceNameMark: true,
+  branches: true,
   syncCrossingsV1: true,
   watchRemoveV1: true,
   syncPartsV1: true,
@@ -3312,6 +3589,9 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: a client carrying a read
     // ceiling refuses such a server rather than reading unbounded.
     sessionReadCeiling: value.sessionReadCeiling === true,
+    // Absent (an older server, or a deployment that has not turned it on)
+    // parses to false: a client then sends array changes index by index.
+    markedSplicesV1: value.markedSplicesV1 === true,
     // Absent (an older server) parses to false: a client then refuses to
     // join a presence room rather than send a message the server would
     // refuse.
@@ -3339,9 +3619,15 @@ export const parseMemoryProtocolFlags = (
     // treats the owner as unavailable.
     servedRequests: value.servedRequests === true,
     spaceInvites: value.spaceInvites === true,
+    // Absent (an older server) parses to false: a client then reads the
+    // invitation ledger again itself to learn of a change it did not make.
+    spaceInvitesRevision: value.spaceInvitesRevision === true,
     // Absent (an older server) parses to false: the server records no mark
     // and admits a declaring session's commits without one.
     instanceNameMark: value.instanceNameMark === true,
+    // Absent (an older server) parses to false: a client then opens no
+    // session on a branch and sends no branch or history request.
+    branches: value.branches === true,
     // Absent (an older server) parses to false: a client then sends neither
     // `follow` nor a `setsrc` origin.
     patternLifecycleOrigins: value.patternLifecycleOrigins === true,
@@ -3400,6 +3686,7 @@ export const wireMemoryProtocolFlags = (
   sessionHoldings: flags.sessionHoldings,
   viewScopedReplicationV1: flags.viewScopedReplicationV1,
   sessionReadCeiling: flags.sessionReadCeiling,
+  markedSplicesV1: flags.markedSplicesV1,
   presenceV1: flags.presenceV1,
   sessionClose: flags.sessionClose,
   connectionAuth: flags.connectionAuth,
@@ -3412,7 +3699,9 @@ export const wireMemoryProtocolFlags = (
   patternLifecycleScopes: flags.patternLifecycleScopes,
   servedRequests: flags.servedRequests,
   spaceInvites: flags.spaceInvites,
+  spaceInvitesRevision: flags.spaceInvitesRevision,
   instanceNameMark: flags.instanceNameMark,
+  branches: flags.branches,
   routedAuthV1: flags.routedAuthV1,
   routedCompressionV1: flags.routedCompressionV1,
   syncCrossingsV1: flags.syncCrossingsV1,
@@ -3459,18 +3748,30 @@ export const operationBaselineHash = (value: FabricValue): string =>
  * the places its values fill or leave absent, an array counting as its length
  * with holes included and a record as its number of members. It bounds the
  * work that decoding, applying, and re-encoding one message can cost the
- * server, whatever the message's size on the wire.
+ * server, whatever the message's size on the wire. A server may be given
+ * another limit (`untrustedMessageSlots`); this is the default.
  */
 export const MAX_UNTRUSTED_MESSAGE_SLOTS = 1_000_000;
 
-const untrustedMemoryCodec = newDefaultJsonCodecEngine({
-  slotLimit: MAX_UNTRUSTED_MESSAGE_SLOTS,
-});
+/** One decoder per slot limit a decode has asked for. */
+const untrustedMemoryCodecs = new Map<
+  number,
+  ReturnType<typeof newDefaultJsonCodecEngine>
+>();
+
+const untrustedMemoryCodec = (slotLimit: number) => {
+  let codec = untrustedMemoryCodecs.get(slotLimit);
+  if (codec === undefined) {
+    codec = newDefaultJsonCodecEngine({ slotLimit });
+    untrustedMemoryCodecs.set(slotLimit, codec);
+  }
+  return codec;
+};
 
 /**
  * Decodes wire text from an untrusted sender. Text standing for more than
- * {@link MAX_UNTRUSTED_MESSAGE_SLOTS} slots is refused with `SlotLimitError`
- * before any of it is walked.
+ * `slotLimit` slots, {@link MAX_UNTRUSTED_MESSAGE_SLOTS} unless a caller names
+ * another, is refused with `SlotLimitError` before any of it is walked.
  *
  * This is the decoder for anything a client sent. Text the memory system wrote
  * itself -- a stored row, a frame the server sent -- goes through
@@ -3478,8 +3779,12 @@ const untrustedMemoryCodec = newDefaultJsonCodecEngine({
  */
 export const decodeMemoryBoundary = <Value extends FabricValue = FabricValue>(
   source: string,
+  slotLimit: number = MAX_UNTRUSTED_MESSAGE_SLOTS,
 ): Value & FabricValue =>
-  untrustedMemoryCodec.decode(source, memoryLiveEnvironment) as Value;
+  untrustedMemoryCodec(slotLimit).decode(
+    source,
+    memoryLiveEnvironment,
+  ) as Value;
 
 /**
  * Like {@link decodeMemoryBoundary}, except that no slot limit applies: for

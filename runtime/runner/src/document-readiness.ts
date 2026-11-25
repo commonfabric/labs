@@ -26,7 +26,7 @@ export class DocumentLoadError extends Error {}
  * is read from the storage manager's ledger of loads, captured before the
  * load settles.
  */
-function documentLoad(
+export function documentLoad(
   runtime: Runtime,
   root: Cell<unknown>,
   identity: ScopeKeyIdentity | undefined,

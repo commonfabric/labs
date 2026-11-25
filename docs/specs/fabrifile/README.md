@@ -143,7 +143,9 @@ A store's entries are as private as its space: a reader the space's access list
 refuses reads no entry. The bytes are not, today:
 
 - **The blob routes are unauthenticated.** Anyone who holds a blob's space and
-  id can fetch it, and anyone can upload into a space
+  id can fetch it, and the store's upload route takes a blob into a space from
+  anyone, though the runtime client's upload is admitted only for a principal
+  the space grants `WRITE`
   ([files](../../common/capabilities/files.md#what-the-store-provides)). The
   bytes are only as private as their reference is secret.
 - **A reference is a hash of the content.** Anyone who already has a file, and
@@ -176,8 +178,9 @@ The design depends on runtime capabilities that don't exist yet:
 
 - **Authorized blob reads.** A blob read is admitted only for a principal the
   blob's space admits, as a read of any other document of the space is, and a
-  blob write likewise. Until then, everything under [Privacy](#privacy)
-  holds.
+  blob write likewise. A blob the runtime client uploads is admitted that way
+  already; a read is not, nor is a write through the store's upload route.
+  Until both are, everything under [Privacy](#privacy) holds.
 - **A blob reference a pattern can check, in full.** The store learns whether
   its space holds the blob a request names, since storing it under the entry's
   name reads its record, but not the media type or the size the blob was
@@ -198,8 +201,11 @@ the Loom's space uses the Loom's (see
 [`FileStore.md`](FileStore.md#where-it-lives)).
 
 - **The store and its core.** `FileStore` resolves the viewer's profile with
-  `#profile` and hands it to `FileStoreCore`, which takes it as an input, so a
-  test can name one.
+  `#profile` and hands `FileStoreCore` the wish's result and its `errorCode`,
+  which the core takes as inputs, so a test can name them. An `add` refused for
+  want of a profile says "no profile yet" only for a wish that reports
+  `no-match`: any other code is a profile that couldn't be read, and no code at
+  all is one that hasn't loaded yet.
 - **Writers and labels.** An entry's write policy is the element's, at its
   position in the list, and names `commitAdd`, `commitRename` and
   `commitRemove`, since a removal is a write to the element removed. The

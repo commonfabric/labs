@@ -169,6 +169,27 @@ describe("cell-brand", () => {
       expect(getCellBrand(types.get("plain")!, checker)).toBeUndefined();
       expect(getCellBrand(types.get("cell")!, checker)).toBe("cell");
     });
+
+    it("returns `readonly` for the brand `readonly | cell`, and `undefined` for a union of other kinds", async () => {
+      // `ReadonlyCell` declares the first union, the brand that makes a `Cell`
+      // assignable to it. The second names two kinds neither of which is
+      // assignable to the other.
+      const { checker, types } = await probes(`
+        interface Readable<T> extends BrandedCell<T, "readonly" | "cell"> {}
+        interface Mixed<T> extends BrandedCell<T, "cell" | "stream"> {}
+        interface Probes {
+          readable: Readable<number>;
+          mixed: Mixed<number>;
+          readonlyCell: ReadonlyCell<number>;
+        }
+      `);
+
+      expect(getCellBrand(types.get("readable")!, checker)).toBe("readonly");
+      expect(getCellBrand(types.get("mixed")!, checker)).toBeUndefined();
+      expect(getCellBrand(types.get("readonlyCell")!, checker)).toBe(
+        "readonly",
+      );
+    });
   });
 
   describe("getCellWrapperInfo()", () => {

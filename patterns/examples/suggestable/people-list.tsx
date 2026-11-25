@@ -1,3 +1,10 @@
+/**
+ * Lists the people found with `wish` for the `#person` tag in the current space
+ * and the viewer's home space, showing each contact's name and email. The
+ * list view is exported separately so it can be shown with any set of
+ * people.
+ */
+
 import {
   computed,
   Default,

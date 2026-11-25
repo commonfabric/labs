@@ -92,10 +92,10 @@ describe("whose cells an abandoned request's ending writes", () => {
         llmDialog: [],
         generateText: [],
         generateObject: [],
-        // The `sqliteQuery` sink is ungated under the bundle for a reason of
-        // its own — the bound a read wants is the database's space, which a
-        // clause list cannot hold — so the query case here declares the
-        // ceiling its refusal comes from, as the llm cases above do.
+        // The `sqliteQuery` sink is ungated under the bundle, since the
+        // server a query reaches applies the same access rules — so the query
+        // case here declares the ceiling its refusal comes from, as the llm
+        // cases above do.
         sqliteQuery: [],
       },
     });

@@ -3112,6 +3112,15 @@ export class SchemaGenerator {
     type: ts.Type,
     context: GenerationContext,
   ): string | undefined {
+    // A database handle is a wrapper whatever its type is called, and a
+    // wrapper stays where it is written: hoisted, a subtype such as
+    // `IndexedCollections` would carry its `asCell` into `$defs`, and the
+    // position that holds the handle would not say that it is one.
+    if (
+      getCellWrapperInfo(type, context.typeChecker)?.kind === "SqliteDb"
+    ) {
+      return undefined;
+    }
     const key = getNamedTypeKey(type, context.typeNode);
     const alias = type.aliasSymbol;
     return key && context.boundTypeParameters && alias &&

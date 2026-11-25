@@ -29,6 +29,19 @@ const NAME_SCHEMA = {
 } as const satisfies JSONSchema;
 
 /**
+ * What each report of {@link observeRepresentedPrincipal} and
+ * {@link observeWrittenPrincipal} was read from:
+ *
+ * - `"current"`: the label the worker read with the value the handle holds.
+ * - `"refused"`: nothing, because the worker refuses the cell.
+ * - `"stale"`: nothing yet, because the label the handle holds is not the
+ *   one the worker read with the cell's value, as after a write through the
+ *   handle or an update the connection dropped. A `"current"` report
+ *   follows when the worker next delivers the cell.
+ */
+export type LabelReading = "current" | "refused" | "stale";
+
+/**
  * Watches `cell` and reports to `onPrincipal` the one principal its label
  * names as the one its value represents, read as `cf-profile-badge` reads the
  * principal its seal shows (`ownerPrincipalFromLabel()`), until the returned
@@ -38,32 +51,36 @@ const NAME_SCHEMA = {
  * delivers the label the worker read with its value, or the worker refuses
  * it, so that `undefined` never means that the label has yet to load. After
  * that, it is `undefined` when the label names no single principal, for a
- * cell the worker refuses, and while the label the handle holds is not the
- * one the worker read with its value, as after a write through the handle.
+ * cell the worker refuses (`"refused"`), and while the label the handle holds
+ * is not the one the worker read with its value (`"stale"`), as after a write
+ * through the handle.
  */
 export const observeRepresentedPrincipal = (
   cell: CellHandle<unknown>,
-  onPrincipal: (principal: string | undefined) => void,
+  onPrincipal: (principal: string | undefined, reading: LabelReading) => void,
 ): () => void => {
   let decided = false;
-  const report = (principal: string | undefined) => {
+  const report = (principal: string | undefined, reading: LabelReading) => {
     decided = true;
-    onPrincipal(principal);
+    onPrincipal(principal, reading);
   };
   return cell.asSchema<{ name?: string }>(NAME_SCHEMA).subscribe(
     (value, label, delivery) => {
       if (delivery?.cfcLabelCurrent === true) {
-        report(ownerPrincipalFromLabel(
-          label,
-          isWrittenProfileName(
-            isObjectNotArray(value) ? value.name : undefined,
+        report(
+          ownerPrincipalFromLabel(
+            label,
+            isWrittenProfileName(
+              isObjectNotArray(value) ? value.name : undefined,
+            ),
           ),
-        ));
+          "current",
+        );
       } else if (decided) {
-        report(undefined);
+        report(undefined, "stale");
       }
     },
-    { includeCfcLabel: true, onRefused: () => report(undefined) },
+    { includeCfcLabel: true, onRefused: () => report(undefined, "refused") },
   );
 };
 
@@ -90,27 +107,28 @@ const NOTHING_WRITTEN = { value: undefined, principal: undefined } as const;
  *
  * Nothing is reported until the cell delivers the principal the worker read
  * with its value, or the worker refuses it. After that, neither value nor
- * principal is reported for a cell the worker refuses, nor while the value
- * the handle holds is not the one the worker read the principal with, as
- * after a write through the handle, until the worker delivers the cell again.
+ * principal is reported for a cell the worker refuses (`"refused"`), nor
+ * while the value the handle holds is not the one the worker read the
+ * principal with (`"stale"`), as after a write through the handle, until the
+ * worker delivers the cell again.
  */
 export const observeWrittenPrincipal = <T>(
   cell: CellHandle<T>,
-  onWritten: (written: WrittenValue<T>) => void,
+  onWritten: (written: WrittenValue<T>, reading: LabelReading) => void,
 ): () => void => {
   let decided = false;
-  const report = (written: WrittenValue<T>) => {
+  const report = (written: WrittenValue<T>, reading: LabelReading) => {
     decided = true;
-    onWritten(written);
+    onWritten(written, reading);
   };
   return cell.subscribe((value, _label, delivery) => {
     if (delivery?.cfcLabelCurrent === true) {
-      report({ value, principal: delivery.writtenPrincipal });
+      report({ value, principal: delivery.writtenPrincipal }, "current");
     } else if (decided) {
-      report(NOTHING_WRITTEN);
+      report(NOTHING_WRITTEN, "stale");
     }
   }, {
     includeWrittenPrincipal: true,
-    onRefused: () => report(NOTHING_WRITTEN),
+    onRefused: () => report(NOTHING_WRITTEN, "refused"),
   });
 };

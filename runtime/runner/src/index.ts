@@ -45,6 +45,7 @@ export type {
   SpaceCellContents,
 } from "./runtime.ts";
 export type { EventIntentOutcome } from "./speculation/overlay-destination.ts";
+export type { IndexedCollectionMaintenance } from "./builtins/indexed-collection/maintainer.ts";
 export {
   ADOPT_SERVER_FLAGS_ENV,
   type BrowserWorkerPresetParams,
@@ -376,6 +377,7 @@ export {
   schema,
   type SchemaWithoutCell,
   type StreamValue,
+  SUGGESTIONS,
   TESTS,
   TILE_UI,
   type toJSON,
@@ -486,8 +488,10 @@ export {
 export { schemaPathSelection } from "./schema-path.ts";
 export {
   acceptsOpaqueCellOrUnresolvedLink,
+  isStoredArgumentOwnData,
   materializeStoredValueForValidation,
   overlayUnreadableLinkPlaceholders,
+  readStoredLinkChainRaw,
   storedArgumentValidationIssue,
 } from "./stored-argument-validation.ts";
 

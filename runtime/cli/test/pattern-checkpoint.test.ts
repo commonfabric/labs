@@ -70,18 +70,20 @@ describe("cf pattern checkpoint", () => {
     return { sent, printed, readFor };
   };
 
-  it("keeps what the piece runs, not the files, as a private version of the entry's lineage", async () => {
+  it("keeps what the piece runs, not the files, as a version of the entry's lineage the sharing setting covers", async () => {
     const { sent, printed, readFor } = await run({
       status: "recorded",
       created: true,
-      response: RECORDED,
+      response: { ...RECORDED, autoShare: "when_used" },
     });
 
     expect(readFor).toMatchObject({ piece: "fid1:piece" });
     expect(sent).toHaveLength(1);
     const [deployed] = sent;
     expect(deployed.entry).toBe(resolve("./bins.tsx"));
-    expect(deployed.keepPrivate).toBe(true);
+    // Not kept private: the index shares a checkpoint once it settles,
+    // while the sharing setting says to, as it does a deployed version.
+    expect(Object.hasOwn(deployed, "keepPrivate")).toBe(false);
     expect(await deployed.patternId()).toBe("pat-running");
     expect(deployed.program).toBe(PROGRAM);
     expect(deployed.piece).toEqual({
@@ -90,7 +92,7 @@ describe("cf pattern checkpoint", () => {
     });
     expect(Object.hasOwn(deployed, "origin")).toBe(false);
     expect(printed).toEqual([
-      "Kept as private version 4; cf pattern history lists them.",
+      "Kept as private version 4; cf pattern history lists them. Your sharing setting shares it anonymously once you have used it in a loom for a day with no newer version.",
     ]);
     expect(Deno.exitCode).toBe(0);
   });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -11,11 +12,10 @@ import {
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import { isCfcLabelReference } from "../src/cfc/label-documents.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
+  type ImplementationIdentity,
   runtimeWritePolicyAuthorization,
-  type StoredCfcMetadata,
 } from "../src/cfc/types.ts";
 import { stampWaveRunContext, WaveAccumulator } from "../src/executor/wave.ts";
 import { EngineWaveCommitSink } from "../src/executor/engine-wave-sink.ts";
@@ -26,7 +26,10 @@ import {
   writeProcessedClaim,
 } from "../src/executor/processed-claim.ts";
 import { processedClaimJoinIsForeign } from "../src/cfc/prepare.ts";
-import { runBeforeAbort } from "../src/storage/extended-storage-transaction.ts";
+import {
+  runBeforeAbort,
+  setCfcImplementationIdentity,
+} from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -34,12 +37,20 @@ import {
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-processed-claim");
 const space = signer.did() as MemorySpace;
 const foreign = (await Identity.fromPassphrase(
   "runner-cfc-processed-claim-foreign",
 )).did() as MemorySpace;
+
+/** A staged label-map entry, as far as these tests read one. */
+type StagedEntry = {
+  path: string[];
+  origin?: string;
+  label: { confidentiality?: unknown[]; integrity?: unknown[] };
+};
 
 /** The label on the foreign document the handler reads. */
 const FOREIGN_ATOM = "https://commonfabric.org/cfc/atom/Public/foreign-secret";
@@ -85,19 +96,26 @@ describe("cfc-processed-claim", () => {
     return tx;
   };
 
+  /**
+   * The label entries `tx` stages on the document `id` names, each label read
+   * out of its label document where the envelope holds it by reference.
+   */
+  const stagedEntries = (tx: ReturnType<Runtime["edit"]>, id: string) => {
+    const read = (docId: string) =>
+      tx.readOrThrow({ space, scope: "space", id: docId as URI, path: [] });
+    return storedLabelEntries<StagedEntry>(
+      (read(id) as { cfc?: unknown } | undefined)?.cfc,
+      read,
+    );
+  };
+
   /** The `derived` confidentiality `tx` stages on the entries document. */
   const stagedDerivedConfidentiality = (
     tx: ReturnType<Runtime["edit"]>,
   ): unknown[] =>
-    ((tx.readOrThrow({ space, scope: "space", id: entriesId, path: [] }) as
-      | { cfc?: StoredCfcMetadata }
-      | undefined)?.cfc?.labelMap.entries ?? [])
+    stagedEntries(tx, entriesId)
       .filter((entry) => entry.origin === "derived")
-      .flatMap((entry) =>
-        isCfcLabelReference(entry.label)
-          ? []
-          : entry.label.confidentiality ?? []
-      );
+      .flatMap((entry) => entry.label.confidentiality ?? []);
 
   beforeEach(async () => {
     server = newSharedServer();
@@ -547,6 +565,235 @@ describe("cfc-processed-claim", () => {
       ).toBe(false);
       expect(withheldOn(tx)).toBeUndefined();
       expect(waveClaimIsWithheld(tx)).toBe(false);
+      tx.abort();
+    });
+  });
+  describe("the write-identity summary", () => {
+    // §6.2.2 claims the processed cell apart from the handler, so the claim
+    // the serving loop writes in the handler's transaction, under no
+    // identity, is not one of the handler's writes: a run whose own writes
+    // are all the handler's is attributed to the handler (§8.9.3). Only that
+    // write is left out. Each case writes the claim, then writes as the
+    // handler, and then, in the negative cases, writes something else.
+    const HANDLER: ImplementationIdentity = {
+      kind: "verified",
+      moduleIdentity: "module:processed-claim-identity",
+      symbol: "advance",
+      bindingPath: ["advance"],
+    };
+
+    /**
+     * A handler run whose serving loop wrote its processed claim, and whose
+     * handler has written one document.
+     */
+    const claimedHandlerRun = (
+      actionId: string,
+      { clearDeferral }: { clearDeferral: boolean },
+    ) => {
+      const tx = handlerRun(actionId);
+      writeProcessedClaim(
+        runtime,
+        tx,
+        space,
+        { sidecarId: entriesId, index: 0 },
+        { clearDeferral },
+      );
+      setCfcImplementationIdentity(tx, HANDLER);
+      runtime.getCell<string>(space, `${actionId}-out`, undefined, tx)
+        .set("handled");
+      return tx;
+    };
+
+    /**
+     * The `symbol`s of the `TransformedBy` atoms `tx` stages on document `id`,
+     * on label entries at `path` or below it.
+     */
+    const stagedTransformedBy = (
+      tx: ReturnType<Runtime["edit"]>,
+      id: URI,
+      path: readonly string[],
+    ): string[] =>
+      stagedEntries(tx, id)
+        .filter((entry) => path.every((key, i) => entry.path[i] === key))
+        .flatMap((entry) => entry.label.integrity ?? [])
+        .flatMap((atom) =>
+          typeof atom === "object" && atom !== null &&
+            "type" in atom && atom.type === CFC_ATOM_TYPE.TransformedBy &&
+            "identity" in atom &&
+            typeof (atom.identity as { symbol?: unknown })?.symbol === "string"
+            ? [(atom.identity as { symbol: string }).symbol]
+            : []
+        );
+
+    it("stamps the handler's TransformedBy on what it wrote and none on the claim", async () => {
+      // The summary and the join's stamp leave out the same write: were the
+      // claim counted out of the one and stamped by the other, the handler
+      // would be named on bytes the runtime wrote. The handler reads a value
+      // labeled with the stream's own space, and writes a document declared
+      // to hold that, so its output fits and the run prepares.
+      const LOCAL_ATOM = cfcAtom.space(space);
+      const localId = runtime.getCell(space, "local-source", undefined)
+        .getAsNormalizedFullLink().id;
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      seedStoredEnvelope(seed, {
+        space,
+        scope: "space",
+        id: localId,
+        path: [],
+      }, {
+        value: { secret: "local" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: ["secret"],
+              label: { confidentiality: [LOCAL_ATOM] },
+            }],
+          },
+        },
+      });
+      expect((await seed.commit().settled).error).toBeUndefined();
+
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: "stamped-handler",
+        kind: "event-handler",
+      });
+      writeProcessedClaim(
+        runtime,
+        tx,
+        space,
+        { sidecarId: entriesId, index: 0 },
+        { clearDeferral: true },
+      );
+      setCfcImplementationIdentity(tx, HANDLER);
+      const read = runtime.getCellFromLink(
+        { space, scope: "space", id: localId, path: [] },
+        undefined,
+        tx,
+      ).getRaw() as { secret?: string };
+      expect(read.secret).toBe("local");
+      const out = runtime.getCell<string>(
+        space,
+        "stamped-handler-out",
+        { type: "string", ifc: { confidentiality: [LOCAL_ATOM] } } as const,
+        tx,
+      );
+      out.set("handled");
+      tx.prepareCfc();
+      expect(tx.getCfcState().prepare.status).toBe("prepared");
+      expect(
+        stagedTransformedBy(tx, out.getAsNormalizedFullLink().id, []),
+      ).toEqual(["advance"]);
+      expect(stagedTransformedBy(tx, entriesId, ["entries", "0"])).toEqual([]);
+      tx.abort();
+    });
+
+    for (const clearDeferral of [false, true]) {
+      it(
+        `attributes the run to the handler${
+          clearDeferral ? " when the claim clears a delivery deferral" : ""
+        }`,
+        () => {
+          const tx = claimedHandlerRun(
+            `attributed-handler-${clearDeferral}`,
+            { clearDeferral },
+          );
+          const summary = tx.getCfcState().writeIdentity;
+          expect(summary.multiple).toBe(false);
+          expect(summary.identity).toEqual(HANDLER);
+          tx.abort();
+        },
+      );
+    }
+
+    it("still counts a write made under no identity elsewhere", () => {
+      const tx = claimedHandlerRun("mixed-handler", { clearDeferral: false });
+      setCfcImplementationIdentity(tx, undefined);
+      runtime.getCell<string>(space, "mixed-handler-other", undefined, tx)
+        .set("unattributed");
+      expect(tx.getCfcState().writeIdentity.multiple).toBe(true);
+      tx.abort();
+    });
+
+    it("still counts a write under no identity of another value at the claim's path", () => {
+      const tx = claimedHandlerRun("overwritten-claim", {
+        clearDeferral: false,
+      });
+      setCfcImplementationIdentity(tx, undefined);
+      runtime.getCellFromLink<boolean>({
+        space,
+        scope: "space",
+        id: entriesId as never,
+        path: ["entries", "0", "consequenced"],
+      }).withTx(tx).set(false);
+      expect(tx.getCfcState().writeIdentity.multiple).toBe(true);
+      tx.abort();
+    });
+
+    it("still counts the claim's own value written at its path under another identity", () => {
+      const tx = claimedHandlerRun("restated-claim", { clearDeferral: false });
+      setCfcImplementationIdentity(tx, {
+        kind: "verified",
+        moduleIdentity: "module:processed-claim-identity",
+        symbol: "other",
+        bindingPath: ["other"],
+      });
+      // Written on the transaction directly: a cell's `set()` of the value
+      // already there writes nothing.
+      tx.writeOrThrow({
+        space,
+        scope: "space",
+        id: entriesId,
+        path: ["value", "entries", "0", "consequenced"],
+      }, true);
+      expect(tx.getCfcState().writeIdentity.multiple).toBe(true);
+      tx.abort();
+    });
+
+    it("still counts a write the runtime named a claim on a document no stream's entries are", () => {
+      const tx = claimedHandlerRun("misplaced-claim", { clearDeferral: false });
+      setCfcImplementationIdentity(tx, undefined);
+      const other = runtime.getCell<{ consequenced?: boolean }>(
+        space,
+        "not-a-stream-entries-doc",
+        undefined,
+        tx,
+      );
+      const link = other.getAsNormalizedFullLink();
+      tx.recordCfcWritePolicyInput({
+        kind: "structural-provenance",
+        target: { space, id: link.id, scope: "space", path: ["consequenced"] },
+        claim: CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
+        sources: [],
+      }, runtimeWritePolicyAuthorization);
+      other.key("consequenced").set(true);
+      expect(tx.getCfcState().writeIdentity.multiple).toBe(true);
+      tx.abort();
+    });
+
+    it("leaves out no write at a path named a claim without the runtime's mark", () => {
+      const tx = handlerRun("forged-claim-identity");
+      const path = ["entries", "0", "consequenced"];
+      tx.recordCfcWritePolicyInput({
+        kind: "structural-provenance",
+        target: { space, id: entriesId, scope: "space", path },
+        claim: CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
+        sources: [],
+      });
+      runtime.getCellFromLink<boolean>({
+        space,
+        scope: "space",
+        id: entriesId as never,
+        path,
+      }).withTx(tx).set(true);
+      setCfcImplementationIdentity(tx, HANDLER);
+      runtime.getCell<string>(space, "forged-claim-identity-out", undefined, tx)
+        .set("handled");
+      expect(tx.getCfcState().writeIdentity.multiple).toBe(true);
       tx.abort();
     });
   });

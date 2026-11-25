@@ -31,6 +31,7 @@ import {
 import {
   formatSchemaIncompatibility,
   patternSchemaIncompatibilities,
+  schemaWithoutVolatileWriterIdentity,
 } from "../runtime/piece/src/schema-compatibility.ts";
 import { readOnlyArguments } from "./only-arguments.ts";
 import type { AcceptedContractBreak } from "./pattern-compat-accepted-breaks.ts";
@@ -87,11 +88,22 @@ const HASH_LENGTH = 16;
  * order (the same machinery `internSchema` hashes through), so a reordered but
  * structurally identical schema addresses to the same baseline instead of
  * minting a spurious one.
+ *
+ * The address is of the contract as the proof reads it, without the volatile
+ * identity of its writer claims (`schemaWithoutVolatileWriterIdentity`). That
+ * identity includes the content hash of the module that authorizes a write, so
+ * any edit to that module, a comment included, changes it. The proof gives the
+ * same verdict for two contracts that differ only in it, so the gate treats
+ * them as one contract: such an edit needs no new baseline, and two changes
+ * that each make one cannot leave the merged result with a contract no
+ * baseline records.
  */
 export function contractHash(contract: PatternContract): string {
   return hashStringOf({
-    argumentSchema: contract.argumentSchema,
-    resultSchema: contract.resultSchema,
+    argumentSchema: schemaWithoutVolatileWriterIdentity(
+      contract.argumentSchema,
+    ),
+    resultSchema: schemaWithoutVolatileWriterIdentity(contract.resultSchema),
   }).slice(0, HASH_LENGTH);
 }
 
@@ -212,12 +224,14 @@ export function checkPattern(
     contractHash(baseline.contract) === hash
   );
 
-  // An already-recorded contract is unchanged since the run that recorded it,
-  // and it was validated and proved then. Re-doing that work every CI run is
-  // pure waste, and it is not cheap: both the definition validator and the
-  // subset proof blow up combinatorially on some real schemas (validating
-  // lobby/main.tsx's schemas alone takes ~55s). Steady state — no contract
-  // changed in this PR — therefore costs nothing beyond the compile.
+  // A recorded contract is identical to a contract that the run recording it
+  // validated, apart from the writer identity that neither this validation
+  // nor the proof reads, so validating it again here would be pure waste, and
+  // it is not cheap: the definition validator blows up combinatorially on
+  // some real schemas (validating lobby/main.tsx's schemas alone takes ~55s).
+  // The subset proof below still runs against every other baseline, and it
+  // validates both contracts it compares, so that cost recurs once per
+  // baseline.
   if (!recorded) {
     findings.push({ kind: "missing-baseline", pattern, hash });
     for (
@@ -226,7 +240,9 @@ export function checkPattern(
         ["result", current.resultSchema],
       ] as const
     ) {
-      const issue = validateSchemaDefinition(schema);
+      const issue = validateSchemaDefinition(
+        schemaWithoutVolatileWriterIdentity(schema),
+      );
       if (issue !== undefined) {
         findings.push({ kind: "invalid-schema", pattern, role, detail: issue });
       }

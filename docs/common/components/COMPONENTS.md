@@ -43,13 +43,13 @@ name: `allowCustom`, `defaultSize`, `className`, `htmlFor`. Three kinds of name
 are not properties and keep their hyphens: `data-*` and `aria-*`, which are set
 as attributes, and an event prop, which starts with `on` and is spelled with the
 event's own name (`onClick`, `oncf-change`). Any other hyphenated prop sets
-nothing, since no property has that name, and the compiler warns of it, naming
+nothing, since no property has that name, and the compiler refuses it, naming
 the property to write. Because the property name is the only spelling, TypeScript checks every
 prop against the component's declared props.
 
 ```tsx
 // Shown for illustration only.
-<cf-autocomplete allow-custom={true} />  // warning: write `allowCustom`
+<cf-autocomplete allow-custom={true} />  // error: write `allowCustom`
 <cf-autocomplete allowCustom={true} />
 ```
 
@@ -118,7 +118,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-autolayout` | Responsive multi-panel layout | |
 | `cf-autostart` | Zero-UI element that emits a `start` event once on connect | |
 | `cf-avatar` | Avatar showing image bytes, a data-URI image, an emoji glyph, or initials | |
-| `cf-avatar-input` | Picks an image and fires it as profile-picture bytes, cropped square and scaled down | |
+| `cf-avatar-input` | Picks an image, cropped square and scaled down, stores it as a blob, and fires its bytes and the blob | |
 | `cf-badge` | Status indicator / label with visual variants | |
 | `cf-bar-mark` | Bar mark rendered inside `cf-chart` | `$data` |
 | `cf-blob-link` | Link that downloads a blob from a space's blob store, given its reference `{ space, id }` (see [files](../capabilities/files.md)) | |
@@ -1156,10 +1156,15 @@ Untrusted avatar primitive — safe for any code to render, for any person.
 ```tsx
 // Shown for illustration only.
 <cf-avatar name="Ada Lovelace" bytes={person.picture} size="sm" /> // image bytes
+<cf-avatar name="Ada Lovelace" blob={face.pictureBlob} />           // a blob
 <cf-avatar name="Grace Hopper" src="🦊" />                          // emoji glyph
 <cf-avatar name="Alan Turing" />                                    // initials "AT"
 ```
 
+- `blob`: a blob holding a raster image, `{ space, id }`, such as a profile's
+  `pictureBlob`, shown as the image its space's host serves (`cf-image`'s
+  `blob`). A blob that names a space and an id takes precedence over `bytes`
+  and `src`.
 - `bytes`: the bytes of a raster image, such as a profile's `picture`.
   Non-empty bytes take precedence over `src`.
 - `src`: a `data:` URI image, an emoji/glyph, or `""`. **Only `data:` URIs render
@@ -1175,11 +1180,13 @@ contributing it), prefer `cf-profile-badge`.
 
 ### cf-avatar-input
 
-A button that picks an image file and fires `cf-change` with
-`{ bytes: FabricBytes }`: the image's centered square, scaled to 128 pixels on
-each side. A profile's edit form binds it to the profile's `setPicture` stream,
-which reads `detail.bytes`. A file that is not an image fires `cf-error` with
-`{ message }` instead.
+A button that picks an image file, makes it the image's centered square,
+scaled to 128 pixels on each side, stores that as a blob in the blob store of
+the space it is shown in, as `cf-file-input` stores a file, and fires
+`cf-change` with `{ bytes: FabricBytes, blob: { space, id } }`. A profile's
+edit form binds it to the profile's `setPicture` stream, which keeps the blob.
+A file that is not an image, or one that cannot be stored, fires `cf-error`
+with `{ message }` instead.
 
 ```tsx
 // Shown for illustration only.

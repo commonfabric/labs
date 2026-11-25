@@ -29,7 +29,7 @@ import {
   minutePrecision,
   shortName,
 } from "./ci-jobs-page.ts";
-import { LOOM_REPO, RECENT_DISPLAY, REPO } from "./config.ts";
+import { CFS_REPO, RECENT_DISPLAY, REPO } from "./config.ts";
 import { median, pullRequestLinks, runDurationMs } from "./lib.ts";
 import { GREEN_STAR_RULES, greenStar, greenWords } from "./green-star.ts";
 import { type LivePageContent, livePageResponse } from "./live-page.ts";
@@ -670,8 +670,8 @@ function latestRow(
   const { dot, text } = runOutcome(run);
   const title = runTitle(run, source);
   const took = tookMs(run, now);
-  // The commit Gantt charts the labs and loom runs alone.
-  const gantt = source.repo === REPO || source.repo === LOOM_REPO
+  // The commit Gantt charts the labs and cfs runs alone.
+  const gantt = source.repo === REPO || source.repo === CFS_REPO
     ? commitGanttHref(run, all)
     : null;
   const duration = took === undefined

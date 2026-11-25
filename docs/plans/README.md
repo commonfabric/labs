@@ -10,6 +10,23 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [What patterns and agents are made of, in the spec's terms](spec-surface-alignment.md)
+  maps the runtime onto the CFC specification's abstract surface (§14.2.2):
+  labeled values, references, node contexts, trusted and untrusted transitions
+  and their operations. For each it says where the runtime matches, duplicates
+  or drifts from the spec, lists the cleanups that line it back up, and holds
+  the open questions for the specification's author.
+- [Skills and MCP servers in the fabric](skills-and-mcp-bridges.md) brings any
+  Agent Skill or MCP server into the fabric through an importer at the edge
+  that emits only existing records: a wrapper pattern whose verbs are the
+  tools, candidate tool descriptors trusted only inside an accepted registry
+  snapshot, and labeled text. Review unlocks trust, not use, and lowering a
+  tool into pattern code is rewriting one handler.
+- [Joining a Loom lists you in it](social-space-join-as-viewer.md) is a
+  stopgap so that a browser host's guests are named on a Loom's roster: the
+  host lists its guest through the existing `addParticipant`, and then the Loom
+  root exports `joinAsViewer`. READ link guests, people with several profiles,
+  rooms and older roots stay as the plan's accepted limits.
 - [CFC spec correspondence process](cfc-spec-correspondence-process.md)
   gives agents the procedure for changing Contextual Flow Control here: read
   the specification first, classify the change as host arrangement, conforming
@@ -27,6 +44,23 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the memory server's per-session walk and encode on the main thread, the
   four measurements that decide which change to make, the recipes for taking
   them, and how the overlapped commit is validated.
+- [Serving a piece's stored outputs while they are current](stored-output-currency.md)
+  keeps a durable record, per piece and per viewer of it, of what it read,
+  what it writes and which stored outputs a serving loop vouched for, marks
+  that record stale through the store when an input changes, and has the
+  demand pass leave a piece unstarted
+  only while its record proves every demanded output of it current, with a
+  mode that records and judges without acting so the judgment can be checked
+  first.
+- [Serving a stored output that depends on another space or on a wish](stored-output-currency-across-spaces.md)
+  continues that index across spaces: a reading space registers the
+  instances it read with their source, the source tells its readers when one
+  changed or its producer became stale, by a trigger that carries nothing
+  and a pull from a position, and demand travels upstream only along stale
+  edges; with it, a wish's own computations are recorded under an identity,
+  a slice that read the interval clock expires, and a computation the
+  scheduler runs without demand may be left unrun while nothing can observe
+  what it would write.
 - [What a create leaves on a serving worker's heap](serving-worker-heap.md)
   carries the work on what a piece a handler starts keeps alive on a serving
   worker: what has been released, what is left, and the process for finding the

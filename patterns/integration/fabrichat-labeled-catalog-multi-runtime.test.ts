@@ -91,24 +91,13 @@ describe("fabrichat labeled catalog across runtimes", () => {
    */
   const labeledCatalogPaths = async (): Promise<string[]> => {
     const catalog = await ada.link(["sharedSpaceCatalog"]);
-    const stored = (await ada.rawRead(catalog)).value as unknown as {
-      cfc?: {
-        labelMap?: {
-          entries?: {
-            path: string[];
-            label: {
-              confidentiality?: { type?: string; owner?: string }[];
-            };
-          }[];
-        };
-      };
-    };
     const { type, owner } = cfcAtom.personalSpace(ada.identity.did());
-    return (stored.cfc?.labelMap?.entries ?? [])
+    return (await ada.storedLabelEntries(catalog))
       .filter((entry) =>
-        (entry.label.confidentiality ?? []).some((clause) =>
-          clause.type === type && clause.owner === owner
-        )
+        ((entry.label.confidentiality ?? []) as {
+          type?: string;
+          owner?: string;
+        }[]).some((clause) => clause.type === type && clause.owner === owner)
       )
       .map((entry) => entry.path.join("/"));
   };

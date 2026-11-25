@@ -104,6 +104,9 @@ export declare const TESTS: "$TESTS";
 // The single field under which a pattern offers named groups of facts and
 // streams a host may draw with its own toolkit. [UI] remains the floor.
 export declare const VIEWS: "$VIEWS";
+// The suggestions a pattern offers: a list of row cells, each a card a host
+// may rank and draw beside the piece. `Suggestion` is a row's shape.
+export declare const SUGGESTIONS: "$SUGGESTIONS";
 
 /**
  * The size/representation spectrum a piece can be rendered at (CT-1321):
@@ -1559,9 +1562,20 @@ export interface AsReadonlyCell extends HKT {
   type: ReadonlyCell<this["_A"]>;
 }
 
+/**
+ * A cell handle that can be read through and not written through. Each cell
+ * type that can be read is assignable to it: a `Cell<T>`, and so a
+ * `Writable<T>`, passes where a `ReadonlyCell<T>` is declared, as does a cell
+ * that `.key()` returns from one. A `ReadonlyCell<T>` does not pass where a
+ * `Cell<T>` is declared, and a cell that cannot be read, such as a
+ * `WriteonlyCell<T>`, does not pass where a `ReadonlyCell<T>` is.
+ */
+// The brand names the kind of each cell assignable to this one: its own, and
+// `"cell"`, the kind of the other cell type that can be read. The schema
+// generator reads that union as the kind `"readonly"` (`getCellBrand()`).
 export interface ReadonlyCell<T>
   extends
-    BrandedCell<T, "readonly">,
+    BrandedCell<T, "readonly" | "cell">,
     IAnyCell<T>,
     ICreatable<ReadonlyCell<T>>,
     IReadable<T>,
@@ -2637,7 +2651,8 @@ export interface BuiltInCompileAndRunState<T> {
  * typed so a value of the wrong shape under a reserved key is a compile error.
  * `[NAME]` and `[TYPE]` label the piece; `[UI]`, `[TILE_UI]` and `[CHIP_UI]`
  * are its renderings; `[FS]` is its filesystem projection; `[VIEWS]` holds the
- * named groups it offers a host to draw natively. Those are each
+ * named groups it offers a host to draw natively; `[SUGGESTIONS]` holds the
+ * cards it offers, one `Suggestion` cell each. Those are each
  * `FactoryInput`-wrapped, so a reactive value (a `computed()`, a cell) is
  * accepted alongside a plain one. `[TESTS]` is the exception: it holds a
  * `TestStep[]` written out at build time, not a reactive value, so it is not
@@ -2667,6 +2682,7 @@ type ReservedOutput = {
   [FS]?: FactoryInput<FsProjection>;
   [TESTS]?: TestStep[];
   [VIEWS]?: FactoryInput<object>;
+  [SUGGESTIONS]?: FactoryInput<ReadonlyCell<Suggestion>[]>;
 };
 
 /**
@@ -3436,6 +3452,108 @@ export type SqliteDatabaseFunction = {
   asScope(scope: CellScope): SqliteDatabaseFunction;
 };
 
+/**
+ * What an indexed collection mirrors of one kind of member, each of which is
+ * a cell holding a `T` (docs/features/indexed-collections.md).
+ */
+export interface IndexedCollectionOptions<T = unknown> {
+  /**
+   * Values mirrored as columns of the kind's table. A column is named for
+   * the member field it mirrors and given the SQLite type it is stored
+   * under, or is declared with a type and, as needed, the path of a value
+   * nested in the member and the column's label. A value that is absent is
+   * stored as `NULL`.
+   */
+  columns?: Record<string, string | IndexedColumnSpec>;
+
+  /**
+   * Member fields holding one reference to another cell, or a list of them.
+   * Each becomes a table named for the kind and the relation, holding a
+   * `source_cf_link` and a `target_cf_link` column, with one row per
+   * reference. A list names fields of the member; a map gives each relation
+   * the path of a nested field.
+   */
+  relations?:
+    | ReadonlyArray<keyof T & string>
+    | Record<string, readonly string[]>;
+
+  /** Secondary indexes over the kind's table, each a list of columns. */
+  indexes?: ReadonlyArray<ReadonlyArray<string>>;
+}
+
+/** A column of an indexed collection declared with more than its type. */
+export interface IndexedColumnSpec {
+  /** SQLite column type the value is stored under. */
+  type: string;
+
+  /** Keys leading from the member to the value, when it is nested. */
+  path?: readonly string[];
+
+  /**
+   * The column's label. A member's value that carries confidentiality is
+   * mirrored only into a column whose `confidentiality` covers it, and a
+   * query reading the column carries that label.
+   */
+  ifc?: {
+    confidentiality?: readonly FabricValue[];
+    maxConfidentiality?: readonly FabricValue[];
+  };
+}
+
+/**
+ * A collection of cells whose membership lives in a SQLite database the
+ * runtime keeps current. Its members come in the kinds it declares. Each kind
+ * has a table named for it, and each of its relations a table named for the
+ * kind and the relation, joined by an underscore, so a statement can join one
+ * kind's members to another's. The collection is read with `query()` and with
+ * nothing else: there is no list of members to read. `add()` and `remove()`
+ * change membership inside a handler, and the runtime re-reads a member
+ * whenever a document its mirrored fields were read from is written.
+ */
+export interface IndexedCollections<Kinds = Record<string, unknown>>
+  extends SqliteDb {
+  /**
+   * Adds `member` as one of `kind`, mirroring its declared fields in the
+   * caller's transaction. Adding a member the collection holds refreshes its
+   * rows.
+   */
+  add<K extends keyof Kinds & string>(
+    kind: K,
+    member: Kinds[K] | AnyCell<Kinds[K]>,
+  ): void;
+
+  /** Removes `member` of `kind` and every row mirrored from it. */
+  remove<K extends keyof Kinds & string>(
+    kind: K,
+    member: Kinds[K] | AnyCell<Kinds[K]>,
+  ): void;
+}
+
+/** What a collection declares beside its kinds. */
+export interface IndexedCollectionsOptions {
+  /**
+   * A cell every `add()`, `remove()` and `exec()` on the collection also
+   * writes, in the transaction that carries its database write. It is where a
+   * collection says who may write it: declared with a writer policy, as
+   * `new Writable<WriteAuthorizedBy<number, typeof addTopic>>(0)` is, it
+   * refuses the write of any handler the policy does not name, and the
+   * database write goes with it. Without it, every holder of the handle
+   * writes. The runtime's own upkeep of the tables does not write it. It
+   * holds a count: a number, under whatever policy the cell is declared
+   * with.
+   */
+  guard?: AnyCell<number> | AnyCell<Cfc<number, unknown>>;
+}
+
+/**
+ * Declares an {@link IndexedCollections}, which lives at the scope of the
+ * space, with a declaration per kind of member.
+ */
+export type IndexedCollectionsFunction = <Kinds = Record<string, unknown>>(
+  kinds: { [K in keyof Kinds & string]: IndexedCollectionOptions<Kinds[K]> },
+  options?: IndexedCollectionsOptions,
+) => Reactive<IndexedCollections<Kinds>>;
+
 export type SqliteQueryParams = {
   db: FactoryInput<SqliteDatabase | SqliteDb>;
   sql: string;
@@ -3528,8 +3646,12 @@ export type SqliteTableFunction = (
   rule?: SqliteRowLabelRule,
   /** CFC Phase 3.b: `{ allowReadClearance: true }` opts the table into
    *  read-time clearance (reader-filtered `db.query({ readClearance: true })`).
-   *  Needs a `rule` — throws at `table()` time without one. */
-  opts?: { allowReadClearance?: boolean },
+   *  Needs a `rule` — throws at `table()` time without one. `indexes`
+   *  declares secondary indexes, each a list of column names in key order. */
+  opts?: {
+    allowReadClearance?: boolean;
+    indexes?: ReadonlyArray<ReadonlyArray<string>>;
+  },
 ) => JSONSchema;
 
 /**
@@ -3813,7 +3935,11 @@ export declare function resultOwnerOf<T>(
  * whether or not the profiles have loaded, so a handler can keep, reorder or
  * drop them, and `spaceOf()` can name each one's space. An element that holds
  * a value reads as a cell at that element; a `target` holding no list reads
- * as none, and `undefined` as `undefined`. It can be called where
+ * as none, and `undefined` as `undefined`. Each cell carries the schema its
+ * link stores, and one at an element holding a value carries none, so a cell
+ * written into another list stores the same link this one holds, and a read
+ * through a cell reads the value it names, except where the link stores
+ * `{ type: "unknown" }`: that cell reads as a reference. It can be called where
  * `principalOf()` can; calling it in a pattern body throws, and a list that
  * cannot be read throws too.
  */
@@ -4356,6 +4482,7 @@ export declare const compileAndRun: CompileAndRunFunction;
 export declare const dataFile: DataFileFunction;
 export declare const sqliteDatabase: SqliteDatabaseFunction;
 export declare const sqliteQuery: SqliteQueryFunction;
+export declare const indexedCollections: IndexedCollectionsFunction;
 export declare const table: SqliteTableFunction;
 export declare const cfLink: SqliteCfLinkFunction;
 export declare const cfSqlite: CfSqliteHelpers;
@@ -4845,3 +4972,185 @@ export type FsProjection =
     content: Record<string, unknown>;
   }
   | { type?: undefined; [key: string]: unknown };
+
+/**
+ * One suggestion a pattern offers under `[SUGGESTIONS]`: a card a host may
+ * rank and draw beside the piece, with the acts its buttons take. The fields
+ * are a subset of a prepared Moments item's, so a host ranks and draws a
+ * pattern's cards and Moments' alike.
+ *
+ * Each suggestion is held in a cell of its own, and that cell is the card's
+ * identity: a host keys a dismissal or a take on it, and a new value in the
+ * same cell is the same card revised. The element a `.map()` builds is a cell
+ * of its own, as is one made by `Writable.for(cause).set(row)`; an object
+ * written inline into a list is not, and a host refuses it. `[SUGGESTIONS]` is
+ * typed as a list of `ReadonlyCell<Suggestion>` to say so, which a list built
+ * of inline objects does not satisfy. A reactive `.map()` result is a list of
+ * cells when it runs, but its declared type is a list of values, so it does
+ * not satisfy that type either; a `computed()` returning `Writable.for` cells
+ * does.
+ */
+export interface Suggestion {
+  /** The card's headline. */
+  title: string;
+  /** The words under the headline. */
+  body?: string;
+  /** The area of the person's life the card's action falls in. */
+  activity?: SuggestionActivity;
+  /** The material the card draws at rest, one block per section. */
+  sections?: SuggestionSection[];
+  /**
+   * What the card's buttons do, the main one first, at most three. A card
+   * without acts opens the piece and offers nothing more.
+   */
+  acts?: SuggestionAct[];
+  /**
+   * The cells the card is about, most important first, each held as a link.
+   * The host puts the piece that offered the card ahead of them, so the card
+   * is always about at least that piece.
+   */
+  about?: unknown[];
+  /** When the matter itself starts, as an ISO 8601 instant with a timezone. */
+  startsAt?: string;
+  /** When the matter itself ends, as an ISO 8601 instant with a timezone. */
+  endsAt?: string;
+  /** When the card starts to be worth showing, as an ISO 8601 instant. */
+  relevantAt?: string;
+  /** When the card stops being worth showing, as an ISO 8601 instant. */
+  expiresAt?: string;
+  /** How much the pattern thinks the card matters, from 0 to 1. */
+  priority?: number;
+  /** The loom style the card is drawn in. */
+  appearance?: SuggestionAppearance;
+  /**
+   * Words a `cf-suggestions` slot matches exactly when it draws the pattern's
+   * own cards. A host that ranks suggestions does not read them.
+   */
+  tags?: string[];
+}
+
+/** The areas of a person's life a suggestion's action can fall in. */
+export type SuggestionActivity =
+  | "shopping"
+  | "correspondence"
+  | "research"
+  | "planning"
+  | "outings"
+  | "money"
+  | "health"
+  | "travel";
+
+/** A loom style from the host's catalog, and the mode to draw it in. */
+export interface SuggestionAppearance {
+  /** The style's identifier in the host's catalog. */
+  style_id: string;
+  /** Whether the style follows the host's mode or is fixed light or dark. */
+  mode?: "native" | "light" | "dark";
+}
+
+/**
+ * One block of a suggestion's material. Every kind draws its title, body and
+ * entries; `steps`, `agenda`, `ledger` and `progress` add the fields each
+ * names below, and a host draws a kind it does not know as text.
+ */
+export interface SuggestionSection {
+  /**
+   * What the section holds. `steps` is a checklist, `agenda` a list of times,
+   * `ledger` a list of amounts, and `progress` a count of `done` against `of`.
+   */
+  kind:
+    | "text"
+    | "agenda"
+    | "materials"
+    | "steps"
+    | "constraints"
+    | "ledger"
+    | "progress";
+  /** The section's heading. */
+  title: string;
+  /** Words under the heading. */
+  body?: string;
+  /** The section's rows. A `progress` section has none. */
+  entries?: SuggestionEntry[];
+  /** The sum of a `ledger` section's amounts. */
+  total?: SuggestionAmount;
+  /** How much of a `progress` section is done, against `of`. */
+  done?: number | SuggestionAmount;
+  /** The whole a `progress` section counts toward, more than nothing. */
+  of?: number | SuggestionAmount;
+}
+
+/** One row of a suggestion's section. */
+export interface SuggestionEntry {
+  /** The row's words. */
+  title: string;
+  /** Further words under the row. */
+  body?: string;
+  /** When the row happens, as an ISO 8601 instant; an `agenda` sorts by it. */
+  at?: string;
+  /** When the row ends, as an ISO 8601 instant at or after `at`. */
+  endAt?: string;
+  /** What the row costs, on a `ledger` section. */
+  amount?: SuggestionAmount;
+  /** Whether a `steps` row is done. */
+  done?: boolean;
+  /** Whether an `agenda` row moved because another one did. */
+  follows?: boolean;
+  /** Whether the row was added, removed or changed since the card's last value. */
+  change?: "add" | "remove" | "changed";
+  /** What a changed row was before, in its own fields. */
+  was?: Pick<SuggestionEntry, "title" | "body" | "at" | "endAt" | "amount">;
+  /**
+   * The cells the row rests on, each held as a link. Without them the row
+   * rests on the piece that offered the card.
+   */
+  sources?: unknown[];
+}
+
+/** An amount of money: a number and its currency code, never a formatted string. */
+export interface SuggestionAmount {
+  /** How much. */
+  value: number;
+  /** The currency's code, such as `USD`. */
+  currency: string;
+}
+
+/** What one of a suggestion's buttons does. */
+export type SuggestionAct = SuggestionPatternVerb | SuggestionWant;
+
+/**
+ * A button that sends `payload` to one of the pattern's handlers. The take
+ * asks the person first only when `confirm` is set.
+ */
+// deno-lint-ignore no-explicit-any
+export interface SuggestionPatternVerb<E = any> {
+  /** The kind of act. */
+  kind: "pattern.verb";
+  /** The button's words, such as "Add". */
+  label: string;
+  /** Why the act is offered, in words the person reads. */
+  why?: string;
+  /** The handler the take sends to: any bound handler in the piece's space. */
+  verb: Stream<E>;
+  /**
+   * What the handler receives, as plain JSON. Nothing else reaches it, so it
+   * carries what the handler needs to act and to check the offer still holds.
+   */
+  payload: E;
+  /** Whether the person confirms the act before it is taken. */
+  confirm?: boolean;
+}
+
+/** A button that files a want the person may adopt. */
+export interface SuggestionWant {
+  /** The kind of act. */
+  kind: "want";
+  /** The button's words. */
+  label: string;
+  /** Why the act is offered, in words the person reads. */
+  why?: string;
+  /** The want's key, the same for every offer of the same want. */
+  key: string;
+  /** The want, in the person's words. */
+  text: string;
+}

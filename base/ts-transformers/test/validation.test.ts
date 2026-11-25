@@ -5303,7 +5303,7 @@ Deno.test("Paren-Invariance Twins", async (t) => {
 Deno.test("JSX Prop Name Validation", async (t) => {
   const misnamed = (diagnostics: readonly TransformationDiagnostic[]) =>
     diagnostics.filter((d) =>
-      d.type === "jsx:misnamed-prop" && d.severity === "warning"
+      d.type === "jsx:misnamed-prop" && d.severity === "error"
     );
   const inPattern = (jsx: string) =>
     [
@@ -5373,6 +5373,22 @@ Deno.test("JSX Prop Name Validation", async (t) => {
         { types: COMMONFABRIC_TYPES },
       );
       assertEquals(misnamed(diagnostics), []);
+    },
+  );
+
+  await t.step(
+    "reports a hyphenated prop as a warning over stored source",
+    async () => {
+      const { diagnostics } = await validateSource(
+        inPattern("<cf-resizable-panel default-size={28} />"),
+        { types: COMMONFABRIC_TYPES, storedSource: true },
+      );
+      assertEquals(
+        diagnostics
+          .filter((d) => d.type === "jsx:misnamed-prop")
+          .map((d) => d.severity),
+        ["warning"],
+      );
     },
   );
 

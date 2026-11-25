@@ -667,7 +667,7 @@ describe("topics-browser-measurement", () => {
       }
     });
 
-    it("throws for an operation that runs nothing in the worker", async () => {
+    it("returns a zero-run sample only when the operation declares it may run nothing", async () => {
       // The counts are held still, so the operation reads as running nothing.
       // A worker whose views the server serves may have timed no run yet in
       // this session, which would leave its timing without the key the
@@ -721,6 +721,16 @@ describe("topics-browser-measurement", () => {
           "idle: the timed operation ran nothing in the worker",
         );
         expect(await samplesLeftInPage()).toEqual([]);
+
+        const sample = await timeTopicsOperation(session.page, {
+          label: "idle, declared",
+          posture,
+          operation: () => Promise.resolve(),
+          mayRunNothing: true,
+        });
+        expect(sample.mayRunNothing).toBe(true);
+        expect(sample.workerRuns).toBe(0);
+        expect(await samplesLeftInPage()).toEqual([]);
       } finally {
         await session.page.evaluate(() => {
           const scope: ReplacementGlobal = globalThis;
@@ -761,17 +771,6 @@ describe("topics-browser-measurement", () => {
         await restoreRuntimeClient();
       }
       expect(await samplesLeftInPage()).toEqual([]);
-    });
-
-    it("returns a sample recording the declaration for an operation declared to run nothing", async () => {
-      const sample = await timeTopicsOperation(session.page, {
-        label: "idle, declared",
-        posture,
-        operation: () => Promise.resolve(),
-        mayRunNothing: true,
-      });
-
-      expect(sample.mayRunNothing).toBe(true);
     });
   });
 });

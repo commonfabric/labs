@@ -51,7 +51,7 @@ was last checked against the code.
 | [`cfcWriteFloor`](#cfcwritefloor)                                           | `RuntimeOptions.cfcWriteFloor`                                                                                                                  | `enforce`                                                                            | Bernhard Seefeld (#4479)                              | move toward `enforce`                                                                                                                                                                                                             | implemented, on by default at `enforce`                                         |
 | [`cfcTriggerReadGating`](#cfctriggerreadgating)                             | `RuntimeOptions.cfcTriggerReadGating`                                                                                                           | `true`                                                                               | Bernhard Seefeld (#4488)                              | move toward `true`                                                                                                                                                                                                                | implemented, on by default                                                      |
 | [`cfcDecomposedEnvelopes`](#cfcdecomposedenvelopes)                         | `RuntimeOptions.cfcDecomposedEnvelopes`                                                                                                         | `false`                                                                              | Robin McCollum (CT-2062)                              | move toward `true` once every deployed reader resolves the references a stored root carries                                                                                                                                      | implemented, off by default                                                     |
-| [`cfcContentAddressedLabels`](#cfccontentaddressedlabels)                   | `RuntimeOptions.cfcContentAddressedLabels`                                                                                                      | `false`                                                                              | Bernhard Seefeld                                      | move toward `true` once every deployed reader interprets version-2 envelopes                                                                                                                                                     | implemented, off by default                                                     |
+| [`cfcContentAddressedLabels`](#cfccontentaddressedlabels)                   | `RuntimeOptions.cfcContentAddressedLabels`                                                                                                      | `true`                                                                               | Bernhard Seefeld                                      | retire the dial once the default has soaked, so version 2 is the only spelling the persist path writes                                                                                                                           | implemented, on by default                                                      |
 | [`cfcPolicyEvaluation`](#cfcpolicyevaluation)                               | `RuntimeOptions.cfcPolicyEvaluation`                                                                                                            | `enforce`                                                                            | Bernhard Seefeld (#4566)                              | move toward `enforce`                                                                                                                                                                                                             | implemented, on by default at `enforce`                                         |
 | [`cfcDeclaredMonotonicity`](#cfcdeclaredmonotonicity)                       | `RuntimeOptions.cfcDeclaredMonotonicity`                                                                                                        | `observe`                                                                            | Bernhard Seefeld (#4647)                              | `observe` first, then `enforce` (must soak before the §8.12.7 route 2b event ships)                                                                                                                                               | implemented, on by default at `observe`                                         |
 | [`cfcPrefixProvenanceStats`](#cfcprefixprovenancestats)                     | `RuntimeOptions.cfcPrefixProvenanceStats` (per-deployment; not env-wired)                                                                       | `false`                                                                              | Bernhard Seefeld (#4623)                              | stays a measurement opt-in; fold in or remove after Stage 0                                                                                                                                                                       | implemented, off by default, measurement only                                   |
@@ -59,6 +59,7 @@ was last checked against the code.
 | [`conflictAdmissionMode`](#conflictadmissionmode)                           | `CF_CONFLICT_ADMISSION` env, or `setConflictAdmissionMode()`                                                                                    | `off`                                                                                | William Kelly (#4237); `hold` removed CT-1925 (#5110) | keep `preempt` as a tuning dial or remove after re-measurement                                                                                                                                                                    | implemented, off by default, measured net-negative                              |
 | [`syncSchemaTableV2`](#syncschematablev2)                                   | `setSyncSchemaTableConfig()` (negotiated per connection)                                                                                        | on                                                                                   | Ben Follington (#4292)                                | retire the negotiation once every peer speaks v2                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`messageCompressionV1`](#messagecompressionv1)                             | `setMessageCompressionConfig()` (negotiated per connection)                                                                                     | on                                                                                   | PR #6474                                             | retire the rollback switch after the binary WebSocket envelope has field-soaked                                                                                                                                                   | implemented, on by default                                                      |
+| [`MEMORY_RETIRE_BARE_DID_LABELS`](#memory_retire_bare_did_labels) | `MEMORY_RETIRE_BARE_DID_LABELS` env on toolshed (the memory `Server`'s `retireBareDidLabels` option) | on | alex-claude (top/3324) | once deployed stores hold the `store_migration` row, delete the flag and the respelling | implemented, on by default |
 | [`syncCidReferencesV1`](#synccidreferencesv1) | server: `MEMORY_SYNC_CID_REFERENCES` env on toolshed (the memory `Server`'s `syncCidReferences` option); client: `EXPERIMENTAL_SYNC_CID_REFERENCES` env, or `RuntimeOptions.experimental` (negotiated per connection) | server on, client off | Dan Bornstein (#9719) | measure the bandwidth saved against the extra round trip, then graduate or remove | implemented; servers on, clients off by default |
 | [`ownWriteEcho`](#ownwriteecho)                                             | `setOwnWriteEchoConfig()` (server-side only, not negotiated)                                                                                    | on                                                                                   | Robin McCollum (CT-1965)                              | remove the switch once the echo has field-soaked                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`experimentalConcurrentWatchRefresh`](#experimentalconcurrentwatchrefresh) | `IRemoteStorageProviderSettings`; in the shell, the `commonfabric.concurrentWatchRefresh()` console command (localStorage, per browser profile) | off                                                                                  | Ben Follington (#4937; shell toggle #4974)            | graduate to always-on after live measurement, or remove if superseded                                                                                                                                                             | off by default; acquisition/removal ordering tested; real-latency measurement pending |
@@ -67,6 +68,7 @@ was last checked against the code.
 | [`SERVER_EXECUTION_WORKER`](#server_execution_worker) | `SERVER_EXECUTION_WORKER` env on toolshed | on in toolshed over a file store; off in the test harness's serving memory server | Bernhard Seefeld (the serving loop off the request thread) | soak with the default on, then delete the knob and the in-process arm | implemented, on by default in toolshed |
 | [`SERVER_EXECUTION_OWNER_ROUTING`](#server_execution_owner_routing) | `SERVER_EXECUTION_OWNER_ROUTING` env on toolshed | on in toolshed | Bernhard Seefeld (serve each space from the process that owns it) | delete the knob and the in-process crossings once every process keeps the lease in memory | implemented for every crossing, on by default in toolshed |
 | [`SERVER_EXECUTION_OVERLAP_COMMIT`](#server_execution_overlap_commit) | `SERVER_EXECUTION_OVERLAP_COMMIT` env on toolshed, or `SpaceServerPolicy.overlapWaveCommit` | off | Bernhard Seefeld (the wave commit overlapped with the next cycle) | measure under the worker, flip on where it pays, then delete the knob and the inline arm | implemented, off by default |
+| [`SERVER_EXECUTION_CURRENCY_INDEX`](#server_execution_currency_index) | `SERVER_EXECUTION_CURRENCY_INDEX` env on toolshed (`skip`, `start-upstream`, `record`, `off`), or `SpaceServerPolicy.currencyIndex` | `skip` on toolshed; none for a policy that sets no mode | Bernhard Seefeld (the currency index of a space's store) | make `start-upstream` the only behavior once deployed spaces have run under it with `currency.falseClean` at zero | implemented, `skip` by default on toolshed |
 | [`SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`](#server_execution_flush_deadline_max_ms) | `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` env on toolshed, or `SpaceServerPolicy.flushDeadlineMaxMs` | off (a fixed deadline) | Bernhard Seefeld (the flush deadline that grows after a cut settle) | measure the vote burst and the seed with a cap, pick a default cap where it pays, then delete the knob | implemented, off by default |
 | [`fuseNfsCacheTuning`](#fusenfscachetuning)                                 | `cf fuse mount --attrcache-timeout <whole seconds; 0 = untuned>` or `--noattrcache`                                                             | cf adds `attrcache-timeout=1` (one second) to FUSE-T mounts                          | Ian Hickson                                           | keep the default; shrink the exec.ts listing-recheck delay once the default has field-soaked                                                                                                                                      | implemented, on by default for FUSE-T, soak-validated                           |
 
@@ -431,9 +433,14 @@ flags it adopts from the deployment it runs against.
   is read by every deployed-topology entry point — the `productionServer` / `remoteClient` construction presets
   (toolshed's operator runtime, the CLI, every pieces controller and
   integration harness against a toolshed),
-  toolshed's serving-host gate and its memory ACL principal lists (the
-  DELEGATING class since OW31's build — the process identity is no
-  longer an implicit-OWNER service principal), and the browser
+  toolshed's serving-host gate, its indexed-collection host, and its memory
+  ACL principal lists (under the flag, the DELEGATING class since OW31's
+  build — the process identity is no longer an implicit-OWNER service
+  principal there; OFF the flag the process identity is an OWNER-class
+  service principal, for the sessions of the indexed-collection host that
+  keeps every space's
+  [indexed collections](../features/indexed-collections.md#which-runtime-maintains)
+  current on that arm), and the browser
   shell where neither its build define nor its deployment states an arm. An
   UNSET flag resolves to it; an explicit
   `EXPERIMENTAL_SERVER_EXECUTION=false` (or `experimental.serverExecution:
@@ -1251,9 +1258,9 @@ source-varying material-risk caveats an llm sink exists to process. Building
 that mechanism is planned in
 [`docs/plans/cfc-llm-sink-admission.md`](../plans/cfc-llm-sink-admission.md).
 And `sqliteQuery`, whose request is a read handed to the provider holding a
-space's replicas: the bound it wants is the database's own SPACE, which a
-clause list cannot express, so the sqlite builtin refuses a request carrying
-confidentiality for a database in another space before staging it. A
+space's replicas, in this space or another: every space is served by an
+attested runtime applying the same access rules, and the rows' labels decide
+what each reader is shown. A
 deployment that wants a confidentiality gate on sqlite reads declares a
 ceiling for the sink, which the seam then applies.
 The bundle names no enforcement mode, so a runtime taking it keeps the core's
@@ -1484,15 +1491,23 @@ the per-epic implementation notes).
   in version 2 on its next persist even when its labels are unchanged,
   which is how a store migrates without a data migration; with it off, a
   stored version 2 is left as it is.
-- **Current default and planned end state.** `false` by default. The target
-  is `true`; version-1 envelopes remain readable indefinitely.
-- **Status on 2026-09-15.** Implemented, off by default. The flip is gated
-  on deployment reach: a reader that predates version 2 fails closed on a
-  version-2 envelope through `UnknownCfcMetadataVersionError`, which is
-  correct and also unusable, so every deployed reader must interpret
-  version 2 before any space sees one.
-- **Path to removal.** Once the default flips, the dial retires and version
-  2 becomes the only spelling the persist path emits.
+- **Current default and planned end state.** `true` by default
+  (`RUNTIME_CFC_DIAL_DEFAULTS` in `runtime/runner/src/cfc/posture-report.ts`;
+  no preset pins it). A transaction no runtime configured keeps the version-1
+  floor. Version-1 envelopes remain readable indefinitely.
+- **Status on 2026-11-23.** Implemented, on by default. Every reader in the
+  tree interprets version 2: the runner's metadata reader, the memory
+  engine's commit and anchor readers, cf-harness's space-label reader, and
+  `cf inspect`. A reader built before 2026-09-15 fails closed on a version-2
+  envelope and has no setting that changes that, so while one shares a
+  space with a newer build, the newer build's writers are what must write
+  version 1. No preset or serving factory takes the dial: a first-party
+  deployment does that by building with
+  `RUNTIME_CFC_DIAL_DEFAULTS.cfcContentAddressedLabels` set back to
+  `false`, and a host that constructs its own `Runtime` passes
+  `cfcContentAddressedLabels: false`.
+- **Path to removal.** Once the default has soaked, the dial retires and
+  version 2 becomes the only spelling the persist path emits.
 
 ### `cfcPolicyEvaluation`
 
@@ -1729,11 +1744,15 @@ the per-epic implementation notes).
   there is nothing to negotiate.
 - **Added by.** Robin McCollum, for CT-1965.
 - **Purpose.** A sync frame includes a doc unless the writing session provably
-  holds it: own accepted `patch`-produced heads ride the covering frame as full
-  post-apply documents (merged state the writer cannot extrapolate), while own
-  `set`- and `delete`-produced heads stay elided. Off restores full echo
-  suppression — the pre-CT-1965 behavior, where promotion extrapolates every own
-  write from the client's own ops.
+  holds it: an own accepted `patch`-produced head rides the covering frame as
+  the full post-apply document (merged state the writer cannot extrapolate),
+  while own `set`- and `delete`-produced heads stay elided. An own `patch`
+  head is elided as well where the server can show the session holds the
+  revision its patches were applied over, since the session's replay of the
+  patches it sent then yields the head; section 4.11.2 of
+  [the memory protocol](../specs/memory-v2/04-protocol.md) states the
+  conditions. Off restores full echo suppression — the pre-CT-1965 behavior,
+  where promotion extrapolates every own write from the client's own ops.
 - **Current default and planned end state.** On by default. The switch exists as
   an operational backstop while the echo field-soaks.
 - **Status on 2026-08-08.** Implemented and on by default.
@@ -1933,6 +1952,18 @@ the per-epic implementation notes).
 >   session. Only the server advertises it; a client reads it from `hello.ok`
 >   and never offers it. A server that omits it parses as `false`, and
 >   `SpaceInviteClient` then sends administration over HTTP. It is permanent.
+> - **`spaceInvitesRevision`** is a build-inherent capability, hardwired to
+>   `true`. It advertises that the server's invitation service moves a space's
+>   invitation ledger revision document, `of:space-invites-revision`, on the
+>   space's default branch with every change to the ledger, and tells its own
+>   sessions on the space of the move (the memory protocol chapter's section
+>   4.1.1). It does not depend on `inviteHost`, since the ledger also changes
+>   through the host's HTTP routes. Only the server advertises it; a client
+>   reads it from `hello.ok` on the connection its session is on, for a
+>   session on the default branch (`ISpaceReplica.invitesRevisionWatchable()`),
+>   and never offers it. Older servers omit it, which parses as `false`, and a
+>   client then reads the ledger again itself to learn of a change it did not
+>   make. It is permanent.
 > - **`servedRequests`** is a configuration-derived capability, neither an
 >   experimental toggle nor build-inherent. A memory server advertises it
 >   exactly while its host has installed a served-request handler through
@@ -1959,9 +1990,13 @@ the per-epic implementation notes).
 >   chapter's section 4.2.3), and a server splits a sync for such a client on
 >   a connection whose transport bounds its messages: the routed host splits a
 >   sync past the routed frame cap or the bytes a message may take (16 MiB
->   expanded when compressed, 8 MiB as text), in parts of 1 MiB. A direct server advertises it and
->   sends every sync whole. A peer that omits it parses as `false`, and is
->   sent every sync whole. It is permanent.
+>   expanded when compressed, 8 MiB as text), in parts of 1 MiB. The
+>   toolshed's direct memory socket splits a sync larger than the largest
+>   message it still sends compressed (256 MiB), or one too long for the
+>   JavaScript engine to encode whole. Such a sync goes in parts of at most
+>   32 MiB, and an entry larger than 32 MiB goes alone, in a part of its own
+>   (`MEMORY_SOCKET_SYNC_PARTS`). A peer that omits it parses as `false` and
+>   is sent every sync whole. It is permanent.
 > - **`watchSetPartsV1`** is a build-inherent capability, hardwired to
 >   `true`. It advertises that the server applies a `session.watch.set` staged
 >   in parts as one set (the memory protocol chapter's section 4.3.5). Only
@@ -1998,6 +2033,13 @@ the per-epic implementation notes).
 >   since such a server would neither validate nor seal it, and
 >   `Runtime.spaceKind()` throws there rather than report a kind as absent. It
 >   is permanent.
+> - **`branches`** is a build-inherent capability, hardwired to `true`. It
+>   advertises that the server opens a session on a branch and serves the
+>   branch and history commands
+>   ([`space-history.md`](../features/space-history.md)). Only the server's
+>   advertisement matters: a client reads it from `hello.ok` and never offers
+>   it, and opens no session on a branch against a server that omits it. It is
+>   permanent.
 > - **`instanceNameMark`** is a build-inherent capability, hardwired to
 >   `true`. It advertises that the server records a space's instance-naming
 >   mark and admits sessions and commits by it (INV-16 in
@@ -2300,7 +2342,11 @@ the per-epic implementation notes).
   worker may send no message, its heartbeats included, before it is killed
   (default 60, at least 10). The watchdog checks every 10 seconds, so the kill
   comes at the first check at or past that many seconds of silence in a row:
-  15 kills at 20. The serving memory server tests build reads the first.
+  15 kills at 20. A kill of a worker in a served handler's run fails that
+  run's event rather than running it again, unless the worker the event is
+  handed to, or the process, ends before the error commits (serving-loop.md
+  §2, "The watchdog"), so the setting is also how long one handler may hold
+  its worker's thread. The serving memory server tests build reads the first.
   Where the workers' runtimes compile takes two more:
   `SERVER_EXECUTION_COMPILE_WORKERS`, how many compile workers the process
   holds for every serving runtime (default 1), and
@@ -2443,6 +2489,135 @@ the per-epic implementation notes).
 - **Path to removal.** Measure the vote burst and the seed under the worker
   with the overlap on, flip the default where it pays, then delete the knob.
 
+### `SERVER_EXECUTION_CURRENCY_INDEX`
+
+- **Toggle via.** The `SERVER_EXECUTION_CURRENCY_INDEX` environment variable
+  on toolshed, read by the serving-host bootstrap
+  ([`runtime/toolshed/lib/server-execution.ts`](../../runtime/toolshed/lib/server-execution.ts))
+  into `SpaceServerPolicy.currencyIndex`; a harness constructing an
+  `ExecutorHost` sets the policy field directly, and a test's serving memory
+  server (`runtime/runner/src/executor/serving-memory-server.deno.ts`) reads
+  the same variable for a policy that leaves the field unset. On toolshed
+  the mode is `skip` unless the variable says otherwise
+  (`DEFAULT_CURRENCY_INDEX` in `server-execution.ts`): `record`, `skip` and
+  `start-upstream` select a mode, `off` keeps no index, and anything else
+  warns and leaves `skip`. The names are matched exactly, from one list
+  (`CURRENCY_INDEX_MODES` in
+  [`runtime/runner/src/executor/store-currency.ts`](../../runtime/runner/src/executor/store-currency.ts)).
+  A starting toolshed logs the mode in force. A policy that sets no mode
+  keeps no index, and the test server keeps one only for the literal name of
+  a mode.
+  `SERVER_EXECUTION_CURRENCY_EPOCH` names the epoch records are stored
+  under and trusted by (`SpaceServerPolicy.currencyEpoch`): a piece recorded
+  under another epoch is started. Unset, the epoch is
+  `DEFAULT_CURRENCY_EPOCH`
+  ([`runtime/runner/src/executor/space-server.ts`](../../runtime/runner/src/executor/space-server.ts)),
+  one fixed value for every build and every process, so a deployment trusts
+  the records of its earlier builds, and a source run those of its earlier
+  runs. A build that changes what an unchanged pattern computes from
+  unchanged inputs, as a fix to the runtime or to a builtin does, therefore
+  leaves the stored outputs judged current until an input of the piece
+  changes. Setting the variable to a value no record carries stops trusting
+  every record stored so far, and each piece starts on its next demand;
+  [the plan](../plans/stored-output-currency.md) lists what else a record
+  carries across builds, under "Known limits". Meaningful only with the
+  serving loop running ([`serverExecution`](#serverexecution) on).
+- **Added by.** Bernhard Seefeld, in the change that adds the currency index
+  of a space's store.
+- **Purpose.** A serving loop starts a piece whenever a session's demand
+  reaches one of its documents, and a fresh serving runtime runs every
+  demanded computation of it again, although the store holds what they
+  wrote. With a mode set, the loop records at each quiescent point, per
+  piece, what its computations write, and per slice of it (the runs every
+  viewer shares, and each demanding user's and session's own) what those
+  runs read and which stored document instances they vouch for
+  ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §3b).
+  A commit above one of a slice's rows marks that slice, and a marked slice
+  marks each slice of another piece that reads an instance it writes, so one
+  viewer's change marks nothing of another viewer's. `record` stores the
+  records, judges each eligible cold root, and loads every root regardless:
+  `currency.servable` counts the roots the store could have served, and
+  `currency.falseClean` counts the pieces that were held clean and then
+  wrote an output they answered for again, to a value other than the one it
+  held, with no input changed, each one a judgment that would have served a
+  stale value. A root may rest on a slice that
+  read another space the same memory server holds: that space is asked
+  what changed before the judgment, and tells the reading space of its next
+  change, which has a loop that left such a root unstarted judge it again.
+  A loop in the `record` or `start-upstream` mode also carries demand into
+  the spaces its started pieces' runs read, for the actors those runs were
+  made for, where that space's index does not prove the instance current:
+  `currency.carried` counts the rows offered now, and
+  `currency.carriedRefused` the rows a space refused, as it does an actor's
+  own instance where the actor may not read the space. Into its own space it
+  carries, the same way, the instances a run was withdrawn for until the
+  piece that writes them has produced them for the run's viewer.
+  `skip` acts on the judgment of what is current: a root
+  whose piece vouches for every demanded instance of it, in slices that are
+  clean, is neither loaded nor started, until an input marks a slice a
+  demanded instance is resolved under, by a commit in the space or by a
+  change another space reports (`currency.indexWakes`), the record of such a slice expires
+  because it read the interval clock of a wish, which the loop sets a timer
+  for (`currency.expiryWakes`), or a session's demand reaches an instance
+  the piece does not vouch for
+  ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §1).
+  A root whose stored document carries no back-link and no pattern pointer,
+  which a load starts no piece from, is judged as the one piece recorded as
+  writing it, and one that nothing derives is parked as that load would
+  park it, until a commit to it (`currency.underived`).
+  That is all `skip` does, and it carries no demand, into another space or
+  its own, as a loop with no index carries none: both counts stay zero. A
+  piece in another space that a run here read, and a piece here that a run
+  was withdrawn for, start only for a demand of their own. A root that is
+  stale only through what is
+  upstream of it, in its own space, is not made current by starting its
+  piece, and `skip` starts its piece all the same, as it starts any root the
+  judgment refuses: the piece derives from what the store holds of the
+  pieces upstream, which is what a loop with no index derives, and it stays
+  marked. `currency.refused` counts such a root under `stale-upstream`,
+  which no other mode counts under, so the count says how many roots
+  `start-upstream` would have held.
+  `start-upstream` leaves a current root unstarted as `skip` does, and treats
+  that case otherwise: the loop
+  leaves the root unloaded, demands the instances that keep it stale, which
+  starts the pieces that write them, and holds the watermark until the root
+  is judged again. A piece that runs and is stale the same way has the
+  pieces upstream of it started too, which `record` does as well.
+  `currency.heldUpstream` counts the roots `start-upstream` left unloaded
+  for that, and `currency.upstreamAbandoned` the pieces the loop gave up
+  waiting on what is upstream of, which loads a root that was held for
+  them; both stay zero under `skip`.
+  [The plan](../plans/stored-output-currency.md) carries the design, its
+  limits and the stages after this one.
+- **Current default and planned end state.** `skip` on toolshed, and no index
+  for a serving host whose policy sets no mode. The end state is
+  `start-upstream` as the only behavior, once deployed spaces have run under
+  it with `currency.falseClean` at zero;
+  [the plan](../plans/stored-output-currency.md) lists, under "Known
+  limits", what `skip` leaves stale and what is open in the upstream starts.
+  `SERVER_EXECUTION_CURRENCY_INDEX=off`
+  restores a start for every demanded piece, and `record` keeps the index
+  and starts every piece.
+- **Status on 2026-11-24.** Implemented, and `skip` by default on toolshed,
+  under an epoch every build shares. `start-upstream` is opt-in.
+  The index and its marks are covered in
+  `runtime/memory/test/v2-currency-index.test.ts`, what passes between two
+  spaces' indexes in
+  `runtime/memory/test/v2-server-currency-across-spaces.test.ts`, and
+  recording, the judgment, and a skipped root's re-arm in
+  `runtime/runner/test/executor/space-server-currency.test.ts` and
+  `space-server-currency-wish.test.ts` beside it, and what each of `skip`
+  and `start-upstream` does with a root stale only upstream in
+  `space-server-currency-upstream.test.ts`, and the demand each mode carries
+  into another space in `space-server-carried-demand.test.ts`. Measured on a
+  synthetic Topics board under a serving worker and on a counter in the
+  browser
+  ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md)).
+  Not measured on a deployed space or on a copy of the production board.
+- **Path to removal.** Watch `currency.falseClean` on deployed spaces, cut
+  the judgment's cost for each demand row, then delete the mode and the
+  unconditional start.
+
 ### `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`
 
 - **Toggle via.** The `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` environment
@@ -2494,6 +2669,64 @@ the per-epic implementation notes).
 - **Path to removal.** Measure the vote burst and the seed with a cap on both
   served arms, pick the default cap where the counts and the headline agree,
   then delete the knob.
+
+### `MEMORY_RETIRE_BARE_DID_LABELS`
+
+- **Toggle via.** The `MEMORY_RETIRE_BARE_DID_LABELS` environment variable on
+  toolshed, read into the memory `Server`'s `retireBareDidLabels` option:
+  `true`, `1` or no setting leaves it on, `false` or `0` turns it off, and
+  any other spelling refuses startup. A test or tool opening an engine itself
+  calls `retireBareDidLabels()` (`runtime/memory/v2/cfc-bare-did-migration.ts`)
+  on it.
+- **Added by.** alex-claude, for laundry top/3324.
+- **Purpose.** Some stored confidentiality labels name a principal by bare
+  `did:key` string where every current writer names it `User{subject: DID}`.
+  The fit kernel compares atoms structurally, so a reader whose ceiling names
+  the principal as `User` is refused the data the bare string labels,
+  including the principal's own agent reading their own data. Recomputing a
+  document does not rewrite its envelope when the value is unchanged, and a
+  declared entry comes off only by an owner release. The two spellings name
+  one principal, so the stored labels are rewritten once, and no code is
+  kept that tells them apart. With the flag on, the memory server respells,
+  as it opens each store and before serving it, every such atom in every
+  label-map entry of every origin, for the current instances of the default
+  branch at space and user scope, through `system` commits that patch only
+  the `cfc` member. A walk that fails is logged and the store is served as
+  it stands, unmarked, so the walk runs again at the next opening; a bare
+  DID it left behind only refuses more readers than the respelled form
+  would, never fewer. Session-scoped instances are left as they are: a
+  session's instances are read by that session alone, and a client mints a
+  fresh session id for each process. Branches other than the default are
+  left as well. Each batch is read and rewritten under the store's write
+  lock. An instance the store refuses the rewrite of keeps its labels and is
+  logged. A `store_migration` row named `cfc-bare-did-respelling/1`, written
+  once the walk has reached every instance, marks the store done; a run that
+  stops before then runs again at the next opening. Once the row is there, a
+  branch restore respells the labels it writes back.
+- **Current default and planned end state.** On, so that every deployed
+  store is respelled at its first opening after an update, with nothing for
+  its owner to do. The CFC owner asked for this one-time rewrite; the
+  specification's text for it is
+  [specs#107](https://github.com/commonfabric/specs/pull/107). The flag
+  exists to turn the rewrite off on a deployment where it misbehaves.
+- **Status on 2026-11-20.** Implemented and on by default. Covered in
+  `runtime/memory/test/v2-cfc-bare-did-migration.test.ts`. Rehearsed on a
+  copy of a home space's store of 4.79 million current instances: the walk
+  took 23 seconds at the store's first opening, during which that space is
+  not served, and respelled 25,382 instances, refusing none (the walk skips
+  the 4.72 million session instances in its query); documents the
+  owner's agent had been refused then read under a `User` ceiling.
+- **Path to removal.** Once the default has been on for a release that every
+  install has updated past, which `loom update` brings with it, and the stores
+  a deployment serves hold the `cfc-bare-did-respelling/1` row, delete
+  `cfc-bare-did-migration.ts`, its test file, the `Server` option, the
+  environment variable and the respelling in `restoreBranch` (the
+  `store_migration` table may stay, unread), and drop
+  `isActorOwnedAlternative`'s bare-string case
+  (`runtime/memory/v2/cfc-release-authority.ts`) with the specification's
+  `standsForActor` arm. A store that has not opened under the flag by then
+  keeps its bare-DID labels, which a `User` ceiling refuses. Review by
+  2027-02-01.
 
 ## Flag-gated tripwires
 
@@ -3122,6 +3355,30 @@ shell, toolshed, and CLI, which is the pattern the persistent-scheduler-state
 flag then followed.
 
 ---
+
+### `markedSplicesV1` / `MEMORY_MARKED_SPLICES` (removed)
+
+Gated whether a memory server advertised `markedSplicesV1` in `hello.ok`, so
+that its clients sent a change to a long array as marked splices (`pinned` on
+the `splice` op) instead of a `replace` at every shifted index. On the Topics
+board, a new topic at the head of the 3,270-entry index went from 711,556
+bytes of operations to one splice of 253. Added by Gideon Wald, with Bernhard
+Seefeld's ruling, in #9982 (2026-11-20). It was off by default so that a
+deployment turned it on only once every serving worker that may read its rows
+read the mark (readers before writers). A serving worker of an older build
+reads a stored marked splice as overwriting nothing, and under server
+execution can let a delayed handler's write land over the change it stands
+for. Removed once Estuary ran with it on: a server of this build advertises
+the capability unconditionally (`getMemoryProtocolFlags()`), and toolshed
+ignores the environment variable. The capability itself stays. A client
+builds a commit with marked splices only on a connection that advertises it,
+and checks again at the commit's first send, so a commit first sent to a
+server that predates marked splices goes per index. A commit already sent
+goes again unchanged after a reconnect, whatever the new connection
+advertises, so that the store can answer it as the commit it took. Such a
+resend reaches a server that predates the mark only after a rollback past it,
+which under server execution a deployment must not make
+([08-conflict-granularity.md](../specs/memory-v2/08-conflict-granularity.md)).
 
 ## Appendix B: Related toggles that are not experimental flags
 

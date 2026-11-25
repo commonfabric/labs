@@ -1,0 +1,3 @@
+# Read-only access for the Weaver publisher
+restrict,command="git-upload-pack" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOBQEYE5U9
+restrict,from="10.

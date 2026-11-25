@@ -32,6 +32,7 @@ import {
   contendedEntities,
   type ContendedEntity,
   entityConflicts,
+  readCoverage,
 } from "./conflicts.ts";
 
 export interface InspectorBundle {
@@ -125,11 +126,20 @@ function buildConflicts(
 ): ContendedEntity[] {
   const STALE_READ_ANALYSIS_CAP = 60;
   const contended = contendedEntities(space, { branch, scope, limit: 300 });
+  // One pass over the log for every cell analyzed here, made only once one is.
+  let coverage: ReturnType<typeof readCoverage> | undefined;
   let analyzed = 0;
   for (const c of contended) {
     if (c.multiUser && analyzed < STALE_READ_ANALYSIS_CAP) {
       analyzed++;
-      c.staleReads = entityConflicts(space, c.id, { branch, scope }).staleReads;
+      coverage ??= readCoverage(space);
+      const analysis = entityConflicts(space, c.id, {
+        branch,
+        scope,
+        coverage,
+      });
+      c.staleReads = analysis.staleReads;
+      c.readSetsNotKept = analysis.readSetsNotKept;
       c.staleReadsAnalyzed = true;
     }
     // Beyond the cap, leave staleReadsAnalyzed falsy so the UI shows "not
@@ -463,7 +473,11 @@ function renderDetail(id){
       // Distinguish "analysis skipped (cap)" from "analyzed → clean".
       body.push(el("div",{class:"muted",style:"margin-top:6px;font-size:12px",text:"stale-read analysis skipped (per-bundle cap) — run 'cf inspect conflicts <space> "+shortId(cf.id)+"' for this cell"}));
     }
-    const cfTag = (cf.staleReads&&cf.staleReads.length)?" · ⚠ anomaly":((cf.multiUser&&!cf.staleReadsAnalyzed)?" · ? not analyzed":"");
+    // Analyzed, but over reads a later commit kept only as a digest: not clean.
+    if(cf.readSetsNotKept){
+      body.push(el("div",{class:"muted",style:"margin-top:6px;font-size:12px",text:"? "+cf.readSetsNotKept+" later commit(s) hold reads this check cannot replay (a digest, compacted history, or an unreadable payload) — whether they read this cell stale was not checked"}));
+    }
+    const cfTag = (cf.staleReads&&cf.staleReads.length)?" · ⚠ anomaly":((cf.multiUser&&!cf.staleReadsAnalyzed)?" · ? not analyzed":(cf.readSetsNotKept?" · ? "+cf.readSetsNotKept+" unchecked":""));
     host.append(section("Contention"+(cf.multiUser?" ⚔ MULTI-USER":"")+cfTag, cf.multiUser, body));
   }
 
@@ -715,7 +729,7 @@ function renderConflicts(){
   if(!cs.length){ host.append(el("div",{class:"muted",text:"(no contested cells)"})); return; }
   for(const c of cs.slice(0,150)){
     const d=byId.get(c.id);
-    const stale=(c.staleReads&&c.staleReads.length)?" · "+c.staleReads.length+" stale":"";
+    const stale=((c.staleReads&&c.staleReads.length)?" · "+c.staleReads.length+" stale":"")+(c.readSetsNotKept?" · "+c.readSetsNotKept+" unchecked":"");
     host.append(el("div",{class:"row",onclick:()=>select(c.id),style:"white-space:normal"},[
       el("span",{text:(c.multiUser?"⚔ ":"· ")}),
       el("span",{class:"jlink",text:d?d.label:shortId(c.id)}),

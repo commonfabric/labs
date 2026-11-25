@@ -1,0 +1,121 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "CanonicalRule": {
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "key": {
+            "description": "A hash of field, label, and canonical pattern: equal keys, equal rules.",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "The canonical pattern, run with the `i` flag.",
+            "type": "string"
+          },
+          "predicts": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "field",
+          "pattern",
+          "predicts",
+          "key"
+        ],
+        "type": "object"
+      },
+      "HistoryEntry": {
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "answered": {
+            "description": "The surprises this round answered, so the next round counts new ones.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "currentF1": {
+            "type": "number"
+          },
+          "decidedAt": {
+            "type": "number"
+          },
+          "heldOut": {
+            "type": "number"
+          },
+          "poolOffer": {
+            "description": "Set when the round judged the pool's released rules rather than a\nrewrite: the offer's key, so the same offer is not made again.",
+            "type": "string"
+          },
+          "proposed": {
+            "items": {
+              "$ref": "#/$defs/CanonicalRule"
+            },
+            "type": "array"
+          },
+          "proposedF1": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "refusals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "round": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "round",
+          "accepted",
+          "reason",
+          "proposed",
+          "refusals",
+          "currentF1",
+          "proposedF1",
+          "heldOut",
+          "answered",
+          "decidedAt"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "history": {
+        "items": {
+          "$ref": "#/$defs/HistoryEntry"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "history"
+    ],
+    "type": "object"
+  },
+  "pattern": "showcase/inductor/lofi/history-card.tsx",
+  "resultSchema": {
+    "description": "The inductor's judged proposals, newest first.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

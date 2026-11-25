@@ -1,8 +1,8 @@
 /**
  * FabriChat's rules that need no runtime: what counts as a single emoji, how
- * the two views of a conversation are derived from replies, and how a
- * thread's title reads when no member has set one. The room applies them to
- * its records; `logic.test.ts` states them directly.
+ * the two views of a conversation are derived from replies, where a window
+ * falls in a view, and how a thread's title reads when no member has set one.
+ * The room applies them to its records; `logic.test.ts` states them directly.
  */
 
 /**
@@ -99,6 +99,53 @@ export const viewPlaces = (
   );
 };
 
+/**
+ * Which end of its view a window holds: the newest messages, `before: "end"`,
+ * or the oldest, `after: "start"`.
+ */
+export type WindowAnchor = { before: "end" } | { after: "start" };
+
+/** A window's place in its view: indexes into it, and what lies beyond. */
+export interface WindowSlice {
+  /** The index of the window's first message in the view. */
+  start: number;
+
+  /** The index just past the window's last message. */
+  end: number;
+
+  /** Whether the view has messages before the window. */
+  hasOlder: boolean;
+
+  /** Whether the view has messages after the window. */
+  hasNewer: boolean;
+}
+
+/**
+ * How many messages a window asking for `requested` holds, at most `max`: a
+ * request for none, for a negative count, for a count that is not a finite
+ * number, or for no count at all holds none, and a fractional count is
+ * rounded down.
+ */
+export const windowCount = (requested: unknown, max: number): number =>
+  typeof requested === "number" && Number.isFinite(requested)
+    ? Math.min(Math.max(0, Math.floor(requested)), max)
+    : 0;
+
+/**
+ * Where a window of at most `count` messages, held at the end of its view
+ * `anchor` names, falls in a view of `length` messages, oldest first.
+ */
+export const windowSlice = (
+  length: number,
+  anchor: WindowAnchor,
+  count: number,
+): WindowSlice => {
+  const size = Math.min(Math.max(0, Math.floor(count)), length);
+  const start = "before" in anchor ? length - size : 0;
+  const end = start + size;
+  return { start, end, hasOlder: start > 0, hasNewer: end < length };
+};
+
 /** The most characters a thread's title has when no member has set one. */
 export const THREAD_EXCERPT_LENGTH = 50;
 
@@ -121,4 +168,44 @@ export const threadExcerpt = (text: string): string => {
   const space = room.lastIndexOf(" ");
   const kept = atBreak || space <= 0 ? room : room.slice(0, space);
   return `${kept.join("").trimEnd()}…`;
+};
+
+/** How many of a principal's last characters tell two same-named people apart. */
+export const SAME_NAME_MARK_LENGTH = 6;
+
+/** A person a list of people shows: their principal, and the name they show. */
+export interface NamedPerson {
+  /** The principal their profile attests. */
+  principal: string;
+
+  /** Their profile's name, `undefined` where it has none. */
+  name: string | undefined;
+}
+
+/**
+ * What tells each of `people` apart from another showing the same name, by
+ * principal: an ellipsis and the last `SAME_NAME_MARK_LENGTH` characters of
+ * their principal where another of `people` shows the same name, and the
+ * empty string where none does. Names are the same when they match once each
+ * is trimmed and case is ignored. A person showing no name is told apart from
+ * no one here, since no name is anyone's name.
+ */
+export const sameNameMarks = (
+  people: readonly NamedPerson[],
+): Record<string, string> => {
+  const keyOf = (person: NamedPerson): string =>
+    (person.name ?? "").trim().toLowerCase();
+  const counts = new Map<string, number>();
+  for (const person of people) {
+    const key = keyOf(person);
+    if (key !== "") counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return Object.fromEntries(
+    people.map((person): [string, string] => [
+      person.principal,
+      (counts.get(keyOf(person)) ?? 0) > 1
+        ? `…${person.principal.slice(-SAME_NAME_MARK_LENGTH)}`
+        : "",
+    ]),
+  );
 };

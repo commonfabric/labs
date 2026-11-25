@@ -44,6 +44,12 @@ const OWNER = "did:key:zOwner";
 const SEVEN = "did:mailbox:seven";
 const BIG = "did:mailbox:big";
 const ERA = "did:era:2024";
+// principal() and dbOwner() name readers as CFC `User{subject}` atoms; the
+// constant() markers above stay as authored.
+const user = (subject: string) => ({
+  type: "https://commonfabric.org/cfc/atom/User",
+  subject,
+});
 
 // Three stored ids: one small, one past 2^31 (where the 32-bit accessor wraps),
 // one past 2^53 (where a double cannot name the integer at all). The timestamp
@@ -135,15 +141,24 @@ describe("row-label over a stored INTEGER", () => {
         );
         expect(labels).toEqual([
           {
-            confidentiality: [SEVEN, ERA, "did:mailbox:7", OWNER],
+            confidentiality: [SEVEN, ERA, user("did:mailbox:7"), user(OWNER)],
             integrity: [],
           },
           {
-            confidentiality: [BIG, ERA, "did:mailbox:4294967303", OWNER],
+            confidentiality: [
+              BIG,
+              ERA,
+              user("did:mailbox:4294967303"),
+              user(OWNER),
+            ],
             integrity: [],
           },
           {
-            confidentiality: [ERA, "did:mailbox:9007199254740993", OWNER],
+            confidentiality: [
+              ERA,
+              user("did:mailbox:9007199254740993"),
+              user(OWNER),
+            ],
             integrity: [],
           },
         ]);

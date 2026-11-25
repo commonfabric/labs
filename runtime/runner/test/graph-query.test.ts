@@ -227,10 +227,9 @@ describe("graph-query", () => {
       it("records under the caller's explicit instance key when one is given", () => {
         // A query root naming an explicit scope instance (protocol.md §2's
         // read row) records under THAT instance rather than one resolved
-        // from the walk's own identity. Traversal beyond that entry still
-        // resolves under the acting identity — including the traverser's
-        // own read-track of the root document (per-run deep threading is
-        // the Phase 2 fan-out work) — so both keys appear.
+        // from the walk's own identity. Traversal beyond that entry
+        // resolves under the acting identity, including the traverser's own
+        // read-track of the root document, so both keys appear.
         const documents = new Map<string, FabricValue>([
           [keyFor("of:root"), { title: "Glazed" }],
         ]);
@@ -250,6 +249,138 @@ describe("graph-query", () => {
           keyFor("of:root"),
           explicitKey,
         ]);
+      });
+
+      it("follows no link whose scope the walk's identity resolves no instance of", () => {
+        // The walk acts as a principal with no session. `of:root` links to
+        // `of:draft` in the session scope, and to `of:glaze` in its own.
+
+        const documents = new Map<string, FabricValue>([
+          [
+            keyFor("of:root"),
+            {
+              draft: {
+                "/": {
+                  [LINK_V1_TAG]: { id: "of:draft", path: [], scope: "session" },
+                },
+              },
+              glaze: linkTo("of:glaze"),
+            },
+          ],
+          [keyFor("of:glaze"), { flavor: "maple" }],
+        ]);
+        const manager = new StubObjectManager(documents);
+        const schemaTracker = new MapSetStringToPathSelectors(true);
+        const misses: string[] = [];
+        const walk = new GraphQueryWalk({
+          manager,
+          space: SPACE,
+          schemaTracker,
+          identity: { principal: TEST_SCOPE_IDENTITY.principal },
+          onMissedDoc: (key) => misses.push(key),
+        });
+
+        walk.visit(
+          documentFor(manager, "of:root"),
+          {
+            path: ["value"],
+            schema: {
+              type: "object",
+              properties: {
+                draft: { type: "object" },
+                glaze: { type: "object" },
+              },
+            },
+          } satisfies SchemaPathSelector,
+        );
+
+        expect(trackedKeys(schemaTracker)).toEqual([
+          keyFor("of:glaze"),
+          keyFor("of:root"),
+        ]);
+        expect(misses).toEqual([]);
+        expect(manager.requested.filter((key) => key.endsWith("/of:draft")))
+          .toEqual([]);
+      });
+
+      it("follows no such link under a selector that reaches everything, in a walk that attributes what it records", () => {
+        // As above, under `schema: true`, which the traversal walks without
+        // a schema, and with `onTrackedDoc`, which has it attribute each
+        // position to the record walking it.
+
+        const documents = new Map<string, FabricValue>([
+          [
+            keyFor("of:root"),
+            {
+              draft: {
+                "/": {
+                  [LINK_V1_TAG]: { id: "of:draft", path: [], scope: "session" },
+                },
+              },
+              glaze: linkTo("of:glaze"),
+            },
+          ],
+          [keyFor("of:glaze"), { flavor: "maple" }],
+        ]);
+        const manager = new StubObjectManager(documents);
+        const schemaTracker = new MapSetStringToPathSelectors(true);
+        const misses: string[] = [];
+        const walk = new GraphQueryWalk({
+          manager,
+          space: SPACE,
+          schemaTracker,
+          identity: { principal: TEST_SCOPE_IDENTITY.principal },
+          onMissedDoc: (key) => misses.push(key),
+          onTrackedDoc: () => {},
+        });
+
+        walk.visit(
+          documentFor(manager, "of:root"),
+          { path: ["value"], schema: true } satisfies SchemaPathSelector,
+        );
+
+        expect(trackedKeys(schemaTracker)).toEqual([
+          keyFor("of:glaze"),
+          keyFor("of:root"),
+        ]);
+        expect(misses).toEqual([]);
+        expect(manager.requested.filter((key) => key.endsWith("/of:draft")))
+          .toEqual([]);
+      });
+
+      it("throws at a user-scoped link for a walk whose identity names no principal", () => {
+        const documents = new Map<string, FabricValue>([
+          [
+            keyFor("of:root"),
+            {
+              prefs: {
+                "/": {
+                  [LINK_V1_TAG]: { id: "of:prefs", path: [], scope: "user" },
+                },
+              },
+            },
+          ],
+        ]);
+        const manager = new StubObjectManager(documents);
+        const walk = new GraphQueryWalk({
+          manager,
+          space: SPACE,
+          schemaTracker: new MapSetStringToPathSelectors(true),
+          identity: {},
+        });
+
+        expect(() =>
+          walk.visit(
+            documentFor(manager, "of:root"),
+            {
+              path: ["value"],
+              schema: {
+                type: "object",
+                properties: { prefs: { type: "object" } },
+              },
+            } satisfies SchemaPathSelector,
+          )
+        ).toThrow("user scoped memory operations require a principal");
       });
 
       it("records a linked document the schema reaches", () => {
@@ -1264,6 +1395,278 @@ describe("graph-query", () => {
 
         expect(first.walk.stats.schemaMemoHits).toBe(0);
         expect(second.walk.stats.schemaMemoHits).toBeGreaterThan(0);
+      });
+
+      describe("over data deeper than the stack", () => {
+        // A walk that took stack frames for each level of the data would run
+        // out of stack long before a chain this long, or a document nested
+        // this deep.
+        const chainLength = 10_000;
+        const nestingDepth = 3_000;
+
+        /**
+         * `length` documents `of:chain-0` onward, each linking to the next
+         * through `next`.
+         */
+        const chainOf = (length: number) => {
+          const documents = new Map<string, FabricValue>();
+          for (let i = 0; i < length; i++) {
+            documents.set(
+              keyFor(`of:chain-${i}`),
+              i + 1 < length
+                ? { label: i, next: linkTo(`of:chain-${i + 1}`) }
+                : { label: i },
+            );
+          }
+          return documents;
+        };
+
+        /**
+         * A value nested `nestingDepth` levels through `child`, alternating
+         * between `unionTree`'s two shapes, whose deepest level is `leaf`.
+         */
+        const nestedOf = (leaf: FabricValue) => {
+          let value: FabricValue = leaf;
+          for (let i = nestingDepth - 1; i >= 0; i--) {
+            value = i % 2 === 0
+              ? { a: `${i}`, child: value }
+              : { b: `${i}`, child: value };
+          }
+          return value;
+        };
+
+        /**
+         * Every level an object of one of two shapes, both reaching the next
+         * level through `child`.
+         */
+        const unionTree: JSONSchema = {
+          $defs: {
+            Tree: {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: {
+                    a: { type: "string" },
+                    child: { $ref: "#/$defs/Tree" },
+                  },
+                  required: ["a"],
+                },
+                {
+                  type: "object",
+                  properties: {
+                    b: { type: "string" },
+                    child: { $ref: "#/$defs/Tree" },
+                  },
+                  required: ["b"],
+                },
+              ],
+            },
+          },
+          $ref: "#/$defs/Tree",
+        };
+
+        /**
+         * Walks `id` of `documents` under `schema`, attributing to a root,
+         * and returns the keys the walk tracked.
+         */
+        const walkFrom = (
+          documents: Map<string, FabricValue>,
+          id: string,
+          schema: JSONSchema,
+        ) => {
+          const { manager, schemaTracker, walk } = walkOver(documents, {
+            onTrackedDoc: () => {},
+          });
+          walk.visit(
+            documentFor(manager, id),
+            { path: ["value"], schema },
+            undefined,
+            "root",
+          );
+          return trackedKeys(schemaTracker);
+        };
+
+        it("tracks every document of a long chain under a recursive schema", () => {
+          const documents = chainOf(chainLength);
+
+          const tracked = walkFrom(documents, "of:chain-0", {
+            $defs: {
+              Node: {
+                type: "object",
+                properties: { next: { $ref: "#/$defs/Node" } },
+              },
+            },
+            $ref: "#/$defs/Node",
+          });
+
+          expect(tracked).toEqual([...documents.keys()].toSorted());
+        });
+
+        it("tracks every document of a long chain whose last document links back to the first", () => {
+          const documents = chainOf(chainLength);
+          documents.set(keyFor(`of:chain-${chainLength - 1}`), {
+            label: chainLength - 1,
+            next: linkTo("of:chain-0"),
+          });
+
+          const tracked = walkFrom(documents, "of:chain-0", {
+            $defs: {
+              Node: {
+                type: "object",
+                properties: { next: { $ref: "#/$defs/Node" } },
+              },
+            },
+            $ref: "#/$defs/Node",
+          });
+
+          expect(tracked).toEqual([...documents.keys()].toSorted());
+        });
+
+        it("tracks every document of a long chain under a schema that takes anything", () => {
+          const documents = chainOf(chainLength);
+
+          const tracked = walkFrom(documents, "of:chain-0", true);
+
+          expect(tracked).toEqual([...documents.keys()].toSorted());
+        });
+
+        it("tracks every document of a long chain through array elements under a schema that takes anything", () => {
+          const documents = new Map<string, FabricValue>();
+          for (let i = 0; i < chainLength; i++) {
+            documents.set(
+              keyFor(`of:chain-${i}`),
+              i + 1 < chainLength
+                ? { label: i, rest: [linkTo(`of:chain-${i + 1}`)] }
+                : { label: i, rest: [] },
+            );
+          }
+
+          const tracked = walkFrom(documents, "of:chain-0", true);
+
+          expect(tracked).toEqual([...documents.keys()].toSorted());
+        });
+
+        it("tracks every document of a long chain of links carrying their own schema under a schema that takes anything", () => {
+          const node = {
+            $defs: {
+              Node: {
+                type: "object",
+                properties: { next: { $ref: "#/$defs/Node" } },
+              },
+            },
+            $ref: "#/$defs/Node",
+          } satisfies JSONSchema;
+          const documents = new Map<string, FabricValue>();
+          for (let i = 0; i < chainLength; i++) {
+            documents.set(
+              keyFor(`of:chain-${i}`),
+              i + 1 < chainLength
+                ? {
+                  label: i,
+                  next: {
+                    "/": {
+                      [LINK_V1_TAG]: {
+                        id: `of:chain-${i + 1}`,
+                        path: [],
+                        schema: node,
+                      },
+                    },
+                  },
+                }
+                : { label: i },
+            );
+          }
+
+          const tracked = walkFrom(documents, "of:chain-0", true);
+
+          expect(tracked).toEqual([...documents.keys()].toSorted());
+        });
+
+        it("tracks the document linked from the deepest level of a recursive union", () => {
+          const documents = new Map<string, FabricValue>([
+            [
+              keyFor("of:tree"),
+              nestedOf({ a: "leaf", child: linkTo("of:far") }),
+            ],
+            [keyFor("of:far"), { b: "far" }],
+          ]);
+
+          const tracked = walkFrom(documents, "of:tree", unionTree);
+
+          expect(tracked).toEqual([keyFor("of:far"), keyFor("of:tree")]);
+        });
+
+        it("tracks the document linked from the deepest level of a recursive record", () => {
+          const documents = new Map<string, FabricValue>([
+            [
+              keyFor("of:tree"),
+              nestedOf({ a: "leaf", child: linkTo("of:far") }),
+            ],
+            [keyFor("of:far"), { b: "far" }],
+          ]);
+
+          const tracked = walkFrom(documents, "of:tree", {
+            $defs: {
+              Tree: {
+                type: "object",
+                properties: { child: { $ref: "#/$defs/Tree" } },
+              },
+            },
+            $ref: "#/$defs/Tree",
+          });
+
+          expect(tracked).toEqual([keyFor("of:far"), keyFor("of:tree")]);
+        });
+
+        it("does not track a document linked from a deepest level that matches no branch", () => {
+          const documents = new Map<string, FabricValue>([
+            [
+              keyFor("of:tree"),
+              nestedOf({ c: "leaf", child: linkTo("of:far") }),
+            ],
+            [keyFor("of:far"), { b: "far" }],
+          ]);
+
+          const tracked = walkFrom(documents, "of:tree", unionTree);
+
+          expect(tracked).toEqual([keyFor("of:tree")]);
+        });
+
+        it("tracks the document linked from the deepest level of nesting under a schema that takes anything", () => {
+          const documents = new Map<string, FabricValue>([
+            [
+              keyFor("of:tree"),
+              nestedOf({ a: "leaf", child: linkTo("of:far") }),
+            ],
+            [keyFor("of:far"), { b: "far" }],
+          ]);
+
+          const tracked = walkFrom(documents, "of:tree", true);
+
+          expect(tracked).toEqual([keyFor("of:far"), keyFor("of:tree")]);
+        });
+
+        it("counts in its statistics the positions it hands to the traversal's own stack", () => {
+          const shallow = new Map<string, FabricValue>([
+            [keyFor("of:tree"), { a: "0", child: { b: "1" } }],
+          ]);
+          const deep = new Map<string, FabricValue>([
+            [keyFor("of:tree"), nestedOf({ a: "leaf" })],
+          ]);
+          const handoffsOver = (documents: Map<string, FabricValue>) => {
+            const { manager, walk } = walkOver(documents);
+            walk.visit(
+              documentFor(manager, "of:tree"),
+              { path: ["value"], schema: unionTree },
+              undefined,
+              "root",
+            );
+            return walk.stats.nativeDepthHandoffs;
+          };
+
+          expect(handoffsOver(shallow)).toBe(0);
+          expect(handoffsOver(deep)).toBeGreaterThan(0);
+        });
       });
     });
   });

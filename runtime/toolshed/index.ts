@@ -28,6 +28,10 @@ import {
   stopServerExecutionHost,
 } from "@/lib/server-execution.ts";
 import { listenForHeapProfileSignal } from "@/lib/heap-profiles.ts";
+import {
+  startIndexedCollectionHost,
+  stopIndexedCollectionHost,
+} from "@/lib/indexed-collection-host.ts";
 import { shutdownOpenTelemetry } from "@/lib/otel.ts";
 import { lifecycleRequestHandler } from "@/lib/pattern-lifecycle-handler.ts";
 import {
@@ -54,7 +58,10 @@ if (import.meta.main) {
   const shutdown = createShutdown({
     abort: () => ac.abort(),
     memoryServer,
-    stopServingHost: stopServerExecutionHost,
+    stopServingHost: async () => {
+      await stopServerExecutionHost();
+      await stopIndexedCollectionHost();
+    },
     closeMemory: () => memory.close(),
     flushTelemetry: shutdownOpenTelemetry,
     limitMs: 10_000,
@@ -66,6 +73,7 @@ if (import.meta.main) {
   await listenForHeapProfileSignal({
     directory: Deno.env.get("HEAP_PROFILE_DIR") ||
       `${Deno.env.get("TMPDIR") || "/tmp"}/toolshed-heap-profiles`,
+    sampleMainThread: env.HEAP_PROFILE_MAIN_THREAD,
     workerHeapProfiles: (directory) =>
       serverExecutionHost()?.workerHeapProfiles(directory) ??
         Promise.resolve(undefined),
@@ -74,9 +82,10 @@ if (import.meta.main) {
   });
 
   // This process's runtimes: the webhook runtime and, under
-  // EXPERIMENTAL_SERVER_EXECUTION, the serving loop's host. Both address
-  // their own pattern-source, compile and API requests to API_URL, or to
-  // API_INTERNAL_URL when that is set (lib/internal-api-origin.ts).
+  // EXPERIMENTAL_SERVER_EXECUTION, the serving loop's host, or without it
+  // the indexed-collection host. Each addresses its own pattern-source,
+  // compile and API requests to API_URL, or to API_INTERNAL_URL when that is
+  // set (lib/internal-api-origin.ts).
   const startProcessRuntimes = () => {
     const fetch = selfDirectedFetch(env);
     runtime = startRuntimes({
@@ -113,6 +122,7 @@ if (import.meta.main) {
       log,
       error,
     });
+    startIndexedCollectionHost({ server: memoryServer, identity, config: env });
   };
 
   const serve = (onListening?: () => void) =>

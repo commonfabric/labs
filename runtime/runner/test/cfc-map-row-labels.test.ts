@@ -42,7 +42,13 @@ import { createTrustedBuilder } from "./support/trusted-builder.ts";
 const signer = await Identity.fromPassphrase("runner-cfc-map-row-labels");
 const space = signer.did();
 
-const BOB = "did:mailto:bob@example.test";
+/** The readers the row rule's `dbOwner()` and `principal()` name: the CFC
+ *  `User{subject}` atom (spec §15.2), not the bare DID. */
+const OWNER_READER = { type: CFC_ATOM_TYPE.User, subject: space };
+const BOB = {
+  type: CFC_ATOM_TYPE.User,
+  subject: "did:mailto:bob@example.test",
+};
 
 /** The label of the cell the query's parameter is read from: `S`. */
 const SELECTION_CLAUSE = [
@@ -254,11 +260,11 @@ describe("CFC flow labels: a map over rows with different labels", () => {
     const first = await consumerConfidentiality(cards.key(0), "cards-probe-0");
     const second = await consumerConfidentiality(cards.key(1), "cards-probe-1");
 
-    expect(first).toContainEqual(space);
+    expect(first).toContainEqual(OWNER_READER);
     expect(hasClause(first, SELECTION_CLAUSE)).toBe(true);
     expect(first).not.toContainEqual(BOB);
 
-    expect(second).toContainEqual(space);
+    expect(second).toContainEqual(OWNER_READER);
     expect(second).toContainEqual(BOB);
     expect(hasClause(second, SELECTION_CLAUSE)).toBe(true);
   });
@@ -270,7 +276,7 @@ describe("CFC flow labels: a map over rows with different labels", () => {
       result.key("cards") as Cell<any>,
     );
 
-    expect(count).toContainEqual(space);
+    expect(count).toContainEqual(OWNER_READER);
     expect(count).toContainEqual(BOB);
     expect(hasClause(count, SELECTION_CLAUSE)).toBe(true);
   });

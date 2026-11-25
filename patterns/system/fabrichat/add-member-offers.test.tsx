@@ -261,11 +261,12 @@ interface ManagedRoomOutput {
   addRequests: ChatRoomOutput["addRequests"];
   members: ChatRoomOutput["members"];
   participantPrincipals: ChatRoomOutput["participantPrincipals"];
+  roster: ChatRoomOutput["roster"];
 }
 
 /**
  * A group room that names itself to its viewer's manager by its own result,
- * as `FabriChatRoom` does.
+ * as `FabriChatRoom` does, which lists the room's roster as its does.
  */
 const ManagedRoom = pattern<ManagedRoomInput, ManagedRoomOutput>(
   (input) => {
@@ -286,6 +287,7 @@ const ManagedRoom = pattern<ManagedRoomInput, ManagedRoomOutput>(
       addRequests: room.addRequests,
       members: room.members,
       participantPrincipals: room.participantPrincipals,
+      roster: room.roster,
     };
   },
 );
@@ -298,6 +300,17 @@ const pickerOf = (root: unknown): string => {
     countElements(picker, "cf-profile-badge")
   }`;
 };
+
+/** Whether the room's control asking the manager for the people shows. */
+const askOf = (root: unknown): string =>
+  String(
+    readValue(
+      (propValue(
+        findNodeById(root, "fabrichat-add-member-ask-people"),
+        "style",
+      ) as { display?: unknown })?.display,
+    ),
+  );
 
 /** What the room shows the session about its latest add. */
 const shownOf = (root: unknown): string =>
@@ -386,6 +399,20 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     outgoingNotices: notices,
   } as ManagerArg);
   const room = ManagedRoom({
+    myProfile: profile,
+    messages: setup.room.messages,
+    roster: setup.roster,
+    addRequests: Writable.of<Record<string, AddMemberOutcome>>({}),
+    manager: {
+      offerRoom: manager.offerRoom,
+      requests: manager.requests,
+      people: manager.people,
+      askedPeople: manager.askedPeople,
+    } as RoomManager,
+  });
+  // The same room, to a viewer whose manager is from before `askedPeople`,
+  // and lists its `people` without being asked.
+  const legacy = ManagedRoom({
     myProfile: profile,
     messages: setup.room.messages,
     roster: setup.roster,
@@ -493,9 +520,29 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         trustedUi: revokeGesture,
       },
       { action: action_list_room },
-      // The room's picker offers Alice, whom Bob's people list and the room's
-      // space doesn't.
-      { assertion: assert(() => pickerOf(room[UI]) === "block:1") },
+      // The room's picker offers no one until the session asks for the
+      // people, as its control does, and then offers Alice, whom Bob's people
+      // list and the room's space doesn't.
+      {
+        assertion: assert(() =>
+          pickerOf(room[UI]) === "none:0" && askOf(room[UI]) === "block"
+        ),
+      },
+      { action: manager.askForPeople, event: {} },
+      {
+        assertion: assert(() =>
+          pickerOf(room[UI]) === "block:1" && askOf(room[UI]) === "none"
+        ),
+      },
+      // A manager from before `askedPeople` is read through its `people`,
+      // with no control to ask it, and a viewer with no manager has none
+      // either.
+      {
+        assertion: assert(() =>
+          pickerOf(legacy[UI]) === "block:1" && askOf(legacy[UI]) === "none" &&
+          askOf(unmanaged[UI]) === "none"
+        ),
+      },
       // An offer names a group room, and nothing else in its space.
       {
         action: manager.offerRoom,
@@ -532,8 +579,9 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         }),
       },
       // Named by her chat address alone, Alice is offered the room through the
-      // profile Bob's people list for her, and joins its roster, so she is a
-      // member again, with that profile, and the picker leaves her out.
+      // profile the roster of Bob's direct room with her lists, and joins the
+      // room's roster, so she is a member again, with that profile, and the
+      // picker leaves her out.
       {
         action: room.addMember,
         event: { requestId: "add-alice", target: { value: setup.aliceDid } },
@@ -598,6 +646,32 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
             mismatch.reason === "That profile isn't theirs." &&
             nobody?.status === "refused" &&
             nobody.reason === "That profile doesn't say whose it is.";
+        }),
+      },
+      // Taken out of the space's access list and added again by her chat
+      // address alone, Carol, with whom Bob has no direct room, is offered
+      // the room through the profile the room's own roster lists for her.
+      {
+        action: revokeMember({
+          room: setup.room.messages,
+          principal: setup.carolDid,
+        }),
+        event: {},
+        trustedUi: revokeGesture,
+      },
+      {
+        action: room.addMember,
+        event: { requestId: "readd-carol", target: { value: setup.carolDid } },
+        trustedUi: addGesture,
+      },
+      {
+        assertion: assert(() => {
+          const outcome = room.addRequests["readd-carol"];
+          return outcome?.status === "done" &&
+            outcome.delivery === "offered" &&
+            !notices.get().some((notice) =>
+              notice.recipient === setup.carolDid.get()
+            );
         }),
       },
       // A viewer with no manager admits the person, and the add reads as
@@ -703,6 +777,30 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
             shared.every((id, index) => id === expected[index]) &&
             setup.second.received.length === 1 &&
             setup.second.received[0] === "g-two";
+        }),
+      },
+      // Carol is on the rosters of other groups of Bob's, but not on this
+      // one's, and Bob has no direct room with her, so an offer of it naming
+      // her by principal alone reads no roster that lists her, and queues her
+      // a notice.
+      {
+        action: manager.offerRoom,
+        event: {
+          requestId: "o-group-only",
+          room: held.key("room"),
+          member: setup.carolDid,
+        },
+      },
+      {
+        assertion: assert(() => {
+          const outcome = requests.get()["o-group-only"];
+          return outcome?.status === "done" &&
+            outcome.delivery === "noticed" &&
+            notices.get().some((notice) =>
+              notice.recipient === setup.carolDid.get() &&
+              notice.id ===
+                JSON.stringify([setup.carolDid.get(), "o-group-only"])
+            );
         }),
       },
       // An access list not known yet doesn't read as one refusing this user:

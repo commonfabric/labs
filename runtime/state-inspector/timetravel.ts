@@ -32,6 +32,7 @@ import {
   summarize,
 } from "./decode.ts";
 import {
+  inheritedDocument,
   owningLink,
   reconstructDocument,
   selectAtPath,
@@ -461,9 +462,9 @@ export function entityTimeline(
   const branch = opts.branch ?? "";
   const limit = opts.limit ?? 500;
   // The branch that OWNS the visible row, not the branch asked about: the
-  // replay below mirrors `reconstructWithinBranch`, which never composes across
-  // a fork, so the rows to replay are that branch's. Reading local rows only
-  // would return an empty timeline for an entity the branch inherited.
+  // rows to replay are that branch's, as `reconstructWithinBranch` replays
+  // them. Reading local rows only would return an empty timeline for an
+  // entity the branch inherited.
   const owner = owningLink(space, { branch, scope, id: opts.id });
   const rows = owner === undefined ? [] : space.db
     .prepare(
@@ -488,20 +489,41 @@ export function entityTimeline(
   // (which is O(writes²) and won't return on a hot entity). The op semantics
   // mirror reconstructWithinBranch: set=decode, patch=applyPatch(doc ?? {}),
   // delete=tombstone (a later patch then starts from {}, as the engine does).
+  // The replay starts from what the owning branch inherits at its fork point,
+  // since a patch before any set or delete on the branch was written over
+  // that; on the default branch, or with nothing inherited, that is `{}`.
   const steps: TimelineStep[] = [];
   let doc: FabricValue | undefined = undefined;
   let stateKnown = true;
-  let previousValue: SelectedDiffValue = {
-    present: false,
-    value: undefined,
-  };
+  // Why the state is unknown when no write of the branch's own made it so:
+  // what the branch inherits could not be reconstructed.
+  let unknownBecause: string | undefined;
+  if (owner !== undefined) {
+    try {
+      doc = inheritedDocument(space, owner.branch, scope, opts.id);
+    } catch (e) {
+      // A patch over what the branch inherits then has no known state until
+      // a set or delete on the branch gives it one, and says why.
+      stateKnown = false;
+      unknownBecause =
+        `The document this branch inherits could not be reconstructed: ${
+          (e as Error).message
+        }`;
+    }
+  }
+  let previousValue: SelectedDiffValue =
+    stateKnown && isFabricPlainObject(doc) && Object.hasOwn(doc, "value")
+      ? { present: true, value: doc.value }
+      : { present: false, value: undefined };
   for (const r of rows) {
     const previousStateKnown = stateKnown;
     let reconstructionError: string | undefined;
     if (r.op === "patch" && !stateKnown) {
-      reconstructionError =
+      reconstructionError = unknownBecause ??
         "State remains unknown because an earlier write could not be reconstructed.";
     } else {
+      // From this write on, the state is known or unknown because of it.
+      unknownBecause = undefined;
       try {
         if (r.op === "set") {
           doc = r.data ? decodeStored(r.data) : undefined;

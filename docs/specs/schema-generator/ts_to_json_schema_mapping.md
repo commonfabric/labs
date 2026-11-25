@@ -689,6 +689,15 @@ Because the claim is by brand rather than by name, this one keeps its ordinary
 `$defs` hoisting: every `SqliteDb` position emits
 `$ref: "#/$defs/SqliteDatabase"` against one descriptor.
 
+A handle type that extends `SqliteDb` and has type parameters of its own, as
+`IndexedCollections<Kinds>` has, emits the same descriptor. The payload is
+read off the reference to `SqliteDb` in the type's hierarchy
+(`getCellWrapperInfo`), and the type arguments written on the subtype are
+left unread: they are the subtype's own, and none is the value the handle
+reads as. Such a subtype is not hoisted under its own name either: the
+position that holds the handle states `asCell: ["sqlite"]` beside the
+`$ref`, as a position written `SqliteDb` does.
+
 The remaining typed arrays and the buffer types map to `true` (accept
 anything), which overclaims: none of them is representable as a `FabricValue`,
 so a value of one of those types is rejected at the storage boundary rather
@@ -805,7 +814,12 @@ The wrapper vocabulary is deliberately split (header comment,
   ComparableCell | ReadonlyCell | WriteonlyCell | SqliteDb | Reactive`.
 - **Brand axis** — `CellBrand` (`cell-brand.ts`): the marker strings
   `"opaque" | "cell" | "stream" | "comparable" | "readonly" | "writeonly" |
-  "sqlite"` that land in schemas.
+  "sqlite"` that land in schemas. A cell type's brand is one of them, except
+  `ReadonlyCell`'s, which is the union `"readonly" | "cell"`: its own kind and
+  the kind of the cell type assignable to it (`base/api/index.ts`).
+  `getCellBrand()` reads that union as `"readonly"` (`KINDS_ASSIGNABLE_TO`,
+  `cell-brand.ts`); a brand that is any other union names no kind
+  (`test/typescript/cell-brand.test.ts`).
 
 Cell detection is **structural, not nominal**: brand marker properties, keyed
 by the `unique symbol`s `CELL_BRAND`/`CELL_INNER_TYPE` (named `__@` and the

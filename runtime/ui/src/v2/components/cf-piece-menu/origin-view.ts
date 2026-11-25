@@ -10,52 +10,14 @@ import {
   STORED_ARGUMENT_SCHEMA_REFUSAL,
   storedArgumentRefusalDetail,
 } from "@commonfabric/runner/shared";
-import type {
-  PieceOriginView,
-  PieceReconciliationView,
-  PieceSourceView,
+import {
+  describeOrigin,
+  type OriginDescription,
+  type PieceReconciliationView,
+  type PieceSourceView,
 } from "@commonfabric/runtime-client";
 
-export interface OriginDescription {
-  /** Short label naming the kind of origin. */
-  label: string;
-
-  /** One sentence on what that origin can do. */
-  detail: string;
-}
-
-/** How an origin reads to a person, including the detached case. */
-export function describeOrigin(
-  origin: PieceOriginView | undefined,
-): OriginDescription {
-  if (origin === undefined) {
-    return {
-      label: "Detached",
-      detail: "This piece records no origin, so nothing supplies new code " +
-        "for it. It is the only durable reference to the source it runs.",
-    };
-  }
-  switch (origin.kind) {
-    case "system":
-      return {
-        label: "Deployment pattern",
-        detail: "A pattern this deployment serves; a new release of the " +
-          "deployment can replace it.",
-      };
-    case "fabric-piece":
-      return {
-        label: "Fabric piece",
-        detail: "A stable piece in the fabric; the origin names whichever " +
-          "pattern that piece currently runs.",
-      };
-    case "fabric-pattern":
-      return {
-        label: "Exact pattern",
-        detail: "Content-addressed source: this origin always resolves to " +
-          "the same code.",
-      };
-  }
-}
+export { describeOrigin, type OriginDescription };
 
 /** A content identity abbreviated for display; the full value stays in a title. */
 function shortIdentity(identity: string): string {

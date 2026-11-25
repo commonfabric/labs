@@ -463,7 +463,10 @@ describe("topics-browser-measurement-core", () => {
       expect(
         confirmLiftImplementations(
           [pivot],
-          [{ [src]: [fixture.lifts.crossrefTable.preview] }],
+          [{
+            "not a source location": [fixture.cardsByActivityPreview],
+            [src]: [fixture.lifts.crossrefTable.preview],
+          }],
           running,
         ),
       ).toEqual(new Map([[pivot.site, fixture.lifts.crossrefTable.preview]]));
@@ -680,6 +683,15 @@ describe("topics-browser-measurement-core", () => {
       } as const;
       expect(WORKER_RUN_TIMING_KEY).toBe("scheduler/scheduler/run");
       expect(workerRunCount(before, after)).toBe(7);
+    });
+
+    it("returns zero when the scheduler's run count is unchanged", () => {
+      const timing = { [WORKER_RUN_TIMING_KEY]: [4, 12] } as const;
+      expect(workerRunCount(timing, timing)).toBe(0);
+    });
+
+    it("counts the first runs when the earlier snapshot has no run span", () => {
+      expect(workerRunCount({}, { [WORKER_RUN_TIMING_KEY]: [3, 1] })).toBe(3);
     });
 
     it("throws for timing without the scheduler's run span", () => {

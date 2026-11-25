@@ -1,3 +1,10 @@
+/**
+ * A shared board of topics, each a unit of team attention with a title, a
+ * living body, and a comment thread. The board shows a card for each topic with
+ * its number, a snippet of its body, its author, comment count, and last
+ * activity, shows the profile you are acting as, and has a field to start a new
+ * topic.
+ */
 import {
   action,
   Default,
@@ -568,7 +575,36 @@ export interface CardSource {
 }
 
 /**
- * The cards' rows, most recently active first, from the topics as cells.
+ * How many cards the board shows: the most recently active topics, up to this
+ * many.
+ *
+ * Every card is an instance of the card list's mapped sub-pattern, and a
+ * browser rendering the list watches each instance. Under server execution
+ * each watched instance is demand, so the server starts every card, and the
+ * topic it links to, for every viewer. Unbounded, that is the whole board per
+ * viewer: on a copy of the team's board at 3,441 topics, one viewer took a
+ * serving worker past its 8 GB heap limit, and with the cards bounded here it
+ * settled at 2.6 GB with the board open in two tabs. Older topics are reached
+ * by number or by search.
+ */
+export const CARD_LIMIT = 200;
+
+/**
+ * The topics whose cards the board shows: the `limit` most recently active of
+ * `read`, most recently active first. The order is `activityOrderOf()`'s.
+ */
+export function cardsToShow<T extends { value: CardSource }>(
+  read: readonly T[],
+  limit: number = CARD_LIMIT,
+): T[] {
+  return [...read]
+    .sort((a, b) => activityOrderOf(b.value) - activityOrderOf(a.value))
+    .slice(0, limit);
+}
+
+/**
+ * The cards' rows, the `CARD_LIMIT` most recently active first, from the
+ * topics as cells.
  *
  * Each topic is read ONCE, into a plain value, and sorted and rendered from
  * that: reading through the reactive array costs a link resolution per read,
@@ -596,9 +632,8 @@ export function cardRowsOf(
     const value = topic?.get();
     if (value) read.push({ topic, value });
   }
-  read.sort((a, b) => activityOrderOf(b.value) - activityOrderOf(a.value));
   const rows: unknown[] = [];
-  for (const { topic, value } of read) {
+  for (const { topic, value } of cardsToShow(read)) {
     rows.push(
       Writable.for<CardRow>(topic).set({
         topic,
@@ -821,6 +856,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   // identity; no topic reads it.
   const table = namesTable({ names });
   const hasNoTopics = topicCount === 0;
+  const cardsAreCapped = topicCount > CARD_LIMIT;
 
   // Browser authorship comes from the current viewer's canonical Profile.
   // CLI streams below remain wish-free: agents sign each mutation in the
@@ -963,6 +999,15 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
                 </cf-hstack>
               </cf-card>
             ))}
+
+            {cardsAreCapped
+              ? (
+                <cf-text variant="caption" tone="muted">
+                  Showing up to {CARD_LIMIT} of {topicCount}{" "}
+                  topics, most recently active first.
+                </cf-text>
+              )
+              : null}
 
             {hasNoTopics
               ? (

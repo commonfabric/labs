@@ -9,6 +9,106 @@ const createEngine = async () => {
   return { engine, path };
 };
 
+Deno.test("memory v2 engine drops the records of a currency index laid out before a slice answered for slots at another key", async () => {
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  const raw = await new Database(path);
+  raw.exec(`
+    CREATE TABLE currency_slice (
+      branch TEXT NOT NULL, slice TEXT NOT NULL, piece TEXT NOT NULL,
+      mark INTEGER NOT NULL, was_clean INTEGER NOT NULL, epoch TEXT NOT NULL,
+      PRIMARY KEY (branch, slice, piece)
+    );
+    CREATE TABLE currency_vouch (
+      branch TEXT NOT NULL, slice TEXT NOT NULL, piece TEXT NOT NULL,
+      id TEXT NOT NULL, seq INTEGER NOT NULL, held INTEGER NOT NULL,
+      PRIMARY KEY (branch, slice, piece, id)
+    );
+    INSERT INTO currency_slice VALUES ('', 'space', 'of:piece', 0, 1, 'epoch');
+    INSERT INTO currency_vouch VALUES ('', 'space', 'of:piece', 'of:out', 3, 1);
+  `);
+  raw.close();
+
+  const engine = await open({ url: toFileUrl(path) });
+
+  try {
+    const count = (table: string) =>
+      engine.database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get();
+    assertEquals(count("currency_slice"), { n: 0 });
+    assertEquals(count("currency_vouch"), { n: 0 });
+    assertEquals(count("currency_decide"), { n: 0 });
+    assertEquals(
+      (engine.database.prepare(`PRAGMA table_info("currency_slice")`)
+        .all() as Array<{ name: string }>).map((row) => row.name).includes(
+          "unvouched",
+        ),
+      true,
+    );
+  } finally {
+    await close(engine);
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 engine drops a currency index laid out one row per piece", async () => {
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  const raw = await new Database(path);
+  raw.exec(`
+    CREATE TABLE currency_piece (
+      branch TEXT NOT NULL, piece TEXT NOT NULL, mark INTEGER NOT NULL,
+      was_clean INTEGER NOT NULL, epoch TEXT NOT NULL,
+      PRIMARY KEY (branch, piece)
+    );
+    CREATE TABLE currency_read (
+      branch TEXT NOT NULL, piece TEXT NOT NULL, entity_space TEXT NOT NULL,
+      entity TEXT NOT NULL, derived INTEGER NOT NULL, seq INTEGER NOT NULL,
+      PRIMARY KEY (branch, piece, entity_space, entity)
+    );
+    INSERT INTO currency_piece VALUES ('', 'of:piece', 0, 1, 'epoch');
+    INSERT INTO currency_read VALUES ('', 'of:piece', 'did:key:s', 'of:a', 0, 3);
+  `);
+  raw.close();
+
+  const engine = await open({ url: toFileUrl(path) });
+
+  try {
+    const tables = (engine.database.prepare(
+      `SELECT name FROM sqlite_schema
+       WHERE type = 'table' AND name LIKE 'currency_%'
+       ORDER BY name`,
+    ).all() as Array<{ name: string }>).map((row) => row.name);
+    assertEquals(tables, [
+      "currency_cursor",
+      "currency_decide",
+      "currency_expiry",
+      "currency_export",
+      "currency_import",
+      "currency_origin",
+      "currency_read",
+      "currency_reader",
+      "currency_slice",
+      "currency_slice_source",
+      "currency_source",
+      "currency_under",
+      "currency_vouch",
+      "currency_write",
+    ]);
+    assertEquals(
+      engine.database.prepare("SELECT COUNT(*) AS n FROM currency_read").get(),
+      { n: 0 },
+    );
+    assertEquals(
+      (engine.database.prepare(`PRAGMA table_info("currency_read")`)
+        .all() as Array<{ name: string }>).map((row) => row.name).includes(
+          "slice",
+        ),
+      true,
+    );
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
 Deno.test("memory v2 engine bootstraps the revision schema", async () => {
   const { engine, path } = await createEngine();
 
@@ -28,6 +128,20 @@ Deno.test("memory v2 engine bootstraps the revision schema", async () => {
         "blob_store",
         "branch",
         "commit",
+        "currency_cursor",
+        "currency_decide",
+        "currency_expiry",
+        "currency_export",
+        "currency_import",
+        "currency_origin",
+        "currency_read",
+        "currency_reader",
+        "currency_slice",
+        "currency_slice_source",
+        "currency_source",
+        "currency_under",
+        "currency_vouch",
+        "currency_write",
         "execution_lease",
         "execution_outbox",
         "head",

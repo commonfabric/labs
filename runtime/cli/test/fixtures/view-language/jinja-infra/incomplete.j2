@@ -1,0 +1,4 @@
+# {{ ansible_managed }}
+{%- if deploy_users is defined %}
+{{ user 
+deploy ALL=(ALL) NOPASSWD: ALL

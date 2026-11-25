@@ -226,6 +226,34 @@ currency. The existing overlay and retirement rules below still apply.
      read-propagation path — the OW51 shape — with the deliberate
      body-throw awaiting that export.
 
+  **A run refused for an input in transit keeps a result its node
+  already holds (DECIDED 2026-11-19, narrowing the 2026-08-21 ruling's
+  "output `undefined`").** Where the read that refused found a document
+  still in transit to this replica, one it has never examined and the
+  store has not reported absent (`IStorageProvider.unexaminedAbsences()`
+  and `storeReportedAbsent()`), and the node's output already holds a
+  value, the disposal writes nothing: the output keeps that value. The
+  same holds for an argument that did not resolve because a document it
+  reads is in transit. Such a run runs again once the loads of those
+  documents have settled, whatever they find, since a document that
+  arrives absent changes nothing its reads could see. A document whose
+  load has settled is no longer in transit, whether the load failed or
+  ended without delivering it, as a load from a space that refuses this
+  replica ends (the store's ledger records no failure for one: the
+  document is absent for its reader), so the run after that clears the
+  result rather than asking for the load again. Everywhere else
+  the disposal is as above: a refusal over an input that has arrived
+  clears the result, as the [2026-09-14 derived-state correction
+  decision](../../history/development/2026-09-14-derived-state-correction.md)
+  requires, and a node whose output holds nothing takes the `undefined`
+  result. So a result derived from an input that had not arrived never
+  replaces one derived from inputs that had. The case this governs is a
+  client starting a piece cold: its first runs read inputs in spaces it
+  has not loaded yet, and each would otherwise commit `undefined` over
+  the stored result, blanking it for every client until the inputs
+  arrived and the run came again. — decided by @danfuzz, 2026-11-19;
+  @seefeldb, who made the 2026-08-21 ruling, is informed.
+
   **The serving-side re-trigger, explicit (RULED 2026-08-21 — the
   option-3 ruling on the demand-closure fork):**
 
@@ -269,8 +297,11 @@ currency. The existing overlay and retirement rules below still apply.
   `scheduler/handler-load-wait.ts` for the handler withdrawal; pinned in
   `runtime/runner/test/unresolved-input-lift.test.ts` (the hop-target
   dead-end disposes and re-triggers on arrival; the stated-null
-  control still flows; its case has no previous result, so it does not
-  pin that one is overwritten), with the serving-runtime match
+  control still flows) and in
+  `runtime/runner/test/refused-run-keeps-result.test.ts` (a cold
+  start's refused run leaves a stored result in place and the run after
+  the input arrives writes the new one; a node holding no result writes
+  none until then), with the serving-runtime match
   witnessed by `integration/default-app.test.ts` greening ON (the
   surface whose serving-runtime crash first recorded the bug —
   verification-coverage.md OW51).

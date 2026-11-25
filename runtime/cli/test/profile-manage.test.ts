@@ -30,6 +30,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { blobDocumentId } from "@commonfabric/runner/blob-record";
 import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
 
 import { PiecesController } from "@commonfabric/piece/ops";
@@ -72,6 +73,8 @@ const picture = new Uint8Array([
   0,
   13,
 ]);
+// Another picture, by the same check.
+const otherPicture = new Uint8Array([...picture, 1]);
 const space = signer.did();
 
 /** A list of profile links, each read as the link it is. */
@@ -1002,47 +1005,81 @@ describe("profile management", () => {
         .toBeUndefined();
     });
 
-    it("reports a picture another principal set as not the owner's", async () => {
+    it("uploads a picture of 200 KiB as a blob in the profile's own space, and holds no bytes of it inline", async () => {
       const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
         loadPieces,
       });
-      // The profile's space lets anyone write, and the picture's writer
-      // labels the value with whoever wrote it.
-      profileSigner = stranger;
+      const large = new Uint8Array(200 * 1024);
+      large.set(picture);
+
+      await setProfilePicture(
+        { ...CONFIG, profileSpace: ada.space, bytes: large },
+        { loadPieces },
+      );
+
+      const [listed] = await listProfiles(CONFIG, { loadPieces });
+      expect(listed.picture).toEqual(large);
+      expect(listed.pictureByOwner).toBe(true);
+      const profile = runtime.getCellFromEntityId<{
+        picture?: FabricBytes;
+        pictureBlob?: { space?: string; id?: string };
+      }>(spaceOf(ada), ada.id);
+      await profile.sync();
+      const { picture: inline, pictureBlob } = profile.get() ?? {};
+      expect(inline?.length).toBe(0);
+      expect(pictureBlob?.space).toBe(ada.space);
+      const record = await server.readDocument(
+        spaceOf(ada),
+        blobDocumentId(pictureBlob?.id ?? ""),
+      );
+      expect(record?.value).toEqual({
+        type: "image/png",
+        body: new FabricBytes(large),
+      });
+    });
+
+    it("refuses a picture another principal sets, and keeps the owner's", async () => {
+      const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
+        loadPieces,
+      });
       await setProfilePicture(
         { ...CONFIG, profileSpace: ada.space, bytes: picture },
         { loadPieces },
       );
+
+      profileSigner = stranger;
+      await expect(
+        setProfilePicture(
+          { ...CONFIG, profileSpace: ada.space, bytes: otherPicture },
+          { loadPieces },
+        ),
+      ).rejects.toThrow(/Only the profile's owner can set its picture/);
       profileSigner = signer;
 
       const [listed] = await listProfiles(CONFIG, { loadPieces });
       expect(listed.picture).toEqual(picture);
-      expect(listed.pictureByOwner).toBe(false);
-
-      await setProfilePicture(
-        { ...CONFIG, profileSpace: ada.space, bytes: picture },
-        { loadPieces },
-      );
-      expect((await listProfiles(CONFIG, { loadPieces }))[0].pictureByOwner)
-        .toBe(true);
+      expect(listed.pictureByOwner).toBe(true);
     });
 
     it("reports a picture stored without a label as not attested to its owner, and attests it with `keepCurrent`", async () => {
       const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
         loadPieces,
       });
-      // A picture as a writer that brings no policy stores it: bytes, and no
-      // label.
+      // A stand-in for a picture stored before the field had a policy: the
+      // stored policy is taken away, and bytes are written with no label.
       const profile = runtime.getCellFromEntityId<{ picture?: unknown }>(
         spaceOf(ada),
         ada.id,
       );
       await profile.sync();
+      const stored = profile.key("picture").resolveAsCell()
+        .getAsNormalizedFullLink();
+      const strip = runtime.edit();
+      seedStoredEnvelope(strip, { ...stored, path: ["cfc"] }, undefined);
+      runtime.prepareTxForCommit(strip);
+      expect((await strip.commit().settled).error).toBeUndefined();
       const tx = runtime.edit();
-      tx.writeValueOrThrow(
-        profile.key("picture").resolveAsCell().getAsNormalizedFullLink(),
-        new FabricBytes(picture),
-      );
+      tx.writeValueOrThrow(stored, new FabricBytes(picture));
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
 

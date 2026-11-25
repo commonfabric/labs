@@ -170,6 +170,8 @@ jobs:
       LANE_JOB: Tests (${{ matrix.lane }}/${{ needs.plan.outputs.of }})
     strategy:
       fail-fast: false
+      # Limit this run to forty concurrent test jobs; its remaining lanes queue.
+      max-parallel: 40
       matrix:
         # Every lane of the run packs the same plan and takes its own share of
         # it, so nothing tells a lane what to run beyond its number.

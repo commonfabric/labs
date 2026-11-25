@@ -1,0 +1,35 @@
+FROM node:22.23.4-alpine3.23@sha256:6abbcf5dd6b231da109bcde1181db1d92bf78015ae1a9514d9807c1f857869db AS build
+
+RUN npm install -g pnpm
+
+# Move files into the image and install
+WORKDIR /app
+COPY ./service ./
+RUN pnpm install --production --frozen-lockfile > /dev/null
+
+# Uses assets from build stage to reduce build size
+FROM node:22.23.4-alpine3.23@sha256:6abbcf5dd6b231da109bcde1181db1d92bf78015ae1a9514d9807c1f857869db
+
+RUN apk add --no-cache 'ca-certificates>=20261020-r0' dumb-init bash curl openssl jq coreutils sqlite util-linux
+
+# Avoid zombie processes, handle signal forwarding
+ENTRYPOINT ["dumb-init", "--"]
+
+WORKDIR /app
+COPY --from=build /app /app
+
+# Copy pdsadmin scripts and make them executable
+COPY ./pdsadmin/pdsadmin.sh /usr/local/bin/pdsadmin
+RUN chmod a+x /usr/local/bin/pdsadmin
+
+EXPOSE 3000
+ENV PDS_PORT=3000
+ENV NODE_ENV=production
+# potential perf issues w/ io_uring on this version of node
+ENV UV_USE_IO_URING=0
+
+CMD ["node", "--enable-source-maps", "index.js"]
+
+LABEL org.opencontainers.image.source=https://github.com/bluesky-social/pds
+LABEL org.opencontainers.image.description="AT Protocol PDS"
+LABEL org.opencontainers.image.licenses=MIT

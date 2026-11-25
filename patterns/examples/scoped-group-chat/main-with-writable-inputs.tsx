@@ -1,3 +1,11 @@
+/**
+ * A group chat with rooms in which the messages are shared by everyone in the
+ * space, each person's name and draft message belong to that user, and the
+ * selected room is private to each browser session. It demonstrates the
+ * `PerSpace`, `PerUser`, and `PerSession` scopes wrapped around `Writable`
+ * input types, reading and updating them through cell references.
+ */
+
 import {
   computed,
   Default,

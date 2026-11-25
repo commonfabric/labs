@@ -47,24 +47,7 @@ const x: number = 1;
 const y = x;`;
   const doc = parseDocument(blob);
   const sem = createSemantics(blob, { cwd: CWD })!;
-  sem.prewarm();
   assertEquals(sem.typeAt(nameOffsetOf(doc, "y")), "number");
-});
-
-Deno.test("semantics: prewarm never sees a throw because build isolates its own", () => {
-  // A hostile cwd makes build()'s own try/catch latch `failed`; the throw is
-  // swallowed inside build(), so prewarm()'s surrounding try/catch observes
-  // nothing. The service stays silent on every later query.
-
-  const blob = `// transformed: /m.ts
-const x = 1;
-const y = x;`;
-  const doc = parseDocument(blob);
-  const sem = createSemantics(blob, { cwd: 12345 as unknown as string })!;
-  sem.prewarm(); // build throws internally, latches failed, does not propagate
-  sem.prewarm(); // the latch short-circuits the second attempt
-  assertEquals(sem.typeAt(nameOffsetOf(doc, "y")), null);
-  assertEquals(sem.definitionOf(nameOffsetOf(doc, "y")), []);
 });
 
 //
@@ -92,7 +75,6 @@ const a = ext();
 const b = ext();`;
     const doc = parseDocument(blob);
     const sem = createSemantics(blob, { cwd: root })!;
-    sem.prewarm();
     assertEquals(sem.typeAt(nameOffsetOf(doc, "a")), "boolean");
     assertEquals(sem.typeAt(nameOffsetOf(doc, "b")), "boolean");
     // The external definition still resolves through the service's own cache.
@@ -136,11 +118,9 @@ const a = ext();`;
     const doc = parseDocument(blob);
 
     const nearer = createSemantics(blob, { cwd: sub })!;
-    nearer.prewarm();
     assertEquals(nearer.typeAt(nameOffsetOf(doc, "a")), "number");
 
     const outer = createSemantics(blob, { cwd: root })!;
-    outer.prewarm();
     assertEquals(outer.typeAt(nameOffsetOf(doc, "a")), "string");
   } finally {
     Deno.removeSync(root, { recursive: true });
@@ -222,10 +202,7 @@ Deno.test("diff semantics: build succeeds over real root files, so typeAt's !pro
       cwd: root,
     })!;
     assert(sem, "diff service builds over the real root file");
-    sem.prewarm();
-    sem.prewarm(); // the cached Program short-circuits the second build()
-    // No offset maps into a file here, so typeAt degrades to null via the map,
-    // with build() having already succeeded.
+    // No offset maps into a file here, so typeAt degrades to null via the map.
     assertEquals(sem.typeAt(0), null);
     assertEquals(sem.definitionOf(0), []);
   } finally {

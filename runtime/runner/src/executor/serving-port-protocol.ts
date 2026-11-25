@@ -36,6 +36,7 @@ import type { ModuleCompileRequest } from "../harness/module-compile.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
 import type { HostOccupancy } from "./host.ts";
+import type { RunEvent, RunIdentity } from "./run-beacon.ts";
 import type { ServedAclChangeData } from "./served-acl-change.ts";
 import type { SpaceServerPolicy } from "./space-server.ts";
 import type { ServingLoopCounters, ServingLoopStats } from "./stats.ts";
@@ -173,6 +174,13 @@ export type ServingWorkerInit = {
    * Absent, they use the cache the worker's entry module gives, if any.
    */
   readonly compileCacheDir: string | undefined;
+
+  /**
+   * The worker's run beacon (`run-beacon.ts`), which the worker's schedulers
+   * mark around each run and the pool reads on its watchdog timer. A shared
+   * buffer crosses by reference. Absent, the worker marks nothing.
+   */
+  readonly runBeacon: SharedArrayBuffer | undefined;
 };
 
 /** A compile `compiler.compile` ran, as its answer crosses. */
@@ -236,6 +244,36 @@ export type PlaneRequests = {
       selection: ViewSelection;
     };
     result: boolean;
+  };
+  "server.advanceCurrency": {
+    params: { space: string };
+    result: Awaited<ReturnType<Server["advanceCurrency"]>>;
+  };
+  "server.storeCurrencyRecords": {
+    params: {
+      space: string;
+      batch: Parameters<Server["storeCurrencyRecords"]>[1];
+    };
+    result: Awaited<ReturnType<Server["storeCurrencyRecords"]>>;
+  };
+  "server.judgeCurrencyRoots": {
+    params: {
+      space: string;
+      roots: string[];
+      excludePrincipal: string | undefined;
+      epoch: string;
+      running: string[] | undefined;
+    };
+    result: Awaited<ReturnType<Server["judgeCurrencyRoots"]>>;
+  };
+  "server.setCarriedDemand": {
+    params: {
+      space: string;
+      reader: string;
+      rows: Parameters<Server["setCarriedDemand"]>[2][number][];
+      excludePrincipal: string | undefined;
+    };
+    result: Awaited<ReturnType<Server["setCarriedDemand"]>>;
   };
   "server.foreignWriteAuthorityFor": {
     params: { space: string; principal: string | undefined };
@@ -311,6 +349,19 @@ export type PlaneNotices = {
    * reads from any message of the worker's the same way (serving-loop.md §2).
    */
   "worker.heartbeat": WorkerHeartbeat;
+
+  /**
+   * What a number on the worker's run beacon stands for, posted before the
+   * body of the first run it names starts.
+   */
+  "worker.runNamed": RunIdentity;
+
+  /**
+   * Numbers on the worker's run beacon that no longer stand for anything: the
+   * worker's realm has collected the actions they named, so no run of them
+   * starts again.
+   */
+  "worker.runsForgotten": { runs: readonly number[] };
 
   "server.noteExecutorCommit": { notice: AdmittedCommitNotice };
   "loopback.close": { transport: number };
@@ -393,6 +444,7 @@ export type BridgeNotices = {
     notDemand: true | undefined;
   };
   "observer.viewsChanged": { space: string; sessionId: string };
+  "observer.currencyChanged": { space: string };
   "observer.sessionChanged": { event: SessionLifecycleEvent };
 
   /**
@@ -402,6 +454,14 @@ export type BridgeNotices = {
    */
   "observer.spaceAclChanged": { space: string };
   "loopback.frame": { transport: number; frame: string };
+
+  /**
+   * An event of `space` whose handler's run held the thread of a worker the
+   * pool ended: the worker's host writes `reason` as the event's consequence,
+   * and does not run the handler for it. Sent ahead of anything else for the
+   * space, when the space is placed on this worker.
+   */
+  "host.failEvent": { space: MemorySpace; event: RunEvent; reason: string };
 };
 
 /** The shape of one request's parameters and answer. */

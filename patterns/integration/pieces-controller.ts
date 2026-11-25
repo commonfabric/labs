@@ -10,15 +10,16 @@ type InitializePiecesControllerOptions = Parameters<
 
 export const moduleByteCache = createCompileByteCache();
 
+/**
+ * Starts a controller that shares this module's compile cache, unless
+ * `options` names another one.
+ */
 export function initializePiecesController(
-  options: Omit<
-    InitializePiecesControllerOptions,
-    "moduleByteCache" | "patternCoverage"
-  >,
+  options: Omit<InitializePiecesControllerOptions, "patternCoverage">,
 ): Promise<PiecesController> {
   return PiecesController.initialize({
     ...options,
-    moduleByteCache,
+    moduleByteCache: options.moduleByteCache ?? moduleByteCache,
     // Off unless the run collects coverage. When it does, this controller must
     // collect too: it authors the space's pieces, and a browser that collects
     // coverage reads a different cached variant than an uninstrumented

@@ -1,0 +1,214 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Ingredient": {
+        "properties": {
+          "amount": {
+            "description": "Free text so \"1 1/2\", \"2-3\" and \"a handful\" all fit.",
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "amount",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "OvenNeed": {
+        "properties": {
+          "duration": {
+            "description": "Minutes in the oven.",
+            "type": "number"
+          },
+          "heightSlots": {
+            "description": "Rack height the dish takes: 1 a sheet pan, 2 a casserole, 5 a turkey.",
+            "type": "number"
+          },
+          "temperature": {
+            "description": "°F.",
+            "type": "number"
+          },
+          "width": {
+            "enum": [
+              "full",
+              "half"
+            ]
+          }
+        },
+        "required": [
+          "temperature",
+          "duration",
+          "heightSlots",
+          "width"
+        ],
+        "type": "object"
+      },
+      "RecipeStep": {
+        "properties": {
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "type": "object"
+      },
+      "StepGroup": {
+        "properties": {
+          "duration": {
+            "description": "Minutes the group takes, active and passive.",
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "maxWaitMinutes": {
+            "description": "Minutes its result can wait before the next group without suffering.",
+            "type": "number"
+          },
+          "minutesBeforeServing": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "nightsBeforeServing": {
+            "type": "number"
+          },
+          "oven": {
+            "$ref": "#/$defs/OvenNeed",
+            "description": "Absent when the group does not use the oven."
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/$defs/RecipeStep"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "steps"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "done": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "description": "Checked steps, \"groupId#index\".",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "ingredients": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Ingredient"
+        },
+        "type": "array"
+      },
+      "recipeName": {
+        "default": "",
+        "type": "string"
+      },
+      "servings": {
+        "default": 4,
+        "type": "number"
+      },
+      "stepGroups": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/StepGroup"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/food-recipe/viewer.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "done": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "reset": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "stepsDone": {
+        "description": "Steps checked, out of all steps.",
+        "type": "number"
+      },
+      "stepsTotal": {
+        "type": "number"
+      },
+      "toggleGroup": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "groupId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "groupId"
+        ],
+        "type": "object"
+      },
+      "toggleStep": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "done",
+      "stepsDone",
+      "stepsTotal",
+      "toggleStep",
+      "toggleGroup",
+      "reset",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

@@ -681,32 +681,12 @@ All write steps happen inside a single database transaction.
 
 ```typescript
 // Shown at module scope.
-type BranchLifecycleWrite =
-  | {
-    cmd: "/memory/branch/create";
-    args: {
-      localSeq: number;
-      name: BranchId;
-      fromBranch?: BranchId;
-      atSeq?: number;
-    };
-  }
-  | {
-    cmd: "/memory/branch/delete";
-    args: {
-      localSeq: number;
-      name: BranchId;
-    };
-  };
-
-type WritePayload = ClientCommit | BranchLifecycleWrite;
-
 interface CommitLogEntry {
   seq: number;
   branch: BranchId;
   sessionId: SessionId;
   localSeq: number;
-  original: WritePayload;
+  original: ClientCommit;
   resolution: {
     seq: number;
     resolvedPendingReads?: Array<{
@@ -719,8 +699,14 @@ interface CommitLogEntry {
 }
 ```
 
+Every entry holds a client commit. Creating or deleting a branch takes no
+`seq` and appends no entry: it changes the branch's own record only
+(`06-branching.md` §6.3.2 and §6.9).
+
 The semantic JSON write path is keyed by `seq`, not by commit hash. The
 content-addressed UCAN envelope is reserved for a later signed-write pass.
+A stored `ClientCommit` may hold a `digest` of the whole submission in
+place of its `reads` (02-storage.md §3.3).
 
 ### 3.7.3 Seq Assignment
 
@@ -750,7 +736,10 @@ Each committed write-class operation has identifiers with different roles:
 On replay after reconnect:
 
 1. the server deduplicates by `(sessionId, localSeq)`
-2. it compares the replayed `original` payload with the stored `original`
+2. it compares the replayed `original` payload with the stored `original`:
+   byte for byte, or, where the log holds the commit in digest form
+   (02-storage.md §3.3), with the digest form of the replayed payload, whose
+   digest is the SHA-256 of the replayed payload's whole encoding
 3. if they match, it returns the existing commit result
 4. if they differ, the replay is a protocol error
 

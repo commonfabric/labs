@@ -234,7 +234,9 @@ Within an active epoch:
 An explicit `release-op-field` operation deactivates the field without changing
 its materialized value or its anchors (§7.7.4). A later `apply-op` starts a new
 epoch from the then current value. Deleting the owning entity releases all its
-active collaborative fields in the same transaction.
+active collaborative fields in the same transaction. A restore that rewrites
+the owning document ends its fields' epochs the same way and writes the
+restored value (`06-branching.md` section 6.15.4).
 
 Ordinary `set` or `patch` operations may coexist with collaborative fields only
 when their resulting value preserves every active field they overlap. A write
@@ -529,7 +531,8 @@ operation_index
 
 The encoded payload is retained directly for efficient submitted-view queries.
 The row also joins to the canonical `commit` record, whose `original` field
-preserves the complete accepted request.
+preserves the accepted request, or, where the log does not keep its read set,
+the request without it and a digest of the whole (02-storage.md §3.3).
 
 ### `op_integrated`
 
@@ -724,12 +727,14 @@ contradict each other.
 
 ## 7.11 Branches
 
-Field addresses and every collaborative storage key include a branch. The
-editor and runtime-client integration operates on the default branch. Memory
-rejects collaborative queries, applies, and releases on child branches. There
-is no Memory branch-merge operation; operation-aware child inheritance and
-collaborative merge semantics remain deferred. Parent cursors are never
-accepted as child cursors.
+Field addresses and every collaborative storage key include a branch, and a
+field's epoch, cursor and operation log are a branch's own
+(`06-branching.md` section 6.18). Memory serves collaborative queries,
+applies, and releases on a child branch as it does on the default branch. A
+child branch inherits a field's value and none of its epoch: the field is
+inactive there until an editor starts an epoch from the inherited value.
+Parent cursors are never accepted as child cursors. There is no Memory
+branch-merge operation; collaborative merge semantics remain deferred.
 
 ---
 

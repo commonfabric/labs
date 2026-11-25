@@ -296,6 +296,14 @@ behavior they change:
 - `state` and `diagnosticsCollector` — cross-stage communication and diagnostic
   collection (§2)
 
+`AssertDiagnosticsTransformer` records a method call's receiver when the call
+has no argument worth recording. It leaves a receiver within an optional chain
+intact, including when the `?.` occurs earlier than the method access, as in
+`entry?.revision.startsWith("1:")`. The chain retains its nullish
+short-circuiting, receiver binding, and single evaluation; arguments remain
+unevaluated when the chain short-circuits. An enclosing operator can still
+record the whole call's result (`test/assert-diagnostics.test.ts`).
+
 ## 5. Call Kind Detection Contract
 
 `detectCallKind()` drives multiple transformers. The set of recognized Common
@@ -326,8 +334,9 @@ list — is the authoritative source. As of this writing it recognizes:
   `fetchJsonUnchecked`, `fetchText`, `fetchBinary` — `fetchProgram`,
   `streamData`, `cellFromUrl`,
   `compileAndRun`, `navigateTo`, and the SQLite builtins `sqliteDatabase` /
-  `sqliteQuery` (`sqliteQuery<Row>` additionally gets dedicated type-argument
-  schema injection)
+  `sqliteQuery` / `indexedCollections`
+  (`sqliteQuery<Row>` additionally gets
+  dedicated type-argument schema injection)
 - `patternTool` — recognized, but explicitly **not** a reactive origin
   (`reactiveOrigin: false`)
 
@@ -1259,7 +1268,7 @@ callback diagnostic would.
 `JsxPropNameValidationTransformer` (stage 10) reports a JSX prop whose name
 can name no property of the element it is written on:
 
-- **Warning** `jsx:misnamed-prop`
+- **Error** `jsx:misnamed-prop`
   (`src/transformers/jsx-prop-name-validation.ts`) — a prop on an intrinsic
   element (a tag starting with a lower-case letter or holding a hyphen) whose
   name holds a hyphen and is neither an event prop (`on…`, such as
@@ -1278,9 +1287,10 @@ are event, attribute and misnamed props is decided by
 too. A component's props are not checked: they are its parameter's fields,
 which may hold any name.
 
-It is a warning rather than an error because a pattern source already stored
-in a space may hold such a prop, and a stored source has to keep compiling; the
-prop does nothing either way.
+Under `TransformationOptions.storedSource` it reports as a **Warning**, as the
+other authoring-shape gates do: a pattern source already stored in a space may
+hold such a prop, and its reload has to keep compiling. The prop does nothing
+either way.
 
 The stage walks every node, including the expression inside a JSX expression
 container, and changes nothing.
@@ -1998,9 +2008,9 @@ Primary behaviors:
   (`hasStaticKeyType()`) when it is a literal; a well-known Common Fabric
   key, the set `COMMON_FABRIC_KEY_NAMES` in
   `base/schema-generator/src/typescript/property-name.ts` defines (as of
-  this writing `NAME`, `UI`, `SELF`, `FS`, `VIEWS`); or an expression whose
-  type is a single string or number literal, such as a reference to
-  `const KEY = "k"`. What is emitted follows the kind of key
+  this writing `NAME`, `UI`, `SELF`, `FS`, `VIEWS`, `SUGGESTIONS`); or an
+  expression whose type is a single string or number literal, such as a
+  reference to `const KEY = "k"`. What is emitted follows the kind of key
   (`getStaticKeySegment()`): a literal as its string, a numeric one under its
   decimal name (`groups[1e2]` -> `.key("groups", "100")`); a well-known key as
   its `__cfHelpers` member (`row[NAME]` -> `row.key(__cfHelpers.NAME)`,

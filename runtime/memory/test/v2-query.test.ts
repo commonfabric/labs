@@ -2,7 +2,7 @@ import { assert, assertEquals, assertExists, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 import type { JSONSchema } from "@commonfabric/api";
-import { taggedHashStringOf } from "@commonfabric/data-model";
+import { type FabricValue, taggedHashStringOf } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { encodeMemoryBoundary } from "../v2.ts";
 import {
@@ -2490,6 +2490,77 @@ Deno.test("memory v2 traversal stats charge one root's cost to that root", async
       slowest.elapsedMs <= stats.rootsElapsedMs,
       "one root cannot outlast the sum of the visits",
     );
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 traversal stats count the positions a root hands to the traversal's own stack", async () => {
+  const { engine, path } = await createEngine();
+  const space = "did:key:z6Mk-memory-v2-root-attribution-deep";
+
+  try {
+    // Documents nested `depth` levels, whose deepest level links to another,
+    // so the query walks every level to reach it.
+    const nested = (depth: number): FabricValue => {
+      let value: FabricValue = {
+        name: "leaf",
+        child: { "/": { "link@1": { id: "of:leaf", path: [], space } } },
+      };
+      for (let i = 0; i < depth; i++) value = { name: `${i}`, child: value };
+      return value;
+    };
+    applyCommit(engine, {
+      sessionId: "session:alice",
+      principal: "did:key:alice",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [
+          { op: "set", id: "of:deep", value: { value: nested(200) } },
+          { op: "set", id: "of:deeper", value: { value: nested(600) } },
+          { op: "set", id: "of:shallow", value: { value: nested(3) } },
+          { op: "set", id: "of:leaf", value: { value: { name: "far" } } },
+        ],
+      },
+    });
+    const statsFrom = (...ids: string[]) =>
+      trackGraph(space, engine, {
+        roots: ids.map((id) => ({
+          id,
+          selector: {
+            path: [],
+            schema: {
+              $defs: {
+                Node: {
+                  type: "object",
+                  properties: {
+                    name: { type: "string" },
+                    child: { $ref: "#/$defs/Node" },
+                  },
+                },
+              },
+              $ref: "#/$defs/Node",
+            },
+          },
+        })),
+      }).stats;
+
+    const deep = statsFrom("of:deep", "of:deeper");
+    const shallow = statsFrom("of:shallow");
+
+    // Both deep roots hand positions over, so the slowest root's share is
+    // some of the query's count but not all of it.
+    const slowest = deep.slowestRoot;
+    assertExists(slowest);
+    assert(
+      slowest.walk.nativeDepthHandoffs > 0 &&
+        slowest.walk.nativeDepthHandoffs < deep.nativeDepthHandoffs,
+      `a share of ${deep.nativeDepthHandoffs}, got ${slowest.walk.nativeDepthHandoffs}`,
+    );
+    assertEquals(shallow.managerReads, 2, "the shallow root reached the leaf");
+    assertEquals(shallow.nativeDepthHandoffs, 0);
   } finally {
     close(engine);
     await Deno.remove(path);

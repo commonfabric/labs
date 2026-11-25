@@ -458,6 +458,22 @@ describe("XHeaderView menu", () => {
       }
     });
 
+    it("asks for the history panel to be shown when hidden, and hidden when shown", async () => {
+      const { view, state } = await header();
+      for (const shown of [false, true]) {
+        view.showHistoryView = shown;
+        state.menuOpen = true;
+        const commands = await commandsDuring(
+          view,
+          () => click(view, "button", "Toggle history"),
+        );
+        expect(commands).toEqual([
+          { type: "set-config", key: "showHistoryView", value: !shown },
+        ]);
+        expect(state.menuOpen).toBe(false);
+      }
+    });
+
     it("switches the page to the other theme and offers the way back", async () => {
       const { view, state } = await header();
       state.menuOpen = true;
