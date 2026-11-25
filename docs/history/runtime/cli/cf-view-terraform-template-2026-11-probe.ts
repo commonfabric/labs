@@ -43,7 +43,7 @@ interface Subject {
 /** The shared fixture's template from the Infra repository. */
 const INFRA_TEMPLATE = Deno.readTextFileSync(
   new URL(
-    "../../../../runtime/cli/test/fixtures/view-language/terraform-template-infra/after.sh.tftpl",
+    "../../../../runtime/cli/test/fixtures/view-language/terraform-template-shell-infra/after.sh.tftpl",
     import.meta.url,
   ),
 );

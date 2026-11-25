@@ -15,7 +15,7 @@
 
 import { walk } from "jsr:@std/fs@1/walk";
 import {
-  languageForFile,
+  languageForSource,
   prepareLanguages,
 } from "../../../../runtime/cli/lib/view/languages/language.ts";
 import { terraformTemplateSyntax } from "../../../../runtime/cli/lib/view/languages/terraform-template/terraform-template.ts";
@@ -29,10 +29,10 @@ let sequenceCharacters = 0;
 let plainInSequences = 0;
 for await (const entry of walk(Deno.args[0], { includeDirs: false })) {
   if (!entry.path.toLowerCase().endsWith(".tftpl")) continue;
-  const language = languageForFile(entry.path);
+  const source = await Deno.readTextFile(entry.path);
+  const language = languageForSource(entry.path, source);
   selected[entry.path] = language.id;
   await prepareLanguages([language]);
-  const source = await Deno.readTextFile(entry.path);
   const lines = language.highlightLines(source, entry.path);
   const reconstructed = lines.map((line) =>
     line.spans.map((span) => span.text).join("")
