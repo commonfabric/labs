@@ -25,7 +25,7 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
 | `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The merged branch at `5db1c2658d`: every branch of the build, and the two executor fixes of round twenty (P453) | #10183, stacked on #10140 |
 | `merge-attempt/serving-m6` | none | The merge of the serving branch, at `31d73441f8`; the merged branch was fast-forwarded to it | none |
-| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-four, and the four link-following commits of `claude/fabrichat-row-rights-68447f` (P470, P471), and round twenty-five, at `8442957f6f`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461), the store step of a result (P462 to P464); cut from the merged branch at `5db1c2658d` | none (local) |
+| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-four, and the four link-following commits of `claude/fabrichat-row-rights-68447f` (P470, P471), and rounds twenty-five and twenty-six, at `a184f568a0`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461), the store step of a result (P462 to P464); cut from the merged branch at `5db1c2658d` | none (local) |
 | `claude/fabrichat-row-rights-68447f` | `fabrichat-row-rights-68447f` | The FabriChat room, real and copy, whose message rows derive their own controls; the two executor fixes of round twenty, carried onto the merged branch | none (local) |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
@@ -226,6 +226,32 @@ twenty).
   stores no clause of the item at its outputs, where reading by
   `items.key(i).key("title").get()` stores it (CFC question 3 of the
   round).
+  Round twenty-six (`a184f568a0`, notes 1077 to 1086, P474 to P478) closed
+  those: the rows of a scoped collection below a row of another collection
+  are stored in a document per collection and outer element keys, with an
+  instance per scope key, and an assembly is set aside with its element
+  table when the acting principal changes (P474, P475), so FabriChat's
+  dumps hold no error state at any size; Z96 is built (a row's stream
+  marker carries the membership label of its row, P477, in a document the
+  piece owns, P476), and `vault`, `fair-share`, `profile-embed` and
+  `group-chat-lobby` commit every event in the corpus; Z97 is built (P478),
+  and the room's result document is 110 KB where it was 183 KB at 100
+  messages. Both rulings were classified as conforming implementation, with
+  no change of the specification (note 1083). The possible under-label
+  does not hold: on today's path and the compiled path alike, a body that
+  iterates `items.get()` stores the items' clauses once the titles are
+  read (`compare/both-paths.ts`, option `labels`). The Topics create's 205
+  records did not reproduce at any commit and fit the race of P450; the
+  `message-row` change is the module's own authorship check, reached now
+  that `get()` follows one link. A send gives 304 records at every size and
+  takes 37 to 38, 118 to 122 and 293 to 324 ms of the piece's own time at
+  100, 500 and 1,000 messages, changing 256, 390 and 600 KB; the seed at
+  1,000 takes 262 s. Open (note 1085): entries over the elements of a `map`
+  over a `computed` output are compared at every pull (ruling Z53); a
+  compiled start whose first derivation reads a value under a clause is
+  refused where today's path commits (note 1079); the crate gives no value
+  function for a `computed` declared in an element body whose result is
+  the source of a collection (note 1082).
 - *Fixed in round twenty, two executor defects (notes 1012 and 1013).*
   `Executor.#invoke` handed a body a plain value where an `identity` entry
   of `Body.computed` reached each row through `*`, so a body that resolved
@@ -386,14 +412,14 @@ P253 serving, P270 to P275 and P330 to P335 resume by units, P290 to P296
 and P350 to P360 sandbox and scopes, P310 to P316 and P370 to P382 write integrity, P410 and
 P411 specification review; P420 to P425 resume by units, fourth round; P390
 to P394 serving, round fifteen; P450 to P464 the merges and rounds nineteen
-to twenty-four, P470 and P471 the link-following work, P472 and P473
-round twenty-five (the next is P474). Note
+to twenty-four, P470 and P471 the link-following work, P472 to P478
+rounds twenty-five and twenty-six (the next is P479). Note
 numbers in `SPEC-NOTES.md` likewise: 692 to 704, 860 to 875 and 960 to 975
 trunk, 940 to 944 carry, 742 to 752 and 880 to 892 sandbox, 760 to 772
 and 900 to 914 write integrity, 851 to 866 and 920 to 932 serving, 980 to
-1076 the merges and the rounds after them (1016 to 1076 on
+1086 the merges and the rounds after them (1016 to 1086 on
 `claude/compiled-pattern-scoped-rows`, 1060 to 1066 the link-following
-work; the next is 1077). The plan documents hold decisions up to
+work; the next is 1087). The plan documents hold decisions up to
 P210 and P410 to P411; the rounds after that are in `SPEC-NOTES.md` of their
 branches only and need a document round after the merges.
 
