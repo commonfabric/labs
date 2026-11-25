@@ -111,4 +111,14 @@ describe("an add to the rows of a compiled piece that follow a link", () => {
     expect(large.records).toBe(small.records);
     expect(large.labelReaders).toBe(small.labelReaders);
   });
+
+  it("copies as much for an add at 10 rows as at 100", async () => {
+    // The add reads whether the result of the instance is there, which is
+    // a read of which children it has: the rows the result holds are not
+    // read.
+    const small = await cost("copies small", 10);
+    const large = await cost("copies large", 100);
+
+    expect(large.copied).toBe(small.copied);
+  });
 });

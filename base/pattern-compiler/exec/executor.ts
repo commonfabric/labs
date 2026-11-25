@@ -1094,13 +1094,6 @@ const membersUnread = (schema: Schema | undefined): Schema =>
   typeof schema === "object" ? { ...schema, items: {} } : { items: {} };
 
 /**
- * The schema of a read of a container that gives which children it has,
- * of an array or of a record, and follows no link a child holds: it types
- * each element as `unknown` and declares no member.
- */
-const CHILDREN_UNREAD: Schema = { items: {} };
-
-/**
  * The classes a slot observes a stored position in, each of which consumes
  * a label of its own there.
  */
@@ -2768,6 +2761,17 @@ export class Host {
       );
     }
     return value;
+  }
+
+  /**
+   * Reads which children the container that `ref` names holds, as a read
+   * of its shape or its membership: the links on the way to the position
+   * and at it are followed, and the position is the last one the read went
+   * through (`reads`). No member is read and no link a member holds is
+   * followed, so the read costs as much whatever the container holds.
+   */
+  readChildren(ref: Ref): void {
+    this.#instance.store.locate(ref, true, this.reads);
   }
 
   /**
@@ -16833,17 +16837,18 @@ export class Instance {
       // An `enumeration` or a `shape` entry gives way to a handle the
       // state holds at or above its path (`gives`): the body reaches each
       // child through that handle. The read is then of which children the
-      // container has, and follows no link a child holds.
+      // container has, and reads no member.
       const givesWay = read.observes !== "identity" &&
         read.observes !== "value" &&
         this.gives(read.observes, state, read.path);
-      let given = read.observes === "identity"
-        ? this.handleOf(
-          found,
-          undefined,
-          slot,
-        )
-        : host.v(found, givesWay ? CHILDREN_UNREAD : undefined);
+      let given: unknown;
+      if (read.observes === "identity") {
+        given = this.handleOf(found, undefined, slot);
+      } else if (givesWay && found instanceof Ref) {
+        host.readChildren(found);
+      } else {
+        given = host.v(found);
+      }
       if (read.observes !== "identity") handed.note(given);
       // A write through a handle to a value the instance computes fails
       // (PL §3.11).

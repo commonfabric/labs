@@ -266,8 +266,9 @@ describe("the store step of a result that holds a tree", () => {
 // and each looking up what the facts say of its title. The facts read every
 // item and, through `*`, every note, which the argument holds beside the
 // items, so the record of each row names positions of the argument at
-// `notes/*/title`.
-describe("the records a change of labels reaches over rows that name the facts", () => {
+// `notes/*/title`. The handler `add` appends an item and reads whether the
+// result of the instance is there.
+describe("rows that follow a link and name the facts", () => {
   const started = async (size: number) => {
     const given = new Given();
     const link = (doc: string) => ({ $link: { doc, path: [] } });
@@ -315,7 +316,16 @@ describe("the records a change of labels reaches over rows that name the facts",
         readers: instance.counts.labelReaders - readers,
       };
     };
-    return { relabeled };
+    /** What the containers the reads copied number, for one add. */
+    const copiedByAdd = () => {
+      const copied = instance.store.copiedByReads;
+      instance.send(
+        instance.plan.bindings.findIndex(({ name }) => name === "add"),
+        { title: "added" },
+      );
+      return instance.store.copiedByReads - copied;
+    };
+    return { relabeled, copiedByAdd };
   };
 
   it("forms no label again where a label changed at an appended item and no read consumes another", async () => {
@@ -344,5 +354,15 @@ describe("the records a change of labels reaches over rows that name the facts",
       "unchanged $UI/children/0/2/children/2/children/0",
       "unchanged count",
     ]);
+  });
+
+  it("copies as much for an add that reads whether the result is there at 10 rows as at 100", async () => {
+    // A read of which children the result holds reads none of them.
+    const [small, large] = [
+      (await started(10)).copiedByAdd(),
+      (await started(100)).copiedByAdd(),
+    ];
+
+    expect(large).toBe(small);
   });
 });

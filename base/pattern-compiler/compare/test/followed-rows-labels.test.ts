@@ -39,7 +39,7 @@ const clausesOf = (label: string): string[] =>
 // are appended: an append changes the labels of the list document at the
 // appended item, and no label a row's record reads there.
 describe("the labels stored at rows that follow a link and name the facts", () => {
-  const labels = async (appended: number) => {
+  const labels = async (appended: number, byHandler = false) => {
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     const space = signer.did();
     const storageManager = StorageManager.emulate({ as: signer });
@@ -108,7 +108,15 @@ describe("the labels stored at rows that follow a link and name the facts", () =
         documents,
       });
       expect(await hooks.settled()).toEqual([]);
-      for (let added = 0; added < appended; added++) {
+      const add = instance.plan.bindings.findIndex(({ name }) =>
+        name === "add"
+      );
+      for (let added = 0; added < appended && byHandler; added++) {
+        instance.send(add, { title: `added ${added}` });
+        instance.settle();
+        expect(await hooks.settled()).toEqual([]);
+      }
+      for (let added = 0; added < appended && !byHandler; added++) {
         const index = ids.length;
         const value = { title: `t${index}`, owner: link(owner) };
         const item = await held(`item-${index}`, value);
@@ -138,7 +146,34 @@ describe("the labels stored at rows that follow a link and name the facts", () =
           ));
         const row = (index: number, child: number) =>
           at(["$UI", "children", "0", `${index}`, "children", `${child}`]);
+        // The document that the handler keeps the result of the instance
+        // in, and what it appended to the list.
+        const kept = [...instance.store.docs].find(([, { kind }]) =>
+          kind === "state cell"
+        )?.[0];
+        const stored = (doc: string, path: readonly string[]) => {
+          const held = readStoredCfcMetadata(read, {
+            space,
+            id: hooks.entityOf(doc),
+            scope: "space",
+          });
+          return clausesOf(JSON.stringify(
+            (held === undefined ? undefined : labelForConsumedEntries(
+              consumedEntriesForRead(held, path, {
+                nonRecursive: false,
+                consumes: "value",
+              }),
+              path,
+              false,
+            ))?.confidentiality ?? [],
+          ));
+        };
         return {
+          kept: kept === undefined ? undefined : stored(kept, []),
+          appended: Array.from(
+            { length: byHandler ? appended : 0 },
+            (_, added) => stored(list, ["items", `${3 + added}`]),
+          ),
           count: at(["count"]),
           titles: ids.map((_, index) => row(index, 0)),
           owners: ids.map((_, index) => row(index, 1)),
@@ -172,5 +207,15 @@ describe("the labels stored at rows that follow a link and name the facts", () =
       [...items(4), "list"],
       [...items(5), "list"],
     ]);
+  });
+
+  it("stores at what the handler writes the clauses of what it reads, after two adds", async () => {
+    // The handler reads whether the result of the instance is there, which
+    // is a read of which children the result holds and of none of them.
+    const stored = await labels(2, true);
+
+    const read = ["item-0", "item-1", "item-2", "list", "owner"];
+    expect(stored.kept).toEqual(read);
+    expect(stored.appended).toEqual([read, read]);
   });
 });
