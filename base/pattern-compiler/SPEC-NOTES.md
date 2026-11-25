@@ -25056,3 +25056,494 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    state, which each reader resolves in its own instance, so the label a reader
    consumes through `authorProfile` is that of its own profile and not the
    sender's.
+
+## Round twenty-two: what a FabriChat send still stores that grows with the room
+
+Round twenty-two (2026-11-24), on the branch
+`claude/compiled-pattern-scoped-rows` from `b5aa103f8f`. The notes are numbered
+from 1027, the provisional decisions from P457. The logs are in the folder
+`r22-send-growth/` of the session. Whenever a note says `map` or `filter`, it
+names the case. Times are on an Apple M5 Max with 18 cores at the load averages
+given, from other sessions; the counts do not depend on the load.
+
+1027. **Findings, first.**
+      - _Liveness, open, not fixed: one writer-fit refusal of the marker of a
+        new stream is repeated at every derivation after it._ A derivation that
+        makes the row of an element whose value carries a confidentiality clause
+        writes the marker of the row's stream (`{ $stream: true }`) in the same
+        transaction, under no record of the plan, so the marker's document takes
+        the join of everything the derivation read and is measured against the
+        empty ceiling of a document no schema declares a policy on. The commit
+        is refused, the executor takes back what it wrote, and the next
+        derivation writes the same marker under the same join. In
+        `examples/fair-share/main.tsx` the row is that of the person a handler
+        copied from the profile (`joinWithProfile`), and the clause is the
+        profile's `User`; every later derivation of the piece is refused and its
+        result is not stored again, and after a resume the whole resume's commit
+        is refused. In `apps/redactor/vault.tsx` under the serving loop the
+        clause is the redaction rule's `policyOf`, and an event is lost: its
+        stream's marker was never stored ("no stream of the binding is stored").
+        This is the open question of the marker's label (FabriChat round two,
+        question 4; note 745), not a defect of round twenty-one: at `5db1c2658d`
+        the same refusal ended after three derivations only because the fourth
+        re-evaluated nothing that read the profile's data, so its join held no
+        clause and the marker was stored with no label (note 1028).
+      - _Scale, fixed: a refused commit of the document of the scoped outputs
+        brought every place of every row up to date again,_ for both scope keys,
+        rows times keys of work: P455 kept the scope of each place of a value in
+        the map that names the paths of the document of the scoped outputs,
+        which `Instance.restore` marks whole (note 1028).
+      - _Scale, reduced, not bounded: the basis document._ It listed every
+        document the piece made, 3,462 at 100 messages and 33,162 at 1,000, and
+        a send wrote it whole. The list is now spread over 256 part documents by
+        the hash that spreads the numbers of the sources (P457): the document of
+        the basis holds about 4 KB at every size where it held 199 KB, 948 KB
+        and 1.88 MB at 100, 500 and 1,000 messages, and a send writes the parts
+        that name what it made, about 31 of them. A part holds about one in 256
+        of the documents listed, so what a send writes still grows with the
+        room, at a 256th of the rate. A send at 1,000 messages changes 2.37 MB
+        where it changed 4.02 MB, and takes 1.3 to 2.0 s where it took 1.8 to
+        2.1 s under the same load (note 1032). Leaving out the documents a
+        resume derives again was tried and does not hold (note 1029).
+      - _Structure, found and not landed: `Instance.rootOf` without the read of
+        `failed` (step 3)._ Built and measured in a scratch worktree, with the
+        error state of a request that was not made held in the outcome itself.
+        It changes the order in which the executor finds an entry to be of a
+        scope, and that exposes a defect of the executor: a value that becomes
+        of a scope after it was stored, as an output in a document of its own,
+        is refused for having stored what it derived in a document of the space
+        (`examples/profile-group-chat/main.tsx`, whose whole result becomes that
+        error state). Not landed (note 1030).
+      - _Scale, traced: four reads keep the room's rendered tree of the scope
+        `session` or `user`_ (note 1031): the read of `failed` in `rootOf`; the
+        spread `...view` of a record the room's inner pattern builds, which the
+        emitted code reads whole (`$h.v`); `{profileWish[UI]}`, a path of the
+        result of a `wish` of the scope `user` placed as a child and read as a
+        value; and the links of the scope `user` the rows reach through
+        `authorProfile`. With the first three changed in a scratch worktree, the
+        tree is of the space, and a send at 100 messages changes 220 KB where
+        the branch's head changes 410 KB; the fourth is the work on how handles
+        follow links. Planned, not built.
+      - _Recorded, as the brief asked, not fixed:_ `addToDeepFrozenCache`
+        (`base/data-model/src/deep-freeze.ts`) and
+        `writesMoreMembersThan`/`membersWritten`
+        (`base/data-model/src/codec-json/text-scan.ts`). In the coordinator's
+        profile of round twenty-one at 1,000 messages they take 45.6 ms and 104
+        ms per send, inclusive. In this round's pair of profiles at 1,000
+        messages, taken side by side under one load (note 1032), they take 0 and
+        0 ms before and 4.5 and 3.1 ms after. Which condition of the
+        coordinator's run made them costly was not traced.
+
+1028. **The regression of `examples/fair-share/main.tsx` (note 1024).**
+      - _What is refused._ Two documents of the space that the derivation writes
+        whole, each the marker of a stream: the `oncf-remove` handler of the row
+        of the person `joinWithProfile` added (a `map` over `people`, an array
+        of plain values in place, the row keyed by the element record the push
+        made), and the stream of the `$value` binding of the row's `cf-select`.
+        The join holds the profile's `User` clause through the reads of
+        `people`, `people/2` and the element record's `name` (the copy of the
+        profile's name). The stream markers were found by printing the refused
+        transaction's writes and the sources of the join, with code kept out of
+        the branch.
+      - _Why the refusal now repeats._ At `5db1c2658d` the derivations after the
+        first refusal evaluated only the places `scoped ["values","4"]` and
+        `scoped ["$UI"]`, so the second and third read less of `people`, and the
+        fourth read nothing that carries the clause: its join was empty and the
+        marker was stored with no label. At `b5aa103f8f` each derivation after a
+        refusal brought every place of the piece up to date
+        (`scoped ["values",4]`, `["values",22]`, and the place
+        `["values",16,<row>]` of each row of `splitChips`, the `map` over
+        `people`): the restore of the session instance of the document of the
+        scoped outputs marked every name `#placeScopes` holds, and P455 had put
+        the places of values there beside the paths of that document. Each
+        place's entry was then evaluated again, read `people` again, and the
+        join kept the clause.
+      - _Fixed: the places of values keep their scope apart_
+        (`Instance.#valueScopes`, `exec/executor.ts`). Each such place is a
+        document of its own (P455), and the restore of that document marks that
+        place alone, as before. Test (`exec/test/scoped-view.test.ts`,
+        "evaluates as much at 10 items as at 100 after a refused commit of the
+        document of the scoped outputs", over `fixtures/scoped-rows-output.tsx`,
+        a `map` over an array of references whose rows read a value of the scope
+        `session` beside an output of that scope): 12 evaluations at 10 items
+        and 102 at 100 at `b5aa103f8f`; 1 at both after; it passes at
+        `5db1c2658d`, where the rows were stored whole in the scope instance
+        (run there in a scratch worktree with the fixture emitted by that
+        commit's crate).
+      - _What the fix does not change._ The module still gives 10 refusals: each
+        derivation after the first refused one stores the place of the new row
+        again, since the refused commit made that document and the restore
+        removes it, and the tree's cone that reads through the reference to it
+        is evaluated again, reads `people` and keeps the clause in the join.
+        Whether the derivation that writes a stream's marker owes the marker
+        that join is the open question of the first finding; nothing was changed
+        for it, and the convergence at `5db1c2658d` is no outcome to restore.
+      - _`apps/redactor/vault.tsx`._ The same class: the marker of the stream of
+        a new entry's row, refused under the redaction rule's `policyOf` clause
+        of `entries/*`. Run alone, each line is the same at every run (three
+        runs on the runner path, one or two in each other mode): at `5db1c2658d`
+        the runner path, the serving loop and the serving loop with a resume
+        handle 4 of 4 events with 2 refusals, and the whole resume's commit is
+        refused; at `b5aa103f8f`, with or without the fix, the runner path
+        handles 4 of 4 with 1 refusal, the serving loop 3 of 4 with 8 and loses
+        an event (no stream of the binding is stored), the resume goes through
+        with no refusal, and the serving loop with a resume handles 4 of 4
+        with 1. So round twenty-one changed it: the tree is no longer of the
+        scope `session` (P454), and the result document of the space is what a
+        refused derivation stores again. The line note 1024 saw vary (3 of 4
+        with 8 refusals on the runner path) is that of the module run after the
+        others of the corpus in one process; alone it does not vary. What state
+        of the process makes the difference was not traced.
+
+1029. **The basis document (provisional decision P457).**
+      - _What it held._ `StoredBasis.documents`
+        (`runtime/runner/src/compiled/basis.ts`) named every document the piece
+        made that is no row, and a run that made one wrote the path
+        `documents/<doc>` of the document of the basis, which the storage and
+        every holder store whole. In FabriChat at 100 messages (`SCALE_BASIS`, a
+        new option of the harness) the list held 3,462 documents: 2,081 entities
+        of streams, 737 places of the scope `user`, 325 of the scope `session`,
+        103 created cells, 103 element records, 103 outputs of the scope `user`
+        and a few others; at 500, 16,662, of which 10,081 streams.
+      - _First form, taken back: leave out what a resume derives again._ A piece
+        that has documents of a scope resumes whole (note 892), so the entities
+        of streams and the documents of a scope were left out of the list. Of
+        the documents listed in the corpus's whole resumes (`--resume`, counted
+        before and after the list's sync), 1,679 were reached by the links the
+        resume follows from the result anyway, 167 were brought by the list
+        alone (104 entities of streams, 44 documents of the space, 19 of the
+        scope `user`) and 130 by neither (70 of the scope `session`). The corpus
+        showed both left-out kinds are needed: a whole resume that wrote the
+        marker of a stream it had not brought was refused with a stale confirmed
+        read at sequence 0 (`showcase/wordsearch/play.tsx`, whose streams the
+        stored result reaches only through a scope instance), and so was one
+        that wrote a place of the scope `user` it had not brought
+        (`examples/group-chat-lobby/group-chat-lobby.tsx`,
+        `showcase/scrabble/scrabble.tsx`).
+      - _Decision, P457: the list is spread over part documents._ Every document
+        the piece made that is no row is listed, as before, in one of 256 parts
+        by `basisPartOf`, the hash the numbers of the sources are spread by
+        (`basisMadePartDocumentOf`); the document of the basis names the parts
+        that exist (`made`). A run that made a document writes its path in its
+        part, and a part that has no document yet is written whole.
+        `storedBasisOf` reads the parts, `syncBasis` brings them for every
+        resume, and a part the document names and the storage does not hold is
+        no basis, as for the numbers. A refused commit that wrote the basis has
+        the next record write every part whole, as it writes the numbers. Chosen
+        over a document per row (the list grouped by the element key that made
+        each document) because the hash parts exist for the numbers and are the
+        same mechanism; the cost is that a part holds about one in 256 of the
+        documents, so what a send writes grows with the room at a 256th of the
+        rate.
+      - _Tests._ `runtime/runner/test/compiled/basis-documents.test.ts` over
+        `fixtures/scoped-rows-made.tsx` (a `map` over an array of references
+        whose rows each have a stream and a place of the scope `session`, and an
+        event that adds an item in a document the piece makes): before, the
+        documents of the basis that an item added after 100 others writes listed
+        270 documents more than after 10 (the document of the basis whole, three
+        documents for each item); after, they list 6 and 3, the parts that name
+        what the item made; a runtime that resumes the piece from its basis
+        shows every row; no refusal. `resume.test.ts`: a derivation behind an
+        added item writes one document more, the part of the list that names the
+        item.
+
+1030. **`Instance.rootOf` without the read of `failed` (step 3): built in a
+      scratch worktree, not landed.**
+      - _What was built._ `rootOf` gives a cone that reads the result of an
+        operation the reference to its outcome, `state.key(OUTCOME)`, and reads
+        nothing of the state document, which is of the scope of the operation.
+        The member `failed` is gone. The error state of a request that was not
+        made (SS §6.2, step 1) is then read where the reference is read through:
+        `#requestTransactions` writes it as the outcome itself, in place of the
+        record of `pending`, `result` and `error`, and clears `requestHash`, so
+        the next request that holds no error state is made and the outcome is a
+        record again; and `Store.locate` gives the error state for a path below
+        a position that holds one, as a read of a member of a value in an error
+        state gives it (PL §5.2), so a reader through the reference takes the
+        error state and a reader that passes the reference on reads nothing. A
+        client that reads the stored link reads the error state too, where with
+        `failed` it read a record with `pending` false. The patch is
+        `r22-send-growth/step3/rootof-experiment.patch`.
+      - _What it gave._ Over `fixtures/scoped-wish-view.tsx` (a tree that places
+        `profile.result` of a `wish` of the scope `user` as an attribute bound
+        to a cell, beside the rows of a `map` over an array of references), with
+        two principals, the scope instances hold 3,014 bytes at 10 items and
+        25,334 at 100 before, the tree being of the scope `user`, and the same
+        at both sizes after. `exec/test/` passed with it; the one case of
+        `compare/test/` that failed in that run was of the first form of P457
+        (note 1029).
+      - _Why it was not landed._ `examples/profile-group-chat/main.tsx` on the
+        runner path, with or without a resume: the whole result becomes the
+        error state "a computation of the scope `user` stored what it derived in
+        a document of the space (output)". The read of `failed` had made the
+        result's cone of the scope `user` from its first evaluation, since the
+        cone binds the handler `sendMessage` with the wish's result as
+        `profile`. Without it the cone is of the space until the first message
+        stores that result as its `authorProfile` (a link of the scope `user`,
+        note 1016); then `participants`, a `computed` over the messages, reads
+        through the link and is of the scope `user`, and the assembly over its
+        result stores its rows by `Instance.#generated` in a document of the
+        space (the name `#scopeOfOutput` gave before the value was found to be
+        of a scope) in the evaluation of the result's cone, which
+        `#refuseStoredForEveryKey` then refuses. So the defect is the executor's
+        handling of a value that becomes of a scope after it was stored whole in
+        a document of its own: the stored document has to move to the scope
+        instance with the value, as the place of a value does (`#staleAside`
+        when a place moves to a narrower scope), and the write to the document
+        of the space is no derived write of the entry that evaluates the
+        assembly. That is a change of its own with its own test; it was not
+        built, and step 3 waits on it.
+      - _Where the error state is read, in the form built:_ in the outcome, by
+        whatever reads through the reference to it: a cone that reads a member
+        of the result (`fetched.pending` takes the error state, as
+        `exec/test/effects.test.ts` "is not requested where the cone of its
+        request failed" asserts), a handler body that reads it through a handle,
+        and a client that reads the stored link.
+
+1031. **What keeps the room's rendered tree of a scope (step 4).** Traced in a
+      scratch worktree with `rootOf` as in note 1030 and `Handle.resolveAsCell`
+      following the links at the handle's position (the experiment of note 1022;
+      how handles follow links is excluded from this round and nothing of it is
+      built): each evaluation of the room's tree cone (value 586 of
+      `FabriChatRoom`) recorded the first read of each scope instance it made
+      and the stack of the read (`ScopeInstances.resolve`). Four reads, in the
+      order they were found:
+      1. _The read of `failed` in `rootOf`_ (note 1030).
+      2. _The spread `...view` in the result of the room's inner pattern_
+         (`room.tsx`, `return { ..., [VIEWS]: { room: view }, ...view, ... }`).
+         `view` is a record the body builds, whose members are values of other
+         cones (`messageRights`, `canSend`, `viewer` and others of the scope
+         `session`). The crate emits a spread whose argument is no value of
+         another cone as `...$h.v(...)`, which reads the record whole and
+         follows each reference to the place of a scoped value; the room's tree
+         forces the inner instance's result (`$h.at(room, [UI])`), so the tree's
+         cone reads every scoped member. With the spread of a record the body
+         builds emitted as a pass (`Want::Pass`: the members, references
+         included, are placed as they are, as a spread copies them in
+         JavaScript), the tree went from the scope `session` to the scope
+         `user`. No planning apart is needed: the members are already values of
+         their own; the tree only has to stop reading them. A change of
+         `structure` in `src/emit.rs`, with fixtures emitted again.
+      3. _`{profileWish[UI]}`_ (`room.tsx`, the `div` of the profile setup): a
+         path of the result of a `wish` of the scope `user`, placed as a child
+         of JSX. The slot (`$h.slot(585, [$h.pick(13, UI)])`) observes the
+         value, so `Host.slot` reads it whole through the operation's state
+         document. Passed on by reference instead (tried by returning the
+         reference from `Host.slot` for a slot whose root is an operation of a
+         scope narrower than the space), the tree is of the space. As a rule
+         this is P451's for an operator expression, extended to a path of a
+         scoped place written as a child or an attribute value: the crate plans
+         it as a value of its own, or binds the slot as `identity` where the
+         position only passes it on. It needs planning apart or an `identity`
+         slot, decided by the crate; a change of `hoisted_scope` and
+         `place_scope` in `src/plan.rs`.
+      4. _The links of the scope `user` the rows reach through `authorProfile`_
+         (note 1016): with `resolveAsCell` returning the handle, as on this
+         branch, the rows of the main conversation read the wish's state through
+         each message's `authorProfile`, and their cones are of the scope
+         `user`. This is the work on how handles follow links.
+      - _Measured in the scratch worktree, a send at 10 messages,_
+        `SCALE_STAND_INS=table`, one run each, the documents a send changes:
+        with 1 and 4 changed (note 1022's experiment), the tree is of the scope
+        `session`, its session instance holds 206 KB, and the send changes 258
+        KB; with 1, 2 and 4, the tree's cone is of the scope `user`, a session
+        instance of the scoped outputs still holds 185 KB, 243 KB; with 1, 2, 3
+        and 4, the tree is in the result document of the space (13 KB), no scope
+        instance holds it, 98 KB; with 1, 2 and 3 and `resolveAsCell` as on the
+        branch, the tree is of the space and the rows' cones of the scope
+        `user`, with a user instance of 17.7 KB, 108 KB; with 1 and 2 alone, 121
+        KB with a session instance of 42 KB. On the branch at its head, 105 to
+        112 KB, with the session instance of the tree at 35 KB. At 10 messages
+        the variants differ little in bytes; what changes is where the rows of
+        the main conversation are stored. In a scope instance a scoped tree
+        holds them whole, which grows with the room (190 KB at 100 messages,
+        1.74 MB at 1,000); in a tree of the space they are rows of a `map` over
+        the result of a `filter` (another per-element construct), each in a
+        document of its own. At 100 messages, with 1, 2 and 3 changed and P457,
+        a send changes 68 to 69 documents of 219 to 222 KB where the branch's
+        head changes 75 to 77 of 408 to 416 KB: the session instance of the tree
+        (190 KB) is gone, the result document of the space holds the tree (90
+        KB, of which `$UI` 13 KB), and three list documents of 103 links each
+        (16 KB) are written whole; 247 records and 57 evaluations against 172
+        and 59; the dump holds no error value. One run, at load 27 to 41.
+      - _Today's runtime_ decides the scope of each node by what it read; a
+        compiled cone holds more than a node. For 1, nothing is planned apart:
+        the cone holds the reference to the outcome and reads nothing of the
+        state document. For 4, nothing either: with `resolveAsCell` following
+        the links, the message stores the link to the profile and no row reads a
+        scoped document. For 2, no node of its own is needed: a spread of a
+        record a body builds reads nothing in JavaScript, and the emitted code
+        read it only because the crate had no form for passing it. For 3,
+        today's runtime gives the child its own node only where the child is a
+        computation; a bare path placed as a child is passed by reference. So
+        neither needs a cone instance per row; 3 needs the crate to tell a
+        position that passes a value on from one that reads it, which it does
+        for a state cell (`identity`) and not yet for a path of an operation's
+        result.
+      - _Not built here_ because 2 and 3 together with 1 are what make the tree
+        of the space, and 1 waits on the defect of note 1030; each of 2 and 3
+        alone leaves the tree of a scope, so a send's bytes would not move.
+        Plan, in this order: the move of a stored value whose scope narrows
+        (note 1030), then 1, 2 and 3, each with a test over a fixture of its own
+        at 10 and 100 items with two principals (the scope instances hold the
+        same bytes at both sizes), then FabriChat and the corpus.
+
+1032. **Measured: FabriChat.** `SCALE_STAND_INS=table`,
+      `compare/fabrichat/scale.ts runner room <n>`, the room of this branch (arm
+      C of note 1022), one run of each cell, three timed sends each, the sizes
+      run side by side. Before is note 1022's figures at `b5aa103f8f`. Times in
+      milliseconds, the piece's own time in brackets; "KB" is the size as JSON
+      after the commit of each document a send's commits changed.
+
+      | messages | when   | load  | ms per send (own)         | records | evaluations | element evaluations | documents | KB changed  |
+      | -------- | ------ | ----- | ------------------------- | ------- | ----------- | ------------------- | --------- | ----------- |
+      | 100      | before | 7.7   | 164–419 (75–327)          | 172     | 59          | 31                  | 44        | 568–576     |
+      | 100      | after  | 21–23 | 252–265 (127–131)         | 172     | 59          | 31                  | 75–77     | 408–416     |
+      | 500      | before | 7.9   | 591–648 (280–306)         | 172     | 59          | 31                  | 44        | 2,095–2,103 |
+      | 500      | after  | 23–26 | 555–688 (277–352)         | 172     | 59          | 31                  | 74–77     | 1,278–1,287 |
+      | 1,000    | before | 16    | 1,588–2,195 (687–788)     | 172     | 59          | 31                  | 44        | 4,016–4,025 |
+      | 1,000    | after  | 23–61 | 2,921–5,732 (1,285–2,975) | 172     | 59          | 31                  | 74–75     | 2,371–2,381 |
+
+      - _The seeds._ At 1,000 messages 833 s at a peak of 6.53 GB resident
+        (before: 979 s, 6.46 GB); at 500, 211 s and 4.31 GB (166 s and 4.33 GB);
+        at 100, 17 s and 1.18 GB. No send of a seed was refused.
+      - _The rows._ The dumps (`SCALE_DUMP`) hold no error value and no
+        `is
+        not a function`, and the reader's rights of every message
+        read back (103, 503, 1,003).
+      - _What a send changes, by document_ (`SCALE_CHANGES`, the third send), at
+        100, 500 and 1,000 messages: the room's tree in the session instance of
+        the scoped outputs, 191 KB, 880 KB and 1.74 MB, as before; the argument,
+        26 KB, 125 KB and 249 KB, as before; the result, 111 KB at every size; a
+        user instance of 17.7 KB; the document of the basis, 4.1 KB, 4.6 KB and
+        4.4 KB where it was 199 KB, 948 KB and 1.88 MB; and about 31 parts of
+        the list of what the piece made, each about one in 256 of the list (0.8
+        KB, 3.7 KB and 7.3 KB; the list holds 3,462, 16,662 and 33,162
+        documents). The documents a send changes are 74 to 77 where they were
+        44: those parts.
+      - _Records, evaluations and evaluations of element bodies_ are those of
+        round twenty-one at every size; neither change of this round evaluates
+        anything more or less in a send.
+      - _Times._ The load from other sessions was two to eight times that of
+        round twenty-one's figures, and the times of the table at 1,000 are not
+        comparable with them. A pair of runs at 1,000 messages side by side,
+        before (`b5aa103f8f` in a scratch worktree) and after, under one load
+        (67 at the start, 11 to 14 during the timed sends): a send takes 1,763
+        to 2,119 ms (659 to 841 of the piece's own) before and 1,275 to 1,957 ms
+        (625 to 638) after, with the same counts as in the table; the seeds
+        1,114 s and 1,079 s, at peaks of 7.33 GB and 7.27 GB resident. The
+        phases per send of the profiles of the three timed sends
+        (`profile-phases.py`), before and after, in milliseconds:
+
+        | phase                                     | before  | after   |
+        | ----------------------------------------- | ------- | ------- |
+        | all                                       | 1,894.5 | 1,529.0 |
+        | garbage collection                        | 248.6   | 268.9   |
+        | memory server: apply commit               | 248.3   | 122.3   |
+        | client: CFC preparation of a commit       | 169.4   | 194.3   |
+        | client: transaction commit (encode, send) | 215.3   | 130.3   |
+        | client: receive and decode                | 183.9   | 174.1   |
+        | executor: `#pullScoped`                   | 36.3    | 28.5    |
+        | executor: `#storeResult`                  | 116.6   | 93.2    |
+        | executor: `#reassemble`                   | 115.0   | 93.8    |
+        | executor: other of a derivation           | 417.4   | 324.0   |
+        | handler event                             | 39.8    | 33.5    |
+        | scheduler: resubscribe after a commit     | 14.3    | 12.9    |
+        | other                                     | 89.5    | 53.2    |
+
+        The four storage phases take 817 ms before and 621 ms after; the memory
+        server's apply and the client's encode halve with the bytes, while the
+        CFC preparation takes about as long, since it follows the documents
+        written, which are more (74 against 44). Within the executor,
+        `Instance.#putScoped` takes 127 and 104 ms and `#noteRecord` 94 and 73
+        ms; neither change of this round touches them, and the differences are
+        within what one run of each gives. One run of each.
+
+1033. **Measured: Topics, the serving path, and the corpus.**
+      - _Topics, the arm `serving` on `filing-order`_, the boards of the
+        measurement branch copied in for the run and removed after, one run
+        each, at loads of 34 to 41. An edit of a title runs 1 derivation and 5
+        evaluations and gives 9 records at 1,000 and 2,000 topics, as in note
+        1023; the second client reads it after 26 to 81 ms at 1,000 and 32 to 87
+        ms at 2,000 (note 1023: 62 to 73 and 68 to 78, at 41 to 55). A create
+        runs 12 to 13 derivations with no refusal and gives 117 to 189 records
+        at both sizes, as in note 1023; the second client reads it after 602 to
+        1,196 ms at 1,000 and 1,008 to 3,438 ms at 2,000 (note 1023: 523 to
+        1,078 and 886 to 2,031). The first create at 2,000 took 1.7 s of the
+        piece's own time, the others 0.3 to 0.4 s; one run, not traced.
+      - _`compare/serving-path.ts 1000`_: the piece is found current after the
+        takeover with no evaluation, 6 evaluations at the wake, 11 derivations,
+        no refusal, 52.3 ms of its own for its ten events and derivations (load
+        34 to 47; note 1023: 44.3 ms at 17 to 20).
+      - _The corpus,_ `compare/runner-corpus.ts` in its four modes, run side by
+        side once at the head of the round (loads of 23 to 115), against note
+        1024's after column (`423f44a346`): started, every event handled, no
+        commit refused, equal to the executor in memory, and for the resumes,
+        resumed, found current, wrote no document.
+
+        | Mode                  | Note 1024, after                 | This round                       |
+        | --------------------- | -------------------------------- | -------------------------------- |
+        | runner                | 259, 215, 249, 230               | 259, 216, 249, 231               |
+        | serving               | 235, 201, 221, 211               | 235, 201, 221, 211               |
+        | after a resume        | 259, 215, 251, 227; 148, 121, 82 | 259, 216, 251, 228; 149, 121, 82 |
+        | serving with a resume | 235, 201, 221, 210; 81, 72, 0    | 235, 201, 221, 210; 81, 72, 0    |
+
+        - _Modules whose line changes._ `apps/cozy-poll/main.tsx` handles 13 of
+          its 19 events on the runner path and after a resume, where round
+          twenty-one's last run handled 12; 13 is its line at `5db1c2658d`. It
+          was not traced which of this round's two changes gives it.
+          `apps/redactor/vault.tsx` handles 4 of 4 with 7 refusals and holds the
+          values of the executor on the runner path (round twenty-one: 3 of 4
+          with 8), and after a resume it resumes and handles 4 of 4 with no
+          refusal (round twenty-one: the whole resume's commit refused); its
+          line varies between runs (note 1028), so this says nothing of a
+          change. Under the serving loop, with and without a resume, no line
+          differs from round twenty-one's. Against `5db1c2658d`, the lines that
+          differ are those of `examples/fair-share/main.tsx` (10 refusals where
+          1, and after a resume the whole resume's commit is refused where it
+          went through) and `apps/redactor/vault.tsx` (note 1028).
+
+1034. **Provisional decision, and what was not built or verified.** P457: as
+      note 1029. Not built: step 3 (note 1030) and what it waits on, the move of
+      a value stored in a document of its own when its scope narrows; steps 2
+      and 3 of note 1031 (the spread of a record a body builds as a pass, and a
+      path of a scoped place written as a child planned apart or bound as
+      `identity`); step 5 of the brief, the rows of the `filter` branch of
+      `Instance.#reassemble` formed from every element (note 923), not started;
+      a label for the marker of a stream (note 1027, a CFC question). Not
+      verified: the times against round twenty-one's at the same load (the pair
+      of note 1032 is the comparison); FabriChat under the serving loop or with
+      two users; a resume of FabriChat; the variation of
+      `apps/redactor/vault.tsx` between a run alone and a run after the corpus
+      in one process (note 1028); the scratch worktree's figures above 100
+      messages (note 1031); `examples/fair-share/main.tsx` on today's path.
+
+### CFC questions deferred, round twenty-two
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. Notes 1027 and 1028: the marker of a stream that a derivation makes for the
+   row of an element whose value carries a confidentiality clause is written
+   under no record, takes the join of the derivation, and is measured against
+   the empty ceiling of a document no schema declares a policy on, so it is
+   refused at every derivation while the element exists. Which label the marker
+   owes is FabriChat round two's question 4 (note 745). New here: the join is of
+   what the derivation evaluated, not of what the values it stores came from, so
+   whether the marker is refused depends on what a retry evaluates again; at
+   `5db1c2658d` a retry that evaluated nothing carrying the clause stored the
+   marker with no label.
+2. P457: a part of the list of the documents a piece made is written under no
+   record, as the document of the basis was, and takes the join of the
+   derivation that writes it last; it names documents that several derivations
+   made, under several joins. The same held for the document of the basis, which
+   named them all.
+3. Note 1030, not landed: with the error state of a request that was not made
+   held in the outcome, the outcome carries the label the request transaction's
+   join gives it, as the member `failed` did, and a reader that reads through
+   the reference consumes it where a cone that only passes the reference on
+   consumes nothing.
+4. Note 1031, planned: a spread of a record a body builds, emitted as a pass,
+   places each member at its position with the label of that member's value,
+   where the read of the whole record joined the labels of every member into
+   each position the spread gives. A change that stores less label, to be ruled
+   on before it is built.
