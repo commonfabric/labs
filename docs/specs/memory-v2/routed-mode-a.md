@@ -597,6 +597,19 @@ socket order and handed to the connection without waiting for the turn before
 them to end, as the WebSocket hosts do (04-protocol.md section 4.13.4); each
 frame retains its queue budget until its own protected Memory turn ends.
 
+A routed data frame may not name a field only the router or a toolshed sets:
+`routerTicket`, `routerBinding`, `forwarded`, `contextId`, `upstream`, `host`,
+`authorization`, `invocation`, `actingAs` or `statement`. The data socket closes
+on one, and the router closes the client's connection before forwarding it. One
+`authorization` is a client's: a `session.open` naming its
+connection-authenticated `principal` may present a proof chain as
+`authorization.proofs` and nothing else beside it, at most eight proofs
+(04-protocol.md section 4.5.1). The router forwards it, the data socket admits
+it, and the routed connection hands it to the server, which verifies the chain
+and resolves the session's capability from its root issuer's grant. A client
+opens a space that owns itself this way, so a router that refused the chain
+would close every client that creates a profile without server execution.
+
 The durable ledger records only what must outlive a restart: link epochs and
 router-key revocations. It exclusively locks a separate inode, fsyncs each
 change before acknowledging it and fsyncs the parent directory on creation or

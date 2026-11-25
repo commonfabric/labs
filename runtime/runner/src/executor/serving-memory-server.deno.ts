@@ -56,6 +56,7 @@ import {
   ServingWorkerPool,
 } from "./serving-worker-host.ts";
 import type { SpaceServerPolicy } from "./space-server.ts";
+import { currencyIndexModeOf } from "./store-currency.ts";
 
 export { inServingContext } from "./serving-context.ts";
 
@@ -202,8 +203,9 @@ const TIMER_DELAY_MAX_MS = 2_147_483_647;
  * (`SERVER_EXECUTION_OVERLAP_COMMIT`) are each on for the literal `true`
  * alone, where a toolshed keeps the read-through on unless the variable is
  * `false`. The currency index (`SERVER_EXECUTION_CURRENCY_INDEX`) is kept
- * for the literal `record` or `skip`, under the epoch
- * `SERVER_EXECUTION_CURRENCY_EPOCH` names. The flush deadline and the cap it
+ * for the literal name of a mode (`CURRENCY_INDEX_MODES`), under the epoch
+ * `SERVER_EXECUTION_CURRENCY_EPOCH` names; a policy left with none takes the
+ * space server's default epoch. The flush deadline and the cap it
  * grows to come from `SERVER_EXECUTION_FLUSH_DEADLINE_MS` and
  * `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`, positive decimal integers of
  * milliseconds. A lane sets the first two to run every test that leaves them
@@ -227,10 +229,8 @@ export const policyFromEnvironment = (
     resolved = { ...resolved, overlapWaveCommit: true };
   }
   if (resolved?.currencyIndex === undefined) {
-    const mode = env("SERVER_EXECUTION_CURRENCY_INDEX");
-    if (mode === "record" || mode === "skip") {
-      resolved = { ...resolved, currencyIndex: mode };
-    }
+    const mode = currencyIndexModeOf(env("SERVER_EXECUTION_CURRENCY_INDEX"));
+    if (mode !== undefined) resolved = { ...resolved, currencyIndex: mode };
   }
   if (
     resolved?.currencyIndex !== undefined &&

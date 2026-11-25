@@ -8037,6 +8037,21 @@ export class SpaceReplica
     return this.#sessionClient?.serverFlags?.syncCrossingsV1 === true;
   }
 
+  /**
+   * Whether a watch through this replica on the space's invitation ledger
+   * revision document sees it move with every change to the ledger: the
+   * session asked for the default branch, where the invitation service moves
+   * it, and its server advertises `spaceInvitesRevision`. A session that asked
+   * to fork a branch is taken to be of it (`SpaceSession.requestedBranch`),
+   * even where the server opened it on the default branch, which errs toward
+   * reading the ledger. `false` until a session exists, and refreshed by each
+   * reconnect handshake.
+   */
+  invitesRevisionWatchable(): boolean {
+    return this.#sessionSession?.requestedBranch === DEFAULT_BRANCH &&
+      this.#sessionClient?.serverFlags?.spaceInvitesRevision === true;
+  }
+
   /** Waits for session authentication and watch restoration after reconnect. */
   async whenSessionRestored(): Promise<void> {
     const { session } = await this.#memoizedSessionHandle();

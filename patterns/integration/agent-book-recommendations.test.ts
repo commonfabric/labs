@@ -333,8 +333,12 @@ describe("agent book recommendations", () => {
         ).toEqual(books.map((book) => book.getAsNormalizedFullLink().id));
         expect(resolved.sources).toHaveLength(3);
 
-        const inspect = async (cell: Cell<unknown>, name: string) => {
-          const link = cell.getAsNormalizedFullLink();
+        /** The stored document `id` names, as `cf inspect` reads it. */
+        const inspectDocument = async (
+          space: string,
+          id: string,
+          scope: string,
+        ) => {
           const output = await runDenoCommandWithTemporaryLock({
             root,
             args: (
@@ -348,23 +352,46 @@ describe("agent book recommendations", () => {
               "runtime/cli/mod.ts",
               "inspect",
               "value-at",
-              join(store, `${link.space}.sqlite`),
-              link.id,
+              join(store, `${space}.sqlite`),
+              id,
               "--scope",
-              link.scope ?? "space",
+              scope,
               "--doc",
               "--full-depth",
               "--json",
             ],
           });
           expect(output.code, new TextDecoder().decode(output.stderr)).toBe(0);
-          const value = JSON.parse(new TextDecoder().decode(output.stdout));
+          return JSON.parse(new TextDecoder().decode(output.stdout));
+        };
+        // A stored envelope may hold a label by reference to a `cid:` label
+        // document in the same space; each such label is replaced by the
+        // document's value, so the assertions below read labels either way.
+        const inspect = async (cell: Cell<unknown>, name: string) => {
+          const link = cell.getAsNormalizedFullLink();
+          const value = await inspectDocument(
+            link.space,
+            link.id,
+            link.scope ?? "space",
+          );
           await Deno.writeTextFile(
             join(evidence, `inspect-${name}.json`),
             JSON.stringify(value, null, 2),
           );
           expect(value.exists).toBe(true);
-          return value.value;
+          const document = value.value;
+          for (const entry of document.cfc?.labelMap?.entries ?? []) {
+            const ref = entry.label?.$ref;
+            if (typeof ref !== "string") continue;
+            const labelDocument = await inspectDocument(
+              link.space,
+              ref,
+              "space",
+            );
+            expect(labelDocument.exists).toBe(true);
+            entry.label = labelDocument.value.value;
+          }
+          return document;
         };
         const resultDocument = await inspect(resultCell, "result");
         const declaredLabel = (

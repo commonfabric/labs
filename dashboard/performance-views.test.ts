@@ -7,7 +7,7 @@ import {
 } from "./performance-views.ts";
 
 const state = {
-  repo: "loom" as const,
+  repo: "cfs" as const,
   days: 14,
   sort: "job",
   stat: "p99",
@@ -16,15 +16,15 @@ const state = {
 Deno.test("performance view URLs share one canonical route and translate sort modes", () => {
   assertEquals(
     performanceViewHref("runtime", state),
-    "/bench?view=runtime&amp;repo=loom&amp;days=14&amp;sort=file&amp;stat=p99",
+    "/bench?view=runtime&amp;repo=cfs&amp;days=14&amp;sort=file&amp;stat=p99",
   );
   assertEquals(
     performanceViewHref("ci", { ...state, sort: "file" }),
-    "/bench?view=ci&amp;repo=loom&amp;days=14&amp;sort=job&amp;stat=p99",
+    "/bench?view=ci&amp;repo=cfs&amp;days=14&amp;sort=job&amp;stat=p99",
   );
   assertEquals(
     performanceViewHref("gantt", state),
-    "/bench?view=gantt&amp;repo=loom&amp;days=14&amp;sort=job&amp;stat=p99",
+    "/bench?view=gantt&amp;repo=cfs&amp;days=14&amp;sort=job&amp;stat=p99",
   );
 });
 

@@ -17,10 +17,7 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import { extractHashtags } from "../hashtags.ts";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
-import {
-  isObjectNotArray,
-  isObjectOrArray,
-} from "@commonfabric/js-values/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { h } from "../builder/h.ts";
 // The sidecar instantiation observes its wave settlement (a serving-wave
@@ -43,7 +40,7 @@ import {
   type NormalizedFullLink,
   toMemorySpaceAddress,
 } from "../link-utils.ts";
-import type { RawBuiltinResult, RawNodeCause } from "../module.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import { systemPatternSource } from "../pattern-source-scheme.ts";
 import {
   homeHasDefaultProfileSlot,
@@ -75,7 +72,7 @@ import {
   ownedStoreLinks,
   recordRuntimeOwnedStore,
 } from "./runtime-owned-store.ts";
-import { scopedCell } from "./scope-policy.ts";
+import { isNodeCauseWithOutputSpot, scopedCell } from "./scope-policy.ts";
 import {
   createDocumentReadiness,
   DocumentLoadError,
@@ -275,7 +272,11 @@ const FACE_FIELD_TARGETS: ReadonlySet<string> = new Set([
   "#profilePicture",
   "#profileAvatar",
 ]);
-const FACE_FIELDS: ReadonlySet<string> = new Set(["picture", "avatar"]);
+const FACE_FIELDS: ReadonlySet<string> = new Set([
+  "pictureBlob",
+  "picture",
+  "avatar",
+]);
 
 /**
  * Parses the wish target `target`, with `extraPath` (a wish's `path`)
@@ -2304,16 +2305,6 @@ function wishStoreCause(
     ? { parents: cause.parents, outputSpot: cause.outputSpot }
     : cause;
   return { wish: { [kind]: positional, ...fields } };
-}
-
-/** Whether `cause` is a node cause whose output binding reached a redirect. */
-function isNodeCauseWithOutputSpot(
-  cause: unknown,
-): cause is RawNodeCause & {
-  outputSpot: NonNullable<RawNodeCause["outputSpot"]>;
-} {
-  return isObjectNotArray(cause) && cause.parents !== undefined &&
-    cause.outputSpot !== undefined;
 }
 
 /**

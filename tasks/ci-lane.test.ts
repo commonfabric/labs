@@ -1130,6 +1130,27 @@ describe("how many lanes a run asks for", () => {
     expect(await lanesOf(options, deps)).toBe(4);
   });
 
+  it("splits a full run past forty lanes without overfilling them", async () => {
+    const deps = corpus(120, FULL_LANE_BUDGET_SECONDS * 0.45);
+    const full = await saying(deps);
+    expect(full.lanes).toBe(60);
+    expect(full.said).not.toContain("needs more than");
+    const { laid } = await lanePlan(
+      { ...options, of: full.lanes },
+      await deps.topology(),
+      deps,
+    );
+    const placed = laid.lanes.flatMap((lane) =>
+      lane.selections.map((selection) => testIdentityKey(selection.entry.test))
+    );
+    expect(placed.length).toBe(120);
+    expect(new Set(placed).size).toBe(120);
+    expect(laid.overBudgetSeconds).toBe(0);
+    const selected = await saying(deps, { ...options, full: false });
+    expect(selected.lanes).toBe(1);
+    expect(selected.said).not.toContain("needs more than");
+  });
+
   /**
    * What `lanesOf` answers for the full run, or for `run`, and what it said
    * on the error stream.
@@ -1302,6 +1323,28 @@ describe("how many lanes a run asks for", () => {
     }
     expect(lanes).toBe(2);
     expect(errors.join("\n")).toContain("measured");
+  });
+
+  it("allocates fallback lanes for test work rather than coverage verdicts", async () => {
+    const suites = [
+      suite({ id: "workspace-unit", units: ["a.test.ts"] }),
+      suite({
+        id: "coverage-gates",
+        units: ["bakery"],
+        judges: new Map([["bakery", {
+          suite: "workspace-unit",
+          units: ["a.test.ts"],
+          identity: { k: "gate", s: "bakery", n: "coverage" },
+        }]]),
+      }),
+    ];
+    const { lanes, said } = await saying({
+      topology: () => Promise.resolve(suites),
+      manifest: () =>
+        Promise.resolve({ absent: "the store holds no manifest" }),
+    });
+    expect(lanes).toBe(1);
+    expect(said).toContain("1 suites with anything to run");
   });
 
   it("grows the fallback with the units, not only with the suites", async () => {

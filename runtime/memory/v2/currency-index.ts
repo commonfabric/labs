@@ -12,8 +12,8 @@
  * a marked slice marks each slice of another piece that reads an instance it
  * writes, so a mark reaches a piece through documents no session demands.
  * Storing a new record of a slice is the only thing that clears its mark,
- * and a record replaces the slices it names and leaves the others as they
- * are.
+ * and a record replaces the slices it names and leaves a viewer's others as
+ * they are.
  *
  * A slice can read an instance of another space's store. That store is the
  * instance's source, and keeps the list of the spaces that read it. The
@@ -30,8 +30,17 @@
  * none of them runs at admission.
  */
 
-import { fabricAwareEqual } from "@commonfabric/data-model";
-import { DEFAULT_BRANCH, type ScopeKey, scopeOfScopeKey } from "../v2.ts";
+import {
+  fabricAwareEqual,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
+import {
+  decodeTrustedMemoryBoundary,
+  DEFAULT_BRANCH,
+  resolveScopeKey,
+  type ScopeKey,
+  scopeOfScopeKey,
+} from "../v2.ts";
 import { ANY_INSTANCE, sliceChain, SPACE_SLICE } from "./currency-keys.ts";
 import { type Engine, read, serverSeq } from "./engine.ts";
 
@@ -52,6 +61,43 @@ const sameDocument = (a: unknown, b: unknown): boolean => {
 
 /** What the id of a document some computation derives begins with. */
 const COMPUTED_ID_PREFIX = "computed:";
+
+/**
+ * The seq a row of `currency_decide` stands at for a slot that holds a
+ * write later than its slice's: below the head of every instance, one with
+ * no revision included.
+ */
+const SUPERSEDED_SEQ = -1;
+
+/**
+ * The scope key of the run that made the write at `opIndex` of a serving
+ * loop's derivation, read off the attribution the commit stores with each
+ * write (protocol.md §1): `space` for a run that acted as nobody, a user's
+ * key for one that acted as the user, and a session's for one that acted as
+ * the pair. `undefined` where `annotations`, the commit's stored column,
+ * attributes that write to no run.
+ *
+ * A run acts as the narrowest scope it read, and is filed under the scope
+ * its node has read for that viewer in any run, so the key is that of the
+ * run's slice only where the two agree.
+ */
+const runKeyOf = (
+  annotations: string | null,
+  opIndex: number,
+): string | undefined => {
+  const stored = annotations === null
+    ? undefined
+    : decodeTrustedMemoryBoundary(annotations);
+  const found = Array.isArray(stored)
+    ? stored.find((entry) => isFabricPlainObject(entry) && entry.op === opIndex)
+    : undefined;
+  if (!isFabricPlainObject(found)) return undefined;
+  const { actingUser: principal, actingSession: sessionId } = found;
+  if (typeof principal !== "string" || principal === "") return SPACE_SLICE;
+  return typeof sessionId === "string" && sessionId !== ""
+    ? resolveScopeKey("session", { principal, sessionId })
+    : resolveScopeKey("user", { principal });
+};
 
 export { ANY_INSTANCE };
 
@@ -133,6 +179,25 @@ export type CurrencySliceRecord = {
   vouches: readonly string[];
 
   /**
+   * The instances at another key that a live, clean computation of the
+   * slice wrote, as a run made for one viewer leaves a redirect at the
+   * user's and the space's key. What such a slot holds was decided by the
+   * slice's reads, so the slice answers for it. Absent for a slice that
+   * wrote none.
+   */
+  decides?: readonly CurrencyInstance[];
+
+  /**
+   * The instances at another key that a run of the slice wrote and that
+   * something has changed since, as another viewer's run does that writes
+   * the slot differently. Such a slot holds that later write, so the slice
+   * answers for it no longer: its row is stored behind the slot's head,
+   * where a viewer of the slice who demands the slot is refused. Absent
+   * for a slice with none.
+   */
+  superseded?: readonly CurrencyInstance[];
+
+  /**
    * The time, in milliseconds since the epoch, from which the slice is no
    * longer current whatever its rows say: the next tick of a clock one of
    * its runs read. Absent for a slice only a commit can make stale.
@@ -164,9 +229,19 @@ export type CurrencyRecord = {
   owned: readonly string[];
 
   /**
-   * The slices the loop ran. A piece with no `space` slice yet is given one
-   * that read nothing where the record names none. A slice the piece holds
-   * and the record does not name is left as it is.
+   * Whether the piece records a source origin (serving-loop.md §3e), which
+   * a serving loop follows before it leaves a demanded root that rests on
+   * the piece unstarted.
+   */
+  followsOrigin?: boolean;
+
+  /**
+   * The slices a live computation of the piece ran at when the record was
+   * taken. A viewer's slice the piece holds and the record does not name is
+   * left as it is. A record that names no `space` slice leaves the one the
+   * piece holds as it is where that slice is clean and of the batch's epoch
+   * and the record is vouched for, and has one that read nothing stored
+   * otherwise.
    */
   slices: readonly CurrencySliceRecord[];
 };
@@ -185,7 +260,7 @@ export type CurrencyBatch = {
    */
   seen: readonly number[];
 
-  /** The epoch of the recording build. */
+  /** The epoch the recording loop records under. */
   epoch: string;
 
   /** The records, one per piece. */
@@ -215,6 +290,12 @@ export type CurrencyMarked = {
 
   /** The pieces that enclose the piece. */
   under: string[];
+
+  /**
+   * Present where the slice is left marked `1`: none of its own rows is
+   * behind, and an input of it is stale.
+   */
+  upstream?: true;
 };
 
 /** What storing a batch found. */
@@ -224,9 +305,13 @@ export type CurrencyStored = {
 
   /**
    * The pieces with a slice that had been clean since its last record, then
-   * wrote an instance it vouched for again, to a value other than the one
+   * wrote an instance it answered for again, to a value other than the one
    * it held, with no input of its having changed: what it held was not what
-   * it computes.
+   * it computes. An instance the slice vouched for at its own key counts
+   * whichever derivation wrote it. One it decided at another key counts
+   * where every revision since is attributed to a run at the slice's key
+   * and the batch names the instance as one the slice decides, so a slot
+   * another slice's run wrote in between is not counted.
    */
   falseClean: string[];
 
@@ -301,7 +386,7 @@ type Statements = ReturnType<typeof statementsFor>;
 /** The prepared statements over the index, for `engine`. */
 const statementsFor = (engine: Engine) => ({
   selectSlice: engine.prepare(`
-SELECT mark, was_clean, epoch FROM currency_slice
+SELECT mark, was_clean, epoch, unvouched FROM currency_slice
 WHERE branch = :branch AND slice = :slice AND piece = :piece
 `),
   selectSlicesOfPiece: engine.prepare(`
@@ -312,10 +397,13 @@ WHERE branch = :branch AND piece = :piece
 SELECT COUNT(*) AS count FROM currency_slice WHERE branch = :branch
 `),
   upsertSlice: engine.prepare(`
-INSERT INTO currency_slice (branch, slice, piece, mark, was_clean, epoch)
-VALUES (:branch, :slice, :piece, :mark, 0, :epoch)
+INSERT INTO currency_slice (
+  branch, slice, piece, mark, was_clean, epoch, unvouched
+)
+VALUES (:branch, :slice, :piece, :mark, 0, :epoch, :unvouched)
 ON CONFLICT (branch, slice, piece)
-DO UPDATE SET mark = excluded.mark, was_clean = 0, epoch = excluded.epoch
+DO UPDATE SET mark = excluded.mark, was_clean = 0, epoch = excluded.epoch,
+  unvouched = excluded.unvouched
 `),
   setWasClean: engine.prepare(`
 UPDATE currency_slice SET was_clean = 1
@@ -341,6 +429,22 @@ WHERE branch = :branch AND id = :id AND scope_key = :scope_key
 `),
   deleteUnder: engine.prepare(`
 DELETE FROM currency_under WHERE branch = :branch AND piece = :piece
+`),
+  // The pieces a root encloses, read through the index that leads with the
+  // root: the table's own key leads with the piece enclosed.
+  selectBeneath: engine.prepare(`
+SELECT piece FROM currency_under WHERE branch = :branch AND root = :root
+`),
+  insertOrigin: engine.prepare(`
+INSERT OR IGNORE INTO currency_origin (branch, piece)
+VALUES (:branch, :piece)
+`),
+  deleteOrigin: engine.prepare(`
+DELETE FROM currency_origin WHERE branch = :branch AND piece = :piece
+`),
+  selectOrigin: engine.prepare(`
+SELECT 1 AS found FROM currency_origin
+WHERE branch = :branch AND piece = :piece
 `),
   insertUnder: engine.prepare(`
 INSERT OR IGNORE INTO currency_under (branch, piece, root)
@@ -406,6 +510,42 @@ WHERE branch = :branch AND slice = :slice AND piece = :piece AND id = :id
 SELECT id, seq, held FROM currency_vouch
 WHERE branch = :branch AND slice = :slice AND piece = :piece
 `),
+  deleteDecides: engine.prepare(`
+DELETE FROM currency_decide
+WHERE branch = :branch AND slice = :slice AND piece = :piece
+`),
+  insertDecide: engine.prepare(`
+INSERT OR REPLACE INTO currency_decide (
+  branch, slice, piece, id, instance_key, seq
+)
+VALUES (:branch, :slice, :piece, :id, :instance_key, :seq)
+`),
+  // The slots one slice answers for whose head stands above its row. A row
+  // stored behind every head answers for no slot, and is left out.
+  selectDecidesBehind: engine.prepare(`
+SELECT d.id AS id, d.instance_key AS instance_key, d.seq AS seq
+FROM currency_decide d
+JOIN head h
+  ON h.branch = d.branch AND h.id = d.id AND h.scope_key = d.instance_key
+WHERE d.branch = :branch AND d.slice = :slice AND d.piece = :piece
+  AND d.seq > ${SUPERSEDED_SEQ} AND h.seq > d.seq
+`),
+  // The writes one commit made to one instance, each with what the commit
+  // stores of the runs that made its writes.
+  selectRevisionWriters: engine.prepare(`
+SELECT r.op_index AS op_index, c.annotations AS annotations
+FROM revision r
+JOIN "commit" c ON c.seq = r.commit_seq
+WHERE r.branch = :branch AND r.id = :id AND r.scope_key = :scope_key
+  AND r.seq = :seq
+`),
+  // The rows for one slot, of whichever slices' runs wrote it.
+  selectDeciders: engine.prepare(`
+SELECT slice, piece, seq FROM currency_decide
+  INDEXED BY idx_currency_decide_instance
+WHERE branch = :branch AND instance_key = :scope_key AND id = :id
+`),
+
   selectCursor: engine.prepare(`
 SELECT seq FROM currency_cursor WHERE branch = :branch
 `),
@@ -436,6 +576,26 @@ WHERE branch = :branch AND entity_space = :space AND entity = :id
 SELECT piece, seq FROM currency_vouch INDEXED BY idx_currency_vouch_id
 WHERE branch = :branch AND slice = :scope_key AND id = :id AND seq < :seq
   AND held = 1
+`),
+  // The readers of every slot one slice decides, where the slice's row
+  // stands at the slot's head. One statement for the slice, starting from
+  // its decide rows: a slice decides two slots for each document a session's
+  // run writes, so a statement for each slot is thousands for one walk.
+  selectReadersOfDecided: engine.prepare(`
+SELECT DISTINCT r.slice AS slice, r.piece AS piece, s.mark AS mark,
+  d.instance_key AS instance_key
+FROM currency_decide d
+LEFT JOIN head h
+  ON h.branch = d.branch AND h.id = d.id AND h.scope_key = d.instance_key
+CROSS JOIN currency_read r INDEXED BY idx_currency_read_entity
+  ON r.branch = d.branch AND r.entity_space = :space AND r.entity = d.id
+CROSS JOIN currency_slice s
+  ON s.branch = r.branch AND s.slice = r.slice AND s.piece = r.piece
+WHERE d.branch = :branch AND d.slice = :slice AND d.piece = :piece
+  AND d.seq >= COALESCE(h.seq, 0)
+  AND (r.entity_scope_key = d.instance_key
+    OR r.entity_scope_key = '${ANY_INSTANCE}')
+  AND NOT (r.piece = :piece AND r.slice = :slice)
 `),
   selectReadersOfInstance: engine.prepare(`
 SELECT slice, piece FROM currency_read
@@ -474,6 +634,18 @@ WHERE w.branch = :branch AND w.piece = :piece AND w.owned = 0
 SELECT entity, entity_scope_key, derived FROM currency_read
 WHERE branch = :branch AND slice = :slice AND piece = :piece
   AND entity_space = :space
+`),
+  selectLocalRead: engine.prepare(`
+SELECT derived FROM currency_read
+WHERE branch = :branch AND slice = :slice AND piece = :piece
+  AND entity_space = :space AND entity = :entity
+  AND entity_scope_key = :entity_scope_key
+`),
+  selectReadAsDerived: engine.prepare(`
+SELECT 1 AS found FROM currency_read INDEXED BY idx_currency_read_entity
+WHERE branch = :branch AND entity_space = :space AND entity = :entity
+  AND derived = 1
+LIMIT 1
 `),
   selectForeignReads: engine.prepare(`
 SELECT entity_space, entity, entity_scope_key FROM currency_read
@@ -578,6 +750,9 @@ SELECT 1 AS found FROM currency_export WHERE branch = :branch LIMIT 1
   selectExportsOfId: engine.prepare(`
 SELECT scope_key FROM currency_export WHERE branch = :branch AND id = :id
 `),
+  selectExportedIds: engine.prepare(`
+SELECT DISTINCT id FROM currency_export WHERE branch = :branch
+`),
   selectReadersMovedSince: engine.prepare(`
 SELECT r.reader AS reader, MAX(e.position) AS position
 FROM currency_export e INDEXED BY idx_currency_export_position
@@ -617,16 +792,26 @@ type Context = {
   touched?: { ids: Set<string>; pieces: Set<string> };
 };
 
+/** What the index holds of one recorded slice. */
+type SliceRow = {
+  mark: CurrencyMark;
+  was_clean: number;
+  epoch: string;
+
+  /** `1` where the slice's record was stored not vouched for. */
+  unvouched: number;
+};
+
 /** The row of the slice `ref`, or `undefined` for one with no record. */
 const rowOf = (
   context: Context,
   ref: SliceRef,
-): { mark: CurrencyMark; was_clean: number; epoch: string } | undefined =>
+): SliceRow | undefined =>
   context.statements.selectSlice.get({
     branch: context.branch,
     slice: ref.slice,
     piece: ref.piece,
-  }) as { mark: CurrencyMark; was_clean: number; epoch: string } | undefined;
+  }) as SliceRow | undefined;
 
 /** The mark `ref` holds, or `undefined` for a slice with no record. */
 const markOf = (context: Context, ref: SliceRef): CurrencyMark | undefined =>
@@ -664,14 +849,53 @@ const slicesOf = (
 const readersOf = (
   context: Context,
   ref: SliceRef,
-): Array<SliceRef & { mark: CurrencyMark }> =>
-  context.statements.selectReadersOfSlice.all({
-    branch: context.branch,
-    space: context.space,
+): Array<SliceRef & { mark: CurrencyMark }> => {
+  const { branch, space, statements } = context;
+  const readers = statements.selectReadersOfSlice.all({
+    branch,
+    space,
     piece: ref.piece,
     slice: ref.slice,
     ...atOrBeneath(ref.slice),
   }) as Array<SliceRef & { mark: CurrencyMark }>;
+  // A slot at a broader key that the slice's runs wrote is one it decides
+  // while its row stands at the slot's head, and its readers are then
+  // readers of the slice: one at the slot's own key, whoever wrote it, and
+  // one at a viewer's key where this slice is in that viewer's chain.
+  const decided = statements.selectReadersOfDecided.all({
+    branch,
+    space,
+    slice: ref.slice,
+    piece: ref.piece,
+  }) as Array<SliceRef & { mark: CurrencyMark; instance_key: string }>;
+  if (decided.length === 0) return readers;
+  const seen = new Set(readers.map(refKey));
+  for (const { slice, piece, mark, instance_key } of decided) {
+    if (
+      slice !== instance_key && !sliceChain(slice).includes(ref.slice)
+    ) continue;
+    const key = refKey({ slice, piece });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    readers.push({ slice, piece, mark });
+  }
+  return readers;
+};
+
+/**
+ * The slices whose runs wrote the slot `(id, scopeKey)` from a narrower
+ * key, each with the seq its row stands at.
+ */
+const decidersOf = (
+  context: Context,
+  id: string,
+  scopeKey: string,
+): Array<SliceRef & { seq: number }> =>
+  context.statements.selectDeciders.all({
+    branch: context.branch,
+    scope_key: scopeKey,
+    id,
+  }) as Array<SliceRef & { seq: number }>;
 
 /** Whether `piece` vouches for the instance `(id, scopeKey)`. */
 const vouchesFor = (
@@ -735,10 +959,58 @@ const staleInstance = (
       if (mark !== 0) producers.push({ piece, slice });
     }
   }
+  // A slot a slice's run wrote from another key is as current as that
+  // slice, while its row stands at the slot's head: a row behind it answers
+  // for nothing, since another run wrote the slot since. A reader at a
+  // viewer's key sees the slot as the slices of that viewer's chain decided
+  // it, and a reader at the slot's own key as whichever slice holds it.
+  if (scopeKey !== ANY_INSTANCE) {
+    const viewer = self !== undefined && self.slice !== scopeKey
+      ? sliceChain(self.slice)
+      : undefined;
+    const head = headOfInstance(context, id, scopeKey);
+    for (const decider of decidersOf(context, id, scopeKey)) {
+      if (decider.seq < head) continue;
+      if (viewer !== undefined && !viewer.includes(decider.slice)) continue;
+      vouched = true;
+      // A slot the reading slice decides itself does not count against it.
+      if (decider.piece === self?.piece && decider.slice === self.slice) {
+        continue;
+      }
+      const mark = markOf(context, decider);
+      if (mark !== undefined && mark !== 0) {
+        producers.push({ piece: decider.piece, slice: decider.slice });
+      }
+    }
+  }
   // A stored value some computation writes is current only while a clean run
   // of that computation stands behind it. A record taken while the
   // computation was not running drops that, whatever the slice's mark.
   return { unrecorded: false, unvouched: !vouched, producers };
+};
+
+/**
+ * Whether `ref` read an instance of another space that its source reported
+ * stale upstream, or has reported nothing of.
+ */
+const readsStaleImport = (context: Context, ref: SliceRef): boolean => {
+  const { branch, space, statements } = context;
+  const foreign = statements.selectForeignReads.all({
+    branch,
+    space,
+    slice: ref.slice,
+    piece: ref.piece,
+  }) as Array<
+    { entity_space: string; entity: string; entity_scope_key: string }
+  >;
+  return foreign.some(({ entity_space, entity, entity_scope_key }) =>
+    (statements.selectImport.get({
+      branch,
+      source: entity_space,
+      id: entity,
+      scope_key: entity_scope_key,
+    }) as { stale: number } | undefined)?.stale !== 0
+  );
 };
 
 /**
@@ -783,37 +1055,196 @@ const staleInputsOf = (
       producers.set(refKey(producer), producer);
     }
   }
-  const foreign = statements.selectForeignReads.all({
-    branch,
-    space,
-    slice: ref.slice,
-    piece: ref.piece,
-  }) as Array<
-    { entity_space: string; entity: string; entity_scope_key: string }
-  >;
-  const upstream = foreign.some(({ entity_space, entity, entity_scope_key }) =>
-    (statements.selectImport.get({
-      branch,
-      source: entity_space,
-      id: entity,
-      scope_key: entity_scope_key,
-    }) as { stale: number } | undefined)?.stale !== 0
-  );
   return {
     unrecorded,
     unvouched,
-    upstream,
+    upstream: readsStaleImport(context, ref),
     producers: [...producers.values()],
   };
 };
 
-/** Whether an input of `ref` is one the index cannot call current. */
-const hasStaleInput = (context: Context, ref: SliceRef): boolean => {
-  const { unrecorded, unvouched, upstream, producers } = staleInputsOf(
-    context,
-    ref,
-  );
-  return unrecorded || unvouched || upstream || producers.length > 0;
+/**
+ * The reads that keep `ref`, a slice marked `1`, from being current, where
+ * every one of them is of an instance another recorded piece is to bring
+ * up to date: one a piece that is behind on its own rows decides, or one a
+ * recorded piece writes and none vouches for, as a viewer's own instance
+ * is before that piece has run for the viewer. They are the reads `ref`
+ * made of such an instance, and those made by each slice marked `1`
+ * between `ref` and such a piece. Starting those pieces is then what can
+ * clear `ref`, and starting its own piece is not. `undefined` where
+ * something else keeps `ref` stale: a derived document no recorded piece
+ * writes, an instance of another space, a read that names no one instance,
+ * an instance of a piece whose record was stored not vouched for, or
+ * nothing at all.
+ */
+const upstreamReadsOf = (
+  context: Context,
+  ref: SliceRef,
+): Array<Omit<CurrencyUpstreamRead, "reader">> | undefined => {
+  const { branch, space, statements } = context;
+  const found = new Map<string, Omit<CurrencyUpstreamRead, "reader">>();
+  const seen = new Set([refKey(ref)]);
+  const queue = [ref];
+  while (queue.length > 0) {
+    const at = queue.pop()!;
+    const inputs = staleInputsOf(context, at);
+    if (inputs.unrecorded || inputs.upstream) return undefined;
+    const reads = statements.selectLocalReads.all({
+      branch,
+      space,
+      slice: at.slice,
+      piece: at.piece,
+    }) as Array<{ entity: string; entity_scope_key: string; derived: number }>;
+    for (const { entity, entity_scope_key, derived } of reads) {
+      if (entity === at.piece) continue;
+      const { unvouched, producers } = staleInstance(context, {
+        id: entity,
+        scopeKey: entity_scope_key,
+        derived: derived === 1,
+      }, at);
+      /** Notes that the read is of an instance `piece` is to bring up to date. */
+      const note = (piece: string) =>
+        found.set(
+          [at.slice, entity_scope_key, entity, piece].join("\0"),
+          {
+            slice: at.slice,
+            id: entity,
+            scopeKey: entity_scope_key,
+            piece,
+          },
+        );
+      if (unvouched) {
+        // No clean run stands behind the instance, so each recorded piece
+        // that writes the document is one to run for it. A document the
+        // slice's own piece alone writes has nothing upstream.
+        const writers =
+          (statements.selectWriters.all({ branch, id: entity }) as Array<
+            { piece: string }
+          >).filter(({ piece }) => piece !== at.piece);
+        if (entity_scope_key === ANY_INSTANCE || writers.length === 0) {
+          return undefined;
+        }
+        for (const { piece } of writers) {
+          // A writer recorded for the instance's key and not vouched for
+          // has run for it, and a further run vouches for no more.
+          const ran = sliceChain(entity_scope_key).some((slice) =>
+            rowOf(context, { piece, slice })?.unvouched === 1
+          );
+          if (ran) return undefined;
+          note(piece);
+        }
+      }
+      for (const producer of producers) {
+        const row = rowOf(context, producer);
+        if (row?.mark === 1) {
+          const key = refKey(producer);
+          if (!seen.has(key)) {
+            seen.add(key);
+            queue.push(producer);
+          }
+          continue;
+        }
+        // A slice whose record was stored not vouched for stays marked
+        // however often its piece runs, so starting that piece clears
+        // nothing.
+        if (row?.unvouched === 1) return undefined;
+        if (entity_scope_key === ANY_INSTANCE) return undefined;
+        note(producer.piece);
+      }
+    }
+  }
+  return found.size === 0 ? undefined : [...found.values()];
+};
+
+/**
+ * For each slice `hasStaleInput()` last found waiting on an input of this
+ * store, the read it was found waiting on, by engine and by `refKey()`.
+ *
+ * A slice that reads what many pieces write is asked about once for each of
+ * those pieces that is stored clean, and goes on waiting on the same read
+ * through nearly all of them. Asking about that read first makes each of
+ * those answers one row's work, where walking the slice's reads to it again
+ * makes storing the records of a board the square of its size.
+ *
+ * An entry is a place to look first and nothing more: the read is looked up
+ * and judged again each time, so an entry that outlived the slice's rows, or
+ * a transaction that rolled back, costs one lookup and is dropped.
+ */
+const waitingReads = new WeakMap<
+  Engine,
+  Map<string, { entity: string; scopeKey: string }>
+>();
+
+/**
+ * Whether an input of `ref` is one the index cannot call current, with each
+ * slice in `assumed` taken as clean. It answers from what `staleInputsOf()`
+ * gathers, and stops at the first input that decides it: a slice is asked on
+ * every record stored and on every walk downstream, and one that waits on
+ * something it read goes on waiting whatever its other reads say. The read
+ * it stopped at the last time is asked about first (`waitingReads`).
+ */
+const hasStaleInput = (
+  context: Context,
+  ref: SliceRef,
+  assumed?: ReadonlyMap<string, SliceRef>,
+): boolean => {
+  const { branch, space, statements } = context;
+
+  /** Whether `ref` waits on its read of the instance `(entity, scopeKey)`. */
+  const waitsOn = (
+    entity: string,
+    scopeKey: string,
+    derived: boolean,
+  ): boolean => {
+    // The piece's own result document is its pattern pointer, which no
+    // computation decides.
+    if (entity === ref.piece) return false;
+    const found = staleInstance(
+      context,
+      { id: entity, scopeKey, derived },
+      ref,
+    );
+    return found.unrecorded || found.unvouched ||
+      found.producers.some((producer) =>
+        assumed?.has(refKey(producer)) !== true
+      );
+  };
+
+  let waiting = waitingReads.get(context.engine);
+  if (waiting === undefined) {
+    waiting = new Map();
+    waitingReads.set(context.engine, waiting);
+  }
+  const key = refKey(ref);
+  const last = waiting.get(key);
+  if (last !== undefined) {
+    const row = statements.selectLocalRead.get({
+      branch,
+      space,
+      slice: ref.slice,
+      piece: ref.piece,
+      entity: last.entity,
+      entity_scope_key: last.scopeKey,
+    }) as { derived: number } | undefined;
+    if (
+      row !== undefined &&
+      waitsOn(last.entity, last.scopeKey, row.derived === 1)
+    ) return true;
+    waiting.delete(key);
+  }
+  if (readsStaleImport(context, ref)) return true;
+  const reads = statements.selectLocalReads.all({
+    branch,
+    space,
+    slice: ref.slice,
+    piece: ref.piece,
+  }) as Array<{ entity: string; entity_scope_key: string; derived: number }>;
+  for (const { entity, entity_scope_key, derived } of reads) {
+    if (!waitsOn(entity, entity_scope_key, derived === 1)) continue;
+    waiting.set(key, { entity, scopeKey: entity_scope_key });
+    return true;
+  }
+  return false;
 };
 
 /** The pieces that enclose `piece`. */
@@ -906,6 +1337,15 @@ const advance = (context: Context): CurrencyMarked[] => {
       ?.seq;
   const slices =
     (statements.countSlices.get({ branch }) as { count: number }).count;
+  // An index that holds rows it tells its readers and no cursor starts over
+  // with its records dropped (`open()` in `engine.ts`). Each such row says
+  // what those records made of its instance, so each is brought up to date.
+  if (cursor === undefined && context.touched !== undefined) {
+    const exported = statements.selectExportedIds.all({ branch }) as Array<
+      { id: string }
+    >;
+    for (const { id } of exported) context.touched.ids.add(id);
+  }
   const seqs = new Map<string, { ref: SliceRef; seq: number }>();
   const becameMarked: SliceRef[] = [];
   if (slices > 0) {
@@ -980,7 +1420,13 @@ const advance = (context: Context): CurrencyMarked[] => {
       roots = underOf(context, ref.piece);
       under.set(ref.piece, roots);
     }
-    return { piece: ref.piece, slice: ref.slice, seq, under: roots };
+    return {
+      piece: ref.piece,
+      slice: ref.slice,
+      seq,
+      under: roots,
+      ...(markOf(context, ref) === 1 && { upstream: true as const }),
+    };
   });
 };
 
@@ -989,9 +1435,26 @@ const contextFor = (engine: Engine, space: string): Context => ({
   engine,
   branch: DEFAULT_BRANCH,
   space,
-  statements: statementsFor(engine),
+  statements: preparedFor(engine),
   now: Date.now(),
 });
+
+/**
+ * The prepared statements of each engine. A judgment asks about each of its
+ * roots with a call of its own, and gathering the statements for each call
+ * looks every one of them up again.
+ */
+const prepared = new WeakMap<Engine, Statements>();
+
+/** The prepared statements over the index, for `engine`, gathered once. */
+const preparedFor = (engine: Engine): Statements => {
+  let statements = prepared.get(engine);
+  if (statements === undefined) {
+    statements = statementsFor(engine);
+    prepared.set(engine, statements);
+  }
+  return statements;
+};
 
 /**
  * The context of a call that changes the index. It keeps what the call
@@ -1032,8 +1495,11 @@ export const advanceCurrencyCursor = (
 /**
  * Stores `batch`, replacing the rows of each slice it names as a set, and
  * each piece's write rows, after bringing the marks up to the store's head.
- * A slice a piece holds and its record does not name keeps its rows and its
- * mark.
+ * A viewer's slice a piece holds and its record does not name keeps its rows
+ * and its mark. So does a `space` slice that is clean and of the batch's
+ * epoch, under a record that is vouched for. Any other `space` slice a
+ * record does not name is replaced by one that read nothing, as is the
+ * missing one of a piece with no record.
  *
  * A row takes the seq its instance's head stands at when every revision of
  * the instance above `batch.asOf` is one `batch.seen` names. Otherwise a
@@ -1168,22 +1634,68 @@ export const storeCurrencyRecords = (
   };
 
   /**
-   * Whether `ref`, clean since its last record, wrote an instance it
-   * vouched for again, to a value other than the one it held, with nothing
-   * it read having changed. Read before its rows are replaced.
+   * Whether every write the commit at `seq` made to the instance
+   * `(id, scopeKey)` is one it attributes to a run at the scope key `slice`.
    */
-  const wroteAgainUnprompted = (ref: SliceRef): boolean => {
-    const vouches = (statements.selectVouches.all({
+  const writtenAs = (
+    id: string,
+    scopeKey: string,
+    seq: number,
+    slice: string,
+  ): boolean => {
+    const writes = statements.selectRevisionWriters.all({
+      branch,
+      id,
+      scope_key: scopeKey,
+      seq,
+    }) as Array<{ op_index: number; annotations: string | null }>;
+    return writes.every(({ op_index, annotations }) =>
+      runKeyOf(annotations, op_index) === slice
+    );
+  };
+
+  /**
+   * Whether `ref`, clean since its last record, wrote an instance it
+   * answered for again, to a value other than the one it held, with nothing
+   * it read having changed. `decides` are the instances at another key that
+   * the record being stored names as ones `ref` decides. Read before the
+   * rows of `ref` are replaced.
+   *
+   * An instance at the slice's own key counts whichever derivation wrote
+   * it. One at another key is shared with the runs of other slices, any of
+   * which may write it as it decides, so it counts only where the slice's
+   * own run is known to have written it: every revision above the slice's
+   * row is attributed to a run at the slice's key, and the record names the
+   * instance as one that holds what the slice's run left. Where another
+   * slice's run wrote it in between, what the slice's run then wrote may
+   * have been prompted by that write, and is not counted.
+   */
+  const wroteAgainUnprompted = (
+    ref: SliceRef,
+    decides: readonly CurrencyInstance[],
+  ): boolean => {
+    /** The instances at its own key the slice vouched for. */
+    const vouched = (statements.selectVouches.all({
       branch,
       slice: ref.slice,
       piece: ref.piece,
     }) as Array<{ id: string; seq: number; held: number }>).filter((row) =>
       row.held === 1
-    );
+    ).map(({ id, seq }) => ({ id, scopeKey: ref.slice, seq }));
+
+    /** The instances at another key it answered for that were written since. */
+    const decided = (statements.selectDecidesBehind.all({
+      branch,
+      slice: ref.slice,
+      piece: ref.piece,
+    }) as Array<{ id: string; instance_key: string; seq: number }>).map((
+      { id, instance_key, seq },
+    ) => ({ id, scopeKey: instance_key, seq }));
+
     // A revision that is no derivation is a change from outside, and
     // whatever the piece wrote after it was prompted.
-    for (const { id, seq } of vouches) {
-      const above = revisionsAbove(id, ref.slice, seq);
+    for (const { id, scopeKey, seq } of [...vouched, ...decided]) {
+      const above = revisionsAbove(id, scopeKey, seq);
       if (above.some((revision) => !isDerivation(revision))) return false;
     }
     const written = new Set(
@@ -1219,32 +1731,88 @@ export const storeCurrencyRecords = (
           ) return false;
           continue;
         }
-        if (written.has(row.entity)) continue;
+        if (written.has(row.entity)) {
+          // A piece does not run for a viewer who holds no instance of its
+          // result document. The write that makes the instance is that of
+          // whoever instantiates the piece for them, and it prompts what
+          // the piece then writes.
+          if (
+            row.entity === ref.piece &&
+            row.entity_scope_key !== ANY_INSTANCE &&
+            headOf(row.entity, row.entity_scope_key) > row.seq &&
+            read(engine, {
+                id: row.entity,
+                scopeKey: row.entity_scope_key as ScopeKey,
+                seq: row.seq,
+              }) === null
+          ) return false;
+          continue;
+        }
         if (headOf(row.entity, row.entity_scope_key) > row.seq) return false;
       }
     }
-    // A start derives every output of a piece afresh, those of a slice that
-    // was current among them, so an instance written again as it stood is
-    // no sign that the stored value was stale.
-    return vouches.some(({ id, seq }) =>
-      headOf(id, ref.slice) > seq &&
+
+    /**
+     * Whether the instance holds another document than it did at `seq`. A
+     * start derives every output of a piece afresh, those of a slice that
+     * was current among them, so an instance written again as it stood is
+     * no sign that the stored value was stale.
+     */
+    const differs = (
+      { id, scopeKey, seq }: CurrencyInstance & { seq: number },
+    ): boolean =>
+      headOf(id, scopeKey) > seq &&
       !sameDocument(
-        read(engine, { id, scopeKey: ref.slice as ScopeKey, seq }),
-        read(engine, { id, scopeKey: ref.slice as ScopeKey }),
-      )
-    );
+        read(engine, { id, scopeKey: scopeKey as ScopeKey, seq }),
+        read(engine, { id, scopeKey: scopeKey as ScopeKey }),
+      );
+
+    return vouched.some(differs) ||
+      decided.some((slot) =>
+        decides.some(({ id, scopeKey }) =>
+          id === slot.id && scopeKey === slot.scopeKey
+        ) &&
+        revisionsAbove(slot.id, slot.scopeKey, slot.seq).every((revision) =>
+          writtenAs(slot.id, slot.scopeKey, revision, ref.slice)
+        ) && differs(slot)
+      );
   };
 
   engine.database.transaction(() => {
+    result.marked = advance(context);
+
+    /**
+     * Whether a record of `record`'s piece that names no `space` slice
+     * leaves the one the piece holds as it is. No live computation of the
+     * piece ran at the space's key when such a record was taken, so it has
+     * nothing to put in the slice's place.
+     *
+     * A slice that is clean and of the batch's epoch is kept. Keeping it
+     * makes nothing servable that its rows do not prove: they are the rows a
+     * clean run left, the advance above has just brought the marks up to the
+     * store's head, and every later change to an instance the slice read or
+     * vouches for marks it as it marks the slice of a viewer who is away.
+     *
+     * Any other slice is replaced by one that read nothing. It passes no
+     * judgment as it stands, and it would stay so for as long as no session
+     * demands what its computations wrote, with its piece started on every
+     * demand for the rest of it.
+     */
+    const keepsSpaceSlice = (record: CurrencyRecord): boolean => {
+      const held = rowOf(context, { piece: record.piece, slice: SPACE_SLICE });
+      return record.vouched && held !== undefined && held.mark === 0 &&
+        held.epoch === batch.epoch;
+    };
+
     /**
      * The slices each record stores: the ones it names, and a `space` slice
-     * that read nothing for a piece that has none yet.
+     * that read nothing for a record that names none, unless the piece
+     * holds one the record leaves as it is.
      */
     const stored = batch.records.map((record) => ({
       record,
       slices: record.slices.some((slice) => slice.key === SPACE_SLICE) ||
-          rowOf(context, { piece: record.piece, slice: SPACE_SLICE }) !==
-            undefined
+          keepsSpaceSlice(record)
         ? record.slices
         : [
           { key: SPACE_SLICE, vouched: true, reads: [], vouches: [] },
@@ -1252,12 +1820,16 @@ export const storeCurrencyRecords = (
         ],
     }));
     const wasClean = stored.flatMap(({ record, slices }) =>
-      slices.map((slice) => ({ piece: record.piece, slice: slice.key }))
-    ).filter((ref) => rowOf(context, ref)?.was_clean === 1);
-    result.marked = advance(context);
+      slices.map((slice) => ({
+        ref: { piece: record.piece, slice: slice.key },
+        decides: slice.decides ?? [],
+      }))
+    ).filter(({ ref }) => rowOf(context, ref)?.was_clean === 1);
     result.falseClean = [
       ...new Set(
-        wasClean.filter(wroteAgainUnprompted).map((ref) => ref.piece),
+        wasClean.filter(({ ref, decides }) =>
+          wroteAgainUnprompted(ref, decides)
+        ).map(({ ref }) => ref.piece),
       ),
     ];
 
@@ -1281,6 +1853,11 @@ export const storeCurrencyRecords = (
       statements.deleteWrites.run({ branch, piece });
       for (const root of record.under) {
         if (root !== piece) statements.insertUnder.run({ branch, piece, root });
+      }
+      if (record.followsOrigin === true) {
+        statements.insertOrigin.run({ branch, piece });
+      } else {
+        statements.deleteOrigin.run({ branch, piece });
       }
       for (const id of record.writes) {
         statements.insertWrite.run({ branch, piece, id, owned: 0 });
@@ -1412,6 +1989,34 @@ export const storeCurrencyRecords = (
             seq: outside ? last ?? 0 : at.seq,
           });
         }
+        // The broader slots the slice's runs wrote are answered for here,
+        // each at the seq it stands at. A record replaces them whole. One
+        // that holds a later write is stored behind every head: the row
+        // answers for nothing, and keeps the slot from being taken for one
+        // the slice's runs never wrote.
+        statements.deleteDecides.run({ branch, slice: slice.key, piece });
+        for (const { id, scopeKey } of slice.superseded ?? []) {
+          statements.insertDecide.run({
+            branch,
+            slice: slice.key,
+            piece,
+            id,
+            instance_key: scopeKey,
+            seq: SUPERSEDED_SEQ,
+          });
+        }
+        for (const { id, scopeKey } of slice.decides ?? []) {
+          const at = standingOf(id, scopeKey);
+          unseen ||= at.unseen;
+          statements.insertDecide.run({
+            branch,
+            slice: slice.key,
+            piece,
+            id,
+            instance_key: scopeKey,
+            seq: at.seq,
+          });
+        }
         const vouched = record.vouched && slice.vouched && !foreign;
         if (vouched && unseen && !overwritten) behind.add(piece);
         // A record that reaches the store at or after the time it expires
@@ -1435,6 +2040,7 @@ export const storeCurrencyRecords = (
           piece,
           mark: clean ? 0 : 2,
           epoch: batch.epoch,
+          unvouched: vouched ? 0 : 1,
         });
         refs.push(ref);
       }
@@ -1463,13 +2069,7 @@ export const storeCurrencyRecords = (
     for (let changed = true; changed;) {
       changed = false;
       for (const [key, ref] of assumed) {
-        const { unrecorded, unvouched, upstream, producers } = staleInputsOf(
-          context,
-          ref,
-        );
-        const stale = unrecorded || unvouched || upstream ||
-          producers.some((producer) => !assumed.has(refKey(producer)));
-        if (!stale) continue;
+        if (!hasStaleInput(context, ref, assumed)) continue;
         assumed.delete(key);
         // A dropped slice is a marked producer from here on.
         if (!settling.has(key)) setMark(context, ref, 1);
@@ -1786,6 +2386,18 @@ export const applyCurrencyImports = (
     /** The slices that read an entry and stood marked `1`. */
     const waiting = new Map<string, SliceRef>();
     for (const { id, scopeKey, head, stale } of options.entries) {
+      // An entry that says what the index already holds of the instance
+      // changes no slice: each that read it was marked, or left waiting,
+      // when the entry was first applied or when its own record was stored.
+      // A registration returns every instance a batch read, so most entries
+      // are such.
+      const held = statements.selectImport.get({
+        branch,
+        source,
+        id,
+        scope_key: scopeKey,
+      }) as { head: number; stale: number } | undefined;
+      if (held?.head === head && (held.stale !== 0) === stale) continue;
       statements.upsertImport.run({
         branch,
         source,
@@ -1850,18 +2462,41 @@ export const selectCurrencyWriters = (
 };
 
 /**
- * The piece of `space` that derives the `computed:` document `id`: the one
- * piece whose record says it writes the document, at any instance of it.
- * `undefined` when `id` names no computed document, or when the records of
- * no piece or of several say they write it.
+ * The piece of `space` that derives the document `id`: the one piece whose
+ * record says it writes the document, at any instance of it. `undefined`
+ * when the records of no piece or of several say they write it.
  */
 export const selectCurrencyDeriver = (
   engine: Engine,
   options: { space: string; id: string },
 ): string | undefined => {
-  if (!options.id.startsWith(COMPUTED_ID_PREFIX)) return undefined;
   const writers = selectCurrencyWriters(engine, options);
   return writers.length === 1 ? writers[0] : undefined;
+};
+
+/**
+ * Whether nothing the index or the store holds says that a computation
+ * writes the document `id` of `space`: its id is no `computed:` one, no
+ * piece's record says it writes it, no recorded slice read it as a document
+ * a computation writes, and no serving loop's derivation wrote its shared
+ * instance. Such a document holds what clients wrote, and nothing derives
+ * it.
+ */
+export const isUnderivedDocument = (
+  engine: Engine,
+  options: { space: string; id: string },
+): boolean => {
+  const { id, space } = options;
+  if (id.startsWith(COMPUTED_ID_PREFIX)) return false;
+  const { branch, statements } = contextFor(engine, space);
+  return statements.selectWriters.get({ branch, id }) === undefined &&
+    statements.selectReadAsDerived.get({ branch, space, entity: id }) ===
+      undefined &&
+    statements.selectDerivationOfInstance.get({
+        branch,
+        id,
+        scope_key: SPACE_SLICE,
+      }) === undefined;
 };
 
 /**
@@ -2122,6 +2757,35 @@ export type CurrencyRefusal =
    */
   | "owner-not-clean";
 
+/**
+ * A read that keeps a slice from being current, of an instance another
+ * recorded piece is to bring up to date: one a piece behind on its own rows
+ * decides, or one a recorded piece writes and none vouches for.
+ */
+export type CurrencyUpstreamRead = {
+  /**
+   * The piece whose slice the read keeps stale: a root's piece, a piece
+   * beneath a root that a demanded instance is resolved under, or a running
+   * piece the judgment was asked about.
+   */
+  reader: string;
+
+  /**
+   * The key of the slice that made the read: a slice of `reader`, or of a
+   * piece between `reader` and `piece` that is stale only through this.
+   */
+  slice: string;
+
+  /** The id of the document read. */
+  id: string;
+
+  /** The scope key of the instance read. */
+  scopeKey: string;
+
+  /** The piece that writes the instance, and is to run for it. */
+  piece: string;
+};
+
 /** What a judgment of roots found. */
 export type CurrencyJudgment = {
   /** The roots the store can serve. */
@@ -2129,6 +2793,27 @@ export type CurrencyJudgment = {
 
   /** The roots it cannot, each with the first reason found. */
   refused: Array<{ root: string; reason: CurrencyRefusal }>;
+
+  /**
+   * The roots that would pass but for slices that are stale only through
+   * what is upstream of them: what the store holds of each is not current,
+   * and starting its piece would not make it so. Starting the pieces
+   * `upstream` names may. `readers` are the pieces whose slices hold the
+   * root, its own piece or pieces beneath it, as `upstream` names them.
+   */
+  held: Array<{ root: string; readers: string[] }>;
+
+  /**
+   * The reads that keep a slice of a root, or of one of the running pieces
+   * asked about, stale only through what is upstream of it.
+   */
+  upstream: CurrencyUpstreamRead[];
+
+  /**
+   * The pieces each servable root rests on that record a source origin: its
+   * own piece and those beneath it. A root that rests on none has no entry.
+   */
+  origins: Array<{ root: string; pieces: string[] }>;
 };
 
 /**
@@ -2141,37 +2826,109 @@ export type CurrencyJudgment = {
  * piece beneath it does, is vouched for: each slice of the owner the
  * instance is resolved under is clean and of `epoch`, and the slice at the
  * instance's own key holds a vouch row for a written id, or the store holds
- * a live document for an owned one. A slice no demanded instance is resolved
+ * a live document for an owned one. A written instance that a narrower
+ * slice's run wrote, as a redirect at a broader key is, is answered for by
+ * the slices of each demander's own chain that hold a row for it, which are
+ * to be current with the slices above them, and by no other viewer's. A
+ * slice no demanded instance is resolved
  * under is not read, so the stale slice of a viewer who demands nothing
  * refuses no root. A root is served for every session `rows` covers or for
  * none, so one of them with a stale slice refuses it for all.
  * The marks are read as they stand, so a caller that needs them current
  * advances the cursor first, and brings what the index holds of each space
  * the slices read up to what that space reports.
+ *
+ * A slice marked `1` whose every stale input a piece behind on its own
+ * rows decides refuses no root: a root that passes but for such slices is
+ * returned as held, with the reads that keep them stale. `running` are
+ * pieces that run already, whose slices are asked about for those reads
+ * alone.
  */
 export const judgeCurrencyRoots = (
   engine: Engine,
   options: {
     space: string;
     roots: readonly string[];
-    rows: Iterable<CurrencyInstance>;
+    /**
+     * The demanded instances. `demander` is the narrowest scope key of the
+     * pair whose session demands the row, a session's key: a row at the
+     * space names no pair, and whose view of a slot is asked about decides
+     * which slice answers for it. A row without one is taken as demanded by
+     * every pair the narrower keys among the rows name.
+     */
+    rows: Iterable<CurrencyInstance & { demander?: string }>;
     epoch: string;
+    running?: readonly string[];
   },
 ): CurrencyJudgment => {
   const context = contextFor(engine, options.space);
   const { branch, statements } = context;
-  const judgment: CurrencyJudgment = { servable: [], refused: [] };
+  const judgment: CurrencyJudgment = {
+    servable: [],
+    refused: [],
+    held: [],
+    upstream: [],
+    origins: [],
+  };
+
+  /** Whether each slice asked about is stale only upstream, by slice. */
+  const upstreamOnly = new Map<string, boolean>();
+
+  /** The pieces a slice of which is stale only upstream. */
+  const staleUpstream = new Set<string>();
+
+  /**
+   * Whether the slice `ref`, marked `1` and of the epoch, is stale only
+   * through what is upstream of it. The reads that keep it so join the
+   * judgment the first time it is asked about.
+   */
+  const staleOnlyUpstream = (ref: SliceRef): boolean => {
+    const key = refKey(ref);
+    let known = upstreamOnly.get(key);
+    if (known === undefined) {
+      const reads = upstreamReadsOf(context, ref);
+      known = reads !== undefined;
+      upstreamOnly.set(key, known);
+      if (reads !== undefined) {
+        staleUpstream.add(ref.piece);
+        for (const read of reads) {
+          judgment.upstream.push({ reader: ref.piece, ...read });
+        }
+      }
+    }
+    return known;
+  };
+
+  /**
+   * Whether the row `row` of the slice `ref` refuses nothing: it is of the
+   * epoch, and clean or stale only upstream.
+   */
+  const passes = (
+    ref: SliceRef,
+    row: { mark: CurrencyMark; epoch: string },
+  ): boolean =>
+    row.epoch === options.epoch &&
+    (row.mark === 0 || (row.mark === 1 && staleOnlyUpstream(ref)));
+
+  for (const piece of options.running ?? []) {
+    for (const { slice, mark } of slicesOf(context, piece)) {
+      const ref = { piece, slice };
+      if (mark !== 1 || rowOf(context, ref)?.epoch !== options.epoch) continue;
+      staleOnlyUpstream(ref);
+    }
+  }
   const candidates: string[] = [];
   for (const root of options.roots) {
-    const row = rowOf(context, { piece: root, slice: SPACE_SLICE });
+    const ref = { piece: root, slice: SPACE_SLICE };
+    const row = rowOf(context, ref);
     if (row === undefined) {
       judgment.refused.push({ root, reason: "no-record" });
+    } else if (passes(ref, row)) {
+      candidates.push(root);
     } else if (row.mark !== 0) {
       judgment.refused.push({ root, reason: "marked" });
-    } else if (row.epoch !== options.epoch) {
-      judgment.refused.push({ root, reason: "other-epoch" });
     } else {
-      candidates.push(root);
+      judgment.refused.push({ root, reason: "other-epoch" });
     }
   }
   if (candidates.length === 0) return judgment;
@@ -2179,23 +2936,102 @@ export const judgeCurrencyRoots = (
   /** Each answer `isCurrent()` has given, by slice. */
   const current = new Map<string, boolean>();
 
-  /** Whether the slice `ref` is clean and of the epoch, `true` for none. */
+  /**
+   * Whether the slice `ref` refuses nothing: it is of the epoch, and clean
+   * or stale only upstream. `true` for none.
+   */
   const isCurrent = (ref: SliceRef): boolean => {
     const key = refKey(ref);
     let known = current.get(key);
     if (known === undefined) {
       const row = rowOf(context, ref);
-      known = row === undefined ||
-        (row.mark === 0 && row.epoch === options.epoch);
+      known = row === undefined || passes(ref, row);
       current.set(key, known);
     }
     return known;
   };
 
+  const rows = [...options.rows];
+
+  /**
+   * The chain of each pair known only by the narrower keys among the rows,
+   * from that key up to the space: who a row that names no demander is
+   * taken as demanded by.
+   */
+  const unnamed = [
+    ...new Set(
+      rows.filter(({ demander }) => demander === undefined).map((
+        { scopeKey },
+      ) => scopeKey).filter((key) => key !== SPACE_SLICE),
+    ),
+  ].map((key) => sliceChain(key));
+
+  /** The chains of the pairs that demand each instance, by instance. */
+  const demanding = new Map<string, Map<string, string[]>>();
+  for (const { id, scopeKey, demander } of rows) {
+    const key = `${scopeKey}\0${id}`;
+    let chains = demanding.get(key);
+    if (chains === undefined) {
+      chains = new Map();
+      demanding.set(key, chains);
+    }
+    if (demander !== undefined) {
+      if (!chains.has(demander)) chains.set(demander, sliceChain(demander));
+      continue;
+    }
+    for (const chain of unnamed) chains.set(chain[0], chain);
+  }
+
+  /**
+   * Why `piece` does not answer for the instance `(id, scopeKey)` it writes,
+   * or `undefined` where it does. The slice at the instance's key vouches
+   * for what its own runs wrote. A slot a narrower slice's run wrote is
+   * decided, for each pair that demands it, by the slices of that pair's
+   * chain that hold a row for it: each row is to stand at the slot's head,
+   * and each of those slices, and each slice above it, is to be current. A
+   * slot only another viewer's slice holds a row for is not answered for.
+   */
+  const unvouchedFor = (
+    piece: string,
+    id: string,
+    scopeKey: string,
+  ): CurrencyRefusal | undefined => {
+    const own = statements.selectVouch.get({
+      branch,
+      slice: scopeKey,
+      piece,
+      id,
+    }) !== undefined;
+    const deciders = decidersOf(context, id, scopeKey).filter((decider) =>
+      decider.piece === piece
+    );
+    if (deciders.length === 0) return own ? undefined : "unvouched-instance";
+    // Every row the judgment reads is among the demanded ones.
+    const viewers = [...demanding.get(`${scopeKey}\0${id}`)!.values()]
+      .filter((chain) => chain.includes(scopeKey));
+    if (viewers.length === 0) return own ? undefined : "unvouched-instance";
+    const head = headOfInstance(context, id, scopeKey);
+    for (const chain of viewers) {
+      const mine = deciders.filter(({ slice }) => chain.includes(slice));
+      if (mine.length === 0) {
+        if (!own) return "unvouched-instance";
+        continue;
+      }
+      // A row behind the slot's head answers for nothing: another run wrote
+      // the slot since, and a run for this pair would write it as it decides.
+      if (mine.some(({ seq }) => seq < head)) return "unvouched-instance";
+      const stale = mine.some((decider) =>
+        sliceChain(decider.slice).some((slice) => !isCurrent({ piece, slice }))
+      );
+      if (stale) return "owner-not-clean";
+    }
+    return undefined;
+  };
+
   /** The pieces that own a demanded instance they do not vouch for. */
   const failing = new Map<string, CurrencyRefusal>();
   const judged = new Set<string>();
-  for (const { id, scopeKey } of options.rows) {
+  for (const { id, scopeKey } of rows) {
     const key = `${scopeKey}\0${id}`;
     if (judged.has(key)) continue;
     judged.add(key);
@@ -2210,15 +3046,9 @@ export const judgeCurrencyRoots = (
         failing.set(piece, "owner-not-clean");
       } else if (owned !== 0) {
         if (!isLive(context, id, scopeKey)) failing.set(piece, "absent-owned");
-      } else if (
-        statements.selectVouch.get({
-          branch,
-          slice: scopeKey,
-          piece,
-          id,
-        }) === undefined
-      ) {
-        failing.set(piece, "unvouched-instance");
+      } else {
+        const reason = unvouchedFor(piece, id, scopeKey);
+        if (reason !== undefined) failing.set(piece, reason);
       }
     }
   }
@@ -2228,10 +3058,31 @@ export const judgeCurrencyRoots = (
       if (!failingRoots.has(root)) failingRoots.set(root, reason);
     }
   }
+  // A root rests on its own piece and on the pieces beneath it, so one of
+  // those that is stale upstream holds the root.
+  const holding = new Map<string, string[]>();
+  for (const piece of staleUpstream) {
+    for (const root of [piece, ...underOf(context, piece)]) {
+      const readers = holding.get(root);
+      if (readers === undefined) holding.set(root, [piece]);
+      else if (!readers.includes(piece)) readers.push(piece);
+    }
+  }
   for (const root of candidates) {
     const reason = failingRoots.get(root);
-    if (reason === undefined) judgment.servable.push(root);
-    else judgment.refused.push({ root, reason });
+    const readers = holding.get(root);
+    if (reason !== undefined) judgment.refused.push({ root, reason });
+    else if (readers !== undefined) judgment.held.push({ root, readers });
+    else judgment.servable.push(root);
+  }
+  for (const root of judgment.servable) {
+    const beneath = statements.selectBeneath.all({ branch, root }) as Array<
+      { piece: string }
+    >;
+    const pieces = [root, ...beneath.map(({ piece }) => piece)].filter((
+      piece,
+    ) => statements.selectOrigin.get({ branch, piece }) !== undefined);
+    if (pieces.length > 0) judgment.origins.push({ root, pieces });
   }
   return judgment;
 };

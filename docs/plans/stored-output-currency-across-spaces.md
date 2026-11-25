@@ -192,6 +192,16 @@ The trigger and the transfer are separate.
   source until its next pull. The trigger carries no position and no data,
   so nothing in it has to be trusted, and a late or repeated one changes
   nothing.
+- **A shortened arming is told the same way, and stays armed.** Where the
+  time the source may be rested on until comes earlier ("The interval
+  clock"), the source shortens the arming of each reader armed for longer
+  to that time and tells it as it would of a change, but does not disarm
+  it: nothing moved. The telling carries no time either. The reader's loop
+  judges again, and the judgment returns the time from the arming, which
+  the memory server holds. A shortened reader shortens its own readers in
+  turn, and a reader whose arming was already that short or shorter passes
+  nothing on, so round a circle of spaces the shortening ends after one
+  round.
 
 What a reader does with a trigger depends on what is waiting on it:
 
@@ -243,7 +253,12 @@ ends by bringing what the store reports of its registered instances up to
 date, for the documents a commit wrote and the pieces whose slices changed,
 so finding the readers to tell is one read of the rows that moved. A row
 takes a position when it changes, and none when its instance is first
-registered, since the space registering it is handed the row.
+registered, since the space registering it is handed the row. An index
+that starts over with its records dropped keeps these rows, and the first
+call that changes it brings every one of them up to date. A reader that
+kept its records then hears that an instance a piece here computes is no
+longer vouched for. An instance nothing computes is plain data, and its
+row stays as it was.
 
 ### A circle of triggers
 
@@ -379,8 +394,9 @@ root, and a demanding pair, which is the actor's principal and session. It
 differs from a client's row in where it comes from, which the row names as
 its origin: the space where that session is a client's, and the session.
 The source's loop treats it as it treats any row. It loads the piece that
-computes the instance, runs it for that pair, and under `skip` judges it
-first and leaves it unstarted while its record proves it current.
+computes the instance, runs it for that pair, and under `skip` or
+`start-upstream` judges it first and leaves it unstarted while its record
+proves it current.
 
 **Which pair a read carries.** The slice of the run that read says whose
 it is. A read in a `session` slice carries that slice's pair. A read in a
@@ -449,7 +465,10 @@ watermark spans spaces.
 **Not in this step.** A source whose store another memory server holds
 receives no carried demand, as it receives no registration. A loop that
 keeps no index carries nothing, since its records are where it finds what
-a run read. A piece that only a warm request or an anonymous session
+a run read, and a loop in the `skip` mode carries nothing either: a piece
+that runs there derives from what the source holds, and the judgment holds
+the reading slice stale until the source's index proves the instance
+current. A piece that only a warm request or an anonymous session
 demands carries nothing, since neither names an actor to carry.
 
 ## Wish
@@ -506,8 +525,16 @@ again, which marks the expired slice in the source and returns what is
 downstream of it as stale. The time a judgment returns is the same one for
 its own space, so the loop of a space that reads an expiring slice two
 spaces along sets its timer for that slice. A record stored in a space that
-makes that time earlier, or gives it one where it had none, tells each
-space armed with it for longer, which pulls again.
+makes that time earlier, or gives it one where it had none, shortens the
+arming of each space armed with it for longer to that time, and tells it,
+so that its loop judges again and sets its timer for the earlier time.
+Nothing in the space moved, so the reading space stays armed and pulls
+nothing, and the spaces armed with it are shortened in turn, which ends at
+the first space whose readers are armed until then or sooner. Disarming it
+would not do: where the two read each other, round a circle of spaces, the
+trigger would disarm the space the time came from, the pulls that followed
+could arm the reading space for longer again, and the circle would go round
+with nothing moving in it.
 
 ## Computations that run without demand
 
@@ -566,10 +593,30 @@ computation that wrote outside them is recorded as unbounded.
 An effect is left as it is. It runs while its piece is started, and a mark
 on a demanded piece's slice starts the piece.
 
+### The first step: a materializer runs while its space is served
+
+*(RULED 2026-11-21.)* A materializer runs eagerly, and not on demand,
+because what it will write cannot be predicted: that is why the scheduler
+keeps it live, at low priority. The first step keeps that, and bounds it
+by the space instead of by the destinations. While a serving loop serves a
+space for any demand, a piece of that space that holds a materializer and
+is marked is started, whether or not the demand has anything to do with
+it, and its materializers run at low priority. A space nothing demands
+runs none of them. Such a piece may be marked often, by inputs that change
+often, so starting it may need a throttle or a debounce beyond this.
+
+For this the index needs to know which pieces hold a materializer, which a
+record can say, and the loop needs the marked ones among them after each
+advance. It needs nothing about where a materializer writes. The cases
+above are the finer rule, for a space that is served and should still not
+run every materializer it holds, and for a space another space reads while
+nothing serves it.
+
 ### What the rows for an envelope need
 
 Three facts about the scheduler and the index decide how the first two cases
-above are built, and none of them is settled.
+above are built, once the first step is not enough. The first two are not
+settled.
 
 - **An envelope names where a link is held, not what is written.** For a
   computation handed a writable cell, the envelope is the slot that holds
@@ -590,11 +637,11 @@ above are built, and none of them is settled.
   relation of their own: one that marks the readers of the document when the
   materializer's slice is marked, asks for no vouch, and is not marked by
   another writer's revision.
-- **Within one space nothing starts a stale producer.** A reader marked `1`
-  is started and reads what the store holds. The piece that would write it
-  starts only when a session demands it, or when the demand comes from
-  another space (step 5). Starting it from a reader in its own space is the
-  first plan's stage 5.
+- **A stale producer is started from what its record says it writes.**
+  Within one space as across spaces, a reader's stale read starts the piece
+  the index records as writing the instance (the first plan's stage 5, and
+  step 5 here). A document a materializer wrote within its envelope is in
+  no record's write rows, so a reader of it starts nothing.
 
 ### A write into another space at an undeclared destination
 
@@ -726,7 +773,8 @@ A third is ruled:
    access check, their end and the rows the source's index proves current
    left out; the reading loop's set, sent when it changes and withdrawn at
    a park; and activation and parking of the source, which follow from the
-   rows being held among the source's sessions. Measured:
+   rows being held among the source's sessions. A loop carries demand in
+   the `record` and `start-upstream` modes and not in `skip`. Measured:
    [the record](../history/development/performance/2026-11-21-carried-demand-cost.md).
    A return with nothing changed hands the source no demand. A carried
    demand costs the source the admission of its rows and the start of its
@@ -734,14 +782,18 @@ A third is ruled:
    its whole set whenever it changes, and each reading piece is recorded
    again with every viewer's slice at each start; both are costs still to
    take out.
-6. **Computations that run without demand.** Not started. Envelopes among
-   the write rows; a computation recorded as unbounded from what it wrote;
-   the unsettled space, settled before a judgment in it or a pull from it
-   returns; the writer's registration for a declared destination in another
-   space; and the counts the open question needs. Built on step 5, which
-   starts a producer in another space, and on the first plan's stage 5 for
-   one in the same space. "What the rows for an envelope need" lists what
-   is to be settled first.
+6. **Computations that run without demand.** Not started. First, as ruled:
+   a record says whether its piece holds a materializer, and a loop that
+   serves a space for any demand starts the marked pieces that do, at low
+   priority, with a throttle if measurement asks for one. Then the finer
+   rule: envelopes among the write rows; a computation recorded as
+   unbounded from what it wrote; the unsettled space, settled before a
+   judgment in it or a pull from it returns; the writer's registration for
+   a declared destination in another space; and the counts the open
+   question needs. The finer rule is built on step 5, which starts a
+   producer in another space, and on the first plan's stage 5, which starts
+   one in the same space, and "What the rows for an envelope need" lists
+   what is to be settled before it.
 7. **The interval clock's expiry.** Done. A space is armed with one it
    reads only until the earliest slice there expires.
 8. **Measure** a social space whose pieces read each viewer's profile, with
@@ -866,11 +918,13 @@ change to a shared input of the other space, which reaches both viewers:
     the second. A grant withdrawn afterward marks the slice `2` and drops
     its registration, at the next record and at the judgment that follows
     the change to the access list
-    (`v2-server-currency-across-spaces.test.ts`). Under `skip`
+    (`v2-server-currency-across-spaces.test.ts`). Under `start-upstream`
     the piece of test 22 is left unstarted, and carries nothing, while
     each viewer's instance is unchanged, and is started when an input of
     the other space's piece changes, which brings each viewer the new
-    value (`space-server-carried-demand.test.ts`).
+    value. Under `skip` the loop carries nothing into the other space,
+    which computes no instance for a viewer with no session there
+    (`space-server-carried-demand.test.ts`).
 
 ## Related
 

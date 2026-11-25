@@ -1271,6 +1271,70 @@ Deno.test("renderStatus: control characters in the current file are shown as gly
   assertEquals(status.length, 60, "the bar is exactly the terminal width");
 });
 
+Deno.test("renderStatus: highlighting progress shows a spinner, a label, and a gauge", () => {
+  const doc = parseDocument(SAMPLE);
+  const rows = renderFrame(
+    doc,
+    baseView({
+      width: 100,
+      color: false,
+      currentFile: "x.ts",
+      highlighting: { fraction: 0.35, frame: 1 },
+    }),
+  );
+  const status = rows[rows.length - 1];
+  assert(
+    status.includes("◓ Highlighting ███░░░░░░░  x.ts"),
+    `the progress precedes the file: "${status}"`,
+  );
+  assertEquals(columns(status), 100, "the bar is exactly the terminal width");
+});
+
+Deno.test("renderStatus: highlighting progress leaves out its label when only the gauge fits", () => {
+  const doc = parseDocument(SAMPLE);
+  const rows = renderFrame(
+    doc,
+    baseView({
+      width: 60,
+      currentFile: "runtime/runner/src/storage/v2.ts",
+      highlighting: { fraction: 1, frame: 4 },
+    }),
+  );
+  const status = stripAnsi(rows[rows.length - 1]);
+  assert(status.includes("◐ ██████████"), `spinner and full gauge: ${status}`);
+  assertEquals(status.includes("Highlighting"), false, "no label");
+  assert(status.startsWith("? Help  Q Quit"), "the first two hints stay");
+  assertEquals(columns(status), 60, "the bar is exactly the terminal width");
+  assert(
+    rows[rows.length - 1].includes(fgCode(ui.statusBusy.fg!)),
+    "the gauge is drawn in the busy color",
+  );
+});
+
+Deno.test("renderStatus: highlighting progress gives way to the first two hints on a narrow screen", () => {
+  const doc = parseDocument(SAMPLE);
+  for (const width of [30, 40]) {
+    const status = stripAnsi(
+      renderFrame(
+        doc,
+        baseView({
+          width,
+          currentFile: "runtime/runner/src/storage/v2.ts",
+          highlighting: { fraction: 0.5, frame: 0 },
+        }),
+      ).at(-1)!,
+    );
+    assertEquals(status.includes("░"), false, `no gauge at ${width}`);
+    assertEquals(columns(status), width, `exactly ${width} columns`);
+  }
+});
+
+Deno.test("renderStatus: no highlighting progress shows no gauge", () => {
+  const doc = parseDocument(SAMPLE);
+  const rows = renderFrame(doc, baseView({ width: 100, color: false }));
+  assertEquals(rows[rows.length - 1].includes("░"), false);
+});
+
 Deno.test("dialog: control characters in the body are shown as glyphs", () => {
   const rows = renderFrame(
     parseDocument("x\n"),

@@ -25,6 +25,7 @@ import type { Ctx, TileView } from "../types.ts";
 import { BENCH_TREND_BUCKET_MS, REPO } from "../config.ts";
 import {
   BenchmarkHistoryStore,
+  type BenchmarkStats,
   type CachedBenchmarkRun,
 } from "../benchmark-history-cache.ts";
 import {
@@ -38,6 +39,7 @@ import {
   benchmarkRerunHandoff,
   type BenchmarkSnapshot,
   benchmarkTrend,
+  benchmarkTilesResponse,
   benchmarkTrendRuns,
   benchPage,
   describeBenchmarkProgress,
@@ -125,6 +127,7 @@ const benchZip = (json: string) => artifactZip("results.json", json);
 interface GhRun {
   id: number;
   head_branch: string | null;
+  head_sha: string;
   run_attempt: number;
   status: string;
   created_at: string;
@@ -147,6 +150,7 @@ const ghRun = (
 ): GhRun => ({
   id,
   head_branch: "main",
+  head_sha: `c${id}`,
   run_attempt: runAttempt,
   status: "completed",
   created_at: new Date(at).toISOString(),
@@ -376,8 +380,15 @@ Deno.test("benchmark: no token -> gray, and nothing is fetched", async () => {
     assertEquals(v.value, "—");
     assertEquals(v.sub, "set GH_TOKEN");
     assertEquals(v.href, "/bench?view=runtime&repo=labs");
-    assertEquals(v.hint, "metrics ↗");
+    assertEquals(v.hint, "metrics ↗ · as JSON at /bench/tiles.json");
     assertEquals(calls, []);
+    const [tile] = (await (await benchmarkTilesResponse()).json()).tiles;
+    expect(tile).toMatchObject({
+      status: "unknown",
+      headline: "—",
+      sub: "set GH_TOKEN",
+      processors: [],
+    });
   });
 });
 
@@ -955,7 +966,7 @@ Deno.test("benchmark: paging stops at the 45-day cutoff, and an out-of-window ru
     // outage the failures make.
     assertMatch(v.sub ?? "", /^last good \d+ days ago · 99 runs failed$/);
     assertEquals(v.href, "/bench?view=runtime&repo=labs");
-    assertEquals(v.hint, "metrics ↗");
+    assertEquals(v.hint, "metrics ↗ · as JSON at /bench/tiles.json");
     // The newest twenty, then the first hundred, which reaches the run past
     // the cutoff. The second hundred was never asked for.
     assertEquals(runListCalls(calls), [
@@ -3117,16 +3128,16 @@ Deno.test("/bench: the page names the repo and workflow it read", async () => {
 });
 
 Deno.test("/bench runtime preserves the selected CI repository across its links", () => {
-  const html = benchPage("p75", "duration", 9, BASE, "loom");
+  const html = benchPage("p75", "duration", 9, BASE, "cfs");
 
-  assertStringIncludes(html, '<input type="hidden" name="repo" value="loom">');
+  assertStringIncludes(html, '<input type="hidden" name="repo" value="cfs">');
   assertStringIncludes(
     html,
-    'href="/bench?view=ci&amp;repo=loom&amp;days=9&amp;sort=duration&amp;stat=p75">CI duration history</a>',
+    'href="/bench?view=ci&amp;repo=cfs&amp;days=9&amp;sort=duration&amp;stat=p75">CI duration history</a>',
   );
   assertStringIncludes(
     html,
-    'href="/bench?view=gantt&amp;repo=loom&amp;days=9&amp;sort=duration&amp;stat=p75">CI run Gantt</a>',
+    'href="/bench?view=gantt&amp;repo=cfs&amp;days=9&amp;sort=duration&amp;stat=p75">CI run Gantt</a>',
   );
 });
 
@@ -3184,6 +3195,12 @@ Deno.test("benchmark: a failed fetch keeps a stale cached trend grayed", async (
     assertEquals(online.status, "unknown");
     assertEquals(online.value, "—");
     assertEquals(online.sub, "no recent benchmark data");
+    const served = async () =>
+      (await (await isolated.benchmarkTilesResponse()).json()).tiles[0];
+    expect(await served()).toMatchObject({
+      status: "unknown",
+      sub: "no recent benchmark data",
+    });
 
     // The source becomes unreachable on the next collection.
     time.tick(NEXT_COLLECTION_MS);
@@ -3196,6 +3213,17 @@ Deno.test("benchmark: a failed fetch keeps a stale cached trend grayed", async (
     assertEquals(offline.sub, "source unreachable");
     assertStringIncludes(offline.value ?? "", "new");
     assertStringIncludes(offline.extra ?? "", "<svg");
+    // The JSON serves what the board shows, not a status worked out again from
+    // the last run list that could be read.
+    expect(await served()).toMatchObject({
+      status: "unknown",
+      headline: "new",
+      sub: "source unreachable",
+    });
+    // The commits come from the last run list that could be read.
+    expect((await served()).processors[0].points.map(
+      (point: { commit: string | null }) => point.commit,
+    )).toEqual(["c7701", "c7702"]);
   } finally {
     globalThis.fetch = originalFetch;
     if (previousCacheDirectory === undefined) {
@@ -4663,6 +4691,351 @@ describe("the /bench snapshot", () => {
       expect(chartedAttempts(after)).toEqual([`${unplaced.runId}.1`]);
       await check();
       expect(isolated.benchmarkSnapshotForTest()).toBe(after);
+    });
+  });
+});
+
+describe("the benchmark JSON endpoints", () => {
+  beforeEach(forgetBenchmarkRunsForTest);
+
+  const work = "runtime/a/json.bench.ts > work";
+  const calibration = `${CALIBRATION_FILE} > integer arithmetic`;
+  const SLOWER_CPU = "Intel Xeon Platinum 8370C";
+  // Every statistic of a benchmark at one value.
+  const stats = (p75: number): BenchmarkStats => ({
+    min: p75,
+    avg: p75,
+    max: p75,
+    p75,
+    p99: p75,
+    p995: p75,
+    p999: p75,
+  });
+
+  // Twenty daily runs on each of two processors, the second processor's two
+  // hours before the first's, so run `idBase + 2 * day` is the second
+  // processor's and the next id is the first's. The repository's work gets
+  // half again slower on the first processor from day ten, with the machine
+  // unchanged, and its run on day three, or the run `failing` names, fails
+  // having measured. The second processor's host gets a quarter slower from
+  // day twelve, the calibration with it, so its index stays flat.
+  async function twoProcessors(
+    idBase: number,
+    failing = idBase + 7,
+  ): Promise<Api> {
+    const artifacts: Api["artifacts"] = {};
+    const zips: Api["zips"] = {};
+    const runs: GhRun[] = [];
+    for (let day = 0; day < 20; day++) {
+      const at = SAMPLED_BASE - (19 - day) * DAY;
+      const days = [
+        {
+          id: idBase + 2 * day + 1,
+          at,
+          cpu: TEST_CPU,
+          product: day >= 10 ? 1.5 : 1,
+          host: 1,
+        },
+        {
+          id: idBase + 2 * day,
+          at: at - 2 * HOUR,
+          cpu: SLOWER_CPU,
+          product: day >= 12 ? 1.25 : 1,
+          host: day >= 12 ? 1.25 : 1,
+        },
+      ];
+      for (const { id, at, cpu, product, host } of days) {
+        runs.push(ghRun(id, at, id === failing ? "failure" : "success"));
+        artifacts[id] = [{ id: id * 10, name: "bench-results", expired: false }];
+        zips[id * 10] = await benchZip(report([
+          bench("runtime/a/json.bench.ts", null, "work", timings(5e6 * product)),
+          bench(CALIBRATION_FILE, null, "integer arithmetic", timings(1e6 * host)),
+        ], "", cpu));
+      }
+    }
+    runs.sort((a, b) => b.id - a.id);
+    return { pages: { 1: runs }, artifacts, zips };
+  }
+
+  async function served(path: string): Promise<Response> {
+    const url = new URL(path, "http://x");
+    const route = benchmark.routes?.find((route) =>
+      route.path === url.pathname
+    );
+    if (!route) throw new Error(`no route serves ${url.pathname}`);
+    return await route.handler(new Request(url), url);
+  }
+
+  const json = async (path: string) => await (await served(path)).json();
+
+  it("serves what each tile reads and the index behind it, step by step", async () => {
+    await withApi(await twoProcessors(961_000), async () => {
+      const [all] = await Promise.all([
+        benchmark.collect(ctx({ GH_TOKEN: "t" })),
+        keyBenchmarks.collect(ctx({ GH_TOKEN: "t" })),
+      ]);
+      const body = await json("/bench/tiles.json");
+      expect(body.tiles.map((tile: { label: string }) => tile.label))
+        .toEqual(["all benchmarks", "key benchmarks"]);
+      const [allTile, keyTile] = body.tiles;
+      expect(allTile.status).toBe(all.status);
+      expect(allTile.headline).toBe(all.value);
+      expect(allTile.headline).toBe("▲50%");
+      expect(allTile.benchmarks).toBe(1);
+      expect(allTile.headlineProcessor).toBe(TEST_CPU);
+
+      // Processors come in name order.
+      const [rising, steady] = allTile.processors;
+      expect(steady.processor).toBe(SLOWER_CPU);
+      expect(steady.trend.label).toBe("flat");
+      expect(steady.headlineCandidate).toBe(true);
+      expect(steady.steps).toEqual([]);
+      // The host slowed on day twelve, and the index divided it out.
+      const slowed = steady.points[12];
+      expect(slowed.runId).toBe(961_024);
+      expect(slowed.productRatio).toBeCloseTo(1.25);
+      expect(slowed.calibrationRatio).toBeCloseTo(1.25);
+      expect(slowed.index).toBeCloseTo(1);
+
+      expect(rising.processor).toBe(TEST_CPU);
+      expect(rising.trend.label).toBe("▲50%");
+      expect(rising.window.runs).toBe(20);
+      expect(rising.points[0]).toMatchObject({
+        runId: 961_001,
+        runAttempt: 1,
+        commit: "c961001",
+        index: 1,
+        productRatio: null,
+        calibrationRatio: null,
+      });
+      expect(rising.steps).toHaveLength(1);
+      const [step] = rising.steps;
+      expect(step.ratio).toBeCloseTo(1.5);
+      // The index has divided the calibration out already.
+      expect(step).not.toHaveProperty("calibrationRatio");
+      expect(step.before).toMatchObject({
+        runId: 961_019,
+        commit: "c961019",
+        levelRuns: 10,
+      });
+      expect(step.after).toMatchObject({
+        runId: 961_021,
+        commit: "c961021",
+        levelRuns: 10,
+      });
+
+      // The fixtures carry neither key benchmark, so the key tile measures
+      // nothing and says so.
+      expect(keyTile).toMatchObject({
+        status: "bad",
+        headline: "failed",
+        sub: "no benchmark data",
+        processors: [],
+        headlineProcessor: null,
+      });
+    });
+  });
+
+  it("serves every sampled run with its commit, conclusion, processor and calibration", async () => {
+    await withApi(await twoProcessors(962_000), async () => {
+      await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      const body = await json("/bench/runs.json?match=json.bench");
+      expect(body.runs).toHaveLength(40);
+      expect(body.runs[0].runId).toBe(962_000);
+      const failed = body.runs.find((run: { runId: number }) =>
+        run.runId === 962_007
+      );
+      expect(failed).toMatchObject({
+        runAttempt: 1,
+        commit: "c962007",
+        conclusion: "failure",
+        url: `https://github.com/${REPO}/actions/runs/962007/attempts/1`,
+        processor: TEST_CPU,
+        benchmarks: { [work]: timings(5e6) },
+      });
+      expect(failed.calibration.benchmarks).toBe(1);
+      expect(failed.calibration.p75).toBeCloseTo(0.8e6);
+      expect(body.runs.at(-1).conclusion).toBe("success");
+
+      // A filter names benchmarks, calibration ones included, and leaves the
+      // rest out.
+      const calibrated = await json(
+        "/bench/runs.json?match=nothing&match=integer",
+      );
+      expect(Object.keys(calibrated.runs[0].benchmarks)).toEqual([calibration]);
+      const keyOnly = await json("/bench/runs.json?key=1");
+      expect(keyOnly.runs[0].benchmarks).toEqual({});
+      expect(keyOnly.runs[0].calibration).not.toBeNull();
+      const every = await json("/bench/runs.json?match=");
+      expect(Object.keys(every.runs[0].benchmarks).sort()).toEqual([
+        calibration,
+        work,
+      ]);
+      const unnamed = await served("/bench/runs.json");
+      expect(unnamed.status).toBe(400);
+      expect(await unnamed.text()).toContain("match=");
+    });
+  });
+
+  it("serves each benchmark's level changes with the commits either side", async () => {
+    await withApi(await twoProcessors(963_000), async () => {
+      await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      const body = await json("/bench/steps.json?match=json.bench");
+      expect(body.stat).toBe("p75");
+      expect(body.steps).toHaveLength(2);
+      const [code, host] = body.steps;
+      expect(code).toMatchObject({ benchmark: work, processor: TEST_CPU });
+      expect(code.ratio).toBeCloseTo(1.5);
+      expect(code.calibrationRatio).toBeCloseTo(1);
+      expect(code.before.commit).toBe("c963019");
+      expect(code.after.commit).toBe("c963021");
+      // The second processor's step is its host's: the calibration moved by
+      // as much.
+      expect(host).toMatchObject({ benchmark: work, processor: SLOWER_CPU });
+      expect(host.ratio).toBeCloseTo(1.25);
+      expect(host.calibrationRatio).toBeCloseTo(1.25);
+      expect(host.before.runId).toBe(963_022);
+      expect(host.after.runId).toBe(963_024);
+
+      expect((await json("/bench/steps.json?match=nothing")).steps)
+        .toEqual([]);
+      expect((await served("/bench/steps.json")).status).toBe(400);
+      // A host's step shows in its calibration benchmarks too, and the key
+      // filter leaves them out.
+      const everyStep = await json("/bench/steps.json?match=");
+      expect(everyStep.steps.map((step: { benchmark: string }) =>
+        step.benchmark
+      )).toContain(calibration);
+      expect((await json("/bench/steps.json?key=1")).steps).toEqual([]);
+      const unknown = await served("/bench/steps.json?stat=median");
+      expect(unknown.status).toBe(400);
+      expect(await unknown.text()).toContain("min, avg, p75");
+    });
+  });
+
+  it("serves a failed tile's reading with the trend it had", async () => {
+    // The first processor's newest run, on day nineteen, fails.
+    await withApi(await twoProcessors(965_000, 965_039), async () => {
+      const tile = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      const [allTile] = (await json("/bench/tiles.json")).tiles;
+      expect(allTile).toMatchObject({
+        status: "bad",
+        headline: tile.valueLabel,
+        sub: tile.sub,
+        headlineProcessor: TEST_CPU,
+      });
+      expect(allTile.headline).toBe("failed (was ▲50%)");
+      expect(allTile.processors).toHaveLength(2);
+    });
+  });
+
+  it("serves no conclusion for a run whose list names a later attempt", async () => {
+    // The cache holds the first attempt. The list shows a second one, whose
+    // artifact cannot be read, so the cache keeps serving the first.
+    const cached: CachedBenchmarkRun = {
+      runId: 966_000,
+      runAttempt: 1,
+      at: SAMPLED_BASE - DAY,
+      cpu: TEST_CPU,
+      metrics: new Map([[work, stats(5e6)]]),
+    };
+    await withCache([cached], [cached], async (isolated) => {
+      await withApi({
+        pages: { 1: [ghRun(cached.runId, cached.at, "success", 2)] },
+        artifacts: { [cached.runId]: 500 },
+      }, async () => {
+        await isolated.benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      });
+      const [run] = (await (await isolated.benchmarkRunsResponse(
+        new URL("http://x/bench/runs.json?match=json.bench"),
+      )).json()).runs;
+      expect(run).toMatchObject({
+        runId: cached.runId,
+        runAttempt: 1,
+        commit: `c${cached.runId}`,
+        conclusion: null,
+      });
+    });
+  });
+
+  it("serves the indices gray, and runs without commits, until the tiles have collected", async () => {
+    // Twenty-four daily runs carrying no calibration, twice as slow from the
+    // thirteenth.
+    const runs = Array.from({ length: 24 }, (_, day): CachedBenchmarkRun => ({
+      runId: 964_000 + day,
+      runAttempt: 1,
+      at: SAMPLED_BASE - (23 - day) * DAY,
+      cpu: TEST_CPU,
+      metrics: new Map([[work, stats(day >= 12 ? 1e7 : 5e6)]]),
+    }));
+    // A processor last measured four weeks ago.
+    const old = Array.from({ length: 3 }, (_, day): CachedBenchmarkRun => ({
+      runId: 963_900 + day,
+      runAttempt: 1,
+      at: SAMPLED_BASE - (30 - day) * DAY,
+      cpu: SLOWER_CPU,
+      metrics: new Map([[work, stats(5e6)]]),
+    }));
+    const cached = [...old, ...runs];
+    await withCache(cached, cached, async (isolated) => {
+      const response = await isolated.benchmarkTilesResponse();
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      const body = await response.json();
+      expect(body.refreshedAt).not.toBeNull();
+      const [allTile] = body.tiles;
+      expect(allTile).toMatchObject({
+        status: "unknown",
+        sub: "not collected yet",
+        headlineProcessor: TEST_CPU,
+      });
+      const [processor, stale] = allTile.processors;
+      expect(processor).toMatchObject({
+        processor: TEST_CPU,
+        headlineCandidate: true,
+        // The trend reads the last twenty runs, since fewer fall in its
+        // fourteen days.
+        window: { runs: 20, from: new Date(runs[4].at).toISOString() },
+      });
+      expect(stale).toMatchObject({
+        processor: SLOWER_CPU,
+        headlineCandidate: false,
+      });
+      expect(processor.points.map(
+        (point: { commit: string | null }) => point.commit,
+      )).toEqual(Array(24).fill(null));
+      expect(processor.steps).toEqual([{
+        ratio: 2,
+        before: {
+          runId: 964_011,
+          runAttempt: 1,
+          at: new Date(runs[11].at).toISOString(),
+          commit: null,
+          levelRuns: 12,
+        },
+        after: {
+          runId: 964_012,
+          runAttempt: 1,
+          at: new Date(runs[12].at).toISOString(),
+          commit: null,
+          levelRuns: 12,
+        },
+      }]);
+
+      const [run] = (await (await isolated.benchmarkRunsResponse(
+        new URL("http://x/bench/runs.json?match=json.bench"),
+      )).json()).runs;
+      expect(run).toMatchObject({
+        runId: old[0].runId,
+        commit: null,
+        conclusion: null,
+        calibration: null,
+        benchmarks: { [work]: stats(5e6) },
+      });
+      // With no calibration on either side, a step has no calibration ratio.
+      const [step] = (await (await isolated.benchmarkStepsResponse(
+        new URL("http://x/bench/steps.json?match=json.bench"),
+      )).json()).steps;
+      expect(step).toMatchObject({ ratio: 2, calibrationRatio: null });
     });
   });
 });

@@ -2426,9 +2426,13 @@ export function selectSourceSchema(
   // at this position, whatever the source declares there.
   if (mask === false) return false;
   // An absent/wildcard source schema cannot prove that a structural mask has
-  // the same container shape as the current value. Keep that read permissive;
-  // the materializing projector still applies the mask and drops siblings.
-  if (source === undefined || source === true) return true;
+  // the same container shape as the current value. A read names the
+  // positions the mask selects and claims no shape at any of them, since what
+  // a read loads is what a session goes on watching. An output schema stays
+  // permissive; the materializing projector applies the mask to the value.
+  if (source === undefined || source === true) {
+    return purpose === "source-read" ? shapelessMask(mask) : true;
+  }
   if (source === false || mask === true || !isObjectOrArray(mask)) {
     return source;
   }
@@ -2535,6 +2539,26 @@ export function selectSourceSchema(
     ...metadata,
     properties,
     ...(selectedRequired?.length ? { required: selectedRequired } : {}),
+    additionalProperties: false,
+  };
+}
+
+/**
+ * The positions `mask` selects, as a schema that states no container type at
+ * any of them. An object position names its properties and admits no others,
+ * and an array position names its items, so a value of either shape is read
+ * as far as the mask reaches into it and no further, and a value of another
+ * shape than the mask's is read rather than refused.
+ */
+function shapelessMask(mask: ProjectionMask): JSONSchema {
+  if (mask === true || mask === false) return mask;
+  if (mask.type === "array") return { items: shapelessMask(mask.items) };
+  return {
+    properties: Object.fromEntries(
+      Object.entries(mask.properties).map((
+        [key, child],
+      ) => [key, shapelessMask(child)]),
+    ),
     additionalProperties: false,
   };
 }

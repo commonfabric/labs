@@ -17,7 +17,10 @@ export function computeLineStarts(text: string): number[] {
 }
 
 /** Index of the line containing `offset` (binary search over line starts). */
-export function lineIndexOf(lineStarts: number[], offset: number): number {
+export function lineIndexOf(
+  lineStarts: readonly number[],
+  offset: number,
+): number {
   return Math.max(0, firstIndexAtLeast(lineStarts, offset + 1) - 1);
 }
 
@@ -51,7 +54,7 @@ export type ColumnOf = (line: number, offset: number) => number;
  */
 export function codePointColumns(
   text: string,
-  lineStarts: number[],
+  lineStarts: readonly number[],
 ): ColumnOf {
   // `cpLen()` counts every UTF-16 unit except a low surrogate that completes a
   // pair, so a column is the distance in units less those in between.

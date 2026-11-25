@@ -20,117 +20,51 @@ import {
 const LINK_TARGET_ATTR = "data-topics-link-target";
 
 /**
- * A predicate that tags one `cf-cell-link` for a click.
- *
- * The predicates used for initial selection take the same four arguments —
- * what to look for, the token to tag with, and the two attributes the tag goes
- * in. The identity predicate below refines what to look for, but keeps the last
- * three marking arguments in the same order.
+ * The resolution a click's marking asked a labelled link for, kept on the link
+ * as `__activation`: the click's token, the source the link had when asked,
+ * the resolution itself, and its target once it lands (`settled`).
  */
-type MarkLinkPredicate = (
-  probe: ProbeApi,
-  target: string,
-  targetToken: string,
-  clickTargetAttribute: string,
-  linkTargetAttribute: string,
-) => boolean;
+type LinkActivation = {
+  token: string;
+  source?: unknown;
+  resolution: Promise<void>;
+  target?: unknown;
+  settled: boolean;
+};
 
 /**
- * Find the `cf-cell-link` showing `targetLabel` and tag both it and the native
- * button inside it with `targetToken`. Self-contained: it is serialized and run
- * in the page, so it closes over nothing in this module.
+ * Find the `cf-cell-link` showing `targetLabel` and, with a `cardTitle`,
+ * inside the board card showing that title, and tag both it and the native
+ * button inside it with `targetToken`. Self-contained: it is serialized and
+ * run in the page, so it closes over nothing in this module.
  *
  * A link is named by what it shows: its authored `label` when it carries one,
  * and otherwise the `[NAME]` of the cell it points at, which an unlabelled link
  * shows once it has resolved. The first such link whose button has been laid
  * out is the candidate.
  *
- * A labelled link resolves only when acted on. So the candidate is asked to
- * resolve for this click (`resolveTarget()`), as a press would, and is tagged
- * once that resolution lands. Its destination is the one this click found,
- * never one an earlier interaction left, and no other link is asked.
- */
-const markCellLink: MarkLinkPredicate = (
-  probe,
-  targetLabel,
-  targetToken,
-  clickTargetAttribute,
-  linkTargetAttribute,
-) => {
-  for (const element of probe.collect("cf-cell-link")) {
-    const link = element as HTMLElement & {
-      label?: string;
-      _name?: string;
-      _resolvedCell?: unknown;
-      resolveTarget?: () => Promise<unknown>;
-      cell?: unknown;
-      link?: unknown;
-      __activation?: {
-        token: string;
-        target?: unknown;
-        settled: boolean;
-        source?: unknown;
-      };
-    };
-    if ((link.label ?? link._name) !== targetLabel) continue;
-    const chip = link.shadowRoot?.querySelector("cf-chip");
-    const button = chip?.shadowRoot?.querySelector("button");
-    if (!button || !probe.isRendered(button)) continue;
-    if (link.label && link.resolveTarget) {
-      const activation = link.__activation;
-      const source = link.cell ?? link.link;
-      // A resolution that found nothing because the link was given a new
-      // source meanwhile is superseded, not empty: resolve again.
-      if (
-        activation?.token !== targetToken ||
-        (activation.settled && !activation.target &&
-          activation.source !== source)
-      ) {
-        const started: {
-          token: string;
-          target?: unknown;
-          settled: boolean;
-          source?: unknown;
-        } = { token: targetToken, settled: false, source };
-        link.__activation = started;
-        void link.resolveTarget().then((target) => {
-          started.target = target;
-          started.settled = true;
-        });
-        return false;
-      }
-      if (!activation.settled) return false;
-      // Resolved for this click and found nothing: try the next match.
-      if (!activation.target) continue;
-    } else if (!link._resolvedCell) {
-      continue;
-    }
-    link.setAttribute(linkTargetAttribute, targetToken);
-    probe.addToken(button, clickTargetAttribute, targetToken);
-    return true;
-  }
-  return false;
-};
-
-/**
- * Find the `cf-cell-link` labelled `Open` on the board card showing
- * `cardTitle`, and tag it the way {@link markCellLink} does, resolving it for
- * this click the same way. Self-contained for the same reason: it is
- * serialized and run in the page.
- *
  * A card is addressed by its title because every card's link is authored with
  * the same `label="Open"`, which leaves them indistinguishable to a predicate
  * that matches on the label alone. Walking out of the link to the `cf-card`
  * around it is what separates them, and the walk crosses shadow boundaries by
  * their hosts because `closest` stops at the first one.
+ *
+ * A labelled link resolves only when acted on. So the candidate is asked to
+ * resolve for this click (`resolveTarget()`), as a press would, and is tagged
+ * once that resolution lands. Until then this returns a promise that looks
+ * over the links again when the resolution settles, since a resolution
+ * changes nothing on the page that would make the wait look again. The
+ * destination is the one this click found, never one an earlier interaction
+ * left, and no other link is asked.
  */
-const markCardOpenLink: MarkLinkPredicate = (
-  probe,
-  cardTitle,
-  targetToken,
-  clickTargetAttribute,
-  linkTargetAttribute,
-) => {
+function markCellLink(
+  probe: ProbeApi,
+  targetLabel: string,
+  cardTitle: string,
+  targetToken: string,
+  clickTargetAttribute: string,
+  linkTargetAttribute: string,
+): boolean | Promise<boolean> {
   for (const element of probe.collect("cf-cell-link")) {
     const link = element as HTMLElement & {
       label?: string;
@@ -139,33 +73,28 @@ const markCardOpenLink: MarkLinkPredicate = (
       resolveTarget?: () => Promise<unknown>;
       cell?: unknown;
       link?: unknown;
-      __activation?: {
-        token: string;
-        target?: unknown;
-        settled: boolean;
-        source?: unknown;
-      };
+      __activation?: LinkActivation;
     };
-    if ((link.label ?? link._name) !== "Open") continue;
-
-    let card: Element | undefined;
-    let current: Node | null = link;
-    while (current) {
-      if (current instanceof Element && current.matches("cf-card")) {
-        card = current;
-        break;
+    if ((link.label ?? link._name) !== targetLabel) continue;
+    if (cardTitle !== "") {
+      let card: Element | undefined;
+      let current: Node | null = link;
+      while (current) {
+        if (current instanceof Element && current.matches("cf-card")) {
+          card = current;
+          break;
+        }
+        const root = current.getRootNode();
+        current = current.parentNode ??
+          (root instanceof ShadowRoot ? root.host : null);
       }
-      const root = current.getRootNode();
-      current = current.parentNode ??
-        (root instanceof ShadowRoot ? root.host : null);
+      if (!card || !probe.deepText(card).includes(cardTitle)) continue;
     }
-    if (!card || !probe.deepText(card).includes(cardTitle)) continue;
-
     const chip = link.shadowRoot?.querySelector("cf-chip");
     const button = chip?.shadowRoot?.querySelector("button");
     if (!button || !probe.isRendered(button)) continue;
     if (link.label && link.resolveTarget) {
-      const activation = link.__activation;
+      let activation = link.__activation;
       const source = link.cell ?? link.link;
       // A resolution that found nothing because the link was given a new
       // source meanwhile is superseded, not empty: resolve again.
@@ -174,20 +103,30 @@ const markCardOpenLink: MarkLinkPredicate = (
         (activation.settled && !activation.target &&
           activation.source !== source)
       ) {
-        const started: {
-          token: string;
-          target?: unknown;
-          settled: boolean;
-          source?: unknown;
-        } = { token: targetToken, settled: false, source };
+        const started: LinkActivation = {
+          token: targetToken,
+          source,
+          resolution: link.resolveTarget().then((target) => {
+            started.target = target;
+            started.settled = true;
+          }),
+          settled: false,
+        };
         link.__activation = started;
-        void link.resolveTarget().then((target) => {
-          started.target = target;
-          started.settled = true;
-        });
-        return false;
+        activation = started;
       }
-      if (!activation.settled) return false;
+      if (!activation.settled) {
+        return activation.resolution.then(() =>
+          markCellLink(
+            probe,
+            targetLabel,
+            cardTitle,
+            targetToken,
+            clickTargetAttribute,
+            linkTargetAttribute,
+          )
+        );
+      }
       // Resolved for this click and found nothing: try the next match.
       if (!activation.target) continue;
     } else if (!link._resolvedCell) {
@@ -198,7 +137,7 @@ const markCardOpenLink: MarkLinkPredicate = (
     return true;
   }
   return false;
-};
+}
 
 /**
  * Finds the root cell link at `targetSpace`, `targetScope`, and `targetId`,
@@ -213,9 +152,10 @@ const markCardOpenLink: MarkLinkPredicate = (
  * `cardTitle`, inside the `cf-card` showing it. Such links are asked one at a
  * time, and only as far as the first that matches. Any other labelled link on
  * the page is left unresolved, since on a board asking it would start the
- * piece behind it.
+ * piece behind it. A link it asks is waited for the way {@link markCellLink}
+ * waits.
  */
-const markResolvedCellLink = (
+function markResolvedCellLink(
   probe: ProbeApi,
   targetLabel: string,
   cardTitle: string,
@@ -225,7 +165,7 @@ const markResolvedCellLink = (
   targetToken: string,
   clickTargetAttribute: string,
   linkTargetAttribute: string,
-) => {
+): boolean | Promise<boolean> {
   type Destination = {
     space(): string;
     id(): string;
@@ -239,17 +179,12 @@ const markResolvedCellLink = (
       resolveTarget?: () => Promise<unknown>;
       cell?: unknown;
       link?: unknown;
-      __activation?: {
-        token: string;
-        target?: unknown;
-        settled: boolean;
-        source?: unknown;
-      };
+      __activation?: LinkActivation;
     };
     const chip = link.shadowRoot?.querySelector("cf-chip");
     const button = chip?.shadowRoot?.querySelector("button");
     const onDemand = Boolean(link.label && link.resolveTarget);
-    const activation = link.__activation?.token === targetToken
+    let activation = link.__activation?.token === targetToken
       ? link.__activation
       : undefined;
     const cell = onDemand
@@ -279,19 +214,31 @@ const markResolvedCellLink = (
         activation.source !== source;
       if (activation?.settled && !superseded) continue;
       if (activation === undefined || superseded) {
-        const started: {
-          token: string;
-          target?: unknown;
-          settled: boolean;
-          source?: unknown;
-        } = { token: targetToken, settled: false, source };
+        const started: LinkActivation = {
+          token: targetToken,
+          source,
+          resolution: link.resolveTarget!().then((target) => {
+            started.target = target;
+            started.settled = true;
+          }),
+          settled: false,
+        };
         link.__activation = started;
-        void link.resolveTarget!().then((target) => {
-          started.target = target;
-          started.settled = true;
-        });
+        activation = started;
       }
-      return false;
+      return activation.resolution.then(() =>
+        markResolvedCellLink(
+          probe,
+          targetLabel,
+          cardTitle,
+          targetSpace,
+          targetScope,
+          targetId,
+          targetToken,
+          clickTargetAttribute,
+          linkTargetAttribute,
+        )
+      );
     }
     if (!cell) continue;
     const ref = cell.ref();
@@ -308,15 +255,15 @@ const markResolvedCellLink = (
     return true;
   }
   return false;
-};
+}
 
 /**
- * Wait for `predicate` to mark a resolved cell link, then issue one trusted
- * browser click on it, and return the id of the piece the click navigated to
- * (the `cf-navigate` it dispatched). That is what the caller then waits for
- * the shell to select. A labelled link resolves again when it is pressed, so
- * a slot that moved after the link was chosen opens, and reports, its new
- * target, not the one the choice found.
+ * Wait for {@link markCellLink} to mark the resolved cell link `selection`
+ * names, then issue one trusted browser click on it, and return the id of the
+ * piece the click navigated to (the `cf-navigate` it dispatched). That is what
+ * the caller then waits for the shell to select. A labelled link resolves
+ * again when it is pressed, so a slot that moved after the link was chosen
+ * opens, and reports, its new target, not the one the choice found.
  *
  * The view is settled before marking, so the link is resolved against a page
  * that has caught up rather than one mid-render. `clickMarked` carries the rest:
@@ -325,28 +272,28 @@ const markResolvedCellLink = (
  * rebuilt link is tagged again and a surviving link is revalidated without
  * selecting a different cell carrying the same label or id.
  *
- * `selection` is what `predicate` chose the link by: the label it shows and,
- * for a card's link, the card's title, empty otherwise. Revalidation asks
- * only a link it could match to resolve.
+ * `selection` is what the link is chosen by: the label it shows and, for a
+ * card's link, the card's title, empty otherwise. Revalidation asks only a
+ * link it could match to resolve.
  *
  * `description` names the link in a failure, as the caller would describe it.
  */
 async function markResolveAndClick(
   page: Page,
-  predicate: MarkLinkPredicate,
-  target: string,
   selection: { label: string; cardTitle: string },
   description: string,
 ): Promise<string> {
   await settleView(page);
   const token = `topics-cell-link-${crypto.randomUUID()}`;
-  const markArgs: [string, string, string, string] = [
-    target,
-    token,
-    CLICK_TARGET_ATTR,
-    LINK_TARGET_ATTR,
-  ];
-  await waitForCondition(page, predicate, { args: markArgs });
+  await waitForCondition(page, markCellLink, {
+    args: [
+      selection.label,
+      selection.cardTitle,
+      token,
+      CLICK_TARGET_ATTR,
+      LINK_TARGET_ATTR,
+    ],
+  });
 
   const resolved = await page.evaluate(
     (targetToken: string, linkTargetAttribute: string) => {
@@ -365,7 +312,7 @@ async function markResolveAndClick(
             label?: string;
             _resolvedCell?: Destination;
             resolveTarget?: () => Promise<unknown>;
-            __activation?: { token: string; target?: unknown };
+            __activation?: LinkActivation;
           })
           | null;
         // A labelled link's destination is the one it resolved for this
@@ -556,7 +503,7 @@ async function markResolveAndClick(
               label?: string;
               _resolvedCell?: LinkTarget;
               resolveTarget?: unknown;
-              __activation?: { token: string; target?: unknown };
+              __activation?: LinkActivation;
             };
             resolutions: Promise<unknown>[];
             settling?: Promise<ClickOutcome>;
@@ -649,8 +596,6 @@ type ClickOutcome =
 export function clickCellLink(page: Page, label: string): Promise<string> {
   return markResolveAndClick(
     page,
-    markCellLink,
-    label,
     { label, cardTitle: "" },
     `Cell link "${label}"`,
   );
@@ -669,8 +614,6 @@ export function clickCardOpenLink(
 ): Promise<string> {
   return markResolveAndClick(
     page,
-    markCardOpenLink,
-    title,
     { label: "Open", cardTitle: title },
     `The Open link on the card titled "${title}"`,
   );

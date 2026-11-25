@@ -36,3 +36,11 @@ Deno.test("flattenStructure: pre-order, depth-first", () => {
 Deno.test("flattenStructure: an empty forest flattens to nothing", () => {
   assertEquals(flattenStructure([]), []);
 });
+
+Deno.test("flattenStructure: a tree deeper than the call stack flattens in order", () => {
+  let tree = node("leaf");
+  for (let depth = 0; depth < 50_000; depth++) tree = node("inner", [tree]);
+  const flat = flattenStructure([tree, node("next")]);
+  assertEquals(flat.length, 50_002);
+  assertEquals(flat.slice(-2).map((n) => n.label), ["leaf", "next"]);
+});

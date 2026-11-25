@@ -126,6 +126,7 @@ function makeNotificationState(args: {
     pending: new Set(),
     getActionId: () => "test-action",
     recordCellUpdate: () => {},
+    writersOf: () => undefined,
     recordTriggerTrace: () => {},
     markInvalid: (action, cause) => {
       markInvalid(nodes, action, cause);

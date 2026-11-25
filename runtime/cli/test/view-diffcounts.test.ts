@@ -79,8 +79,8 @@ async function commentOnly(...files: Side[]): Promise<boolean[]> {
     [...diff, ""].join("\n"),
     files.map(({ path, before, after }) => ({
       languages: sideLanguages(path),
-      oldLines: contextLines(path, [...before, ""]),
-      newLines: contextLines(path, [...after, ""]),
+      oldLines: () => contextLines(path, [...before, ""]),
+      newLines: () => contextLines(path, [...after, ""]),
     })),
   );
 }
@@ -290,18 +290,20 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("main.rs"),
-      oldLines: contextLines("main.rs", [
-        "/*",
-        " * hidden note",
-        " * old note",
-        " */",
-      ]),
-      newLines: contextLines("main.rs", [
-        "/*",
-        " * hidden note",
-        " * new note",
-        " */",
-      ]),
+      oldLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * hidden note",
+          " * old note",
+          " */",
+        ]),
+      newLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * hidden note",
+          " * new note",
+          " */",
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 0, dels: 0 });
@@ -323,18 +325,20 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("main.rs"),
-      oldLines: contextLines("main.rs", [
-        "/*",
-        " * old note",
-        " */",
-        "run_old();",
-      ]),
-      newLines: contextLines("main.rs", [
-        "/*",
-        " * new note",
-        " */",
-        "run_new();",
-      ]),
+      oldLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * old note",
+          " */",
+          "run_old();",
+        ]),
+      newLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * new note",
+          " */",
+          "run_new();",
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -357,20 +361,22 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("main.rs"),
-      oldLines: contextLines("main.rs", [
-        "/*",
-        " * old note",
-        " */",
-        "run_old();",
-        '// say "hello */',
-      ]),
-      newLines: contextLines("main.rs", [
-        "/*",
-        " * new note",
-        " */",
-        "run_new();",
-        '// say "hello */',
-      ]),
+      oldLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * old note",
+          " */",
+          "run_old();",
+          '// say "hello */',
+        ]),
+      newLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * new note",
+          " */",
+          "run_new();",
+          '// say "hello */',
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -388,18 +394,20 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("readme.md"),
-      oldLines: contextLines("readme.md", [
-        "```html",
-        "<!-- literal example",
-        "```",
-        "old prose",
-      ]),
-      newLines: contextLines("readme.md", [
-        "```html",
-        "<!-- literal example",
-        "```",
-        "new prose",
-      ]),
+      oldLines: () =>
+        contextLines("readme.md", [
+          "```html",
+          "<!-- literal example",
+          "```",
+          "old prose",
+        ]),
+      newLines: () =>
+        contextLines("readme.md", [
+          "```html",
+          "<!-- literal example",
+          "```",
+          "new prose",
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -417,14 +425,16 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("readme.md"),
-      oldLines: contextLines("readme.md", [
-        "    <!-- literal example",
-        "old prose",
-      ]),
-      newLines: contextLines("readme.md", [
-        "    <!-- literal example",
-        "new prose",
-      ]),
+      oldLines: () =>
+        contextLines("readme.md", [
+          "    <!-- literal example",
+          "old prose",
+        ]),
+      newLines: () =>
+        contextLines("readme.md", [
+          "    <!-- literal example",
+          "new prose",
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -987,8 +997,8 @@ describe("diffcounts", () => {
       contextLines("main.rs", ['let s = "', "text", line, '";']);
     const counts = countsFor(diff, [{
       languages: sideLanguages("main.rs"),
-      oldLines: side("// a"),
-      newLines: side("// b"),
+      oldLines: () => side("// a"),
+      newLines: () => side("// b"),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -1124,8 +1134,18 @@ describe("diffcounts", () => {
             before: ["// a", "fn run() {} // b", "/* c /* d */ e */"],
             after: ["// f", "fn run() {} // g", "/* h /* d */ i */"],
           },
+          {
+            path: ".gitignore",
+            before: ["# Build output", "dist/"],
+            after: ["# Build output", "# from the bundler", "dist/"],
+          },
+          {
+            path: "main.go",
+            before: ["// a", "package main"],
+            after: ["// b", "// c", "package main"],
+          },
         ),
-      ).toEqual([true, true, true, true, true, true, true, true]);
+      ).toEqual([true, true, true, true, true, true, true, true, true, true]);
     });
 
     it("returns false for Rust doc comments, which are attributes, and true for a TypeScript doc comment", async () => {
@@ -1158,6 +1178,23 @@ describe("diffcounts", () => {
           after: ['const T: &str = r#"a " // c"#;'],
         }),
       ).toEqual([false]);
+    });
+
+    it("returns false for a change to a Go directive or a cgo preamble, neither of which is a comment", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "main.go",
+            before: ["//go:build linux", "", "package main"],
+            after: ["//go:build darwin", "", "package main"],
+          },
+          {
+            path: "math.go",
+            before: ["package main", "", "// #include <math.h>", 'import "C"'],
+            after: ["package main", "", "// #include <tgmath.h>", 'import "C"'],
+          },
+        ),
+      ).toEqual([false, false]);
     });
 
     it("returns false for a change after a shell comment inside backticks, which ends at the closing backtick", async () => {
@@ -1218,8 +1255,10 @@ describe("diffcounts", () => {
             before: ["if ready:", "    go()"],
             after: ["if ready:", "go()"],
           },
+          // Git reads a `#` after leading white space as part of a pattern.
+          { path: ".gitignore", before: ["dist/"], after: ["dist/", " #x"] },
         ),
-      ).toEqual(Array(14).fill(false));
+      ).toEqual(Array(15).fill(false));
     });
 
     it("returns false when whitespace changes inside a multiline literal", async () => {
@@ -1339,7 +1378,7 @@ describe("diffcounts", () => {
       expect(
         await commentOnly(
           { path: "README.md", before: ["<!-- a -->"], after: ["<!-- b -->"] },
-          { path: "main.go", before: ["// a"], after: ["// b"] },
+          { path: "notes.txt", before: ["// a"], after: ["// b"] },
         ),
       ).toEqual([false, false]);
     });
@@ -1389,10 +1428,11 @@ describe("diffcounts", () => {
         ].join("\n");
       const sides = {
         languages: sideLanguages("a.ts"),
-        oldLines: contextLines("a.ts", ["// a", ""]),
-        newLines: contextLines("a.ts", ["// b", ""]),
+        oldLines: () => contextLines("a.ts", ["// a", ""]),
+        newLines: () => contextLines("a.ts", ["// b", ""]),
       };
 
+      expect(commentOnlyFiles("not a diff", [sides])).toEqual([]);
       expect(commentOnlyFiles(renamed, [sides])).toEqual([false]);
       expect(commentOnlyFiles(plain(index), [])).toEqual([false]);
       expect(commentOnlyFiles(plain(index), [{ languages: sides.languages }]))
@@ -1403,7 +1443,7 @@ describe("diffcounts", () => {
       // Highlighting whose spans leave part of a line out.
       expect(commentOnlyFiles(plain(index), [{
         ...sides,
-        oldLines: [{ text: "// a", spans: [] }, { text: "", spans: [] }],
+        oldLines: () => [{ text: "// a", spans: [] }, { text: "", spans: [] }],
       }])).toEqual([false]);
     });
 
@@ -1428,8 +1468,8 @@ describe("diffcounts", () => {
 
       expect(commentOnlyFiles(diff, [{
         languages: sideLanguages("w.py"),
-        oldLines: contextLines("w.py", before),
-        newLines: contextLines("w.py", rebuilt),
+        oldLines: () => contextLines("w.py", before),
+        newLines: () => contextLines("w.py", rebuilt),
       }])).toEqual([false]);
     });
 
@@ -1448,8 +1488,9 @@ describe("diffcounts", () => {
         ].join("\n");
       const context = (before: string, after: string) => [{
         languages: sideLanguages("a.ts"),
-        oldLines: contextLines("a.ts", [before.replace("\uFEFF", ""), ""]),
-        newLines: contextLines("a.ts", [after.replace("\uFEFF", ""), ""]),
+        oldLines: () =>
+          contextLines("a.ts", [before.replace("\uFEFF", ""), ""]),
+        newLines: () => contextLines("a.ts", [after.replace("\uFEFF", ""), ""]),
       }];
       const both = ["\uFEFFrun(); // a", "\uFEFFrun(); // b"] as const;
       const removed = ["\uFEFFrun(); // a", "run(); // a"] as const;

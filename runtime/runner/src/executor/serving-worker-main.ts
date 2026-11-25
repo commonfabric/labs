@@ -2,7 +2,8 @@
  * What a serving worker's entry module does once loaded: installs the port's
  * endpoint on the worker's global scope, waits for the `worker.init` request,
  * which carries the service key and the host's options, builds the
- * `ExecutorHost` over a `ServingPlane`, and answers once the host serves. The
+ * `ExecutorHost` over a `ServingPlane`, with the serving runtimes marking their
+ * runs on the run beacon the init carries, and answers once the host serves. The
  * runner's own entry (`serving-worker.ts`) calls this bare; an entry in a
  * higher layer calls it with the lifecycle verbs it can build and the fetch
  * and module cache its deployment uses. Where the init says so, the serving
@@ -27,6 +28,7 @@ import type { ModuleCompileWorker } from "../harness/module-compile-worker.ts";
 import type { ModuleByteCache, RuntimeFetch } from "../runtime.ts";
 import { ExecutorHost } from "./host.ts";
 import { webSocketRoute } from "./routed-plane.ts";
+import { RunBeacon } from "./run-beacon.ts";
 import { servingLoopDiagnostics } from "./serving-loop-diagnostics.ts";
 import { ServingPlane, servingPlaneEndpoint } from "./serving-port-plane.ts";
 import type {
@@ -115,6 +117,12 @@ export function serveFromPort(
       keyPairFromRealmValue(init.serviceKeyPair, "the serving worker's key"),
     );
     const plane = new ServingPlane(endpoint);
+    const runBeacon = init.runBeacon === undefined ? undefined : new RunBeacon(
+      init.runBeacon,
+      (identity) => plane.reportRunNamed(identity),
+      (runs) => plane.reportRunsForgotten(runs),
+    );
+    runBeacon?.countReads();
     const shared = init.compileCacheDir === undefined
       ? undefined
       : openSharedCompileCache(init.compileCacheDir);
@@ -143,6 +151,7 @@ export function serveFromPort(
           ? {}
           : { compileClaims: shared.compileClaims }),
         ...(moduleCompiler === undefined ? {} : { moduleCompiler }),
+        ...(runBeacon === undefined ? {} : { runBeacon }),
       }),
       ...(init.policy === undefined ? {} : { policy: init.policy }),
       ...(init.ensureSpaceRoots === undefined
@@ -185,6 +194,7 @@ export function serveFromPort(
         writeThreadHeapProfile(directory, `worker-${threadId}`),
       occupancy: () => host.occupancy,
       noteSpaceAclChanged: (space) => host.noteSpaceAclChanged(space),
+      failEvent: (space, event, reason) => host.failEvent(space, event, reason),
       runLifecycleVerb: (space, verb) => {
         if (options.runLifecycleVerb === undefined) {
           return Promise.reject(

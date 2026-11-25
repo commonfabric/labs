@@ -3,7 +3,10 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/logger";
-import type { SqliteDbRef } from "@commonfabric/memory/v2";
+import {
+  decodeMemoryBoundary,
+  type SqliteDbRef,
+} from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
@@ -279,6 +282,22 @@ describe("SpaceServer", () => {
           expect(await stored(space, cell)).toEqual({ n: 1 });
           expect(cell.get()).toEqual({ n: 1 });
           expect(warnings("direct-commit-local-rollback")).toBe(rollbacks);
+        });
+
+        it("annotates its write with the action that made it", async () => {
+          const cell = await syncedCell(space, "direct-annotated");
+          const tx = direct();
+          cell.withTx(tx).set({ n: 1 });
+          runtime.prepareTxForCommit(tx);
+
+          expect((await tx.commit().settled).error).toBeUndefined();
+
+          const row = engine.database.prepare(
+            `SELECT annotations FROM "commit" ORDER BY seq DESC LIMIT 1`,
+          ).get() as { annotations: string };
+          expect(decodeMemoryBoundary(row.annotations)).toEqual([
+            { op: 0, action: "test/direct" },
+          ]);
         });
 
         it("returns a refusal naming the park when the tenure parks before the seal is taken up", async () => {

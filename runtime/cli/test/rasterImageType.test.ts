@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { isRasterImage } from "../lib/profile.ts";
+import { rasterImageType } from "../lib/profile.ts";
 
 /** `parts` as bytes: numbers are bytes, strings their characters' codes. */
 function bytesOf(...parts: (number | string)[]): Uint8Array {
@@ -33,8 +33,8 @@ const bmp = (dibSize: number) =>
 const ftyp = (size: number, major: string, ...compatible: string[]) =>
   bytesOf(...be32(size), "ftyp", major, 0, 0, 0, 0, ...compatible);
 
-describe("isRasterImage()", () => {
-  it("returns `true` for each format's signature", () => {
+describe("rasterImageType()", () => {
+  it("returns a media type for each format's signature", () => {
     const images = [
       bytesOf(0x89, "PNG", 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13),
       bytesOf(0xff, 0xd8, 0xff, 0xe0),
@@ -53,10 +53,10 @@ describe("isRasterImage()", () => {
       ftyp(24, "mif1", "miaf", "avif"),
     ];
 
-    expect(images.map(isRasterImage)).toEqual(images.map(() => true));
+    expect(images.map(rasterImageType)).not.toContain(undefined);
   });
 
-  it("returns `false` for a prefix of a signature, or a near miss", () => {
+  it("returns `undefined` for a prefix of a signature, or a near miss", () => {
     const others = [
       bytesOf(),
       bytesOf(0x89, "PNG<svg>"),
@@ -72,15 +72,33 @@ describe("isRasterImage()", () => {
       ftyp(8, "avif"),
     ];
 
-    expect(others.map(isRasterImage)).toEqual(others.map(() => false));
+    expect(others.map(rasterImageType)).toEqual(others.map(() => undefined));
   });
 
-  it("returns `false` for SVG, and for SVG behind a format's first bytes", () => {
+  it("returns `undefined` for SVG, and for SVG behind a format's first bytes", () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
 
-    expect(isRasterImage(bytesOf(svg))).toBe(false);
-    expect(isRasterImage(bytesOf("BM", svg))).toBe(false);
-    expect(isRasterImage(bytesOf("GIF8", svg))).toBe(false);
-    expect(isRasterImage(bytesOf(0x89, "PNG", svg))).toBe(false);
+    expect(rasterImageType(bytesOf(svg))).toBeUndefined();
+    expect(rasterImageType(bytesOf("BM", svg))).toBeUndefined();
+    expect(rasterImageType(bytesOf("GIF8", svg))).toBeUndefined();
+    expect(rasterImageType(bytesOf(0x89, "PNG", svg))).toBeUndefined();
+  });
+
+  it("returns each format's media type", () => {
+    expect([
+      bytesOf(0x89, "PNG", 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13),
+      bytesOf(0xff, 0xd8, 0xff, 0xe0),
+      bytesOf("GIF89a", 1, 0),
+      bytesOf("RIFF", ...le32(30), "WEBPVP8 "),
+      bmp(40),
+      ftyp(24, "mif1", "miaf", "avif"),
+    ].map(rasterImageType)).toEqual([
+      "image/png",
+      "image/jpeg",
+      "image/gif",
+      "image/webp",
+      "image/bmp",
+      "image/avif",
+    ]);
   });
 });

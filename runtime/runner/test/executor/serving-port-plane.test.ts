@@ -87,6 +87,7 @@ const fakeHost = (
     runLifecycleVerb: () => Promise.reject(new Error("no verbs")),
     occupancy,
     noteSpaceAclChanged: () => {},
+    failEvent: () => {},
     close: () => {
       host.closes += 1;
       return Promise.resolve();
@@ -286,7 +287,23 @@ describe("serving-port-plane", () => {
       bridge.onRequest("server.judgeCurrencyRoots", (params) => {
         asked.push(params);
         return {
-          servable: [{ root: "of:argument", piece: "of:piece" }],
+          servable: [{
+            root: "of:argument",
+            piece: "of:piece",
+            origins: ["of:piece"],
+          }],
+          held: [{
+            root: "of:held",
+            piece: "of:reader",
+            readers: ["of:reader"],
+          }],
+          upstream: [{
+            reader: "of:reader",
+            slice: "space",
+            id: "computed:out",
+            scopeKey: "space",
+            piece: "of:producer",
+          }],
           refused: { marked: 2 },
           marked: [],
         };
@@ -305,9 +322,26 @@ describe("serving-port-plane", () => {
         await plane.server.judgeCurrencyRoots(space, ["of:argument"], {
           excludePrincipal: alice,
           epoch: "release-7",
+          running: ["of:running"],
         }),
       ).toEqual({
-        servable: [{ root: "of:argument", piece: "of:piece" }],
+        servable: [{
+          root: "of:argument",
+          piece: "of:piece",
+          origins: ["of:piece"],
+        }],
+        held: [{
+          root: "of:held",
+          piece: "of:reader",
+          readers: ["of:reader"],
+        }],
+        upstream: [{
+          reader: "of:reader",
+          slice: "space",
+          id: "computed:out",
+          scopeKey: "space",
+          piece: "of:producer",
+        }],
         refused: { marked: 2 },
         marked: [],
       });
@@ -319,6 +353,7 @@ describe("serving-port-plane", () => {
           roots: ["of:argument"],
           excludePrincipal: alice,
           epoch: "release-7",
+          running: ["of:running"],
         },
       ]);
     });
@@ -582,6 +617,42 @@ describe("serving-port-plane", () => {
       bridge.notify("observer.spaceAclChanged", { space });
       await handled();
       expect(changed).toEqual([space]);
+    });
+
+    it("hands the host each event the server's thread fails, with its reason", async () => {
+      const failed: unknown[] = [];
+      plane.serve(
+        fakeHost(() => "busy", {
+          failEvent: (space, event, reason) =>
+            failed.push({ space, event, reason }),
+        }),
+      );
+      const event = { sidecarId: "of:sidecar", eventId: "evt-1", seq: 2 };
+      bridge.notify("host.failEvent", { space, event, reason: "ended" });
+      await handled();
+      expect(failed).toEqual([{ space, event, reason: "ended" }]);
+    });
+  });
+
+  describe("reportRunNamed()", () => {
+    it("posts what a number on the worker's run beacon stands for", async () => {
+      const named = Promise.withResolvers<unknown>();
+      bridge.onNotice("worker.runNamed", (identity) => named.resolve(identity));
+      const identity = { run: 3, space, action: "total" };
+      plane.reportRunNamed(identity);
+      expect(await named.promise).toEqual(identity);
+    });
+  });
+
+  describe("reportRunsForgotten()", () => {
+    it("posts the numbers on the worker's run beacon whose actions its realm collected", async () => {
+      const forgotten = Promise.withResolvers<unknown>();
+      bridge.onNotice(
+        "worker.runsForgotten",
+        (notice) => forgotten.resolve(notice),
+      );
+      plane.reportRunsForgotten([2, 5]);
+      expect(await forgotten.promise).toEqual({ runs: [2, 5] });
     });
   });
 

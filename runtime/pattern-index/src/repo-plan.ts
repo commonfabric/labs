@@ -5,7 +5,14 @@
  * code and runs where there is no credential to take.
  */
 
-import { globToRegExp, join, relative, resolve, SEPARATOR } from "@std/path";
+import {
+  basename,
+  globToRegExp,
+  join,
+  relative,
+  resolve,
+  SEPARATOR,
+} from "@std/path";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import {
   type CompiledPattern,
@@ -136,6 +143,16 @@ export const findEntries = async (
 };
 
 /**
+ * Whether a repository says this entry stands alone: in a repository a
+ * pattern's folder is its name, `<name>/main.tsx` is the entry offered to a
+ * person choosing what to place, and every other file is a part. Sent
+ * either way, so the repository's answer is stated rather than left to the
+ * index's default for a first version.
+ */
+export const isStandaloneEntry = (path: string): boolean =>
+  basename(path) === "main.tsx";
+
+/**
  * Resolves and compiles one entry, given the source already read from it.
  */
 const planEntry = async (
@@ -168,6 +185,7 @@ const planEntry = async (
     keywords: doc.keywords,
     argumentSchema: compiled.argumentSchema,
     resultSchema: compiled.resultSchema,
+    standalone: isStandaloneEntry(path),
   });
   return { path, status: "compiled", sourceHash, request };
 };

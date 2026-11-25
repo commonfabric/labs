@@ -521,8 +521,9 @@ export function waveSettlementOf(
 }
 
 /**
- * The addressing/attribution pair on one batched write is the wire-shape
- * module's `DerivedWriteAnnotation` (protocol.md §1, §7): one shared
+ * The addressing/attribution pair on one batched write, with the action
+ * whose run made it, is the wire-shape module's `DerivedWriteAnnotation`
+ * (protocol.md §1, §7): one shared
  * shape for the runner attaching it at seal time and the engine consuming
  * the addressing half at admission — the LD3 direction of one definition,
  * imported by engine and runner alike.
@@ -3927,22 +3928,23 @@ export class WaveAccumulator
         if (operation.op !== "sqlite") {
           const scoped = operation.scope !== undefined &&
             operation.scope !== "space";
-          if (scoped || context.acting !== undefined) {
-            annotations.push({
-              op: opIndex,
-              ...(scoped
-                ? { scopeKey: this.#scopeKeyFor(operation.scope, context) }
-                : {}),
-              ...(context.acting !== undefined
-                ? {
-                  actingUser: context.acting.user,
-                  ...(context.acting.session !== undefined
-                    ? { actingSession: context.acting.session }
-                    : {}),
-                }
-                : {}),
-            });
-          }
+          // Every write names the action whose run made it, a space-scoped
+          // write of a run that acts as nobody included (protocol.md §1).
+          annotations.push({
+            op: opIndex,
+            ...(scoped
+              ? { scopeKey: this.#scopeKeyFor(operation.scope, context) }
+              : {}),
+            ...(context.acting !== undefined
+              ? {
+                actingUser: context.acting.user,
+                ...(context.acting.session !== undefined
+                  ? { actingSession: context.acting.session }
+                  : {}),
+              }
+              : {}),
+            action: context.actionId,
+          });
         }
       }
       for (const precondition of home.sealed.commit.preconditions ?? []) {

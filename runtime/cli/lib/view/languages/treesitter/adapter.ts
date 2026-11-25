@@ -150,6 +150,12 @@ const loading = new Map<string, Promise<void>>();
 /** The loads that have started and not ended. */
 const unfinished = new Set<Promise<void>>();
 
+/** Each compiled grammar by its location, compiled once however many grammars
+ * use it. A grammar file that cannot be read or compiled is not kept, so a
+ * grammar that uses it later reads it again. Grammars loading it at the same
+ * time share the failure, which names the grammar that started the load. */
+const compiled = new Map<string, Promise<treeSitter.Language>>();
+
 /** The runtime shared by every loaded grammar, present once one is loaded. */
 let runtime: TreeSitterModule | undefined;
 
@@ -236,8 +242,15 @@ async function loadGrammarNow(
   wasmUrl: string,
 ): Promise<void> {
   const module = await initializeRuntime();
-  const wasm = await readGrammar(grammar.id, wasmUrl);
-  const language = await module.Language.load(wasm);
+  let compiling = compiled.get(wasmUrl);
+  if (compiling === undefined) {
+    compiling = readGrammar(grammar.id, wasmUrl).then((wasm) =>
+      module.Language.load(wasm)
+    );
+    compiled.set(wasmUrl, compiling);
+    compiling.catch(() => compiled.delete(wasmUrl));
+  }
+  const language = await compiling;
   const parser = new module.Parser();
   parser.setLanguage(language);
   const query = new module.Query(language, grammar.highlightQuery);

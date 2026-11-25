@@ -23,8 +23,9 @@ import {
   languageMatchingSources,
   type LanguageMetadata,
   languageNames,
-  metadataMatchesFilename,
   metadataMatchesSharedExtension,
+  metadataNamesFilename,
+  metadataPatternMatchesFilename,
   renderedLinesFor,
 } from "../lib/view/languages/language.ts";
 import type { LanguageDecoder } from "../lib/view/languages/decoder.ts";
@@ -35,21 +36,51 @@ import {
   jsonLinesLanguage,
 } from "../lib/view/languages/json/language.ts";
 import { yamlLanguage } from "../lib/view/languages/yaml/language.ts";
+import {
+  bazelignoreLanguage,
+  dockerignoreLanguage,
+  gitignoreLanguage,
+} from "../lib/view/languages/ignore/language.ts";
 import { pythonLanguage } from "../lib/view/languages/python/language.ts";
+import {
+  goLanguage,
+  goModLanguage,
+  goSumLanguage,
+} from "../lib/view/languages/go/language.ts";
 import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
 import { kotlinLanguage } from "../lib/view/languages/kotlin/language.ts";
 import { rustLanguage } from "../lib/view/languages/rust/language.ts";
 import { tomlLanguage } from "../lib/view/languages/toml/language.ts";
 import { hclLanguage } from "../lib/view/languages/hcl/language.ts";
+import {
+  cFamilyHeaderLanguage,
+  cLanguage,
+  cppLanguage,
+  cudaLanguage,
+} from "../lib/view/languages/c-family/language.ts";
+import { starlarkLanguage } from "../lib/view/languages/starlark/language.ts";
+import { bazelrcLanguage } from "../lib/view/languages/bazelrc/language.ts";
 import { shellLanguage } from "../lib/view/languages/shell/language.ts";
 import { makeLanguage } from "../lib/view/languages/make/language.ts";
+import { dockerfileLanguage } from "../lib/view/languages/dockerfile/language.ts";
 import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
+import { gitConfigLanguage } from "../lib/view/languages/git-config/language.ts";
 import { proguardLanguage } from "../lib/view/languages/proguard/language.ts";
+import { directiveLanguage } from "../lib/view/languages/directive/language.ts";
 import { iniLanguage } from "../lib/view/languages/ini/language.ts";
 import { orgLanguage } from "../lib/view/languages/org/language.ts";
+import {
+  csvLanguage,
+  datLanguage,
+  tsvLanguage,
+} from "../lib/view/languages/table/language.ts";
 import { gitAttributesLanguage } from "../lib/view/languages/gitattributes/language.ts";
 import { leanLanguage } from "../lib/view/languages/lean/language.ts";
 import { leanToolchainLanguage } from "../lib/view/languages/lean-toolchain/language.ts";
+import { dotLanguage } from "../lib/view/languages/dot/language.ts";
+import { dotenvLanguage } from "../lib/view/languages/dotenv/language.ts";
+import { assemblyLanguage } from "../lib/view/languages/assembly/language.ts";
+import { sqlLanguage } from "../lib/view/languages/sql/language.ts";
 import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
@@ -76,6 +107,11 @@ Deno.test("languageForFile: named files resolve and missing names use plain text
   expect(languageForFile("payload.bin").id).toBe("binary");
   assertEquals(languageForFile("notes.xyz").id, "plain-text");
   assertEquals(languageForFile("LICENSE").id, "plain-text");
+  // A version file is plain text by name, whatever its content looks like.
+  assertEquals(
+    languageForSource(".bazelversion", "<?xml 8.3.1").id,
+    "plain-text",
+  );
   assertEquals(languageForFile(undefined).id, "plain-text");
   assertEquals(languageForTransformedOutput().id, "typescript");
 });
@@ -88,16 +124,26 @@ Deno.test("language metadata matches extensions, exact names, and compound patte
     aliases: ["example"],
     interpreters: ["example-runner"],
     signatures: [],
-    sharedExtensions: [{ extension: ".shared", content: /^demo:/ }],
+    sharedExtensions: [{
+      extension: ".shared",
+      content: (text) => text.startsWith("demo:"),
+    }],
   };
 
-  assert(metadataMatchesFilename(metadata, "/repo/source.DEMO"));
-  assert(metadataMatchesFilename(metadata, "/repo/BUILD"));
-  assert(metadataMatchesFilename(metadata, "containers/Dockerfile.x86_64"));
-  assert(metadataMatchesFilename(metadata, "containers/DOCKERFILE.debug"));
-  assert(!metadataMatchesFilename(metadata, "/repo/build"));
-  assert(!metadataMatchesFilename(metadata, "/repo/demo"));
-  assert(!metadataMatchesFilename(metadata, undefined));
+  assert(metadataNamesFilename(metadata, "/repo/source.DEMO"));
+  assert(metadataNamesFilename(metadata, "/repo/BUILD"));
+  assert(!metadataNamesFilename(metadata, "containers/Dockerfile.x86_64"));
+  assert(
+    metadataPatternMatchesFilename(metadata, "containers/Dockerfile.x86_64"),
+  );
+  assert(
+    metadataPatternMatchesFilename(metadata, "containers/DOCKERFILE.debug"),
+  );
+  assert(!metadataPatternMatchesFilename(metadata, "/repo/BUILD"));
+  for (const name of ["/repo/build", "/repo/demo", undefined]) {
+    assert(!metadataNamesFilename(metadata, name));
+    assert(!metadataPatternMatchesFilename(metadata, name));
+  }
 });
 
 Deno.test("language metadata claims a shared extension only with its evidence", () => {
@@ -108,10 +154,13 @@ Deno.test("language metadata claims a shared extension only with its evidence", 
     aliases: [],
     interpreters: [],
     signatures: [],
-    sharedExtensions: [{ extension: ".shared", content: /^demo:/ }],
+    sharedExtensions: [{
+      extension: ".shared",
+      content: (text) => text.startsWith("demo:"),
+    }],
   };
 
-  assert(!metadataMatchesFilename(metadata, "/repo/source.shared"));
+  assert(!metadataNamesFilename(metadata, "/repo/source.shared"));
   assert(
     metadataMatchesSharedExtension(metadata, "/repo/source.shared", "demo:"),
   );
@@ -146,8 +195,16 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("ndjson"), jsonLinesLanguage);
   assertEquals(languageForName("yaml"), yamlLanguage);
   assertEquals(languageForName("yml"), yamlLanguage);
+  expect(languageForName("gitignore")).toBe(gitignoreLanguage);
+  expect(languageForName("dockerignore")).toBe(dockerignoreLanguage);
+  expect(languageForName("bazelignore")).toBe(bazelignoreLanguage);
   assertEquals(languageForName("python"), pythonLanguage);
   assertEquals(languageForName("py"), pythonLanguage);
+  assertEquals(languageForName("go"), goLanguage);
+  assertEquals(languageForName("golang"), goLanguage);
+  assertEquals(languageForName("go-mod"), goModLanguage);
+  assertEquals(languageForName("gowork"), goModLanguage);
+  assertEquals(languageForName("go-sum"), goSumLanguage);
   assertEquals(languageForName("swift"), swiftLanguage);
   assertEquals(languageForName("kotlin"), kotlinLanguage);
   assertEquals(languageForName("kt"), kotlinLanguage);
@@ -160,12 +217,24 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("lean"), leanLanguage);
   assertEquals(languageForName("lean4"), leanLanguage);
   assertEquals(languageForName("lean-toolchain"), leanToolchainLanguage);
+  assertEquals(languageForName("c"), cLanguage);
+  assertEquals(languageForName("cpp"), cppLanguage);
+  assertEquals(languageForName("c++"), cppLanguage);
+  assertEquals(languageForName("cuda"), cudaLanguage);
+  assertEquals(languageForName("h"), cFamilyHeaderLanguage);
+  assertEquals(languageForName("starlark"), starlarkLanguage);
+  assertEquals(languageForName("bazel"), starlarkLanguage);
+  assertEquals(languageForName("bzl"), starlarkLanguage);
+  assertEquals(languageForName("bazelrc"), bazelrcLanguage);
   assertEquals(languageForName("shell"), shellLanguage);
   assertEquals(languageForName("sh"), shellLanguage);
   assertEquals(languageForName("bash"), shellLanguage);
   assertEquals(languageForName("make"), makeLanguage);
   assertEquals(languageForName("makefile"), makeLanguage);
   assertEquals(languageForName("mk"), makeLanguage);
+  assertEquals(languageForName("dockerfile"), dockerfileLanguage);
+  assertEquals(languageForName("docker"), dockerfileLanguage);
+  assertEquals(languageForName("containerfile"), dockerfileLanguage);
   assertEquals(languageForName("properties"), propertiesLanguage);
   assertEquals(languageForName("java-properties"), propertiesLanguage);
   assertEquals(languageForName("proguard"), proguardLanguage);
@@ -173,11 +242,24 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("ini"), iniLanguage);
   assertEquals(languageForName("dosini"), iniLanguage);
   assertEquals(languageForName("gitattributes"), gitAttributesLanguage);
+  assertEquals(languageForName("dot"), dotLanguage);
+  assertEquals(languageForName("graphviz"), dotLanguage);
+  assertEquals(languageForName("dotenv"), dotenvLanguage);
+  assertEquals(languageForName("git-config"), gitConfigLanguage);
+  assertEquals(languageForName("gitmodules"), gitConfigLanguage);
   assertEquals(languageForName("xml"), xmlLanguage);
   assertEquals(languageForName("svg"), xmlLanguage);
   assertEquals(languageForName("plist"), xmlLanguage);
   assertEquals(languageForName("org"), orgLanguage);
   assertEquals(languageForName("orgmode"), orgLanguage);
+  assertEquals(languageForName("nginx"), directiveLanguage);
+  assertEquals(languageForName("netdata"), directiveLanguage);
+  expect(languageForName("csv")).toBe(csvLanguage);
+  expect(languageForName("tsv")).toBe(tsvLanguage);
+  expect(languageForName("dat")).toBe(datLanguage);
+  expect(languageForName("assembly")).toBe(assemblyLanguage);
+  expect(languageForName("asm")).toBe(assemblyLanguage);
+  assertEquals(languageForName("sql"), sqlLanguage);
   expect(languageForName("binary")).toBe(binaryLanguage);
   expect(languageForName("bytes")).toBe(binaryLanguage);
   assertEquals(languageForName("plain-text"), plainTextLanguage);
@@ -190,7 +272,13 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "json",
     "json-lines",
     "yaml",
+    "gitignore",
+    "dockerignore",
+    "bazelignore",
     "python",
+    "go",
+    "go-mod",
+    "go-sum",
     "swift",
     "kotlin",
     "rust",
@@ -198,14 +286,31 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "hcl",
     "lean",
     "lean-toolchain",
+    "c",
+    "cpp",
+    "cuda",
+    "c-family-header",
+    "starlark",
+    "bazelrc",
     "shell",
     "make",
+    "dockerfile",
     "properties",
     "ini",
+    "dot",
+    "dotenv",
+    "git-config",
     "proguard",
     "gitattributes",
+    "linker-script",
     "xml",
     "org",
+    "directive",
+    "csv",
+    "tsv",
+    "dat",
+    "assembly",
+    "sql",
     "binary",
     "plain-text",
   ]);
@@ -223,8 +328,18 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "ndjson",
     "yaml",
     "yml",
+    "gitignore",
+    "dockerignore",
+    "bazelignore",
     "python",
     "py",
+    "go",
+    "golang",
+    "go-mod",
+    "gomod",
+    "gowork",
+    "go-sum",
+    "gosum",
     "swift",
     "kotlin",
     "kt",
@@ -239,25 +354,65 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "lean",
     "lean4",
     "lean-toolchain",
+    "c",
+    "cpp",
+    "c++",
+    "cxx",
+    "cuda",
+    "c-family-header",
+    "h",
+    "starlark",
+    "bazel",
+    "bzl",
+    "star",
+    "bazelrc",
     "shell",
     "sh",
     "bash",
     "make",
     "makefile",
     "mk",
+    "dockerfile",
+    "docker",
+    "containerfile",
     "properties",
     "java-properties",
     "ini",
     "dosini",
     "cfg",
+    "dot",
+    "graphviz",
+    "gv",
+    "dotenv",
+    "git-config",
+    "gitconfig",
+    "gitmodules",
     "proguard",
     "r8",
     "gitattributes",
+    "linker-script",
+    "ld",
+    "lds",
+    "linkerscript",
     "xml",
     "svg",
     "plist",
     "org",
     "orgmode",
+    "directive",
+    "nginx",
+    "apache",
+    "apacheconf",
+    "nftables",
+    "nft",
+    "netdata",
+    "sysusers",
+    "csv",
+    "tsv",
+    "dat",
+    "assembly",
+    "asm",
+    "sql",
     "binary",
     "bytes",
     "plain-text",

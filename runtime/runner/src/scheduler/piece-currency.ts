@@ -22,6 +22,7 @@ import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope, scopeRank } from "../scope.ts";
 import type { IMemorySpaceAddress, MemorySpace } from "../storage/interface.ts";
 import { isLive, type SchedulerLivenessState } from "./dependency-graph.ts";
+import { fanOutHoldsSlot } from "./fan-out.ts";
 import { entityNameKey } from "./keys.ts";
 import type { NodeRegistry, SchedulerNode } from "./node-record.ts";
 import type { SchedulerWriteIndex } from "./scheduling-writes.ts";
@@ -29,8 +30,6 @@ import type { Action, ReactivityLog, TelemetryAnnotations } from "./types.ts";
 
 /** One reason a piece, or one slice of it, cannot be vouched for. */
 export type PieceUnvouchedReason =
-  /** The piece's root is narrower than the space. */
-  | "scoped-root"
   /** A computation of the piece declares a write in another space. */
   | "foreign-write"
   /** A live computation of the slice is not clean. */
@@ -95,6 +94,26 @@ export type PieceCurrencySlice = {
    * computation of the piece wrote.
    */
   vouches: string[];
+
+  /**
+   * The instances at another key that hold what a live, clean computation
+   * of the slice wrote: the redirect a run made for one viewer leaves at
+   * the user's and the space's key, on its way up to the scope the document
+   * is declared at, and the narrower instance a run at a broader key wrote
+   * for the identity it ran under. What such a slot holds was decided by
+   * the run, so it is answered for here. A slot a later run wrote the same
+   * holds what both wrote, and is named by both.
+   */
+  decides: Array<{ id: string; scopeKey: ScopeKey }>;
+
+  /**
+   * The instances at another key that a live, clean computation of the
+   * slice wrote and that something has changed since, another viewer's run
+   * as a rule. Such a slot holds that later write, so the slice answers for
+   * it no longer, and a viewer of the slice who demands it is to have the
+   * computation run again.
+   */
+  superseded: Array<{ id: string; scopeKey: ScopeKey }>;
 };
 
 /** One piece as the scheduler holds it at an instant. */
@@ -102,12 +121,18 @@ export type PieceCurrencySnapshot = {
   /** The raw id of the piece's result document. */
   piece: string;
 
+  /**
+   * The scope the piece's result document is declared at. Each viewer
+   * holds an instance of their own of one narrower than the space.
+   */
+  rootScope: CellScope;
+
   /** The pieces that enclose this one. */
   under: string[];
 
   /**
-   * Why no slice of the piece can be vouched for, empty when one can: its
-   * root is space-scoped and everything it writes is in its own space.
+   * Why no slice of the piece can be vouched for, empty when one can:
+   * everything it writes is in its own space.
    */
   unvouched: PieceUnvouchedReason[];
 
@@ -115,10 +140,20 @@ export type PieceCurrencySnapshot = {
   writes: string[];
 
   /**
-   * The slices the piece's computations ran at, and each broader slice one
-   * of them wrote a redirect in. The `space` slice is always among them.
+   * The slices a live computation of the piece ran at. A slice none ran at
+   * is not among them, the `space` slice included: the snapshot has nothing
+   * to say of it, and the index keeps or replaces the one it holds by that
+   * slice's own mark (`storeCurrencyRecords()`).
    */
   slices: PieceCurrencySlice[];
+
+  /**
+   * Whether a live computation of the piece read, in its own space, a
+   * derived document that no computation registered on the runtime writes:
+   * the output of a piece that is not started there. Nothing on the runtime
+   * recomputes such a document when its inputs change.
+   */
+  readsUnstarted: boolean;
 };
 
 /** The scheduler state a snapshot reads. */
@@ -222,6 +257,12 @@ type NodeRun = {
   identity: ScopeKeyIdentity | undefined;
   log: ReactivityLog | undefined;
   clean: boolean;
+
+  /**
+   * Whether the instance of the document `id` at `scopeKey`, a key other
+   * than the run's, holds what the run left there.
+   */
+  holds: (scopeKey: ScopeKey, id: string) => boolean;
 };
 
 /**
@@ -236,6 +277,7 @@ const runsOf = (state: PieceCurrencyState, node: SchedulerNode): NodeRun[] => {
       identity: undefined,
       log: state.dependencies.get(node.action),
       clean: node.status === "clean",
+      holds: () => true,
     }];
   }
   // The node's one status is invalid while any instance is owed a run. Which
@@ -247,6 +289,7 @@ const runsOf = (state: PieceCurrencyState, node: SchedulerNode): NodeRun[] => {
     identity: instance.identity,
     log: instance.log,
     clean: fanOut.clean.has(key),
+    holds: (scopeKey, id) => fanOutHoldsSlot(fanOut, key, scopeKey, id),
   }));
 };
 
@@ -270,7 +313,14 @@ export function snapshotPieceCurrency(
   }
   const identity = identityOf(nodes[0].action)!;
   const unvouched = new Set<PieceUnvouchedReason>();
-  if (!identity.pieceId.startsWith("space:")) unvouched.add("scoped-root");
+  // The piece's id is its result document's, after the scope key of the
+  // instance this runtime registered it under.
+  const rootScope = scopeOfScopeKey(
+    identity.pieceId.slice(
+      0,
+      identity.pieceId.length - piece.length - 1,
+    ) as ScopeKey,
+  );
   const under = (identity.demandRootIds ?? []).filter((id) => id !== piece);
   const writes = new Set<string>();
 
@@ -282,17 +332,28 @@ export function snapshotPieceCurrency(
       Pick<IMemorySpaceAddress, "space" | "id"> & { scopeKey: string }
     >;
     vouches: Set<string>;
+
+    /** The broader slots the slice's runs wrote, by scope key and id. */
+    decides: Map<string, { id: string; scopeKey: ScopeKey }>;
+
+    /** Those of them that hold a later write, by scope key and id. */
+    superseded: Map<string, { id: string; scopeKey: ScopeKey }>;
     expiresAt?: number;
   }>();
   const sliceAt = (key: ScopeKey) => {
     let slice = slices.get(key);
     if (slice === undefined) {
-      slice = { unvouched: new Set(), reads: new Map(), vouches: new Set() };
+      slice = {
+        unvouched: new Set(),
+        reads: new Map(),
+        vouches: new Set(),
+        decides: new Map(),
+        superseded: new Map(),
+      };
       slices.set(key, slice);
     }
     return slice;
   };
-  sliceAt("space");
 
   for (const node of nodes) {
     const surface = state.writeIndex.getSchedulingWrites(node.action) ?? [];
@@ -331,9 +392,20 @@ export function snapshotPieceCurrency(
           : declared === "space"
           ? ["space"]
           : [];
-        // An instance is vouched for in the slice at its own key, which for
-        // a redirect is broader than the run's.
-        for (const key of keys) sliceAt(key).vouches.add(write.id);
+        // What a run wrote is answered for in the run's own slice: the
+        // instance at its key as one it vouches for, and each instance at
+        // another key, a redirect at a broader one among them, as a slot it
+        // decides. A slot something changed since holds that later write.
+        for (const key of keys) {
+          if (key === run.key) {
+            slice.vouches.add(write.id);
+            continue;
+          }
+          const slots = run.holds(key, write.id)
+            ? slice.decides
+            : slice.superseded;
+          slots.set(`${key}\0${write.id}`, { id: write.id, scopeKey: key });
+        }
       }
     }
   }
@@ -387,11 +459,14 @@ export function snapshotPieceCurrency(
     return [...log.reads, ...log.shallowReads];
   };
 
+  let readsUnstarted = false;
   const taken: PieceCurrencySnapshot = {
     piece,
+    rootScope,
     under,
     unvouched: [...unvouched],
     writes: [...writes],
+    readsUnstarted,
     slices: [...slices].map(([key, slice]) => {
       const reads: PieceCurrencySlice["reads"] = [];
       // A read taken over from a writer that names no piece joins the map
@@ -426,6 +501,11 @@ export function snapshotPieceCurrency(
           slice.expiresAt = Math.min(slice.expiresAt ?? Infinity, expiresAt);
         }
         const { attributed, unattributed } = writersOf(read.id);
+        if (
+          !attributed && unattributed.length === 0 &&
+          !writes.has(read.id) &&
+          entityKindOfIdString(read.id) === "computed"
+        ) readsUnstarted = true;
         const takenOver = unattributed.map(readsOf);
         if (takenOver.includes(undefined)) {
           slice.unvouched.add("unattributed-writer");
@@ -456,10 +536,17 @@ export function snapshotPieceCurrency(
         unvouched: [...slice.unvouched],
         reads,
         vouches: [...slice.vouches],
+        decides: [...slice.decides.values()],
+        // A slot one computation of the slice still holds is the slice's,
+        // whatever another of its computations wrote there before.
+        superseded: [...slice.superseded].filter(([slot]) =>
+          !slice.decides.has(slot)
+        ).map(([, instance]) => instance),
         ...(slice.expiresAt !== undefined && { expiresAt: slice.expiresAt }),
       };
     }),
   };
+  taken.readsUnstarted = readsUnstarted;
   state.nodes.setAnsweredFor(piece, answeredFor);
   return taken;
 }

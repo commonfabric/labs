@@ -1,0 +1,1 @@
+{"date": "2026-11-23", "from": {"k": "unit", "s": "memory", "n": "v2 query evaluation cache > keys a session-scoped evaluation to its identity instead of sharing it"}, "to": {"k": "unit", "s": "memory", "n": "v2 query evaluation cache > does not keep an evaluation of a session-scoped root"}}

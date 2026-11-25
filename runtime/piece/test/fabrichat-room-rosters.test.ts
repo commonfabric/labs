@@ -195,7 +195,14 @@ describe("fabrichat-room-rosters", () => {
       members.home.key("profiles").key(0).resolveAsCell()
         .getAsNormalizedFullLink(),
     );
-    // Something reading the people is what runs the readers.
+    // Something reading the people, once the session has asked for them, is
+    // what runs the readers.
+    await send(
+      owners.runtime,
+      owners.home,
+      ["chatManager", "askForPeople"],
+      {},
+    );
     cancelPeople = owners.home.key("chatManager").key("people").asSchema(
       peopleSchema,
     ).sink(() => {});
@@ -249,32 +256,6 @@ describe("fabrichat-room-rosters", () => {
     const added = rooms[rooms.length - 1].space;
     expect(after.get(added)).toBeGreaterThan(0);
     for (const [space, runs] of before) expect(after.get(space)).toBe(runs);
-  });
-
-  it("runs only the newly listed room's readers when another room is listed after the session asks for the people", async () => {
-    await send(
-      owners.runtime,
-      owners.home,
-      ["chatManager", "askForPeople"],
-      {},
-    );
-    const asked = owners.home.key("chatManager").key("askedPeople").asSchema(
-      peopleSchema,
-    ).sink(() => {});
-    try {
-      await owners.runtime.idle();
-      const before = readerRuns();
-
-      rooms.push(await createGroup("g-added-asked"));
-      await owners.runtime.idle();
-
-      const after = readerRuns();
-      const added = rooms[rooms.length - 1].space;
-      expect(after.get(added)).toBeGreaterThan(0);
-      for (const [space, runs] of before) expect(after.get(space)).toBe(runs);
-    } finally {
-      asked();
-    }
   });
 
   it("runs only an adopted room's reader when a room listed from before the others is adopted", async () => {

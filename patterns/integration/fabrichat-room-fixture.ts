@@ -411,28 +411,41 @@ export async function openMember(
   try {
     const home = (await controller.ensureDefaultPattern()).getCell();
     await controller.runtime.idle();
-    // The list holds links to profiles in spaces of their own, which its
-    // length needs none of.
-    const profiles = home.key("profiles").asSchema<Cell<unknown>[]>({
-      type: "array",
-      items: { asCell: ["cell"] },
-    });
+    const profiles = profilesOf(home);
     await profiles.pull();
-    if ((profiles.get() ?? []).length === 0) {
-      await sendTrusted(controller, home.key("createProfile"), {
-        target: { value: memberName(index) },
-      }, PROFILE_CREATE);
-      await waits.until(
-        `${memberName(index)}'s profile creation`,
-        profiles,
-        (list) => (list ?? []).length > 0,
-      );
-    }
-    return { index, identity, controller, home, sent: 0, waits };
+    const member = { index, identity, controller, home, sent: 0, waits };
+    if ((profiles.get() ?? []).length === 0) await createProfile(member);
+    return member;
   } catch (error) {
     await controller.dispose();
     throw error;
   }
+}
+
+/**
+ * Creates a profile for `member` through Home's `createProfile`, and waits for
+ * Home to list it.
+ */
+export async function createProfile(member: MemberSession): Promise<void> {
+  await sendTrusted(member.controller, member.home.key("createProfile"), {
+    target: { value: memberName(member.index) },
+  }, PROFILE_CREATE);
+  await member.waits.until(
+    `${memberName(member.index)}'s profile creation`,
+    profilesOf(member.home),
+    (list) => (list ?? []).length > 0,
+  );
+}
+
+/**
+ * The profiles `home` lists. The list holds links to profiles in spaces of
+ * their own, which its length needs none of.
+ */
+function profilesOf(home: Cell<unknown>): Cell<Cell<unknown>[]> {
+  return home.key("profiles").asSchema<Cell<unknown>[]>({
+    type: "array",
+    items: { asCell: ["cell"] },
+  });
 }
 
 /**

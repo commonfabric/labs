@@ -907,10 +907,12 @@ export class Client {
    */
   #cidBodyFetches = new Map<string, Promise<boolean>>();
   /**
-   * The bounds a watch set is staged in parts to fit on this connection: on
-   * a routed connection, the frame cap and the 4 MiB a request may take, in
-   * parts of 1 MiB; on a direct one, the server's slot limit on a client
-   * message.
+   * The bounds one request is held to on this connection, which a watch
+   * set is staged in parts to fit and a commit past them is refused unsent:
+   * on a routed connection, the frame cap and the 4 MiB a request may take,
+   * in parts of 1 MiB; on a direct one, the server's slot limit on a client
+   * message, which is the one its `hello.ok` carries (`messageSlots`) or
+   * else the default.
    */
   #requestLimits: PartLimits | undefined;
   /** The split syncs whose last part has not arrived, by session. */
@@ -2546,10 +2548,11 @@ export class Client {
     // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
     // `patternLifecycle`, `patternLifecycleOrigins`,
     // `patternLifecycleScopes`, `servedRequests`, `spaceInvites`,
-    // `instanceNameMark` and `branches` are the server's capabilities alone:
-    // the client reads them from `hello.ok` and never offers them. Other
-    // flags an endpoint does not know are ignored there, since the routed
-    // flag allowlists were removed (infra DEVIATIONS row 41).
+    // `spaceInvitesRevision`, `instanceNameMark` and `branches` are the
+    // server's capabilities alone: the client reads them from `hello.ok` and
+    // never offers them. Other flags an endpoint does not know are ignored
+    // there, since the routed flag allowlists were removed (infra DEVIATIONS
+    // row 41).
     const {
       sessionReportV1: _reportsServerOnly,
       watchRemoveV1: _removalServerOnly,
@@ -2559,6 +2562,7 @@ export class Client {
       patternLifecycleScopes: _lifecycleScopesServerOnly,
       servedRequests: _servedServerOnly,
       spaceInvites: _invitesServerOnly,
+      spaceInvitesRevision: _invitesRevisionServerOnly,
       instanceNameMark: _instanceNameMarkServerOnly,
       branches: _branchesServerOnly,
       ...expectedFlags
@@ -2797,7 +2801,7 @@ export class Client {
           }
           : this.#transport.messageLimits ?? {
             bytes: Number.MAX_SAFE_INTEGER,
-            values: MAX_UNTRUSTED_MESSAGE_SLOTS,
+            values: helloOk.messageSlots ?? MAX_UNTRUSTED_MESSAGE_SLOTS,
           };
         this.#helloPending.resolve();
         return;
@@ -3733,6 +3737,18 @@ export class SpaceSession {
 
   get sessionId(): string {
     return this.#sessionId;
+  }
+
+  /**
+   * The branch this session's opens name (`MountOptions.branch`): the default
+   * branch when they name none. It is the branch the session is of, except
+   * where an open asked the server to fork it (`MountOptions.forkBranch`) for
+   * a principal that may not write to the space: the server then opens the
+   * session on the default branch (04-protocol.md section 4.1.2), and
+   * `session.open` does not say so.
+   */
+  get requestedBranch(): BranchName {
+    return this.#branch ?? DEFAULT_BRANCH;
   }
 
   /** Serving-process provenance from the latest successful session open. */
@@ -6879,6 +6895,7 @@ const parseHelloOk = (
   routerTransport?: number;
   routerUploadWindow?: number;
   routerFrameSlots?: number | null;
+  messageSlots?: number;
 } | null => {
   if (!isPlainObject(message)) {
     return null;
@@ -6903,6 +6920,17 @@ const parseHelloOk = (
   ) {
     return null;
   }
+  // A server's limit is never below the default, so a lower one is not a
+  // limit any server was given.
+  const messageSlots = message.messageSlots;
+  if (
+    messageSlots !== undefined &&
+    (typeof messageSlots !== "number" ||
+      !Number.isSafeInteger(messageSlots) ||
+      messageSlots < MAX_UNTRUSTED_MESSAGE_SLOTS)
+  ) {
+    return null;
+  }
   return {
     flags: parsed,
     sessionOpen: message.sessionOpen,
@@ -6911,6 +6939,7 @@ const parseHelloOk = (
       ? { routerUploadWindow: message.routerUploadWindow }
       : {}),
     ...(frameSlots === undefined ? {} : { routerFrameSlots: frameSlots }),
+    ...(messageSlots === undefined ? {} : { messageSlots }),
   };
 };
 

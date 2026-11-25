@@ -114,7 +114,14 @@ separate view with no membership control. Archive and restore use
 the revision embedded in the rendered control's event, so a newer peer choice
 causes a conflict notice instead of being replaced. Opening uses ordinary shell
 space navigation and its configured routing; listing does not fetch target
-roots, add routing hints, grant access, or change the navigation list.
+roots, add routing hints, grant access, or change the navigation list. The
+browser's `selectedTab` input is the tab its host has selected, for a host that
+shows it in the tab `SOCIAL_SPACES_TAB` names. While another tab is selected the
+browser derives no row and creates no row instance; the collection view itself
+is still derived from the catalog. Without the input the list is shown. Home
+passes its result's `activeTab`, since a client that draws Home's view demands
+every panel of it, hidden ones included. That cell is space-scoped, so the tab
+one session selects is selected in every session of the space.
 
 ## Identity and routing
 

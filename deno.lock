@@ -164,6 +164,9 @@
     "npm:source-map-js@^1.2.1": "1.2.1",
     "npm:stoker@^2.0.1": "2.0.1_@hono+zod-openapi@1.5.1_hono@4.12.31",
     "npm:tree-sitter-bash@0.25.1": "0.25.1",
+    "npm:tree-sitter-c@0.23.6": "0.23.6",
+    "npm:tree-sitter-cpp@0.23.4": "0.23.4",
+    "npm:tree-sitter-go@0.25.0": "0.25.0",
     "npm:tree-sitter-python@0.25.0": "0.25.0",
     "npm:tree-sitter-rust@0.24.0": "0.24.0",
     "npm:turndown@^7.2.4": "7.2.4",
@@ -2754,6 +2757,31 @@
       ],
       "scripts": true
     },
+    "tree-sitter-c@0.23.6": {
+      "integrity": "sha512-0dxXKznVyUA0s6PjNolJNs2yF87O5aL538A/eR6njA5oqX3C3vH4vnx3QdOKwuUdpKEcFdHuiDpRKLLCA/tjvQ==",
+      "dependencies": [
+        "node-addon-api",
+        "node-gyp-build"
+      ],
+      "scripts": true
+    },
+    "tree-sitter-cpp@0.23.4": {
+      "integrity": "sha512-qR5qUDyhZ5jJ6V8/umiBxokRbe89bCGmcq/dk94wI4kN86qfdV8k0GHIUEKaqWgcu42wKal5E97LKpLeVW8sKw==",
+      "dependencies": [
+        "node-addon-api",
+        "node-gyp-build",
+        "tree-sitter-c"
+      ],
+      "scripts": true
+    },
+    "tree-sitter-go@0.25.0": {
+      "integrity": "sha512-APBc/Dq3xz/e35Xpkhb1blu5UgW+2E3RyGWawZSCNcbGwa7jhSQPS8KsUupuzBla8PCo8+lz9W/JDJjmfRa2tw==",
+      "dependencies": [
+        "node-addon-api",
+        "node-gyp-build"
+      ],
+      "scripts": true
+    },
     "tree-sitter-python@0.25.0": {
       "integrity": "sha512-eCmJx6zQa35GxaCtQD+wXHOhYqBxEL+bp71W/s3fcDMu06MrtzkVXR437dRrCrbrDbyLuUDJpAgycs7ncngLXw==",
       "dependencies": [
@@ -3020,6 +3048,9 @@
           "npm:entities@8",
           "npm:marked@^18.0.6",
           "npm:tree-sitter-bash@0.25.1",
+          "npm:tree-sitter-c@0.23.6",
+          "npm:tree-sitter-cpp@0.23.4",
+          "npm:tree-sitter-go@0.25.0",
           "npm:tree-sitter-python@0.25.0",
           "npm:tree-sitter-rust@0.24.0",
           "npm:typescript@6.0.3",

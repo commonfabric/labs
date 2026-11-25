@@ -646,6 +646,57 @@ describe("v2-server-carried-demand", () => {
         expect(demand().map(({ id }) => id)).toEqual(["of:near"]);
         expect(told).toEqual(["session removed", `demand ${SOURCE}`]);
       });
+
+      describe("with rows the space's own serving loop offers", () => {
+        it("holds a row whose origin is a session of the space as that session's pair, though the access list gives its actor nothing", async () => {
+          // A session of the space reads it already, so the grant a row
+          // from another space is admitted under is not asked.
+
+          const bob = await session(BOB, "bob-one", SOURCE);
+
+          const { refused } = await server.setCarriedDemand(SOURCE, SOURCE, [
+            own("computed:near", BOB, bob),
+          ]);
+
+          expect(refused).toBe(0);
+          expect(
+            demand().map(({ id, scopeKey, identity, origin }) => ({
+              id,
+              scopeKey,
+              principal: identity?.principal,
+              origin,
+            })),
+          ).toEqual([{
+            id: "computed:near",
+            scopeKey: `user:${BOB}`,
+            principal: BOB,
+            origin: bob,
+          }]);
+        });
+
+        it("refuses a row for an actor's own instance whose origin is a session of another space, where the access list gives the actor nothing", async () => {
+          const bob = await session(BOB, "bob-one");
+
+          const { refused } = await server.setCarriedDemand(SOURCE, SOURCE, [
+            own("computed:near", BOB, bob),
+          ]);
+
+          expect(refused).toBe(1);
+          expect(demand()).toEqual([]);
+        });
+
+        it("withdraws the rows once the loop offers none", async () => {
+          const alice = await session(ALICE, "alice-one", SOURCE);
+          await server.setCarriedDemand(SOURCE, SOURCE, [
+            shared("computed:near", alice),
+          ]);
+          expect(demand().map(({ id }) => id)).toEqual(["computed:near"]);
+
+          await server.setCarriedDemand(SOURCE, SOURCE, []);
+
+          expect(demand()).toEqual([]);
+        });
+      });
     });
 
     describe("demandForSessions()", () => {

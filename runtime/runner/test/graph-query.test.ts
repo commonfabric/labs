@@ -227,10 +227,9 @@ describe("graph-query", () => {
       it("records under the caller's explicit instance key when one is given", () => {
         // A query root naming an explicit scope instance (protocol.md §2's
         // read row) records under THAT instance rather than one resolved
-        // from the walk's own identity. Traversal beyond that entry still
-        // resolves under the acting identity — including the traverser's
-        // own read-track of the root document (per-run deep threading is
-        // the Phase 2 fan-out work) — so both keys appear.
+        // from the walk's own identity. Traversal beyond that entry
+        // resolves under the acting identity, including the traverser's own
+        // read-track of the root document, so both keys appear.
         const documents = new Map<string, FabricValue>([
           [keyFor("of:root"), { title: "Glazed" }],
         ]);
@@ -250,6 +249,138 @@ describe("graph-query", () => {
           keyFor("of:root"),
           explicitKey,
         ]);
+      });
+
+      it("follows no link whose scope the walk's identity resolves no instance of", () => {
+        // The walk acts as a principal with no session. `of:root` links to
+        // `of:draft` in the session scope, and to `of:glaze` in its own.
+
+        const documents = new Map<string, FabricValue>([
+          [
+            keyFor("of:root"),
+            {
+              draft: {
+                "/": {
+                  [LINK_V1_TAG]: { id: "of:draft", path: [], scope: "session" },
+                },
+              },
+              glaze: linkTo("of:glaze"),
+            },
+          ],
+          [keyFor("of:glaze"), { flavor: "maple" }],
+        ]);
+        const manager = new StubObjectManager(documents);
+        const schemaTracker = new MapSetStringToPathSelectors(true);
+        const misses: string[] = [];
+        const walk = new GraphQueryWalk({
+          manager,
+          space: SPACE,
+          schemaTracker,
+          identity: { principal: TEST_SCOPE_IDENTITY.principal },
+          onMissedDoc: (key) => misses.push(key),
+        });
+
+        walk.visit(
+          documentFor(manager, "of:root"),
+          {
+            path: ["value"],
+            schema: {
+              type: "object",
+              properties: {
+                draft: { type: "object" },
+                glaze: { type: "object" },
+              },
+            },
+          } satisfies SchemaPathSelector,
+        );
+
+        expect(trackedKeys(schemaTracker)).toEqual([
+          keyFor("of:glaze"),
+          keyFor("of:root"),
+        ]);
+        expect(misses).toEqual([]);
+        expect(manager.requested.filter((key) => key.endsWith("/of:draft")))
+          .toEqual([]);
+      });
+
+      it("follows no such link under a selector that reaches everything, in a walk that attributes what it records", () => {
+        // As above, under `schema: true`, which the traversal walks without
+        // a schema, and with `onTrackedDoc`, which has it attribute each
+        // position to the record walking it.
+
+        const documents = new Map<string, FabricValue>([
+          [
+            keyFor("of:root"),
+            {
+              draft: {
+                "/": {
+                  [LINK_V1_TAG]: { id: "of:draft", path: [], scope: "session" },
+                },
+              },
+              glaze: linkTo("of:glaze"),
+            },
+          ],
+          [keyFor("of:glaze"), { flavor: "maple" }],
+        ]);
+        const manager = new StubObjectManager(documents);
+        const schemaTracker = new MapSetStringToPathSelectors(true);
+        const misses: string[] = [];
+        const walk = new GraphQueryWalk({
+          manager,
+          space: SPACE,
+          schemaTracker,
+          identity: { principal: TEST_SCOPE_IDENTITY.principal },
+          onMissedDoc: (key) => misses.push(key),
+          onTrackedDoc: () => {},
+        });
+
+        walk.visit(
+          documentFor(manager, "of:root"),
+          { path: ["value"], schema: true } satisfies SchemaPathSelector,
+        );
+
+        expect(trackedKeys(schemaTracker)).toEqual([
+          keyFor("of:glaze"),
+          keyFor("of:root"),
+        ]);
+        expect(misses).toEqual([]);
+        expect(manager.requested.filter((key) => key.endsWith("/of:draft")))
+          .toEqual([]);
+      });
+
+      it("throws at a user-scoped link for a walk whose identity names no principal", () => {
+        const documents = new Map<string, FabricValue>([
+          [
+            keyFor("of:root"),
+            {
+              prefs: {
+                "/": {
+                  [LINK_V1_TAG]: { id: "of:prefs", path: [], scope: "user" },
+                },
+              },
+            },
+          ],
+        ]);
+        const manager = new StubObjectManager(documents);
+        const walk = new GraphQueryWalk({
+          manager,
+          space: SPACE,
+          schemaTracker: new MapSetStringToPathSelectors(true),
+          identity: {},
+        });
+
+        expect(() =>
+          walk.visit(
+            documentFor(manager, "of:root"),
+            {
+              path: ["value"],
+              schema: {
+                type: "object",
+                properties: { prefs: { type: "object" } },
+              },
+            } satisfies SchemaPathSelector,
+          )
+        ).toThrow("user scoped memory operations require a principal");
       });
 
       it("records a linked document the schema reaches", () => {

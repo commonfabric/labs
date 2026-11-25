@@ -43,7 +43,7 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
 root lists when the room is not that root (`wish({ query: "#default" })`), and
 the messages' authors, keyed by profile cell. A room with `about`, which only a
 manager creates, is its space's root, and reads only its own roster: its
-`#default` is itself. `roster` is computed from those who joined alone.
+`#default` is itself. `roster` is a link to the roster the room stores.
 `messages` (its `count`, `oldestAt`, `newestAt`, `latest`, and `threads`) is
 computed from the messages when it's read, and isn't stored. The reader's
 profile is what the room's `#profile` wish finds, in a `PerSession` instance,

@@ -126,11 +126,22 @@ Waits split into two groups with different primitives.
   flip with no DOM mutation (for example a runtime global being set). A nonempty
   `events` list additionally observes those window events and disables the
   polling backstop. The waiter checks once immediately, so an event that fired
-  before the wait is also covered. `waitForShellReady(page)` uses `cf-shell-ready`, which the shell dispatches
+  before the wait is also covered. A predicate may return a promise, and the
+  waiter holds the next check until it settles, so a promise that never settles
+  holds the wait until the safety net. A predicate that starts work whose
+  completion changes nothing in the DOM, such as asking a `cf-cell-link` to
+  resolve, returns a promise that resolves to its result once that work is
+  done. Returning `false` instead leaves the next check to an unrelated DOM
+  change, a named event, or the backstop: up to half a second late, or, in a
+  wait that names `events` and sees neither, not until the safety net.
+  `waitForShellReady(page)` uses `cf-shell-ready`, which the shell dispatches
   after publishing `globalThis.app` at the end of bootstrap. The predicate is
   serialized and runs in the page, so it closes over nothing from the test module
-  — inline any collection it needs, and pass values in through `args`. A predicate that returns a truthy value instead of `true` hands that
-  value back to the caller in the same binding notification, so it must be a
+  — inline any collection it needs, and pass values in through `args`. A
+  predicate that calls itself must keep its name once rebuilt in the page: a
+  function declaration does, and an arrow function bound to a `const` does not.
+  A predicate that returns a truthy value instead of `true` hands that value
+  back to the caller in the same binding notification, so it must be a
   `PageConditionValue`: a plain JSON value. Maps, functions, class instances,
   cycles, and other lossy JSON inputs are rejected at the boundary instead of
   being changed silently. A wait that runs out reports the page it ran out

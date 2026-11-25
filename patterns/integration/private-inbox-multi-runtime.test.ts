@@ -45,6 +45,7 @@ import { aclDocId } from "@commonfabric/memory/acl";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
+  once,
   type PieceAddress,
   resolveServerExecution,
 } from "./multi-runtime-harness.ts";
@@ -133,20 +134,6 @@ type ReadOffer = {
   sharedAt: number;
   receivedAt: number;
   changes?: Record<string, true>;
-};
-
-/**
- * A function that runs `build` on its first call and returns the promise that
- * call made, on that call and every later one.
- *
- * Each Home stand-in's setup is one of these, called by the steps that read
- * it. A lane that runs one step of this file registers the others as ignored,
- * and a setup that ran whatever the lane chose would cost every such lane the
- * whole file's.
- */
-const once = <T>(build: () => Promise<T>): () => Promise<T> => {
-  let built: Promise<T> | undefined;
-  return () => built ??= build();
 };
 
 describe("private inbox across runtimes", () => {

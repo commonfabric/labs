@@ -166,7 +166,11 @@ import {
   unsubscribeSchedulerAction,
 } from "./registration.ts";
 import { sameReactivityLog } from "./reactivity.ts";
-import { runSchedulerAction, type SchedulerActionRunState } from "./run.ts";
+import {
+  runSchedulerAction,
+  type SchedulerActionRunState,
+  type UnproducedRead,
+} from "./run.ts";
 import {
   captureEchoRun,
   computeEchoSteps,
@@ -496,6 +500,13 @@ export class Scheduler {
    * them.
    */
   readonly #clockDocuments = new Map<string, ClockDocument>();
+
+  /**
+   * The read each served run is withdrawn for and waiting on, by the
+   * action and then by the instance key of the run (`unproducedReads()`).
+   */
+  readonly #unproducedReads = new Map<Action, Map<ScopeKey, UnproducedRead>>();
+  #unproducedReadsGeneration = 0;
 
   readonly #materializers = new SchedulerMaterializers(
     this.#nodes.effects,
@@ -1066,6 +1077,9 @@ export class Scheduler {
   ): void {
     unsubscribeSchedulerAction(this.#unsubscribeState, action, options);
     this.#materializers.clearAction(action);
+    if (this.#unproducedReads.delete(action)) {
+      this.#unproducedReadsGeneration += 1;
+    }
     // The node record outlives the registration, so its echo gate would
     // otherwise defer a later registration of the same action.
     this.#echoBreaker.forget(this.#getActionId(action), performance.now());
@@ -2248,6 +2262,51 @@ export class Scheduler {
       this.#producedWatchers.delete(key);
       for (const wake of watchers) wake();
     }
+  }
+
+  /**
+   * Notes what the run of `action` at the instance `run` found of the
+   * scoped instances it read (`SchedulerActionRunState.noteUnproducedRead`).
+   */
+  #noteUnproducedRead(
+    action: Action,
+    run: ScopeKey,
+    read: UnproducedRead | undefined,
+  ): void {
+    let reads = this.#unproducedReads.get(action);
+    if (read === undefined) {
+      if (reads?.delete(run) !== true) return;
+      if (reads.size === 0) this.#unproducedReads.delete(action);
+    } else {
+      if (reads === undefined) {
+        reads = new Map();
+        this.#unproducedReads.set(action, reads);
+      }
+      const known = reads.get(run);
+      if (
+        known !== undefined && known.id === read.id &&
+        known.scopeKey === read.scopeKey && known.space === read.space
+      ) return;
+      reads.set(run, read);
+    }
+    this.#unproducedReadsGeneration += 1;
+  }
+
+  /**
+   * The reads for which a served run is withdrawn and waiting: each of a
+   * scoped instance that a writer registered here owes and has not
+   * produced for the run's identity. A serving loop demands those
+   * instances, so that the writer runs for them.
+   */
+  unproducedReads(): UnproducedRead[] {
+    return [...this.#unproducedReads.values()].flatMap((reads) => [
+      ...reads.values(),
+    ]);
+  }
+
+  /** A count that moves whenever what `unproducedReads()` returns does. */
+  get unproducedReadsGeneration(): number {
+    return this.#unproducedReadsGeneration;
   }
 
   /** Notes that `action` finished a run that was not withdrawn, waking the
@@ -3535,6 +3594,7 @@ export class Scheduler {
           type: "cell.update",
           change,
         }),
+      writersOf: (entity) => this.#writeIndex.writersByEntity.get(entity),
       recordTriggerTrace: (entry) =>
         recordTriggerTraceState({ triggerTrace: this.#triggerTrace }, entry),
       markInvalid: (target, cause) =>
@@ -3956,6 +4016,8 @@ export class Scheduler {
       markActionHasRun: (target) => this.#gates.markActionHasRun(target),
       markNodeHasRun: (target) => this.#markNodeHasRun(target),
       noteProduced: (target) => this.#noteProduced(target),
+      noteUnproducedRead: (target, run, read) =>
+        this.#noteUnproducedRead(target, run, read),
       handleError: (error, target) => this.#handleError(error, target),
       resubscribe: (target, log) => this.resubscribe(target, log),
       markInvalid: (target, options) =>

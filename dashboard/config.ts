@@ -5,6 +5,8 @@
  * threshold is tuned here rather than in the tile that applies it.
  */
 
+import { currentRepoName } from "./repository-names.ts";
+
 export { TRUST_RUNS_MAX } from "./ci-trust-layout.ts";
 export {
   CI_RUNS_MAX,
@@ -28,22 +30,29 @@ export const TICK_MS = 15_000;
 // Override with PROD_SERVICE.
 export const PROD_SERVICE = "toolshed-production";
 
-// The loom repo and its main CI workflow ("Tests (fast)"), for the loom-repo CI
-// tiles and the recent commits tile.
-export const LOOM_REPO = Deno.env.get("DASHBOARD_LOOM_REPO") ?? "commonfabric/loom";
-export const LOOM_CI_WORKFLOW = "test-fast.yml";
+// The cfs repo and its main CI workflow ("Tests (fast)"), for the cfs-repo CI
+// tiles and the recent commits tile. DASHBOARD_CFS_REPO names it, and
+// DASHBOARD_LOOM_REPO is read when that is unset. A name the repository had
+// before it was renamed, given in the environment, is taken as the name it has
+// now, here and for the weaver repo below.
+export const CFS_REPO = currentRepoName(
+  Deno.env.get("DASHBOARD_CFS_REPO") ?? Deno.env.get("DASHBOARD_LOOM_REPO") ??
+    "commonfabric/cfs",
+);
+export const CFS_CI_WORKFLOW = "test-fast.yml";
 
 // The branch each repository's CI moves to the newest commit of main whose
 // tests passed, by repository. Every view of a run on main marks a commit the
 // branch is or was at (green-branch.ts).
 export const GREEN_BRANCHES: Readonly<Record<string, string>> = {
-  [LOOM_REPO]: "main-green",
+  [CFS_REPO]: "main-green",
 };
 
 // The weaver repo and its CI workflow, for the weaver-repo CI tiles and the
 // recent commits tile.
-export const WEAVER_REPO = Deno.env.get("DASHBOARD_WEAVER_REPO") ??
-  "commonfabric/commonfabric-weaver";
+export const WEAVER_REPO = currentRepoName(
+  Deno.env.get("DASHBOARD_WEAVER_REPO") ?? "commonfabric/weaver",
+);
 export const WEAVER_CI_WORKFLOW = "ci.yml";
 
 // How long a job's failure stays red on the ci tile. A job that has been

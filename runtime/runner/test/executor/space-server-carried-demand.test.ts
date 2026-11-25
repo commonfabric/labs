@@ -362,8 +362,10 @@ describe("SpaceServer", () => {
           .toBeUndefined();
       });
 
-      it("leaves the reading piece unstarted, and carries nothing, for viewers whose instances in that space have not changed, under `skip`", async () => {
-        const { alice, result, bob, bobResult } = await standUp("skip");
+      it("leaves the reading piece unstarted, and carries nothing, for viewers whose instances in that space have not changed, under `start-upstream`", async () => {
+        const { alice, result, bob, bobResult } = await standUp(
+          "start-upstream",
+        );
         await reads(alice, result, "read:mine:0");
         await reads(bob, bobResult, "read:mine:0");
         await host!.whenQuiescent();
@@ -381,8 +383,10 @@ describe("SpaceServer", () => {
         expect(carriedIntoSource()).toEqual([]);
       });
 
-      it("starts the reading piece left unstarted once an input of that space's piece changed, and brings each viewer the new value, under `skip`", async () => {
-        const { alice, result, bob, bobResult } = await standUp("skip");
+      it("starts the reading piece left unstarted once an input of that space's piece changed, and brings each viewer the new value, under `start-upstream`", async () => {
+        const { alice, result, bob, bobResult } = await standUp(
+          "start-upstream",
+        );
         await reads(alice, result, "read:mine:0");
         await reads(bob, bobResult, "read:mine:0");
         await host!.whenQuiescent();
@@ -398,6 +402,20 @@ describe("SpaceServer", () => {
 
         await reads(alice, result, "read:mine:1");
         await reads(bob, bobResult, "read:mine:1");
+      });
+
+      it("carries nothing into that space under `skip`, which then computes no instance for a viewer with no session there", async () => {
+        // Alice's client reads the source piece's result as it sets up the
+        // reader, which is a session of hers in that space. Bob has none.
+
+        await standUp("skip");
+        await host!.whenQuiescent();
+
+        expect(host!.stats().currency.carried).toBe(0);
+        expect(carriedIntoSource()).toEqual([]);
+        expect(await derivedInstancesOfSource()).toEqual(
+          [setupSigner, aliceSigner].map(ownKey).sort(),
+        );
       });
     });
   });

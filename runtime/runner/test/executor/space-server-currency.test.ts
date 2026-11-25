@@ -3,16 +3,23 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { selectCurrencyPiece } from "@commonfabric/memory/v2/currency-index";
+import {
+  judgeCurrencyRoots,
+  selectCurrencyPiece,
+} from "@commonfabric/memory/v2/currency-index";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
+import { stub } from "@std/testing/mock";
 import { ExecutorHost } from "../../src/executor/host.ts";
+import { DEFAULT_CURRENCY_EPOCH } from "../../src/executor/space-server.ts";
 import { readWatermarkSeq } from "../../src/executor/watermark-engine.ts";
 import type { CurrencyIndexMode } from "../../src/executor/store-currency.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
+import { rawMetaWriteAuthorization } from "../../src/meta-seam.ts";
 import { Runtime } from "../../src/runtime.ts";
+import type { ReconcileOutcome } from "../../src/source-reconciler.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
@@ -73,6 +80,56 @@ const DRAFT_PROGRAM: RuntimeProgram = {
 };
 
 /**
+ * A piece that encloses another whose result is each session's own: the
+ * inner pattern is instantiated at the session's scope, so every session
+ * holds an instance of its result document.
+ */
+const NESTED_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern } from 'commonfabric';",
+      "const Inner = pattern<{ value: number }, { doubled: number }>(",
+      "  ({ value }) => ({ doubled: computed(() => value * 2) }),",
+      ");",
+      "export default pattern<",
+      "  { value: number },",
+      "  { inner: { doubled: number }; tripled: number }",
+      ">(({ value }) => ({",
+      "  inner: Inner.asScope('session')({ value }),",
+      "  tripled: computed(() => value * 3),",
+      "}));",
+    ].join("\n"),
+  }],
+};
+
+/**
+ * A piece that encloses another in the space, each with one derived output
+ * from an input of its own: the outer piece's start instantiates the inner
+ * one, and a change to `extra` is a change to the outer piece alone.
+ */
+const ENCLOSING_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern } from 'commonfabric';",
+      "const Inner = pattern<{ value: number }, { doubled: number }>(",
+      "  ({ value }) => ({ doubled: computed(() => value * 2) }),",
+      ");",
+      "export default pattern<",
+      "  { value: number; extra: number },",
+      "  { inner: { doubled: number }; tripled: number }",
+      ">(({ value, extra }) => ({",
+      "  inner: Inner({ value }),",
+      "  tripled: computed(() => extra * 3),",
+      "}));",
+    ].join("\n"),
+  }],
+};
+
+/**
  * One demanded document: a watch root, or a document a selector reaches, at
  * the space's instance unless `scopeKey` names another, demanded by the
  * session `viewer` of alice unless `session` names another session or
@@ -95,6 +152,15 @@ describe("SpaceServer", () => {
   let servingRuntime: Runtime | undefined;
   let cycles: ArrivalLog<unknown>;
   let demanded: Demanded[];
+
+  /**
+   * What following a piece's origin answers on each serving runtime made
+   * from here on, or `undefined` to follow origins for real.
+   */
+  let followOutcome: ReconcileOutcome | undefined;
+
+  /** The pieces whose origin a serving runtime followed, and whether each ran. */
+  let follows: Array<{ id: string; running: boolean }>;
   const opened: { runtime: Runtime; manager: EmulatedStorageManager }[] = [];
 
   /** A runtime over the shared server, acting for `as`, that runs nothing. */
@@ -121,6 +187,8 @@ describe("SpaceServer", () => {
     servingRuntime = undefined;
     cycles = new ArrivalLog();
     demanded = [];
+    followOutcome = undefined;
+    follows = [];
     // The demand is the documents each case names, as one session of alice's
     // demands them.
     (server as { demandForSpace: unknown }).demandForSpace = () =>
@@ -170,6 +238,15 @@ describe("SpaceServer", () => {
           experimental: { serverExecution: true },
         });
         servingRuntime = runtime;
+        if (followOutcome !== undefined) {
+          stub(runtime.sourceReconciler, "reconcile", (cell) => {
+            follows.push({
+              id: cell.getAsNormalizedFullLink().id,
+              running: runtime.runner.isRunning(cell),
+            });
+            return Promise.resolve(followOutcome!);
+          });
+        }
         return Promise.resolve({
           runtime,
           dispose: async () => {
@@ -428,6 +505,71 @@ describe("SpaceServer", () => {
         expect(host.stats().currency.rearmed).toBe(0);
         cancel();
       });
+
+      it("leaves unstarted a settled piece that encloses one whose result is the session's own, under `skip`", async () => {
+        // The session watches the outer piece through its result schema,
+        // which reaches the session's instance of the inner piece's result.
+
+        delete (server as { demandForSpace?: unknown }).demandForSpace;
+        host = newHost("skip");
+        const manager = EmulatedStorageManager.connectTo(server, {
+          as: aliceSigner,
+        });
+        const alice = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: manager,
+          experimental: { serverExecution: true },
+        });
+        opened.push({ runtime: alice, manager });
+        const compiled = await alice.patternManager.compilePattern(
+          NESTED_PROGRAM,
+          { space },
+        );
+        const argument = alice.getCell<{ value: number }>(
+          space,
+          "currency nested argument",
+          compiled.argumentSchema,
+        );
+        const result = alice.getCell<
+          { inner: { doubled: number }; tripled: number }
+        >(
+          space,
+          "currency nested result",
+          compiled.resultSchema,
+        );
+        await argument.sync();
+        await result.sync();
+        const tx = alice.edit();
+        argument.withTx(tx).set({ value: 2 });
+        alice.run(tx, compiled, argument, result);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        const cancel = result.sink(() => {});
+        const root = result.getAsNormalizedFullLink();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.recordsStored > 0 && serves(root),
+        );
+        await waitForCellValue(
+          alice,
+          result.key("inner").key("doubled"),
+          (doubled: number | undefined) => doubled === 4,
+          { stuckLabel: "the inner piece's `doubled` to be 4" },
+        );
+        await settled();
+        expect(host.stats().currency.unvouched).toEqual({});
+        await host.spaceServer(space)!.park("test-park");
+
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore > 0,
+        );
+        await settled();
+
+        expect(serves(root)).toBe(false);
+        expect(host.stats().currency.falseClean).toBe(0);
+        cancel();
+      });
     });
 
     describe("noteDemandChanged()", () => {
@@ -450,11 +592,14 @@ describe("SpaceServer", () => {
           servable: 0,
           refused: {},
           servedFromStore: 0,
+          underived: 0,
           rearmed: 0,
           indexWakes: 0,
           expiryWakes: 0,
           carried: 0,
           carriedRefused: 0,
+          heldUpstream: 0,
+          upstreamAbandoned: 0,
           falseClean: 0,
         });
       });
@@ -488,17 +633,43 @@ describe("SpaceServer", () => {
         expect(host.stats().currency.falseClean).toBe(0);
       });
 
-      it("starts a piece the store could serve, and counts it, under `skip` with no epoch named", async () => {
+      it("records under the default epoch, and leaves unstarted a piece recorded under it, under `skip` with no epoch named", async () => {
         host = newHost("skip", null);
         const piece = await setUpTripler();
         await serveAndPark(piece);
+        expect(await recordOf(piece.root)).toEqual({
+          mark: 0,
+          epoch: DEFAULT_CURRENCY_EPOCH,
+        });
 
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore === 1,
+        );
+        await settled();
+
+        expect(serves(piece.root)).toBe(false);
+        await outIs(6);
+      });
+
+      it("starts a piece recorded under another epoch, under `skip` with no epoch named", async () => {
+        host = newHost("skip", "earlier-epoch");
+        const piece = await setUpTripler();
+        await serveAndPark(piece);
+        expect(await recordOf(piece.root)).toEqual({
+          mark: 0,
+          epoch: "earlier-epoch",
+        });
+        await host.close();
+
+        host = newHost("skip", null);
         await touchSpace();
         await awaitEach(cycles, () => serves(piece.root));
         await settled();
 
-        expect(host.stats().currency.servable).toBe(1);
         expect(host.stats().currency.servedFromStore).toBe(0);
+        expect(host.stats().currency.refused).toEqual({ "other-epoch": 1 });
       });
 
       it("leaves unstarted a piece whose record is clean and vouches for what is demanded, under `skip`", async () => {
@@ -751,6 +922,223 @@ describe("SpaceServer", () => {
 
         await awaitEach(cycles, () => serves(piece.root));
         expect(host.stats().currency.rearmed).toBe(1);
+      });
+
+      describe("with a demanded document that nothing derives", () => {
+        /**
+         * Writes, as a client, a document that carries neither a back-link
+         * nor a pattern pointer, and returns its link.
+         */
+        const writeData = async (): Promise<NormalizedFullLink> => {
+          const writer = openRuntime(setupSigner);
+          const data = writer.getCell<{ title: string }>(
+            space,
+            "currency underived data",
+            { type: "object", properties: { title: { type: "string" } } },
+          );
+          await data.sync();
+          const tx = writer.edit();
+          data.withTx(tx).set({ title: "typed" });
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await writer.storageManager.synced();
+          const link = data.getAsNormalizedFullLink();
+          await closeLastRuntime();
+          return link;
+        };
+
+        it("parks it unloaded, as a load that finds no piece would, under `skip`", async () => {
+          host = newHost("skip");
+          const data = await writeData();
+
+          await demand({ link: data, root: true });
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.underived === 1,
+          );
+          await settled();
+
+          const stats = host.stats();
+          expect(stats.structureLoadTerminal).toBe(0);
+          expect(stats.currency.servedFromStore).toBe(0);
+          expect(stats.currency.refused).toEqual({});
+        });
+
+        it("loads it once a client commits to it, and starts the piece it then leads to, under `skip`", async () => {
+          host = newHost("skip");
+          const piece = await setUpTripler();
+          const data = await writeData();
+          await demand({ link: data, root: true });
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.underived === 1,
+          );
+          expect(serves(piece.root)).toBe(false);
+
+          const writer = openRuntime(setupSigner);
+          const document = writer.getCellFromLink(data);
+          await document.sync();
+          const tx = writer.edit();
+          document.withTx(tx).setMetaRaw(
+            "result",
+            writer.getCellFromLink(piece.root).getAsWriteRedirectLink({
+              includeSchema: true,
+            }),
+            rawMetaWriteAuthorization,
+          );
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await writer.storageManager.synced();
+          await closeLastRuntime();
+
+          await awaitEach(cycles, () => serves(piece.root));
+          expect(host.stats().structureLoadRearmed).toBe(1);
+        });
+
+        it("loads it, and parks it once the load finds no piece, under `record`", async () => {
+          host = newHost("record");
+          const data = await writeData();
+
+          await demand({ link: data, root: true });
+          await awaitEach(
+            cycles,
+            () => host!.stats().structureLoadTerminal === 1,
+          );
+
+          expect(host.stats().currency.underived).toBe(1);
+        });
+      });
+
+      it("keeps the record of a piece an enclosing piece's start instantiates and no session demands, under `skip`", async () => {
+        host = newHost("skip");
+        const setup = openRuntime(setupSigner);
+        const compiled = await setup.patternManager.compilePattern(
+          ENCLOSING_PROGRAM,
+          { space },
+        );
+        const argument = setup.getCell<{ value: number; extra: number }>(
+          space,
+          "currency enclosing argument",
+          compiled.argumentSchema,
+        );
+        const result = setup.getCell<
+          { inner: { doubled: number }; tripled: number }
+        >(space, "currency enclosing result", compiled.resultSchema);
+        const tx = setup.edit();
+        argument.withTx(tx).set({ value: 2, extra: 1 });
+        setup.run(tx, compiled, argument, result);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await result.pull();
+        const documentOf = (cell: { getAsNormalizedFullLink(): unknown }) =>
+          ({
+            ...cell.getAsNormalizedFullLink() as NormalizedFullLink,
+            path: [],
+          }) as NormalizedFullLink;
+        const outer = result.getAsNormalizedFullLink();
+        const inner = documentOf(result.key("inner").resolveAsCell());
+        const tripled = documentOf(result.key("tripled").resolveAsCell());
+        const doubled = documentOf(
+          result.key("inner").key("doubled").resolveAsCell(),
+        );
+        setup.runner.stop(result);
+        await setup.idle();
+        await setup.storageManager.synced();
+        await closeLastRuntime();
+
+        // The first viewer watches the inner piece as a root of its own, as
+        // a board's viewer watches each piece the board lists.
+        const innerView: Demanded[] = [
+          { link: inner, root: true },
+          { link: doubled, root: false },
+        ];
+        /** The roots the store can serve of the inner piece, for that view. */
+        const innerServable = async () =>
+          judgeCurrencyRoots(await server.engineForSpace(space), {
+            space,
+            roots: [inner.id],
+            rows: innerView.map(({ link }) => ({
+              id: link.id,
+              scopeKey: "space",
+            })),
+            epoch: EPOCH,
+          }).servable;
+        await demand({ link: outer, root: true }, ...innerView);
+        await awaitEach(cycles, () => serves(outer));
+        await settled();
+        expect(await innerServable()).toEqual([inner.id]);
+        await host.spaceServer(space)!.park("test-park");
+
+        // The second viewer demands nothing of the inner piece. The outer
+        // piece never vouched for `tripled`, so it starts, and its start
+        // instantiates the inner piece with none of its computations live.
+        const stored = host.stats().currency.recordsStored;
+        demanded = [
+          { link: outer, root: true },
+          { link: tripled, root: false },
+        ];
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => serves(outer) && host!.stats().currency.recordsStored > stored,
+        );
+        await settled();
+
+        expect(await innerServable()).toEqual([inner.id]);
+      });
+
+      describe("with a piece that records a source origin", () => {
+        /**
+         * Sets up the tripler with a source origin recorded on its root, as
+         * a piece created from a served source carries one.
+         */
+        const setUpTriplerWithOrigin = async () => {
+          const piece = await setUpTripler();
+          const writer = openRuntime(setupSigner);
+          const root = writer.getCellFromLink(piece.root);
+          await root.sync();
+          const tx = writer.edit();
+          root.withTx(tx).setMetaRaw(
+            "patternSource",
+            "system:system/probe/probe.tsx",
+            rawMetaWriteAuthorization,
+          );
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await writer.storageManager.synced();
+          await closeLastRuntime();
+          return piece;
+        };
+
+        it("follows the origin while the piece is stopped and leaves the piece unstarted where the origin has not moved, under `skip`", async () => {
+          followOutcome = "current";
+          host = newHost("skip");
+          const piece = await setUpTriplerWithOrigin();
+          await serveAndPark(piece);
+          follows.length = 0;
+
+          await touchSpace();
+          await awaitEach(
+            cycles,
+            () =>
+              host!.stats().currency.servedFromStore === 1 &&
+              follows.length === 1,
+          );
+          await settled();
+
+          expect(follows).toEqual([{ id: piece.root.id, running: false }]);
+          expect(serves(piece.root)).toBe(false);
+          await outIs(6);
+        });
+
+        it("starts the piece where it adopted new source when its origin was followed, under `skip`", async () => {
+          followOutcome = "current";
+          host = newHost("skip");
+          const piece = await setUpTriplerWithOrigin();
+          await serveAndPark(piece);
+          followOutcome = "updated";
+
+          await touchSpace();
+          await awaitEach(cycles, () => serves(piece.root));
+
+          expect(serves(piece.root)).toBe(true);
+        });
       });
     });
   });

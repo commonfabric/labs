@@ -8,7 +8,12 @@ import {
 import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-keys";
 import type { CellScope } from "../../src/builder/types.ts";
 import type { SchedulerLivenessState } from "../../src/scheduler/dependency-graph.ts";
-import { newFanOutNodeState } from "../../src/scheduler/fan-out.ts";
+import {
+  fanOutRunFinished,
+  fanOutRunOpened,
+  fanOutSlotChanged,
+  newFanOutNodeState,
+} from "../../src/scheduler/fan-out.ts";
 import {
   NodeRegistry,
   type NodeStatus,
@@ -64,9 +69,15 @@ describe("piece-currency", () => {
    * `reads` is what its one run read. `clocks` are the documents of the
    * space that a clock writes, each with the interval of the clock and the
    * tick the document holds, and `sourceSeqs` the seq the replica holds
-   * each document of another space at, by id. Each of `unattributed` is a
+   * each document of another space at, by id. `changed` is the latest
+   * change to an instance of `computed:out`: the key the instance is at,
+   * and the key of the instance whose run made it, after every instance
+   * ran. `root` is the scope key of the instance of the piece's result
+   * document that the runtime registered the piece under, `space` unless
+   * given. Each of `unattributed` is a
    * computation that names no piece, clean and live unless it says
-   * otherwise, with the document it writes and what it read.
+   * otherwise, with the document it writes and what it read. With
+   * `live: false` the piece's computation is registered and not live.
    */
   const snapshotOf = (options: {
     declared?: CellScope;
@@ -74,7 +85,10 @@ describe("piece-currency", () => {
       { key: ScopeKey; identity?: ScopeKeyIdentity; reads?: Read[] }
     >;
     clean?: ScopeKey[];
+    changed?: { at: ScopeKey; by: ScopeKey };
+    root?: ScopeKey;
     status?: NodeStatus;
+    live?: boolean;
     reads?: Read[];
     clocks?: Record<string, { intervalMs: number; tick?: number }>;
     sourceSeqs?: Record<string, number>;
@@ -88,12 +102,12 @@ describe("piece-currency", () => {
     unattributedWriters = [];
     const action: Action & Partial<TelemetryAnnotations> = function writer() {};
     action.schedulerObservationIdentity = {
-      pieceId: `space:${PIECE}`,
+      pieceId: `${options.root ?? "space"}:${PIECE}`,
       pieceRootId: PIECE,
     };
     const node = nodes.register(action, "computation");
     nodes.setStatus(action, options.status ?? "clean");
-    node.liveRefs = 1;
+    node.liveRefs = options.live === false ? 0 : 1;
     const logOf = (reads: Read[] = []): ReactivityLog => ({
       reads: reads.map((read) => ({
         space: SPACE,
@@ -114,6 +128,23 @@ describe("piece-currency", () => {
       }
       for (const key of options.clean ?? instances.map(({ key }) => key)) {
         node.fanOut.clean.add(key);
+      }
+      if (options.changed !== undefined) {
+        const { at, by } = options.changed;
+        const transaction = {};
+        const run = {
+          key: by,
+          identity: instances.find(({ key }) => key === by)?.identity ?? ALICE,
+        };
+        node.fanOut.narrowed = true;
+        fanOutRunOpened(node.fanOut, run, transaction);
+        fanOutRunFinished(node.fanOut, run, {
+          discovered: "user",
+          startGen: 0,
+          log: undefined,
+          transaction,
+        });
+        fanOutSlotChanged(node.fanOut, at, "computed:out", transaction);
       }
     }
     const surface: IMemorySpaceAddress[] = [{
@@ -171,44 +202,65 @@ describe("piece-currency", () => {
   ) => snapshot.slices.find((slice) => slice.key === key);
 
   /**
-   * The keys of the slices that vouch for `computed:out`, sorted, for a
-   * computation that declares it at `declared` and ran clean at `keys`.
+   * Where `computed:out` is answered for, for a computation that declares it
+   * at `declared` and ran clean at `keys`: each slice that answers for an
+   * instance of it, with the key that instance is at, sorted.
    */
-  const vouchesOf = (declared: CellScope, keys: ScopeKey[] = []) =>
+  const answersOf = (declared: CellScope, keys: ScopeKey[] = []) =>
     snapshotOf({ declared, instances: keys.map((key) => ({ key })) }).slices
-      .filter((slice) => slice.vouches.includes("computed:out"))
-      .map((slice) => slice.key).sort();
+      .flatMap((slice) => [
+        ...(slice.vouches.includes("computed:out")
+          ? [{ slice: slice.key, at: slice.key }]
+          : []),
+        ...slice.decides.filter(({ id }) => id === "computed:out").map((
+          { scopeKey },
+        ) => ({ slice: slice.key, at: scopeKey })),
+      ]).sort((a, b) =>
+        `${a.slice} ${a.at}`.localeCompare(`${b.slice} ${b.at}`)
+      );
 
   const user = resolveScopeKey("user", ALICE);
   const session = resolveScopeKey("session", ALICE);
   const bobUser = resolveScopeKey("user", BOB);
 
   describe("snapshotPieceCurrency()", () => {
-    describe("the slices that vouch for a write", () => {
+    describe("the slice that answers for a write", () => {
       it("is the space slice for a space write, for a computation with no fan-out state", () => {
-        expect(vouchesOf("space")).toEqual(["space"]);
+        expect(answersOf("space")).toEqual([{ slice: "space", at: "space" }]);
       });
 
-      it("is empty for a user write, for a computation with no fan-out state", () => {
-        expect(vouchesOf("user")).toEqual([]);
+      it("is none for a user write, for a computation with no fan-out state", () => {
+        expect(answersOf("user")).toEqual([]);
       });
 
-      it("is the run's slice and each broader one, for a space write of a run at a session instance", () => {
-        expect(vouchesOf("space", [session])).toEqual(
-          [session, "space", user].sort(),
-        );
+      it("is the run's slice, for the value and for the redirect at each broader key, for a space write of a run at a session instance", () => {
+        // What the redirects hold was decided by the run, whose reads are in
+        // its own slice.
+
+        expect(answersOf("space", [session])).toEqual([
+          { slice: session, at: session },
+          { slice: session, at: "space" },
+          { slice: session, at: user },
+        ]);
       });
 
-      it("is the run's user's slice alone, for a user write of a run at the space instance", () => {
-        expect(vouchesOf("user", ["space"])).toEqual([user]);
+      it("is the space slice, for the user's instance, for a user write of a run at the space instance", () => {
+        expect(answersOf("user", ["space"])).toEqual([
+          { slice: "space", at: user },
+        ]);
       });
 
-      it("is the run's session's slice alone, for a session write of a run at a user instance", () => {
-        expect(vouchesOf("session", [user])).toEqual([session]);
+      it("is the user slice, for the session's instance, for a session write of a run at a user instance", () => {
+        expect(answersOf("session", [user])).toEqual([
+          { slice: user, at: session },
+        ]);
       });
 
-      it("is the run's slice and the user slice, for a user write of a run at a session instance", () => {
-        expect(vouchesOf("user", [session])).toEqual([session, user].sort());
+      it("is the run's slice, for the value and for the redirect at the user's key, for a user write of a run at a session instance", () => {
+        expect(answersOf("user", [session])).toEqual([
+          { slice: session, at: session },
+          { slice: session, at: user },
+        ]);
       });
     });
 
@@ -235,7 +287,6 @@ describe("piece-currency", () => {
         expect(sliceOf(taken, bobUser)?.reads).toEqual([
           { space: SPACE, id: "of:prefs", scopeKey: bobUser, derived: false },
         ]);
-        expect(sliceOf(taken, "space")?.reads).toEqual([]);
       });
 
       it("names the instance a read carries over the one its scope resolves to", () => {
@@ -424,6 +475,8 @@ describe("piece-currency", () => {
             },
           ],
           vouches: ["computed:out"],
+          decides: [],
+          superseded: [],
         });
       });
 
@@ -518,9 +571,75 @@ describe("piece-currency", () => {
               },
             ],
             vouches: ["computed:out"],
+            decides: [],
+            superseded: [],
           });
         });
       }
+    });
+
+    describe("a read of the output of a piece that is not started", () => {
+      it("is reported for a read of a derived document no registered computation writes", () => {
+        expect(snapshotOf({ reads: [{ id: "computed:far" }] }).readsUnstarted)
+          .toBe(true);
+      });
+
+      it("is not reported for a read of the piece's own derived document", () => {
+        expect(snapshotOf({ reads: [{ id: "computed:out" }] }).readsUnstarted)
+          .toBe(false);
+      });
+
+      it("is not reported for a read of a document that is no derived one", () => {
+        expect(snapshotOf({ reads: [{ id: "of:input" }] }).readsUnstarted)
+          .toBe(false);
+      });
+    });
+
+    describe("the scope of the piece's root", () => {
+      it("is the space for a piece registered under the space's instance of its result document", () => {
+        expect(snapshotOf().rootScope).toBe("space");
+      });
+
+      it("is the user's for a piece registered under a user's instance", () => {
+        expect(snapshotOf({ root: user }).rootScope).toBe("user");
+      });
+
+      it("is the session's for a piece registered under a session's instance", () => {
+        expect(snapshotOf({ root: session }).rootScope).toBe("session");
+      });
+
+      it("keeps no slice of the piece from being vouched for", () => {
+        const taken = snapshotOf({
+          root: session,
+          instances: [{ key: session }],
+        });
+
+        expect(taken.unvouched).toEqual([]);
+        expect(sliceOf(taken, session)?.unvouched).toEqual([]);
+      });
+    });
+
+    describe("the slices it names", () => {
+      it("are none for a piece whose one computation is registered and not live", () => {
+        const taken = snapshotOf({ live: false, reads: [{ id: "of:input" }] });
+
+        expect(taken.slices).toEqual([]);
+        expect(taken.writes).toEqual(["computed:out"]);
+      });
+
+      it("are the `space` slice alone for a live computation with no fan-out state", () => {
+        const taken = snapshotOf({ reads: [{ id: "of:input" }] });
+
+        expect(taken.slices.map(({ key }) => key)).toEqual(["space"]);
+      });
+
+      it("are the viewers' slices, and no `space` slice, for a live computation that ran at viewers' instances alone", () => {
+        const taken = snapshotOf({
+          instances: [{ key: user }, { key: bobUser, identity: BOB }],
+        });
+
+        expect(taken.slices.map(({ key }) => key)).toEqual([user, bobUser]);
+      });
     });
 
     it("reports the `space` slice of a piece with a live computation that is invalid as not clean, and vouches for nothing", () => {
@@ -531,6 +650,8 @@ describe("piece-currency", () => {
         unvouched: ["not-clean"],
         reads: [],
         vouches: [],
+        decides: [],
+        superseded: [],
       });
     });
 
@@ -546,6 +667,8 @@ describe("piece-currency", () => {
         unvouched: [],
         reads: [],
         vouches: ["computed:out"],
+        decides: [{ id: "computed:out", scopeKey: "space" }],
+        superseded: [],
       });
       expect(sliceOf(taken, bobUser)?.unvouched).toEqual(["not-clean"]);
     });
@@ -561,13 +684,35 @@ describe("piece-currency", () => {
         unvouched: ["not-clean"],
         reads: [],
         vouches: [],
+        decides: [],
+        superseded: [],
       });
       expect(sliceOf(taken, user)?.unvouched).toEqual([]);
       expect(
-        taken.slices.filter((slice) => slice.vouches.length > 0).map((slice) =>
-          slice.key
-        ).sort(),
-      ).toEqual(["space", user].sort());
+        taken.slices.filter((slice) =>
+          slice.vouches.length > 0 || slice.decides.length > 0
+        ).map((slice) => slice.key),
+      ).toEqual([user]);
+    });
+
+    it("names an instance at another key as decided in the slice of the run that changed it last, and as superseded in a slice whose run came before", () => {
+      // Both viewers' runs write the instance at the space's key, and
+      // Bob's changed it after Alice's ran: it holds what Bob's run wrote.
+
+      const taken = snapshotOf({
+        instances: [{ key: user }, { key: bobUser, identity: BOB }],
+        changed: { at: "space", by: bobUser },
+      });
+
+      expect(sliceOf(taken, bobUser)?.decides).toEqual([
+        { id: "computed:out", scopeKey: "space" },
+      ]);
+      expect(sliceOf(taken, bobUser)?.superseded).toEqual([]);
+      expect(sliceOf(taken, user)?.decides).toEqual([]);
+      expect(sliceOf(taken, user)?.superseded).toEqual([
+        { id: "computed:out", scopeKey: "space" },
+      ]);
+      expect(sliceOf(taken, user)?.vouches).toEqual(["computed:out"]);
     });
   });
 });

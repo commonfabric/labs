@@ -118,6 +118,7 @@ import {
   memoryHostForForeignOrigin,
 } from "./deployment-meta.ts";
 import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
+import type { SpaceRunBeacon } from "./executor/run-beacon.ts";
 import {
   type DelegatedCarriage,
   waveRunActorOf,
@@ -784,6 +785,14 @@ export interface RuntimeOptions {
    */
   servingPosture?: boolean;
 
+  /**
+   * Where this runtime's scheduler marks the body of each action run while it
+   * holds the thread: the run beacon of the serving worker this runtime
+   * serves a space in (`executor/run-beacon.ts`; serving-loop.md §2, "The
+   * watchdog"). Absent, the scheduler marks nothing.
+   */
+  runBeacon?: SpaceRunBeacon;
+
   /** Rollout mode for commit-boundary CFC enforcement. Defaults to `enforce-strict`. */
   cfcEnforcementMode?: CfcEnforcementMode;
 
@@ -843,7 +852,7 @@ export interface RuntimeOptions {
   cfcDecomposedEnvelopes?: CfcDecomposedEnvelopes;
 
   /**
-   * Defaults to `false`. When true, the envelope persist path stores
+   * Defaults to `true`. When true, the envelope persist path stores
    * version-2 envelopes: each label above the inline limit is a reference
    * to a content-addressed label document shared by every envelope that
    * carries the label (`docs/specs/content-addressed-cfc-labels.md`). Off
@@ -1712,6 +1721,9 @@ export class Runtime {
    */
   #serverExecutionRelease: (() => void) | undefined;
 
+  /** Where the scheduler marks each run's body (`RuntimeOptions.runBeacon`). */
+  readonly #runBeacon: SpaceRunBeacon | undefined;
+
   /** Serving posture (RuntimeOptions.servingPosture): true only for the
    * SpaceServer's own runtime. Gates the Phase-2 speculation-overlay
    * default (a serving runtime never speculates). */
@@ -2224,6 +2236,7 @@ export class Runtime {
     this.experimental.serverExecution = this.#explicitServerExecution ??
       getServerExecutionConfig();
     this.servingPosture = options.servingPosture === true;
+    this.#runBeacon = options.runBeacon;
     // Everything below can throw (URL parsing, host validation, engine
     // construction). The enabler claimed above is process-global state,
     // so a THROWING construction must roll it back — a leaked enabler
@@ -3231,6 +3244,14 @@ export class Runtime {
     eventId: string,
   ): void {
     this.#speculationDestination()?.trackIntent(space, sidecarId, eventId);
+  }
+
+  /**
+   * Where the scheduler marks the body of each action run while it holds the
+   * thread (`RuntimeOptions.runBeacon`); `undefined` off a serving worker.
+   */
+  get runBeacon(): SpaceRunBeacon | undefined {
+    return this.#runBeacon;
   }
 
   /** The client-effect channel of a flag-ON non-serving runtime

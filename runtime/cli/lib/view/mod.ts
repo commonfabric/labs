@@ -5,12 +5,14 @@
  * loading a parser, as an Org source block can. It then launches the
  * interactive pager (when stdout is a TTY) or prints the selected source or
  * rendered representation and exits, mirroring how `less`/`bat` behave when
- * their output is redirected.
+ * their output is redirected. The pager shows a diff before its large complete
+ * files are parsed, and colors them as their parses finish.
  * Filename-free compiler output keeps the transformed TypeScript default.
  * Other source uses filename, shebang, and signature metadata unless an
  * explicit language selects another language.
  */
 
+import { type ParseJob, PendingParses } from "./backgroundparse.ts";
 import { renderLineColored } from "./highlight.ts";
 import { runPager } from "./pager.ts";
 import type { Document, Line } from "./model.ts";
@@ -22,7 +24,7 @@ import {
   diffLanguages,
   type DiffWorkspace,
   realWorkspace,
-  type WorkspaceCache,
+  WorkspaceCache,
 } from "./diffdoc.ts";
 import {
   byteInputFor,
@@ -99,12 +101,14 @@ export async function viewMain(options: ViewOptions): Promise<void> {
     }
     return;
   }
-  const { doc, semantics, editSource } = await buildPreparedView(
-    input,
-    options.file,
-    options.diff,
-    selection,
-  );
+  const { doc, semantics, editSource, parses, parsesEnded } =
+    await buildPreparedView(
+      input,
+      options.file,
+      options.diff,
+      selection,
+      interactive,
+    );
   if (!editSource.allowsEmptyInput && doc.text.trim().length === 0) {
     throw new ViewError(
       options.file
@@ -122,6 +126,8 @@ export async function viewMain(options: ViewOptions): Promise<void> {
         color: true,
         showLineNumbers: options.lineNumbers,
         viewMode: options.rendered ? "rendered" : undefined,
+        parses,
+        parsesEnded,
       },
       semantics(),
       editSource,
@@ -224,24 +230,43 @@ export function buildView(
   return builtView(selectView(input, file, forceDiff, selection));
 }
 
-/** Build a view after loading the parsers its languages need. */
+/**
+ * Build a view after loading the parsers its languages need. With
+ * `deferParses`, a diff parses only as much of its complete files as
+ * {@link PendingParses} parses at once, shows the rest as plain text, and
+ * returns the parses it left in `parses`, for the pager to finish, and in
+ * `parsesEnded` what forgets their results once the pager has built the view
+ * from the last of them.
+ */
 export async function buildPreparedView(
   input: string | Uint8Array | ViewByteInput,
   file?: string,
   forceDiff?: boolean,
   selection: SourceSelection = {},
+  deferParses = false,
 ): Promise<{
   doc: Document;
   semantics: () => Semantics | undefined;
   editSource: EditableSource;
+  parses: readonly ParseJob[];
+  parsesEnded: () => void;
 }> {
   const selected = selectView(input, file, forceDiff, selection);
   await prepareLanguages(selected.languages);
   // A language embedded in another, such as the language an Org source block
-  // names, starts loading its parser when a parse reaches it.
-  let view = builtView(selected);
-  while (await finishGrammarLoads()) view = builtView(selected);
-  return view;
+  // names, starts loading its parser when a parse reaches it. Each build
+  // decides afresh which complete files to leave pending.
+  let pending = deferParses ? new PendingParses() : undefined;
+  let view = builtView(selected, pending);
+  while (await finishGrammarLoads()) {
+    pending = deferParses ? new PendingParses() : undefined;
+    view = builtView(selected, pending);
+  }
+  return {
+    ...view,
+    parses: pending?.take() ?? [],
+    parsesEnded: () => pending?.keepOnly(new Set()),
+  };
 }
 
 /**
@@ -363,7 +388,7 @@ function selectView(
   return { ...common, model, language, languages: [language] };
 }
 
-function builtView(selected: ViewSelection): {
+function builtView(selected: ViewSelection, pending?: PendingParses): {
   doc: Document;
   semantics: () => Semantics | undefined;
   editSource: EditableSource;
@@ -372,8 +397,9 @@ function builtView(selected: ViewSelection): {
   if (selected.model !== null) {
     const { model, ws } = selected;
     // One workspace cache shared by the initial build and every deferred
-    // re-parse, so the named files are read and parsed once per session.
-    const cache: WorkspaceCache = new Map();
+    // re-parse, so the named files are read once per session and a re-parse
+    // builds again only the file sections an edit changed.
+    const cache = new WorkspaceCache();
     const { doc, maps, edit } = buildDiffDocument(
       text,
       model,
@@ -381,6 +407,7 @@ function builtView(selected: ViewSelection): {
       cache,
       "source",
       selected.fileLanguages,
+      pending,
     );
     return {
       doc,
@@ -389,7 +416,7 @@ function builtView(selected: ViewSelection): {
       semantics: () => diffSemanticsFor(text, maps, { cwd: safeCwd() }),
       // A diff edits the new side of the files it touches, in place. Saving
       // edited `git show` output amends HEAD with those file and message edits.
-      editSource: diffSource(ws, edit, cache, realGit(safeCwd())),
+      editSource: diffSource(ws, edit, cache, realGit(safeCwd()), pending),
     };
   }
   const language = selected.language;

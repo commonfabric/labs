@@ -72,7 +72,7 @@ Labs CI publishes binaries and attestations on green pushes to `main`.
 paired `producer=commonfabric/labs` and `run_id` hints:
 
 - `commonfabric/infra`: `rapids.yml`, which reconciles the release candidate.
-- `commonfabric/loom`: `rapids-dependencies.yml`, which integrates verified
+- `commonfabric/cfs`: `rapids-dependencies.yml`, which integrates verified
   producer dependencies and resolves their revisions independently.
 
 Each notification uses a separate repository-scoped Actions-write token from
@@ -130,8 +130,8 @@ command has a 45-minute limit. The receiver performs these steps in order:
    `rapids-deployment-<run_id>-<run_attempt>`, retained for 90 days. A failed
    validation or deployment stops this sequence before proof is uploaded.
 
-The evidence token is read-only for contents and Actions in `infra`, `loom`,
-`labs`, `commonfabric-weaver`, and `gvisor`. The bastion receives that token,
+The evidence token is read-only for contents and Actions in `infra`, `cfs`,
+`labs`, `weaver`, and `gvisor`. The bastion receives that token,
 `INFRA_SHA`, and the Labs orchestrator's `GITHUB_SHA`, `GITHUB_REPOSITORY`,
 `GITHUB_RUN_ID`, and `GITHUB_RUN_ATTEMPT`.
 
@@ -336,7 +336,7 @@ on infra's `main`. It checks out and runs nothing on the runner. On the bastion,
 `/opt/cf/deploy-replica-service.sh` checks the commit against infra's `main`
 again, runs infra's play from a clean worktree of that commit, and the play
 verifies the build's checksum and provenance before it touches Estuary. The
-bastion receives a short-lived token that reads `infra` and `loom` contents,
+bastion receives a short-lived token that reads `infra` and `cfs` contents,
 because the play asks whether the pinned Loom commit is on Loom's `main`.
 
 It has a concurrency group of its own, so an install runs independently of

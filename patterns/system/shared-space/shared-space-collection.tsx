@@ -54,10 +54,21 @@ export const chooseCollectionMembership = handler<
   return result;
 });
 
+/** The value of the tab a host shows the browser in. */
+export const SOCIAL_SPACES_TAB = "social-spaces";
+
 /** The owned catalog and its validated observation, supplied by Home. */
 export interface SharedSpaceCollectionInput {
   catalog: Writable<SharedSpaceCatalogStorage>;
   view: SharedSpaceCollectionView;
+
+  /**
+   * The tab its host has selected, from a host that shows the browser in the
+   * tab {@link SOCIAL_SPACES_TAB} names. While another tab is selected the
+   * browser derives no rows, so the host's hidden panel runs nothing for each
+   * entry. Without it the list is shown.
+   */
+  selectedTab?: string;
 }
 
 /** The browser's UI and session-local controls. */
@@ -78,7 +89,7 @@ const kindLabel = (kind: string): string =>
 const SharedSpaceCollection = pattern<
   SharedSpaceCollectionInput,
   SharedSpaceCollectionOutput
->(({ catalog, view }) => {
+>(({ catalog, view, selectedTab }) => {
   const search = new Writable.perSession("");
   const kind = new Writable.perSession("");
   const membership = new Writable.perSession("saved");
@@ -100,7 +111,10 @@ const SharedSpaceCollection = pattern<
       : []),
   ]);
   const rows = computed(() => {
-    if (view.status !== "ready") return [];
+    if (
+      (selectedTab !== undefined && selectedTab !== SOCIAL_SPACES_TAB) ||
+      view.status !== "ready"
+    ) return [];
     const state = membership.get();
     const entries = state === "saved"
       ? view.saved
@@ -119,7 +133,10 @@ const SharedSpaceCollection = pattern<
         ))
     );
   });
-  const empty = computed(() => view.status === "ready" && rows.length === 0);
+  const empty = computed(() =>
+    (selectedTab === undefined || selectedTab === SOCIAL_SPACES_TAB) &&
+    view.status === "ready" && rows.length === 0
+  );
   const conflictText = computed(() =>
     conflict.get() === "revision"
       ? "The collection changed after this choice was shown. Review it and choose again."

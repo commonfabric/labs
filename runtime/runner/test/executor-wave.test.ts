@@ -1084,6 +1084,34 @@ describe("stage D seal-into-wave", () => {
     expect(commitMeta.holder).toBe(lease.holder);
   });
 
+  it("annotates each space-scoped write of a run that acts as nobody with the action whose run made it", async () => {
+    const lease = await liveLease();
+    const leasedWave = newWave({ lease });
+    runtime.installSealDestination(leasedWave);
+    const a = runtime.getCell<{ value: number }>(space, "made-a", undefined);
+    const b = runtime.getCell<{ value: number }>(space, "made-b", undefined);
+    const tx1 = runtime.edit();
+    stampWaveRunContext(tx1, { actionId: "derive-a", kind: "derivation" });
+    a.withTx(tx1).set({ value: 1 });
+    expect((await tx1.commit().settled).error).toBeUndefined();
+    const tx2 = runtime.edit();
+    stampWaveRunContext(tx2, { actionId: "derive-b", kind: "derivation" });
+    b.withTx(tx2).set({ value: 2 });
+    expect((await tx2.commit().settled).error).toBeUndefined();
+    runtime.clearSealDestination();
+
+    const outcome = await leasedWave.commitWave(newSink());
+    await leasedWave.settled();
+
+    const row = engine.database.prepare(
+      `SELECT annotations FROM "commit" WHERE seq = :seq`,
+    ).get({ seq: outcome.seq }) as { annotations: string };
+    expect(decodeMemoryBoundary(row.annotations)).toEqual([
+      { op: 0, action: "derive-a" },
+      { op: 1, action: "derive-b" },
+    ]);
+  });
+
   it("drops superseded pure writes (C8a) and the derivations that read them; the authored value survives", async () => {
     const lease = await liveLease();
     const wave = newWave({ lease });
@@ -1875,7 +1903,12 @@ describe("stage D seal-into-wave", () => {
       Record<string, unknown>
     >;
     expect(annotations).toEqual([
-      { op: 0, actingUser: "did:key:alice", actingSession: "sess-1" },
+      {
+        op: 0,
+        actingUser: "did:key:alice",
+        actingSession: "sess-1",
+        action: "handle-vote",
+      },
     ]);
     const basis = selectSchedulerBasisRows(engine, {
       branch: "",

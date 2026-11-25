@@ -25,6 +25,7 @@ import {
   type RunCfHarnessCliDependencies,
   selectCfHarnessCliSandboxRuntime,
 } from "@commonfabric/cf-harness/cli";
+import type { HarnessModelProviderId } from "@commonfabric/cf-harness/config";
 import type { HarnessBrowserHost } from "@commonfabric/cf-harness/contracts/browser-host";
 import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
@@ -168,6 +169,13 @@ export interface HarnessJobSpec extends HarnessModelLimits {
   /** Model name passed to `cf-harness`. */
   model?: string;
 
+  /**
+   * The model provider passed to `cf-harness`; absent, the harness resolves
+   * its own. A follow-up naming one other than its predecessor's recorded
+   * provider is refused before any model call.
+   */
+  modelProvider?: HarnessModelProviderId;
+
   /** The job's system prompt: framing the task's author supplies. */
   instructions?: string;
 
@@ -224,6 +232,16 @@ export interface HarnessJobSpec extends HarnessModelLimits {
   /** `"agent"`: the job is a person's own agent making patterns for them (`--pattern-index-origin`). */
   patternIndexOrigin?: "agent";
 }
+
+/**
+ * The gateway's settings in the runner's environment, which a job pinned to
+ * `openai-codex` runs without: the harness refuses a gateway URL or auth mode
+ * beside that provider.
+ */
+export const HARNESS_GATEWAY_ENV_KEYS = [
+  "CF_HARNESS_GATEWAY_BASE_URL",
+  "CF_HARNESS_GATEWAY_AUTH_MODE",
+] as const;
 
 /**
  * The harness settings a job never takes from its environment: each grants
@@ -482,6 +500,9 @@ const argvOf = (
     (profile) => ["--allow-subagent-profile", profile],
   ),
   ...(spec.model !== undefined ? ["--model", spec.model] : []),
+  ...(spec.modelProvider !== undefined
+    ? ["--model-provider", spec.modelProvider]
+    : []),
 ];
 
 /**
@@ -598,6 +619,11 @@ export const runHarnessJob = async (
       new CfHarnessPromptLoop(loopOptions));
   const env = { ...(options.harnessDeps?.env ?? processCfHarnessCliEnv()) };
   for (const key of HARNESS_JOB_GRANT_ENV_KEYS) delete env[key];
+  if (spec.modelProvider === "openai-codex") {
+    // A runner serving gateway profiles too may carry the gateway's settings;
+    // the harness refuses them beside `--model-provider openai-codex`.
+    for (const key of HARNESS_GATEWAY_ENV_KEYS) delete env[key];
+  }
   const deps: RunCfHarnessCliDependencies = {
     ...options.harnessDeps,
     ...SANDBOX_SELECTION,

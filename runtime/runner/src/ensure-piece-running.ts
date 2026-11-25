@@ -13,6 +13,7 @@ import {
   getPieceReconciliation,
   type PieceReconciliationReason,
 } from "./piece-reconciliation.ts";
+import type { RunnerStartOptions } from "./runner.ts";
 import type { Runtime } from "./runtime.ts";
 import { PieceStateMovedError } from "./stored-setup-build.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
@@ -947,11 +948,17 @@ export type StartWithInputSourcesOptions = {
    * what it has, as it leaves an opened piece.
    */
   followOrigins?: boolean;
+
+  /**
+   * Start the piece with `Runtime.startWithCommit()`, which also waits for
+   * the commit of the setup writes of the graph the start instantiates.
+   */
+  awaitSetupCommit?: boolean;
 };
 
 /**
  * Starts `piece`, a piece a caller names on its own, as a client's open does,
- * by calling `start`, after starting the pieces that enclose it, where
+ * and starts the pieces that enclose it before `piece` is instantiated, where
  * `runtime`'s run of its handlers is the one that counts
  * ({@link handlerRunCounts}): the instance whose graph sets `piece` up as a
  * nested one, and that instance's own enclosing instance, and so on
@@ -959,43 +966,58 @@ export type StartWithInputSourcesOptions = {
  * own runs its handlers against inputs nothing in the runtime derives, and once
  * it runs, no later event starts what encloses it. A piece whose output
  * `piece`'s argument links to is not started here; an event's auto-load of a
- * piece that is not running starts it. `start` runs whether or not an enclosing
- * piece's graph set `piece` up as its child, so the opened piece has a lifetime
- * of its own: an enclosing piece that stops or re-instantiates leaves it
- * running, as it leaves a piece opened before what encloses it. Each enclosing
- * piece this starts is started in its own right too, and runs until it is
- * stopped itself or the runtime ends, outliving the opened piece, as a piece an
- * event's auto-load starts does.
+ * piece that is not running starts it. `piece` is started whether or not an
+ * enclosing piece's graph set it up as its child, so the opened piece has a
+ * lifetime of its own: an enclosing piece that stops or re-instantiates leaves
+ * it running, as it leaves a piece opened before what encloses it. Each
+ * enclosing piece this starts is started in its own right too, and runs until
+ * it is stopped itself or the runtime ends, outliving the opened piece, as a
+ * piece an event's auto-load starts does.
+ *
+ * `piece`'s start begins at once, and loads what it needs while the search
+ * for the enclosing pieces runs; it instantiates `piece` once the search is
+ * done (`RunnerStartOptions.instantiateAfter`). This returns once both are
+ * done.
  *
  * Starting what encloses `piece` is best effort. An enclosing piece that
  * cannot start, one whose origin's follow cannot be settled, and an argument
  * whose links cannot be read each leave `piece` to start without it, so an
  * open fails only where the piece's own start does; each is logged as a
  * warning naming the opened piece. Where `runtime`'s runs echo the served
- * ones, or `piece` runs already, this only calls `start`.
+ * ones, or `piece` runs already, this only starts `piece`.
  *
- * @returns What `start` returns.
+ * @returns What `Runtime.start()` returns, or `Runtime.startWithCommit()` with
+ *   `awaitSetupCommit`.
  */
 export async function startWithInputSources(
   runtime: Runtime,
   piece: Cell<any>,
-  start: () => Promise<boolean>,
   options: StartWithInputSourcesOptions = {},
 ): Promise<boolean> {
-  if (handlerRunCounts(runtime) && !runtime.runner.isRunning(piece)) {
-    const { space, id, scope } = piece.getAsNormalizedFullLink();
-    const root: OwningRootAddress = { space, id, scope };
-    try {
-      await startEnclosingFollowingOrigins(runtime, root, options);
-    } catch (error) {
-      openLogger.warn("input-sources", () => [
-        `Opened ${id} without the pieces that enclose it, whose links ` +
-        `could not be read; its handlers read what those derived last:`,
-        error,
-      ]);
-    }
+  const start = (startOptions?: RunnerStartOptions) =>
+    options.awaitSetupCommit === true
+      ? runtime.startWithCommit(piece, startOptions)
+      : runtime.start(piece, startOptions);
+  if (!handlerRunCounts(runtime) || runtime.runner.isRunning(piece)) {
+    return await start();
   }
-  return await start();
+  const { space, id, scope } = piece.getAsNormalizedFullLink();
+  const enclosing = startEnclosingFollowingOrigins(
+    runtime,
+    { space, id, scope },
+    options,
+  ).catch((error) => {
+    openLogger.warn("input-sources", () => [
+      `Opened ${id} without the pieces that enclose it, whose links ` +
+      `could not be read; its handlers read what those derived last:`,
+      error,
+    ]);
+  });
+  try {
+    return await start({ instantiateAfter: enclosing });
+  } finally {
+    await enclosing;
+  }
 }
 
 /**

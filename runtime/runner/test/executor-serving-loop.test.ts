@@ -2126,6 +2126,26 @@ describe("stage F serving loop", () => {
     expect(host.stats().parkedRuntimes.held).toBe(0);
   });
 
+  it("drops the events failed for a deleted space when it refuses the space", async () => {
+    const engine = await server.engineForSpace(space);
+    writeDeletionTombstone(engine, space, spaceSigner.did());
+    host = newHost();
+    host.failEvent(
+      space,
+      {
+        sidecarId: "of:deleted-failed-sidecar",
+        eventId: "deleted-failed",
+        seq: 1,
+      },
+      "ended",
+    );
+    expect(host.accessForTestingOnly.failedEvents.has(space)).toBe(true);
+
+    warmNotice(engine, "deleted-failed-warm");
+    await refused();
+    expect(host.accessForTestingOnly.failedEvents.has(space)).toBe(false);
+  });
+
   it("ends a tenure for good on the host's notice that its space's access list became a deletion tombstone", async () => {
     onServingRuntime = () => Promise.resolve();
     host = newHost({ idleParkMs: 600_000 });
@@ -3142,8 +3162,14 @@ describe("stage F serving loop", () => {
       );
     await awaitAdmitted(server, () => demandedKeyCommits().length >= 2);
     expect(demandedKeyCommits().length).toBe(2);
+    // A commit also annotates the writes of runs that act as nobody, which
+    // name their action alone.
     for (const annotations of demandedKeyCommits()) {
       for (const annotation of annotations) {
+        if (
+          annotation.scopeKey === undefined &&
+          annotation.actingUser === undefined
+        ) continue;
         expect(annotation.actingUser).toBe(demanded.principal);
         expect(annotation.actingSession).toBeUndefined();
       }

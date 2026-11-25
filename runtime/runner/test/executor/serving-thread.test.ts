@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
+  newRunBeaconBuffer,
+  readRunBeacon,
+} from "../../src/executor/run-beacon.ts";
+import {
   MIN_SERVING_THREAD_HEAP_LIMIT_MB,
   type ServingThread,
   type ServingThreadFailure,
@@ -10,6 +14,10 @@ import {
 
 const ECHO = new URL("../fixtures/serving-thread-echo.ts", import.meta.url);
 const HOG = new URL("../fixtures/serving-thread-hog.ts", import.meta.url);
+const BEACON = new URL(
+  "../fixtures/serving-thread-beacon.ts",
+  import.meta.url,
+);
 const GROWS = new URL(
   "../fixtures/serving-thread-that-grows.ts",
   import.meta.url,
@@ -69,6 +77,24 @@ describe("startServingThread()", () => {
       thread.port.postMessage({ n: 1 });
 
       expect(await answer).toEqual({ echo: { n: 1 } });
+    });
+
+    it(`shares a run beacon with the thread, and takes the post a run makes before its body holds the thread, while it does ${kind}`, async () => {
+      const thread = start(BEACON, heapLimitMb);
+      expect(await nextMessage(thread)).toBe("listening");
+      const beacon = newRunBeaconBuffer();
+      const gate = new Int32Array(new SharedArrayBuffer(4));
+
+      const named = nextMessage(thread);
+      thread.port.postMessage({ beacon, gate: gate.buffer });
+      expect(await named).toMatchObject({ run: 1, action: "held" });
+      expect(readRunBeacon(beacon)).toEqual({ epoch: 1, run: 1, reads: 0 });
+
+      const released = nextMessage(thread);
+      Atomics.store(gate, 0, 1);
+      Atomics.notify(gate, 0);
+      expect(await released).toBe("released");
+      expect(readRunBeacon(beacon)).toBeUndefined();
     });
 
     it(`reports no failure for a thread terminate() ends ${kind}`, async () => {

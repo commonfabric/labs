@@ -24,6 +24,39 @@ import type { Capability } from "./acl.ts";
 export const INVITE_ACCESS = ["READ", "WRITE", "OWNER"] as const;
 
 /**
+ * The id of the document the invitation service moves on, on the space's
+ * default branch, whenever an operation changes what `list` or `receipts`
+ * return: an invitation made or withdrawn, a new receipt, or an invitation
+ * retired because its issuer no longer owns the space. Its value is an
+ * {@link InviteLedgerRevision}. A client that holds a session on the space's
+ * default branch watches it to learn that the ledger moved, where nothing
+ * else would say so: another owner's invitation, or a redemption by an identity
+ * that already held the access, which writes a receipt and leaves the access
+ * list as it was.
+ *
+ * The document says only that the ledger moved, never what it holds, so every
+ * principal that may read the space may read it while the ledger stays the
+ * owners'. Expiry moves nothing, since every reader compares `expiresAt` with
+ * the time itself. Only the service writes it: the store refuses it in any
+ * commit but a system one, the server's direct writes (`writeDocument`)
+ * refuse it, and a branch restore leaves it as it is.
+ *
+ * A memory server whose service writes it advertises `spaceInvitesRevision`
+ * in its handshake (`MemoryProtocolFlags` in `v2.ts`), so a client asks the
+ * server its session is on. A session on another branch sees the document as
+ * it stood when the branch was forked. A server that does not advertise it
+ * writes no such document, and a client that wants to learn of a change it did
+ * not make reads the ledger again itself.
+ */
+export const SPACE_INVITES_REVISION_DOC_ID = "of:space-invites-revision";
+
+/**
+ * The value of the document {@link SPACE_INVITES_REVISION_DOC_ID} names:
+ * `revision` counts the changes to the ledger, from `1` at the first.
+ */
+export type InviteLedgerRevision = { revision: number };
+
+/**
  * Host limits for version one of the invitation protocol.
  *
  * `suggestedProfile` bounds the profile an issuer may suggest for the person
