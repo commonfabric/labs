@@ -53,6 +53,15 @@
  * `room` and the event of `home` are sampled and the profile is written
  * to that path followed by the size.
  *
+ * With `SCALE_GROWTH` set, the run compares the last timed send of `room`
+ * at each size with that at the first size, in each count that does not
+ * depend on how many messages the room holds (`GROWTH_COUNTS`), prints a
+ * step `growth` that names each count that differs, and exits with status
+ * 1 where one does. Below 100 messages the window of the newest messages
+ * (`maxWindowCount` of `FABRICHAT_POLICY`) holds every message, and a send
+ * gives a record more for each message held, so the sizes compared are 100
+ * and more, as 100 and 200 are.
+ *
  * With `SCALE_LISTS=in-place`, the arms `runner` and `serving` store the
  * links to the row documents of the room in the result document, and
  * otherwise in documents of their own (`CompiledPieceOptions.lists`).
@@ -606,7 +615,13 @@ const print = (step: Record<string, unknown>) =>
   console.log(JSON.stringify(step));
 
 /** The counters of the executor that a step is charged with. */
-const counted = (instance: Instance, before: Instance["counts"]) => ({
+/** The counts of the executor and the containers its reads copied. */
+const countsOf = (instance: Instance) => ({
+  ...instance.counts,
+  copied: instance.store.copiedByReads,
+});
+
+const counted = (instance: Instance, before: ReturnType<typeof countsOf>) => ({
   evaluations: instance.counts.evaluations - before.evaluations,
   elementEvaluations: instance.counts.elementEvaluations -
     before.elementEvaluations,
@@ -615,7 +630,36 @@ const counted = (instance: Instance, before: Instance["counts"]) => ({
   recordsNoted: instance.counts.recordsNoted - before.recordsNoted,
   recordRegistrations: instance.counts.recordRegistrations -
     before.recordRegistrations,
+  labelReaders: instance.counts.labelReaders - before.labelReaders,
+  copied: instance.store.copiedByReads - before.copied,
 });
+
+/**
+ * The counts of a timed send of `room` that `SCALE_GROWTH` compares between
+ * sizes: those the room's size is not to change. Left out are `reads`,
+ * `recordRegistrations` and `copied`, which follow the room through
+ * `facts`, an authored body that reads about eight positions per message
+ * held, through the new row's records, which name the inputs of `facts`,
+ * and through the values that read the stored messages whole (notes 1044,
+ * 1052 and 1068 of `../../SPEC-NOTES.md`); `changedBytes`, which the
+ * document of the stored messages and the parts of the basis follow;
+ * `writes` and `changedDocuments`, which vary with the parts of the basis a
+ * send writes; and the times.
+ */
+const GROWTH_COUNTS = [
+  "evaluations",
+  "elementEvaluations",
+  "assemblies",
+  "positionsPlaced",
+  "recordsNoted",
+  "labelReaders",
+  "recordsGiven",
+  "commits",
+  "derivations",
+] as const;
+
+/** The last timed send of `room` at each size, for `SCALE_GROWTH`. */
+const lastSends: { size: number; counts: Record<string, unknown> }[] = [];
 
 /**
  * The gesture a send of the room is made with where the write policies are
@@ -841,7 +885,7 @@ for (
     step: "start",
     ms: performance.now() - began,
     ...counted(instance, {
-      ...instance.counts,
+      ...countsOf(instance),
       evaluations: 0,
       elementEvaluations: 0,
       assemblies: 0,
@@ -856,7 +900,7 @@ for (
     const binding = plan.bindings.findIndex((held) =>
       held.name === "addSpaceHandler"
     );
-    const before = { ...instance.counts };
+    const before = countsOf(instance);
     const adapter = started.adapter?.();
     const stopProfile = await profiled(size);
     began = performance.now();
@@ -892,7 +936,7 @@ for (
     print({ ...base, step: "seed", ms: performance.now() - began, refused });
     const stopProfile = await profiled(size);
     for (let index = 0; index < 3; index++) {
-      const before = { ...instance.counts };
+      const before = countsOf(instance);
       const adapter = started.adapter?.();
       started.trace?.();
       if (Deno.env.get("SCALE_CHANGES") !== undefined && index === 2) {
@@ -908,14 +952,15 @@ for (
       if (Deno.env.get("SCALE_TRACE") !== undefined && index === 2) {
         print({ ...base, step: "trace", ...started.trace?.() });
       }
+      const counts = { ...counted(instance, before), ...adapted(adapter) };
+      if (index === 2) lastSends.push({ size, counts });
       print({
         ...base,
         step: "send",
         ms: performance.now() - began,
         load: Deno.loadavg()[0],
         committed,
-        ...counted(instance, before),
-        ...adapted(adapter),
+        ...counts,
         ...(listed === undefined ? {} : { changes: listed }),
       });
     }
@@ -949,4 +994,23 @@ for (
     });
   }
   await stop();
+}
+
+if (Deno.env.get("SCALE_GROWTH") !== undefined && lastSends.length > 1) {
+  const [first, ...others] = lastSends;
+  const differing = Object.fromEntries(
+    GROWTH_COUNTS.flatMap((name) =>
+      others.some(({ counts }) => counts[name] !== first.counts[name])
+        ? [[name, lastSends.map(({ counts }) => counts[name])]]
+        : []
+    ),
+  );
+  print({
+    arm,
+    pattern: name,
+    step: "growth",
+    sizes: lastSends.map(({ size }) => size),
+    differing,
+  });
+  if (Object.keys(differing).length > 0) Deno.exit(1);
 }

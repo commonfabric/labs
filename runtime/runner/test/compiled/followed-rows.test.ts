@@ -82,6 +82,8 @@ describe("an add to the rows of a compiled piece that follow a link", () => {
     const before = {
       records: piece.transactions.counts.recordsGiven,
       copied: piece.instance.store.copiedByReads,
+      reads: piece.transactions.counts.reads,
+      writes: piece.transactions.counts.writes,
       ...piece.instance.counts,
     };
     result.key("add").send({ title: "last" } as never);
@@ -90,6 +92,8 @@ describe("an add to the rows of a compiled piece that follow a link", () => {
     const after = {
       records: piece.transactions.counts.recordsGiven,
       copied: piece.instance.store.copiedByReads,
+      reads: piece.transactions.counts.reads,
+      writes: piece.transactions.counts.writes,
       ...piece.instance.counts,
     };
     return Object.fromEntries(
@@ -120,5 +124,22 @@ describe("an add to the rows of a compiled piece that follow a link", () => {
     const large = await cost("copies large", 100);
 
     expect(large.copied).toBe(small.copied);
+  });
+
+  it("does as much of every kind of work for an add at 10 rows as at 100, but the reads of the facts", async () => {
+    // The facts read every item's title, and the appended row's record
+    // names their inputs, so the reads and the positions registered for it
+    // follow the rows; every other count of the executor and of the
+    // adapter is the same at both sizes.
+    const small = await cost("work small", 10);
+    const large = await cost("work large", 100);
+    const growing = ["reads", "recordRegistrations"];
+    const without = (counts: Record<string, number>) =>
+      Object.fromEntries(
+        Object.entries(counts).filter(([name]) => !growing.includes(name)),
+      );
+
+    expect(without(large)).toEqual(without(small));
+    expect(large.reads).toBeGreaterThan(small.reads);
   });
 });
