@@ -227,6 +227,8 @@ installFakeClock({
     "session-draft",
     // The same, for a list a handler appends to, across a takeover.
     "stored-append",
+    // The same, for an event a handler sends after reading another space.
+    "relay-send",
   ],
 });
 
