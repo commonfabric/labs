@@ -69,6 +69,7 @@ import { gitAttributesLanguage } from "./gitattributes/language.ts";
 import { xmlLanguage } from "./xml/language.ts";
 import { orgLanguage } from "./org/language.ts";
 import { directiveLanguage } from "./directive/language.ts";
+import { csvLanguage, datLanguage, tsvLanguage } from "./table/language.ts";
 import { binaryLanguage } from "./binary/language.ts";
 import { plainTextLanguage } from "./plain-text/language.ts";
 import type { LineEndingProvenance } from "../editbuffer.ts";
@@ -257,8 +258,14 @@ export interface SharedExtension {
   /** The extension, including its leading dot, compared without case. */
   readonly extension: string;
 
-  /** The evidence this language requires from the complete source. */
-  readonly content: RegExp;
+  /**
+   * Whether the complete source gives the evidence this language requires. A
+   * test that looks past an unbounded run of lines reads them one at a time,
+   * as `evidence.ts` does: a regular expression that repeats once for each
+   * line exhausts the stack of V8's regular expression engine on a few million
+   * lines.
+   */
+  readonly content: (text: string) => boolean;
 }
 
 /**
@@ -291,8 +298,8 @@ export interface Language {
   /**
    * Stable identifier, such as `"typescript"`, `"markdown"`, `"json"`,
    * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"kotlin"`, `"shell"`,
-   * `"make"`, `"org"`, `"directive"`, `"dockerfile"`, `"dotenv"`, `"binary"`,
-   * or `"plain-text"`.
+   * `"make"`, `"org"`, `"directive"`, `"dockerfile"`, `"dotenv"`, `"csv"`,
+   * `"tsv"`, `"dat"`, `"binary"`, or `"plain-text"`.
    */
   readonly id: string;
 
@@ -550,6 +557,9 @@ function allLanguages(): readonly Language[] {
     xmlLanguage,
     orgLanguage,
     directiveLanguage,
+    csvLanguage,
+    tsvLanguage,
+    datLanguage,
     binaryLanguage,
     plainTextLanguage,
   ];
@@ -616,7 +626,7 @@ export function metadataMatchesSharedExtension(
   const lower = basename(fileName).toLowerCase();
   return metadata.sharedExtensions.some((shared) =>
     lower.endsWith(shared.extension.toLowerCase()) &&
-    regularExpressionMatches(shared.content, text)
+    shared.content(text)
   );
 }
 

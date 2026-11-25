@@ -69,6 +69,11 @@ import { proguardLanguage } from "../lib/view/languages/proguard/language.ts";
 import { directiveLanguage } from "../lib/view/languages/directive/language.ts";
 import { iniLanguage } from "../lib/view/languages/ini/language.ts";
 import { orgLanguage } from "../lib/view/languages/org/language.ts";
+import {
+  csvLanguage,
+  datLanguage,
+  tsvLanguage,
+} from "../lib/view/languages/table/language.ts";
 import { gitAttributesLanguage } from "../lib/view/languages/gitattributes/language.ts";
 import { leanLanguage } from "../lib/view/languages/lean/language.ts";
 import { leanToolchainLanguage } from "../lib/view/languages/lean-toolchain/language.ts";
@@ -117,7 +122,10 @@ Deno.test("language metadata matches extensions, exact names, and compound patte
     aliases: ["example"],
     interpreters: ["example-runner"],
     signatures: [],
-    sharedExtensions: [{ extension: ".shared", content: /^demo:/ }],
+    sharedExtensions: [{
+      extension: ".shared",
+      content: (text) => text.startsWith("demo:"),
+    }],
   };
 
   assert(metadataNamesFilename(metadata, "/repo/source.DEMO"));
@@ -144,7 +152,10 @@ Deno.test("language metadata claims a shared extension only with its evidence", 
     aliases: [],
     interpreters: [],
     signatures: [],
-    sharedExtensions: [{ extension: ".shared", content: /^demo:/ }],
+    sharedExtensions: [{
+      extension: ".shared",
+      content: (text) => text.startsWith("demo:"),
+    }],
   };
 
   assert(!metadataNamesFilename(metadata, "/repo/source.shared"));
@@ -241,6 +252,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("orgmode"), orgLanguage);
   assertEquals(languageForName("nginx"), directiveLanguage);
   assertEquals(languageForName("netdata"), directiveLanguage);
+  expect(languageForName("csv")).toBe(csvLanguage);
+  expect(languageForName("tsv")).toBe(tsvLanguage);
+  expect(languageForName("dat")).toBe(datLanguage);
   expect(languageForName("binary")).toBe(binaryLanguage);
   expect(languageForName("bytes")).toBe(binaryLanguage);
   assertEquals(languageForName("plain-text"), plainTextLanguage);
@@ -286,6 +300,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "xml",
     "org",
     "directive",
+    "csv",
+    "tsv",
+    "dat",
     "binary",
     "plain-text",
   ]);
@@ -378,6 +395,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "nft",
     "netdata",
     "sysusers",
+    "csv",
+    "tsv",
+    "dat",
     "binary",
     "bytes",
     "plain-text",

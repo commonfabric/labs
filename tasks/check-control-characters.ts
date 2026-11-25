@@ -73,6 +73,16 @@ const EXEMPT_PATHS: readonly string[] = [
   "runtime/cli/test/fixtures/view-language/make-infra/after.mk",
   "runtime/cli/test/fixtures/view-language/make-infra/before.mk",
   "runtime/cli/test/fixtures/view-language/make-infra/incomplete.mk",
+  // A comma-separated table from a real repository, which the file viewer's
+  // tests read. It ends its lines with CRLF, as RFC 4180 writes them.
+  "runtime/cli/test/fixtures/view-language/csv-gvisor/after.csv",
+  "runtime/cli/test/fixtures/view-language/csv-gvisor/before.csv",
+  "runtime/cli/test/fixtures/view-language/csv-gvisor/incomplete.csv",
+  // Tab-separated tables from a real repository, which the file viewer's tests
+  // read. A tab is what separates their fields.
+  "runtime/cli/test/fixtures/view-language/tsv-loom/after.tsv",
+  "runtime/cli/test/fixtures/view-language/tsv-loom/before.tsv",
+  "runtime/cli/test/fixtures/view-language/tsv-loom/incomplete.tsv",
 ];
 
 /**

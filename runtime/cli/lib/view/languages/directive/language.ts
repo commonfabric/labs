@@ -2,6 +2,7 @@ import type { Language } from "../language.ts";
 import { utf8Decoder } from "../decoder.ts";
 import { remapStructure } from "../../diffremap.ts";
 import { createRecoloringHighlighter } from "../classes.ts";
+import { firstContentLineMatches } from "../evidence.ts";
 import { directiveDocument, directiveLines } from "./directive.ts";
 
 /** The sections an Apache configuration can open with. */
@@ -20,13 +21,16 @@ const APACHE_SECTION =
  * or `%`. INI, systemd, and YAML configuration rarely open in any of those
  * ways, JSON and XML open with punctuation, and a shebang belongs to a script.
  */
-const DIRECTIVE_FIRST = new RegExp(
-  String.raw`^(?!#!)(?:[^\S\n]*(?:[#;][^\n]*)?\n)*[^\S\n]*(?:` +
-    String.raw`(?:alarm|template)[^\S\n]*:` +
-    String.raw`|<(?i:(?:${APACHE_SECTION})(?:Match)?)\b` +
-    String.raw`|[ugm]!?[^\S\n]+[^\s#=]` +
-    String
-      .raw`|(?![^\s;]*:\s)(?![^\s=]*[^\S\n]*=)[A-Za-z_][^\n#]*?(?:;|(?<![$%])\{))`,
+const DIRECTIVE_LINE = firstContentLineMatches(
+  "#;",
+  new RegExp(
+    String.raw`[^\S\n]*(?:` +
+      String.raw`(?:alarm|template)[^\S\n]*:` +
+      String.raw`|<(?i:(?:${APACHE_SECTION})(?:Match)?)\b` +
+      String.raw`|[ugm]!?[^\S\n]+[^\s#=]` +
+      String
+        .raw`|(?![^\s;]*:\s)(?![^\s=]*[^\S\n]*=)[A-Za-z_][^\n#]*?(?:;|(?<![$%])\{))`,
+  ),
 );
 
 /**
@@ -55,7 +59,10 @@ export const directiveLanguage: Language = {
     ],
     interpreters: ["nft"],
     signatures: [],
-    sharedExtensions: [{ extension: ".conf", content: DIRECTIVE_FIRST }],
+    sharedExtensions: [{
+      extension: ".conf",
+      content: (text) => !text.startsWith("#!") && DIRECTIVE_LINE(text),
+    }],
   },
 
   parseDocument: (text) => directiveDocument(text),
