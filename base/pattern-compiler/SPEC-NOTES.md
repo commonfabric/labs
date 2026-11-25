@@ -27659,9 +27659,9 @@ to 2.5, from other sessions. Whenever a note says `map`, it names the case.
         every link from each result, a client reads no error state: 0 of 5
         documents (counter), 0 of 605 (list at 300 items), 0 of 247 (room), and
         0 of 83 for Topics on the standard path.
-      - _Fixed, the first compiled piece of a fresh space did not start:_ 3 of
-        the first 4 `cf piece new` runs in spaces just created waited out the 60
-        s start deadline, and the result document still held nothing minutes
+      - _Fixed, the first compiled piece of a fresh space did not start:_ 5 of 7
+        `cf piece new` runs in spaces just created waited out the 60-second
+        start deadline, and the result document still held nothing minutes
         later. `setUpCompiledPiece` wrote the result's `argument` metadata
         through the result cell, which starts a load of the result document
         while the setup transaction is open; that subscription reached the
