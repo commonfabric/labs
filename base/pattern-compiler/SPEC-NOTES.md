@@ -28595,10 +28595,10 @@ Its branch, `claude/compiled-pattern-two-principal-gate`, was cut from
 its provisional decisions from P520.
 
 1150. **Findings, first.** The gate at the compiled path of `dcaad56391` (the
-      command at the round's head, `full-3.jsonl` of the round's folder; note
-      1155 has the figures): 419 scenarios, of which 276 ran, none is equal, 276
-      differ, and 143 are skipped; the run exits 1. The ledger's one entry, the
-      module identities, accepted 86 findings.
+      command at the round's code head `4731e569a0`, `full-3.jsonl` of the
+      round's folder; note 1155 has the figures): 419 scenarios, of which 276
+      ran, none is equal, 276 differ, and 143 are skipped; the run exits 1. The
+      ledger's one entry, the module identities, accepted 86 findings.
       - _Soundness: the compiled path commits writes today's path refuses._
         Under the serving loop, with the piece set up by a client: the handler
         of `dev/test/cfc-trusted-write/main.tsx` that overwrites the pinned note
@@ -28619,22 +28619,22 @@ its provisional decisions from P520.
         composer, documents of the space of the compiled path hold B's `User`
         clause where today's path holds none (`board/crossrefs/0`,
         `board/crossrefs/0/mentionedBy`, and the topic's made documents that no
-        member reaches), and from that step on the compiled path refuses A, the
-        topic's creator, the whole board, which today's path gives her.
-        Instances of the scope `user` of one principal hold the other's clause
-        (`crossed-clause`, among them the instance of B's board view at
-        `board/mentionable/0/piece/$UI@A/...`). The same holds for the corpus
-        copy of the board (`apps/topics/main.tsx`), and foreign clauses are also
-        stored by `apps/recommend-a-book/shared-invitation.tsx`,
+        member reaches; 449 findings), and from that step on the compiled path
+        refuses A, the topic's creator, the whole board, which today's path
+        gives her. Instances of the scope `user` of one principal hold the
+        other's clause (`crossed-clause`, among them the instance of B's board
+        view at `board/mentionable/0/piece/$UI@A/...`). The same holds for the
+        corpus copy of the board (`apps/topics/main.tsx`), and foreign clauses
+        are also stored by `apps/recommend-a-book/shared-invitation.tsx`,
         `examples/group-chat-lobby/group-chat-lobby.tsx` and
-        `dev/test/cfc-trusted-write/other-writer.tsx`. In the scenario of an
-        instance a handler makes, the defect cannot show yet: the compiled
-        card's `wish` for the profile is never answered (its state holds the
-        request and no outcome, for A alone), its `viewer` is empty, A reads the
-        list of cards empty and B reads nothing, and A's `touch` of the card is
-        dropped ("no handler registered ... after starting its piece"); today's
-        path gives each principal the card with that principal's own profile
-        name.
+        `dev/test/cfc-trusted-write/other-writer.tsx` (600 findings in 5
+        scenarios; 196 crossed clauses in 2). In the scenario of an instance a
+        handler makes, the defect cannot show yet: the compiled card's `wish`
+        for the profile is never answered (its state holds the request and no
+        outcome, for A alone), its `viewer` is empty, A reads the list of cards
+        empty and B reads nothing, and A's `touch` of the card is dropped ("no
+        handler registered ... after starting its piece"); today's path gives
+        each principal the card with that principal's own profile name.
       - _A clause of the serving loop's identity._ The compiled path stores
         `User(service)` at `note/pinned` of `cfc-trusted-write/main.tsx`, where
         today's path stores `User` of the acting principal, so neither principal
@@ -28649,13 +28649,13 @@ its provisional decisions from P520.
         the positions of its rendered expenses on today's path and not on the
         compiled path, so both principals read on the compiled path what today's
         path refuses them; the same for `examples/cfc-spec-gallery` and
-        `apps/redactor/vault.tsx` (a module policy's clause). 1,225 findings in
+        `apps/redactor/vault.tsx` (a module policy's clause). 1,220 findings in
         47 scenarios.
-      - _Labels extra on the compiled path._ 14,197 findings in 274 scenarios,
+      - _Labels extra on the compiled path._ 14,243 findings in 274 scenarios,
         of which 13,843 are the atom `TransformedBy` naming the compiled pattern
         at positions where today's path stores no flow atom (CFC question 5
-        below); the rest are `User` clauses (297) and other clauses.
-      - _Values._ 665 findings in 164 scenarios, among them the reads of the
+        below); the rest are `User` clauses (344) and other clauses.
+      - _Values._ 666 findings in 163 scenarios, among them the reads of the
         principal that set the piece up, time-dependent values
         (`examples/reactive-now`, `apps/reward-spinner`), and a view value of
         the space whose value differs by form (`crossrefIndex.source` is `{}` on
@@ -28667,12 +28667,19 @@ its provisional decisions from P520.
         (reading 'length')", one current and three over all revisions), and
         `dev/test/silent-computed-crash.tsx`, whose crash today's path stores as
         no error state.
-      - _Not stable between runs._ Of the scenarios that ran in both full runs
-        of the round, the counts of 13 differ between the runs with the same
-        code: the crossed clauses of `examples/profile-group-chat`,
-        `shared-profile-demo` and `profile-roster-live-demo` appear in one run
-        and not the other, and the Topics scenario's foreign clauses were 430
-        and 223.
+      - _Not stable between runs._ The last two full runs differ in the harness
+        only in how the message of a refused commit is read, and the counts of 9
+        scenarios differ between them: the Topics scenario's foreign clauses
+        were 223 and 449 and its crossed clauses 76 and 160; crossed clauses of
+        `examples/fair-share/main.tsx` and `shared-profile-roster/main.tsx`
+        appear in one run and not the other (in the run before, those of
+        `profile-group-chat`, `shared-profile-demo` and
+        `profile-roster-live-demo` did); and in the scenario of an instance a
+        handler makes, today's path gave each principal its card in one run and
+        refused both principals in the other. Values that follow the clock
+        (`examples/reactive-now`, `apps/contacts/contact-book.tsx`) differ as
+        well. The derivations for two principals are not deterministic in what
+        they store, on either path.
 
 1151. **The gate (P520 to P527).** `compare/both-paths.ts` is now the command of
       the gate; the harness of note 900, one principal with no serving loop,
@@ -28848,6 +28855,26 @@ its provisional decisions from P520.
       policy atoms of a module policy differ in form as well and are not
       covered); the scenarios' stability across runs beyond the two full runs of
       the round.
+
+1155. **The command and its figures.** From the repository root, after
+      `cargo build --release` in `base/pattern-compiler`:
+      `deno run -A --no-check base/pattern-compiler/compare/both-paths.ts <results.jsonl>`
+      (`--sets=hand,named,corpus`, `--only=<part of a name>`,
+      `--ledger=<file>`). The package has no `deno.jsonc` and so no task. A full
+      run took 5 minutes 3 seconds and 5 minutes 59 seconds on an Apple M5 Max
+      with the load of other sessions, and 9 minutes 4 seconds beside the
+      repository's type check and test runs; the crate's `emit --corpus` that
+      lists the corpus is part of it. At the round's code head: 419 scenarios
+      (32 hand-written, 9 named, 378 of the corpus), 276 ran, 0 equal, 276
+      differing, 143 skipped (69 export no pattern, 31 request an effect, 39 the
+      serving runtime did not run compiled, 35 of them because the serving
+      compiler refused a program the corpus emit accepted, 4 have no value
+      code). Unexplained findings by kind: `label-extra` 14,243 in 274
+      scenarios, `label-missing` 1,220 in 47, `value` 666 in 163,
+      `foreign-clause` 600 in 5, `crossed-clause` 196 in 2, `hidden` 123 in 25,
+      `policy` 63 in 25, `commit` 23 in 17, `message` 11 in 8, `foreign-value` 4
+      in 1, `error-state` 4 in 4, `read-failed` 2 in 1; 86 findings accepted by
+      the ledger's one entry. Exit status 1.
 
 ### CFC questions deferred, round thirty-one
 
