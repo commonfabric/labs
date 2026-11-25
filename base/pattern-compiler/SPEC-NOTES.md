@@ -28309,6 +28309,13 @@ where they differ.
         not from `TOPIC_UPGRADE_SCHEMA`; the integration test
         `collection-naming-concurrency.test.ts`, type-checked only.
 
+1109. **The Topics harness, again.** With the board's own program accepted,
+      `rewrite.patch` is removed and `compare/topics/tree.ts` copies the seven
+      files as they are; the copy passes the check (exit 0). The Topics
+      harness's arms still compile the boards of the measurement branch, which
+      this worktree does not hold, so no Topics figure was taken in this round,
+      and note 1086's figures were not compared.
+
 ### CFC questions deferred, round twenty-eight, continued
 
 3. Note 1107: a request operand that named an element in place by its key is
