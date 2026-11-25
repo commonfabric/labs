@@ -275,9 +275,8 @@ const onPhotoCaptured = handler<
 ### Extraction
 
 Reuse the idiom of the `generateObject` call in
-`patterns/apps/store-mapper/main.tsx`, whose
-`prompt` is a content-parts array mixing image + text, with an explicit JSON
-`schema`:
+`patterns/apps/store-mapper/main.tsx`, whose `prompt` is a content-parts array
+mixing image + text, with an explicit JSON `schema`:
 
 ```ts
 const extraction = generateObject<PlateExtraction>({

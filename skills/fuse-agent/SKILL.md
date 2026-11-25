@@ -206,9 +206,9 @@ lift/computed or at pattern-body level rather than inside a handler.
 
 ## Activity Log Pattern
 
-The Activity Log (`patterns/apps/activity-log/main.tsx`) is a structured
-event stream for recording agent actions. Log events incrementally as you work —
-not in one batch at the end.
+The Activity Log (`patterns/apps/activity-log/main.tsx`) is a structured event
+stream for recording agent actions. Log events incrementally as you work — not
+in one batch at the end.
 
 **Calling `logEvent.handler`:**
 

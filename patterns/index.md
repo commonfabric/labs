@@ -109,14 +109,13 @@ Capability and app demos, each a single file: `apps/annotation/annotation.tsx`,
 `showcase/dice/dice-handlers.ts`),
 `examples/group-chat-lobby/group-chat-lobby.tsx`,
 `examples/group-chat-room/group-chat-room.tsx`, `examples/image/image.tsx`,
-`apps/image-analysis/main.tsx`,
-`examples/link-preview/link-preview.tsx`, `examples/map-demo/map-demo.tsx`,
+`apps/image-analysis/main.tsx`, `examples/link-preview/link-preview.tsx`,
+`examples/map-demo/map-demo.tsx`,
 `examples/mobile-app-demo/mobile-app-demo.tsx`,
 `examples/pattern-index/pattern-index.tsx`,
 `examples/profile-roster-live-demo/profile-roster-live-demo.tsx` (demo: live
 multi-user profile roster — every participant's cross-space profile badge),
-`system/self/self.tsx`,
-`apps/self-improving-classifier/main.tsx`,
+`system/self/self.tsx`, `apps/self-improving-classifier/main.tsx`,
 `apps/shopping-list/main.tsx`, `apps/store-mapper/main.tsx`,
 `examples/text-swapper/text-swapper.tsx`.
 
@@ -1131,13 +1130,13 @@ interface AssumptionSurfacerOutput {
 
 Ask a language model about something personal without sending it anything
 personal. Names, emails, phone numbers, SSNs, card numbers and addresses in a
-draft, from the embedded PII vault (`apps/redactor/main.tsx`) or found by format, are swapped
-for realistic stand-ins; only that redacted draft may be sent to the model, and
-the reply comes back with the originals restored for the owner. CFC enforces the
-boundary: the draft and vault are `Confidential` under `policy.tsx`, whose one
-exchange rule releases only what the `redactDraft` lift computes, and the
-model's prompt is a `MaxConfidentiality` store. See the README's CFC design and
-CFC debt sections.
+draft, from the embedded PII vault (`apps/redactor/main.tsx`) or found by
+format, are swapped for realistic stand-ins; only that redacted draft may be
+sent to the model, and the reply comes back with the originals restored for the
+owner. CFC enforces the boundary: the draft and vault are `Confidential` under
+`policy.tsx`, whose one exchange rule releases only what the `redactDraft` lift
+computes, and the model's prompt is a `MaxConfidentiality` store. See the
+README's CFC design and CFC debt sections.
 
 **Keywords:** privacy, PII, redaction, pseudonymization, llm, CFC, exchangeRule,
 TransformedBy, MaxConfidentiality
