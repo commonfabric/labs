@@ -22,4 +22,13 @@ describe("skip-list", () => {
       expect(parseSkipList(text)).toBeUndefined();
     }
   });
+
+  it("keeps a file named `__proto__` as a file of its own", () => {
+    const skips = parseSkipList('{"__proto__": ["leaf"], "a.test.ts": []}');
+    expect(skips === undefined ? [] : Object.entries(skips)).toEqual([
+      ["__proto__", ["leaf"]],
+      ["a.test.ts", []],
+    ]);
+    expect(Object.getPrototypeOf(skips)).toBe(Object.prototype);
+  });
 });

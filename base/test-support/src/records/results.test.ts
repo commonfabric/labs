@@ -64,6 +64,7 @@ describe("results", () => {
           JSON.stringify({ ...result(["a"], "pass", 1), file: "../out.ts" }),
           JSON.stringify({ ...result(["a"], "pass", 1), name: [] }),
           JSON.stringify({ ...result(["a"], "pass", 1), name: [1] }),
+          JSON.stringify({ ...result(["a"], "pass", 1), name: ["a > b"] }),
           JSON.stringify({ ...result(["a"], "pass", 1), outcome: "ok" }),
           JSON.stringify({ ...result(["a"], "pass", 1), durationMs: -1 }),
           JSON.stringify({ ...result(["a"], "pass", 1), container: false }),

@@ -97,6 +97,7 @@ export {
   ResultsWriter,
 } from "./results.ts";
 export type {
+  Outcome,
   ReadResultsOptions,
   RegisteredLine,
   ResultLine,

@@ -891,7 +891,7 @@ document](waiting-in-tests-rationale.md#the-runner-clock-retired-exemptions-and-
 works that retry loop through in full.
 
 A suite whose round trips cross a real socket, such as a standalone memory
-server reached over a websocket, belongs on that list too. The pump cannot see
+server reached over a websocket, calls `useRealClock()` too. The pump cannot see
 I/O in flight, so a wait on a reply reads as an idle loop, and logical time
 jumps to the earliest pending production timer. Over an authenticated
 connection that timer is the memory client's lease renewal, 58 minutes out.
@@ -900,10 +900,10 @@ The server reads the same clock and gives a challenge five minutes, so a
 expired. The shared-connection cases of the storage admission-notice suite are
 that shape.
 
-Other entries have been retired from that list as the deadlines and test
+Other files have stopped calling `useRealClock()` as the deadlines and test
 designs behind them were fixed. [The rationale
 document](waiting-in-tests-rationale.md#the-runner-clock-retired-exemptions-and-converted-waits)
-records what each hang turned out to be; read it before adding a new entry,
+records what each hang turned out to be; read it before adding a new call,
 because every retired one looked like it needed the real clock and did not.
 
 The `test/` versus `src/` classification reads the scheduling frame from a

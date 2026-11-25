@@ -168,10 +168,15 @@ export class ResultsWriter {
   }
 }
 
-/** Whether a value is a list of names a line can carry. */
+/**
+ * Whether a value is a list of names a line can carry. No name holds the
+ * separator, which would make two lists one identity once joined.
+ */
 function isNames(value: unknown): value is string[] {
   return Array.isArray(value) && value.length > 0 &&
-    value.every((name) => typeof name === "string");
+    value.every((name) =>
+      typeof name === "string" && !name.includes(NAME_SEPARATOR)
+    );
 }
 
 /**

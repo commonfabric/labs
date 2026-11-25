@@ -427,16 +427,16 @@ what the topology declares and ship its records. A suite whose runner is
 `deno test` declares, in each invocation its `command()` returns, the kind and
 scope its tests' results are recorded as (`Invocation.results`).
 
-A test file registers its tests through `@commonfabric/test-support/test`,
-which does what recording needs of a test process. It reads the skip list, it
-writes each test's result into the spool as the test finishes, and it names
-each test's file: the test file its realm runs, which Deno makes
-`Deno.mainModule` whichever module made the call. So a file that registers
-its cases through a shared module, such as `defineFixtureSuite`, is the file
-its records carry and the file its skip list is keyed by, which is the path
-the command named and the one a topology suite knows as its unit. The
-`cf-test/registration` lint rule reports a test registered any other way,
-since a lane could neither skip nor record it.
+A test file registers its tests through `@commonfabric/test-support/test`, which
+does what recording needs of a test process. It reads the skip list, it writes
+each test's result into the spool as the test finishes, and it names each test's
+file: the test file its realm runs, which Deno exposes as `Deno.mainModule`
+whichever module registers the test. So a file that registers its cases through
+a shared module, such as `defineFixtureSuite`, is the file its records carry and
+the file its skip list is keyed by, which is the path the command named and the
+one a topology suite knows as its unit. The `cf-test/registration` lint rule
+reports a test registered any other way, since a lane could neither skip nor
+record it.
 
 Recording needs permissions. Reading `CF_TEST_RECORDS_DIR` and
 `CF_TEST_SKIP_LIST` needs `--allow-env`, and that one the test task grants:

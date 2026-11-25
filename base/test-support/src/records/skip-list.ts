@@ -37,7 +37,7 @@ export function parseSkipList(text: string): SkipList | undefined {
     return undefined;
   }
   if (!isObjectNotArray(parsed)) return undefined;
-  const skips: SkipList = {};
+  const entries: [string, string[]][] = [];
   for (const [file, names] of Object.entries(parsed)) {
     if (!Array.isArray(names)) return undefined;
     const strings: string[] = [];
@@ -45,7 +45,8 @@ export function parseSkipList(text: string): SkipList | undefined {
       if (typeof name !== "string") return undefined;
       strings.push(name);
     }
-    skips[file] = strings;
+    entries.push([file, strings]);
   }
-  return skips;
+  // Each file is an own property, whatever it is named, `__proto__` too.
+  return Object.fromEntries(entries);
 }
