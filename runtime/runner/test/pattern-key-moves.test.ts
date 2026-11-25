@@ -76,6 +76,13 @@ describe("pattern-key-moves", () => {
       expect(cyclic.current("a.tsx")).toBe("b.tsx");
       expect(cyclic.formers("a.tsx")).toEqual(["b.tsx"]);
     });
+
+    it("returns from a cycle through directories that lengthens the key on every pass", () => {
+      const cyclic = patternKeyMovesIn({ "a/": "b/", "b/": "a/sub/" });
+
+      expect(cyclic.current("a/x.tsx")).toBe("a/sub/x.tsx");
+      expect(cyclic.formers("a/sub/x.tsx")).toEqual(["b/x.tsx", "a/x.tsx"]);
+    });
   });
 
   describe("currentPatternKey()", () => {

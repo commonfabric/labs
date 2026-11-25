@@ -9,13 +9,14 @@
  *
  * The rule reads only the argument schema, in the shapes the pattern compiler
  * emits: an object schema whose `required` names its inputs, with a default on
- * the input's own schema, on the `$defs` entry its `$ref` names, or in the
+ * the input's own schema, on a `$defs` entry its `$ref` leads to, or in the
  * object's own `default`. A required input declared in any other way, such as
  * inside an `allOf`, counts as having no default. An input a host fills in,
  * such as the browser's loom id, is declared optional by its author; nothing
  * in the schema says who fills an input in.
  */
 
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { JSONSchema } from "@commonfabric/runner";
 
 /**
@@ -27,10 +28,7 @@ export function inputsNeededToRun(argumentSchema: JSONSchema): string[] {
   const root = resolved(argumentSchema, argumentSchema);
   if (typeof root !== "object" || root === null) return [];
   const properties = root.properties ?? {};
-  const defaults = typeof root.default === "object" && root.default !== null &&
-      !Array.isArray(root.default)
-    ? root.default as Record<string, unknown>
-    : {};
+  const defaults = isObjectNotArray(root.default) ? root.default : {};
   return (root.required ?? []).filter((name) => {
     if (Object.hasOwn(defaults, name)) return false;
     const property = resolved(properties[name], argumentSchema);
@@ -40,23 +38,42 @@ export function inputsNeededToRun(argumentSchema: JSONSchema): string[] {
 }
 
 /**
- * `schema` with a `$ref` into the root's `$defs` replaced by what it names,
- * keeping what sits beside the `$ref`, so a default on either side counts. A
- * `$ref` that names nothing in the root is left as it is.
+ * `schema` with each `$ref` into the root's `$defs` replaced by what it names,
+ * following a `$ref` the named schema holds in turn, and keeping what sits
+ * beside each `$ref`, so a default on any of them counts; the nearer schema
+ * wins where two set the same keyword. A `$ref` that names nothing in the
+ * root, or one already followed, is left as it is.
  */
 function resolved(
   schema: JSONSchema | undefined,
   root: JSONSchema,
 ): JSONSchema | undefined {
-  if (typeof schema !== "object" || schema === null) return schema;
-  const ref = schema.$ref;
-  const prefix = "#/$defs/";
-  if (typeof ref !== "string" || !ref.startsWith(prefix)) return schema;
   const defs = typeof root === "object" && root !== null
     ? root.$defs
     : undefined;
-  const target = defs?.[ref.slice(prefix.length)];
-  if (typeof target !== "object" || target === null) return schema;
-  const { $ref: _ref, ...beside } = schema;
-  return { ...target, ...beside };
+  const followed = new Set<string>();
+  let current = schema;
+  while (typeof current === "object" && current !== null) {
+    const ref = current.$ref;
+    if (typeof ref !== "string" || followed.has(ref)) return current;
+    const name = definitionNamed(ref);
+    const target = name === undefined ? undefined : defs?.[name];
+    if (typeof target !== "object" || target === null) return current;
+    followed.add(ref);
+    const { $ref: _ref, ...beside } = current;
+    current = { ...target, ...beside };
+  }
+  return current;
+}
+
+/**
+ * The `$defs` name a `$ref` of the form `#/$defs/<name>` points to, with the
+ * JSON Pointer escapes `~1` and `~0` decoded; undefined for any other `$ref`.
+ */
+function definitionNamed(ref: string): string | undefined {
+  const prefix = "#/$defs/";
+  if (!ref.startsWith(prefix)) return undefined;
+  const token = ref.slice(prefix.length);
+  if (token.includes("/")) return undefined;
+  return token.replaceAll("~1", "/").replaceAll("~0", "~");
 }

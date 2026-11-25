@@ -289,25 +289,43 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "workbench/": "product/workbench/",
 };
 
-/** The entry of `moves` whose key names `key` or a directory holding it. */
+/**
+ * The index of the entry of `moves` whose key names `key` or a directory
+ * holding it; -1 when none does.
+ */
+function entryMoving(
+  key: string,
+  moves: readonly (readonly [string, string])[],
+): number {
+  return moves.findIndex(([from]) =>
+    key === from || (from.endsWith("/") && key.startsWith(from))
+  );
+}
+
+/** `key` as the entry of `moves` that names it moves it. */
 function movedBy(
   key: string,
   moves: readonly (readonly [string, string])[],
 ): string {
-  for (const [from, to] of moves) {
-    if (key === from) return to;
-    if (from.endsWith("/") && key.startsWith(from)) {
-      return to + key.slice(from.length);
-    }
-  }
-  return key;
+  const entry = entryMoving(key, moves);
+  return entry < 0 ? key : movedByEntry(key, moves[entry]);
+}
+
+/** `key` as `[from, to]`, an entry naming it, moves it. */
+function movedByEntry(
+  key: string,
+  [from, to]: readonly [string, string],
+): string {
+  return from.endsWith("/") ? to + key.slice(from.length) : to;
 }
 
 /**
  * The keys `key` passes through as `moves` is applied to it again and again,
  * nearest first, until a key `moves` leaves unchanged; none when `moves`
- * leaves `key` itself unchanged. The walk stops at a key it already reached,
- * so a cycle in a table ends it instead of hanging it.
+ * leaves `key` itself unchanged. A pattern's moves apply each entry at most
+ * once, so the walk stops at a key it already reached or at an entry it
+ * already applied: a cycle in a table ends it instead of hanging it, including
+ * one through directory entries that reaches a longer key on every pass.
  */
 function movesFrom(
   key: string,
@@ -315,15 +333,17 @@ function movesFrom(
 ): string[] {
   const keys: string[] = [];
   const seen = new Set([key]);
-  for (
-    let next = movedBy(key, moves);
-    !seen.has(next);
-    next = movedBy(next, moves)
-  ) {
+  const applied = new Set<number>();
+  for (let at = key;;) {
+    const entry = entryMoving(at, moves);
+    if (entry < 0 || applied.has(entry)) return keys;
+    applied.add(entry);
+    const next = movedByEntry(at, moves[entry]);
+    if (seen.has(next)) return keys;
     seen.add(next);
     keys.push(next);
+    at = next;
   }
-  return keys;
 }
 
 /** The lookups a table of moves answers. */

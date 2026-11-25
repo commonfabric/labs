@@ -78,5 +78,42 @@ describe("standalone", () => {
         },
       })).toEqual(["ids"]);
     });
+
+    it("reads through a `$ref` to a definition that is itself a `$ref`", () => {
+      expect(inputsNeededToRun({
+        $ref: "#/$defs/Alias",
+        $defs: {
+          Alias: { $ref: "#/$defs/Input" },
+          Input: {
+            type: "object",
+            properties: {
+              ids: { type: "array" },
+              clock: { $ref: "#/$defs/Clock" },
+            },
+            required: ["ids", "clock"],
+          },
+          Clock: { $ref: "#/$defs/Zero" },
+          Zero: { type: "number", default: 0 },
+        },
+      })).toEqual(["ids"]);
+    });
+
+    it("returns from `$ref`s that name each other instead of hanging", () => {
+      expect(inputsNeededToRun({
+        type: "object",
+        $defs: { A: { $ref: "#/$defs/B" }, B: { $ref: "#/$defs/A" } },
+        properties: { loop: { $ref: "#/$defs/A" } },
+        required: ["loop"],
+      })).toEqual(["loop"]);
+    });
+
+    it("reads a definition whose name the `$ref` escapes as a JSON Pointer", () => {
+      expect(inputsNeededToRun({
+        type: "object",
+        $defs: { "Input/Value~1": { type: "number", default: 0 } },
+        properties: { value: { $ref: "#/$defs/Input~1Value~01" } },
+        required: ["value"],
+      })).toEqual([]);
+    });
   });
 });

@@ -10,6 +10,11 @@
  * new pattern with no structural check at all, so nothing but CI stands between
  * an incompatible schema and every running piece. See `pattern-compat-lib.ts`.
  *
+ * It also holds each `main.tsx` under `patterns/` to the standalone floor: a
+ * `main.tsx` entry is offered to people to place alone, so one that requires
+ * an input with no default fails, unless `PENDING_STANDALONE_RENAMES` names it
+ * as an entry still waiting to be renamed out of `main.tsx`.
+ *
  *   deno task pattern-compat             # check (what CI runs)
  *   deno task pattern-compat --update    # record contracts that have no baseline
  *   deno task pattern-compat --only home # restrict to matching paths
