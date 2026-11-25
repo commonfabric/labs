@@ -17,6 +17,7 @@ import {
   setMockResponseGate,
 } from "@commonfabric/llm";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 
 import { ExecutorHost } from "../src/executor/host.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -39,11 +40,22 @@ type Outcome = {
   /** What a fresh client loads for the same key. */
   fresh: unknown;
 
-  /** The running client's speculations still standing in the space. */
+  /** The running client's speculations still standing in the space, once
+   * none is left or, when `awaitRetirement` is off, as the answer lands. */
   standing: number;
 };
 
-async function runLateAnswer(): Promise<Outcome> {
+/**
+ * Runs the piece on a client, has the serving runtime answer the model call
+ * only after the client's runs have settled, and waits for the store and the
+ * client's replica to hold the value the served computed derived from it.
+ * With `awaitRetirement`, also waits for the client's speculations to retire,
+ * which they never do while one of them waits for a document the served run
+ * does not write.
+ */
+async function runLateAnswer(
+  { awaitRetirement }: { awaitRetirement: boolean },
+): Promise<Outcome> {
   const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
   const managers = new Map<Runtime, EmulatedStorageManager>();
   let host: ExecutorHost | undefined;
@@ -163,6 +175,15 @@ export default pattern<{ topic: string }, { "[SUGGESTIONS]": any }>(
         confirmed >= head;
     });
     await client.idle();
+    if (awaitRetirement) {
+      // Sleeps on the entries' own settlement: an entry that waits for a
+      // document the served run never writes keeps it asleep until the net
+      // fails the wait.
+      await withStuckNet(
+        client.speculationOverlay!.waitForSpaceQuiescence(space),
+        "the running client's speculations retiring",
+      );
+    }
 
     const fresh = openClient().getCellFromLink(
       suggestions.getAsNormalizedFullLink(),
@@ -189,14 +210,16 @@ export default pattern<{ topic: string }, { "[SUGGESTIONS]": any }>(
 
 describe("served-late-answer-watching-client", () => {
   it("shows a client running the piece the value derived from a late served answer", async () => {
-    const { running, fresh } = await runLateAnswer();
+    const { running, fresh } = await runLateAnswer({
+      awaitRetirement: false,
+    });
 
     expect(fresh).toEqual([ROW]);
     expect(running).toEqual([ROW]);
   });
 
-  it("leaves none of the running client's speculations standing once the late answer is served", async () => {
-    const { fresh, standing } = await runLateAnswer();
+  it("retires every one of the running client's speculations once the late answer is served", async () => {
+    const { fresh, standing } = await runLateAnswer({ awaitRetirement: true });
 
     expect(fresh).toEqual([ROW]);
     expect(standing).toBe(0);
