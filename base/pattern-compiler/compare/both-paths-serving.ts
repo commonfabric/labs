@@ -307,10 +307,19 @@ export const programsOf = async (
   return programs;
 };
 
-/** The first line of a message, at most 300 characters. */
-const firstLine = (error: unknown): string =>
-  (error instanceof Error ? `${error.name}: ${error.message}` : String(error))
-    .split("\n")[0].slice(0, 300);
+/**
+ * The first line of the message of `error`, at most 300 characters. A
+ * commit's error is a record with a name and a message, and not always an
+ * `Error`.
+ */
+const firstLine = (error: unknown): string => {
+  const named = error as { name?: unknown; message?: unknown } | undefined;
+  const text = error instanceof Error ||
+      (typeof named?.message === "string")
+    ? `${String(named!.name ?? "Error")}: ${String(named!.message)}`
+    : String(error);
+  return text.split("\n")[0].slice(0, 300);
+};
 
 /** Whether `value` is a link a host read holds in the place of a cell. */
 const linkIn = (value: unknown) => {
