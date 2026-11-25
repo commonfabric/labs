@@ -25,7 +25,7 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
 | `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The merged branch at `5db1c2658d`: every branch of the build, and the two executor fixes of round twenty (P453) | #10183, stacked on #10140 |
 | `merge-attempt/serving-m6` | none | The merge of the serving branch, at `31d73441f8`; the merged branch was fast-forwarded to it | none |
-| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-four, and the four link-following commits of `claude/fabrichat-row-rights-68447f` (P470, P471), and rounds twenty-five to twenty-seven, at `e157bd950b`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461), the store step of a result (P462 to P464); cut from the merged branch at `5db1c2658d`; and round twenty-eight at `9b0d83a3d0`: the real Topics board and the modules it imports declared to the compiler's check (Z98, P484), an event a body sends stored as a write (P482), `cellFromUrl` for compiled pieces (P483); and round twenty-nine at `dcaad56391`: a client's scoped writes read by a served handler (P490), the stream-events sidecar per Z99, a first append stored as an array (P489), verbs, schema metadata and receipts of instances a body makes (P486 to P488) | none (local) |
+| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-four, and the four link-following commits of `claude/fabrichat-row-rights-68447f` (P470, P471), and rounds twenty-five to twenty-seven, at `e157bd950b`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461), the store step of a result (P462 to P464); cut from the merged branch at `5db1c2658d`; and round twenty-eight at `9b0d83a3d0`: the real Topics board and the modules it imports declared to the compiler's check (Z98, P484), an event a body sends stored as a write (P482), `cellFromUrl` for compiled pieces (P483); and round twenty-nine at `dcaad56391`: a client's scoped writes read by a served handler (P490), the stream-events sidecar per Z99, a first append stored as an array (P489), verbs, schema metadata and receipts of instances a body makes (P486 to P488); and round thirty at `860154a073` (P491 to P494) | none (pushed) |
 | `claude/fabrichat-row-rights-68447f` | `fabrichat-row-rights-68447f` | The FabriChat room, real and copy, whose message rows derive their own controls; the two executor fixes of round twenty, carried onto the merged branch | none (local) |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
@@ -608,6 +608,96 @@ Findings, the coordinator's confirmation said for each. None is fixed.
   it on they fail by the defect #10204 fixes, which the branch lacks. The
   upgrade handles of `topic.tsx` now declare stored authors as complete, so
   the type checker sees the guards for partial legacy data as unneeded.
+
+## Rounds thirty and thirty-one, and what their reviews found
+
+The build branch `claude/compiled-pattern-scoped-rows` is pushed at
+`860154a073` (round thirty), with no pull request. The comparison is on
+`claude/compiled-pattern-two-principal-gate` (worktree
+`compiled-pattern-two-principal-gate`, local, cut from `dcaad56391`), where
+round thirty-two repairs it. An investigation of today's path is on
+`claude/served-two-principal-clause-crossing` (worktree of the same name,
+local, cut from `main` at `f51440a49c`). Next numbers: notes from 1125 on
+the build branch and from 1160 on the gate branch, provisional decisions
+from P495 and from P530.
+
+**Round thirty** (`860154a073`, notes 1119 to 1124, P491 to P494). The
+coordinator reran the gates (239 in compare and exec, 71 of 71 in
+`test/compiled/` on both storages, 71 in the CFC tests,
+`check-cfc-correspondence` and `deno task check` at 0) and walked the real
+board on the 8300 servers with two CLI identities, one that holds a session
+and one that creates; no browser was at hand. Three topics are created, the
+mentions commit, the board's `crossrefs` list both sources for topic 1, and
+no topic's result document is among the documents of the space that gained
+a `User` clause; 34 internal documents did (basis parts, the minted
+document, and 20 not identified), each with the clause of the identity that
+only held a session. Error states: 0.
+
+- The round found three ways one session's run put its principal's clause
+  into shared documents and closed each: a position of a space document
+  that holds a link to a scoped place takes a record with no label (P491);
+  a made instance's result is an empty record from the handler's
+  transaction, so its root no longer takes the first derivation's join
+  (P492); the basis affirms unconfirmed documents with a read that adds no
+  flow label (P493). All three store less label. A body that returns
+  unchanged an element reached through a link stores the link (P494).
+- The round found no value of another principal in a document the creator
+  reads, on a copy of the 8300 store. Nothing the creator's click wrote
+  carried a `User` clause, so an over-labeled event input does not explain
+  the hidden topic; today's path was not traced for the same click.
+- The reviewer's findings. The cause stands: a run for one session derives
+  the space's part and the session's part in one transaction, so every
+  write under no record takes that session's clauses; the round removed
+  three written positions from that. P493 has no test (`hidden-made.test.ts`
+  passes without it). That test walks the executor's own documents only, so
+  it cannot see the internal documents, and it never asserts what the
+  second principal reads. P491 as coded also strips the label of a link a
+  body chose from data by a labeled value (suspected, not run); it should
+  apply to the output's own scoped place only. P494 runs `store.locate`
+  once per element for every body with a `*` entry and no handle; no figure
+  was taken. The reviewer agrees with the classifications of P492 and P493
+  and with P491 once narrowed.
+- Open, a wrong value: `items.map((item) => ({ ...item, done: true }))`
+  over an array of references stores `[{done: true}, …]` on the executor;
+  every other member is lost. Older than the round; the crate's footprint
+  reads a spread as the identity of its argument (`footprint.rs`,
+  `SpreadProperty`).
+- Open: a second principal is not served a made instance's scoped place;
+  piped event input to `cf piece call` arrives `undefined` on the compiled
+  path; FabriChat with two members was not run.
+
+**Round thirty-one** (`c48a43267a`, notes 1150 to 1155, P520 to P527)
+extends `compare/both-paths.ts` to run each scenario on both paths under a
+serving loop with two principals under differing clauses: 32 hand-written
+runs, 9 named scenarios, 378 corpus modules. At `dcaad56391`, 276 ran, none
+was equal and 143 were skipped. Its reviewer's reading of what can be
+relied on:
+
+- Reliable: the compiled path commits writes today's path refuses (23
+  findings in 17 scenarios; reproduced by the reviewer on
+  `cfc-trusted-write/main`), because a piece set up through
+  `setUpCompiledPiece`, the route `cf piece new` takes, stores no write
+  policy at its argument; the earlier "12 of 14 equal" was taken on a route
+  no deployment uses. Error states in 4 modules on the compiled path. The
+  existence of foreign and crossed clauses on the compiled path, the Topics
+  board among them.
+- Not reliable: every count that involves a scoped value, and the value
+  differences. Today's path is not a stable reference there: in one run of
+  four of the scenario "instance a handler makes" it stored both
+  principals' `User` clauses in each principal's instance and refused both
+  the cards, a difference in what is stored after quiescence. The
+  investigation on `claude/served-two-principal-clause-crossing` is about
+  that. The harness also reads before the demand its reads cause has
+  settled, compares clauses as debug strings, pools the documents no walk
+  reaches, searches for known strings as its check of one principal's value
+  reaching another, and exits 0 when no scenario matched.
+- For the owner to rule on: 13,843 `TransformedBy` flow atoms of the kind
+  `compiled` at positions where today's path stores no flow atom, and 500
+  atoms of today's path with no compiled counterpart. They are integrity
+  atoms and their placement differs, not only their identity.
+- 35 corpus modules that `emit --corpus` accepts are refused by the serving
+  compiler, which compiles the whole program; the corpus acceptance figures
+  taken per module overstate what a server runs.
 
 ## Open lines of work
 
