@@ -730,6 +730,12 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #streams = new Map<string, StreamOfExecutor>();
   /** The stream entities the transaction in progress wrote first. */
   #createdStreams: string[] = [];
+
+  /**
+   * The markers of streams that the change in progress wrote, each with its
+   * stream, for the records `#recordsOfMarkers` gives them.
+   */
+  #markersMade: { entity: URI; stream: StreamOfExecutor }[] = [];
   readonly #onStream:
     | ((entity: URI, stream: StreamOfExecutor) => void)
     | undefined;
@@ -2304,6 +2310,13 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#store = store;
     if (path.length === 0 && this.#heldWhole.delete(doc)) return;
     this.#listsWritten = [];
+    this.#markersMade = [];
+    // The records of the arrays of rows the change wrote, which give the
+    // markers of streams it wrote their records (`#recordsOfMarkers`).
+    const memberships = writes?.filter((record) =>
+      record.target.doc === doc &&
+      (record.membersChanged === true || record.membersAppended === true)
+    ) ?? [];
     this.#counts.writes += 1;
     this.#stagedState += 1;
     // What a derivation writes is derived. What a handler, the creation
@@ -2625,8 +2638,9 @@ export class RuntimeTransactions implements TransactionHooks {
           target.doc === doc && isPrefix(target.path, at)
         )
       );
-      if (ofBuckets.length > 0 || ofLists.length > 0) {
-        writes = [...given, ...ofBuckets, ...ofLists];
+      const ofMarkers = this.#recordsOfMarkers(doc, path, store, memberships);
+      if (ofBuckets.length > 0 || ofLists.length > 0 || ofMarkers.length > 0) {
+        writes = [...given, ...ofBuckets, ...ofLists, ...ofMarkers];
       }
     }
     if (
@@ -2853,6 +2867,61 @@ export class RuntimeTransactions implements TransactionHooks {
         ...plain
       } = record;
       records.push({ ...plain, target: { doc, path: [] } });
+    }
+    return records;
+  }
+
+  /**
+   * The records of the markers of streams that the change of `path` of `doc`
+   * wrote (`#markersMade`). A marker says that its stream exists, and the
+   * stream of a binding in an element body exists while the collection has
+   * the element, so the marker of a stream with element keys has the record
+   * of the membership of each collection that holds its row: the record
+   * the change gave the array that holds the row, at the array
+   * (`membersChanged`, `membersAppended`; `arrays`). That is the label a
+   * record of
+   * what the marker depends on gives it (ruling Z96;
+   * `plan-and-label-templates.md` §2.6, "A row of the stream index"), where
+   * the marker would otherwise take the join of what the transaction read.
+   * A marker of a stream with no element key, or of a row whose array the
+   * change gives no record, is left with that join.
+   */
+  #recordsOfMarkers(
+    doc: string,
+    path: readonly string[],
+    store: Store,
+    arrays: readonly PlanWrite[],
+  ): PlanWrite[] {
+    const made = this.#markersMade.splice(0).filter(({ stream }) =>
+      stream.keys.length > 0
+    );
+    if (made.length === 0 || arrays.length === 0) return [];
+    const paths = streamPaths(
+      store.peek(doc, path),
+      new Set(made.map(({ stream }) => stream)),
+    );
+    const records: PlanWrite[] = [];
+    for (const { entity, stream } of made) {
+      const below = paths.get(stream);
+      if (below === undefined) continue;
+      const at = [...path, ...below];
+      for (const record of arrays) {
+        if (
+          record.target.path.length >= at.length ||
+          !isPrefix(record.target.path, at)
+        ) continue;
+        const {
+          enumeration: _enumeration,
+          removes: _removes,
+          moves: _moves,
+          start: _start,
+          relabel: _relabel,
+          membersChanged: _changed,
+          membersAppended: _appended,
+          ...plain
+        } = record;
+        records.push({ ...plain, target: { doc: entity, path: [] } });
+      }
     }
     return records;
   }
@@ -4968,6 +5037,10 @@ export class RuntimeTransactions implements TransactionHooks {
         { space: this.#space, id: entity, path: [], scope: "space" },
         { $stream: true },
       );
+      this.#markersMade.push({ entity, stream });
+      // The marker's document is a store the instance owns, as the runner
+      // enrolls the cell of each stream of a piece (`pieceOwnedStores`).
+      this.#enroll(this.#open(), entity);
       this.#linkToResult(this.#open(), entity);
       this.#handleStream(entity, stream);
     }
@@ -5693,6 +5766,35 @@ const aboveLinks = (
 
 const samePath = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && a.every((segment, index) => segment === b[index]);
+
+/**
+ * The path below `value` of each stream of `wanted` that it holds, by the
+ * stream: the executor stores a stream as `{ $stream: <the stream> }`, and
+ * the stream is the object a marker was written for. A link is not followed.
+ */
+const streamPaths = (
+  value: unknown,
+  wanted: ReadonlySet<object>,
+): Map<object, string[]> => {
+  const found = new Map<object, string[]>();
+  const walk = (held: unknown, at: string[]): void => {
+    if (found.size === wanted.size) return;
+    if (typeof held !== "object" || held === null || isLink(held)) return;
+    if (isStream(held)) {
+      if (wanted.has(held.$stream)) found.set(held.$stream, at);
+      return;
+    }
+    if (Array.isArray(held)) {
+      held.forEach((member, index) => walk(member, [...at, `${index}`]));
+      return;
+    }
+    for (const [name, member] of Object.entries(held)) {
+      walk(member, [...at, name]);
+    }
+  };
+  walk(value, []);
+  return found;
+};
 
 const isPrefix = (prefix: readonly string[], path: readonly string[]) =>
   prefix.length <= path.length &&
