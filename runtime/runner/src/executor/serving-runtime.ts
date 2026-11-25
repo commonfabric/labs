@@ -25,6 +25,7 @@ import {
   type LoopbackPlane,
   LoopbackStorageManager,
 } from "./loopback-storage.ts";
+import type { RunBeacon } from "./run-beacon.ts";
 
 /**
  * The flags a serving runtime runs regardless of the flags it is otherwise
@@ -94,6 +95,12 @@ export type ServingRuntimeFactoryOptions = {
   moduleCompiler?: ModuleCompiler;
 
   /**
+   * The run beacon of the serving worker the factory's runtimes run in, which
+   * each runtime's scheduler marks for its space. Absent, they mark nothing.
+   */
+  runBeacon?: RunBeacon;
+
+  /**
    * Called with each serving runtime's storage manager before the runtime
    * that uses it is constructed, so a test can replace one of its providers'
    * methods. The returned function, if any, runs once the runtime, and with
@@ -156,6 +163,9 @@ export function servingRuntimeFactory(
       ...(options.moduleCompiler === undefined
         ? {}
         : { moduleCompiler: options.moduleCompiler }),
+      ...(options.runBeacon === undefined
+        ? {}
+        : { runBeacon: options.runBeacon.forSpace(space) }),
     });
     return Promise.resolve({
       runtime,

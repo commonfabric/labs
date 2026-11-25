@@ -31,6 +31,14 @@ import {
   SpaceNotServedError,
   writesSpaceAcl,
 } from "./host.ts";
+import {
+  newRunBeaconBuffer,
+  readRunBeacon,
+  type RunBeaconReading,
+  type RunEvent,
+  runEventKey,
+  type RunIdentity,
+} from "./run-beacon.ts";
 import { ServingPortBridge } from "./serving-port-bridge.ts";
 import {
   assertServingThreadHeapLimit,
@@ -317,6 +325,26 @@ type PoolWorker = {
   /** The timer that watches this worker for silence. */
   watchdog: ReturnType<typeof setInterval> | undefined;
 
+  /** The worker's run beacon, which the watchdog reads (`run-beacon.ts`). */
+  beacon: SharedArrayBuffer;
+
+  /**
+   * What the numbers on the worker's beacon stand for, as the worker has
+   * posted them: each action it has run and its realm has not collected, and
+   * the last served handler's run for an event, which is the only such run
+   * the beacon can still show.
+   */
+  runs: Map<number, RunIdentity>;
+
+  /** The number of the last served handler's run for an event in `runs`. */
+  lastEventRun: number | undefined;
+
+  /**
+   * The run the watchdog's last check found holding the worker's thread, and
+   * how many checks in a row have found it.
+   */
+  live: { reading: RunBeaconReading; checks: number } | undefined;
+
   /** The spaces placed on this worker; none for a spare. */
   spaces: Set<string>;
 
@@ -419,7 +447,11 @@ type WaitingSpace = {
  *
  * A worker counts as failed when it reports an error it did not handle, when
  * its host cannot start, and when it stops sending messages (`#watch()`).
- * Only its own spaces are affected. Once it is gone and the leases it held
+ * Only its own spaces are affected. Each worker marks the run that holds its
+ * thread on a run beacon the pool reads without asking it (`run-beacon.ts`),
+ * and a worker the watchdog ends in a served handler's run has that run's
+ * event failed by the space's next worker rather than run again
+ * (`#onWorkerFailed()`). Once it is gone and the leases it held
  * are released, each of them is placed again if it still has something to
  * serve, after the backoff the host applies to a space whose tenures keep
  * failing, widening until a worker commits a wave for the space. Every
@@ -482,6 +514,18 @@ export class ServingWorkerPool {
    * one; its next placement clears it.
    */
   readonly #heapStopped = new Set<string>();
+
+  /**
+   * The events, by space and then by stream entry (`runEventKey()`), whose
+   * handler's run held the
+   * thread of a worker the pool ended, each with the reason its consequence
+   * states. Each is handed to the worker the space is placed on next
+   * (`#introduce()`), which writes the reason as the event's consequence.
+   */
+  readonly #failedEvents = new Map<
+    string,
+    Map<string, { event: RunEvent; reason: string }>
+  >();
 
   /** Teardowns of workers that failed or were closed, while they run. */
   readonly #teardowns = new Set<Promise<void>>();
@@ -666,6 +710,25 @@ export class ServingWorkerPool {
       parked,
       heapUsed,
       heapStopped: this.#heapStopped.size,
+      running: [...this.#workers].flatMap((worker) => {
+        if (worker.live === undefined) return [];
+        const { reading, checks } = worker.live;
+        const identity = worker.runs.get(reading.run);
+        return [{
+          spaces: [...worker.spaces],
+          ...(identity === undefined ? {} : {
+            space: identity.space,
+            action: identity.action,
+            ...(identity.name === undefined ? {} : { name: identity.name }),
+            ...(identity.piece === undefined ? {} : { piece: identity.piece }),
+            ...(identity.event === undefined
+              ? {}
+              : { eventId: identity.event.eventId }),
+          }),
+          checks,
+          reads: reading.reads,
+        }];
+      }),
       ...this.#counts,
     };
     return stats;
@@ -1066,6 +1129,14 @@ export class ServingWorkerPool {
   ): void {
     const { observer } = worker.bridge;
     for (const space of spaces) {
+      const failed = this.#failedEvents.get(space);
+      if (failed === undefined) continue;
+      this.#failedEvents.delete(space);
+      for (const { event, reason } of failed.values()) {
+        worker.bridge.failEvent(space as MemorySpace, event, reason);
+      }
+    }
+    for (const space of spaces) {
       for (const event of this.#options.server.sessionSnapshot(space)) {
         observer.sessionChanged(event);
       }
@@ -1124,6 +1195,10 @@ export class ServingWorkerPool {
         },
         onOccupancy: (occupancy) => this.#onOccupancy(started, occupancy),
         onHeartbeat: (heartbeat) => this.#onHeartbeat(started, heartbeat),
+        onRunNamed: (identity) => this.#onRunNamed(started, identity),
+        onRunsForgotten: (runs) => {
+          for (const run of runs) started.runs.delete(run);
+        },
         ...(this.#options.moduleCompiler === undefined
           ? {}
           : { moduleCompiler: this.#options.moduleCompiler }),
@@ -1140,6 +1215,10 @@ export class ServingWorkerPool {
       gone: false,
       lifetimeLock: undefined,
       watchdog: undefined,
+      beacon: newRunBeaconBuffer(),
+      runs: new Map(),
+      lastEventRun: undefined,
+      live: undefined,
       spaces: new Set(),
       alone: false,
       backlog: [],
@@ -1167,6 +1246,7 @@ export class ServingWorkerPool {
       route: this.#options.route?.href,
       compileOnHost: this.#options.moduleCompiler !== undefined,
       compileCacheDir: this.#options.compileCacheDir,
+      runBeacon: started.beacon,
     };
     started.ready = started.bridge.init(init).then((
       { lifetimeLock, heapSizeLimit },
@@ -1228,6 +1308,8 @@ export class ServingWorkerPool {
    * timer once on waking, with the worker's messages already queued behind it.
    * The count starts at the worker's first message, since until its modules
    * have loaded a worker has no timer to post from and no lease to release.
+   * Each firing also reads the worker's run beacon, counting the checks in a
+   * row that find the same run holding its thread (`PoolWorker.live`).
    */
   #watch(
     watched: PoolWorker,
@@ -1236,6 +1318,13 @@ export class ServingWorkerPool {
     let lastSeen = 0;
     let silentIntervals = 0;
     return setInterval(() => {
+      const reading = readRunBeacon(watched.beacon);
+      watched.live = reading === undefined ? undefined : {
+        reading,
+        checks: watched.live?.reading.epoch === reading.epoch
+          ? watched.live.checks + 1
+          : 1,
+      };
       const seen = watched.bridge.messagesReceived;
       if (seen === 0) return;
       if (seen !== lastSeen) {
@@ -1254,6 +1343,22 @@ export class ServingWorkerPool {
         { killed: true },
       );
     }, intervalMs);
+  }
+
+  /**
+   * What a number on a worker's run beacon stands for, as the worker posts
+   * it. A served handler's run for an event replaces the one before it, since
+   * the beacon shows one run at a time and a later run has started once a
+   * later number is posted.
+   */
+  #onRunNamed(worker: PoolWorker, identity: RunIdentity): void {
+    if (identity.event !== undefined) {
+      if (worker.lastEventRun !== undefined) {
+        worker.runs.delete(worker.lastEventRun);
+      }
+      worker.lastEventRun = identity.run;
+    }
+    worker.runs.set(identity.run, identity);
   }
 
   /**
@@ -1599,6 +1704,15 @@ export class ServingWorkerPool {
    *
    * A worker that failed `atHeapLimit` has its spaces dealt with as the
    * class's doc comment describes.
+   *
+   * The run the worker's beacon shows holding its thread as it is ended is
+   * named in the log line, for a kill by the watchdog and for a thread that
+   * ended itself at its heap limit, whose beacon shows the run it ended in. A
+   * served handler's run for an event has its event failed: the space's next
+   * worker writes the error as the event's consequence, and does not run the
+   * handler for it again (`#introduce()`). A worker ended for the heap a
+   * heartbeat reported names no run, since the heartbeat's timer runs only
+   * between runs, and whatever run the beacon shows started after it.
    */
   #onWorkerFailed(
     worker: PoolWorker,
@@ -1609,6 +1723,38 @@ export class ServingWorkerPool {
     } = {},
   ): void {
     if (worker.gone) return;
+    // The watchdog's kill, or a thread that ended itself at its heap limit.
+    const named = (killed && !atHeapLimit) || (!killed && atHeapLimit);
+    const reading = named ? readRunBeacon(worker.beacon) : undefined;
+    const run = reading === undefined
+      ? undefined
+      : worker.runs.get(reading.run);
+    let failedEvent: RunEvent | undefined;
+    if (run?.event !== undefined && worker.spaces.has(run.space)) {
+      failedEvent = run.event;
+      const reason = (killed
+        ? "the handler held its serving worker's thread until the watchdog " +
+          `ended the worker (${message})`
+        : "the handler was running when its serving worker's heap reached " +
+          `its limit (${message})`) +
+        ", and is not run for this event again";
+      const failed = this.#failedEvents.get(run.space) ?? new Map();
+      failed.set(runEventKey(failedEvent), { event: failedEvent, reason });
+      this.#failedEvents.set(run.space, failed);
+    }
+    if (reading !== undefined) {
+      const checks = worker.live?.reading.epoch === reading.epoch
+        ? worker.live.checks
+        : undefined;
+      message += run === undefined
+        ? `, in run ${reading.run}, which the worker had not named`
+        : `, in a run of \`${run.name ?? run.action}\` (action ` +
+          `\`${run.action}\`${
+            run.piece === undefined ? "" : `, piece ${run.piece}`
+          }) in space ${run.space}` +
+          (run.event === undefined ? "" : ` for event ${run.event.eventId}`) +
+          (checks === undefined ? "" : ` that ${checks} checks in a row found`);
+    }
     if (killed) worker.lifetimeLock = undefined;
     if (atHeapLimit) this.#counts.heapLimited += 1;
     const spare = worker.spaces.size === 0;
@@ -1677,7 +1823,11 @@ export class ServingWorkerPool {
           ? `placing its ${worker.spaces.size} spaces ` +
             `(${[...worker.spaces].join(", ")}) again in ${delayMs}ms, ` +
             "each on a worker of its own"
-          : `placing its ${worker.spaces.size} space(s) again in ${delayMs}ms`),
+          : `placing its ${worker.spaces.size} space(s) again in ${delayMs}ms`) +
+        (failedEvent === undefined
+          ? ""
+          : `; event ${failedEvent.eventId} takes the error as its ` +
+            "consequence, and its handler is not run for it again"),
     );
     this.#reportWorkerClosed(worker, "failed");
     const { promise: waited, resolve: wake } = Promise.withResolvers<void>();

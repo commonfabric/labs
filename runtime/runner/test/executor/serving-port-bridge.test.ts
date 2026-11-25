@@ -14,7 +14,10 @@ import {
   ServingPlane,
   servingPlaneEndpoint,
 } from "../../src/executor/serving-port-plane.ts";
-import { ServingPortBridge } from "../../src/executor/serving-port-bridge.ts";
+import {
+  ServingPortBridge,
+  type ServingPortBridgeOptions,
+} from "../../src/executor/serving-port-bridge.ts";
 import {
   isPlaceCompileFailure,
   markPlaceCompileFailure,
@@ -73,9 +76,15 @@ describe("ServingPortBridge", () => {
 
   /**
    * Builds the bridge over a server whose store is at `store`, compiling for
-   * its worker in `moduleCompiler` where one is given.
+   * its worker in `moduleCompiler` where one is given, and reporting what the
+   * worker names to `onRunNamed` and what it forgets to `onRunsForgotten`.
    */
-  const start = (store?: URL, moduleCompiler?: ModuleCompiler) => {
+  const start = (
+    store?: URL,
+    moduleCompiler?: ModuleCompiler,
+    onRunNamed?: ServingPortBridgeOptions["onRunNamed"],
+    onRunsForgotten?: ServingPortBridgeOptions["onRunsForgotten"],
+  ) => {
     server = newSharedServer({
       subscriptionRefreshDelayMs: 0,
       ...(store === undefined ? {} : { store }),
@@ -84,6 +93,8 @@ describe("ServingPortBridge", () => {
       server,
       port: channel.port2,
       ...(moduleCompiler === undefined ? {} : { moduleCompiler }),
+      ...(onRunNamed === undefined ? {} : { onRunNamed }),
+      ...(onRunsForgotten === undefined ? {} : { onRunsForgotten }),
     });
   };
 
@@ -358,6 +369,32 @@ describe("ServingPortBridge", () => {
       await expect(
         worker.request("loopback.send", { transport: 7, payload: "frame" }),
       ).rejects.toThrow("loopback connection 7 is not open");
+    });
+
+    it("sends the worker an event to fail, with its reason", async () => {
+      start();
+      const failed = Promise.withResolvers<unknown>();
+      worker.onNotice("host.failEvent", (params) => failed.resolve(params));
+      const event = { sidecarId, eventId: "evt-held", seq: 2 };
+      bridge.failEvent(space, event, "ended");
+      expect(await failed.promise).toEqual({ space, event, reason: "ended" });
+    });
+
+    it("hands `onRunNamed` what each number on the worker's run beacon stands for", async () => {
+      const named: unknown[] = [];
+      start(undefined, undefined, (identity) => named.push(identity));
+      const identity = { run: 1, space, action: "total" };
+      worker.notify("worker.runNamed", identity);
+      await worker.request("server.idle", null);
+      expect(named).toEqual([identity]);
+    });
+
+    it("hands `onRunsForgotten` the numbers on the worker's run beacon whose actions its realm collected", async () => {
+      const forgotten: (readonly number[])[] = [];
+      start(undefined, undefined, undefined, (runs) => forgotten.push(runs));
+      worker.notify("worker.runsForgotten", { runs: [1, 4] });
+      await worker.request("server.idle", null);
+      expect(forgotten).toEqual([[1, 4]]);
     });
 
     it("logs a notice it has no handler for as a port fault, and keeps serving", async () => {
