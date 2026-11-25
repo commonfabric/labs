@@ -240,7 +240,9 @@ A stream that was delivering and then closed is reopened immediately. One that
 has never delivered is reopened once per silence interval, so a server that
 refuses or fails connections costs one request an interval however long it is
 away, while one that accepts a connection and then drops it is followed as fast
-as it flaps. The silence interval is the fastest tile's collection interval
+as it flaps. A stream the page closes itself, because it cannot apply an update
+that arrived on it, is reopened once per silence interval too, so a failure
+that recurs on every stream costs one request an interval. The silence interval is the fastest tile's collection interval
 plus a serving tick plus ten seconds. That keeps it clear of the heartbeat
 period, which is one serving tick, by the whole of the fastest tile's interval.
 A heartbeat slower than the silence interval would replace a healthy stream on
