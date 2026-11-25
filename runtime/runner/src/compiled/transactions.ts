@@ -85,7 +85,10 @@ import {
 import { readMaybeLink } from "../link-resolution.ts";
 import type { Runtime } from "../runtime.ts";
 import { ignoreReadForScheduling } from "../scheduler.ts";
-import { markReadAsAttemptedWrite } from "../storage/reactivity-log.ts";
+import {
+  markReadAsAttemptedWrite,
+  writeDestinationRead,
+} from "../storage/reactivity-log.ts";
 import { handlerIdentityOf } from "./handler-identity.ts";
 import { appendedBehind, appendedBySplice } from "./appended.ts";
 import { recordNewDocumentProtectedDefaults } from "../cfc/default-initialization.ts";
@@ -2583,11 +2586,14 @@ export class RuntimeTransactions implements TransactionHooks {
           store.peek(doc, path),
           (member) => this.#encode(member),
         );
-        // Where the storage holds no array yet, the empty one is written
-        // first, and the members behind it.
-        if (splice !== undefined && stored === undefined) {
-          tx.writeValueOrThrow(at(path), []);
-        }
+      }
+      // The positions of a splice are written into the array the storage
+      // holds. Where it holds none, as for a list the argument left out,
+      // the empty one is written first and the members behind it, and a
+      // splice behind members it does not hold writes the array whole.
+      if (splice !== undefined && !this.#holdsArray(tx, at(path))) {
+        if (splice.start === 0) tx.writeValueOrThrow(at(path), []);
+        else splice = undefined;
       }
       const held = splice === undefined ? undefined : store.peek(doc, path);
       if (splice !== undefined && Array.isArray(held)) {
@@ -3784,6 +3790,24 @@ export class RuntimeTransactions implements TransactionHooks {
       if (!whole) tx.writeValueOrThrow(here([`${index}`]), link);
     }
     if (whole) this.#splicedArrays.set(array, tx);
+  }
+
+  /**
+   * Whether the storage, as `tx` sees it, holds an array at `address`,
+   * into which the positions of a splice can be written. A write of
+   * positions where it holds none makes a record of them. The read decides
+   * how the write is made and not what it holds, so it is no input of the
+   * transaction's flow and no dependency of the run.
+   */
+  #holdsArray(
+    tx: IExtendedStorageTransaction,
+    address: NormalizedFullLink,
+  ): boolean {
+    return Array.isArray(
+      tx.readValueOrThrow(address, {
+        meta: { ...ignoreReadForScheduling, ...writeDestinationRead },
+      }),
+    );
   }
 
   /**

@@ -225,6 +225,8 @@ installFakeClock({
     // The same, for a handler that reads state of the scope `session` a
     // client wrote.
     "session-draft",
+    // The same, for a list a handler appends to, across a takeover.
+    "stored-append",
   ],
 });
 
