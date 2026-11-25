@@ -211,54 +211,6 @@ EXPERIMENTAL_EXAMPLE_NAME_2=true \
 The same env vars must also be set when running `cf` CLI commands against the
 server. See `docs/development/EXPERIMENTAL_OPTIONS.md` for all available flags.
 
-### Compiled patterns
-
-`EXPERIMENTAL_COMPILED_PATTERNS=true` starts a toolshed whose serving runtimes
-compile the source of a piece with the crate of `base/pattern-compiler` and run
-the piece on the compiled path
-([`compiledPatterns`](EXPERIMENTAL_OPTIONS.md#compiledpatterns)). With the
-option on, `start-local-dev.sh` builds the crate's release binary with
-`cargo build --release` unless `PATTERN_COMPILER_BINARY` names one, so it needs
-Rust installed, and keeps what the compiler emits in
-`runtime/toolshed/cache/pattern-compiler`, which `--clear-cache` clears.
-`restart-local-dev.sh` passes the environment on. The shell takes the option
-from the toolshed, and so does the CLI unless its own environment sets
-`EXPERIMENTAL_COMPILED_PATTERNS`.
-
-```bash
-EXPERIMENTAL_COMPILED_PATTERNS=true ./scripts/start-local-dev.sh --port-offset=300
-
-mkdir -p .cf
-deno task cf id new > .cf/compiled.key
-export CF_API_URL=http://localhost:8300
-export CF_IDENTITY="$PWD/.cf/compiled.key"
-deno task cf space create --label "Compiled patterns"   # prints the space's DID
-export CF_SPACE="<the DID it printed>"
-
-deno task cf piece new patterns/examples/counter/counter.tsx   # prints the piece id
-deno task cf piece call --cell <piece id> increment
-deno task cf cell get --cell <piece id> value
-echo 10 | deno task cf cell set --cell <piece id> --input value
-
-./scripts/stop-local-dev.sh --port-offset=300
-```
-
-The piece is at `http://localhost:8300/<space DID>/<piece id>` in a browser
-signed in with the CLI's key ("First-time browser login" below).
-
-Against such a toolshed, `cf piece new` first compiles the program with the
-crate's binary that `PATTERN_COMPILER_BINARY` names, or else the release build
-of the checkout, and says which path the piece took on stderr:
-`Created on the compiled path.`, or `Created on the standard path:` and the
-reason the compiler refused the program, in which case the piece is created as
-it is without the option. `--json` names the path in `path` and the reason in
-`pathNote`. Where no binary is at hand, the command takes the compiled path,
-and where the serving runtime then refuses the program it fails with the
-compiler's reason and leaves the piece unregistered.
-`EXPERIMENTAL_COMPILED_PATTERNS=false` in the environment of a `cf` command
-creates the piece on the standard path. `cf piece ls` lists a compiled piece
-with no pattern, since its result document names none.
-
 **Logs:**
 - `runtime/shell/local-dev-shell.log`
 - `runtime/toolshed/local-dev-toolshed.log`
@@ -320,6 +272,54 @@ For Playwright testing, use:
 // Shown inside a pattern body.
 await page.goto("http://localhost:8000/<SPACE>/<PIECE_ID>");
 ```
+
+### Compiled patterns
+
+`EXPERIMENTAL_COMPILED_PATTERNS=true` starts a toolshed whose serving runtimes
+compile the source of a piece with the crate of `base/pattern-compiler` and run
+the piece on the compiled path
+([`compiledPatterns`](EXPERIMENTAL_OPTIONS.md#compiledpatterns)). With the
+option on, `start-local-dev.sh` builds the crate's release binary with
+`cargo build --release` unless `PATTERN_COMPILER_BINARY` names one, so it needs
+Rust installed, and keeps what the compiler emits in
+`runtime/toolshed/cache/pattern-compiler`, which `--clear-cache` clears.
+`restart-local-dev.sh` passes the environment on. The shell takes the option
+from the toolshed, and so does the CLI unless its own environment sets
+`EXPERIMENTAL_COMPILED_PATTERNS`.
+
+```bash
+EXPERIMENTAL_COMPILED_PATTERNS=true ./scripts/start-local-dev.sh --port-offset=300
+
+mkdir -p .cf
+deno task cf id new > .cf/compiled.key
+export CF_API_URL=http://localhost:8300
+export CF_IDENTITY="$PWD/.cf/compiled.key"
+deno task cf space create --label "Compiled patterns"   # prints the space's DID
+export CF_SPACE="<the DID it printed>"
+
+deno task cf piece new patterns/examples/counter/counter.tsx   # prints the piece id
+deno task cf piece call --cell <piece id> increment
+deno task cf cell get --cell <piece id> value
+echo 10 | deno task cf cell set --cell <piece id> --input value
+
+./scripts/stop-local-dev.sh --port-offset=300
+```
+
+The piece is at `http://localhost:8300/<space DID>/<piece id>` in a browser
+signed in with the CLI's key ("First-time browser login" above).
+
+Against such a toolshed, `cf piece new` first compiles the program with the
+crate's binary that `PATTERN_COMPILER_BINARY` names, or else the release build
+of the checkout, and says which path the piece took on stderr:
+`Created on the compiled path.`, or `Created on the standard path:` and the
+reason the compiler refused the program, in which case the piece is created as
+it is without the option. `--json` names the path in `path` and the reason in
+`pathNote`. Where no binary is at hand, the command takes the compiled path,
+and where the serving runtime then refuses the program it fails with the
+compiler's reason and leaves the piece unregistered.
+`EXPERIMENTAL_COMPILED_PATTERNS=false` in the environment of a `cf` command
+creates the piece on the standard path. `cf piece ls` lists a compiled piece
+with no pattern, since its result document names none.
 
 ---
 
