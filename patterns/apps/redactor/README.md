@@ -30,7 +30,7 @@ from `modelPrompt` alone (CFC debt 2).
    redacted draft out and paste its reply back in.
 
 Files: `redaction.ts` (pure matching, detection, stand-ins, restore),
-`policy.tsx` (the policy and the computations over secret data), `vault.tsx`
+`policy.tsx` (the policy and the computations over secret data), `main.tsx`
 (the PII vault, standalone or embedded), `redactor.tsx` (the app).
 
 Ported from jkomoros/community-patterns `redactor.tsx` and
