@@ -1580,22 +1580,58 @@ describe("runners-feed", () => {
 
     it("returns the organization's larger runners, with their size where GitHub says", async () => {
       Deno.env.set("GH_TOKEN", "runners-feed-test");
-      using requests = wire(() =>
-        Response.json({
-          runners: [
-            { name: "big", maximum_runners: 4, machine_size_details: { cpu_cores: 8, memory_gb: 32 } },
-            { name: "vague", maximum_runners: "many" },
-            { maximum_runners: 2 },
-            7,
-          ],
-        })
+      const groups = `/orgs/${org}/actions/runner-groups?per_page=100`;
+      const group = (id: number) => `/orgs/${org}/actions/runner-groups/${id}/hosted-runners?per_page=100`;
+      using requests = wire((path) =>
+        path === groups
+          ? Response.json({ runner_groups: [{ id: 1 }, { id: "two" }, { id: 3 }, 4] })
+          : path === group(1)
+          ? Response.json({
+            runners: [
+              { name: "big", maximum_runners: 4, machine_size_details: { cpu_cores: 8, memory_gb: 32 } },
+              { name: "vague", maximum_runners: "many" },
+              { maximum_runners: 2 },
+              7,
+            ],
+          })
+          : path === group(3)
+          ? Response.json({ runners: [{ name: "small", maximum_runners: 1 }] })
+          : Response.json({ message: "Not Found" }, { status: 404 })
       );
 
       expect(await dashboardRunnersGitHub().largerRunners()).toEqual([
         { owner: org, name: "big", maximum: 4, cores: 8, memory: 32 },
         { owner: org, name: "vague", maximum: null, cores: null, memory: null },
+        { owner: org, name: "small", maximum: 1, cores: null, memory: null },
       ]);
-      expect(requests.requested).toEqual([`/orgs/${org}/actions/hosted-runners?per_page=100`]);
+      expect(requests.requested).toEqual([groups, group(1), group(3)]);
+    });
+
+    it("returns no larger runners, after one request, for an organization with no runner groups", async () => {
+      Deno.env.set("GH_TOKEN", "runners-feed-test");
+      using requests = wire((path) =>
+        path.endsWith("/runner-groups?per_page=100")
+          ? Response.json({ runner_groups: [] })
+          : Response.json({ runners: [{ name: "big" }] })
+      );
+
+      expect(await dashboardRunnersGitHub().largerRunners()).toEqual([]);
+      expect(requests.requested).toEqual([`/orgs/${org}/actions/runner-groups?per_page=100`]);
+    });
+
+    it("throws for the larger runners when one runner group's list of them cannot be read", async () => {
+      Deno.env.set("GH_TOKEN", "runners-feed-test");
+      using _wire = wire((path) =>
+        path.endsWith("/runner-groups?per_page=100")
+          ? Response.json({ runner_groups: [{ id: 1 }, { id: 2 }] })
+          : path.includes("/runner-groups/2/")
+          ? Response.json({ message: "Forbidden" }, { status: 403 })
+          : Response.json({ runners: [{ name: "big" }] })
+      );
+
+      await expect(dashboardRunnersGitHub().largerRunners()).rejects.toThrow(
+        `GitHub API orgs/${org}/actions/runner-groups/2/hosted-runners?per_page=100 failed: HTTP 403`,
+      );
     });
   });
 });
