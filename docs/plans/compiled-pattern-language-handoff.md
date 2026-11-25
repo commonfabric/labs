@@ -226,36 +226,33 @@ twenty).
   stores no clause of the item at its outputs, where reading by
   `items.key(i).key("title").get()` stores it (CFC question 3 of the
   round).
-  Round twenty-six (`a184f568a0`, notes 1077 to 1086, P474 to P478) fixed
-  the reactions and answered the label question, and did not reproduce the
-  Topics create: the rows of a scoped collection below a row of another
-  collection are stored in a document per collection and outer element
-  keys, with an instance per scope key, and an assembly is set aside with
-  its element table when the acting principal changes (P474, P475), so FabriChat's
-  dumps hold no error state at any size; Z96 is built (a row's stream
-  marker carries the membership label of its row, P477, in a document the
-  piece owns, P476), and `vault`, `fair-share` and `group-chat-lobby`
-  commit every event in the corpus, and `profile-embed` handles 5 of 5
-  (see its open item below); Z97 is built (P478),
-  and the room's result document is 110 KB where it was 183 KB at 100
-  messages. Both rulings were classified as conforming implementation, with
-  no change of the specification (note 1083). The possible under-label
-  does not hold: on today's path and the compiled path alike, a body that
-  iterates `items.get()` stores the items' clauses once the titles are
-  read (`compare/both-paths.ts`, option `labels`). The Topics create's 205
-  records and refused first create did not reproduce at any commit,
-  including those where round twenty-five saw them, so the cause is
-  unresolved; the race between sessions' runs of P450 is one possible
-  reading, not confirmed by a run. The
-  `message-row` change is the module's own authorship check, reached now
-  that `get()` follows one link. A send gives 304 records at every size and
-  takes 37 to 38, 118 to 122 and 293 to 324 ms of the piece's own time at
-  100, 500 and 1,000 messages, changing 256, 390 and 600 KB; the seed at
-  1,000 takes 262 s. Open (note 1085): entries over the elements of a `map`
-  over a `computed` output are compared at every pull (ruling Z53); a
-  compiled start whose first derivation reads a value under a clause is
-  refused where today's path commits (note 1079); the crate gives no value
-  function for a `computed` declared in an element body whose result is
+  Round twenty-six (`a184f568a0`, notes 1077 to 1086, P474 to P478) fixed the
+  reactions and answered the label question, and did not reproduce the Topics
+  create: the rows of a scoped collection below a row of another collection are
+  stored in a document per collection and outer element keys, with an instance
+  per scope key, and an assembly is set aside with its element table when the
+  acting principal changes (P474, P475), so FabriChat's dumps hold no error
+  state at any size; Z96 is built (a row's stream marker carries the membership
+  label of its row, P477, in a document the piece owns, P476), and `vault`,
+  `fair-share` and `group-chat-lobby` commit every event in the corpus, and
+  `profile-embed` handles 5 of 5 (see its open item below); Z97 is built (P478),
+  and the room's result document is 110 KB where it was 183 KB at 100 messages.
+  Both rulings were classified as conforming implementation, with no change of
+  the specification (note 1083). The possible under-label does not hold: on
+  today's path and the compiled path alike, a body that iterates `items.get()`
+  stores the items' clauses once the titles are read (`compare/both-paths.ts`,
+  option `labels`). The Topics create's 205 records and refused first create did
+  not reproduce at any commit, including those where round twenty-five saw them,
+  so the cause is unresolved; the race between sessions' runs of P450 is one
+  possible reading, not confirmed by a run. The `message-row` change is the
+  module's own authorship check, reached now that `get()` follows one link. A
+  send gives 304 records at every size and takes 37 to 38, 118 to 122 and 293 to
+  324 ms of the piece's own time at 100, 500 and 1,000 messages, changing 256,
+  390 and 600 KB; the seed at 1,000 takes 262 s. Open (note 1085): entries over
+  the elements of a `map` over a `computed` output are compared at every pull
+  (ruling Z53); a compiled start whose first derivation reads a value under a
+  clause is refused where today's path commits (note 1079); the crate gives no
+  value function for a `computed` declared in an element body whose result is
   the source of a collection (note 1082).
 - *Fixed in round twenty, two executor defects (notes 1012 and 1013).*
   `Executor.#invoke` handed a body a plain value where an `identity` entry
