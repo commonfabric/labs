@@ -107,6 +107,21 @@ describe("standalone", () => {
       })).toEqual(["loop"]);
     });
 
+    it("returns a required input whose `$ref` points outside `$defs` or inside a definition", () => {
+      expect(inputsNeededToRun({
+        type: "object",
+        $defs: {
+          Clock: { type: "object", properties: { at: { default: 0 } } },
+        },
+        definitions: { Clock: { type: "number", default: 0 } },
+        properties: {
+          legacy: { $ref: "#/definitions/Clock" },
+          nested: { $ref: "#/$defs/Clock/properties/at" },
+        },
+        required: ["legacy", "nested"],
+      })).toEqual(["legacy", "nested"]);
+    });
+
     it("reads a definition whose name the `$ref` escapes as a JSON Pointer", () => {
       expect(inputsNeededToRun({
         type: "object",
