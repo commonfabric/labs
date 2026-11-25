@@ -1760,7 +1760,20 @@ which `--no-start` skips; `--no-start` also asks the serving loop not to derive
 the piece until something demands it. The receipt returns once the piece is
 durable and registered, including with `--no-start`; the serving loop derives it
 on demand, so a reader that needs the derived value pulls it. Against any other
-deployment, and under `cf test`, the command performs every step itself.
+deployment, and under `cf test`, the command performs every step itself. Where
+the serving deployment's posture also selects `EXPERIMENTAL_COMPILED_PATTERNS`,
+the command first compiles the program with the binary of
+`base/pattern-compiler` that `PATTERN_COMPILER_BINARY` names, or else the
+checkout's release build. A program the compiler accepts is set up from this
+process for the serving runtime to compile and start: the source, the argument,
+the slug and the creation receipt commit together, the command waits until the
+serving runtime has started the piece or stored why it refused it, and then
+registers it as above. A program the compiler refuses is created as described
+above. The command says on stderr which path the piece took, with the compiler's
+reason for the standard one, and `--json` carries them as `path` and `pathNote`.
+With no binary at hand the compiled path is taken unchecked, and a refusal by
+the serving runtime fails the command with its reason
+([`LOCAL_DEV_SERVERS.md`](../../docs/development/LOCAL_DEV_SERVERS.md#compiled-patterns)).
 `cf piece setsrc` requests the same way against a serving deployment: it
 resolves and pins the program, sends it with the piece's id, and prints the
 receipt of the setup transaction the serving runtime committed — directly to the

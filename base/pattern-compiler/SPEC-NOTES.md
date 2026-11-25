@@ -27634,3 +27634,246 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    compiled piece stores every item's clause at the output of such a body. Which
    of the two the template's slot `items/*/title` gives in the harness was not
    traced; `count` itself depends on the enumeration alone.
+
+## Round twenty-seven: a compiled piece created from the CLI and served by a local toolshed
+
+Round twenty-seven (2026-11-25), on the branch
+`claude/compiled-pattern-scoped-rows` from `a184f568a0`. The notes are numbered
+from 1087, the provisional decisions from P479. The logs are in the folder
+`r27-local-e2e/` of the session. No browser was launched. The servers ran at the
+port offset 300 (toolshed 8300, shell 5473) with
+`EXPERIMENTAL_COMPILED_PATTERNS=true` and the serving loop in Workers, its
+default over a file store. Times are on an Apple M5 Max at load averages of 1.8
+to 2.5, from other sessions. Whenever a note says `map`, it names the case.
+
+1087. **Findings, first.**
+      - _Works end to end:_ `start-local-dev.sh` with the option on starts a
+        toolshed whose serving workers compile and serve compiled pieces, and
+        `cf piece new` creates the counter
+        (`patterns/examples/counter/counter.tsx`), the list fixture
+        (`compare/fixtures/serving-list.tsx`) and the FabriChat room copy
+        (`compare/fabrichat/fabrichat/room.tsx`) on the compiled path. The
+        counter's handlers commit through `cf piece call`, `cf cell get` reads
+        it, `cf cell set --input` writes its argument and the piece derives from
+        the write, and `cf piece ls` and `cf piece inspect` list it. Following
+        every link from each result, a client reads no error state: 0 of 5
+        documents (counter), 0 of 605 (list at 300 items), 0 of 247 (room), and
+        0 of 83 for Topics on the standard path.
+      - _Not working, FabriChat:_ a `sendMessage` sent with `cf piece call` is
+        refused: the serving runtime aborts the handler's transaction, and the
+        client is told no more than
+        `event handling errored: Transaction was
+        aborted`, while the
+        serving worker logs the uncaught `StorageTransactionAborted` of
+        `CompiledPiece.#keepMinted` (the carry-branch item of the handoff). The
+        cause was not traced. The room's write policy admits a send only as a
+        gesture on its send surface, which a renderer attests and a CLI call
+        cannot, and the harness either strips the policies
+        (`withoutWritePolicies`) or sends such a gesture. The real room, on
+        today's path, refuses a CLI send as well, for another reason (no handler
+        registered for its computed stream). No room was seeded, so neither a
+        room past 128 messages nor a send in the shell was seen.
+      - _Not working, Topics:_ the crate's check refuses the copy the harnesses
+        use (`compare/topics/tree.ts` with `rewrite.patch`): 37 errors, 33 of
+        them `subset-type:mismatch` for an authored function whose parameter
+        declares a structural view where a handle is passed, one
+        `module-scope:import-form`, one `subset-type:mapped` and four
+        `schema:unknown-type-access`. The harnesses compile it with
+        `emit --unchecked`, which no serving runtime does. `cf piece new`
+        creates the board on the standard path and says why, and the real board
+        is refused too.
+      - _Not working, a read of a path through a link:_ `cf cell get` of the
+        path `rows` of the list fixture prints `null`, and of `rows/0` "property
+        not found", where the whole result and `--select rows` give the 300
+        rows. The result document of a compiled piece carries no `schema`
+        metadata, so the server's pull of the path loads the list document and
+        not the row documents it links to. Planned, not built (note 1093).
+      - _Structural, fixed (P480):_ a list of more than 128 rows was stored in
+        chunks, which every reader through the runtime, the CLI and the shell
+        among them, reads as an array of chunks: `cf cell get` of the list
+        fixture at 200 items printed `rows` as four arrays of rows. The list is
+        now one document by default.
+      - _Fixed, a client's open of a compiled piece:_ `Runner.start()` on a
+        client refused the piece as a document with no pattern identity, so
+        `cf piece ls` printed `<error: Cannot start: no pattern identity>` as
+        its name and a client's open of it (the shell's `startPiece`) would
+        throw. It now resolves where the document that names a source holds one,
+        and says that the piece does not run there.
+      - _Fixed, the argument of a compiled piece:_ the result document named no
+        argument, so `cf piece call` failed with `piece missing argument cell`
+        and `cf cell set --input` had nothing to write to. `setUpCompiledPiece`
+        now writes the `argument` link into the result's metadata, as the
+        runner's setup does.
+      - _Noise, not fixed:_ a client that sends an event to a compiled piece
+        logs
+        `Event dropped: no handler registered for … and its piece could not
+        be started (no-pattern-meta)`
+        for each event, though the serving runtime handles it: the client's own
+        delivery asks `ensurePieceRunningVerdict()`, which finds no pattern and
+        has no loader to ask.
+
+1088. **The local servers (step 1; P481).** The serving loop runs in Workers by
+      default over a file store, and its runtimes had no compiler. The choice
+      (P481) is both halves: the toolshed gives the Worker loop a compiler, and
+      the script configures the binary. `serveFromPort()` takes `setUpRuntimes`,
+      which decides once from the init's experimental options what each serving
+      runtime of the worker is given before it serves, and the toolshed's worker
+      entry (`runtime/toolshed/lib/serving-worker.ts`) gives it
+      `compiledPatternsForServing()` over the worker's own environment, one
+      `PatternCompiler` per worker. The process checks the binary at startup
+      before any worker starts, as before. So a toolshed serves compiled pieces
+      in its default posture, and in whichever posture a deployment picks, which
+      a script that set `SERVER_EXECUTION_WORKER=false` would not have given.
+      Where the option is on and `PATTERN_COMPILER_BINARY` is unset,
+      `start-local-dev.sh` runs `cargo build --release` in
+      `base/pattern-compiler` (0.1 s once current) and sets the variable to the
+      release binary, so the toolshed compiles with the crate the checkout
+      holds, and sets `PATTERN_COMPILER_CACHE_DIR` under the toolshed's
+      disposable cache, which workers then share on disk; the restart script
+      passes the environment on. The shell takes the option from `/api/meta`,
+      which published `compiledPatterns: true`. Test
+      `serving-worker-main.test.ts` ("gives each serving runtime it creates what
+      the entry decides from the init's experimental options"): before, the verb
+      ran with no runtime set up (`receipt` 0 where 1). Its other cases now
+      serve over a file store, which a serving worker's runtimes need. A
+      toolshed started before a change to `runtime/runner/deno.jsonc` keeps the
+      import map it started with while its workers load the new sources, so its
+      spare workers failed to start (`Unknown export './compiled/setup'`) until
+      it was restarted.
+
+1089. **`cf piece new` (step 2; P479).** Against a deployment that runs the
+      serving loop with the option on, as the CLI adopts it from `/api/meta`
+      unless its environment sets it, `newPieceWithReceipt` compiles the program
+      with the crate's binary at hand first (`checkCompiledProgram`:
+      `PATTERN_COMPILER_BINARY`, else the checkout's release build) and decides
+      as `Runtime.run` decides under `runCompiledPatterns()`: refused where the
+      crate refuses it or a plan requests an effect no built-in answers for a
+      compiled piece (`unansweredRequestOf`, moved to `compiled/wish.ts` to be
+      shared), accepted otherwise. Accepted, `createCompiledPiece` sets the
+      piece up from the client with `compiledInstantiatePiece` (the setup, the
+      slug and a creation receipt in the record the served creation keeps, whose
+      pattern names the source document), waits within the creation's start
+      deadline until the result document holds a value or the serving runtime
+      stored why it refused (`compiledPieceStarted`, whose subscription is the
+      demand), and then registers the piece through the root with
+      `completeServedRegistration`. Refused, the piece is created on the
+      standard path. The command prints `Created on the compiled path.` or
+      `Created on the standard path:` with the reason, and `--json` names `path`
+      and `pathNote`. P479 chose to compile here first because the choice is
+      then made before anything is written, by the rule `Runtime.run` applies,
+      and a refused program leaves no set-up documents behind; the alternatives
+      were to fail on the serving runtime's refusal, or to fall back after it,
+      which would have to undo a setup and a creation receipt under the same
+      request key. Where no binary is at hand the compiled path is taken
+      unchecked, and a refusal by the serving runtime then fails the command
+      with the compiler's reason (seen: `$h` is not a listed standard-library
+      global), leaving the piece set up and unregistered. A request key replays
+      a compiled creation by its receipt, as a served one. Tests, each seen
+      failing first: `new-piece-compiled.test.ts` (the module did not export the
+      functions), `compiled-instantiate.test.ts` (no export
+      `compiledInstantiatePiece`), `compiled-serving.test.ts` "names the
+      argument document in the metadata of the result document…" (the link was
+      `undefined`) and "is opened by a client of a deployment that serves
+      compiled pieces…" (`Cannot start: no pattern identity`). In
+      `new-piece-compiled.test.ts`, a refusal that is handled only after the
+      write that causes it is awaited crashed the test runner with
+      `Cannot read properties of undefined (reading '_idleNext')` in
+      `runImmediates`; the test handles it from the start.
+
+1090. **The four patterns (step 3).**
+      - _Counter_ (real pattern): compiled path; the serving worker had the
+        result 37 ms after the setup commit, and `cf piece new` took under 2 s
+        in all. `increment`, `decrement` and a write of the argument committed
+        (values 1, -1, 10, `$NAME` "Counter: 10"); 0 error states.
+      - _List_ (`compare/fixtures/serving-list.tsx`, the copy
+        `compare/serving-path.ts` and the serving tests use; a `map` over an
+        array the type declares as references, given as an array of plain values
+        in place, whose rows are documents of their own): compiled path; 300
+        `add` events from one client committed, median 50 ms each from send to
+        the client's read of `events`, 14.1 s in all; `events` reads 300 and the
+        whole result's `rows` 300 rows; 0 error states over 605 documents.
+        Before P480 the same at 200 items read `rows` as four chunks.
+      - _Topics_ (the harnesses' copy): refused by the crate's check, created on
+        the standard path; `addTopic` committed there; 0 error states.
+      - _FabriChat room_ (the copy; the real room is refused): compiled path;
+        `$NAME` "Chat", `messages/count` 0; `sendMessage` refused (note 1087); 0
+        error states over 247 documents.
+
+1091. **A list of more than 128 rows read by a client (step 4; P480).** The
+      default of `listWhole` is now no bound: an array of row documents keeps
+      its links in one list document, which a reader through the runtime reads
+      as the array of the rows, as it reads an array of links today's runtime
+      stores. P480 chose this over teaching readers the chunked layout: a list
+      in chunks is a representation no reader of today's runtime knows, it would
+      need the traversal, the cell reads and the schema queries of every client
+      to follow a second kind of link, and Z91 rules out an optimization of the
+      compiled path that today's runtime has no counterpart of; round eighteen
+      recommended the same. The cost is the one today's runtime pays: an append
+      rewrites the list document, 201 links at 201 rows where a chunk held at
+      most 64 (`row-documents.test.ts`). The measurement behind round eighteen's
+      recommendation applies: the list fixture's second client reads an add
+      after 57 and 408 ms at 1,000 and 10,000 rows with one list document, and
+      after 5,023 and 67,732 ms with chunks, while the piece takes 328 ms where
+      it took 52 for 10 events at 10,000. Chunks stay available through the
+      option, and the cases of `link-lists.test.ts` and `row-documents.test.ts`
+      that measure them name it. Test: `link-lists.test.ts` "holds the rows of a
+      long array in the one document the link leads to…", 300 rows read as
+      titles, failed before (the reader got chunks). Not measured: the FabriChat
+      and Topics figures with the new default.
+
+1092. **Documentation (step 5).** `LOCAL_DEV_SERVERS.md` "Compiled patterns"
+      gives the commands, and the `compiledPatterns` entry of
+      `EXPERIMENTAL_OPTIONS.md` says what the toolshed's workers, the start
+      script, a client's setup and `cf piece new` do, with the tests that pin
+      them and the read of a path through a link that does not work.
+
+1093. **Planned, not built.**
+      - _The result schema of a compiled piece in its metadata:_ the serving
+        runtime writes the plan's result schema as the result document's
+        `schema` metadata when it starts a piece (`writeResultSchemaMeta`, as
+        the runner's setup writes it), so that a client's read of a path through
+        a link loads what the schema reaches and gets the plan's defaults.
+        Deferred for CFC question 1 below.
+      - _A client's delivery of an event to a compiled piece:_ under server
+        execution, `ensurePieceRunningVerdict()` on a client could answer that a
+        result naming a compiled source runs on the serving runtime, so the
+        client neither tries to start it nor logs a drop.
+      - _The reason of a refused handler:_ the serving runtime tells the client
+        of a compiled piece only that the transaction was aborted, and
+        `#keepMinted` then writes into it; the refusal the piece records is what
+        the receipt should carry.
+      - _The serving loader and unanswered effects:_ `serveCompiledPieces()`
+        starts a piece whose plan requests an effect no built-in answers, which
+        `Runtime.run` and the CLI refuse; it should refuse it with that reason.
+      - _The Topics copy:_ the rewrite the crate's check now asks for, so the
+        board can be created on the compiled path.
+
+1094. **Provisional decisions, and what was not verified.** P479: note 1089.
+      P480: note 1091. P481: note 1088. Not verified: anything in a browser; a
+      FabriChat send on the compiled path, and so a room past 128 messages;
+      Topics on the compiled path; the serving loop on the main thread
+      (`SERVER_EXECUTION_WORKER=false`) since step 1;
+      `cf piece new
+      --from-index` and `--request-key` against the toolshed
+      (unit-tested only); two principals on a compiled piece created from the
+      CLI; the FabriChat and Topics figures with P480's default; `cargo test`,
+      which no change of the round reaches.
+
+### CFC questions deferred, round twenty-seven
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. Note 1093: writing the plan's result schema as the `schema` metadata of a
+   compiled piece's result document hands readers the schema's `ifc`
+   annotations, from which a client's label view derives labels
+   (`cfcLabelViewFromSchema`). Whether a reader may take a compiled piece's
+   labels from that schema, which the store does not verify against the template
+   labels, is open.
+2. `setUpCompiledPiece` writes the `argument` link into the result document's
+   metadata from the client's setup transaction, with
+   `rawMetaWriteAuthorization`, as the runner's setup does; the label that
+   commit stores at the metadata path is the client transaction's join, and
+   whether a template label of the plan ever covers that path was not traced.
+3. P480 changes no rule of a label: the one list document is written under the
+   label each chunk was written under. A reader of the list now reads one
+   document where it read several, and so joins one label.

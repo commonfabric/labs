@@ -1228,10 +1228,12 @@ holds the measurements and the conditions for revisiting.
   and throws with the option off. Such a piece stores the rows of a `map`
   over references and the buckets of an index it keeps in documents of their
   own, and the links to them in list documents that its result document
-  links to, an array of more rows than its option `listWhole` in chunks of
-  at most 64 links, or with its option `lists` at `in-place` in its result
-  document. A reader through the runtime reads a list in chunks as an array
-  of chunks, each an array of rows. The value code of such a piece is
+  links to, one list document for each array, or with its option `lists` at
+  `in-place` in its result document. A reader through the runtime reads such
+  a list document as the array of the rows. Only where its option
+  `listWhole` names a bound is an array of more rows stored in chunks of at
+  most 64 links, which a reader through the runtime reads as an array of
+  chunks, each an array of rows. The value code of such a piece is
   evaluated in an SES compartment
   (`runtime/runner/src/compiled/value-code.ts`), and
   `runtime/runner/src/compiled/compile.deno.ts` compiles a pattern source
@@ -1248,19 +1250,36 @@ holds the measurements and the conditions for revisiting.
   serving runtimes read their space from the store unless its policy says
   otherwise, installs it, and so does `runCompiledPatterns()`. A toolshed
   installs it too: with the option on, `startServerExecutionHost()` of
-  `runtime/toolshed/lib/server-execution.ts` gives each serving runtime of
-  the main-thread serving loop the loader with one `PatternCompiler` for
-  the process (`runtime/toolshed/lib/compiled-patterns.ts`), which runs the
-  binary that `PATTERN_COMPILER_BINARY` names in a child process and keeps
-  what it emitted under `PATTERN_COMPILER_CACHE_DIR` where that is set. A
-  toolshed with the option on and no file at that path does not start. A
-  serving loop that runs in Workers, the default over a file store, gives
-  its runtimes no compiler and says so at startup. With the option off the
-  toolshed imports none of the executor's modules and creates its serving
-  runtimes as before. A runtime with the option on also answers a `wish`
-  of a compiled piece with its own `wish`, the built-ins a compiled piece
-  imports with its own functions, and the fetch effects of the reactive
-  tier with its own fetch built-ins (`compiled/wish.ts`,
+  `runtime/toolshed/lib/server-execution.ts` gives each serving runtime the
+  loader with one `PatternCompiler` for the thread its serving loop runs on
+  (`runtime/toolshed/lib/compiled-patterns.ts`): the main thread, or each
+  serving worker, whose entry `runtime/toolshed/lib/serving-worker.ts` makes
+  its own from the same environment (`ServingWorkerMainOptions.setUpRuntimes`).
+  The compiler runs the binary that `PATTERN_COMPILER_BINARY` names in a
+  child process and keeps what it emitted under `PATTERN_COMPILER_CACHE_DIR`
+  where that is set. A toolshed with the option on and no file at that path
+  does not start. `scripts/start-local-dev.sh` builds the release binary of
+  the checkout and sets both variables where the option is on and
+  `PATTERN_COMPILER_BINARY` is unset
+  ([`LOCAL_DEV_SERVERS.md`](LOCAL_DEV_SERVERS.md#compiled-patterns)). With
+  the option off the toolshed imports none of the executor's modules and
+  creates its serving runtimes as before. A client of a deployment with the
+  option and server execution on sets a piece up with
+  `setUpCompiledPiece()`, which also links the `argument` metadata of the
+  result document to the argument document, so a client reads and writes the
+  argument of a compiled piece as it does any piece's.
+  `compiledInstantiatePiece()` of `runtime/piece/src/ops/served-lifecycle.ts`
+  sets one up with a creation receipt and a slug, and `cf piece new` uses it
+  where the crate's binary at hand accepts the program, and creates the piece
+  on the standard path where it refuses it (`checkCompiledProgram()` and
+  `createCompiledPiece()` of `runtime/cli/lib/piece.ts`). Such a client's
+  `Runner.start()` of a compiled piece runs nothing and reports that the
+  piece does not run there (`namesCompiledPattern()` of
+  `runtime/runner/src/compiled/setup.ts`). A runtime with the option on
+  also answers a `wish` of a compiled piece with its own `wish`, the
+  built-ins a compiled piece imports with its own functions, and the fetch
+  effects of the reactive tier with its own fetch built-ins
+  (`compiled/wish.ts`,
   `compiled/builtins.ts`). A compiled piece holds a document of the scope
   `user` or `session` once for each principal or session, addressed by its
   entity and that scope, and under a serving loop its derivation runs once
@@ -1296,7 +1315,15 @@ holds the measurements and the conditions for revisiting.
   `runtime/runner/test/compiled/compiled-serving.test.ts`. The start from a
   source through `Runtime.run()` is pinned by
   `base/pattern-compiler/compare/test/runtime-run.test.ts`, which runs the
-  crate's release binary.
+  crate's release binary. A toolshed's serving workers, a client's setup
+  and creation of a compiled piece, and its start of one are pinned by
+  `runtime/runner/test/executor/serving-worker-main.test.ts`,
+  `runtime/runner/test/compiled/compiled-serving.test.ts`,
+  `runtime/piece/test/compiled-instantiate.test.ts` and
+  `runtime/cli/test/new-piece-compiled.test.ts`. A compiled piece's result
+  document carries no `schema` metadata, so a client's read of a path that
+  leads through a link, `cf cell get` of a list of rows among them, loads
+  the linked document and not the documents it links to.
 - **Path to removal.** Delete the runtime option, its env, authority and
   shell-source entries, `CfcTxState.planLabels`, and either the `plan-write`
   and `plan-inputs` path or the gate on it, and either
@@ -1305,7 +1332,12 @@ holds the measurements and the conditions for revisiting.
   `ensure-piece-running.ts` and `Runner.start()` that ask it, and
   `Runtime.compiledPatternRunner` with the branches of
   `PatternManager.compilePattern()`, `Runner.run()`, `Runner.stop()` and
-  `Runtime.dispose()` that ask it.
+  `Runtime.dispose()` that ask it, and the client side: the branch of
+  `Runner.start()` that asks `namesCompiledPattern()`,
+  `compiledInstantiatePiece()`, the compiled path of `cf piece new`
+  (`checkCompiledProgram()`, `createCompiledPiece()`,
+  `compiledPieceStarted()`), the `setUpRuntimes` of the toolshed's serving
+  worker entry, and the compiler build in `scripts/start-local-dev.sh`.
 
 ## Category 2: Contextual Flow Control enforcement rollout dials
 
