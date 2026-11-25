@@ -1698,6 +1698,25 @@ is held there in place, the runtime stores the value there and no
 reference. A member that carries the address of
 a cell a link led to is stored as a link, by the rule above.
 
+**An event a body sends, and the links an event holds.** An event that
+a body sends on a stream is something the body writes, and the rule
+above holds for it: a handle, a reference stand-in and a container that
+carries the address it was read from are each a link in the event,
+whether the event stays with the executor or is stored and read back by
+the runtime that runs the piece. A handler is handed its event as its
+slots of root `event` read it. A link at a position the body reads
+through is the value read through it, which carries its address. A
+link at a position the body reads by `identity` alone is given as an
+`identity` entry of the state is: a reference stand-in where the
+event's declared type is data there, and a handle where it is a cell.
+Every other position is as the event holds it. So the handler of a list
+that a row's handler sent `{ item }` finds the element with
+`items.remove(item)`, and reads `item.title`, whether the list's
+elements are references or plain values in place. A slot that reads
+through such a link is bound to the event's position and to the
+positions the read crossed. *Provisional (decision P482 of the
+prototype).*
+
 **Handles.** The runtime hands a body a cell handle for every position of
 handle type that its record names: an `identity` slot of `reads`, an
 `identity` entry of `computed`, the handle of a write target or of a write

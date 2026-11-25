@@ -27896,3 +27896,261 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
 3. P480 changes no rule of a label: the one list document is written under the
    label each chunk was written under. A reader of the list now reads one
    document where it read several, and so joins one label.
+
+## Round twenty-eight: the real Topics board, and removing a row from its own button
+
+Round twenty-eight (2026-11-25), on the branch
+`claude/compiled-pattern-scoped-rows` from `e157bd950b`. The notes are numbered
+from 1095, the provisional decisions from P482. The logs are in the folder
+`r28-topics-remove/` of the session. No browser was launched. The round's own
+toolshed ran at port 8400 with `EXPERIMENTAL_COMPILED_PATTERNS=true`, its store,
+caches and log in the session's scratch folder, started directly and not with
+`start-local-dev.sh`: the script writes its logs and keeps its store at fixed
+paths of the checkout, which the coordinator's servers at the port offset 300 of
+the same checkout use. Whenever a note says `map`, it names the case.
+
+1095. **Findings, first.**
+      - _Not working end to end, the real Topics board on the compiled path._
+        `pattern-compiler emit patterns/apps/topics/main.tsx` succeeds after the
+        owner's ruling Z98 (note 1096), but that check is of `main.tsx` alone:
+        each import outside the module's own directory is read as an unresolved
+        external type, against which nothing is checked. The program as
+        `cf piece new --root patterns` hands it to the crate, the seven files of
+        `TOPICS_FILES` of `compare/topics/tree.ts`, is refused with 35 errors at
+        `e157bd950b` and 30 after this round's two changes of the board.
+        `cf piece new` creates the board on the standard path and prints the
+        reasons. Note 1097 lists each error. The coordinator asked the owner
+        about the 25 that are not in the board's own helpers; the round did not
+        change them.
+      - _The harness's copy passes the check._ With `rewrite.patch` rebased onto
+        this round's board (note 1100), the copy `tree.ts` writes passes
+        `pattern-compiler check` over the seven files (exit 0, four warnings).
+        So the patch is a rewrite of every one of the 30 refusals, hunk by hunk,
+        and note 1097 names the hunk for each. Note 1087's count of 37 errors
+        for the copy does not hold for the copy of this head.
+      - _Fixed (P482), removing a todo from its row's button._ The row's handler
+        sends the list `{ item }`, where `item` is the reference stand-in of the
+        row's element. The executor queued the event as the body held it, so the
+        stand-in's address, which the executor keeps aside, survived only while
+        the event stayed in the executor's own queue. A compiled piece sends a
+        handler's event on through the runtime, which stored `{ item: {} }`, and
+        `items.remove({})` matched no member. Separately, a link that an event
+        holds, as one from outside, reached the handler as the raw link record,
+        which equals no position and through which nothing reads. Note 1099.
+      - _Fixed with it, on the executor alone too:_ a handler that reads a
+        member of an element another handler sent it, as `item.title`, read
+        `undefined`: the stand-in has no members.
+      - _Not working, a row's button from the CLI._ `cf piece call` of the path
+        of a row's stream (`mentionable/1/$UI/.../onClick` of the todo list) is
+        refused on today's path as an unknown verb, and on the compiled path
+        accepted and then failed with
+        `Event dropped: no handler
+        registered for … after starting its piece`,
+        the client delivery of note 1087. So the CLI drives a row's button on
+        neither path; the runner test of note 1099 drives it through the
+        runtime.
+      - _Seen again:_ `cf cell get items` of a compiled todo list prints `[]`
+        while its `$NAME` counts three items (note 1087, the read of a path
+        through a link).
+      - _The board's own tests_ give 203 passed and 10 failed at the seed
+        20261125, the same 10 at `e157bd950b` as after each of this round's
+        changes: `render-shape` 1, `multi-user` 3, `activity-scalars` one
+        console error, and five of `topics.test.tsx`, which read
+        `createdBy.kind` as `person` where the test expects `agent`. Not traced.
+
+1096. **The board's two helpers (step 1; the owner's ruling Z98).** The owner's
+      words, as the coordinator relayed them: "Change the pattern to
+      ReadonlyCell. Don't support the get cast. I am fixing all other patterns".
+      So the crate still refuses a handle where a structural type is declared
+      (`language-subset.md` §7.5.1, "A structural type is not a handle"), and
+      the board declares the cell type. `mentionListsOf` takes
+      `ReadonlyCell<{ mentions: M } | undefined>` and `cardRowsOf`
+      `ReadonlyCell<CardSource | undefined>`: the value types keep `undefined`,
+      so `deno task cfcheck` still refuses a read of a mid-sync source without
+      the second `?.` (checked by removing it: "Object is possibly
+      'undefined'"). `topics.test.tsx` builds its three sources as cells; an
+      initial value holds no link (`Cell.of()` refused the reference to
+      `twinA`), so an action pushes the settled source's mention. At the
+      coordinator's word `isElementOf` of `topic.tsx` takes
+      `ReadonlyCell<readonly unknown[]>` as well.
+      `deno task cfcheck --only
+      apps/topics` passes; the board's tests are
+      as in note 1095.
+
+1097. **The 35 refusals of the board's whole program, and what fixing each
+      changes.** Lines are of this round's head, and `rewrite.patch` names the
+      hunk of the harness's copy that answers each.
+      - _A structural type where a cell is passed (`subset-type:mismatch`), 10._
+        Five are fixed by Z98: `main.tsx` `mentionListsOf` (468) and
+        `cardRowsOf` (627), and `topic.tsx` `isElementOf` at its five calls.
+        Four remain in `main.tsx` at calls of the library of
+        `product/collection-naming/`: `createNamed(names, …)` at 775 and 862 and
+        `recordNames(topics, names)` at 902 (two errors), whose parameters
+        `NamesMapCell` (`allocator.ts`, a `{ get(); key(name) }`) and `members`
+        (`naming.ts`, a `{ get(); key(index) }` reaching
+        `resolveAsCell().key("recordName").send`) are structural; and one in
+        `mentionable.ts` at 120, `mentionableRowsOf` over
+        `{ get(): {…} | undefined }`. The patch declares
+        `NamesMapCell = Writable<NamesMap>`,
+        `members: ReadonlyCell<readonly ({ shortName?: string; recordName?:
+        Stream<{ name: string }> } | undefined)[]>`
+        and `ReadonlyCell<{ [NAME]?: …; title?: …; shortName?: … }>`. It changes
+        no schema of a stored value; the library is shared with
+        `product/collection-naming/board.tsx`.
+      - _The `upgrade` record (`subset-type:mismatch`), 18._ `topic.tsx` hands
+        the record of its upgrade handles to `migrateTopicState` (2563, a
+        `lift`) and to 17 handlers (2595 to 2698, and the inline bindings at
+        2951, 3050 and 3122) declared `upgrade: Writable<TopicUpgradeState>`. A
+        record of handles given where a cell of a record is declared is accepted
+        only where a cell of the record's type would be assignable, which needs
+        the same type up to annotations (§7.5.1, third row); the position
+        `createdBy: Writable<Partial<TopicAuthor> | undefined>` is a writable
+        view wider than the stored `TopicAuthor | undefined`, refused by ruling,
+        and `createdByName: ReadonlyCell<unknown>` and
+        `comments: Writable<TopicUpgradeComment[]>` differ likewise. The patch
+        declares `upgrade: TopicUpgradeState` (the record of handles itself,
+        `asCell` dropped from the handlers' schemas, `upgrade.get()` written as
+        `upgrade`), `createdBy: Writable<TopicAuthor | undefined>`,
+        `createdByName: ReadonlyCell<string | undefined>` and
+        `comments: Writable<StoredTopicComment[]>`, and removes
+        `TopicUpgradeComment`. That changes what the migration declares it may
+        read of partly populated stored authors: data whose `createdBy` lacks
+        `kind` or `name` no longer meets the declared type, which is the
+        migration question the coordinator put to the owner.
+      - _`profileFace(profileWish.result)` (`subset-type:mismatch`), 1._
+        `topic.tsx` 2589: `profileFace` of `system/profile-face/profile-face.ts`
+        declares `Cell<ProfileFaceFields>`, and a wish's result is a
+        `ReadonlyCell`. The patch declares `ReadonlyCell<ProfileFaceFields>`; no
+        stored schema changes; the module is shared.
+      - _`unknown` read as a string (`schema:unknown-type-access`), 4._
+        `topic.tsx` 1303, 1304, 1329 and 1330 read `.trim()` of `createdByName`
+        and a comment's `authorName`, declared `unknown` and narrowed by
+        `typeof … === "string"`; the crate does not narrow a data position typed
+        `unknown`. The patch declares both `string` (`TopicInput.createdByName`,
+        `StoredTopicComment.authorName`), which changes the topic's input schema
+        and the stored comment's, and so the compatibility of an update of a
+        deployed board whose legacy data holds another type there.
+      - _`import type {} from "commonfabric/schema"`
+        (`module-scope:import-form`), 1._ `topic.tsx` 29. The patch removes it;
+        whether the typings the import brings in are needed by
+        `deno task cfcheck` was not checked.
+      - _A mapped type (`subset-type:mapped`), 1._ `topic.tsx` 1375,
+        `StampsRead<K> = { readonly [P in K]: number | undefined }`. The patch
+        writes `Readonly<Record<K, number | undefined>>`, the same type; no
+        schema changes.
+
+1098. **The board with the CLI (step 2).** `topics-walk.sh` in the session's
+      scratch folder creates a space, the board, three topics with `addTopic`,
+      renames the second with `setTitle`, makes the third and the second mention
+      the first and the third mention the second with `mention`, retracts the
+      last with `unmention`, reads the board back and counts the error states
+      the space's store holds (`count-errors.sh`: the current revision of each
+      document, and every revision, holding `$error` or an encoded error). On
+      today's path every call commits; the board reads `Topics (3)`, three index
+      rows titled `Topic 1`, `Topic 2, renamed` and `Topic 3` numbered 1 to 3,
+      `crossrefs` with two sources for topic 1 and none for the others, each
+      topic's `mentions` as made, and 0 error states over 1,194 documents. On
+      the compiled path the board does not start (note 1095), so the comparison
+      was not made; the same script with `true` as its second argument runs it
+      once the program is accepted.
+
+1099. **Removing a row from its own button (step 3; P482).** Reproduced with
+      `patterns/examples/todo-list` itself on the executor and on the runner
+      (scratch scripts): on the executor the row's button removed the item, over
+      an array of references and over an array of plain values in place, because
+      the event stayed in the executor's queue; on the runner the event arrived
+      (5 events handled for 3 adds and one click) and the list's action was
+      handed `{}` with no address, while the list held three links to row
+      documents. P482: an event that a body sends is stored as what a body
+      writes is (ES §2.4): `Instance.queue` stores `returned` of the event, so a
+      handle, a reference stand-in and a container that carries its address are
+      each a link, in the executor's queue and in what a compiled piece sends
+      on. And a handler is handed its event as its slots of root `event` read it
+      (`Instance.#handedEvent`): a link at a position the body reads through is
+      the value read through it, carrying its address (`HandedValues.note`); a
+      link the body reads by `identity` alone is given by `handleOf` (a
+      reference stand-in where the event declares data, a handle where it
+      declares a cell; `handleOf` now makes the stand-in for a slot of root
+      `event` as for one of root `binding`). A slot that reads through such a
+      link is bound to the event's position and to the positions the read
+      crossed. ES §2.4 ("An event a body sends, and the links an event holds")
+      states it. The alternative, keeping the stand-in's address in what the
+      piece sends, would have left an event from outside unmatched and a member
+      read through it `undefined`.
+      - _Tests, each seen failing first._
+        `exec/test/row-event-reference.test.ts` over
+        `compare/fixtures/row-event-reference.tsx` (`Filtered`, a `map` over the
+        result of a `computed` that filters the items, the todo list's shape;
+        `Direct`, a `map` over the items): the queued event held `{ item: {} }`
+        where it now holds the link to `item-b`; an outside event's link removed
+        nothing and read no title; a row's item read no title over an array of
+        references (both patterns) and over an array of plain values in place.
+        Its remove and `addUnique` cases over both kinds of array passed before
+        and pass after.
+        `runtime/runner/test/compiled/row-event-reference.test.ts`: on a
+        compiled piece, remove, `addUnique` three times (two of one item) and a
+        title read from a row's button, and a remove an outside event names with
+        a cell, each failed before (nothing removed; three empty pins; no title;
+        nothing removed). `patterns/examples/todo-list` on the runner then
+        removes the second of three items.
+      - _The corpus,_ `compare/runner-corpus.ts` in its four modes at
+        `e157bd950b` and at `0a851b3808` (loads 2.5 to 3.9). Equal to the
+        executor in memory: 231 to 235 (runner), 229 to 233 (after a resume),
+        212 to 216 (serving), 211 to 214 (serving with a resume); no other count
+        of the reports changed. The modules whose line changed:
+        `examples/scoped-group-chat/main-plain-inputs.tsx`,
+        `examples/todo-list/todo-list.tsx`,
+        `product/primitives/amount-ledger.tsx` and
+        `product/primitives/check-list.tsx` are now equal in every mode, but the
+        todo list under the serving loop with a resume, where its line is the
+        same as before (3 of 6 events: a stream not stored and two handlers that
+        did not commit); `apps/reward-spinner/reward-spinner.tsx` under the
+        serving loop differs at another path than before, unequal in both.
+
+1100. **The Topics harness (step 4).** `rewrite.patch` no longer applied once
+      the board declared its three helpers with `ReadonlyCell`, so `tree.ts`
+      refused to write the copy. The three hunks are dropped and every other
+      hunk applies as before; the copy passes the check (note 1095). The harness
+      itself compiles the boards of the measurement branch (`SCALE_BOARD`,
+      `card-text.ts`), which this worktree does not hold, so the serving arm was
+      not rerun and note 1086's figures were not compared; the real board,
+      refused, cannot replace the copy yet.
+
+1101. **Planned, not built.**
+      - _The board on the compiled path:_ the 25 changes of note 1097 outside
+        the board's helpers, as the owner decides them; then
+        `topics-walk.sh <label> true` and the comparison with today's path, and
+        the harness on the real board.
+      - _The CLI and a row's stream:_ `cf piece call` of a stream below a verb's
+        path should either deliver the event or refuse it as today's path does,
+        on both paths alike.
+      - _A whole-program check from the crate's command line:_ `emit` of one
+        module reads what it imports from outside its directory as unresolved,
+        so a checked emit of one file is no evidence that the program is
+        accepted; the command could resolve imports from a root given to it, as
+        the CLI's compile does.
+
+1102. **Provisional decisions, and what was not verified.** P482: note 1099. Z98
+      is the owner's ruling (note 1096). Not verified: anything in a browser,
+      the row's button in the shell above all; the Topics board on the compiled
+      path; the serving arm of the Topics harness; a handler whose event
+      declares a cell at a link (`handleOf`'s handle case) and an event that
+      holds a list of links read by `identity` (a path with `*`), neither of
+      which a test covers; why the board's 10 tests fail at `e157bd950b`.
+
+### CFC questions deferred, round twenty-eight
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. Note 1099: a slot that reads through a link an event holds is bound to the
+   event's position and to the positions the read crossed, and the label of a
+   write that depends on it joins both. Before P482 such a handler read nothing
+   through the link. Whether the event's position is to be joined as well, or
+   the label of the link's target alone is owed, is open.
+2. Note 1099: an event a handler sends now stores a link where a reference
+   stand-in or a container read from a cell stood, where it stored an empty
+   record or a copy. The stored entry's label is the handler transaction's, and
+   the receiving handler's `identity` slot is bound to the entry's position and
+   not to the target; whether a reference passed through an event owes the
+   receiver the label of the position it was read from in the sender was not
+   checked.
