@@ -25,7 +25,7 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
 | `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The merged branch at `5db1c2658d`: every branch of the build, and the two executor fixes of round twenty (P453) | #10183, stacked on #10140 |
 | `merge-attempt/serving-m6` | none | The merge of the serving branch, at `31d73441f8`; the merged branch was fast-forwarded to it | none |
-| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one and twenty-two at `4df0c33bdf`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457); cut from the merged branch at `5db1c2658d` | none (local) |
+| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-three at `71fefaf1e3`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461); cut from the merged branch at `5db1c2658d` | none (local) |
 | `claude/fabrichat-row-rights-68447f` | `fabrichat-row-rights-68447f` | The FabriChat room, real and copy, whose message rows derive their own controls; the two executor fixes of round twenty, carried onto the merged branch | none (local) |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
@@ -153,6 +153,30 @@ twenty).
   the space is refused by `#refuseStoredForEveryKey` (plan in note 1030);
   emitting the spread as a pass stores less label and waits for the owner's
   ruling (CFC question 4 of round twenty-two).
+  Round twenty-three (`71fefaf1e3`, notes 1035 to 1043, P458 to P461) made
+  the room's rendered tree of the space: a value that becomes of a scope
+  after its array was stored in a document of the space moves to the scope
+  instance (P458; before, one user's value was written into the space
+  document every reader reads); an operation's result is the reference to
+  its outcome, with no read of `failed` (P459); a member read by a well-known
+  key of the API, as `profileWish[UI]`, is a static path (P460); a `filter`
+  brought up to date looks only at the positions a change touched, 4
+  elements per append at every size where it looked at 2,504 at 1,000
+  (P461). A send now changes 329 to 331 KB at 100 messages, 480 KB at 500
+  and 714 to 729 KB at 1,000 (2.37 MB before), and peak resident at 1,000
+  is 4.69 GB (7.54 before). The time per send did not fall with the bytes:
+  storing the result, which now holds the tree, places it again at each
+  send and notes the records of every position again
+  (`Instance.#noteRecord`, note 923): 29 ms at 100 messages and 404 ms at
+  1,000, against 90 ms before. The harness's `Instance.streams()` walk adds
+  353 ms per send at 1,000 (harness only). Planned in note 1042: register a
+  record by the inputs it names, not by every position they reach; a
+  `filter` over the rows of a `map`, now formed whole at each change, kept
+  by row; the members of an assembly without positions (a change of
+  representation). Still growing per send: the argument document of the
+  stored messages, the basis parts, and each main-conversation row document,
+  still of the scope `user` through `authorProfile` (the link-following
+  work).
 - *Fixed in round twenty, two executor defects (notes 1012 and 1013).*
   `Executor.#invoke` handed a body a plain value where an `identity` entry
   of `Body.computed` reached each row through `*`, so a body that resolved
@@ -312,14 +336,14 @@ Provisional decisions were numbered per round to avoid collisions: P250 to
 P253 serving, P270 to P275 and P330 to P335 resume by units, P290 to P296
 and P350 to P360 sandbox and scopes, P310 to P316 and P370 to P382 write integrity, P410 and
 P411 specification review; P420 to P425 resume by units, fourth round; P390
-to P394 serving, round fifteen; P450 to P457 the merges and rounds nineteen
-to twenty-two (the next is P458; P470 and P471 are taken by the
+to P394 serving, round fifteen; P450 to P461 the merges and rounds nineteen
+to twenty-three (the next is P462; P470 and P471 are taken by the
 uncommitted work on `claude/fabrichat-row-rights-68447f`). Note
 numbers in `SPEC-NOTES.md` likewise: 692 to 704, 860 to 875 and 960 to 975
 trunk, 940 to 944 carry, 742 to 752 and 880 to 892 sandbox, 760 to 772
 and 900 to 914 write integrity, 851 to 866 and 920 to 932 serving, 980 to
-1034 the merges and the rounds after them (1016 to 1034 on
-`claude/compiled-pattern-scoped-rows`; the next is 1035; 1060 to 1062 are
+1043 the merges and the rounds after them (1016 to 1043 on
+`claude/compiled-pattern-scoped-rows`; the next is 1044; 1060 to 1062 are
 taken by the uncommitted work on `claude/fabrichat-row-rights-68447f`). The plan documents hold decisions up to
 P210 and P410 to P411; the rounds after that are in `SPEC-NOTES.md` of their
 branches only and need a document round after the merges.
