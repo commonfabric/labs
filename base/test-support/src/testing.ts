@@ -1008,8 +1008,9 @@ interface Recording {
 }
 
 /**
- * The context a test runs with. Its steps are named inside the test,
- * skipped where the skip list names them, and reported as tests.
+ * The context a test runs with. Its steps are named inside the test and
+ * reported as tests; one the skip list names still runs, and is reported as
+ * listed.
  */
 function recording(
   raw: Deno.TestContext,
