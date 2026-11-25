@@ -53,7 +53,10 @@ import type {
   Pattern,
   Schema,
 } from "./builder/types.ts";
-import { IndexedCollectionMaintainer } from "./builtins/indexed-collection/maintainer.ts";
+import {
+  IndexedCollectionMaintainer,
+  type IndexedCollectionMaintenance,
+} from "./builtins/indexed-collection/maintainer.ts";
 import { registerBuiltins } from "./builtins/index.ts";
 import type { Cancel } from "./cancel.ts";
 import {
@@ -783,6 +786,19 @@ export interface RuntimeOptions {
    * (speculation.md; the Phase 2 posture). Ignored in the OFF arm.
    */
   servingPosture?: boolean;
+
+  /**
+   * Which indexed collections this runtime keeps current: every collection
+   * the registries of the spaces it hears of list, as well as those it
+   * declares or writes (`"listed"`); only those it declares or writes
+   * (`"own"`); or none (`"none"`). Unset, a runtime in the serving posture
+   * maintains `"listed"`, any other runtime under server execution `"none"`,
+   * and the rest `"own"`. One runtime maintains a space's collections, so a
+   * runtime that talks to a deployed toolshed maintains `"none"`: the
+   * toolshed's serving runtime, or its `IndexedCollectionHost` while server
+   * execution is off, maintains them.
+   */
+  indexedCollectionMaintenance?: IndexedCollectionMaintenance;
 
   /** Rollout mode for commit-boundary CFC enforcement. Defaults to `enforce-strict`. */
   cfcEnforcementMode?: CfcEnforcementMode;
@@ -2406,7 +2422,15 @@ export class Runtime {
 
       // Register built-in modules with runtime injection
       registerBuiltins(this);
-      this.indexedCollections = new IndexedCollectionMaintainer(this);
+      this.indexedCollections = new IndexedCollectionMaintainer(
+        this,
+        options.indexedCollectionMaintenance ??
+          (this.servingPosture
+            ? "listed"
+            : this.experimental.serverExecution === true
+            ? "none"
+            : "own"),
+      );
 
       // Set this runtime as the current runtime for global cell compatibility
       // Removed setCurrentRuntime call - no longer using singleton pattern

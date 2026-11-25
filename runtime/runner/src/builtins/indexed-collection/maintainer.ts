@@ -30,6 +30,7 @@ import {
   refreshMemberRows,
   sameMemberRows,
 } from "./maintenance.ts";
+import { indexedCollectionRegistry } from "./registry.ts";
 
 const logger = getLogger("indexed-collection");
 
@@ -42,8 +43,13 @@ const MEMBERS_PER_EVENT = 50;
  */
 const WITHDRAWALS_OWED_AGAIN = 3;
 
-/** Cause of the per-space cell listing the space's indexed collections. */
-const REGISTRY_CAUSE = "indexed-collection-registry";
+/**
+ * Which indexed collections a runtime keeps current: every collection the
+ * registries of the spaces it hears of list, as well as those it declares or
+ * writes (`"listed"`); only those it declares or writes (`"own"`); or none
+ * (`"none"`).
+ */
+export type IndexedCollectionMaintenance = "listed" | "own" | "none";
 
 /** What the maintainer holds for one indexed collection. */
 interface CollectionState {
@@ -95,13 +101,12 @@ interface SpaceState {
 }
 
 /**
- * One maintenance event: members to re-read, with the rows they have now;
- * the id of a collection to list in its space's registry; or a declaration
- * to record in the collection's own database, under the key given.
+ * One maintenance event: members to re-read, with the rows they have now; or
+ * a declaration to record in the collection's own database, under the key
+ * given.
  */
 type MaintenanceEvent =
   | { members: MemberRows[] }
-  | { list: string }
   | { record: "migrating" | "declaration"; declaration: string };
 
 /**
@@ -119,11 +124,14 @@ type MaintenanceEvent =
  *
  * The mirror follows stored state: a member field computed by a derivation
  * is re-read when that derivation's result is written, not when its inputs
- * are. A runtime that executes nothing it stores, a client under server
- * execution, maintains nothing.
+ * are. One runtime maintains the collections of a space: its serving runtime
+ * under server execution, and otherwise the toolshed's
+ * `IndexedCollectionHost`, or the one runtime of a process that has no
+ * server. Every other runtime maintains nothing.
  */
 export class IndexedCollectionMaintainer {
   readonly #runtime: Runtime;
+  readonly #mode: IndexedCollectionMaintenance;
   readonly #enabled: boolean;
   readonly #spaces = new Map<MemorySpace, SpaceState>();
 
@@ -132,11 +140,14 @@ export class IndexedCollectionMaintainer {
   readonly #subscription: IStorageSubscription;
   #disposed = false;
 
-  /** Constructs an instance which maintains the collections of `runtime`. */
-  constructor(runtime: Runtime) {
+  /**
+   * Constructs an instance which maintains the collections of `runtime` that
+   * `mode` names.
+   */
+  constructor(runtime: Runtime, mode: IndexedCollectionMaintenance) {
     this.#runtime = runtime;
-    this.#enabled = runtime.experimental.serverExecution !== true ||
-      runtime.servingPosture;
+    this.#mode = mode;
+    this.#enabled = mode !== "none";
     this.#subscription = {
       next: (notification: StorageNotification) => {
         if (this.#disposed) return { done: true };
@@ -161,17 +172,13 @@ export class IndexedCollectionMaintainer {
 
   /**
    * Records that `handle` is the database handle cell of an indexed
-   * collection, so that writes to its members' documents reach it, and lists
-   * it in its space's registry for the runtimes that serve the space later.
+   * collection, so that writes to its members' documents reach it.
    */
   register(handle: NormalizedFullLink, id: string): void {
     if (!this.#enabled || this.#disposed) return;
     const space = this.#spaceState(handle.space);
     if (space.collections.has(id)) return;
-    const collection = this.#adopt(space, handle, id);
-    // Listing the collection is a write, which a serving runtime commits
-    // only from a scheduler run.
-    void this.#dispatch(collection, { list: id });
+    this.#adopt(space, handle, id);
   }
 
   /**
@@ -196,8 +203,9 @@ export class IndexedCollectionMaintainer {
   noteWrites(space: MemorySpace, ids: Iterable<string>): void {
     if (!this.#enabled || this.#disposed) return;
     const state = this.#spaceState(space);
-    // A space with no collection has nothing to follow. In a serving runtime
-    // that is known once the registry has been read; in any other, at once.
+    // A space with no collection has nothing to follow. A runtime that
+    // maintains listed collections knows that once the registry has been
+    // read; any other, at once.
     if (state.collections.size === 0 && state.read) return;
     for (const id of ids) state.early.add(id);
     if (state.read) return this.#flush(state);
@@ -246,20 +254,14 @@ export class IndexedCollectionMaintainer {
         collections: new Map(),
         early: new Set(),
         loaded: undefined,
-        // Only a serving runtime maintains a collection whose declaring
-        // piece it never loaded, so only it has a registry to read.
-        read: !this.#runtime.servingPosture,
+        // Only a runtime that maintains listed collections maintains one
+        // whose declaring piece it never loaded, so only it reads the
+        // registry.
+        read: this.#mode !== "listed",
       };
       this.#spaces.set(space, state);
     }
     return state;
-  }
-
-  #registryCell(space: MemorySpace): Cell<Record<string, unknown>> {
-    return this.#runtime.getCell<Record<string, unknown>>(
-      space,
-      REGISTRY_CAUSE,
-    );
   }
 
   /**
@@ -268,7 +270,7 @@ export class IndexedCollectionMaintainer {
    */
   async #loadRegistry(space: MemorySpace, state: SpaceState): Promise<boolean> {
     try {
-      const registry = this.#registryCell(space);
+      const registry = indexedCollectionRegistry(this.#runtime, space);
       // Asked without loading the document: a space that holds no collection
       // has no registry, and takes on no watch of one.
       const listed = await this.#runtime.storageManager.open(space)
@@ -396,7 +398,7 @@ export class IndexedCollectionMaintainer {
     if (!again) {
       logger.warn("maintenance-withdrawn", () => [collection.handle.id]);
     }
-    if (!("members" in event)) {
+    if ("record" in event) {
       if (again) void this.#dispatch(collection, event);
       return;
     }
@@ -530,26 +532,15 @@ export class IndexedCollectionMaintainer {
   }
 
   /**
-   * Runs one maintenance event: lists the collection in its space's
-   * registry, records a declaration in the collection's database, or
-   * re-reads the members the event names and writes the rows that changed.
+   * Runs one maintenance event: records a declaration in the collection's
+   * database, or re-reads the members the event names and writes the rows
+   * that changed.
    */
   #maintain(
     tx: IExtendedStorageTransaction,
     handle: NormalizedFullLink,
     event: MaintenanceEvent,
   ): void {
-    if ("list" in event) {
-      const entry = this.#registryCell(handle.space).withTx(tx).key(
-        event.list,
-      );
-      if (entry.getRaw() === undefined) {
-        entry.setRaw(
-          JSON.stringify(this.#runtime.getCellFromLink(handle).getAsLink()),
-        );
-      }
-      return;
-    }
     const writer = createSqliteWriter(this.#runtime, handle, tx);
     if ("record" in event) {
       writer.exec(

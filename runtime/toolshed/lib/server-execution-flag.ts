@@ -27,16 +27,20 @@ export function serverExecutionEnabledFromEnv(envGet: EnvReader): boolean {
  * The memory-server ACL principal lists for this process (OW31, RULED
  * 2026-08-18/19; protocol.md §2b's "read a foreign doc" row):
  *
- * - `serviceDids` — the operator-configured `MEMORY_SERVICE_DIDS` list,
- *   VERBATIM on both arms. The OWNER-class semantics of that list are
- *   untouched and stay operator-only: the process identity is NOT added
- *   to it under the flag. (The Phase-7 posture — the process identity as
- *   an implicit-OWNER memory service principal wherever the operator
- *   had not listed it — is RETIRED by the OW31 ruling: the serving
- *   identity is not an implicit owner of users' spaces. If a future
- *   stage needs the process identity to WRITE over the session plane,
- *   the answer is a wave-stamped path or an explicit grant — never
- *   re-adding it to this list.)
+ * - `serviceDids` — under the flag, the operator-configured
+ *   `MEMORY_SERVICE_DIDS` list VERBATIM: the process identity is NOT
+ *   added to it. (The Phase-7 posture — the process identity as an
+ *   implicit-OWNER memory service principal wherever the operator had
+ *   not listed it — is RETIRED by the OW31 ruling: the serving identity
+ *   is not an implicit owner of users' spaces. If a future stage needs
+ *   the process identity to WRITE over the session plane, the answer is
+ *   a wave-stamped path or an explicit grant — never re-adding it to
+ *   this list.) OFF the flag, the configured list with the process
+ *   identity added: this process's `IndexedCollectionHost` reads member
+ *   documents and writes collection databases in users' spaces over
+ *   loopback sessions, which is the one write path into those spaces a
+ *   process with no serving loop has. The entry goes with the OFF arm
+ *   (docs/plans/indexed-collections-without-server-execution.md).
  * - `delegatingDids` — under the flag, this process's own identity; OFF
  *   the flag, empty. A delegating principal's loopback sessions may
  *   carry the session-level READ binding (`actingAs: "space-owner"`):
@@ -81,8 +85,15 @@ export function memoryAclPrincipalsFor(options: {
   delegatingDids: readonly string[];
   isDelegatingPeer?: (did: string) => boolean;
 } {
+  const serviceDids = [...options.configured];
+  if (
+    !options.serverExecution &&
+    !serviceDids.includes(options.processIdentityDid)
+  ) {
+    serviceDids.push(options.processIdentityDid);
+  }
   return {
-    serviceDids: [...options.configured],
+    serviceDids,
     delegatingDids: options.serverExecution ? [options.processIdentityDid] : [],
     ...(options.serverExecution && options.listsPeer !== undefined
       ? { isDelegatingPeer: options.listsPeer }

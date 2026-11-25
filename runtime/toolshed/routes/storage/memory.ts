@@ -117,7 +117,10 @@ export async function openMemory(
   // toolshed identity the directory lists is a delegating principal too: a
   // crossing from the toolshed serving another space opens its session, with
   // the same binding, as that toolshed's identity. OFF the flag the
-  // delegating class is empty — byte-identical ACL decisions.
+  // delegating class is empty, and the process identity is an OWNER-class
+  // service principal: its indexed-collection host maintains the
+  // collections of every space over loopback sessions
+  // (docs/plans/indexed-collections-without-server-execution.md).
   const serverExecutionOn = serverExecutionEnabledFromEnv(getEnv);
   const memoryAclPrincipals = memoryAclPrincipalsFor({
     configured: environment.MEMORY_SERVICE_DIDS
@@ -155,6 +158,12 @@ export async function openMemory(
           "delegating listing is then moot",
       );
     }
+  } else {
+    console.log(
+      `Memory: server execution OFF — process identity ${identity.did()} ` +
+        "is an OWNER-class memory service principal, for the sessions of " +
+        "its indexed-collection host",
+    );
   }
 
   // Session.open verification is shared with the standalone server. Toolshed
