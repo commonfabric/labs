@@ -99,6 +99,23 @@ describe("cfc-processed-claim", () => {
           : entry.label.confidentiality ?? []
       );
 
+  /**
+   * The paths of the entries document at which `tx` stages a `derived`
+   * entry carrying `atom`.
+   */
+  const stagedDerivedPathsOf = (
+    tx: ReturnType<Runtime["edit"]>,
+    atom: string,
+  ): string[] =>
+    ((tx.readOrThrow({ space, scope: "space", id: entriesId, path: [] }) as
+      | { cfc?: StoredCfcMetadata }
+      | undefined)?.cfc?.labelMap.entries ?? [])
+      .filter((entry) =>
+        entry.origin === "derived" && !isCfcLabelReference(entry.label) &&
+        (entry.label.confidentiality ?? []).includes(atom as never)
+      )
+      .map((entry) => entry.path.join("/"));
+
   beforeEach(async () => {
     server = newSharedServer();
     storageManager = EmulatedStorageManager.connectTo(server, { as: signer });
@@ -230,9 +247,10 @@ describe("cfc-processed-claim", () => {
     tx.abort();
   });
 
-  it("measures the same mark when nothing names it a processed claim", () => {
-    // The control for the cases above: the mark itself, written as any other
-    // write, carries the join and misfits the stream's space.
+  it("measures nothing, and stamps none of the join, on a mark nothing names a processed claim", () => {
+    // The entries document is the event queue's own state (the owner's
+    // ruling Z99): a mark of it carries no label of the transaction that
+    // wrote it, whatever claim the transaction recorded or did not.
     const tx = handlerRun("unnamed-handler");
     runtime.getCellFromLink<boolean>({
       space,
@@ -241,44 +259,28 @@ describe("cfc-processed-claim", () => {
       path: ["entries", "0", "consequenced"],
     }).withTx(tx).set(true);
 
-    const reasons = preparedWriterFitReasons(tx);
-    expect(reasons).toHaveLength(1);
-    expect(reasons[0]).toContain(
-      `writer-fit confidentiality misfit for ${entriesId}`,
-    );
-    expect(reasons[0]).toContain(FOREIGN_ATOM);
+    expect(preparedWriterFitReasons(tx)).toEqual([]);
+    expect(stagedDerivedConfidentiality(tx)).not.toContain(FOREIGN_ATOM);
     tx.abort();
   });
 
-  it("counts a processed claim recorded without the runtime's mark for nothing", () => {
-    // The recording method is on the public transaction interface, so code
-    // holding a transaction can name any path it likes. The runtime's
-    // authorization is what separates the serving loop's claim from that.
-    const tx = handlerRun("forged-handler");
-    const path = ["entries", "0", "consequenced"];
-    tx.recordCfcWritePolicyInput({
-      kind: "structural-provenance",
-      target: { space, id: entriesId, scope: "space", path },
-      claim: CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
-      sources: [],
-    });
-    runtime.getCellFromLink<boolean>({
-      space,
-      scope: "space",
-      id: entriesId as never,
-      path,
-    }).withTx(tx).set(true);
+  it("measures nothing, and keeps the join on the payload alone, of an event a handler that read another space's label appends", () => {
+    // What an event says keeps the label it was written under; the
+    // entries array, and the entry's identity, stream and actor, are the
+    // queue's machinery.
+    const tx = handlerRun("sending-handler");
+    stream.withTx(tx).send({ messageAct: true } as never);
 
-    const reasons = preparedWriterFitReasons(tx);
-    expect(reasons).toHaveLength(1);
-    expect(reasons[0]).toContain(FOREIGN_ATOM);
+    expect(preparedWriterFitReasons(tx)).toEqual([]);
+    expect(tx.getCfcState().prepare.status).toBe("prepared");
+    const stamped = stagedDerivedPathsOf(tx, FOREIGN_ATOM);
+    expect(stamped.length).toBeGreaterThan(0);
+    expect(stamped.filter((path) => !/^entries\/\d+\/payload$/.test(path)))
+      .toEqual([]);
     tx.abort();
   });
 
-  it("measures a value the handler writes over the processed claim's own path", () => {
-    // The claim's path takes nothing of the join only while it holds what the
-    // serving loop wrote there. A handler that writes something else at that
-    // path, after the claim, is measured as any write is.
+  it("measures nothing written over the processed claim's own path", () => {
     const tx = handlerRun("overwriting-handler");
     writeProcessedClaim(
       runtime,
@@ -287,22 +289,20 @@ describe("cfc-processed-claim", () => {
       { sidecarId: entriesId, index: 0 },
       { clearDeferral: false },
     );
-    runtime.getCellFromLink<string>({
+    runtime.getCellFromLink<boolean>({
       space,
       scope: "space",
       id: entriesId as never,
       path: ["entries", "0", "consequenced"],
-    }).withTx(tx).set("s3cr3t");
+    }).withTx(tx).set(false);
 
-    const reasons = preparedWriterFitReasons(tx);
-    expect(reasons).toHaveLength(1);
-    expect(reasons[0]).toContain(FOREIGN_ATOM);
+    expect(preparedWriterFitReasons(tx)).toEqual([]);
     tx.abort();
   });
 
-  it("measures a field the handler writes beside the processed claim", () => {
-    // Only the claim takes nothing of the join. A value computed from what the
-    // handler read, written on the same entry, is measured as any write is.
+  it("keeps the join on an error written beside the processed claim, and measures it against no store", () => {
+    // An error says something of what the handler read, as a payload does,
+    // and keeps the label it was written under.
     const tx = handlerRun("beside-handler");
     writeProcessedClaim(
       runtime,
@@ -320,9 +320,10 @@ describe("cfc-processed-claim", () => {
       path: ["entries", "0", "error"],
     }).withTx(tx).set("refused reading the secret");
 
-    const reasons = preparedWriterFitReasons(tx);
-    expect(reasons).toHaveLength(1);
-    expect(reasons[0]).toContain(FOREIGN_ATOM);
+    expect(preparedWriterFitReasons(tx)).toEqual([]);
+    expect(new Set(stagedDerivedPathsOf(tx, FOREIGN_ATOM))).toEqual(
+      new Set(["entries/0/error"]),
+    );
     tx.abort();
   });
 

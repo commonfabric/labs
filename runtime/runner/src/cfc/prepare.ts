@@ -4398,7 +4398,10 @@ const isUndeclarableIdClass = (id: string): boolean =>
  * component, so a later read of one is tainted and a later egress of one is
  * gated on that label. The residency clause is part of the ceiling this
  * skips, so a derivation's result may land in a space whose name none of the
- * label's clauses carry.
+ * label's clauses carry. A join whose clauses came from another space is
+ * measured on them all the same, but on a stream's entries document, the
+ * event queue's own state, which no join is measured on
+ * (`streamEntryContentPaths`).
  *
  * `docs/specs/cfc-enforcement-matrix.md` §4 carries the reasoning.
  */
@@ -4407,7 +4410,52 @@ const isDeclarablePolicyStore = (
   joinIsLocal: boolean,
   markedUndeclarable: boolean,
 ): boolean =>
-  (!isUndeclarableIdClass(id) && !markedUndeclarable) || !joinIsLocal;
+  !id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
+  ((!isUndeclarableIdClass(id) && !markedUndeclarable) || !joinIsLocal);
+
+/** The fields of a stream's entry that say what an event or its fate says. */
+const STREAM_ENTRY_CONTENT = ["payload", "error", "reason"] as const;
+
+/**
+ * The positions at or below `path` of a stream's entries document, where
+ * `value` is written at `path`, that hold what an event or a notice of its
+ * fate says: each entry's `payload`, and the `error` and `reason` its
+ * handling recorded. Those keep the label they are written under. The
+ * document is the event queue's own state, written by the runtime's
+ * machinery alone (an authored write reaches it only as a declared tail
+ * append), and every other position, the entries array, each entry's
+ * identity, stream, actor, sequence number and marks, carries no label of
+ * the transaction that wrote it.
+ */
+const streamEntryContentPaths = (
+  path: readonly string[],
+  value: unknown,
+): (readonly string[])[] => {
+  const ofEntry = (at: readonly string[], entry: unknown) =>
+    isObjectNotArray(entry)
+      ? STREAM_ENTRY_CONTENT.filter((field) => entry[field] !== undefined)
+        .map((field) => [...at, field])
+      : [];
+  if (path.length === 0 || path[0] !== "entries") {
+    const entries = path.length === 0 && isObjectNotArray(value)
+      ? value.entries
+      : undefined;
+    return Array.isArray(entries)
+      ? entries.flatMap((entry, index) =>
+        ofEntry(["entries", `${index}`], entry)
+      )
+      : [];
+  }
+  if (path.length === 1) {
+    return Array.isArray(value)
+      ? value.flatMap((entry, index) => ofEntry(["entries", `${index}`], entry))
+      : [];
+  }
+  if (path.length === 2) return ofEntry(path, value);
+  return (STREAM_ENTRY_CONTENT as readonly string[]).includes(path[2])
+    ? [path]
+    : [];
+};
 
 /**
  * The principal whose instance of a `user` or `session` document a write by
@@ -15505,6 +15553,21 @@ export function* prepareBoundaryCommitSteps(
         if (derivedStampKeys.has(pathKey(root))) continue;
         derivedStampKeys.add(pathKey(root));
         derivedStampPaths.push(root);
+      }
+      // A stream's entries document is the event queue's own state (the
+      // owner's ruling Z99): what an event or its fate says keeps the join,
+      // and the queue's machinery around it takes none of it.
+      if (id.startsWith(STREAM_ENTRIES_DOC_PREFIX)) {
+        const content = derivedStampPaths.flatMap((path) =>
+          streamEntryContentPaths(
+            path,
+            writtenValueAt(flowWrittenValues, path),
+          )
+        );
+        derivedStampPaths.length = 0;
+        for (const path of content) derivedStampPaths.push(path);
+        structureStampPaths.length = 0;
+        onwardStampPaths.length = 0;
       }
       const derivedPrefixes = new PathPrefixIndex();
       for (const path of derivedStampPaths) derivedPrefixes.add(path);

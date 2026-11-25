@@ -438,7 +438,11 @@ dials.
   sink only where the host declares a sink ceiling (Topics top/3174;
   `served-effect-cross-holder.test.ts` pins a served fetch over another
   space's private URL going out). An event's payload is delivered unlabeled,
-  so a send drops its sender's clauses (Topics top/3175). The holder rule of
+  so a send drops its sender's clauses (Topics top/3175). A stream's entries
+  document is measured under no join (`cfc-enforcement-matrix.md` §4), so a
+  served handler that read another space's labeled value can send it on: the
+  payload's stamp records the clause at rest, and its consumer does not take
+  it. The holder rule of
   [specs#95](https://github.com/commonfabric/specs/pull/95)'s first proposal,
   which refused such writes by where a clause was read, ran here ahead of its
   ruling and was removed when the proposal was withdrawn.

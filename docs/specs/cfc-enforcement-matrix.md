@@ -523,23 +523,35 @@ The strict-only delta is:
   scoped by the contributing documents' spaces, as described below.
 
   The skip is scoped to a join the target's own space produced, for the marked
-  class as much as for the two id classes. Every clause the join carries comes
+  class as much as for computed cells. Every clause the join carries comes
   from a document some read resolved, and the join records which space each of
   those lived in; where any of them lived elsewhere, the target is measured
   like any other document. So the residency half of the ceiling still holds
   for the direction it was written for — a derivation cannot carry another
-  space's labeled value into a local document by materializing it, an emission
-  cannot carry one into a local stream's entries document, and a source
-  transition cannot carry one into a local cache document — while work over
-  the space's own data proceeds. A computed cell shares a replica set with the
-  source it derives from, an entries document shares one with the document
-  holding the stream it belongs to, and a cache document shares one with every
+  space's labeled value into a local document by materializing it, and a
+  source transition cannot carry one into a local cache document — while work
+  over the space's own data proceeds. A computed cell shares a replica set
+  with the source it derives from, and a cache document shares one with every
   piece in that space running the module it holds, so in each case the value
   reaches no reader it had not reached already, and what follows it is the
   stamp.
 
-  One write to an entries document is outside both the measurement and the
-  stamp whatever space the join came from: a served event's processed claim,
+  A stream's entries document is the event queue's own state, and is measured
+  under no join, from whichever space its clauses came (the owner's ruling
+  Z99 of the compiled pattern language build; a host arrangement of where the
+  queue keeps its state). What an event or its fate says keeps the label it is
+  written under: each entry's `payload`, and the `error` and `reason` its
+  handling recorded, take the transaction's join as their stamp. The rest of
+  the document, the entries array and each entry's identity, stream, actor,
+  sequence number and marks, takes none of it (`streamEntryContentPaths` in
+  `prepare.ts`). A handler that read another space's labeled value and sends
+  an event is therefore no longer refused; the payload's stamp records the
+  clause at rest, and the consuming handler, which is handed the payload as a
+  value, does not consume it (`cfc-conformance-statement.md`, top/3175).
+
+  One write to an entries document is named as outside both the measurement
+  and the stamp whatever space the join came from: a served event's processed
+  claim,
   the `consequenced` mark (and the cleared delivery deferral beside it) the
   serving loop writes on the event's own entry in the transaction that runs
   the handler. §6.2.2 claims an event's processed cell apart from its
@@ -550,11 +562,9 @@ The strict-only delta is:
   The serving loop names each such path as it writes it
   (`writeProcessedClaim()` in `runtime/runner/src/executor/processed-claim.ts`)
   under the runtime-authorized `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM`
-  marker, which the gate takes only on a stream's entries document. Every
-  other write the transaction makes, an entry it appends or a field it writes
-  beside the mark included, is measured and stamped as above, so a handler
-  over another space's labeled value still cannot carry it into the stream's
-  space.
+  marker, which the gate takes only on a stream's entries document. Under the
+  rule above the claim's marker decides nothing more on that document: no
+  write to it is measured, and the marks take no stamp.
 
   A declared entry can still reach one of these documents, from a
   schema-carrying write to it, and the skip is unconditional over that route.
