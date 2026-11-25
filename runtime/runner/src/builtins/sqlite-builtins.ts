@@ -35,6 +35,11 @@ import {
 } from "./indexed-collection/maintenance.ts";
 import { resultRowKeys, SQLITE_ROW_SALT } from "./sqlite/row-identity.ts";
 import {
+  isNodeCauseWithOutputSpot,
+  ownedResultCause,
+  scopedCell,
+} from "./scope-policy.ts";
+import {
   computeRowLabelRead,
   resolveCeilingPlaceholders,
 } from "./sqlite/row-label-read.ts";
@@ -43,9 +48,17 @@ import type { RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { TransactionWrapper } from "../storage/extended-storage-transaction.ts";
-import type { NormalizedFullLink } from "../link-types.ts";
+import {
+  areNormalizedLinksSame,
+  type NormalizedFullLink,
+} from "../link-types.ts";
 import type { CellScope, JSONSchema } from "../builder/types.ts";
-import { createSigilLinkFromParsedLink, isCellLink } from "../link-utils.ts";
+import {
+  createSigilLinkFromParsedLink,
+  getMetaLink,
+  isCellLink,
+  parseLink,
+} from "../link-utils.ts";
 import { setResultCell } from "../result-utils.ts";
 import { runtimeSecretLink } from "../runtime-secret.ts";
 import { schemaHasIfc } from "../schema-ifc.ts";
@@ -220,10 +233,27 @@ function resultCellCause(label: string, cause: unknown): unknown {
   return { [label]: { result: cause } };
 }
 
-/** Allocate a result cell linked to the parent cell, at `scope` (the
- *  author-declared scope of the SqliteDb / its query result). The base entity
- *  id is scope-independent; `scope` only re-addresses which scoped instance the
- *  value lands in, matching how the server partitions the on-disk db. */
+/**
+ * The cell `cause` names in `parentCell`'s space, at `scope` (the
+ * author-declared scope of the SqliteDb or its query result). The base entity
+ * id is scope-independent; `scope` only re-addresses which scoped instance
+ * the value lands in, matching how the server partitions the on-disk db.
+ */
+function scopedResultCell<T>(
+  runtime: Runtime,
+  parentCell: Cell<any>,
+  cause: unknown,
+  tx: IExtendedStorageTransaction,
+  scope: CellScope,
+): Cell<T> {
+  const base = runtime.getCell<T>(parentCell.space, cause, undefined, tx);
+  return scopedCell(runtime, tx, base, scope);
+}
+
+/**
+ * Allocates the result cell of a `label` builtin at `scope`, linked to the
+ * parent cell.
+ */
 function makeResultCell<T>(
   runtime: Runtime,
   parentCell: Cell<any>,
@@ -232,21 +262,119 @@ function makeResultCell<T>(
   tx: IExtendedStorageTransaction,
   scope: CellScope = "space",
 ): Cell<T> {
-  const base = runtime.getCell<T>(
-    parentCell.space,
-    resultCellCause(label, cause),
-    undefined,
-    tx,
-  );
-  const link = base.getAsNormalizedFullLink();
-  const cell = createCell<T>(
+  const cell = scopedResultCell<T>(
     runtime,
-    link.scope === scope ? link : { ...link, scope },
+    parentCell,
+    resultCellCause(label, cause),
     tx,
+    scope,
   );
   setResultCell(cell, parentCell);
   cell.sync();
-  return cell as Cell<T>;
+  return cell;
+}
+
+/**
+ * The cause a `sqliteDatabase` node mints its handle under: the node's piece
+ * and output spot, as {@link ownedResultCause} keys a branching builtin's
+ * store. The node's inputs document is left out. It is content-addressed over
+ * the node's serialized inputs, which hold the declared tables and, for a
+ * collection with a guard, the guard's schema, whose write policy names
+ * handlers by the identity of their module. So it changes with a declaration
+ * and with any change to the module's source, and the handle, which names the
+ * database, has to outlive both. A cause carrying no output spot, as a
+ * hand-built one in a test, is used as it is.
+ */
+function databaseHandleCause(cause: unknown, parentCell: Cell<any>): unknown {
+  return isNodeCauseWithOutputSpot(cause)
+    ? ownedResultCause("sqliteDatabase", cause, parentCell)
+    : resultCellCause("sqliteDatabase", cause);
+}
+
+/**
+ * The handle cell a `sqliteDatabase` node runs on, at `scope`, linked to
+ * `parentCell`: the one {@link databaseHandleCause} names, unless that one
+ * holds nothing for the running principal and the node's output spot links to
+ * a handle the node minted under another cause
+ * ({@link earlierDatabaseHandle}), which the node keeps along with the
+ * database it names.
+ */
+function databaseHandle(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  cause: unknown,
+  parentCell: Cell<any>,
+  scope: CellScope,
+  outputSpot: NormalizedFullLink | undefined,
+): Cell<SqliteDbRef> {
+  const minted = scopedResultCell<SqliteDbRef>(
+    runtime,
+    parentCell,
+    databaseHandleCause(cause, parentCell),
+    tx,
+    scope,
+  );
+  const earlier = minted.withTx(tx).getRaw() === undefined
+    ? earlierDatabaseHandle(runtime, tx, cause, parentCell, minted, outputSpot)
+    : undefined;
+  const handle = earlier ?? minted;
+  setResultCell(handle, parentCell);
+  handle.sync();
+  return handle;
+}
+
+/**
+ * The handle other than `minted` that the node's output spot links to, when
+ * the node minted it under another cause. A deployed piece can hold a handle
+ * minted from the node's whole cause, inputs document included, and keeping
+ * it keeps the rows the piece wrote.
+ *
+ * The node minted the handle when it is the one the whole cause names for the
+ * node's current inputs, or when, at `minted`'s scope, its value is a
+ * database reference naming the handle itself and its `result` back-link
+ * names `parentCell`, at the same path and scope. Any other link is refused,
+ * so a node never takes on a database its piece was not given. The second
+ * test reads the running principal's instance: where the first test does not
+ * name a user- or session-scoped handle and the principal holds no instance
+ * of it, this returns `undefined`, and the node runs on `minted` and points
+ * its output spot there, for every principal.
+ */
+function earlierDatabaseHandle(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  cause: unknown,
+  parentCell: Cell<any>,
+  minted: Cell<SqliteDbRef>,
+  outputSpot: NormalizedFullLink | undefined,
+): Cell<SqliteDbRef> | undefined {
+  if (outputSpot === undefined) return undefined;
+  // The node writes its output spot, so its own read of it schedules nothing.
+  const stored = tx.readValueOrThrow(outputSpot, {
+    meta: ignoreReadForScheduling,
+  });
+  const link = isCellLink(stored) ? parseLink(stored, outputSpot) : undefined;
+  const own = minted.getAsNormalizedFullLink();
+  if (
+    link === undefined || link.space !== own.space || link.id === own.id ||
+    link.path.length > 0 || link.scope !== own.scope
+  ) {
+    return undefined;
+  }
+  const held = createCell<SqliteDbRef>(runtime, { ...own, id: link.id }, tx);
+  const named = runtime.getCell(
+    parentCell.space,
+    resultCellCause("sqliteDatabase", cause),
+    undefined,
+    tx,
+  ).getAsNormalizedFullLink();
+  if (link.id === named.id) return held;
+  const value = held.getRaw();
+  const owner = getMetaLink(held, "result");
+  return isSqliteDbRef(value) && value.id === stripEntityUriScheme(link.id) &&
+      owner !== undefined &&
+      areNormalizedLinksSame(owner, parentCell.getAsNormalizedFullLink())
+    ? held
+    : undefined;
 }
 
 function readDbRef(value: unknown): SqliteDbRef {
@@ -764,10 +892,12 @@ export function sqliteDatabase(
   inputsCell: Cell<any>,
   sendResult: (tx: IExtendedStorageTransaction, result: any) => void,
   _addCancel: (cancel: () => void) => void,
-  cause: Cell<any>[],
+  cause: unknown,
   parentCell: Cell<any>,
   runtime: Runtime,
   outputBinding?: NormalizedFullLink,
+  _awaitSync?: boolean,
+  publicationBinding?: NormalizedFullLink,
 ): RawBuiltinResult {
   const initialized = new Set<string>();
   const action: Action = (tx: IExtendedStorageTransaction) => {
@@ -782,13 +912,13 @@ export function sqliteDatabase(
       // output binding. The server uses it to derive a per-user / per-session
       // on-disk filename; the handle cell itself must live at that scope so its
       // value is partitioned the same way.
-      const handle = makeResultCell<SqliteDbRef>(
+      const handle = databaseHandle(
         runtime,
-        parentCell,
-        cause,
-        "sqliteDatabase",
         tx,
+        cause,
+        parentCell,
         scope,
+        publicationBinding,
       );
       const options = inputsCell.withTx(tx).get() as
         | { tables?: SqliteDbRef["tables"]; index?: unknown }
@@ -807,12 +937,12 @@ export function sqliteDatabase(
       const index = indexedCollectionDescriptorOf(
         snapshotQueryResult(options),
       );
-      // `handle` is a builtin RESULT cell (makeResultCell), and result cells
-      // are always `of:`-schemed — the computed kind applies only to derived
-      // internal cells — so stripping the entity scheme yields the handle's
-      // stable, historical key form. Deriving from the scheme-preserving
-      // sourceURI through the canonical helper keeps that assumption
-      // explicit and in one place.
+      // `handle` is a builtin RESULT cell (`databaseHandle()`), and result
+      // cells are always `of:`-schemed — the computed kind applies only to
+      // derived internal cells — so stripping the entity scheme yields the
+      // handle's stable, historical key form. Deriving from the
+      // scheme-preserving sourceURI through the canonical helper keeps that
+      // assumption explicit and in one place.
       const id = (typeof handle.sourceURI === "string"
         ? stripEntityUriScheme(handle.sourceURI)
         : undefined) ?? JSON.stringify(handle.getAsLink());
@@ -921,8 +1051,10 @@ export function sqliteDatabase(
   };
   return {
     action,
+    // An earlier handle the node keeps (`databaseHandle()`) is left out: the
+    // declaration names a store before it exists, and that one already does.
     storeWrites: ownedStoreLinks(runtime, parentCell, [
-      resultCellCause("sqliteDatabase", cause),
+      databaseHandleCause(cause, parentCell),
     ]),
   };
 }
