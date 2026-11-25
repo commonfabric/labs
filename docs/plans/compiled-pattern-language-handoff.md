@@ -312,13 +312,15 @@ Provisional decisions were numbered per round to avoid collisions: P250 to
 P253 serving, P270 to P275 and P330 to P335 resume by units, P290 to P296
 and P350 to P360 sandbox and scopes, P310 to P316 and P370 to P382 write integrity, P410 and
 P411 specification review; P420 to P425 resume by units, fourth round; P390
-to P394 serving, round fifteen; P450 to P456 the merges and rounds nineteen
-to twenty-one (the next is P457). Note
+to P394 serving, round fifteen; P450 to P457 the merges and rounds nineteen
+to twenty-two (the next is P458; P470 and P471 are taken by the
+uncommitted work on `claude/fabrichat-row-rights-68447f`). Note
 numbers in `SPEC-NOTES.md` likewise: 692 to 704, 860 to 875 and 960 to 975
 trunk, 940 to 944 carry, 742 to 752 and 880 to 892 sandbox, 760 to 772
 and 900 to 914 write integrity, 851 to 866 and 920 to 932 serving, 980 to
-1026 the merges and the rounds after them (1016 to 1026 on
-`claude/compiled-pattern-scoped-rows`; the next is 1027). The plan documents hold decisions up to
+1034 the merges and the rounds after them (1016 to 1034 on
+`claude/compiled-pattern-scoped-rows`; the next is 1035; 1060 to 1062 are
+taken by the uncommitted work on `claude/fabrichat-row-rights-68447f`). The plan documents hold decisions up to
 P210 and P410 to P411; the rounds after that are in `SPEC-NOTES.md` of their
 branches only and need a document round after the merges.
 
