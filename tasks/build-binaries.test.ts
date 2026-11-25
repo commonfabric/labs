@@ -1348,6 +1348,49 @@ Deno.test("buildToolshed and buildCli compile their entry points to the dist dir
   }
 });
 
+Deno.test("buildCli bakes a main-thread heap limit of 16 GiB into the cf binary", async () => {
+  // A compiled binary reads no V8 flags when it starts, so the ones it is
+  // built with are the limit it runs with. Run Deno with the flags the build
+  // passes, and without, and read the heap limit V8 settles on.
+  const root = await makeFakeRepo();
+  try {
+    const config = new BuildConfig({ root, toolshedFlags: [] });
+    const { asked, run } = standInRunner(() => Promise.resolve());
+    await logged(() => buildCli(config, run));
+    const v8Flags = asked[0].args?.filter((arg) =>
+      arg.startsWith("--v8-flags=")
+    ) ?? [];
+    expect(v8Flags).toEqual(["--v8-flags=--max-old-space-size=16384"]);
+
+    // Deno run from source takes `DENO_V8_FLAGS`, so it stays out of both
+    // runs.
+    const env = Deno.env.toObject();
+    delete env.DENO_V8_FLAGS;
+    const heapLimit = async (flags: readonly string[]) => {
+      const output = await new Deno.Command(Deno.execPath(), {
+        clearEnv: true,
+        env,
+        args: [
+          "eval",
+          "--no-config",
+          ...flags,
+          `import { getHeapStatistics } from "node:v8";
+          console.log(getHeapStatistics().heap_size_limit);`,
+        ],
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      assert(output.success, new TextDecoder().decode(output.stderr));
+      return Number(new TextDecoder().decode(output.stdout));
+    };
+    const gib16 = 16 * 1024 ** 3;
+    expect(await heapLimit(v8Flags)).toBeGreaterThanOrEqual(gib16);
+    expect(await heapLimit([])).toBeLessThan(gib16);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test("runBuildBinaries bakes the output-based version unless asked for the inputs one", async () => {
   const root = await makeFakeRepo();
   const original = Deno.env.get("CF_COMPILE_CACHE_VERSION");
