@@ -11,6 +11,7 @@ import {
   type EmbeddedClasses,
   type EmbeddedColoring,
   type EmbeddedStretch,
+  prepareGrammar,
   type SyntaxNode,
   tokenClasses,
   type TreeSitterGrammar,
@@ -44,18 +45,8 @@ interface EmbeddedLanguage {
   highlighter?(text: string): Highlighter | undefined;
 }
 
-/** The highlighter of a page's scripts, once {@link loadScriptHighlighting}
- * has loaded it. */
+/** The highlighter of a page's scripts, once the grammar has loaded it. */
 let scripts: typeof ScriptHighlighting | undefined;
-
-/** Load the highlighter of a page's scripts. */
-export async function loadScriptHighlighting(): Promise<void> {
-  // The TypeScript compiler the highlighter runs on is large and reads the
-  // environment as it loads, so a page loads it when it is shown, and a module
-  // that only lists the grammars, such as the binary build, does not.
-  // deno-lint-ignore cf-imports/no-inline-module-import
-  scripts ??= await import("../typescript/parse.ts");
-}
 
 /** Each language that colors part of a page. */
 const LANGUAGES = {
@@ -280,6 +271,16 @@ export const htmlGrammar: TreeSitterGrammar = {
 
   // Error recovery can hold an element inside an error node.
   structureParents: new Set(["document", "element", "ERROR"]),
+
+  async prepareEmbedded() {
+    // The TypeScript compiler the script highlighter runs on is large and
+    // reads the environment as it loads, so the grammar loads it when a page
+    // is shown, and a module that only lists the grammars, such as the binary
+    // build, does not.
+    // deno-lint-ignore cf-imports/no-inline-module-import
+    const loading = import("../typescript/parse.ts");
+    [scripts] = await Promise.all([loading, prepareGrammar(cssGrammar)]);
+  },
 
   structureEntry(node) {
     const tag = node.type.endsWith("element") ? node.firstNamedChild : null;

@@ -105,6 +105,11 @@ export interface TreeSitterGrammar {
    * of the source. Each stretch's classes replace the query's over its
    * extent. */
   embedded?(root: SyntaxNode): Iterable<EmbeddedStretch>;
+
+  /** Load what colors the grammar's embedded stretches. The grammar counts as
+   * loaded once this has finished as well as its parser, so each way a grammar
+   * loads loads this, and a view hears of both together. */
+  prepareEmbedded?(): Promise<void>;
 }
 
 /** A stretch of source that another language colors. */
@@ -303,7 +308,10 @@ async function loadGrammarNow(
     compiled.set(wasmUrl, compiling);
     compiling.catch(() => compiled.delete(wasmUrl));
   }
-  const language = await compiling;
+  const [language] = await Promise.all([
+    compiling,
+    grammar.prepareEmbedded?.(),
+  ]);
   const parser = new module.Parser();
   parser.setLanguage(language);
   const query = new module.Query(language, grammar.highlightQuery);

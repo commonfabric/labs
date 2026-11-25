@@ -87,6 +87,37 @@ describe("adapter", () => {
       ]);
     });
 
+    it("loads a grammar once what colors its embedded stretches has loaded", async () => {
+      const embedded = Promise.withResolvers<void>();
+      const grammar: TreeSitterGrammar = {
+        ...pythonGrammar,
+        id: "python-embedded-load",
+        prepareEmbedded: () => embedded.promise,
+      };
+      const failures: (string | undefined)[] = [];
+      const stop = onGrammarLoad((failure) => failures.push(failure));
+      try {
+        const prepared = prepareGrammar(grammar);
+        // The parser compiles once for both grammars.
+        await prepareGrammar(pythonGrammar);
+        expect(classesOf(highlightLines(grammar, "x = 1"), "x = 1")).toEqual([
+          "plain",
+        ]);
+        expect(failures).toEqual([]);
+
+        embedded.resolve();
+        await prepared;
+
+        expect(failures).toEqual([undefined]);
+        expect(classesOf(highlightLines(grammar, "x = 1"), "1")).toEqual([
+          "number",
+        ]);
+      } finally {
+        embedded.resolve();
+        stop();
+      }
+    });
+
     it("reads a shared grammar file again after a failed read", async () => {
       const directory = await Deno.makeTempDir();
       const copy = join(directory, "late.wasm");
