@@ -25,7 +25,7 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
 | `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The merged branch at `5db1c2658d`: every branch of the build, and the two executor fixes of round twenty (P453) | #10183, stacked on #10140 |
 | `merge-attempt/serving-m6` | none | The merge of the serving branch, at `31d73441f8`; the merged branch was fast-forwarded to it | none |
-| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Round twenty-one: a scoped read in the body of a per-element construct stored per row (P454 to P456), cut from the merged branch at `5db1c2658d` | none (local) |
+| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one and twenty-two at `4df0c33bdf`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457); cut from the merged branch at `5db1c2658d` | none (local) |
 | `claude/fabrichat-row-rights-68447f` | `fabrichat-row-rights-68447f` | The FabriChat room, real and copy, whose message rows derive their own controls; the two executor fixes of round twenty, carried onto the merged branch | none (local) |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
@@ -126,6 +126,33 @@ twenty).
   every operator expression that reads a handle or a value of another cone,
   at the cost of a cone instance per row for each, is the owner's decision
   (note 1025).
+  Round twenty-two (`4df0c33bdf`, notes 1027 to 1034, P457) found the
+  cause of the regression: P455 kept each value place's scope in the map of
+  the scoped-outputs document's paths, so a refused commit of that document
+  marked every place of every row stale (`Instance.#valueScopes` now keeps
+  them apart). `fair-share`'s refusals remain for another reason, a liveness
+  defect: the marker of a stream that a derivation writes for the row of an
+  element carrying a confidentiality clause is written under no record,
+  takes the join of what the derivation evaluated, and is refused at every
+  derivation while the element exists; `vault` loses an event under the
+  serving loop the same way. Which label the marker owes is FabriChat round
+  two's question 4 (note 745), deferred. The basis document's list is now
+  spread over 256 part documents (P457): the basis is about 4 KB at every
+  size and a send writes about 31 parts, so what it writes still grows, at
+  1/256 of the rate. Leaving out the documents a resume derives again was
+  tried and refused whole resumes in the corpus. A send at 1,000 messages
+  now changes 2.37 MB (4.02 before); at 100, 75 to 77 documents of 408 to
+  416 KB. Four reads keep the room's tree of the scope `session` (note
+  1031): the `failed` read of `Instance.rootOf`; the spread `...view`
+  emitted as a read of the whole record; `{profileWish[UI]}`, a path of a
+  `wish` result of the scope `user` placed as a JSX child; and the rows'
+  `authorProfile` (the link-following work). With the first three changed in
+  a scratch worktree the tree is of the space and a send at 100 changes
+  220 KB. Not landed: `rootOf` without `failed` exposes an executor defect,
+  a value that becomes scoped after `#generated` stored it in a document of
+  the space is refused by `#refuseStoredForEveryKey` (plan in note 1030);
+  emitting the spread as a pass stores less label and waits for the owner's
+  ruling (CFC question 4 of round twenty-two).
 - *Fixed in round twenty, two executor defects (notes 1012 and 1013).*
   `Executor.#invoke` handed a body a plain value where an `identity` entry
   of `Body.computed` reached each row through `*`, so a body that resolved
