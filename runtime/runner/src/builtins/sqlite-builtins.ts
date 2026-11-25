@@ -1140,10 +1140,13 @@ export function sqliteQuery(
 ): RawBuiltinResult {
   /**
    * The result cell an accepted transaction linked into the node's output,
-   * with the scope it was minted at. Unset until a transaction that links one
-   * has been accepted, so that every run until then links it again.
+   * with the scope it was minted at. Unset until such a transaction has been
+   * accepted, so that every run until then links it again.
    */
   let published: { result: Cell<QueryState>; scope: CellScope } | undefined;
+
+  /** Runs that linked the result cell and whose transactions are unsettled. */
+  let publishing = 0;
 
   // One owner signal covers query work and completion writebacks. Unsent
   // endings also observe it: cancellation releases the result store's
@@ -1356,11 +1359,21 @@ export function sqliteQuery(
     }
     // The scheduler runs this same action again after a stale-basis
     // rejection, and a serving runtime's wave can still withdraw a commit
-    // that succeeded. A run whose link did not land leaves the next run to
-    // make it.
+    // that succeeded, so a run whose link did not land leaves the next run
+    // to make it. A write equal to what this runtime already holds, its own
+    // unconfirmed writes included, is not sent. A run that starts while an
+    // earlier linking run is unsettled may therefore send no link, and if
+    // that earlier run is then refused, no accepted transaction carries one.
+    // So only the acceptance of a run that started with no linking run
+    // unsettled marks the link as made.
     if (needsPublication) {
+      const alone = publishing === 0;
+      publishing++;
       onAcceptance(tx, () => {
-        published = { result, scope };
+        publishing--;
+        if (alone) published = { result, scope };
+      }, () => {
+        publishing--;
       });
     }
 
