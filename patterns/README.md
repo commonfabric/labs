@@ -38,10 +38,12 @@ of each pattern's inputs and outputs, which a check compares each new version
 against. `integration/` holds the browser tests. `tools/` holds scripts and test
 helpers.
 
-Stored data can name a pattern by the key it had before the patterns were sorted
-into categories, such as `system:topics/main.tsx`. The runtime maps each such
-key to the pattern's current key, using the table in
-`runtime/runner/src/pattern-key-moves.ts`.
+Stored data can name a pattern by a key it had before it moved, such as
+`system:topics/main.tsx` from before the patterns were sorted into categories.
+The runtime maps each such key to the pattern's current key, however many times
+the pattern moved since, using the table in
+`runtime/runner/src/pattern-key-moves.ts`. Moving a pattern adds an entry to
+that table and changes no entry already in it.
 
 This README is intentionally just a signpost. The maintained references are:
 

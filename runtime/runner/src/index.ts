@@ -249,7 +249,10 @@ export {
 export {
   currentPatternKey,
   formerPatternKey,
+  formerPatternKeys,
   mainNamesPattern,
+  type PatternKeyMoves,
+  patternKeyMovesIn,
 } from "./pattern-key-moves.ts";
 export { DocumentLoadError, loadDocument } from "./document-readiness.ts";
 export {

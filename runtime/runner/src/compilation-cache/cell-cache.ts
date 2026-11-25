@@ -36,7 +36,7 @@ import {
 import type { CacheableModule } from "../harness/types.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { createSigilLinkFromParsedLink, parseLink } from "../link-utils.ts";
-import { formerPatternKey } from "../pattern-key-moves.ts";
+import { formerPatternKeys } from "../pattern-key-moves.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
 import type { MemorySpace, Runtime } from "../runtime.ts";
 import { normalizeCellScope } from "../scope.ts";
@@ -265,17 +265,20 @@ const rootsOfSharedTail = (
 };
 
 /**
- * The name a module had before the patterns were sorted into categories: a
- * name below the patterns route, or below a checkout's `/patterns/`, names the
- * pattern by its key, and a pattern that moved had another key.
+ * The names a module had before its pattern moved, the latest first: a name
+ * below the patterns route, or below a checkout's `/patterns/`, names the
+ * pattern by its key, and a pattern that moved had other keys. None for a
+ * module whose pattern never moved.
  */
-const formerModuleName = (name: string): string => {
+const formerModuleNames = (name: string): string[] => {
   for (const root of ["/api/patterns/", "/patterns/"]) {
     if (name.startsWith(root)) {
-      return `${root}${formerPatternKey(name.slice(root.length))}`;
+      return formerPatternKeys(name.slice(root.length)).map((key) =>
+        `${root}${key}`
+      );
     }
   }
-  return name;
+  return [];
 };
 
 /**
@@ -294,8 +297,8 @@ const formerModuleName = (name: string): string => {
  * `/patterns` — and every other module additionally matches the
  * previous module named by its own name under the previous root. A module
  * named below the patterns route or a checkout's `/patterns/` also matches
- * the previous module named by the key its pattern had before the patterns
- * were sorted into categories, under either root. A module with more than one
+ * the previous module named by each key its pattern had before it moved,
+ * under either root. A module with more than one
  * candidate, or one that two successors claim, is ambiguous and matches
  * nothing.
  *
@@ -366,28 +369,33 @@ export function deriveModulePredecessors<
       next: nextEntry,
     }
     : undefined;
-  // The entries' shared tail is taken twice: as the entries are named, and
-  // with the next entry under the key its pattern had before the patterns
-  // were sorted into categories. Each gives the roots its own names shift
-  // between.
-  const rootPairs = entryPair === undefined ? [] : [
-    { rename: (name: string) => name },
-    { rename: formerModuleName },
-  ].flatMap(({ rename }) => {
-    const roots = rootsOfSharedTail(
-      canonicalModuleFilename(entryPair.previous.doc.filename),
-      rename(canonicalModuleFilename(entryPair.next.filename)),
-    );
-    return roots === undefined ? [] : [{ rename, roots }];
-  });
+  // The entries' shared tail is taken as the entries are named, and with the
+  // next entry under each key its pattern had before it moved. Each gives the
+  // roots its own names shift between. Another module may have moved fewer
+  // times than the entry, or more, so each module is tried under its own name
+  // and each of its former names against every pair of roots.
+  const nextEntryName = entryPair === undefined
+    ? undefined
+    : canonicalModuleFilename(entryPair.next.filename);
+  const rootPairs = entryPair === undefined || nextEntryName === undefined
+    ? []
+    : [nextEntryName, ...formerModuleNames(nextEntryName)].flatMap((name) => {
+      const roots = rootsOfSharedTail(
+        canonicalModuleFilename(entryPair.previous.doc.filename),
+        name,
+      );
+      return roots === undefined || roots.previous === roots.next
+        ? []
+        : [roots];
+    });
   const namesFor = (name: string): string[] => {
-    const names = new Set([name, formerModuleName(name)]);
-    for (const { rename, roots } of rootPairs) {
-      const renamed = rename(name);
-      if (
-        roots.previous !== roots.next && renamed.startsWith(`${roots.next}/`)
-      ) {
-        names.add(`${roots.previous}${renamed.slice(roots.next.length)}`);
+    const own = [name, ...formerModuleNames(name)];
+    const names = new Set(own);
+    for (const roots of rootPairs) {
+      for (const candidate of own) {
+        if (candidate.startsWith(`${roots.next}/`)) {
+          names.add(`${roots.previous}${candidate.slice(roots.next.length)}`);
+        }
       }
     }
     return [...names];

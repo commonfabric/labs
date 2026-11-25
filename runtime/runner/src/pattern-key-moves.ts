@@ -1,6 +1,5 @@
 /**
- * The new key of each pattern that moved when the patterns were sorted into
- * `<category>/<pattern>/` directories, indexed by its old key.
+ * The key each moved pattern moved to, indexed by the key it moved from.
  *
  * A key is a path below the patterns route. A key in this table that ends in
  * `/` names a directory, and every file below that directory moved with it.
@@ -11,6 +10,11 @@
  * its stored ref to the new key, but a genesis receipt is never rewritten, so
  * the table is permanent, and so is every old key in it: no file may be added
  * at one.
+ *
+ * A pattern that moves again gets a second entry, from the key it moved to
+ * before, and the entry naming that key stays as it is: the lookups follow the
+ * entries from one key to the next, so each entry records one move. The table
+ * holds no cycle.
  */
 export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "activity-log/": "apps/activity-log/",
@@ -53,6 +57,10 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "counter/": "examples/counter/",
   "cozy-poll/": "apps/cozy-poll/",
   "deep-research.tsx": "apps/deep-research/deep-research.tsx",
+  "dev/map-captured-object-spread/main.test.tsx":
+    "dev/map-captured-object-spread/map-captured-object-spread.test.tsx",
+  "dev/map-captured-object-spread/main.tsx":
+    "dev/map-captured-object-spread/map-captured-object-spread.tsx",
   "dice-handlers.ts": "showcase/dice/dice-handlers.ts",
   "dice.test.tsx": "showcase/dice/dice.test.tsx",
   "dice.tsx": "showcase/dice/dice.tsx",
@@ -282,51 +290,126 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
 };
 
 /**
- * The table's entries, longest key first, so that the entry for a file is found
- * before the entry for the directory holding it.
+ * The index of the entry of `moves` whose key names `key` or a directory
+ * holding it; -1 when none does.
  */
-const MOVES = Object.entries(MOVED_PATTERN_KEYS).sort(([a], [b]) =>
-  b.length - a.length
-);
+function entryMoving(
+  key: string,
+  moves: readonly (readonly [string, string])[],
+): number {
+  return moves.findIndex(([from]) =>
+    key === from || (from.endsWith("/") && key.startsWith(from))
+  );
+}
 
-/** The entry of `moves` whose key names `key` or a directory holding it. */
+/** `key` as the entry of `moves` that names it moves it. */
 function movedBy(
   key: string,
   moves: readonly (readonly [string, string])[],
 ): string {
-  for (const [from, to] of moves) {
-    if (key === from) return to;
-    if (from.endsWith("/") && key.startsWith(from)) {
-      return to + key.slice(from.length);
-    }
+  const entry = entryMoving(key, moves);
+  return entry < 0 ? key : movedByEntry(key, moves[entry]);
+}
+
+/** `key` as `[from, to]`, an entry naming it, moves it. */
+function movedByEntry(
+  key: string,
+  [from, to]: readonly [string, string],
+): string {
+  return from.endsWith("/") ? to + key.slice(from.length) : to;
+}
+
+/**
+ * The keys `key` passes through as `moves` is applied to it again and again,
+ * nearest first, until a key `moves` leaves unchanged; none when `moves`
+ * leaves `key` itself unchanged. A pattern's moves apply each entry at most
+ * once, so the walk stops at a key it already reached or at an entry it
+ * already applied: a cycle in a table ends it instead of hanging it, including
+ * one through directory entries that reaches a longer key on every pass.
+ */
+function movesFrom(
+  key: string,
+  moves: readonly (readonly [string, string])[],
+): string[] {
+  const keys: string[] = [];
+  const seen = new Set([key]);
+  const applied = new Set<number>();
+  for (let at = key;;) {
+    const entry = entryMoving(at, moves);
+    if (entry < 0 || applied.has(entry)) return keys;
+    applied.add(entry);
+    const next = movedByEntry(at, moves[entry]);
+    if (seen.has(next)) return keys;
+    seen.add(next);
+    keys.push(next);
+    at = next;
   }
-  return key;
 }
 
-/** The table's entries reversed, longest new key first. */
-const FORMER = Object.entries(MOVED_PATTERN_KEYS)
-  .map(([from, to]) => [to, from] as const)
-  .sort(([a], [b]) => b.length - a.length);
+/** The lookups a table of moves answers. */
+export interface PatternKeyMoves {
+  /**
+   * The key a pattern is served under, given a key it may have been served
+   * under before it moved, however many times it moved since. A key that
+   * never moved comes back unchanged.
+   */
+  current(key: string): string;
+
+  /**
+   * The key a pattern was served under before its latest move, given the key
+   * it is served under now. A key that never moved comes back unchanged.
+   */
+  former(key: string): string;
+
+  /**
+   * Every key a pattern was served under before it came to be served under
+   * `key`, the key before its latest move first and its first key last; none
+   * for a key that never moved.
+   */
+  formers(key: string): string[];
+}
 
 /**
- * The key a pattern is served under, given a key it may have been served under
- * before it moved. A key that never moved comes back unchanged.
+ * The lookups of `table`, a table of moves shaped as
+ * {@link MOVED_PATTERN_KEYS} is.
  */
+export function patternKeyMovesIn(
+  table: Readonly<Record<string, string>>,
+): PatternKeyMoves {
+  // A file's own entry is found before the entry for a directory holding it,
+  // so each direction is searched longest key first.
+  const forward = Object.entries(table)
+    .sort(([a], [b]) => b.length - a.length);
+  const backward = Object.entries(table)
+    .map(([from, to]) => [to, from] as const)
+    .sort(([a], [b]) => b.length - a.length);
+  return {
+    current: (key) => movesFrom(key, forward).at(-1) ?? key,
+    former: (key) => movedBy(key, backward),
+    formers: (key) => movesFrom(key, backward),
+  };
+}
+
+const MOVES = patternKeyMovesIn(MOVED_PATTERN_KEYS);
+
+/** {@link PatternKeyMoves.current} of {@link MOVED_PATTERN_KEYS}. */
 export function currentPatternKey(key: string): string {
-  return movedBy(key, MOVES);
+  return MOVES.current(key);
 }
 
-/**
- * The key a pattern was served under before it moved, given the key it is
- * served under now. A key that never moved comes back unchanged.
- */
+/** {@link PatternKeyMoves.former} of {@link MOVED_PATTERN_KEYS}. */
 export function formerPatternKey(key: string): string {
-  return movedBy(key, FORMER);
+  return MOVES.former(key);
+}
+
+/** {@link PatternKeyMoves.formers} of {@link MOVED_PATTERN_KEYS}. */
+export function formerPatternKeys(key: string): string[] {
+  return MOVES.formers(key);
 }
 
 /**
  * Whether a stored program's entry module name names the pattern served under
- * `key`, by that key or by the key the pattern had before it moved. A compile
+ * `key`, by that key or by a key the pattern had before it moved. A compile
  * can put any root in front of a current key, so a current key is matched by
  * the name's ending. A former key is matched only below a patterns directory
  * (`/api/patterns/`, `/packages/patterns/`, or `/patterns/`) or at the root,
@@ -335,8 +418,8 @@ export function formerPatternKey(key: string): string {
  * of that name inside another pattern.
  */
 export function mainNamesPattern(main: string, key: string): boolean {
-  const former = formerPatternKey(key);
   return main.endsWith(`/${key}`) ||
-    (former !== key &&
-      (main === `/${former}` || main.endsWith(`/patterns/${former}`)));
+    formerPatternKeys(key).some((former) =>
+      main === `/${former}` || main.endsWith(`/patterns/${former}`)
+    );
 }
