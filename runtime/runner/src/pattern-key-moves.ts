@@ -333,6 +333,7 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "system/backlinks-index.test.tsx":
     "system/backlinks-index/backlinks-index.test.tsx",
   "system/backlinks-index.tsx": "system/backlinks-index/backlinks-index.tsx",
+  "system/chatbot/chatbot.tsx": "system/chatbot/main.tsx",
   "system/common-fabric.tsx": "system/common-fabric/common-fabric.tsx",
   "system/default-app-ben.test.tsx":
     "dev/default-app-ben/default-app-ben.test.tsx",
@@ -351,7 +352,10 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "system/home.test.tsx": "system/home/home.test.tsx",
   "system/home.tsx": "system/home/home.tsx",
   "system/journal.tsx": "system/journal/journal.tsx",
+  "system/journal/journal.tsx": "system/journal/main.tsx",
   "system/knowledge-graph.tsx": "system/knowledge-graph/knowledge-graph.tsx",
+  "system/knowledge-graph/knowledge-graph.tsx":
+    "system/knowledge-graph/main.tsx",
   "system/link-tool.tsx": "system/link-tool/link-tool.tsx",
   "system/mentionables-inspector.tsx":
     "system/mentionables-inspector/mentionables-inspector.tsx",
@@ -401,6 +405,7 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "system/shared-space-profiles.test.tsx":
     "system/shared-space/shared-space-profiles.test.tsx",
   "system/space-overview.tsx": "system/space-overview/space-overview.tsx",
+  "system/space-overview/space-overview.tsx": "system/space-overview/main.tsx",
   "system/suggestion-history.tsx":
     "system/suggestion-history/suggestion-history.tsx",
   "system/suggestion.tsx": "system/suggestion/suggestion.tsx",

@@ -24,7 +24,7 @@ occurrences.
 
 ### chatbot.tsx
 
-**Location**: `patterns/system/chatbot/chatbot.tsx`
+**Location**: `patterns/system/chatbot/main.tsx`
 
 - `clearChat`: simple `handler()` → inline handler
 

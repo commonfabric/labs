@@ -807,7 +807,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // Two entries, one per pattern, for one ruling: `LLMMessageSchema` stopped
     // admitting the `system` role, and that schema reaches the argument
     // contract of every pattern whose `messages` it types.
-    pattern: "system/chatbot/chatbot.tsx",
+    pattern: "system/chatbot/main.tsx",
     baselines: [
       "20260729T022742Z-Wx_o-CaAUThcJygl",
       "20260818T183826Z-ibsxlvix5LQH7bfY",

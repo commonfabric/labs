@@ -8,7 +8,7 @@ import {
   fireEvent,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import SpaceOverview from "./space-overview.tsx";
+import SpaceOverview from "./main.tsx";
 
 // The model fails the analysis the autostart asks for.
 export const llmMocks = [

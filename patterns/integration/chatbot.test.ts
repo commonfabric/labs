@@ -46,7 +46,7 @@ describe("Chat pattern test", () => {
             "..",
             "system",
             "chatbot",
-            "system/chatbot/chatbot.tsx",
+            "system/chatbot/main.tsx",
           ),
         ),
         { start: false },

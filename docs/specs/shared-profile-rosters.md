@@ -140,7 +140,7 @@ elsewhere in the repo:
 
 - `wish<string>({ query: "#profileName" })` and reading `.result` —
   `patterns/examples/shared-profile-demo/main.tsx`,
-  `patterns/system/chatbot/chatbot.tsx`; `profileFace()` on the profile cell
+  `patterns/system/chatbot/main.tsx`; `profileFace()` on the profile cell
   in the join handler — `patterns/examples/group-chat-lobby/main.tsx`.
 - `PerSpace` / `PerUser` roster + writable-cell aliases + a join handler that
   writes the roster — `patterns/showcase/scrabble/main.tsx`,

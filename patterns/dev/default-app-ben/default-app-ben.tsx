@@ -22,7 +22,7 @@ import SummaryIndex from "../../system/summary-index/summary-index.tsx";
 import KnowledgeGraph, {
   getNeighborsPattern,
   searchGraphPattern,
-} from "../../system/knowledge-graph/knowledge-graph.tsx";
+} from "../../system/knowledge-graph/main.tsx";
 
 import QuickCapture from "../../system/quick-capture/quick-capture.tsx";
 import OmniboxFAB from "../../system/omnibox-fab/omnibox-fab.tsx";
