@@ -810,3 +810,199 @@ describe("a branch of a row on another cone of the row of the scope `session`", 
     }
   });
 });
+
+// The rows of a per-element construct that each hold a `map` over a value of
+// the scope `user`, as each message row of FabriChat holds its reactions: the
+// rows stay rows of the space, and each row holds a link to a document of its
+// own for the rows of the inner `map`, with a scope instance for each
+// principal that holds that principal's inner rows (note 1075). Each case
+// over two principals at 10 and at 100 items.
+const NESTED_CASES = [
+  {
+    fixture: "scoped-nested-rows",
+    case: "the rows of a `map` over an array of references",
+    plain: false,
+  },
+  {
+    fixture: "scoped-nested-rows-plain",
+    case: "the rows of a `map` over an array of plain values in place",
+    plain: true,
+  },
+  {
+    fixture: "scoped-nested-rows-filter",
+    case:
+      "the rows of a `map` over the result of a `filter` over an array of references",
+    plain: false,
+  },
+];
+
+/**
+ * The entries `run` evaluates. The places of the inner rows are compared on
+ * every pull, since the elements of a `map` over the result of a `computed`
+ * are read through references by key into the document of that output
+ * (ruling Z53), so what a derivation brings up to date is counted by what
+ * it evaluates and not by what it pulls.
+ */
+const evaluatedBy = (
+  held: Awaited<ReturnType<typeof started>>,
+  run: () => void,
+): number => {
+  const before = held.instance.counts.evaluations;
+  run();
+  return held.instance.counts.evaluations - before;
+};
+
+/** The rows a principal reads, each with the marks its inner `map` gave. */
+const nestedRows = (
+  held: Awaited<ReturnType<typeof started>>,
+  principal: string,
+): { title: string; marks: unknown }[] =>
+  held.as(principal, () => {
+    held.instance.settle();
+    return (held.instance.result() as {
+      rows: { title: string; marks: unknown }[];
+    }).rows;
+  });
+
+for (const { fixture, case: rows, plain } of NESTED_CASES) {
+  describe(`${rows}, each of which holds a \`map\` over a value of the scope \`user\``, () => {
+    it("gives each principal the inner rows its own nickname selects, with no error state, at 10 items as at 100", async () => {
+      for (const size of [10, 100]) {
+        const held = await started(fixture, size, plain);
+        held.send("ann", "call", { name: "Ann" });
+
+        const ann = nestedRows(held, "ann");
+        const bob = nestedRows(held, "bob");
+        expect(ann.length).toBe(size);
+        expect(bob.length).toBe(size);
+        expect(ann[3].marks).toEqual(["item 3!", "Ann!"]);
+        expect(bob[3].marks).toEqual(["item 3!"]);
+        expect(JSON.stringify(held.instance.store.docs.get("result")))
+          .not.toContain("$error");
+
+        held.send("bob", "call", { name: "Bob" });
+        expect(nestedRows(held, "bob")[7].marks).toEqual(["item 7!", "Bob!"]);
+        expect(nestedRows(held, "ann")[7].marks).toEqual(["item 7!", "Ann!"]);
+      }
+    });
+
+    it("holds one place per row in the scope instances of each principal, of a size that does not follow the rows", async () => {
+      const [small, large] = await Promise.all(
+        [10, 100].map((size) => started(fixture, size, plain)),
+      );
+
+      for (const principal of ["ann", "bob"]) {
+        const counts = [small, large].map((held) =>
+          held.instancesOf(principal).length
+        );
+        expect(counts[1] - counts[0]).toBe(90);
+        const largest = [small, large].map((held) =>
+          maxOf(
+            held.instancesOf(principal).map(([, document]) =>
+              JSON.stringify(document.value).length
+            ),
+          )
+        );
+        expect(largest[1] - largest[0]).toBeLessThanOrEqual(2);
+      }
+    });
+
+    it("writes the place of the edited row once for each principal, and the same documents at 10 items as at 100, for an edit of one item", async () => {
+      const edits = await Promise.all([10, 100].map(async (size) => {
+        const held = await started(fixture, size, plain);
+        const writes = held.written(() => {
+          held.send("ann", "rename", { at: 3, title: "renamed" });
+          held.view("ann");
+          held.view("bob");
+        });
+        return {
+          writes,
+          sizes: held.sizesWritten(writes, "ann"),
+          rows: nestedRows(held, "bob"),
+        };
+      }));
+
+      for (const { writes, rows } of edits) {
+        const scoped = writes.filter((write) => write.includes("~"));
+        expect(scoped.length).toBe(2);
+        expect(new Set(scoped.map((write) => write.split(" ")[0])).size)
+          .toBe(1);
+        expect(rows[3].marks).toEqual(["renamed!"]);
+      }
+      expect(normalized(edits[1].writes)).toEqual(normalized(edits[0].writes));
+      expect(edits[1].sizes).toEqual(edits[0].sizes);
+    });
+
+    it("writes the places of the principal whose nickname changed, and none of another", async () => {
+      for (const size of [10, 100]) {
+        const held = await started(fixture, size, plain);
+        const writes = held.written(() => {
+          held.send("ann", "call", { name: "Ann" });
+          held.view("ann");
+          held.view("bob");
+        });
+        const places = writes.filter((write) =>
+          write.split(" ")[0].endsWith("~user")
+        );
+
+        // The nickname's own state cell, and the place of each row.
+        expect(new Set(places.map((write) => write.split(" ")[0])).size)
+          .toBe(size + 1);
+        expect(evaluatedBy(held, () => held.view("bob"))).toBe(0);
+      }
+    });
+
+    it("stores again, after a refused commit, the place the acting principal's commit wrote and no place of another principal", async () => {
+      for (const size of [10, 100]) {
+        const held = await started(fixture, size, plain);
+        const before = new Map(
+          held.instancesOf("ann").map(([id, document]) => [
+            id,
+            document.value,
+          ]),
+        );
+        const [place] = held.written(() => {
+          held.send("ann", "rename", { at: 3, title: "renamed" });
+          held.view("ann");
+        }).filter((write) => write.includes("~"))
+          .map((write) => write.split(" ")[0]);
+        held.view("bob");
+        const stored = held.as(
+          "ann",
+          () => JSON.stringify(held.instance.store.docs.get(place)?.value),
+        );
+        const bob = JSON.stringify(held.instancesOf("bob"));
+        let writes: string[] = [];
+        const restored = held.as("ann", () => {
+          held.instance.restore(place, before.get(`${place}:ann`));
+          return evaluatedBy(held, () => {
+            writes = held.written(() => held.view("ann"));
+          });
+        });
+
+        expect(restored).toBe(1);
+        expect(writes.map((write) => write.split(" ")[0])).toEqual([place]);
+        expect(
+          held.as(
+            "ann",
+            () => JSON.stringify(held.instance.store.docs.get(place)?.value),
+          ),
+        ).toBe(stored);
+        expect(evaluatedBy(held, () => held.view("bob"))).toBe(0);
+        expect(JSON.stringify(held.instancesOf("bob"))).toBe(bob);
+      }
+    });
+
+    it("evaluates nothing for a principal after another acted, at 10 items as at 100", async () => {
+      for (const size of [10, 100]) {
+        const held = await started(fixture, size, plain);
+        held.send("ann", "call", { name: "Ann" });
+        held.view("ann");
+        held.view("bob");
+
+        expect(evaluatedBy(held, () => held.view("ann"))).toBe(0);
+        expect(evaluatedBy(held, () => held.view("bob"))).toBe(0);
+      }
+    });
+  });
+}

@@ -847,11 +847,36 @@ type Dependency = {
   on?: string;
 };
 
+/** The element table of an assembly, with its index by key. */
+type ElementTable = {
+  /** The collection the assembly is of. */
+  collection: number;
+
+  /** The element keys of the collections around it. */
+  around: readonly string[];
+
+  /** The elements, in order. */
+  elements: Element[];
+
+  /** The element of each key. */
+  byKey: Map<string, Element>;
+};
+
 /** What the name that stands for an element table begins with. */
 const TABLE_PREFIX = "table ";
 
 /** The name that stands for the element table of an assembly. */
 const tableName = (assembly: string): string => `${TABLE_PREFIX}${assembly}`;
+
+/**
+ * The text that names the place of the rows of the collection `collection`
+ * under the element keys `keys` of the collections around it, where they
+ * are of a scope key and stand in a row of another collection
+ * (`Instance.#rowsPlace`); the entry that stores them is named
+ * `scoped <text>`.
+ */
+const rowsPlaceText = (collection: number, keys: readonly string[]): string =>
+  JSON.stringify(["rows", collection, ...keys]);
 
 /**
  * What the assembly of a `map` or a `filter` over a stored array keeps
@@ -3810,16 +3835,7 @@ export class Instance {
    * The element table of each collection, by the name of its assembly:
    * the collection, the element keys around it, and the elements.
    */
-  readonly #tables = new Map<
-    string,
-    {
-      collection: number;
-      around: readonly string[];
-      elements: Element[];
-      /** The element of each key. */
-      byKey: Map<string, Element>;
-    }
-  >();
+  readonly #tables = new Map<string, ElementTable>();
 
   /** Holds the element table of an assembly, with its index by key. */
   #setTable(
@@ -3842,6 +3858,11 @@ export class Instance {
    * entry and the key (`Slot.aside`).
    */
   readonly #asideSlots = new Map<string, Map<string, Slot>>();
+  /**
+   * The element table of each assembly set aside for a scope key, by the
+   * name of the assembly and then by the key (`#forActing`).
+   */
+  readonly #asideTables = new Map<string, Map<string, ElementTable>>();
   /** The slots set aside that used each name. */
   readonly #asideUsers = new Map<string, Set<Slot>>();
   /**
@@ -4054,6 +4075,7 @@ export class Instance {
       if (slot.always) this.#alwaysCount -= 1;
     }
     this.#asideSlots.delete(key);
+    this.#asideTables.delete(key);
     this.store.scopes?.forget(`${this.id}\n${key}`);
   }
 
@@ -8700,12 +8722,28 @@ export class Instance {
     const held = this.#memo.get(key);
     if (held?.scoped !== undefined && !scopes.acting(held.scoped)) {
       const slot = this.#slots.get(key);
+      const table = this.#tables.get(key);
       if (
         held.members === undefined && held.rows === undefined &&
-        !this.#tables.has(key)
+        table === undefined
       ) {
         scopes.setAside(name, held);
         if (slot !== undefined) this.#toAside(slot, held);
+      } else if (table !== undefined && slot !== undefined) {
+        // The assembly of a collection is set aside with its element
+        // table, which stands beside the entry: a change of what it was
+        // formed from marks it while it is set aside, and it is brought
+        // back with the table its key formed, so a derivation for one key
+        // forms no assembly another key's formed.
+        scopes.setAside(name, held);
+        this.#toAside(slot, held);
+        let tables = this.#asideTables.get(key);
+        if (tables === undefined) {
+          tables = new Map();
+          this.#asideTables.set(key, tables);
+        }
+        tables.set(held.scoped, table);
+        this.#tables.delete(key);
       } else if (slot !== undefined) {
         // An assembly is formed again for each key. What used the entry of
         // the other key, set aside or not, is marked for that key: no mark
@@ -8725,6 +8763,12 @@ export class Instance {
     const back = scopes.takeBack<Entry>(name);
     if (back === undefined) return;
     this.#memo.set(key, back);
+    const tables = this.#asideTables.get(key);
+    const table = tables?.get(back.scoped!);
+    if (table !== undefined) {
+      tables?.delete(back.scoped!);
+      this.#tables.set(key, table);
+    }
     const aside = this.#asideSlots.get(key)?.get(back.scoped!);
     if (aside !== undefined) {
       // The slot stayed registered while the entry was set aside: what
@@ -8973,10 +9017,13 @@ export class Instance {
    * The stored form of a reference to the rows of the assembled
    * collection `reference` that stands at the path `at` of the result,
    * where the assembly is of a scope key, and nothing where it is one for
-   * every key. The rows are stored whole in the scope instance of the
-   * document of the scoped outputs. Below a row of another collection
-   * they have no path
-   * of the result, and the form is an error state.
+   * every key. At a path of the result the rows are stored whole in the
+   * scope instance of the document of the scoped outputs. Below a row of
+   * another collection they have no path of the result: they are stored
+   * whole in a document of their own for the collection and the element
+   * keys around it, with an instance for each scope key (`#rowsPlace`),
+   * and the row holds a link to it, as a row holds one to the place of a
+   * value of a scope key (P455). The row stays a row of the space.
    */
   #scopedRows(
     reference: Assembled,
@@ -8985,7 +9032,12 @@ export class Instance {
   ): unknown {
     const { scopes } = this.store;
     if (scopes === undefined) return undefined;
-    if (!atRoot || !this.#placeScopes.has(JSON.stringify(at))) {
+    const within = atRoot ? [] : this.#outerOf(reference.collection);
+    const keys = this.#keysIn(within, reference.context);
+    const known = atRoot
+      ? this.#placeScopes.has(JSON.stringify(at))
+      : this.#valueScopes.has(rowsPlaceText(reference.collection, keys));
+    if (!known) {
       // A piece that was started with rows left as stored learns where
       // the rows of a collection stand when the unit is placed, and its
       // assembly is first evaluated then, with the rows it can leave. Such
@@ -9005,14 +9057,79 @@ export class Instance {
       if (assembly?.scoped === undefined) return undefined;
     }
     if (!atRoot) {
-      return errorState(
-        "a collection of a scope narrower than the space, in a row of " +
-          "another collection",
+      if (keys.includes("?")) {
+        throw new Error(
+          debugStr`The rows of collection $quote${reference.collection} ` +
+            `stand in a row whose element keys the context lacks`,
+        );
+      }
+      const context = this.freshContext(reference.context);
+      return this.stored(
+        this.#rowsPlace(reference, keys, within)(context).value,
       );
     }
     return this.stored(
       this.#scopedPlace(at, () => reference)(new Map()).value,
     );
+  }
+
+  /**
+   * The entry that stores the rows of the assembled collection `reference`,
+   * which stands in a row of another collection and is of a scope key, in
+   * the scope instance of their document for the scope key evaluated for
+   * (`#rowsDocument`): its value is the reference to that place, which is
+   * the same for every key. The entry is kept under the element keys `keys`
+   * of the collections `within` around it, so it is dropped with them; it
+   * is set aside for each scope key and brought up to date for the key
+   * whose inputs changed (P456), as the place of a value is
+   * (`#valuePlace`).
+   */
+  #rowsPlace(
+    reference: Assembled,
+    keys: readonly string[],
+    within: readonly number[],
+  ): Lazy {
+    const text = rowsPlaceText(reference.collection, keys);
+    const key = `scoped ${text}`;
+    return (context) =>
+      this.#ensureReference(key, context, undefined, "value", (inner) => {
+        const scopes = this.store.scopes!;
+        const rows = this.stored(inner.whole(reference));
+        const before = this.#valueScopes.get(text);
+        const touched = scopes.touched ?? "user";
+        const scope = before === "session" ? before : touched;
+        if (before !== scope) {
+          this.#valueScopes.set(text, scope);
+          // The place moved to the instances of a narrower scope: each
+          // key stores its rows there.
+          this.#staleAside(key);
+        }
+        const doc = scopedDocument(
+          this.#rowsDocument(reference.collection, keys),
+          scope,
+        );
+        this.#putScoped(doc, [], rows);
+        return new Ref(doc, []);
+      }, within);
+  }
+
+  /**
+   * The name, without a scope, of the document whose scope instances hold
+   * the rows of the collection `collection` under the element keys `keys`
+   * of the collections around it, where the collection stands in a row of
+   * another and is of a scope key (`#rowsPlace`): one document for each
+   * collection and element keys, as today's runtime keeps the result of a
+   * node of a row in a cell of its own for the row.
+   */
+  #rowsDocument(collection: number, keys: readonly string[]): string {
+    const id = this.#identifier(
+      "scoped rows",
+      this.plan.collections[collection].within,
+      keys,
+      { collection },
+    );
+    this.root.#scopedRowsOf.set(id, { instance: this, collection, keys });
+    return id;
   }
 
   /**
@@ -9088,6 +9205,127 @@ export class Instance {
     string,
     { instance: Instance; output: number; keys: readonly string[] }
   >();
+
+  /**
+   * On the root: the instance, the collection and the element keys around
+   * it whose rows each document of `#rowsDocument()` holds, by the name of
+   * the document without its scope.
+   */
+  readonly #scopedRowsOf = new Map<
+    string,
+    { instance: Instance; collection: number; keys: readonly string[] }
+  >();
+
+  /**
+   * The records of a write to a scope instance of the document of the rows
+   * of a collection of a scope key below a row of another collection
+   * (`#rowsDocument`). The document holds the rows at its root, as the
+   * output that holds the collection holds them in the result: the array
+   * has the record of that output under the element keys around the
+   * collection, with what a splice changed of its members, and each
+   * position of a row that an output of the collection's body is stored at
+   * has the record of that output under those keys and the row's own. A
+   * position below those, such as the rows of a collection inside a row,
+   * has the record of the nearest of them above it.
+   */
+  #rowsWrites(
+    doc: string,
+    path: readonly string[],
+    splice: { start: number; removed: number; inserted: number } | undefined,
+    place: { collection: number; keys: readonly string[] },
+  ): PlanWrite[] {
+    const outer = this.#outerOf(place.collection);
+    const pairs = outer.map((collection, at): [number, string] => [
+      collection,
+      place.keys[at],
+    ]);
+    // The output that holds the collection, and the outputs of its body at
+    // their paths below a row, from where the result records them.
+    let holder: number | undefined;
+    const rows: { output: number; below: string[] }[] = [];
+    const outputs = this.#recordedOutputs();
+    for (const entry of outputs) {
+      const within = this.collectionsOf(this.plan.outputs[entry.output].cone);
+      if (
+        within.length !== outer.length + 1 ||
+        within[outer.length] !== place.collection
+      ) continue;
+      const star = entry.path.flatMap((segment, index) =>
+        segment === "*" ? [index] : []
+      )[outer.length];
+      if (star === undefined) {
+        continue;
+      }
+      const below = entry.path.slice(star + 1);
+      if (below.includes("*")) {
+        continue;
+      }
+      rows.push({ output: entry.output, below });
+      const above = entry.path.slice(0, star);
+      holder ??= outputs.find((held) =>
+        held.members === true && held.path.length === above.length &&
+        held.path.every((segment, index) =>
+          segment === above[index]
+        )
+      )?.output;
+    }
+    const members =
+      this.#memo.get(this.#name("assembly", place.collection, place.keys))
+        ?.members ?? [];
+    const held = this.store.peek(doc, []);
+    const count = Array.isArray(held) ? held.length : 0;
+    const found: { output: number; at: string[]; keys: [number, string][] }[] =
+      [];
+    const covers = (at: readonly string[]) =>
+      at.length <= path.length
+        ? at.every((segment, index) => segment === path[index])
+        : path.every((segment, index) => segment === at[index]);
+    // The nearest position at or above the path, and every one below it.
+    let nearest:
+      | { output: number; at: string[]; keys: [number, string][] }
+      | undefined = holder === undefined
+        ? undefined
+        : { output: holder, at: [], keys: pairs };
+    const [start, end] = path.length === 0 && splice !== undefined
+      ? [splice.start, splice.start + splice.inserted]
+      : [0, count];
+    for (let position = start; position < end; position++) {
+      const key = members[position]?.key;
+      if (key === undefined) continue;
+      if (path.length > 0 && path[0] !== `${position}`) continue;
+      const keys: [number, string][] = [...pairs, [place.collection, key]];
+      for (const { output, below } of rows) {
+        const at = [`${position}`, ...below];
+        if (!covers(at)) continue;
+        if (at.length <= path.length) {
+          if (nearest === undefined || at.length > nearest.at.length) {
+            nearest = { output, at, keys };
+          }
+        } else if (this.store.peek(doc, at) !== undefined) {
+          found.push({ output, at, keys });
+        }
+      }
+    }
+    if (nearest !== undefined) {
+      found.unshift({ ...nearest, at: [...path] });
+    }
+    const appends = splice !== undefined && splice.removed === 0 &&
+      splice.start + splice.inserted === count;
+    return found.map(({ output, at, keys }) => {
+      const write = this.#outputRecord(doc, output, at, keys);
+      this.root.#noteRecord(
+        this.#recordKey(output, [doc, ...at]),
+        this.id,
+        write,
+      );
+      if (output !== holder || at.length > 0 || !Array.isArray(held)) {
+        return write;
+      }
+      return appends
+        ? { ...write, membersAppended: true as const }
+        : { ...write, membersChanged: true as const };
+    });
+  }
 
   /**
    * The records of a write to a scope instance of the document of a value
@@ -15554,6 +15792,12 @@ export class Instance {
     if (valued !== undefined) {
       return valued.instance.#valueWrites(doc, path, valued);
     }
+    const rowed = this.store.scopes === undefined
+      ? undefined
+      : this.#scopedRowsOf.get(scopeOfDocument(doc).base);
+    if (rowed !== undefined) {
+      return rowed.instance.#rowsWrites(doc, path, splice, rowed);
+    }
     const writing = this.#writing;
     if (writing === undefined) return [];
     const keys = writing.instance.contextKeys(writing.host.context);
@@ -17096,6 +17340,17 @@ export class Instance {
       const text = JSON.stringify(["values", valued.output, ...valued.keys]);
       for (const each of ["user", "session"] as const) {
         valued.instance.markStale(`scoped ${text}`, store.scopes.keyOf(each));
+      }
+    }
+    // So does what stored the rows of a collection in the scope instance of
+    // the document of those rows alone.
+    const rowed = scope === undefined
+      ? undefined
+      : root.#scopedRowsOf.get(base);
+    if (rowed !== undefined && store.scopes !== undefined) {
+      const text = rowsPlaceText(rowed.collection, rowed.keys);
+      for (const each of ["user", "session"] as const) {
+        rowed.instance.markStale(`scoped ${text}`, store.scopes.keyOf(each));
       }
     }
     if (owner === undefined) {
