@@ -120,7 +120,7 @@ export async function openMemory(
   // delegating class is empty, and the process identity is an OWNER-class
   // service principal: its indexed-collection host maintains the
   // collections of every space over loopback sessions
-  // (docs/plans/indexed-collections-without-server-execution.md).
+  // (docs/features/indexed-collections.md, "Which runtime maintains").
   const serverExecutionOn = serverExecutionEnabledFromEnv(getEnv);
   const memoryAclPrincipals = memoryAclPrincipalsFor({
     configured: environment.MEMORY_SERVICE_DIDS

@@ -1,6 +1,14 @@
+---
+status: historical
+created: 2026-11-24
+archived: 2026-11-24
+reason: "Executed plan; toolshed's IndexedCollectionHost keeps indexed collections current with server execution off."
+superseded-by: docs/features/indexed-collections.md
+---
+
 # Indexed collections without server execution
 
-An [indexed collection](../features/indexed-collections.md) keeps its tables
+An [indexed collection](../../features/indexed-collections.md) keeps its tables
 current through a maintainer that hears every committed write to its space and
 re-reads the members that write could have changed. This plan has the toolshed
 run that maintainer, once per process, while server execution
@@ -116,8 +124,10 @@ its post-commit re-read of an added member as well.
       its memory server enforcing access lists, carries topics that `cf`
       adds to the example `patterns/examples/indexed-topics/`, and a rename
       `cf` makes later, into the collection's database.
-- [ ] The same toolshed keeps the example's listing current for two browser
-      sessions, one of which closes while the other writes.
+- [x] The same toolshed keeps the example's listing current, with topics that
+      `cf` adds and renames, in two browser tabs, in a tab reopened after it
+      was closed during those writes, and in a tab opened after a write made
+      with no tab open.
 
 ## Limits
 

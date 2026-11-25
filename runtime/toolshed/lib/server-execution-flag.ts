@@ -40,7 +40,7 @@ export function serverExecutionEnabledFromEnv(envGet: EnvReader): boolean {
  *   documents and writes collection databases in users' spaces over
  *   loopback sessions, which is the one write path into those spaces a
  *   process with no serving loop has. The entry goes with the OFF arm
- *   (docs/plans/indexed-collections-without-server-execution.md).
+ *   (docs/features/indexed-collections.md, "Which runtime maintains").
  * - `delegatingDids` — under the flag, this process's own identity; OFF
  *   the flag, empty. A delegating principal's loopback sessions may
  *   carry the session-level READ binding (`actingAs: "space-owner"`):

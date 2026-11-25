@@ -2,9 +2,9 @@
  * The toolshed's indexed-collection host while server execution is off: the
  * one runtime of this process that keeps the indexed collections of every
  * space current, since no serving loop runs and the clients maintain none
- * (docs/plans/indexed-collections-without-server-execution.md). Under server
- * execution each space's serving runtime maintains its collections, and
- * nothing here runs.
+ * (docs/features/indexed-collections.md, "Which runtime maintains"). Under
+ * server execution each space's serving runtime maintains its collections,
+ * and nothing here runs.
  */
 
 import type { Identity } from "@commonfabric/identity";

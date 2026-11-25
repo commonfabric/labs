@@ -10,12 +10,6 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
-- [Indexed collections without server execution](indexed-collections-without-server-execution.md)
-  has toolshed keep indexed collections current, once per process, while
-  server execution is off: one maintenance runtime fed by the memory server's
-  admitted commits and built only for a space that lists a collection, clients
-  that stop maintaining, and `add()` listing the collection in its own
-  commit.
 - [Joining a Loom lists you in it](social-space-join-as-viewer.md) is a
   stopgap so that a browser host's guests are named on a Loom's roster: the
   host lists its guest through the existing `addParticipant`, and then the Loom
