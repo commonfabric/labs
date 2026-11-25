@@ -32,6 +32,7 @@ import type { Artifact } from "../../../../base/pattern-compiler/exec/executor.t
 import type { FabricValue } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity";
 
+import { cellFromUrl } from "../builtins/cell-from-url.ts";
 import {
   fetchBinary,
   fetchJson,
@@ -82,13 +83,16 @@ export type RuntimeWishesOptions = {
 
 /**
  * The built-ins of the runtime that answer the request of an effect of the
- * reactive tier of a compiled piece, by name. Each sends the cells of its
- * `pending`, `result` and `error`, which are the members of the outcome.
- * The other effects of the language have no entry: `fetchProgram`,
- * `generateText`, `generateObject`, `sqliteQuery`, `compileAndRun`,
- * `llmDialog`, `agent` and `navigateTo`, and an effect a handler requests.
+ * reactive tier of a compiled piece, by name. Each sends a record of the
+ * cells of its outcome, which are the members of the outcome: `pending`,
+ * `result` and `error` of a fetch, and `pending` and `cell` of
+ * `cellFromUrl`. The other effects of the language have no entry:
+ * `fetchProgram`, `generateText`, `generateObject`, `sqliteQuery`,
+ * `compileAndRun`, `llmDialog`, `agent` and `navigateTo`, and an effect a
+ * handler requests.
  */
 const EFFECTS = {
+  cellFromUrl,
   fetchBinary,
   fetchJson,
   fetchJsonUnchecked,
@@ -103,8 +107,8 @@ export const answersEffect = (builtin: string): boolean =>
  * Why a compiled program cannot run as a compiled piece, where it cannot: a
  * plan of the program requests an effect that no built-in of the runtime
  * answers for a compiled piece (`answersEffect`). A `wish`, and the effects
- * `fetchJson`, `fetchJsonUnchecked`, `fetchText` and `fetchBinary` of the
- * reactive tier, are answered by the runtime's own. An effect a handler
+ * `fetchJson`, `fetchJsonUnchecked`, `fetchText`, `fetchBinary` and
+ * `cellFromUrl` of the reactive tier, are answered by the runtime's own. An effect a handler
  * requests is not in the operations of a plan, and is not looked for here:
  * it stays unanswered. Every pattern of the program is looked at where the
  * compiler gives them, since a function body of the pattern may instantiate

@@ -5803,7 +5803,7 @@ export class Instance {
               : errorState(messageOf(error));
           }
           const state = new Ref(id, []);
-          request = host.whole(request);
+          request = this.#resolvableRequest(host.whole(request), host);
           const recorded = this.#recording(
             this.#coneWrites(
               cone,
@@ -17230,6 +17230,31 @@ export class Instance {
       return value;
     };
     return walk(event, []);
+  }
+
+  /**
+   * The request of an operation as the runtime's built-in that answers it
+   * reads it: through the runtime, which resolves no reference by key. A
+   * reference by key, to an element of an array of plain values in place or
+   * below one, is given as the value it reads now, which the request's cone
+   * depends on; every other reference stays the link it is stored as.
+   */
+  #resolvableRequest(request: unknown, host: Host): unknown {
+    if (request instanceof Ref) {
+      return request.path.some(isKeySegment) ? host.v(request) : request;
+    }
+    if (Array.isArray(request)) {
+      return request.map((member) => this.#resolvableRequest(member, host));
+    }
+    if (isRecord(request)) {
+      return Object.fromEntries(
+        Object.entries(request).map(([name, member]) => [
+          name,
+          this.#resolvableRequest(member, host),
+        ]),
+      );
+    }
+    return request;
   }
 
   /**
