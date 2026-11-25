@@ -316,6 +316,15 @@ describe("cssLanguage", () => {
         .toEqual([1, 2]);
     });
 
+    it("lists the custom properties a keyframe sets", () => {
+      const document = cssLanguage.parseDocument(
+        "@keyframes pulse { from { --glow: 0; } to { --glow: 1; } }",
+      );
+
+      expect(document.flatStructure.map((node) => [node.label, node.depth]))
+        .toEqual([["@keyframes pulse", 0], ["--glow", 1], ["--glow", 1]]);
+    });
+
     it("gives each name its offset in source that is not all ASCII", () => {
       const source = "/* é😀 */ :root { --gäp: 1px; }\n.a { padding: 0 }";
       const document = cssLanguage.parseDocument(source);

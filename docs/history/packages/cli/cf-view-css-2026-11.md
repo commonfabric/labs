@@ -15,13 +15,10 @@ the Lezer CSS parser that the UI package pins compares. CSS runs on the shared
 Tree-sitter adapter with the official grammar from `tree-sitter-css` 0.25.0. It
 is held to the maximums for a later grammar.
 
-CSS is inside the maximums for compiled bytes, unpacked bytes, owned source, and
-build steps. The machine was so loaded that the TOML control's medians took 2 to
-24 times their recorded figures, so the timings are estimates, scaled against
-that control as the [October 2026 HCL report](cf-view-hcl-2026-10.md) scaled its
-timings. Every estimate is inside its maximum, the re-color after one edit
-closest at an estimated 19.6 ms against 25. "Timings" gives the figures measured
-directly as well.
+CSS is inside every maximum. Its timings were measured directly, on a quiet
+machine where a TOML control measured beside CSS stayed within 0.89 to 1.21
+times the medians TOML's own report recorded. The re-color after one edit is
+closest to its maximum, at a 95th percentile of 19.66 ms against 25.
 
 ## Environment and method
 
@@ -53,60 +50,56 @@ initialization samples, and 50 each of a complete highlight, a document parse
 with structure, and a re-color after one edit, for each language. No deadline,
 retry, or sleep participated.
 
-The HCL probe measured one language in each process, and a round ran TOML,
-then HCL, then TOML again. Eight rounds made that way on this machine, with
-one-minute load averages between 127 and 270, gave ratios of a CSS median to
-the TOML medians around it that ranged from 0.67 to 2.15 for a single
-operation, and their samples are not retained. This probe instead takes each
-sample of CSS and then of TOML in turn: the two alternate in one process for
-the complete highlight, the document parse, and the re-color, and alternate
-fresh processes for initialization. The two languages then share the load of
-each moment. The adjacent raw [results](cf-view-css-2026-11-results.json)
-contain every sample of every round, the output of the coverage check and the
-Lezer comparison below, and the counts of changes to CSS paths.
+The HCL probe measured one language in each process, and a round ran TOML, then
+HCL, then TOML again. This probe instead takes each sample of CSS and then of
+TOML in turn: the two alternate in one process for the complete highlight, the
+document parse, and the re-color, and alternate fresh processes for
+initialization, so the two languages share whatever load the machine is under at
+each moment. The probe was written while other work kept the machine's
+one-minute load average between 99 and 270. Rounds made then in the HCL probe's
+way, with CSS in HCL's place, gave ratios of a CSS median to the TOML medians
+around it that ranged from 0.67 to 2.15 for a single operation. Interleaved
+rounds made then put every timing, scaled from the control, inside its maximum.
+The rounds below, made on the final code once the machine was quiet, supersede
+both, and the samples of the earlier rounds are not retained.
+
+The adjacent raw [results](cf-view-css-2026-11-results.json) contain every
+sample of every round below, the output of the coverage check and of the Lezer
+comparison, and the counts of changes to CSS paths.
 
 ## Timings
 
-Other work shared the machine throughout. Each cell gives the median, then the
-95th percentile, in milliseconds; the maximums are 95th percentiles. The load
-column is the one-minute load average at the start of the round.
+Each cell gives the median, then the 95th percentile, in milliseconds; the
+maximums are 95th percentiles. The load column is the one-minute load average at
+the start of the round.
 
 | Round | Load | Lazy initialization | Full highlighting | Document parse | Re-color after one edit |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 | 103 | 321.47 / 607.23 | 385.75 / 616.71 | 402.28 / 603.97 | 262.24 / 553.21 |
-| 2 | 110 | 389.07 / 633.72 | 308.66 / 502.25 | 305.03 / 549.85 | 246.53 / 402.63 |
-| 3 | 124 | 249.65 / 501.24 | 476.50 / 720.94 | 538.31 / 804.84 | 283.60 / 507.97 |
-| 4 | 125 | 205.79 / 773.66 | 210.37 / 450.30 | 238.91 / 564.36 | 224.60 / 419.27 |
-| 5 | 131 | 97.11 / 580.61 | 461.38 / 744.27 | 380.43 / 611.22 | 123.04 / 327.80 |
-| 6 | 99 | 52.96 / 312.53 | 98.49 / 275.31 | 91.56 / 161.40 | 91.72 / 284.88 |
+| 1 | 5.6 | 24.22 / 24.84 | 22.34 / 24.59 | 23.33 / 25.21 | 13.44 / 16.13 |
+| 2 | 5.2 | 25.36 / 27.47 | 21.70 / 24.22 | 23.43 / 24.84 | 13.59 / 15.43 |
+| 3 | 5.0 | 25.65 / 27.92 | 23.85 / 27.03 | 25.10 / 26.61 | 14.43 / 15.97 |
+| 4 | 4.8 | 25.91 / 27.58 | 23.32 / 26.35 | 24.44 / 26.18 | 14.29 / 17.23 |
+| 5 | 4.7 | 26.43 / 27.67 | 24.37 / 26.69 | 25.66 / 27.38 | 14.93 / 19.66 |
+| 6 | 5.2 | 26.52 / 28.60 | 24.66 / 27.88 | 24.83 / 26.31 | 14.43 / 15.91 |
 | Accepted maximum | | 75 | 50 | 50 | 25 |
 
 The TOML control, measured beside CSS in each round, gave these figures:
 
 | Round | Lazy initialization | Full highlighting | Document parse | Re-color after one edit |
 | --- | ---: | ---: | ---: | ---: |
-| 1 | 353.38 / 570.95 | 280.44 / 615.74 | 525.56 / 776.28 | 187.17 / 427.31 |
-| 2 | 233.16 / 656.60 | 216.00 / 499.38 | 362.94 / 570.85 | 230.79 / 404.23 |
-| 3 | 123.36 / 355.25 | 338.89 / 594.84 | 642.95 / 972.40 | 239.37 / 435.45 |
-| 4 | 182.22 / 473.63 | 184.07 / 315.01 | 270.10 / 658.63 | 159.49 / 386.98 |
-| 5 | 64.13 / 373.04 | 359.57 / 528.51 | 426.17 / 698.70 | 132.60 / 290.48 |
-| 6 | 46.69 / 198.93 | 56.88 / 242.59 | 125.78 / 185.74 | 55.88 / 157.16 |
+| 1 | 20.12 / 20.61 | 18.27 / 22.09 | 27.68 / 30.44 | 11.13 / 13.70 |
+| 2 | 21.14 / 22.94 | 17.61 / 19.25 | 28.15 / 30.23 | 11.22 / 14.52 |
+| 3 | 21.35 / 24.12 | 18.64 / 20.50 | 29.82 / 31.52 | 11.68 / 13.02 |
+| 4 | 21.70 / 22.80 | 18.35 / 21.07 | 29.59 / 31.10 | 11.48 / 13.10 |
+| 5 | 22.12 / 23.38 | 19.09 / 21.66 | 32.73 / 35.59 | 12.14 / 13.86 |
+| 6 | 22.02 / 23.38 | 18.74 / 21.39 | 30.57 / 32.82 | 11.87 / 13.17 |
 | Recorded in the Android formats report | 22.55 / 23.42 | 17.49 / 19.79 | 26.97 / 29.61 | 10.89 / 11.96 |
 
-The HCL report left out the rounds whose controls were furthest from the
-recorded figures. Here every round's control was far from them, so all six
-rounds are kept. Over the six rounds, the ratio
-of the CSS median to the TOML median ranges from 0.91 to 2.02 for
-initialization, 1.14 to 1.73 for the complete highlight, 0.73 to 0.89 for the
-document parse, and 0.93 to 1.64 for the re-color. Multiplying the TOML 95th
-percentiles the Android formats report recorded by the largest of those ratios
-gives an estimate for an unloaded machine: 47.4 ms for initialization, 34.3 ms
-for the complete highlight, 26.4 ms for the document parse, and 19.6 ms for the
-re-color. This is an inference from the control. It assumes that CSS and TOML
-slow down alike under load, and that TOML's figures are not changed by sharing
-a process with CSS, which they did not when the Android formats report recorded
-them. At loads this high, those assumptions carry more weight than they did for
-HCL. Each estimate is inside its maximum.
+The control's medians stayed within 0.89 to 1.21 times the recorded ones, so the
+figures are taken as they were measured. The highest 95th percentile in any
+round is 28.60 ms for initialization, 27.88 ms for the complete highlight, 27.38
+ms for the document parse, and 19.66 ms for the re-color, each inside its
+maximum.
 
 ## Size, source, and build
 
@@ -114,7 +107,7 @@ HCL. Each estimate is inside its maximum.
 | --- | ---: | ---: |
 | Compiled `cf` increase | 0.19 MiB | 10 MiB for a later grammar |
 | Unpacked dependencies | 1.88 MiB | 10 MiB for a later grammar |
-| Owned source | 186 lines | 200 lines for a later grammar |
+| Owned source | 189 lines | 200 lines for a later grammar |
 | Parser-specific build and deployment steps | 0 | 0 |
 
 Built with `deno task build-binaries cf`, the binary was 187,574,882 bytes at
@@ -240,14 +233,14 @@ deno run --lock="$LEZER_LOCK" --allow-read --allow-env --allow-run \
   ../../docs/history/packages/cli/cf-view-css-2026-11-lezer.ts DIR:COMMIT...
 ```
 
-It ran on the same loaded machine as the timings above, without a control, so
-only the ratios between its two columns carry meaning. Each cell gives the
+It ran on the same quiet machine as the timings above, with a one-minute load
+average near 5. Each cell gives the
 median, then the 95th percentile, in milliseconds.
 
 | Measure | Lezer CSS | Tree-sitter CSS |
 | --- | ---: | ---: |
-| Load and parse an empty source | 22.96 / 77.28 | 57.90 / 181.03 |
-| Parse the 100,009-byte source | 97.23 / 294.37 | 36.01 / 248.73 |
+| Load and parse an empty source | 8.07 / 9.01 | 16.62 / 18.44 |
+| Parse the 100,009-byte source | 7.68 / 10.52 | 9.07 / 9.49 |
 | Files with a region it cannot parse | 2 | 10 |
 | Lines in such regions | 10 | 32 |
 | Unpacked packages | 0.57 MiB | 1.88 MiB |
@@ -266,9 +259,10 @@ with letters that are hexadecimal digits, such as `#fabricSectionHeader` or
 9 in Loom's web UI style sheet and 1 in Pond's.
 
 On these figures Lezer is ahead in loading, in unpacked bytes, and in lines it
-can parse, and Tree-sitter parses faster, though that measure was taken without
-a control. Neither is ahead in every dimension. What decides the choice is what
-the table leaves out: using Lezer would put a second parser runtime in the
-pager, with an adapter of its own for coloring, editing, and structure, beside
-the shared Tree-sitter adapter that every other parser-backed language uses. The
-parser decision in the plan rules that out, so CSS uses Tree-sitter.
+can parse. The two parse at about the same speed: Lezer's median is lower, and
+Tree-sitter's 95th percentile is. Neither is ahead in every dimension. What
+decides the choice is what the table leaves out: using Lezer would put a second
+parser runtime in the pager, with an adapter of its own for coloring, editing,
+and structure, beside the shared Tree-sitter adapter that every other
+parser-backed language uses. The parser decision in the plan rules that out, so
+CSS uses Tree-sitter.

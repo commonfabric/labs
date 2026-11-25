@@ -228,13 +228,13 @@ selected grammar and query, and one empty highlight.
 
 | Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Shipped C++ / C | Shipped Go | Shipped Starlark | Shipped CSS | Accepted maximum |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 84.7 / 39.3 ms, estimated | 41.4 ms, estimated | 50.8 ms, estimated | 47.4 ms, estimated | 75 ms |
-| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 35.3 / 34.2 ms, estimated | 30.4 ms, estimated | 29.5 ms, estimated | 34.3 ms, estimated | 50 ms |
-| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 38.5 / 34.3 ms, estimated | 31.9 ms, estimated | 31.1 ms, estimated | 26.4 ms, estimated | 50 ms |
-| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 21.5 ms, estimated | 16.8 ms, estimated | 19.6 ms, estimated | 25 ms |
+| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 84.7 / 39.3 ms, estimated | 41.4 ms, estimated | 50.8 ms, estimated | 28.6 ms | 75 ms |
+| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 35.3 / 34.2 ms, estimated | 30.4 ms, estimated | 29.5 ms, estimated | 27.9 ms | 50 ms |
+| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 38.5 / 34.3 ms, estimated | 31.9 ms, estimated | 31.1 ms, estimated | 27.4 ms | 50 ms |
+| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 21.5 ms, estimated | 16.8 ms, estimated | 19.7 ms | 25 ms |
 | Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 4.03 MiB, both | 0.38 MiB | 0.13 MiB | 0.19 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
 | Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 48.98 MiB, both | 3.66 MiB | 0 MiB | 1.88 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 197 lines | 91 lines | 186 lines | 650 shipped lines; 200 for a later grammar |
+| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 197 lines | 91 lines | 189 lines | 650 shipped lines; 200 for a later grammar |
 | Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 The Python column is the
@@ -326,11 +326,11 @@ cumulative owned-source maximum, for the reason under "Go over the cumulative
 owned-source maximum".
 
 The CSS column is the
-[November 2026 CSS measurement](../history/packages/cli/cf-view-css-2026-11.md).
-It ran on a machine so loaded that a TOML control's medians took 2 to 24 times
-their recorded figures, so it measured each sample of CSS and of the control in
-turn, and its timings are estimates in the way the HCL column's are, from the
-largest ratio of CSS to TOML seen in any of its six rounds.
+[November 2026 CSS measurement](../history/packages/cli/cf-view-css-2026-11.md),
+made in six rounds on a quiet machine, each taking every sample of CSS and of a
+TOML control in turn. The control stayed within 0.89 to 1.21 times TOML's
+recorded medians, and each figure is the highest 95th percentile of the six
+rounds.
 
 The binary build leaves out every directory of a grammar package except the
 one holding its WebAssembly grammar, such as generated C source and native

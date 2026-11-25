@@ -23,9 +23,13 @@ const moduleStarted = performance.now();
 const STARTUP_SAMPLES = 40;
 const WORK_SAMPLES = 50;
 
+/** A parse of a source, which is all that a timed sample measures. */
 type Parse = (source: string) => {
   /** The rows of the regions the parser could not parse. */
   errorRows: () => Set<number>;
+  /** Release the parse tree, where the parser holds it outside the
+   * JavaScript heap. */
+  release: () => void;
 };
 
 /** Each parser, loaded on demand so that a cold start loads only one. */
@@ -47,6 +51,7 @@ const PARSERS: Readonly<Record<string, () => Promise<Parse>>> = {
           });
           return rows;
         },
+        release() {},
       };
     };
   },
@@ -63,24 +68,26 @@ const PARSERS: Readonly<Record<string, () => Promise<Parse>>> = {
     );
     return (source) => {
       const tree = parser.parse(source)!;
-      const rows = new Set<number>();
-      const visit = (node: typeof tree.rootNode) => {
-        const holding = node.children.filter((child) => child.hasError);
-        if (node.type === "ERROR" || holding.length === 0) {
-          for (
-            let row = node.startPosition.row;
-            row <= node.endPosition.row;
-            row++
-          ) {
-            rows.add(row);
+      const errorRows = () => {
+        const rows = new Set<number>();
+        const visit = (node: typeof tree.rootNode) => {
+          const holding = node.children.filter((child) => child.hasError);
+          if (node.type === "ERROR" || holding.length === 0) {
+            for (
+              let row = node.startPosition.row;
+              row <= node.endPosition.row;
+              row++
+            ) {
+              rows.add(row);
+            }
+            return;
           }
-          return;
-        }
-        for (const child of holding) visit(child);
+          for (const child of holding) visit(child);
+        };
+        if (tree.rootNode.hasError) visit(tree.rootNode);
+        return rows;
       };
-      if (tree.rootNode.hasError) visit(tree.rootNode);
-      tree.delete();
-      return { errorRows: () => rows };
+      return { errorRows, release: () => tree.delete() };
     };
   },
 };
@@ -159,8 +166,9 @@ const parseSamples = { lezer: [] as number[], treeSitter: [] as number[] };
 for (let index = 0; index <= WORK_SAMPLES; index++) {
   for (const name of ["lezer", "treeSitter"] as const) {
     const started = performance.now();
-    parse[name](source);
+    const parsed = parse[name](source);
     const milliseconds = performance.now() - started;
+    parsed.release();
     if (index > 0) parseSamples[name].push(milliseconds);
   }
 }
@@ -210,7 +218,9 @@ for (const argument of Deno.args) {
     files++;
     lines += text.split("\n").length;
     for (const name of ["lezer", "treeSitter"] as const) {
-      const rows = parse[name](text).errorRows();
+      const parsed = parse[name](text);
+      const rows = parsed.errorRows();
+      parsed.release();
       if (rows.size === 0) continue;
       errors[name].files++;
       errors[name].lines += rows.size;
