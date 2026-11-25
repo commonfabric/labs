@@ -27,8 +27,8 @@ type SpaceListing = "listed" | "unlisted" | string[];
  * Keeps the indexed collections of every space a memory server holds
  * current, from the commits that server admits, with one runtime that does
  * nothing else. Toolshed runs one while server execution is off: no serving
- * runtime maintains a space's collections then, and the runtimes of clients
- * talking to the toolshed maintain none.
+ * runtime maintains a space's collections then, and the presets for runtimes
+ * that talk to a toolshed maintain none.
  *
  * Only a space that lists a collection reaches the runtime. The host learns
  * which spaces do without one: a commit that writes a space's registry marks

@@ -793,10 +793,10 @@ export interface RuntimeOptions {
    * declares or writes (`"listed"`); only those it declares or writes
    * (`"own"`); or none (`"none"`). Unset, a runtime in the serving posture
    * maintains `"listed"`, any other runtime under server execution `"none"`,
-   * and the rest `"own"`. One runtime maintains a space's collections, so a
-   * runtime that talks to a deployed toolshed maintains `"none"`: the
-   * toolshed's serving runtime, or its `IndexedCollectionHost` while server
-   * execution is off, maintains them.
+   * and the rest `"own"`. One runtime maintains a space's collections, so
+   * the presets for a runtime that talks to a deployed toolshed set
+   * `"none"`: the toolshed's serving runtime, or its `IndexedCollectionHost`
+   * while server execution is off, maintains them.
    */
   indexedCollectionMaintenance?: IndexedCollectionMaintenance;
 

@@ -126,14 +126,21 @@ async function fixture() {
     indexedCollectionMaintenance: "none",
   });
   runtime.scheduler.onError((error) => errors.push(error));
-  const host = new IndexedCollectionHost({
-    server,
-    runtimeOptions: () => ({
-      apiUrl: new URL(import.meta.url),
-      storageManager: LoopbackStorageManager.connect(server, { as: service }),
-      experimental: { serverExecution: false },
-    }),
-  });
+  const newHost = () =>
+    new IndexedCollectionHost({
+      server,
+      runtimeOptions: () => ({
+        apiUrl: new URL(import.meta.url),
+        storageManager: LoopbackStorageManager.connect(server, { as: service }),
+        experimental: { serverExecution: false },
+      }),
+    });
+  let host = newHost();
+  /** Replaces the host with a new one, as a toolshed that restarts does. */
+  async function restartHost() {
+    await host.close();
+    host = newHost();
+  }
   let cancel: (() => void) | undefined;
   async function close() {
     cancel?.();
@@ -177,7 +184,17 @@ async function fixture() {
       );
     return { result, titles };
   }
-  return { space, runtime, host, errors, run, close };
+  return {
+    space,
+    runtime,
+    get host() {
+      return host;
+    },
+    errors,
+    run,
+    restartHost,
+    close,
+  };
 }
 
 describe("indexed-collection-host", () => {
@@ -208,6 +225,25 @@ describe("indexed-collection-host", () => {
       result.key("rename").send({ from: "first", to: "renamed" });
 
       await titles(["renamed"]);
+      expect(f.errors).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("re-reads a member written after a restart, in a space whose registry predates the host", async () => {
+    // The new host hears of no write to the registry, so it learns that the
+    // space lists a collection by reading the registry document.
+    const f = await fixture();
+    try {
+      const { result, titles } = await f.run();
+      result.key("add").send({ title: "first" });
+      await titles(["first"]);
+      await f.restartHost();
+      result.key("rename").send({ from: "first", to: "renamed" });
+
+      await titles(["renamed"]);
+      expect(f.host.runtime).toBeDefined();
       expect(f.errors).toEqual([]);
     } finally {
       await f.close();

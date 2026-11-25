@@ -110,7 +110,7 @@ export async function openMemory(
   // their reads run as the space's OWNER (the user whose space it is), and
   // the service identity itself reads a space's ACL only. It is NOT an
   // OWNER-class memory service principal: the operator's
-  // `MEMORY_SERVICE_DIDS` list is used verbatim on both arms, and the
+  // `MEMORY_SERVICE_DIDS` list is used verbatim under the flag, and the
   // Phase-7 implicit-OWNER blanket is retired (the serving identity never
   // writes into users' home spaces; served writes ride the wave's §2b
   // delegated carriage under the acting user). Behind the memory router each
