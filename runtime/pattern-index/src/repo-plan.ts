@@ -226,12 +226,14 @@ export const formerPathsIn = (
    * now lies does not; only without one does the directory's move speak
    * for it.
    */
-  const movedTo = (key: string): string[] => {
-    const files = moves.filter(([, to]) => to === key).map(([from]) => from);
+  const movedTo = (key: string): { from: string; move: number }[] => {
+    const files = moves.flatMap(([from, to], move) =>
+      to === key ? [{ from, move }] : []
+    );
     if (files.length > 0) return files;
-    return moves.flatMap(([from, to]) =>
+    return moves.flatMap(([from, to], move) =>
       to.endsWith("/") && from.endsWith("/") && key.startsWith(to)
-        ? [from + key.slice(to.length)]
+        ? [{ from: from + key.slice(to.length), move }]
         : []
     );
   };
@@ -240,13 +242,22 @@ export const formerPathsIn = (
     const start = path.slice(prefix.length);
     const seen = new Set([start]);
     const former: string[] = [];
-    for (let next = [start]; next.length > 0;) {
-      next = next.flatMap(movedTo).filter((key) => {
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-      for (const key of next) former.push(key);
+    // Each move applies at most once along a file's history. Without that, a
+    // cycle of directory moves (`a/` to `b/`, `b/sub/` to `a/`) would grow
+    // the path forever, since no exact path repeats.
+    type Step = { key: string; used: ReadonlySet<number> };
+    for (
+      let next: Step[] = [{ key: start, used: new Set() }];
+      next.length > 0;
+    ) {
+      next = next.flatMap(({ key, used }) =>
+        movedTo(key).flatMap(({ from, move }) => {
+          if (used.has(move) || seen.has(from)) return [];
+          seen.add(from);
+          return [{ key: from, used: new Set([...used, move]) }];
+        })
+      );
+      for (const { key } of next) former.push(key);
     }
     return former.map((key) => prefix + key);
   };

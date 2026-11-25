@@ -452,6 +452,14 @@ describe("repo-sync", () => {
       expect(formerPathsIn("p", cycle)("p/a.tsx")).toEqual(["p/b.tsx"]);
     });
 
+    it("applies each move once, so a cycle of directory moves ends", () => {
+      const cycle = { "a/": "b/", "b/sub/": "a/" };
+      expect(formerPathsIn("p", cycle)("p/a/x.tsx")).toEqual([
+        "p/b/sub/x.tsx",
+        "p/a/sub/x.tsx",
+      ]);
+    });
+
     it("is what the plan records for each entry, compiled or not", async () => {
       const plan = await planRepo(
         {
