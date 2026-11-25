@@ -363,6 +363,10 @@ a record: archive it to `docs/history/plans/` following the procedure in
   branches are not merged and in which order to merge them, the open lines
   of work with the notes that hold their plans, and how a round is briefed
   and checked.
+- [Compiled pattern language: what has to hold before it ships](compiled-pattern-language-ship-criteria.md)
+  lists the checks the compiled path has to pass before its option is turned
+  on for users, in eight groups, with where each stands and the order of
+  work.
 
 ## Concepts not planned for deployment
 
