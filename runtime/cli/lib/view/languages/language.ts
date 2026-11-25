@@ -51,6 +51,7 @@ import { iniLanguage } from "./ini/language.ts";
 import { dotLanguage } from "./dot/language.ts";
 import { dotenvLanguage } from "./dotenv/language.ts";
 import { gitConfigLanguage } from "./git-config/language.ts";
+import { systemdLanguage } from "./systemd/language.ts";
 import { tomlLanguage } from "./toml/language.ts";
 import { hclLanguage } from "./hcl/language.ts";
 import {
@@ -302,7 +303,7 @@ export interface Language {
    * Stable identifier, such as `"typescript"`, `"markdown"`, `"json"`,
    * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"kotlin"`, `"shell"`,
    * `"make"`, `"org"`, `"directive"`, `"dockerfile"`, `"dotenv"`, `"csv"`,
-   * `"tsv"`, `"dat"`, `"sql"`, `"binary"`, or `"plain-text"`.
+   * `"tsv"`, `"dat"`, `"sql"`, `"systemd"`, `"binary"`, or `"plain-text"`.
    */
   readonly id: string;
 
@@ -555,6 +556,7 @@ function allLanguages(): readonly Language[] {
     dotLanguage,
     dotenvLanguage,
     gitConfigLanguage,
+    systemdLanguage,
     proguardLanguage,
     gitAttributesLanguage,
     linkerScriptLanguage,

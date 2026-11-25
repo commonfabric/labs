@@ -82,6 +82,9 @@ GNU linker scripts, including those that the C preprocessor reads first, have
 syntax highlighting and a structure tree of their `SECTIONS`, `MEMORY`, `PHDRS`,
 and `VERSION` blocks, what each block declares, and the symbols the script
 assigns.
+The systemd unit language has syntax highlighting, with the value of each
+setting that runs commands colored as a command line, and a structure tree of
+sections and the keys in each.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -105,18 +108,18 @@ Tree-sitter through a shared, language-neutral adapter, which HTML will use as
 well. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
 configuration files, XML, makefiles, Org mode, Lean, ignore files, Go's module
 and checksum files, Bazel rc files, Graphviz DOT, Dockerfiles, delimited tables,
-assembly, SQL, and linker scripts use focused scanners. The order is provisional
-because recent activity was measured in six of the 26 active organization
-repositories.
+assembly, SQL, linker scripts, and systemd units use focused scanners. The order
+is provisional because recent activity was measured in six of the 26 active
+organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, shell, C, C++, CUDA,
 makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git attributes,
 Git configuration, XML, Org mode, directive configuration, ignore-file, Graphviz
-DOT, CSV, TSV, `.dat` table, assembly, SQL, linker script, and diff support to
-honest handling of every textual syntax in the active `commonfabric`
-repositories.
+DOT, CSV, TSV, `.dat` table, assembly, SQL, linker script, systemd unit, and
+diff support to honest handling of every textual syntax in the active
+`commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -1003,7 +1006,7 @@ file reconstructed exactly.
 - [x] Add worktree-include syntax.
 - [x] Add dotenv files and compound examples.
 - [x] Add INI, Ansible configuration, and inventory files.
-- [ ] Add systemd units.
+- [x] Add systemd units.
 - [ ] Add tmpfiles configuration.
 - [x] Add surveyed directive configuration.
 
@@ -1332,6 +1335,54 @@ source stayed between 2.4 and 8.8. Inputs built to slow it are slowest where
 each reference becomes its own colored span: 100 kilobytes of `$A` references
 took medians of 7 to 52 milliseconds. Fixtures come from Labs and
 `commonfabric-weaver`.
+
+A November 13, 2026 read of the local checkouts of the organization's
+repositories found 20 systemd unit files in 2 repositories, with 25 path-change
+events on them in the six months before the read. Infra holds 16: the Memory
+router's services, sockets, and target, an example drop-in for one of its
+services named `toolshed.service.d.example.conf`, a mitigation service, and 4
+units that Ansible renders from Jinja templates named `.service.j2`. Legibility
+holds 4 probe services, 2 of them template units named `@.service`. Every unit
+is a service, socket, or target.
+
+The systemd unit language uses a focused scanner, which reads units as systemd's
+own parser does. A line ends at a line feed, a carriage return, or the two
+together in either order. A line whose first character other than spaces and
+tabs is `#` or `;` is a comment, even inside a continuation. Any other line that
+ends in an odd number of backslashes continues on the next line that is not a
+comment. A logical line that opens with `[` heads a section, and any other that
+holds an `=` sets a key, which runs to the first `=`; systemd ignores a line
+with no `=`. A value that is a boolean, a number, a size, a time span of one or
+more parts, or `infinity` is colored as one. A `%` and the letter or `%` after
+it are a specifier. The value of a setting that runs commands, such as
+`ExecStart` or `ExecStopPost`, is a command line. Its prefix characters, its
+programs, its arguments, and the environment variable expansions systemd
+performs each have their own color; a `:` prefix turns the expansions off, as it
+does in systemd. `.service`, `.socket`, `.timer`, `.target`, `.mount`,
+`.automount`, `.swap`, `.path`, and `.slice` select the language. Device units
+come from udev and scope units from systemd's bus interface, so no suffix claims
+them. A `.conf` file is a unit drop-in when its first line other than blank
+lines and comments heads a section that units hold, such as `[Service]`; INI,
+tmpfiles configuration, and directive configuration share that suffix.
+
+The INI scanner reads Python's `configparser` dialect, which continues a value
+on indented lines and splits a key at `:`. Unit files do neither, so they have a
+scanner of their own. Every one of the 20 files reconstructs exactly, and every
+character other than white space in them has a token class. The 4 Jinja
+templates were read as units, with their Jinja left in place.
+
+The timings come from a machine whose load average stayed above 100, so each is
+the fastest of 100 runs, beside INI on the same text in the same run. A full
+highlight of 100 kilobytes of Memory router units took 1.60 milliseconds,
+against 1.26 for INI, and the document parse took 2.36, against 2.04. On 25,000
+lines that each set a key, the highlight took 8.6 against 5.0, and the parse,
+which lists every key, 24.1 against 11.1. Inputs built to slow the scanner each
+took under 6 milliseconds to highlight and to parse: a value continued over
+16,000 lines, a command line of 10,000 words with expansions and specifiers, a
+command line of unclosed quotes, and a value of 50,000 specifiers. INI
+highlighted each in under 4, because it colors such a line as one string.
+Fixtures come from Infra and Legibility. The Jinja templates wait for the Jinja
+layer under Stage 8, which selects its host from the rest of the name.
 
 Completion gate: every surveyed exact-name and compound-name operational file
 selects without content guessing.

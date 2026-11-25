@@ -776,6 +776,18 @@ tree, and `//` starts a comment. Elsewhere, `#` starts a comment, as it does for
 blocks, the output sections, memory regions, program headers, and version nodes
 each one declares, and the symbols the script assigns.
 
+The pager also highlights systemd unit files named `.service`, `.socket`,
+`.timer`, `.target`, `.mount`, `.automount`, `.swap`, `.path`, or `.slice`, and
+a `.conf` drop-in whose first line other than blank lines and comments heads a
+section that units hold, such as `[Service]`. It reads them as systemd does. A
+line that ends in an odd number of backslashes continues on the next line that
+is not a comment, and the first `=` on the joined line separates a key from its
+value. Booleans, numbers, time spans, and `%` specifiers are colored as such.
+The value of a setting that runs commands, such as `ExecStart`, is colored as a
+command line, with its prefix characters, its program, and the environment
+variable expansions systemd performs marked. The structure tree lists sections
+with the keys in each.
+
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each
