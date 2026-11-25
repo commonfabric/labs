@@ -153,7 +153,7 @@ export default pattern(() => {
     });
   });
   const assert_archived = assert(() =>
-    view.status === "ready" && view.entries[LOOM].state === "archived" &&
+    view.status === "ready" && view.entries[LOOM]?.state === "archived" &&
     view.entries[LOOM].revision.startsWith("2:") &&
     !hasText(browser[UI], "Team loom") &&
     catalog.get().entries[LOOM].extension === "kept"
@@ -173,7 +173,7 @@ export default pattern(() => {
     })
   );
   const assert_stale_choice = assert(() =>
-    view.status === "ready" && view.entries[LOOM].state === "archived" &&
+    view.status === "ready" && view.entries[LOOM]?.state === "archived" &&
     hasText(browser[UI], "The collection changed after this choice was shown.")
   );
   const action_restore = action(() => {
@@ -191,7 +191,7 @@ export default pattern(() => {
     });
   });
   const assert_restored = assert(() =>
-    view.status === "ready" && view.entries[LOOM].state === "saved" &&
+    view.status === "ready" && view.entries[LOOM]?.state === "saved" &&
     !hasText(
       browser[UI],
       "The collection changed after this choice was shown.",

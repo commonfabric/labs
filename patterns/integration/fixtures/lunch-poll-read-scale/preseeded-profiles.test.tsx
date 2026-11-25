@@ -27,7 +27,7 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          profiles.elementById("0").get().name === "Existing profile" &&
+          profiles.elementById("0").get()?.name === "Existing profile" &&
           profiles.elementById("1").get() === undefined &&
           profiles.get().length === 1 && poll.voteCount === 0 &&
           poll.optionCount === 0 && poll.userCount === 0
@@ -40,9 +40,9 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          profiles.elementById("0").get().name === "Existing profile" &&
-          profiles.elementById("0").get().avatar === "existing-avatar" &&
-          profiles.elementById("1").get().name === "Voter 1" &&
+          profiles.elementById("0").get()?.name === "Existing profile" &&
+          profiles.elementById("0").get()?.avatar === "existing-avatar" &&
+          profiles.elementById("1").get()?.name === "Voter 1" &&
           profiles.get().length === 2
         ),
       },

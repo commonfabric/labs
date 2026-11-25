@@ -31,6 +31,11 @@ import {
 } from "./view-walk.ts";
 import WeeklyCalendar, { addDays } from "./weekly-calendar.tsx";
 
+// The day after `date`, or undefined while there is no date to read: an
+// assertion also runs before its step, and `addDays` throws on "".
+const dayAfter = (date: string | undefined): string | undefined =>
+  date ? addDays(date, 1) : undefined;
+
 export default pattern(() => {
   const cal = WeeklyCalendar({ events: [] });
 
@@ -102,7 +107,7 @@ export default pattern(() => {
     cal.events[0]?.color === COLORS[0]
   );
   const assert_moved_to_tuesday = assert(() =>
-    cal.events[0]?.date === addDays(cal.events[1]?.date ?? "", 1) &&
+    cal.events[0]?.date === dayAfter(cal.events[1]?.date) &&
     cal.events[0]?.startTime === "08:00" &&
     cal.events[0]?.endTime === "09:00" &&
     styleOf(block(cal[UI], "Standup"), "left") ===
@@ -120,7 +125,7 @@ export default pattern(() => {
     inputValue(cal[UI], "New Event", 3) === "07:00"
   );
   const assert_resized = assert(() =>
-    cal.events[0]?.date === addDays(cal.events[1]?.date ?? "", 1) &&
+    cal.events[0]?.date === dayAfter(cal.events[1]?.date) &&
     cal.events[0]?.startTime === "08:00" &&
     cal.events[0]?.endTime === "10:30"
   );

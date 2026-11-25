@@ -18,10 +18,10 @@ export default pattern(() => {
       { assertion: assert(() => thread.bubbles.length === 0) },
       { action: action(() => thread.open.send()) },
       { assertion: assert(() => thread.bubbles.length === 11) },
-      { assertion: assert(() => thread.bubbles[0].text === "Message 0") },
-      { assertion: assert(() => thread.bubbles[10].text === "Message 10") },
-      { assertion: assert(() => thread.bubbles[0].me === true) },
-      { assertion: assert(() => thread.bubbles[1].me === false) },
+      { assertion: assert(() => thread.bubbles[0]?.text === "Message 0") },
+      { assertion: assert(() => thread.bubbles[10]?.text === "Message 10") },
+      { assertion: assert(() => thread.bubbles[0]?.me === true) },
+      { assertion: assert(() => thread.bubbles[1]?.me === false) },
     ],
   };
 });
