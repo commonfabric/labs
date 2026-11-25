@@ -172,7 +172,7 @@ take 64.27 percent of the characters, most of them inline SVG images in the
 built themes' `data:` URLs. Property names take 10.78 percent, comments 4.39
 percent, and numbers 3.99 percent.
 
-The grammar could not parse part of 10 files, covering 32 of the 147,390 lines.
+The grammar could not parse part of 10 files, covering 32 of the 147,115 lines.
 It does not parse:
 
 - a container style query, such as `@container style(--x: y)`, which accounts
@@ -233,14 +233,15 @@ deno run --lock="$LEZER_LOCK" --allow-read --allow-env --allow-run \
   ../../docs/history/packages/cli/cf-view-css-2026-11-lezer.ts DIR:COMMIT...
 ```
 
-It ran on the same quiet machine as the timings above, with a one-minute load
-average near 5. Each cell gives the
-median, then the 95th percentile, in milliseconds.
+It ran after the timings above, as other work returned to the machine: the
+one-minute load average was 18 when it ended. It has no control, so only the
+ratios between its two columns carry meaning. Each cell gives the median, then
+the 95th percentile, in milliseconds.
 
 | Measure | Lezer CSS | Tree-sitter CSS |
 | --- | ---: | ---: |
-| Load and parse an empty source | 8.07 / 9.01 | 16.62 / 18.44 |
-| Parse the 100,009-byte source | 7.68 / 10.52 | 9.07 / 9.49 |
+| Load and parse an empty source | 16.08 / 23.97 | 32.20 / 44.13 |
+| Parse the 100,009-byte source | 14.60 / 28.99 | 16.95 / 31.48 |
 | Files with a region it cannot parse | 2 | 10 |
 | Lines in such regions | 10 | 32 |
 | Unpacked packages | 0.57 MiB | 1.88 MiB |
@@ -258,11 +259,9 @@ with letters that are hexadecimal digits, such as `#fabricSectionHeader` or
 `#addEventOverlay`, as a color, and fails there; those are all 10 of its lines,
 9 in Loom's web UI style sheet and 1 in Pond's.
 
-On these figures Lezer is ahead in loading, in unpacked bytes, and in lines it
-can parse. The two parse at about the same speed: Lezer's median is lower, and
-Tree-sitter's 95th percentile is. Neither is ahead in every dimension. What
-decides the choice is what the table leaves out: using Lezer would put a second
-parser runtime in the pager, with an adapter of its own for coloring, editing,
-and structure, beside the shared Tree-sitter adapter that every other
-parser-backed language uses. The parser decision in the plan rules that out, so
-CSS uses Tree-sitter.
+On these figures Lezer is ahead in every dimension measured: loading, parsing,
+unpacked bytes, and lines it can parse. What decides the choice is what the
+table leaves out: using Lezer would put a second parser runtime in the pager,
+with an adapter of its own for coloring, editing, and structure, beside the
+shared Tree-sitter adapter that every other parser-backed language uses. The
+parser decision in the plan rules that out, so CSS uses Tree-sitter.

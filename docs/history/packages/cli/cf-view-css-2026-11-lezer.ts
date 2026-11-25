@@ -216,7 +216,10 @@ for (const argument of Deno.args) {
   for (const path of paths) {
     const text = await git(dir, "show", `${commit}:${path}`);
     files++;
-    lines += text.split("\n").length;
+    // Each line break ends a line, and so does the end of a source whose last
+    // line has none.
+    lines += text.split("\n").length -
+      (text === "" || text.endsWith("\n") ? 1 : 0);
     for (const name of ["lezer", "treeSitter"] as const) {
       const parsed = parse[name](text);
       const rows = parsed.errorRows();

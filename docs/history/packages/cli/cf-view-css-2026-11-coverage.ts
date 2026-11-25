@@ -113,7 +113,10 @@ for (const argument of Deno.args) {
     files++;
     filesByRepository[dir] = (filesByRepository[dir] ?? 0) + 1;
     const highlighted = cssLanguage.highlightLines(source);
-    lines += highlighted.length;
+    // Each line break ends a line, and so does the end of a source whose last
+    // line has none.
+    lines += source.split("\n").length -
+      (source === "" || source.endsWith("\n") ? 1 : 0);
     const reconstructed = highlighted.map((line) =>
       line.spans.map((span) => span.text).join("")
     ).join("\n");

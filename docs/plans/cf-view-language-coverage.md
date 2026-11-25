@@ -872,7 +872,7 @@ not, so that text is left uncolored.
 A coverage check over the 277 files found every file reconstructed exactly and
 0.005 percent of characters other than white space without a token class, all
 of them in regions the grammar could not parse. Those regions cover 32 of the
-147,390 lines, in 10 files. The grammar does not parse a container style query,
+147,115 lines, in 10 files. The grammar does not parse a container style query,
 such as `@container style(--x: y)`, a fragment in `url(#arrow)`, or a custom
 property whose value is empty. Coloring continues around each region. Fixtures
 come from Loom and Dynabook. The
