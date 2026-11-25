@@ -859,9 +859,9 @@ opens, at most twice a minute, and on the server's tick every five minutes while
 a page is open, since no delivery says when a runner comes, goes, or loses its
 connection. A list that cannot be read is kept as it was, and named on the
 board. The larger runners are read group by group, so listing both takes one
-permission: a GitHub App or a fine-grained token needs the organization's
-"Self-hosted runners" permission, at read, and a classic token needs
-`admin:org`. Without it, the jobs' runners are pooled by what the jobs say.
+permission: a GitHub App or a fine-grained token needs read-only access to the
+organization's "Self-hosted runners", and a classic token needs `admin:org`.
+Without it, the jobs' runners are pooled by what the jobs say.
 
 The page moves its balls in the browser, every frame while any moves, by the
 time the frame took (`runner-physics.ts`), and stops drawing once everything is
