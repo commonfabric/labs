@@ -111,9 +111,12 @@ its post-commit re-read of an added member as well.
 - [x] Toolshed starts and stops the host with server execution off, and lists
       its identity as a service principal.
 - [x] `docs/features/indexed-collections.md` describes the posture.
-- [ ] A local toolshed started with `EXPERIMENTAL_SERVER_EXECUTION=false`
-      keeps the example `patterns/examples/indexed-topics/` current for two
-      browser sessions, one of which closes while the other writes.
+- [x] A local toolshed started with `EXPERIMENTAL_SERVER_EXECUTION=false`, with
+      its memory server enforcing access lists, carries topics that `cf`
+      adds to the example `patterns/examples/indexed-topics/`, and a rename
+      `cf` makes later, into the collection's database.
+- [ ] The same toolshed keeps the example's listing current for two browser
+      sessions, one of which closes while the other writes.
 
 ## Limits
 
