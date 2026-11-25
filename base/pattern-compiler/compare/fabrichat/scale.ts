@@ -912,6 +912,7 @@ for (
         ...base,
         step: "send",
         ms: performance.now() - began,
+        load: Deno.loadavg()[0],
         committed,
         ...counted(instance, before),
         ...adapted(adapter),
