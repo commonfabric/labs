@@ -4059,9 +4059,10 @@ export class Session {
    * The pull request at `url` has opened or merged. While the task dialog
    * is up, show the watch's running steps done, and, once the task has
    * ended, quit for it at once when `delay` counts as none, and otherwise
-   * have the dialog give the address and say it is quitting, for `delay`
-   * milliseconds, after which {@link completePullRequestQuit} quits. While
-   * the dialog is not up, do nothing.
+   * have the dialog give the address, unless how the task ended already
+   * gives it, and say it is quitting, for `delay` milliseconds, after which
+   * {@link completePullRequestQuit} quits. While the dialog is not up, do
+   * nothing.
    */
   quitForPullRequest(url: string, delay: number): void {
     if (this.#mode !== "taskPrompt") return;
@@ -5068,7 +5069,8 @@ export class Session {
 
   /** When the pull request has opened or merged, quit for it at once if
    * its delay counts as none, and otherwise have the task dialog give its
-   * address and say it is quitting, scrolled to its end. */
+   * address, unless how the task ended already gives it, and say it is
+   * quitting, scrolled to its end. */
   #beginPullRequestQuit(): void {
     const quit = this.#pullRequestQuit;
     if (quit === null) return;
@@ -5078,7 +5080,9 @@ export class Session {
       return;
     }
     this.#taskTop = null;
-    this.#watchLog.say(say`Pull request: ${link(quit.url)}`);
+    if (!this.#taskSummary.some((span) => span.text === quit.url)) {
+      this.#watchLog.say(say`Pull request: ${link(quit.url)}`);
+    }
     this.#watchLog.step(say`Quitting`);
   }
 

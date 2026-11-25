@@ -1122,28 +1122,28 @@ page once it has connected or failed to. While it connects, Abort, or an
 interrupt, gives up on the connection. When a delivery reports that a pull
 request was opened from the pushed branch, at the pushed commit, in the GitHub
 repository that `origin` names, or that the pull request `L` found merged, the
-dialog gives the pull request's address and says it is quitting, and once the
-delay that the "Delay before quitting" slider below sets has passed the viewer
-closes the dialog and quits as Quit does, unless the dialog was closed
-meanwhile. Pressing Quit in that moment quits at once, for the pull request all
-the same. With no delay, the viewer quits at once, without giving the address in
-the dialog. Quitting once the viewer creates or merges the pull request works
-the same way. Once the screen is restored, it prints the pull request's address
-on the terminal. The address is printed only when the viewer quit for it, so a
-quit after cancelling the save prompt it raised prints nothing. When the viewer
-would watch the relay, in the cases above where it connects to it, the dialog
-shows, under how the task ended, a step that connects to the relay and then one
-that waits for the pull request, or says why it is not watching: no relay is
-set, `origin` is not on GitHub, or the connection failed or ended. Closing the
-dialog stops the watch.
+dialog gives the pull request's address, unless how the task ended already gave
+it, and says it is quitting, and once the delay that the "Delay before quitting"
+slider below sets has passed the viewer closes the dialog and quits as Quit
+does, unless the dialog was closed meanwhile. Pressing Quit in that moment quits
+at once, for the pull request all the same. With no delay, the viewer quits at
+once, without giving the address in the dialog. Quitting once the viewer creates
+or merges the pull request works the same way. Once the screen is restored, it
+prints the pull request's address on the terminal. The address is printed only
+when the viewer quit for it, so a quit after cancelling the save prompt it
+raised prints nothing. When the viewer would watch the relay, in the cases above
+where it connects to it, the dialog shows, under how the task ended, a step that
+connects to the relay and then one that waits for the pull request, or says why
+it is not watching: no relay is set, `origin` is not on GitHub, or the
+connection failed or ended. Closing the dialog stops the watch.
 
 Under the check box, the "Delay before quitting" slider sets how long the dialog
-gives the pull request's address before the viewer quits, from none to 10
-seconds on a logarithmic scale, and two seconds unless it is set. Its stops are
-ten to each power of ten from 16 milliseconds up, rounded to two significant
-digits. The first, 16 milliseconds, counts as no delay: the dialog shows it as
-`none`, and the viewer quits at once. It shows the others as `20 ms`, `25 ms`,
-`32 ms`, and so on up to `7.9 s` and `10 s`.
+says it is quitting before the viewer quits, from none to 10 seconds on a
+logarithmic scale, and two seconds unless it is set. Its stops are ten to each
+power of ten from 16 milliseconds up, rounded to two significant digits. The
+first, 16 milliseconds, counts as no delay: the dialog shows it as `none`, and
+the viewer quits at once. It shows the others as `20 ms`, `25 ms`, `32 ms`, and
+so on up to `7.9 s` and `10 s`.
 
 The viewer keeps these settings in git's configuration, as the strings
 `cf-view.pullRequestTool` (`link`, `api`, `browser`, or `touch-gate`) and
