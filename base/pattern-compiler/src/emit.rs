@@ -1567,7 +1567,22 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                                 members.push(code);
                                 continue;
                             }
-                            let code = self.render(&spread.argument, Want::Use);
+                            // A record the body builds, whose members the
+                            // literal declares, is spread as it is: each
+                            // member is placed as it is, a reference
+                            // included, and nothing of the record is read,
+                            // as a spread copies the members in JavaScript
+                            // (PLT §3.4; ruling Z97). Any other value is
+                            // read whole.
+                            let want = if matches!(
+                                self.place_of(&spread.argument),
+                                Some(Place::Record(_))
+                            ) {
+                                Want::Pass
+                            } else {
+                                Want::Use
+                            };
+                            let code = self.render(&spread.argument, want);
                             members.push(format!("...{code}"));
                         }
                     }

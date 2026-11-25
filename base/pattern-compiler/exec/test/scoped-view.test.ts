@@ -1006,3 +1006,40 @@ for (const { fixture, case: rows, plain } of NESTED_CASES) {
     });
   });
 }
+
+// `fixtures/scoped-spread.tsx`: a result that spreads a record the body
+// builds, which holds a value of the scope `session` beside the rows of a
+// `map` over an array of references. The spread places each member as it
+// is (ruling Z97), so the result holds a link to the place of the scoped
+// value and reads nothing of it: the result stays in the document of the
+// space, and no scope instance holds the rows.
+describe("a result that spreads a record the body builds, which holds a value of the scope `session`", () => {
+  it("holds the rows in the result document of the space and a link to the scoped value, at 10 items as at 100", async () => {
+    const sizes = await Promise.all([10, 100].map(async (size) => {
+      const held = await started("scoped-spread", size);
+      const result = held.instance.store.docs.get(held.instance.id)
+        ?.value as { named: unknown; rows: unknown };
+      return { scoped: held.scoped(), result };
+    }));
+
+    for (const { result } of sizes) {
+      expect(isLink(result.named)).toBe(true);
+      expect(Array.isArray(result.rows)).toBe(true);
+    }
+    expect(sizes[1].scoped).toBe(sizes[0].scoped);
+  });
+
+  it("gives each principal the value its own nickname selects", async () => {
+    const held = await started("scoped-spread", 10);
+    held.send("ann", "call", { name: "Ann" });
+
+    const read = (principal: string) =>
+      held.as(principal, () => {
+        held.instance.settle();
+        return held.instance.result() as { named: boolean; rows: string[] };
+      });
+    expect(read("ann").named).toBe(true);
+    expect(read("bob").named).toBe(false);
+    expect(read("bob").rows.length).toBe(10);
+  });
+});

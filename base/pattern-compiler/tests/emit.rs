@@ -1495,3 +1495,28 @@ export const P = pattern<{ items: Writable<Item[]> }>(({ items }) => {
     );
     assert!(element.contains("...({ size: (1) })"), "{element}");
 }
+
+#[test]
+fn a_spread_of_a_record_the_body_builds_is_a_pass() {
+    // Z97: a spread of an object the body builds, whose members the
+    // literal declares, places each member as it is, a reference included,
+    // and reads nothing of the object.
+    let (_, code) = emitted(
+        r#"import { Writable, computed, pattern } from "commonfabric";
+export const P = pattern<{ title: string }>(({ title }) => {
+  const reader = new Writable.perSession<string>("");
+  const named = computed(() => reader.get().length > 0);
+  const view = { named, title, size: 1 };
+  return { ...view, shown: true };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    let returned = text
+        .lines()
+        .find(|line| line.contains("shown: (true)"))
+        .expect("the returned record");
+    assert!(returned.contains("...$rt.force(view, $h)"), "{returned}");
+    assert!(!returned.contains("$h.v("), "{returned}");
+}
