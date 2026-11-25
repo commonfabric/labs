@@ -14,8 +14,9 @@ described below are deleted together.
 
 ## The problem
 
-With server execution off, toolshed runs no runtime of its own, so every
-client runtime maintains the collections it touches. Each one hears only the
+With server execution off, none of toolshed's runtimes maintains indexed
+collections (its one runtime runs webhook deliveries), so every client runtime
+maintains the collections it touches. Each one hears only the
 commits to documents it has loaded, never reads the space's registry of
 collections, and maintains nothing once it closes. Two clients with the same
 piece open both re-read the same members, and a write made while no client is
@@ -121,10 +122,11 @@ its post-commit re-read of an added member as well.
 ## Limits
 
 - The maintenance runtime keeps a session, and the replicas of the members it
-  re-read, for each space that holds a collection, for as long as the process
-  runs.
+  re-read, for each space that holds a collection and that it has heard a
+  commit to, for as long as the process runs.
 - What a drain owes is held in memory. A write that lands while the toolshed
   is down, or that a drain had not carried out when it stopped, is carried in
-  only by a later write to the same member, as under server execution.
+  only once one of the documents the member's rows were read from is written
+  again, as under server execution.
 - A client that talks to a toolshed without the host, an older build, keeps
   nothing current.

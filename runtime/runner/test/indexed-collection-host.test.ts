@@ -135,9 +135,20 @@ async function fixture() {
     indexedCollectionMaintenance: "none",
   });
   runtime.scheduler.onError((error) => errors.push(error));
+  // The host reads each registry through this, so a case can make one of
+  // those reads fail.
+  let failRegistryRead = false;
+  const hostServer = {
+    watchAdmittedCommits: server.watchAdmittedCommits.bind(server),
+    readDocument: (...args: Parameters<typeof server.readDocument>) => {
+      if (!failRegistryRead) return server.readDocument(...args);
+      failRegistryRead = false;
+      return Promise.reject(new Error("the store is unavailable"));
+    },
+  };
   const newHost = () =>
     new IndexedCollectionHost({
-      server,
+      server: hostServer,
       runtimeOptions: () => ({
         apiUrl: new URL(import.meta.url),
         storageManager: LoopbackStorageManager.connect(server, { as: service }),
@@ -287,6 +298,9 @@ async function fixture() {
     addTopic,
     stored,
     restartHost,
+    failNextRegistryRead: () => {
+      failRegistryRead = true;
+    },
     close,
   };
 }
@@ -338,6 +352,35 @@ describe("indexed-collection-host", () => {
 
       await titles(["renamed"]);
       expect(f.host.runtime).toBeDefined();
+      expect(f.errors).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("re-reads a member written while a registry read failed, once a later read succeeds", async () => {
+    // The restarted host has to read the registry to learn of the
+    // collection, and the read for the rename's commit fails. Only the ids
+    // that read held can bring the member to the next read.
+    const f = await fixture();
+    try {
+      const { result, titles } = await f.run();
+      result.key("add").send({ title: "first" });
+      await titles(["first"]);
+      await f.restartHost();
+      f.failNextRegistryRead();
+      result.key("rename").send({ from: "first", to: "renamed" });
+      await f.runtime.idle();
+      await f.runtime.storageManager.synced();
+      await Promise.all(f.host.accessForTestingOnly.reads);
+      // A write the member was not read from has the host read again.
+      const plain = f.runtime.getCell<{ count: number }>(f.space, "plain");
+      await plain.sync();
+      const tx = f.runtime.edit();
+      plain.withTx(tx).set({ count: 1 });
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      await titles(["renamed"]);
       expect(f.errors).toEqual([]);
     } finally {
       await f.close();

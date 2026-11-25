@@ -17,11 +17,12 @@ export type IndexedCollectionHostServer = Pick<
 >;
 
 /**
- * What a host knows of one space: that it lists a collection, that it listed
- * none when its registry was read, or, while that read is in flight, the ids
- * of the documents written meanwhile.
+ * What a host knows of one space: that it lists a collection; that it listed
+ * none when its registry was read; while that read is in flight, the ids of
+ * the documents written meanwhile; or, once a read has failed, the ids held
+ * for it, which the next read hands on.
  */
-type SpaceListing = "listed" | "unlisted" | string[];
+type SpaceListing = "listed" | "unlisted" | string[] | { failed: string[] };
 
 /**
  * Keeps the indexed collections of every space a memory server holds
@@ -96,19 +97,25 @@ export class IndexedCollectionHost {
     if (this.#closed || notice.writes.length === 0) return;
     const ids = notice.writes.map((write) => write.id);
     const known = this.#spaces.get(notice.space);
+    const held = Array.isArray(known)
+      ? known
+      : typeof known === "object"
+      ? known.failed
+      : [];
     if (known === "listed" || ids.includes(this.#registryId)) {
       this.#spaces.set(notice.space, "listed");
-      if (Array.isArray(known)) this.#forward(notice.space, known);
+      if (held.length > 0) this.#forward(notice.space, held);
       this.#forward(notice.space, ids);
       return;
     }
     if (known === "unlisted") return;
-    if (known !== undefined) {
+    if (Array.isArray(known)) {
       for (const id of ids) known.push(id);
       return;
     }
-    this.#spaces.set(notice.space, ids);
-    this.#read(notice.space, ids);
+    for (const id of ids) held.push(id);
+    this.#spaces.set(notice.space, held);
+    this.#read(notice.space, held);
   }
 
   /**
@@ -129,10 +136,11 @@ export class IndexedCollectionHost {
         this.#forward(space, held);
       },
       (error) => {
-        // The next commit to the space reads the registry again. The
-        // documents written up to now are followed again once one of them is
-        // written again.
-        if (this.#spaces.get(space) === held) this.#spaces.delete(space);
+        // The next commit to the space reads the registry again, and hands
+        // on what this read held along with what it writes.
+        if (this.#spaces.get(space) === held) {
+          this.#spaces.set(space, { failed: held });
+        }
         logger.warn("registry-read-failed", () => [space, held.length, error]);
       },
     ).finally(() => {

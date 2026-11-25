@@ -290,8 +290,9 @@ These properties follow from the design, and each is a thing to preserve:
   will link to. The re-read fills its columns and moves its rows to the
   resolved reference. A maintainer in the handler's own runtime re-reads the
   member once the commit lands. A maintainer elsewhere hears of the commit,
-  which writes the new piece's documents, and the member's own document is
-  one of the documents its rows name.
+  which writes the new piece's documents. The member's `member_deps` rows
+  name its own document from the start, though none of the documents the
+  piece is made of, so that commit finds it.
 - **A member is stored under an address and nothing else.** The reference
   holds the space, id, scope and path of the cell a link resolves to. A link's
   other parts, which differ with where the link came from, stay out of it, so
@@ -533,6 +534,8 @@ until the first step has run, and then re-runs.
   runtime therefore never heard of, short of a change to the declaration.
 - With server execution off, the toolshed's maintenance runtime keeps a
   session, and the replicas of the members it re-read, for every space that
-  lists a collection, for as long as the process runs.
-- A client that talks to a toolshed which neither serves its space nor runs
-  an `IndexedCollectionHost` keeps nothing current.
+  lists a collection and that it has heard a commit to since the process
+  started, for as long as the process runs.
+- A client that maintains `"none"`, as the presets for runtimes talking to a
+  deployed toolshed do, keeps nothing current when the toolshed neither
+  serves its space nor runs an `IndexedCollectionHost`.

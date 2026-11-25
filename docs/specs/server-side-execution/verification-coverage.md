@@ -3094,9 +3094,12 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   service-nowhere / commit-#1-is-the-ACL shape).
   (c) **the READ posture** — the OWNER blanket is RETIRED:
   `memoryServiceDidsFor` became `memoryAclPrincipalsFor`
-  (`serviceDids` = the operator list verbatim on BOTH arms — the
-  absolute pin "under ON the process identity is not an OWNER-class
-  service DID by default" is in `server-execution-flag.test.ts`;
+  (`serviceDids` = ON: the operator list verbatim — the absolute pin
+  "under ON the process identity is not an OWNER-class service DID by
+  default" is in `server-execution-flag.test.ts`; OFF: the operator list
+  with the process identity added, for the loopback sessions of the
+  indexed-collection host, which is the OFF arm's one write path into
+  users' spaces ([indexed collections](../../features/indexed-collections.md#which-runtime-maintains));
   `delegatingDids` = ON: the process identity, OFF: empty). A serving
   manager's session mounts carry `actingAs: "space-owner"` (signed
   into the session.open descriptor); the memory server admits the
