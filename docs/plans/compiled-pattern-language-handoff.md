@@ -25,7 +25,7 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
 | `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The merged branch at `5db1c2658d`: every branch of the build, and the two executor fixes of round twenty (P453) | #10183, stacked on #10140 |
 | `merge-attempt/serving-m6` | none | The merge of the serving branch, at `31d73441f8`; the merged branch was fast-forwarded to it | none |
-| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-four, and the four link-following commits of `claude/fabrichat-row-rights-68447f` (P470, P471), and rounds twenty-five to twenty-seven, at `e157bd950b`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461), the store step of a result (P462 to P464); cut from the merged branch at `5db1c2658d`; and round twenty-eight at `9b0d83a3d0`: the real Topics board and the modules it imports declared to the compiler's check (Z98, P484), an event a body sends stored as a write (P482), `cellFromUrl` for compiled pieces (P483) | none (local) |
+| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-four, and the four link-following commits of `claude/fabrichat-row-rights-68447f` (P470, P471), and rounds twenty-five to twenty-seven, at `e157bd950b`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461), the store step of a result (P462 to P464); cut from the merged branch at `5db1c2658d`; and round twenty-eight at `9b0d83a3d0`: the real Topics board and the modules it imports declared to the compiler's check (Z98, P484), an event a body sends stored as a write (P482), `cellFromUrl` for compiled pieces (P483); and round twenty-nine at `dcaad56391`: a client's scoped writes read by a served handler (P490), the stream-events sidecar per Z99, a first append stored as an array (P489), verbs, schema metadata and receipts of instances a body makes (P486 to P488) | none (local) |
 | `claude/fabrichat-row-rights-68447f` | `fabrichat-row-rights-68447f` | The FabriChat room, real and copy, whose message rows derive their own controls; the two executor fixes of round twenty, carried onto the merged branch | none (local) |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
@@ -308,6 +308,55 @@ twenty).
   a topic read through the board comes back whole; an empty outcome cell
   reads `null` where today's path reads `undefined`; no Topics figures were
   taken on the real board.
+  Round twenty-nine (`dcaad56391`, notes 1110 to 1118, P485 to P490):
+  - The board's Start button: the handler read the per-session draft blank
+    because the instance of a scope that a client wrote was never read from
+    the replica, and a client's write of a place the piece had read as
+    absent was dropped (P490). Both are fixed for every pattern whose handler
+    reads a per-session or per-user cell a client wrote.
+  - The stream-events sidecar follows Z99 as a host arrangement: a stream's
+    entries document is measured for writer fit under no join, and only an
+    entry's `payload`, `error` and `reason` keep the transaction's join
+    (commit `854faa3f7f`, meant for `main` as well). The consumer of an
+    event still takes no label from the payload. With the residency refusal
+    gone, that under-taint now reaches across spaces too: a served handler
+    that read another space's labeled value can send it, and the consuming
+    handler writes it unlabeled. The conformance statement and the
+    enforcement matrix §4 say so.
+  - The first append onto a list the storage did not hold stored a record
+    `{0: …, length: 1}`, which emptied a resumed room's window (P489).
+    Rooms created before the fix keep the record.
+  - An instance a body makes has an `argument` link and `schema` metadata,
+    so `cf piece call` and a path through the board reach its verbs (P486,
+    P487).
+  - A handler's return value is in its receipt (P488).
+
+  On 2026-11-25 the coordinator checked the board in the browser after
+  restarting the 8300 servers on `dcaad56391`. Clicking Start now creates
+  the topic and clears the box. Enter does nothing on either path, because
+  the board binds no submit to its input. A topic does not open: its card's
+  Open link and its address both show "Content hidden by policy" to the
+  identity that created it, because the topic's result document carries a
+  `User` label of another principal, the CLI identity that holds a session
+  on the board. The label is written in the commit that handles the
+  creating click. The topic reads `wish("#profile")`, a value of each
+  viewer. Not diagnosed.
+
+  Open from the round:
+  - A topic's `mentions` stores copies of the mentioned topics rather than
+    links, so the board's crossrefs never match. A body that returns a value
+    it read through a link stores the copy, against ES §2.4. This is
+    reproduced on the executor, not fixed.
+  - `cf cell set <topic> title` is refused, because a made instance's
+    argument lacks the defaults its type declares.
+  - The empty `cellFromUrl` outcome still reads differently from today's
+    path.
+  - The root piece's result has no `schema` metadata.
+  - Every session the serving loop holds derives every topic. Each create
+    writes about 132 + 5.4n documents and 165 KB + 39 KB·n, where n is the
+    number of topics held, and each new session writes O(topics) documents
+    once. Derivation by demand is the fix.
+  - No Topics figures were taken.
 - *Fixed in round twenty, two executor defects (notes 1012 and 1013).*
   `Executor.#invoke` handed a body a plain value where an `identity` entry
   of `Body.computed` reached each row through `*`, so a body that resolved
@@ -474,13 +523,13 @@ P411 specification review; P420 to P425 resume by units, fourth round; P390
 to P394 serving, round fifteen; P450 to P464 the merges and rounds nineteen
 to twenty-four, P470 and P471 the link-following work, P472 to P478
 rounds twenty-five and twenty-six, P479 to P481 round twenty-seven, P482 to
-P484 round twenty-eight (the next is P485). Note
+P484 round twenty-eight, P485 to P490 round twenty-nine (the next is P491). Note
 numbers in `SPEC-NOTES.md` likewise: 692 to 704, 860 to 875 and 960 to 975
 trunk, 940 to 944 carry, 742 to 752 and 880 to 892 sandbox, 760 to 772
 and 900 to 914 write integrity, 851 to 866 and 920 to 932 serving, 980 to
-1109 the merges and the rounds after them (1016 to 1109 on
+1118 the merges and the rounds after them (1016 to 1118 on
 `claude/compiled-pattern-scoped-rows`, 1060 to 1066 the link-following
-work; the next is 1110). The plan documents hold decisions up to
+work; the next is 1119). The plan documents hold decisions up to
 P210 and P410 to P411; the rounds after that are in `SPEC-NOTES.md` of their
 branches only and need a document round after the merges.
 
