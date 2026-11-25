@@ -6722,9 +6722,11 @@ is relitigated.
   am fixing all other patterns". The compiler's check
   (`subset-type:mismatch`) stays as it is. The real Topics board
   (`patterns/apps/topics/main.tsx`) declared `mentionListsOf` and
-  `cardRowsOf` that way so its tests could pass plain stand-ins; round
-  twenty-eight changes those two parameters and the tests, and the owner
-  changes the other patterns. Checked as a whole program, the board drew 35
+  `cardRowsOf` that way so its tests could pass plain stand-ins. Round
+  twenty-eight changed those two parameters and the tests on the local
+  branch `claude/compiled-pattern-scoped-rows` (`31089788f4`, not pushed;
+  this branch's copy of the board is unchanged), and the owner changes the
+  other patterns. Checked as a whole program, the board drew 35
   more refusals: the same kind of parameter in `topic.tsx`, in
   `product/collection-naming/naming.ts` and `mentionable.ts`, and in
   `system/profile-face/profile-face.ts`, and in `topic.tsx` a writable view
@@ -6732,8 +6734,9 @@ is relitigated.
   §7.5.1), `unknown` reads of the legacy author name, an import form and a
   mapped type. Asked whether to change those modules and the rest of
   `topic.tsx` on the build branch, the owner answered "Fix both here"
-  (2026-11-25); round twenty-eight does, keeping the board's upgrade path
-  from an existing board.
+  (2026-11-25). Planned: round twenty-eight is to make those changes on
+  `claude/compiled-pattern-scoped-rows`, keeping the board's upgrade path
+  from an existing board; not landed yet.
 
 ## Provisional decisions awaiting the owner's ratification
 
