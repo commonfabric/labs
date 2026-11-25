@@ -49,8 +49,9 @@ sightings.set([...sightings.get(), { image: light, /* … */ }]);
 - Pass `includeData` **only** when you need the inline base64 *transiently* —
   e.g. to feed `generateObject`/`generateText` for OCR/extraction — and hold it
   in a **session** cell (`new Writable<ImageData[]>([])`), never a persisted
-  `PerSpace`/input cell. `apps/store-mapper/main.tsx` and `apps/image-analysis/main.tsx` do exactly
-  this: photos are processed-and-discarded; only the *extracted* data persists.
+  `PerSpace`/input cell. `patterns/apps/store-mapper/main.tsx` and
+  `patterns/apps/image-analysis/main.tsx` do exactly this: photos are
+  processed-and-discarded; only the *extracted* data persists.
 - `group-chat-room.tsx` is the canonical persisted-image pattern: it omits
   `includeData`, and the message it stores carries only the image's `url`.
 - Common flow for "capture → extract → keep the photo": use `includeData` on the
