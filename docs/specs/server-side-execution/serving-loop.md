@@ -392,6 +392,8 @@ piece when loaded, whatever writes it, and is **plain**. Under `skip` and
 `start-upstream` a plain root is parked as its load would park it, terminal
 and watching the document (a commit to it re-arms it, §3), without the
 load, unless a commit to the document was admitted while the judgment ran.
+Its document is still synced into the serving replica, as the load's first
+step syncs it.
 Whether a plain root's stored value is current is not judged, since a load
 would not change it: a document a recorded piece maintains is current once
 that piece runs, and one written by something the index cannot account

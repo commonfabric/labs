@@ -6308,6 +6308,9 @@ export class SpaceServer implements TransactionSealDestination {
     // and that span starts here.
     const changedDocs = new Map<string, number>();
     this.#structureLoadChangedDocs = changedDocs;
+    // The roots parked below as plain, whose documents the pull below still
+    // brings into the replica, as their loads would have.
+    const parked = new Map<string, { id: string; scope: CellScope }>();
     // The roots the store can serve as they stand (serving-loop.md §1):
     // where the loop skips they are neither loaded nor started, and stay
     // awaiting a first load, so each later pass judges them again. A root,
@@ -6358,7 +6361,8 @@ export class SpaceServer implements TransactionSealDestination {
           this.#rearmSeqsAwaitingFollow.delete(key);
         }
         for (const key of judged.plain) {
-          this.#parkPlainRoot(key, rootKeys, changedDocs);
+          const root = this.#parkPlainRoot(key, rootKeys, changedDocs);
+          if (root !== undefined) parked.set(key, root);
         }
       }
       this.#armCurrencyExpiry();
@@ -6375,7 +6379,7 @@ export class SpaceServer implements TransactionSealDestination {
       }
     }
     try {
-      await this.#loadStructureRootDocs(runtime, rootKeys);
+      await this.#loadStructureRootDocs(runtime, rootKeys, parked);
       // The STRUCTURE LOAD, per watch ROOT and per row marked as a piece's
       // (flag 4), unchanged in mechanism (stage P2-F, the OW19 terminal
       // state, the commit-triggered re-arm); only the demand-walk install is
@@ -6861,14 +6865,20 @@ export class SpaceServer implements TransactionSealDestination {
    * root this pulls that the pass then skips is one a client demands either
    * way, and a root this misses is one its traversal fetches as it always
    * did.
+   *
+   * The roots of `parked`, which this pass parked as plain without a load,
+   * are pulled too: the sync is the one step of the load that is not about
+   * finding a piece, and it is what puts a demanded document in the
+   * replica, where a later read of it that does not sync finds it.
    */
   async #loadStructureRootDocs(
     runtime: Runtime,
     rootKeys: ReadonlyMap<string, { id: string; scope?: CellScope }>,
+    parked: ReadonlyMap<string, { id: string; scope?: CellScope }>,
   ): Promise<void> {
     const pending: Promise<unknown>[] = [];
-    for (const [key, root] of rootKeys) {
-      if (this.#terminalStructureLoads.has(key)) continue;
+    for (const [key, root] of [...rootKeys, ...parked]) {
+      if (!parked.has(key) && this.#terminalStructureLoads.has(key)) continue;
       if (neverAPieceRootId(root.id)) continue;
       const scope = root.scope ?? "space";
       // A scoped demand that reads meta-less falls back to the SPACE
@@ -7414,20 +7424,25 @@ export class SpaceServer implements TransactionSealDestination {
    * parks it watching that document alone. A commit to the document
    * admitted since the pass opened `changedDocs` may postdate what the
    * judgment read, and leaves the root in `rootKeys` to be loaded.
+   *
+   * @returns The root parked, whose document the pass still pulls into the
+   * replica (`#loadStructureRootDocs()`), or `undefined` where it was left
+   * to be loaded.
    */
   #parkPlainRoot(
     key: string,
     rootKeys: Map<string, { id: string; scope: CellScope }>,
     changedDocs: ReadonlyMap<string, number>,
-  ): void {
+  ): { id: string; scope: CellScope } | undefined {
     const root = rootKeys.get(key);
-    if (root === undefined || changedDocs.has(root.id)) return;
+    if (root === undefined || changedDocs.has(root.id)) return undefined;
     rootKeys.delete(key);
     this.#demandedRoots.add(key);
     this.#rootsAwaitingFirstLoad.delete(key);
     this.#pendingStructureLoads.delete(key);
     this.#structureLoadDeferralStreaks.delete(key);
     this.#terminalStructureLoads.set(key, new Set([root.id]));
+    return root;
   }
 
   /**

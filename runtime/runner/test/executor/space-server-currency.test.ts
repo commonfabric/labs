@@ -1012,7 +1012,7 @@ describe("SpaceServer", () => {
           await closeLastRuntime();
         };
 
-        it("parks it unloaded, as a load that finds no piece would, under `skip`", async () => {
+        it("parks it unloaded, as a load that finds no piece would, and brings it into the serving replica, under `skip`", async () => {
           host = newHost("skip");
           const data = await writeData();
 
@@ -1027,6 +1027,11 @@ describe("SpaceServer", () => {
           expect(stats.structureLoadTerminal).toBe(0);
           expect(stats.currency.servedFromStore).toBe(0);
           expect(stats.currency.refused).toEqual({});
+          // A read that does not sync finds what the load's sync would have
+          // put in the replica.
+          expect(servingRuntime!.getCellFromLink(data).getRaw()).toEqual({
+            title: "typed",
+          });
         });
 
         it("parks it unloaded where the space holds no instance of it, under `skip`", async () => {
