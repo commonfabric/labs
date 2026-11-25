@@ -35,6 +35,21 @@ export default pattern<{ value: number }>(() => ({ missing }));
   "patterns/dev/scratch.tsx": `/** Excluded. */
 export default 1;
 `,
+  // The repository's record of moves where Labs keeps its own: the counter
+  // folder was once the tally folder.
+  "runtime/runner/src/pattern-key-moves.ts":
+    `export const MOVED_PATTERN_KEYS = { "tally/": "counter/" };\n`,
+  // A record of moves kept as JSON elsewhere: before that, it was one file.
+  // Tables that would lose every move: a directory moved to a file, and an
+  // empty path.
+  "file-for-directory.json": JSON.stringify({ "tally/": "counter/main.tsx" }),
+  "empty-path.json": JSON.stringify({ "": "counter/main.tsx" }),
+  "list.json": JSON.stringify(["counter/main.tsx"]),
+  "not-a-path.json": JSON.stringify({ "tally/": 3 }),
+  "moves.json": JSON.stringify({
+    "count.tsx": "tally/main.tsx",
+    "tally/": "counter/",
+  }),
 };
 
 /** Runs `git` in `cwd`, failing the test when it fails. */
@@ -129,9 +144,102 @@ describe("sync-plan", () => {
     if (counter.status !== "compiled") throw new Error("not compiled");
     expect(counter.request.description).toBe("Counts clicks.");
     expect(counter.request.hashtags).toEqual(["demo"]);
+    // No `--moves-table`, so no moves, though the repository keeps a table.
+    expect(counter.formerPaths).toBeUndefined();
     expect(await Deno.readTextFile(`${repo}/summary.md`)).toContain(
       "3 entries: 1 compiled, 1 without a description, 1 failed.",
     );
+  });
+
+  it("reads the record of moves `--moves-table` names, as JSON", async () => {
+    const output = await runPlan([
+      "--repo-root",
+      repo,
+      "--program-root",
+      "patterns",
+      "--include",
+      "patterns/counter/**",
+      "--moves-table",
+      "moves.json",
+      "--out",
+      `${repo}/moved.json`,
+    ]);
+    expect(output.code).toBe(0);
+    const plan: RepoSyncPlan = JSON.parse(
+      await Deno.readTextFile(`${repo}/moved.json`),
+    );
+    const [counter] = plan.entries;
+    if (counter.status !== "compiled") throw new Error("not compiled");
+    expect(counter.formerPaths).toEqual([
+      "patterns/tally/main.tsx",
+      "patterns/count.tsx",
+    ]);
+  });
+
+  it("reads a record of moves kept as a module exporting MOVED_PATTERN_KEYS", async () => {
+    const output = await runPlan([
+      "--repo-root",
+      repo,
+      "--program-root",
+      "patterns",
+      "--include",
+      "patterns/counter/**",
+      "--moves-table",
+      "runtime/runner/src/pattern-key-moves.ts",
+      "--out",
+      `${repo}/module-moved.json`,
+    ]);
+    expect(output.code).toBe(0);
+    const plan: RepoSyncPlan = JSON.parse(
+      await Deno.readTextFile(`${repo}/module-moved.json`),
+    );
+    const [counter] = plan.entries;
+    if (counter.status !== "compiled") throw new Error("not compiled");
+    expect(counter.formerPaths).toEqual(["patterns/tally/main.tsx"]);
+  });
+
+  it("exits nonzero, writing no plan, when `--moves-table` names no file", async () => {
+    const output = await runPlan([
+      "--repo-root",
+      repo,
+      "--program-root",
+      "patterns",
+      "--include",
+      "patterns/counter/**",
+      "--moves-table",
+      "no-such-moves.json",
+      "--out",
+      `${repo}/unmoved.json`,
+    ]);
+    expect(output.code).not.toBe(0);
+    await expect(Deno.stat(`${repo}/unmoved.json`)).rejects.toThrow();
+  });
+
+  it("exits nonzero, writing no plan, when `--moves-table` names an empty path or an invalid table", async () => {
+    for (
+      const table of [
+        "",
+        "file-for-directory.json",
+        "empty-path.json",
+        "list.json",
+        "not-a-path.json",
+      ]
+    ) {
+      const output = await runPlan([
+        "--repo-root",
+        repo,
+        "--program-root",
+        "patterns",
+        "--include",
+        "patterns/counter/**",
+        "--moves-table",
+        table,
+        "--out",
+        `${repo}/invalid.json`,
+      ]);
+      expect(output.code).not.toBe(0);
+      await expect(Deno.stat(`${repo}/invalid.json`)).rejects.toThrow();
+    }
   });
 
   it("writes the same source hash and pattern id for the same source on a second run", async () => {

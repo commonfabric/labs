@@ -27,6 +27,14 @@ inputs:
       names are written against. Every file an entry imports must lie inside
       it, and it must lie inside the repository.
     default: ""
+  moves-table:
+    description: >-
+      plan: where the repository records how its patterns moved, relative to
+      its root: a JSON object, or a module exporting `MOVED_PATTERN_KEYS`,
+      mapping former paths to current ones below `program-root`. A moved file
+      continues its old path's lineage. Empty: no moves are followed. A path
+      named here that holds no table fails the plan.
+    default: ""
   labs-path:
     description: >-
       A Labs checkout to run from, relative to the repository root: for a
@@ -108,6 +116,7 @@ runs:
         INCLUDE: ${{ inputs.include }}
         EXCLUDE: ${{ inputs.exclude }}
         PROGRAM_ROOT: ${{ inputs.program-root }}
+        MOVES_TABLE: ${{ inputs.moves-table }}
         PLAN: ${{ runner.temp }}/pattern-index-plan/plan.json
       run: |
         if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
@@ -116,6 +125,9 @@ runs:
         fi
         args=(--repo-root "$GITHUB_WORKSPACE" --program-root "$PROGRAM_ROOT"
           --out "$PLAN" --summary "$GITHUB_STEP_SUMMARY")
+        if [ -n "$MOVES_TABLE" ]; then
+          args+=(--moves-table "$MOVES_TABLE")
+        fi
         while IFS= read -r glob; do
           [ -n "$glob" ] && args+=(--include "$glob")
         done <<< "$INCLUDE"
