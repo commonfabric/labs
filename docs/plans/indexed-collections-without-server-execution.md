@@ -102,14 +102,18 @@ its post-commit re-read of an added member as well.
 
 ## Stages
 
-- [ ] The runtime option, its preset classification, and the maintainer's use
+- [x] The runtime option, its preset classification, and the maintainer's use
       of it.
-- [ ] `add()` lists the collection; the maintainer's listing event is gone.
-- [ ] `IndexedCollectionHost`, with a test of two clients that run with server
-      execution off and maintain nothing while the host maintains.
-- [ ] Toolshed starts and stops the host with server execution off, and lists
+- [x] `add()` lists the collection; the maintainer's listing event is gone.
+- [x] `IndexedCollectionHost`, with a test of a client that runs with server
+      execution off and maintains nothing while the host maintains, against a
+      memory server that enforces its access lists.
+- [x] Toolshed starts and stops the host with server execution off, and lists
       its identity as a service principal.
-- [ ] `docs/features/indexed-collections.md` describes the posture.
+- [x] `docs/features/indexed-collections.md` describes the posture.
+- [ ] A local toolshed started with `EXPERIMENTAL_SERVER_EXECUTION=false`
+      keeps the example `patterns/examples/indexed-topics/` current for two
+      browser sessions, one of which closes while the other writes.
 
 ## Limits
 
