@@ -25,7 +25,7 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
 | `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The merged branch at `5db1c2658d`: every branch of the build, and the two executor fixes of round twenty (P453) | #10183, stacked on #10140 |
 | `merge-attempt/serving-m6` | none | The merge of the serving branch, at `31d73441f8`; the merged branch was fast-forwarded to it | none |
-| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-three at `71fefaf1e3`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461); cut from the merged branch at `5db1c2658d` | none (local) |
+| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-four, and the four link-following commits of `claude/fabrichat-row-rights-68447f` (P470, P471), at `0f9b207a49`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461), the store step of a result (P462 to P464); cut from the merged branch at `5db1c2658d` | none (local) |
 | `claude/fabrichat-row-rights-68447f` | `fabrichat-row-rights-68447f` | The FabriChat room, real and copy, whose message rows derive their own controls; the two executor fixes of round twenty, carried onto the merged branch | none (local) |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
@@ -180,6 +180,27 @@ twenty).
   stored messages, the basis parts, and each main-conversation row document,
   still of the scope `user` through `authorProfile` (the link-following
   work).
+  Round twenty-four (`5fc3cf732c`, notes 1044 to 1053, P462 to P464): placing
+  a result again skips a record or array that is the value placed before (83
+  positions per send at every size, where it was 621); records whose inputs
+  have equal content share one set of positions, so registrations per send
+  fell from 6,798 to 1,012 at 100 messages; a `filter` over the rows of a
+  `map` is brought up to date by row; the harness finds a stream once. A
+  send at 1,000 messages took 323 to 337 ms of the piece's own time where it
+  took 549 to 565 at the same load, with 300 records per send at every
+  size. Open: registrations still grow about 8 per message; the index of
+  label readers grows with the square of the room over its life (fixing it
+  changes which records a label change reaches, CFC question 5 of the
+  round).
+  The link-following work (`017819452f` and `1f0c02922e` with their notes)
+  was cherry-picked onto `5fc3cf732c` on 2026-11-24 at the owner's word; the
+  only conflicts were two trailing parameters of `Instance.stored` and the
+  notes. Every gate passes and the corpus is unchanged in its four modes,
+  and the rows of the main conversation are now of the space. But a send
+  follows the room again: 490, 1,290 and 2,290 records at 100, 500 and
+  1,000 messages (300 before), and 191 to 197, 1,190 to 1,491 and 2,837 to
+  3,155 ms of the piece's own time; the seed at 1,000 took 1,701 s. Round
+  twenty-five is diagnosing it.
 - *Fixed in round twenty, two executor defects (notes 1012 and 1013).*
   `Executor.#invoke` handed a body a plain value where an `identity` entry
   of `Body.computed` reached each row through `*`, so a body that resolved
