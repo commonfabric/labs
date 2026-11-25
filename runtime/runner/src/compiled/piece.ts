@@ -56,9 +56,11 @@ import {
   deriveEventKey,
   handlingReceiptLink,
 } from "../scheduler/event-identity.ts";
-import { receiptShapeSchema } from "../receipt-shape.ts";
 import { ignoreReadForScheduling } from "../scheduler.ts";
-import { writeResultSchemaMeta } from "../result-schema-meta.ts";
+import {
+  receiptShapeSchema,
+  writeResultSchemaMeta,
+} from "../result-schema-meta.ts";
 import type { Action, EventHandler } from "../scheduler/types.ts";
 import type { URI } from "../sigil-types.ts";
 import {

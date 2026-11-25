@@ -175,8 +175,10 @@ import {
 } from "./node-binding-memo.ts";
 import { hasInlineCellScheme } from "./immutable-cell.ts";
 import { runtimeOwnedStoreOwnerKey } from "./cfc/runtime-owned-stores.ts";
-import { receiptShapeSchema } from "./receipt-shape.ts";
-import { writeResultSchemaMeta } from "./result-schema-meta.ts";
+import {
+  receiptShapeSchema,
+  writeResultSchemaMeta,
+} from "./result-schema-meta.ts";
 import {
   canResolveScopeKey,
   resolveScopeKey,
