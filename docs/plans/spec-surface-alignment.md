@@ -281,8 +281,11 @@ work under way, the item links to it.
 
    Raw links go. (Ties to 1.2.)
 8. **Fold the duplicate builtins:**
-   - the six fetch sinks become one fetch with decoders;
-   - the four model-call builtins become one.
+   - the six fetch sinks (`fetchJson`, `fetchText`, `fetchBinary`,
+     `fetchJsonUnchecked`, `fetchProgram`, `streamData`) become one fetch with
+     decoders;
+   - the one-shot model calls (`llm`, `generateText`, `generateObject`) become
+     one. `llmDialog` stays separate (item 7).
 
    This is housekeeping inside 1.4.
 9. **`delegate_task` takes explicit input handles and a callee ceiling,** as
