@@ -211,8 +211,10 @@ Each step is the long-term mechanism in a smaller form.
    - [handler-callable egress](handler-callable-egress.md), because today a
      handler cannot issue a request and await its result. Its "through the
      commit boundary" route is the runtime outbox of question 1, which carries a
-     click's evidence to the effect and writes the result back to a cell. A
-     wrapper verb needs nothing more;
+     click's evidence to the effect and writes the result back to a cell. The
+     verb's caller reads the result from that cell, so `call_verb` must be
+     notified when the cell settles rather than when the handler returns, and
+     that is part of this step;
    - source entry for fetched responses (primitives cleanup 4, top/1892), so
      that what a server returns arrives labeled and is never left unlabeled.
 
@@ -242,19 +244,19 @@ Each step is the long-term mechanism in a smaller form.
 These are gaps in the runtime, not in the design. Each one is filed, and each
 has an interim limit that lifts when the gap closes.
 
-| Gap                                                                                                                                                                  | Interim limit                                                                                     |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| H9 / CT-2175: side effects are admitted on run-level direct-command authority. top/3606: skill text in a delegated child inherits that authority.                    | A run that holds unreviewed prose runs side effects only when the person starts them.             |
-| `IntentOnce` is unbuilt.                                                                                                                                             | Per-call authority means the person confirms each call.                                           |
-| Registry snapshots, `ToolDescriptorBound` and the sink check against them are unbuilt (primitives cleanups 5 and 6).                                                 | No reviewed sets: every imported tool runs as unreviewed.                                         |
-| Authority-only request fields are declared in policy templates but not enforced, and nothing mints `AuthorizedRequest`.                                              | The bridge stores no tokens; servers that need one wait.                                          |
-| `fetch*` assigns no source-entry labels (primitives cleanup 4, top/1892).                                                                                            | `cf import mcp` waits for it.                                                                     |
-| top/3597: `llmDialog` writes fail open, and `agent()`'s `call_verb` fails closed.                                                                                    | Agents reach wrapper verbs only through cf-harness.                                               |
-| top/3595: tools that take a URL do not check the context label. top/3594: DNS egress.                                                                                | Runs that hold unreviewed prose do not get `web_fetch`.                                           |
-| Sandbox: not every channel out is mediated. Egress is on by default, DNS is exempt (top/3594), sessions persist between calls, and there is a host execution target. | Unreviewed scripts run in a fresh sandbox with no network and no fabric mount, never on the host. |
-| The gesture-bound reclassification of a person's own `User(A)` data is unbuilt (top/3599).                                                                           | Unreviewed outputs stay with the person who imported the tool and cannot be shared.               |
-| Nothing binds a person's DID to the `did:mailto:` principals a connector mints.                                                                                      | `audienceFrom` stays Loom host policy.                                                            |
-| A reactive `fetch` is deduplicated by `inputHash`, and authority does not cross the reactive hop (primitives 1.7). The outbox of question 1 is unbuilt.              | Wrapper handlers call tools only from events, never from reactive recompute.                      |
+| Gap                                                                                                                                                                  | Interim limit                                                                                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| H9 / CT-2175: side effects are admitted on run-level direct-command authority. top/3606: skill text in a delegated child inherits that authority.                    | A run that holds unreviewed prose runs side effects only when the person starts them.                                |
+| `IntentOnce` is unbuilt.                                                                                                                                             | Per-call authority means the person confirms each call.                                                              |
+| Registry snapshots, `ToolDescriptorBound` and the sink check against them are unbuilt (primitives cleanups 5 and 6).                                                 | No reviewed sets: every imported tool runs as unreviewed.                                                            |
+| Authority-only request fields are declared in policy templates but not enforced, and nothing mints `AuthorizedRequest`.                                              | The bridge stores no tokens; servers that need one wait.                                                             |
+| `fetch*` assigns no source-entry labels (primitives cleanup 4, top/1892).                                                                                            | `cf import mcp` waits for it.                                                                                        |
+| top/3597: `llmDialog` writes fail open, and `agent()`'s `call_verb` fails closed.                                                                                    | Agents reach wrapper verbs only through cf-harness.                                                                  |
+| top/3595: tools that take a URL do not check the context label. top/3594: DNS egress.                                                                                | Runs that hold unreviewed prose do not get `web_fetch`.                                                              |
+| Sandbox: not every channel out is mediated. Egress is on by default, DNS is exempt (top/3594), sessions persist between calls, and there is a host execution target. | The bridge runs unreviewed scripts with network mode `none`, a fresh session and no fabric mount, never on the host. |
+| The gesture-bound reclassification of a person's own `User(A)` data is unbuilt (top/3599).                                                                           | Unreviewed outputs stay with the person who imported the tool and cannot be shared.                                  |
+| Nothing binds a person's DID to the `did:mailto:` principals a connector mints.                                                                                      | `audienceFrom` stays Loom host policy.                                                                               |
+| A reactive `fetch` is deduplicated by `inputHash`, and authority does not cross the reactive hop (primitives 1.7). The outbox of question 1 is unbuilt.              | Wrapper handlers call tools only from events, never from reactive recompute.                                         |
 
 ## Decisions
 

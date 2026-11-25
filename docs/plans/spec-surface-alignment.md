@@ -234,8 +234,9 @@ and the runtime assumes the worst:
 - the arguments are released to the server's origin as a sink;
 - the outputs carry only what source entry assigns.
 
-They remain usable under those assumptions. Their outputs are also confined to
-the person who imported them (appendix question 4, provisional).
+They remain usable under those assumptions. Their outputs will also be confined
+to the person who imported them. That rule is provisional and nothing enforces
+it yet (appendix question 4).
 
 ### The rule for bridges
 
@@ -420,8 +421,8 @@ question 6), so for those the ask is only whether we read the spec correctly.
    and what must its run record show?
 
    _Provisional, a reading of existing rules:_ no rule beyond §18.2 is needed.
-   The sandbox mediates every channel out of it, as any other node's I/O is
-   mediated:
+   The sandbox must mediate every channel out of it, as any other node's I/O is
+   mediated. Today it does not, which is what the interim below covers:
    - network traffic is a `fetch` sink, checked against the run's `pc`;
    - a mediated file read carries the label of the object behind it, and a write
      back is an ordinary labeled write (§18.2.3);
