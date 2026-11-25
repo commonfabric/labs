@@ -130,6 +130,27 @@ currency. The existing overlay and retirement rules below still apply.
   speculable (compilation is an effectful step): that branch renders
   its ordinary loading state until the authoritative push delivers
   the child (runtime-mapping.md N37/N38).
+- **A speculative run mints the ids the served run mints.** Retirement
+  (§4) waits until every document an entry wrote has arrived, so a
+  document the client's run minted under an id the served run never
+  mints holds its entry for the life of the process, and with it every
+  entry that read through that entry's layer. The ids a run mints
+  therefore derive from the node and the run, never from the runtime
+  doing the running. A lift's run and a handler's run each carry a
+  frame of their own, derived from the node and, for a handler, the
+  event. A builtin's run carries one too, whose cause is the node's
+  identity, the cause the stores the builtin keeps derive from. An
+  object a builtin's run writes as an element of an array becomes a
+  document of its own, its id drawn from that frame, so the client's
+  run of a builtin and the served run of the same node over the same
+  inputs mint the same documents. Before builtins' runs carried a
+  frame, a builtin drew those ids from a counter each runtime keeps
+  for its whole life: a client running `generateObject` minted its
+  `messages` elements under ids the served run never wrote, and the
+  echo masked the served answer until the client restarted (top/3639).
+  Work a builtin does after its run returns, such as an effect's
+  answer, runs outside the run's frame; only the serving runtime does
+  that work, so no echo waits on what it mints.
 - **Unreplicated inputs**: a speculative read of a doc/path the client
   has not replicated is PENDING for that branch — speculation NEVER
   blocks on a fetch and never triggers a network read. The branch
