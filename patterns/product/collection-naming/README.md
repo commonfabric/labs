@@ -70,18 +70,20 @@ collection does with it:
 
 The library is two modules, and which one a declaration sits in turns on what it
 needs at runtime. `allocator.ts` holds the allocation rule — `nextNameAmong`,
-`createNamed`, `assignName`, and the `NamesMap` and `NamesMapCell` shapes — and
-takes no value from `commonfabric`, so a plain `deno test` can import it and run
-the allocator with no pattern runtime behind it. `naming.ts` holds what does
-take one — the names table, the reverse lookup, the two backfills — and
-re-exports the whole of `allocator.ts`, so a collection reaches the library
-through `naming.ts` alone.
+`createNamed`, `assignName`, and the `NamesMap` and `NamesMapCell` types — and
+takes no value from `commonfabric`, only the type `Writable`, so a plain
+`deno test` can import it and run the allocator with no pattern runtime behind
+it. `naming.ts` holds what does take one — the names table, the reverse lookup,
+the two backfills — and re-exports the whole of `allocator.ts`, so a collection
+reaches the library through `naming.ts` alone.
 
 Nothing in `naming.ts` knows what kind of piece a member is beyond the one verb
-`recordNames` sends to and the one property it reads. A member is a cell,
-compared by identity and never read through, which is what keeps every read
-there — the allocator surveying keys, the table over the map, a member finding
-its row — from expanding a member document.
+`recordNames` sends to and the one property it reads, which `NamedMember`
+declares; `recordNames` takes the collection's list as the cell it stores,
+`Writable<M[]>` for a member type `M` that extends `NamedMember`. A member is a
+cell, compared by identity and never read through, which is what keeps every
+read there — the allocator surveying keys, the table over the map, a member
+finding its row — from expanding a member document.
 
 ### Declaring the namespace
 
@@ -100,9 +102,10 @@ the reads above stay bounded:
   dropped from the schema.
 
 A verb reads its binding through a schema that carries no default, so inside a
-verb the map is `undefined` until the first name is written. `NamesMapCell`
-declares that structurally, and the library's readers take an absent map as
-empty.
+verb the map is `undefined` until the first name is written. `NamesMapCell` is
+`Writable<NamesMap>`, the cell of the map the input stores, which is how the
+compiled pattern language requires a cell passed to a helper to be declared, and
+the library's readers take an absent map as empty (`?? {}`).
 
 ## The mention universe: `mentionable.ts`
 

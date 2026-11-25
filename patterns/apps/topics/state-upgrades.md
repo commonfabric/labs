@@ -125,12 +125,20 @@ against the enclosing schema document's root. A projection that emits references
 requires its definitions at every containing document root. The Topics suites
 exercise these bindings and fail when a reference cannot resolve.
 
-Mutations carry a cell containing the upgrade handles. The cell keeps the nested
-read-only source handle intact through handler state typing; reading the binding
-yields handles, and the runner reads the version before following the legacy
-data. Other handler fields retain their generated contracts. The structured
-creator remains plain in the outer Topic input; the internal upgrade binding
-supplies its writable destination.
+Mutations carry the record of upgrade handles itself, `TopicUpgradeState`, whose
+handles declare the types the Topic input stores: `createdBy` is a
+`Writable<TopicAuthor | undefined>` and `comments` a
+`Writable<StoredTopicComment[]>`. A record of handles is accepted where a cell
+of a record is declared only when the types are the same, and a writable handle
+of a narrower or a wider view than the stored type is not accepted, so the
+declarations are the stored types and the reader contract above is what reads
+the partially populated legacy shapes. The lift is given that contract as a
+schema of no particular type, so its state is typed as the record of handles and
+not as a type derived from the contract. A legacy name is read as text by
+`legacyText()`, which gives the empty string for any value that is not a string,
+before it is trimmed. Other handler fields retain their generated contracts. The
+structured creator remains plain in the outer Topic input; the internal upgrade
+binding supplies its writable destination.
 
 ## Version one to two: kept count and activity time
 
