@@ -258,7 +258,7 @@ which opens the **rear camera** directly on mobile (confirmed in
 />;
 ```
 
-Handler mirrors `image-analysis.tsx:40-47`:
+Handler mirrors `apps/image-analysis/main.tsx:40-47`:
 
 ```ts
 const onPhotoCaptured = handler<
@@ -274,7 +274,7 @@ const onPhotoCaptured = handler<
 
 ### Extraction
 
-Reuse the `store-mapper.tsx:326-370` idiom — a `generateObject` call whose
+Reuse the `apps/store-mapper/main.tsx:326-370` idiom — a `generateObject` call whose
 `prompt` is a content-parts array mixing image + text, with an explicit JSON
 `schema`:
 

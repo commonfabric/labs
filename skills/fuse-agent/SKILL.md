@@ -291,7 +291,7 @@ echo '"resolved"' | cf cell set --cell $WISH_ID status --space SPACE
 cf piece step --cell $WISH_ID --space SPACE
 ```
 
-**Discover open annotations** — deploy `annotation-manager.tsx` for an
+**Discover open annotations** — deploy `annotation-manager/main.tsx` for an
 aggregated view, or query `pieces.json` directly:
 
 ```bash
