@@ -1267,7 +1267,14 @@ holds the measurements and the conditions for revisiting.
   option and server execution on sets a piece up with
   `setUpCompiledPiece()`, which also links the `argument` metadata of the
   result document to the argument document, so a client reads and writes the
-  argument of a compiled piece as it does any piece's.
+  argument of a compiled piece as it does any piece's. The serving runtime
+  writes the same onto the result document of each instance a body of the
+  piece makes, with the plan's argument schema in the link and its result
+  schema as the `schema` metadata, so a client addresses such an instance as
+  a piece of its own, and `cf piece call` reads a verb's declared event from
+  that schema where the piece has no pattern. A handling the serving runtime
+  runs for a compiled piece writes its receipt, with what the handler
+  returned, as a served handling of any piece does.
   `compiledInstantiatePiece()` of `runtime/piece/src/ops/served-lifecycle.ts`
   sets one up with a creation receipt and a slug, and `cf piece new` uses it
   where the crate's binary at hand accepts the program, and creates the piece

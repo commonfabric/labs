@@ -28322,3 +28322,261 @@ where they differ.
    stored as the value it read, where a link was stored; the request's label is
    then the template's for a copy rather than that of a link to the element.
    Whether the two store the same clauses was not checked.
+
+## Round twenty-nine: the board's Start button, a topic's own verbs, and the FabriChat send
+
+Round twenty-nine (2026-11-25), on the branch
+`claude/compiled-pattern-scoped-rows` from `9b0d83a3d0`. The notes are numbered
+from 1110, the provisional decisions from P485. The logs are in the folder
+`r29-topics-start-verbs/` of the session. No browser was launched. The round's
+own toolshed ran at port 8400 with its store in the session's scratch folder.
+Three requests of the coordinator came during the round and went first: the
+FabriChat send refused after `9b0d83a3d0`, the empty message window after a
+restart, and the cost of a Topics create that grows with the board. Whenever a
+note says `map`, it names the case.
+
+1110. **Findings, first.**
+      - _Scaling, open: every new session derives every topic of the board._
+        A Topics create from the CLI, where each `cf` call is a session of its
+        own, changes about 132 + 5.4n documents and 165 KB + 39 KB·n at n
+        topics held (`create-cost.sh` of the session's scratch folder, 1 to 40
+        topics, the compiled board on the round's toolshed). Of a create at 40
+        topics, 242 documents (1.04 MB) are of the scope `session` of the
+        creating call: each topic's view reads state of that scope, so its
+        outputs are stored per session, and the serving loop derives every
+        topic for every session that demands the board, about 6 documents and
+        25 KB per topic and new session. Each earlier session also stores the
+        board's scoped outputs again at each change (6 documents, 26 KB each,
+        for three earlier sessions). A browser session pays the same once, at
+        its first load. This is the open item "a session no client holds any
+        more is still derived at every change" together with derivation by
+        demand, which neither exists on the compiled path; today's path
+        derives a session's instance of a topic only where something of that
+        session demands it. Not fixed (note 1116).
+      - _Soundness, fixed (P489): the first append onto a list of the
+        argument that the storage did not hold stored a record._ The first
+        message of a FabriChat room wrote `{ 0: <link>, length: 1 }` at the
+        argument's `messages`, since the adapter wrote the number of members
+        and the position added onto an absent array. The executor kept its
+        own array, so nothing showed until a serving runtime took the space
+        over and read the list from the storage: it found no array, and the
+        next send stored a list of one. A room created before this fix keeps
+        the record (no migration, by the owner's word on compatibility).
+      - _CFC, the owner's ruling Z99 and its refinement, built (note 1112):_
+        a stream's entries document is measured under no join, and of the
+        transaction's join only an entry's `payload`, `error` and `reason`
+        keep a stamp. The consumer of an event is handed the payload as a
+        value and consumes no label of it, as before (top/3175). With the
+        residency refusal gone, a served handler that read another space's
+        labeled value can now send it on in an event, and the handler of that
+        event writes it unlabeled: the under-taint now reaches across spaces.
+        Said first because it stores and enforces less.
+      - _Not working end to end on the compiled path, the board's crossrefs:_
+        after `mention` commits, the board's `crossrefs` list no source for
+        the mentioned topic, where today's path lists two. The topic's stored
+        `mentioned` holds the link, but its `mentions` output, which the lift
+        `mentionsOf` returns from `mentioned: unknown[]`, holds a copy of each
+        mentioned topic's result, which no topic of the board equals. A
+        function body reads a value reached through a link as a copy with no
+        address, so returning it unchanged stores the copy, against ES §2.4;
+        reproduced on the executor with a `lift` that returns the elements of
+        an array of references it declares `unknown[]` (stored
+        `[{"title":"a"},{"title":"b"}]` where today's path stores the links).
+        Not fixed (note 1118).
+      - _Not working on the compiled path, `cf cell set <topic> title`:_
+        refused with `updated result does not match its write destination:
+        missing required property comments`. The CLI validates the whole
+        argument document against the argument schema, and a topic's argument
+        document lacks the defaults its type declares: the compiled path
+        writes those only where the type declares a write policy
+        (`argumentWithDefaults`), and today's setup writes them all.
+      - _Not built, step 4 (note 1115)._
+
+1111. **The Start button (step 1).** The handler `submitProfileTopic` read the
+      draft `newTitle` blank. The executor names the state cell of the scope
+      `session` by one name for every key, and `RuntimeTransactions.load`
+      treated every document whose name is no entity of its own (`of:`) as one
+      the executor makes, so the instance of a session key the executor held
+      no copy of was never read from the replica and the executor gave the
+      declared default. The coordinator's guess, another session's instance,
+      did not hold: the handler ran stamped with the client's session. A
+      document of a scope is now read from the replica for a key the executor
+      holds no copy of (P490); a resumed instance reads it as before. And
+      where the piece had read such an instance as absent, the client's later
+      write of it was dropped: the subscription asked whether the place was
+      declared by the name of the instance, where the executor declares a
+      place of a scope by its one name. Test
+      `runtime/runner/test/compiled/session-draft.test.ts` over
+      `compare/fixtures/session-draft.tsx`, three cases under the serving
+      loop, each seen failing first (`8b701ee867`). The board's `profileName`,
+      a value of the scope `user` the handler is bound to, is the second case
+      of the fixture (`author`).
+
+1112. **The FabriChat send (the coordinator's first request).** The send
+      handler, which reads the sender's profile from the profile's own space,
+      appends `{ messageAct: true }` to the event log of the room's
+      `tellJoined` stream in its own transaction. The preparation measured the
+      append against the log's empty ceiling where the join came from another
+      space (`isDeclarablePolicyStore` skips a stream's entries document only
+      for a local join), and refused it at `/entries`. Today's path prepares
+      the same append the same way; P482 did not change the label. The owner
+      ruled (Z99) that the sidecar is internal state of the event queue, which
+      needs no labels, with the refinement that events themselves may carry
+      labels and are to keep them. Built: no write to an entries document is
+      measured, and of the join only the positions that say what an event or
+      its fate says, `payload`, `error` and `reason`, keep a stamp
+      (`streamEntryContentPaths`, P485); the entries array and each entry's
+      identity, stream, actor, sequence number and marks take none. Where an
+      event's label is kept today: on the entry, as the sender's whole join,
+      stamped at the append; the drain hands the payload to the consumer as a
+      value, so the consumer consumes none of it (`cfc-conformance-statement.md`,
+      top/3175). The compiled path sends through `Cell.send` and keeps it the
+      same way. Classified as a host arrangement under
+      `docs/development/cfc-spec-correspondence.md` (where the queue keeps its
+      state and which of its bytes carry a stamp), beside the runtime-owned
+      stores of specs#78; no kernel function changed and no `SPEC-PENDING`
+      marker. The commit `854faa3f7f` is of its own, for a pull request
+      against `main`. Tests: four cases of
+      `runtime/runner/test/cfc-processed-claim.test.ts`, the append case seen
+      refused at `/entries` before, and
+      `runtime/runner/test/compiled/relay-send.test.ts` over
+      `compare/fixtures/relay-send.tsx`, a FabriChat send reduced to what its
+      commit prepares, under the serving loop with the write policies kept,
+      refused at `/` against the preparation before Z99. A FabriChat room
+      itself was not run under a test with its policies kept: its send needs
+      a profile a `wish` resolves under the serving loop, which note 890 found
+      unresolved. On the round's toolshed, before Z99, a room created on the
+      compiled path with a profile `cf profile create` made committed two
+      sends from a client that marks the click as the shell's renderer does
+      (`chat-send.ts` of the scratch folder): the refusal did not reproduce
+      there, and why that profile brings no clause the log refuses was not
+      checked.
+      - _The empty window after a restart_ was the record of note 1110: the
+        resumed piece read no array of messages. The test
+        `runtime/runner/test/compiled/stored-append.test.ts` over
+        `compare/fixtures/authored-input.tsx` stores the list as an array and
+        keeps every member across a takeover, both seen failing first
+        (`568851d282`).
+      - _What a second member sees ("Content hidden by policy"):_ not
+        investigated.
+
+1113. **A topic's own verbs and cells (step 2; P486, P487).** A runtime client
+      already reached a made instance's stream by the instance's own address
+      (the server registers the handler of every stream it marks); what
+      failed was the CLI's view of the instance. The adapter now writes onto
+      the result document of an instance a body makes the `argument` link to
+      its argument document under the plan's argument schema and the plan's
+      result schema as its `schema` metadata, and the argument document links
+      its `result` to that instance (`#describeAsPiece`); a resume still finds
+      such a document its own, through the instance's result. The result of
+      the instance the executor was started with carries no `schema`
+      metadata: with it, a later write stored the link of an index's bucket
+      again in another encoding (`kept-index.test.ts`, `link-lists.test.ts`),
+      not traced. The CLI reads a verb's declared event from the stored result
+      schema where the piece has no pattern (`storedVerbEvents`), and takes a
+      document whose metadata links its argument as the piece a path leads to.
+      Test `runtime/runner/test/compiled/made-verbs.test.ts` over
+      `compare/fixtures/made-verbs.tsx` (the metadata case seen failing
+      first; the verb by the instance's address held before), and two cases
+      of `storedVerbEvents()` written with it. The walk with the CLI
+      (`topics-walk.sh`, extended):
+
+      | Step | Today's path | Compiled path |
+      | --- | --- | --- |
+      | three `addTopic` | commit, result printed | commit, result in the receipt after step 3 |
+      | `setTitle` by the topic's address | commits | commits |
+      | four `mention`/`unmention` | commit | commit |
+      | `setTitle` through `//space/board/topics/0` | commits | commits |
+      | `cf cell set <topic> title` | commits | refused (note 1110) |
+      | `addComment` | commits | commits |
+      | index (titles, numbers, comment counts) | as made | as made, but the title `cf cell set` would have set |
+      | crossrefs of topic 1 | two sources | none (note 1110) |
+      | error states | 0 of 1,351 documents | 0 of 1,217 documents |
+
+1114. **A verb's result (step 3; P488).** The executor's outcome of a handled
+      event carries what the body returned, in stored form
+      (`Outcome.result`), and a compiled piece whose handler a serving runtime
+      ran writes the handling's receipt at its address as the runner does: the
+      result where `plainResultReceipts` is on, `{}` otherwise, with the
+      shape of the value as its `schema` metadata, and nothing where the
+      receipt holds a value. `receiptShapeSchema` moved into
+      `runtime/runner/src/receipt-shape.ts`. Test: `made-verbs.test.ts`,
+      "returns what the handler returned in the receipt of the handling",
+      seen failing first (`20fb845e9a`). Not checked with the CLI.
+
+1115. **An empty outcome cell (step 4), not built.** Reproduced with a case of
+      `url-cells.test.ts` (removed again): `resolution?.cell !== undefined`
+      holds for a URL that names no cell. The outcome's `cell` is a link to
+      the cell the runtime's `cellFromUrl` sets to `undefined`, and a body
+      that declares `cell?: unknown` does not read through it, so the store
+      gives a reference stand-in for the link (a frozen `{}` with its
+      address, `Store.#copy`), which is no `undefined`; today's path reads
+      the empty cell as `undefined`. The plan: a link the body does not read
+      through, to a place that holds nothing, reads as `undefined`, with the
+      place's existence a read of the body so that a later value runs it
+      again.
+
+1116. **The cost of a create (the coordinator's third request).** Counted from
+      the store at each size (documents and bytes a create's commits changed;
+      the piece's own counters run in the serving worker and were not read):
+      at 0, 9, 19, 29 and 39 topics held, 132, 186, 230, 292 and 346
+      documents, 165 KB, 750 KB, 1.05 MB, 1.42 MB and 1.70 MB, at 1.1 to 4.5 s
+      per call with the round's gates running beside it. What grows is note
+      1110's first finding. The fix is the rule of the open item: a scope
+      instance is derived only while something watches its documents, which
+      reaches the demand registry of today's runtime and is a round of its
+      own. Not built.
+
+1117. **The stream's sidecar as a table (the owner's note with Z99).** The
+      entries of a stream are to become a table of the memory server's store
+      instead of documents (`of:stream-events:` in `runtime/memory/v2.ts`).
+      What reads and writes them today: the firing client, which appends an
+      entry as a declared tail append (`event-append-queue.ts`, `Cell.send`'s
+      served arm in the emitting run's own transaction); the space server's
+      drain, which reads pending entries and writes the processed claim, the
+      `withheld` outcome and a delivery deferral on an entry
+      (`processed-claim.ts`, `space-server.ts`); cross-space delivery through
+      the outbox (`executor/outbox.ts`); compaction of entries at or below the
+      stream's watermark (events.md §4); and the dropped-event and
+      attention notices (`status`, `reason`, events.md §5). Not built.
+
+1118. **Planned, not built; provisional decisions; not verified.**
+      - _Planned:_ a value a function body reached through a link, returned
+        unchanged, stored as the link (note 1110), which the board's crossrefs
+        need; the defaults of an argument's type written into a made
+        instance's argument document as today's setup writes them, which
+        `cf cell set` of a topic needs; note 1115; the root's result schema
+        as metadata once the re-encoding is traced; derivation by demand
+        (note 1116); the consumer of an event consuming the payload's stamp,
+        which would close the under-taint Z99 widened.
+      - _Provisional decisions:_ P485, the refinement of Z99 as built: the
+        payload, `error` and `reason` of an entry keep the transaction's
+        join, since without value provenance the join is the only label
+        today's preparation can give a copied value; the rest of the
+        document takes none. P486, an instance a body makes is described as a
+        piece (argument link with its schema, result schema), and the root's
+        result carries no schema metadata. P487, the CLI reads a pattern-less
+        piece's declared events from its stored result schema. P488, a served
+        handling of a compiled piece writes its receipt as the runner's does.
+        P489, a splice is written as positions only into an array the
+        storage holds, through a read that decides how to write
+        (`writeDestinationRead`). P490, a document of a scope is read from the
+        replica for a key the executor holds no copy of.
+      - _Not verified:_ anything in a browser; a FabriChat room under a test
+        with its policies kept; two principals on the board; the receipt
+        through the CLI; Topics figures on the real board (step 5).
+
+### CFC questions deferred, round twenty-nine
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. Note 1112: an event's payload keeps the sender's whole join as its stamp
+   (P485), and its consumer takes none of it. Whether the consumer is to take
+   the payload's label, and with which granularity, is open; Z99 removed the
+   residency refusal that kept another space's clause out of a local event.
+2. Note 1113: the `schema` metadata of a made instance's result carries the
+   plan's `ifc` annotations, from which a client's label view derives labels
+   (round twenty-seven's question 1).
+3. Note 1114: the receipt of a compiled handling stores the handler's result
+   under the handler transaction's join, as the runner's receipt does; the
+   receipt document's label was not checked.
