@@ -1131,7 +1131,7 @@ interface AssumptionSurfacerOutput {
 
 Ask a language model about something personal without sending it anything
 personal. Names, emails, phone numbers, SSNs, card numbers and addresses in a
-draft, from the embedded PII vault (`vault.tsx`) or found by format, are swapped
+draft, from the embedded PII vault (`apps/redactor/main.tsx`) or found by format, are swapped
 for realistic stand-ins; only that redacted draft may be sent to the model, and
 the reply comes back with the originals restored for the owner. CFC enforces the
 boundary: the draft and vault are `Confidential` under `policy.tsx`, whose one
@@ -2348,8 +2348,8 @@ interface EventDetailOutput {
 
 ## `apps/contacts/contact-detail.tsx`
 
-Detail/edit view for a single contact. Use with `navigateTo()` from contact-book
-or as a standalone contact editor.
+Detail/edit view for a single contact. Use with `navigateTo()` from
+`apps/contacts/main.tsx` or as a standalone contact editor.
 
 **Keywords:** contact, detail, edit, form, navigateTo
 
