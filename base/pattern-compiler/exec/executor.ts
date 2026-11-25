@@ -12247,15 +12247,14 @@ export class Instance {
   }
 
   /**
-   * On the root: whether a position the record of `key` read consumes
-   * another label than before `changes`, in a class a slot observes a
-   * position in. It does where the store cannot tell
-   * (`LabelChange.unchanged`), and at a path that names every element.
+   * On the root: whether a position of the set `read` consumes another
+   * label than before `changes`, in a class a slot observes a position in.
+   * It does where the store cannot tell (`LabelChange.unchanged`), and at a
+   * path that names every element.
    */
-  #readsChangedLabel(key: string, changes: readonly LabelChange[]): boolean {
-    const read = this.#readsOfRecord(key) ?? [];
+  #readsChangedLabel(read: ReadSet, changes: readonly LabelChange[]): boolean {
     for (const { doc, unchanged } of changes) {
-      for (const position of read) {
+      for (const position of read.positions.values()) {
         if (position.doc !== doc) continue;
         if (unchanged === undefined || position.path.includes("*")) return true;
         for (const observes of ["value", "identity", "shape"]) {
@@ -13479,8 +13478,20 @@ export class Instance {
     const reading = this.#recordsReading(changes);
     // A record whose own positions consume the labels they consumed before
     // has the label it was given.
+    // The records that share a set of positions share the answer.
+    const answered = new Map<ReadSet, boolean>();
     for (const key of [...reading]) {
-      if (!this.#readsChangedLabel(key, changes)) reading.delete(key);
+      const set = this.#readSetOf.get(key);
+      if (set === undefined) {
+        reading.delete(key);
+        continue;
+      }
+      let reads = answered.get(set);
+      if (reads === undefined) {
+        reads = this.#readsChangedLabel(set, changes);
+        answered.set(set, reads);
+      }
+      if (!reads) reading.delete(key);
     }
     // The rows a body wrote are given their record again when the body
     // next runs, whatever they hold.
