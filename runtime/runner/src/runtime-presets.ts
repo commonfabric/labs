@@ -142,6 +142,9 @@
  * | moduleCompiler             | core-default (unset) — NEVER set by a preset:    |
  * |                            | only that same factory hands its runtimes the    |
  * |                            | compile worker its serving host owns             |
+ * | runBeacon                  | core-default (unset) — NEVER set by a preset:    |
+ * |                            | only that same factory, in a serving worker,     |
+ * |                            | hands its runtimes the worker's run beacon       |
  * | indexedCollectionMaintenance | pinned `"none"` in productionServer /          |
  * |                            | remoteClient / browserWorker: the toolshed they  |
  * |                            | talk to maintains a space's collections, by its  |
@@ -248,6 +251,7 @@ export const RUNTIME_OPTION_KEYS = [
   "servingPosture",
   "compileTurns",
   "moduleCompiler",
+  "runBeacon",
   "indexedCollectionMaintenance",
 ] as const satisfies readonly (keyof RuntimeOptions)[];
 

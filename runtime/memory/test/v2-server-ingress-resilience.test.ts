@@ -43,7 +43,10 @@ Deno.test("memory v2 server rejects malformed input without poisoning the connec
       protocol: MEMORY_PROTOCOL,
       flags: getMemoryProtocolFlags(),
     }));
-    assertEquals(messages.shift()?.type, "hello.ok");
+    // A server holding clients to the default limit says nothing of it.
+    const helloOk = messages.shift();
+    assertEquals(helloOk?.type, "hello.ok");
+    expect(helloOk).not.toHaveProperty("messageSlots");
     assertEquals(messages, []);
   } finally {
     connection.close();
@@ -157,7 +160,11 @@ Deno.test("memory v2 server holds a client message to the slot limit it was give
       protocol: MEMORY_PROTOCOL,
       flags: getMemoryProtocolFlags(),
     }));
-    assertEquals(messages.shift()?.type, "hello.ok");
+    // The reply tells the client of the limit, which is not the default.
+    expect(messages.shift()).toMatchObject({
+      type: "hello.ok",
+      messageSlots: limit,
+    });
 
     // One slot past the default is read: it reaches the command, which
     // refuses it for another reason, on its own request id.

@@ -587,6 +587,15 @@ loop's duty).
   handler-error surface (same shape clients show today) as the derived
   commit for that event, advance `eventWatermark` past it (an error IS
   the consequence — else a poison event wedges the stream), push.
+- A served handler's run that holds its serving worker's thread until the
+  watchdog ends the worker, or in which the worker's thread runs out of
+  memory, ends as a throw does: the worker the space is placed on next writes
+  the error as the event's consequence, saying which of the two ended the
+  run, advances `eventWatermark` past it, and does not run the handler for
+  that event again. The pool learns which event the run handled from the
+  worker's run beacon (serving-loop.md §2, "The watchdog"). Running it again
+  would end the next worker the same way, with the event still first in its
+  space. The space's other pending events run as before.
 - Handler commit refused PRE-STORAGE by a typed deterministic CFC
   verdict (`CfcCommitRefusalError`): the same rule as the throw above
   — the refusal IS the consequence. The entry carries its safe error

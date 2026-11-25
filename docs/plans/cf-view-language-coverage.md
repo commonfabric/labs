@@ -52,12 +52,16 @@ lists, have syntax highlighting; properties files list their keys, and XML lists
 its elements.
 INI, which covers Ansible configuration and inventories and the configuration
 files of Python tools, has syntax highlighting and a structure tree of sections
-and the keys and hosts in each. Org mode has syntax highlighting, with each
+and the keys and hosts in each. Dotenv, which covers environment files and the
+example copies of them that projects commit, has syntax highlighting and a
+structure tree of the variables each file sets. Org mode has syntax highlighting, with each
 source block colored as the language it names, and a structure tree of
-headlines. Git attributes files have syntax highlighting and a structure tree
-of their patterns and macro definitions. Lean has syntax highlighting and a
-structure tree of namespaces, sections, and declarations, and a project's
-`lean-toolchain` file has highlighting of its own.
+headlines. Git attributes files have syntax highlighting and a structure tree of
+their patterns and macro definitions. Git configuration files, which cover
+`.gitmodules`, have syntax highlighting and a structure tree of sections and the
+variables in each. Lean has syntax highlighting and a structure tree of
+namespaces, sections, and declarations, and a project's `lean-toolchain` file
+has highlighting of its own.
 Directive configuration, which covers nginx, Apache httpd, nftables, Netdata
 health alerts, and sysusers.d, has syntax highlighting and a structure tree of
 blocks, sections, and alert entries. Logs, checksums, version files, PID files,
@@ -65,7 +69,15 @@ keys, and short prose files are plain text by name. Git, Docker, and Bazel
 ignore files have syntax highlighting that follows each tool's comments,
 negation, wildcards, and white space.
 Graphviz DOT has syntax highlighting and a structure tree of graphs, subgraphs,
-and the nodes that node statements declare.
+and the nodes that node statements declare. Comma-separated and tab-separated
+values and numeric `.dat` tables have syntax highlighting.
+Assembly, which covers the Go assembler's source and GNU assembler source that
+the C preprocessor reads first, has syntax highlighting and a structure tree of
+functions, symbols, macros, and labels.
+SQL, which covers PostgreSQL, SQLite, and MySQL scripts, has syntax
+highlighting, with a PostgreSQL function's dollar-quoted body colored as SQL,
+and a structure tree of the statements that create things or alter tables,
+with the columns each defines.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -86,19 +98,19 @@ remain outside diff editing and semantic source loading.
 
 Python, Go, Swift, Kotlin, Rust, TOML, HCL, shell, C, C++, and Starlark run on
 Tree-sitter through a shared, language-neutral adapter, which HTML will use as
-well. Java properties, INI, ProGuard rules, Git attributes, XML, makefiles, Org
-mode, Lean, ignore files, Go's module and checksum files, Bazel rc files,
-Graphviz DOT, and Dockerfiles use focused scanners.
-The order is provisional because recent activity was measured in six of the 26
-active organization repositories.
+well. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
+configuration files, XML, makefiles, Org mode, Lean, ignore files, Go's module
+and checksum files, Bazel rc files, Graphviz DOT, Dockerfiles, delimited tables,
+assembly, and SQL use focused scanners. The order is provisional because recent
+activity was measured in six of the 26 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, shell, C, C++, CUDA,
-makefile, Dockerfile, Java properties, INI, ProGuard, Git attributes, XML, Org
-mode, directive configuration, ignore-file, Graphviz DOT, and diff support to
-honest handling of every textual syntax in the active `commonfabric`
-repositories.
+makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git attributes,
+Git configuration, XML, Org mode, directive configuration, ignore-file, Graphviz
+DOT, CSV, TSV, `.dat` table, assembly, SQL, and diff support to honest handling
+of every textual syntax in the active `commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -981,9 +993,9 @@ file reconstructed exactly.
 - [x] Add Makefile and `.mk`.
 - [x] Add Git, Docker, Deno, and Bazel ignore files.
 - [x] Add Git attributes files.
-- [ ] Add Git modules.
+- [x] Add Git modules and other Git configuration files.
 - [x] Add worktree-include syntax.
-- [ ] Add dotenv files and compound examples.
+- [x] Add dotenv files and compound examples.
 - [x] Add INI, Ansible configuration, and inventory files.
 - [ ] Add systemd units.
 - [ ] Add tmpfiles configuration.
@@ -1081,6 +1093,33 @@ way. Of the 100-kilobyte inputs built to slow the scanner, 20,000 lines that
 each open a bracket expression and a character class that nothing closes take
 7.0 milliseconds to highlight and 15 to parse, and one line of 20,000
 attributes takes 2.0 to highlight.
+
+Git configuration files are implemented ahead of the rest of this stage. A
+November 13, 2026 read of the local checkouts of the organization's
+repositories found one tracked file in Git's configuration syntax, Pond's
+`.gitmodules`, with 2 path-change events on it in the six months before the
+read.
+
+Git configuration uses a focused scanner that follows the rules Git's own parser
+applies: section headers with optional quoted subsection names, several of which
+may share a line, variable names, quoted values, backslash escapes, comments
+after a value, and values continued onto the next line by a final backslash. A
+line Git rejects is left out of the structure tree. It is colored up to the
+point where Git rejects it, except that a name is colored as a variable's only
+when a `=` or the end of the line follows it. `.gitmodules`, `.gitconfig`,
+`gitconfig`, a worktree's `config.worktree`, `.lfsconfig`, and names ending in
+`.gitconfig` select it. A repository's own `.git/config` is not claimed, because
+many other formats share its name, `config`. A coverage check read Pond's
+`.gitmodules`, the `.git/config` of each of the 32 local checkouts, and the user
+configuration file of the machine that ran the check. Every one of the 34 files
+reconstructed exactly, and every character other than white space in them has a
+token class. The machine was too loaded for 95th percentiles to mean anything,
+so the shortest of 100 runs stands in for each figure. On 100 kilobytes of those
+files the scanner highlighted in 2.3 milliseconds and parsed with structure in
+3.9, where the INI scanner took 1.7 and 3.2 on the same input in the same run.
+The slowest input built to slow it, 34,134 section headers on one line, parsed
+in 44 milliseconds and highlighted in 6, so most of the time went to building
+the structure tree. The fixture comes from Pond.
 
 A November 13, 2026 read of the local checkouts of the organization's
 repositories found 11 `.conf` files, in Infra, gVisor, and Legibility, and they
@@ -1246,6 +1285,48 @@ heavily that the controls ran 12.6 to 46 times slower than TOML's recorded
 medians, so no round met the condition the HCL measurement set on its controls,
 and these figures are less certain than HCL's.
 
+A November 13, 2026 read of the local checkouts of the organization's
+repositories found 24 dotenv files in 7 repositories: ten `config.env.example`
+files in Loom Scripts, eight files in Infra, two in Labs, and one each in Auth
+Broker, CRM, Dynabook, and the `commonfabric-weaver` repository. The six months
+before the read hold 57 path-change events on them. The July survey also listed
+dotenv examples in Loom and Pattern Factory, whose local checkouts hold none.
+
+Dotenv uses a focused scanner, which reads the common forms as the dotenv
+libraries, Docker Compose, and a shell sourcing the file all read them: `#`
+starts a comment line, an optional `export` precedes a variable's name, and the
+first `=` separates the name from its value. A value that opens with a quote
+runs to the matching quote, across lines, and is read as an unquoted value when
+no quote matches it, as the npm `dotenv` package reads it. A `#` that follows
+white space starts a comment after a value. `$NAME` and `${NAME}` references,
+with the operator and default of forms such as `${NAME:-default}`, are colored
+in unquoted and double-quoted values, and `$$` is a dollar sign, as Docker
+Compose reads it. `.env` and a name that continues it with a further suffix,
+such as `.env.local` or `.env.example`, select dotenv by name, unless that
+suffix is another language's extension. So does an example copy whose name ends
+in `env` followed by `.example`, `.sample`, `.template`, or `.dist`, such as
+`config.env.example` or `toolshed-env.example`. A filename pattern claims a name
+only when no language claims it by extension or exact name, which is what leaves
+`.env.xml` to XML. Another `.env` file is dotenv when its first line other than
+blank lines and comments sets a variable. That evidence leaves out the three
+`.env` files in those checkouts that are not dotenv: two Ansible Vault files in
+Infra, and Skip's app configuration in `commonfabric-weaver`, which follows
+Xcode's build-settings syntax with `//` comments. Infra's `runner.env.j2` and
+`otel-collector.env.j2` are Jinja templates over a dotenv host, which the Jinja
+item under Stage 8 covers.
+
+Every one of the 24 files reconstructs exactly, every one of their 14,585
+characters other than white space has a token class, and each of their 116
+variable assignments is a structure entry. On 100 kilobytes of those files, the
+scanner's median full highlight, document parse, and re-color after one edit
+stayed between 2.0 and 8.1 milliseconds in three runs. The machine's load
+average was about 166, so the 95th percentiles measured only its stalls, and
+each run alternated with the Java properties scanner, whose medians on the same
+source stayed between 2.4 and 8.8. Inputs built to slow it are slowest where
+each reference becomes its own colored span: 100 kilobytes of `$A` references
+took medians of 7 to 52 milliseconds. Fixtures come from Labs and
+`commonfabric-weaver`.
+
 Completion gate: every surveyed exact-name and compound-name operational file
 selects without content guessing.
 
@@ -1348,7 +1429,8 @@ without claiming the unrelated gVisor and Infra configurations.
 ## Stage 12: systems-language group
 
 - [x] Add C, C++, headers, and CUDA.
-- [ ] Add assembly and linker scripts.
+- [x] Add assembly.
+- [ ] Add linker scripts.
 - [ ] Add Protocol Buffers and protobuf text format.
 - [ ] Add Packetdrill.
 - [x] Use a neutral C-family mode for ambiguous headers.
@@ -1419,13 +1501,53 @@ records the costs and the coverage check.
 Completion gate: every systems-language family in the active gVisor branch
 passes direct-file and diff fixtures.
 
+Assembly is implemented ahead of the rest of this stage. A November 13, 2026
+read of the local checkouts of the organization's repositories found 64
+assembly files, all in gVisor: 56 Go assembler files named `.s`, and 8 GNU
+assembler files named `.S`, which the C preprocessor reads first. The six months
+before the read hold no path-change events on them. A ninth `.S` file,
+`pie.lds.S`, is a linker script, which the linker-script item covers.
+
+Assembly uses a focused scanner. The one Tree-sitter assembly grammar,
+[`RubixDev/tree-sitter-asm`](https://github.com/RubixDev/tree-sitter-asm),
+publishes neither an npm package nor a release holding its WebAssembly build.
+Both dialects share a lexical syntax that a scanner reads directly: `//` and
+`/*` comments, preprocessor lines, and statements made of labels, a directive or
+a mnemonic, and operands. `.s` and `.S` select the language, apart from
+`.lds.S`. The structure tree lists the functions that the Go assembler's `TEXT`
+directive declares, directly or through a call of a function-like `#define`
+macro that passes one of its parameters to it, under the argument that parameter
+receives; a macro sees the macros defined before it, and its call of itself adds
+nothing. Each line of a `#define` body that a `\` continues is a statement of
+its own, as the Go assembler reads it. It also lists the symbols that the
+`GLOBL` directive declares, `#define` and `.macro` macros, and labels. A label
+that an earlier GNU `.type` directive declares as a function or an object is
+listed as one. Any other label is listed inside the function it follows, and a
+macro inside the label or function whose code continues after it. Numeric local
+labels and the labels and functions in a macro's body are not listed.
+
+The scanner gave a token class to every character other than white space in the
+64 files, and reconstructed each file exactly. Timing ran on 100 kilobytes of
+gVisor's assembly in three rounds, each beside a makefile control run, on a
+machine whose load average was near 13; the control's 95th percentiles were 0.8
+to 1.6 times the figures recorded for it. The assembly scanner's 95th
+percentiles were at most 6.8 milliseconds for a full highlight, 4.9 for a
+document parse, and 4.1 for a re-color after one edit, inside the maximums for a
+parser-backed language. Each of the 100-kilobyte inputs measured that were built
+to slow the scanner, such as one line of 25,000 operands or 33,000 unclosed
+quotes, parsed in under 21 milliseconds of processor time at the 95th
+percentile. The slowest was 33,000 labels, at 44, whose cost is in the structure
+building the languages share: 33,000 INI keys took 37 in the same run. The
+fixture comes from gVisor.
+
 ## Stage 13: remaining active text formats
 
 - [ ] Add Ruby, Rack, ERB, Gemfiles, and Bundler lock files.
 - [ ] Add TeX and BibTeX.
 - [x] Add Org mode.
-- [ ] Add SQL.
-- [ ] Add CSV, TSV, numeric `.dat` tables, and structured JSON log records.
+- [x] Add SQL.
+- [x] Add CSV, TSV, and numeric `.dat` tables.
+- [ ] Add structured JSON log records.
 - [x] Add Graphviz DOT.
 - [ ] Add Handlebars and generic `.in` templates.
 - [x] Classify application-specific configuration when it has stable syntax.
@@ -1433,6 +1555,59 @@ passes direct-file and diff fixtures.
   as plain text.
 - [ ] Add Objective-C, jq, and AppleScript, which the November 2026 read found
   in Infra and Loom.
+
+Delimited tables are implemented ahead of the rest of this stage. A November
+13, 2026 read of the default branches in the local checkouts of the
+organization's repositories found 37 tables in 5 repositories: 23
+comma-separated files, of which 19 are in gVisor, 3 in Labs, and 1 in Resonant
+Computing; 4 tab-separated files in Loom; and 10 whitespace-separated `.dat`
+tables in Specs, which PGFPlots draws. The six months before the read hold 20
+path-change events on them: 3 on the comma-separated files, 4 on the
+tab-separated files, and 13 on the `.dat` tables.
+
+One focused scanner reads all three formats, with a dialect for each. A line is
+a record. An unquoted field that reads as a decimal number is colored as a
+number, any other field that holds more than white space as a string, and a
+separator as punctuation. `.csv` selects comma-separated values, read as RFC
+4180 defines them: a field that opens with `"` runs to the next quote that is
+not doubled, across commas and line breaks, so a live edit in a diff re-colors
+the whole file. `.tsv` selects tab-separated values, which have no quoting, and
+in which a line that starts with `#` is a comment, as Loom's census tables
+write. Spaces and tabs separate a `.dat` table's fields, and a line whose first
+character other than spaces and tabs is `#` is a comment, as gnuplot and
+PGFPlots read it, and so is one that starts with `%`, as PGFPlots reads it. A file carries no mark of whether its first record names the
+columns, so that record is colored like any other. No field is colored as a
+boolean, because `TRUE` is one of the surnames in Loom's census table. A table
+has no structure tree.
+
+`.dat` names data of every kind, so a `.dat` file is a table only when its first
+line other than blank lines and comments, or the next such line, is a row of two
+or more numbers; a single number is as likely to be a counter or a process
+identifier. A shared extension's evidence is a function of the source. The
+`.dat` evidence reads lines until it has seen two that are neither blank nor
+comments. The INI, directive configuration, YAML, and dotenv evidence skips blank and
+comment lines one at a time until the first other line, and then matches a
+regular expression starting at that line. None of them is one regular expression over the whole
+source: V8's regular expression engine records a step for each repetition it may
+have to undo, so a pattern that repeats once for each line or each number
+exhausts its stack on a few million of them.
+
+The scanner reconstructed each of the 37 files exactly and gave every character
+other than white space a token class. It was measured on 100 kilobytes of each
+format's surveyed source, and on 100-kilobyte inputs built to slow it: an
+unclosed quote, a single line of commas, a single line of numbers, a single line
+of tabs, tabs between fields of spaces, and rows of a thousand empty
+tab-separated fields. The machine's load average was above 150, so no scanner
+figure is a direct measurement. Each is an estimate: the properties scanner's recorded
+95th percentile multiplied by the largest ratio to a properties control run
+seen in six rounds. The largest estimates are 6.5 milliseconds for a full
+highlight, 6.4 for a document parse, and 6.2 for a re-color after one edit, all
+inside the maximums for a parser-backed language. On 100-kilobyte sources built
+to slow the `.dat` evidence, such as 100,000 blank lines before a line of text
+or a single row of 50,000 numbers, the evidence took at most 4 milliseconds at
+the median, measured directly at a load average near 200.
+
+Fixtures come from gVisor, Labs, Loom, and Specs.
 
 The November 13, 2026 read of the local checkouts of the organization's
 repositories listed every tracked file with the language `cf view` selects for
@@ -1547,6 +1722,61 @@ parse in 29 to 130. The parse is slowest where every token is a node that the
 structure tree lists. In the same runs, INI took 91 to 115 milliseconds to parse
 51,200 keys, and DOT took 90 to 136 to parse 51,200 nodes. The fixture comes
 from gVisor.
+
+SQL is implemented. A November 13, 2026 read of the local checkouts of the
+organization's repositories found 17 `.sql` files in 2 repositories: 16
+PostgreSQL schema migrations in CRM, which the July survey predates, and one
+MySQL test script in gVisor. The six months before the read hold 17 path-change
+events on them, all in CRM. `.sql` selects SQL, as does `--language sql`.
+
+SQL uses a focused scanner rather than Tree-sitter. No official Tree-sitter SQL
+grammar exists. The most used one,
+[`DerekStride/tree-sitter-sql`](https://github.com/DerekStride/tree-sitter-sql),
+ships no WebAssembly build in its npm package, which unpacks to 45.8 MiB of
+generated C source and grammar files, against the 10 MiB maximum for a later
+grammar. Its rules read a function body as SQL statements only, so they cannot
+parse the PL/pgSQL bodies that hold 73 of the 482 lines in the 17 files, and
+they have no `#` comment, which 13 of gVisor's 23 lines are. SQL needs no
+parser to color: a scanner that follows comment nesting and dollar-quote tags
+reads each dialect's lexical syntax.
+
+The scanner reads PostgreSQL's lexical syntax, which SQLite's follows, or
+MySQL's. It reads MySQL's when the source, read in PostgreSQL's, holds syntax
+only MySQL reads outside its strings, comments, and bodies, such as a statement
+that starts with a `#` comment or a `DELIMITER` command, or an executed comment
+such as `/*!40101 … */`. It also reads MySQL's when PostgreSQL's reading leaves
+a string open at the end of the source and MySQL's does not, as `'it\'s'` does.
+The two syntaxes differ in what `#`, `"`, and a backslash in a string mean, in
+whether block comments nest, and in MySQL's `DELIMITER` command and executed
+comments.
+
+A PostgreSQL dollar quote ends at the first copy of its tag. One that follows
+`AS`, `DO`, or a `LANGUAGE` clause holds a function's or a block's body. The
+body is colored as SQL when its statement names no language or names `sql` or
+`plpgsql`, and the variables its `declare` section names are colored as
+declarations. Any other dollar quote is a string, and so are the lines of data
+that follow a `COPY … FROM stdin` statement. A line that starts with `\` is a
+psql command.
+
+Every `create` statement and every `alter table` statement outside a body is a
+structure entry, labeled with the kind of thing it creates and the name it
+declares. An `alter table` statement inside a MySQL executed comment that adds
+no columns is the exception. The columns a `create table` lists and an
+`alter table` adds are entries inside it, colored as declarations, and a
+column's type that SQL does not define is colored as a type name.
+
+A coverage check over the 17 files found every file reconstructed exactly and
+every character other than white space with a token class. Timed in processor
+time on a loaded machine, on 100 kilobytes of the CRM migrations, the
+95th-percentile full highlight took 7 milliseconds, the document parse 9, and
+the re-color after one edit 8. Each input built to slow the scanner that was
+measured, such as unclosed strings, comments, and bodies, nested bodies, or
+thousands of distinct dollar-quote tags, took time in proportion to its length.
+The slowest, 100 kilobytes of nested parentheses, re-colored in 35 to 37
+milliseconds, over the 25-millisecond maximum. Each bracket is a colored run of
+its own, which every language that colors brackets pays for, and the HCL,
+Python, and shell grammars are slower than SQL on that input. The fixtures come
+from CRM and gVisor.
 
 Completion gate: every textual syntax in the survey's 24 active repositories
 has a tested selector and highlighter or an explicit plain-text classification.

@@ -109,6 +109,18 @@ describe("iniLanguage", () => {
     expect(languageForSource("a.cfg", "\f; note\r\n\f[a]\n").id).toBe("ini");
   });
 
+  it("selects a `.cfg` file from behind millions of blank and comment lines", () => {
+    const blank = "\n".repeat(4_000_000);
+    const comments = "# c\n".repeat(1_000_000);
+    expect(languageForSource("a.cfg", `${blank}${comments}[a]\n`).id)
+      .toBe("ini");
+    expect(languageForSource("a.cfg", `${comments}${blank}key=1\n`).id)
+      .toBe("plain-text");
+    expect(languageForSource("a.cfg", `${comments}${blank}`).id).toBe(
+      "plain-text",
+    );
+  });
+
   it("colors comments, sections, keys, separators, and values", () => {
     const lines = iniLanguage.highlightLines(CONFIGURATION);
 

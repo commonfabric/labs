@@ -459,6 +459,14 @@ requires.
 
 ## Changing a declaration
 
+A collection's handle, and so its database, is keyed on where the pattern
+declares the collection rather than on what the declaration says
+([03.1](../specs/sqlite-builtin/03-database-sources.md#031-cell-derived-default)).
+An update of the pattern's source keeps both, whether or not it changes the
+declaration. An update that gives the declaration another place, by
+renumbering it among the pattern's anonymous cells, gives the collection a new
+database, which holds no members.
+
 A collection's database records the declaration its tables were last brought
 up to, in `collection_meta`. When a runtime first learns of a collection, by
 declaring it, writing it, or reading it from the registry, it compares that
@@ -498,8 +506,9 @@ until the first step has run, and then re-runs.
   as kinds of one collection.
 - Every commit to a space costs one `member_deps` lookup per collection in
   that space, coalesced while a lookup is in flight. The registry of
-  collections only grows, so a collection whose declaring piece is gone still
-  costs that lookup.
+  collections only grows, so a collection whose declaring piece is gone, or
+  whose declaration moved to another place in its pattern, still costs that
+  lookup.
 - Adding a member costs several database writes, each of which pays the
   per-statement cost of `exec()`.
 - Reading a reference resolves the cell it names, so a member's rows depend

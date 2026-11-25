@@ -314,10 +314,14 @@ become a selector, because the runtime does not know whether to apply them at th
 top level or one level down inside each element.
 
 The answer comes from the outermost `type` in the cell's **declared schema** —
-its *root container kind*. When the source carries no schema, or its outermost
-type is a union such as "array or null", or is otherwise ambiguous, the runtime
-falls back to loading the value first and shaping it afterwards. The projection
-still returns the right answer; it just pays full loading before narrowing.
+its *root container kind*. When the source carries no schema, the root document
+is read alone, without following its links, and the stored value answers the
+question. The selector built from it names the paths the shape names and states
+no container type at any of them, so a position holding another shape than the
+one the shape expects is read whole rather than refused. When the outermost type
+is a union such as "array or null", or is otherwise ambiguous, the runtime falls
+back to loading the value first and shaping it afterwards. The projection still
+returns the right answer; it just pays full loading before narrowing.
 
 This is why a cell's declared schema matters beyond type-checking: it is what
 lets a caller's shape become a fetch instruction instead of a filter applied
@@ -384,10 +388,11 @@ time, in the same create-only transaction, from the value the runtime is
 already holding. A verb returning anything reactive gets no schema at all —
 deriving a shape needs a settled value, and a launched result has none when
 the receipt is written — so for exactly those receipts the read layer's
-mechanisms still fail to engage:
+mechanisms engage only in part:
 
-- The fetch narrowing above cannot engage, so a shape is applied after
-  everything has been loaded.
+- The fetch narrowing above engages only from the stored root: the read names
+  the paths the shape names and claims no type at them, so a position holding
+  another shape than the one expected is loaded whole.
 - A caller's shape is matched against the runtime value rather than against a
   declaration — field names that happen to coincide, rather than a subtree of
   a declared structure.
@@ -492,9 +497,11 @@ renders an address and suppresses the fetch wherever it sits, because a
 rejecting selector short-circuits before a source schema is consulted, and a
 container whose every position rejects rejects in turn — so a marker below a
 link carries its rejection up to the position holding that link and costs the
-same one read as a marker on it. What is lost is narrowing on field selection,
-and any check of a selection before the call. The open question below is how
-that gap closes.
+same one read as a marker on it. A field selection narrows too: the read names
+the fields selected and claims no shape at them, so a field's value is loaded
+with what it links to and the receipt's other children are not. What is lost is
+any check of a selection before the call. The open question below is how that
+gap closes.
 
 It records nothing about which positions hold links. A link position in a source
 schema is spelled `asCell`, and `["cell"]` asserts a writable handle; writing

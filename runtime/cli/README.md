@@ -516,55 +516,55 @@ uses this fixture mechanism at both postures.
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, C, C++, CUDA, shell,
-makefile, Dockerfile, Java properties, INI, Graphviz DOT, ProGuard, XML, and Org
-mode files use their own highlighting. A lowercase `.c` selects C; `.cc`,
-`.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`, `.h++`, `.tcc`, and an uppercase
-`.C` select C++; and `.cu` and `.cuh` select CUDA. C++ and CUDA share one
-grammar, which colors CUDA's qualifiers, such as `__global__`, as keywords. C
-and C++ both write `.h` headers, so a `.h` file is colored in a mode that claims
-neither dialect, using the C++ grammar, which reads the declarations C headers
-usually make; a C header that uses one of C++'s keywords, such as `new`, as a
-name is colored as C when piped with `--language
-c`. HCL covers OpenTofu and
-Terraform configuration named `.tf` or `.tofu`, variable definitions files named
-`.tfvars`, backend configuration files named `.tfbackend`, and other `.hcl`
-files, such as dependency lock files. A string's interpolations and template
-directives are colored as code inside the string. Starlark covers Bazel's build
-files, named `BUILD`, `BUILD.bazel`, or with a `.BUILD` suffix, its module,
-repository, and workspace files, `.bzl` extension files, and other `.star`
-files. Its structure tree lists functions, each name that a statement outside
-functions assigns a value to on its own, and the target that each rule call
-outside functions declares when its `name` argument is a string literal. The
-Bazel rc language covers `.bazelrc` and other files named with that suffix, and
-lists the files an rc file imports and the configurations it defines, such as
-`race` in `build:race`. `.bazelversion` is plain text. Shell covers Bash and
-POSIX shell scripts named `.sh`, `.bash`, or `.command`, and Bash's startup
-files, such as `.bashrc` and `.profile`. A heredoc's body is colored as a
-string, with the expansions its delimiter allows. The makefile language reads
-GNU make's syntax in files named `Makefile`, `makefile`, `GNUmakefile`, or
-`.mk`. Make passes recipe lines to the shell, so they are colored as shell. The
-same is true of the command in a `!=` assignment and the argument of the `shell`
-function. Make's own variable references and function calls are colored inside
-that shell text. A Swift package manifest is Swift source under its `.swift`
-extension, and a module's `.swiftinterface` is Swift as well. Gradle build and
-settings scripts are Kotlin scripts under the `.kts` extension. Gradle version
-catalogs and Cargo manifests are TOML, as are Cargo lock files. The ProGuard
-language covers the keep rules that ProGuard and R8 read: `proguard-rules.pro`
-and `consumer-rules.pro` select it by name, and another `.pro` file uses it when
-one of its lines starts with one of ProGuard's option names, because Qt project
-files and Prolog use that suffix as well. XML covers Android manifests,
-resources, and layouts, SVG images, and Apple property lists, entitlements, and
-privacy manifests. Web manifests, TLDraw documents, Deno lock files, editor
-workspace files, and Swift package resolutions use the JSON highlighting their
-suffixes do not announce. A `.cfg` file uses JSON highlighting when the source
-in view opens a JSON object; that suffix is shared with unrelated syntaxes, so
-its name alone leaves it as plain text. Transformed compiler output piped
-without a filename keeps TypeScript highlighting when its module header
-identifies it. Python interpreter shebangs select Python for otherwise
-unrecognized names, `swift` and `xcrun swift` shebangs select Swift, and
-`kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs select
-shell, which covers Git hooks and other extensionless programs. `make` and
-`gmake` shebangs select the makefile language. Node, Deno, and Bun shebangs
+makefile, Dockerfile, Java properties, INI, dotenv, Graphviz DOT, ProGuard, XML,
+Org mode, CSV, TSV, assembly, and SQL files use their own highlighting. A
+lowercase `.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`,
+`.h++`, `.tcc`, and an uppercase `.C` select C++; and `.cu` and `.cuh` select
+CUDA. C++ and CUDA share one grammar, which colors CUDA's qualifiers, such as
+`__global__`, as keywords. C and C++ both write `.h` headers, so a `.h` file is
+colored in a mode that claims neither dialect, using the C++ grammar, which
+reads the declarations C headers usually make; a C header that uses one of C++'s
+keywords, such as `new`, as a name is colored as C when piped with
+`--language
+c`. HCL covers OpenTofu and Terraform configuration named `.tf` or
+`.tofu`, variable definitions files named `.tfvars`, backend configuration files
+named `.tfbackend`, and other `.hcl` files, such as dependency lock files. A
+string's interpolations and template directives are colored as code inside the
+string. Starlark covers Bazel's build files, named `BUILD`, `BUILD.bazel`, or
+with a `.BUILD` suffix, its module, repository, and workspace files, `.bzl`
+extension files, and other `.star` files. Its structure tree lists functions,
+each name that a statement outside functions assigns a value to on its own, and
+the target that each rule call outside functions declares when its `name`
+argument is a string literal. The Bazel rc language covers `.bazelrc` and other
+files named with that suffix, and lists the files an rc file imports and the
+configurations it defines, such as `race` in `build:race`. `.bazelversion` is
+plain text. Shell covers Bash and POSIX shell scripts named `.sh`, `.bash`, or
+`.command`, and Bash's startup files, such as `.bashrc` and `.profile`. A
+heredoc's body is colored as a string, with the expansions its delimiter allows.
+The makefile language reads GNU make's syntax in files named `Makefile`,
+`makefile`, `GNUmakefile`, or `.mk`. Make passes recipe lines to the shell, so
+they are colored as shell. The same is true of the command in a `!=` assignment
+and the argument of the `shell` function. Make's own variable references and
+function calls are colored inside that shell text. A Swift package manifest is
+Swift source under its `.swift` extension, and a module's `.swiftinterface` is
+Swift as well. Gradle build and settings scripts are Kotlin scripts under the
+`.kts` extension. Gradle version catalogs and Cargo manifests are TOML, as are
+Cargo lock files. The ProGuard language covers the keep rules that ProGuard and
+R8 read: `proguard-rules.pro` and `consumer-rules.pro` select it by name, and
+another `.pro` file uses it when one of its lines starts with one of ProGuard's
+option names, because Qt project files and Prolog use that suffix as well. XML
+covers Android manifests, resources, and layouts, SVG images, and Apple property
+lists, entitlements, and privacy manifests. Web manifests, TLDraw documents,
+Deno lock files, editor workspace files, and Swift package resolutions use the
+JSON highlighting their suffixes do not announce. A `.cfg` file uses JSON
+highlighting when the source in view opens a JSON object; that suffix is shared
+with unrelated syntaxes, so its name alone leaves it as plain text. Transformed
+compiler output piped without a filename keeps TypeScript highlighting when its
+module header identifies it. Python interpreter shebangs select Python for
+otherwise unrecognized names, `swift` and `xcrun swift` shebangs select Swift,
+and `kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs
+select shell, which covers Git hooks and other extensionless programs. `make`
+and `gmake` shebangs select the makefile language. Node, Deno, and Bun shebangs
 select the TypeScript and JavaScript language family. For an otherwise
 unrecognized name, source that starts with an XML declaration (`<?xml`), after
 any byte order mark, selects XML, which covers Interface Builder documents,
@@ -588,6 +588,10 @@ and inductive types inside them. A project's `lean-toolchain` file, which names
 the Lean release the project builds with, colors the repository that publishes
 the release and the release's name.
 
+Assembly covers `.s` and `.S` files in the Go assembler's dialect and in the GNU
+assembler's, including GNU assembler source that the C preprocessor reads first.
+Linker scripts named `.lds.S` are not assembly.
+
 INI covers `.ini` files, which include Ansible inventories with that suffix,
 Ansible's `ansible.cfg` and `.ansible.cfg`, and the configuration files of
 Python tools such as `setup.cfg`, `.coveragerc`, `.flake8`, `pylintrc`, and
@@ -596,6 +600,35 @@ lines and comments heads a section whose name does not start the way a JSON
 array's first value does. A line in an Ansible inventory that names a host and
 then sets `name=value` variables colors the host and each variable. The
 structure tree lists sections with the keys and hosts in each.
+
+Dotenv covers the environment files that programs, Docker Compose, and shell
+scripts read variables from. `.env` selects it, as does a name that continues
+`.env` with a further suffix, such as `.env.local` or `.env.example`, unless
+that suffix is another language's extension, as `.env.json` is. An example copy
+of an environment file, such as `config.env.example` or `deploy-env.sample`,
+selects it as well, through an `.example`, `.sample`, `.template`, or `.dist`
+suffix. Another name ending in `.env` is dotenv when its first line other than
+blank lines and `#` comments sets a variable, because Ansible Vault files and
+Skip's Xcode-style app configuration use that suffix too. A value that opens
+with a quote runs to the matching quote, across lines, and is read as an
+unquoted value when no quote matches it. A `#` that follows white space starts a
+comment after a value. References to other variables, such as `$NAME` and
+`${NAME:-default}`, are colored in unquoted and double-quoted values, and `$$`
+is a dollar sign, as Docker Compose reads it. The structure tree lists the
+variables the file sets.
+
+Tables color each unquoted field that reads as a decimal number as a number,
+every other field that holds more than white space as a string, and each
+separator as punctuation. `.csv` files are comma-separated values as RFC 4180
+defines them, so a quoted field can hold commas, doubled quotes, and line
+breaks. `.tsv` files are tab-separated values, which have no quoting, and a line
+in one that starts with `#` is a comment. The `.dat` suffix names data of every
+kind, so a `.dat` file is shown as a table only when its first line other than
+blank lines and comments, or the next such line, is a row of two or more
+numbers. Spaces and tabs separate the fields of such a table, as gnuplot and
+PGFPlots read it, and a line whose first character other than spaces and tabs is
+`#`, or `%` as PGFPlots also accepts, is a comment. Tables have no structure
+tree.
 
 The Dockerfile language reads the syntax of BuildKit's Dockerfile frontend in
 files named `Dockerfile`, `dockerfile`, `Containerfile`, or `containerfile`, in
@@ -706,6 +739,30 @@ attribute, an attribute's value, a port, or a node. The structure tree lists
 graphs and subgraphs, with the nodes that node statements declare in each. A
 node that only an edge names is not listed.
 
+Git configuration files use their own syntax highlighting as well. The language
+covers `.gitmodules`, user and system configuration named `.gitconfig` or
+`gitconfig`, a worktree's `config.worktree`, other files whose names end in
+`.gitconfig`, and Git LFS's `.lfsconfig`. The structure tree lists sections with
+the variables in each.
+
+SQL covers `.sql` files in PostgreSQL's lexical syntax, which SQLite's follows,
+or in MySQL's, for a file that holds syntax only MySQL reads, such as a
+statement that starts with a `#` comment, an executed comment such as
+`/*!40101 … */`, or a `DELIMITER` command, or one whose strings PostgreSQL's
+syntax leaves open at its end and MySQL's closes, as it does for `'it\'s'`. In
+MySQL's syntax, `#` starts a comment anywhere, `"…"` is a string, a backslash in
+a string escapes the next character, executed comments are colored as
+statements, and a `DELIMITER` command sets the text that ends a statement. A
+PostgreSQL dollar quote that follows `AS`, `DO`, or a `LANGUAGE` clause holds a
+function's or a block's body, which is colored as SQL when the statement names
+no language or names `sql` or `plpgsql`, and the variables its `declare` section
+names are colored as declarations. Any other dollar quote is a string, and so
+are the lines of data that pg_dump writes after a `COPY … FROM stdin` statement,
+and a line that starts with `\` is a psql command. The structure tree lists each
+`create` statement, labeled with the kind of thing it creates and the name it
+declares, and each `alter table` statement, with the columns each defines, apart
+from one inside a MySQL executed comment that adds no columns.
+
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each
@@ -726,10 +783,10 @@ and TypeScript semantic lookup.
 Automatic content detection is limited to binary input, structurally identified
 raw unified diffs, and standard Git commit output. A raw diff starts at the
 first nonblank line. Recognized shebangs, XML declarations, and transformed
-compiler headers remain explicit selectors. A shared extension such as `.cfg`
-consults the source for the pattern each language's metadata pairs with it.
-JSON-, YAML-, Markdown-, Python-, and other language-shaped source is otherwise
-not guessed from its syntax.
+compiler headers remain explicit selectors. A shared extension such as `.cfg` or
+`.dat` consults the source for the evidence each language's metadata pairs with
+it. JSON-, YAML-, Markdown-, Python-, and other language-shaped source is
+otherwise not guessed from its syntax.
 
 A diff shows its whole-diff change totals at the top right corner of its first
 line: the added line count and the removed line count, colored like additions
@@ -3391,6 +3448,14 @@ without following its children. If it holds an object or array, the CLI selects
 from that container directly. An address-only selection can therefore return a
 stored child link without loading the child. The verb's declared result remains
 available for cycle bounding; it does not replace the selection's source schema.
+
+A selection that names fields beside an address loads no more than it names. A
+source with no schema of its own is read through the positions the selection
+selects, with no claim about the shape at any of them: a named field is loaded
+with what it links to, and every other child is left unloaded. What a read loads
+is what the runtime's session goes on watching, and a serving runtime keeps
+current every value a session watches, so a process that makes many calls keeps
+only what their selections named.
 
 Root links, instances, scalars, and receipts read through an explicit schema are
 materialized before selection. A root link can resolve to an absent value, so

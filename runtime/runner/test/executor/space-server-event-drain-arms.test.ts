@@ -15,8 +15,10 @@ import {
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryServer from "@commonfabric/memory/v2/server";
 
+import { runEventKey } from "../../src/executor/run-beacon.ts";
 import {
   EVENT_PREQUEUE_STUCK_AFTER,
+  type FailedEvents,
   SpaceServer,
   type SpaceServerPolicy,
 } from "../../src/executor/space-server.ts";
@@ -81,7 +83,10 @@ describe("SpaceServer", () => {
     }
   });
 
-  async function openFixture(policy?: SpaceServerPolicy) {
+  async function openFixture(
+    policy?: SpaceServerPolicy,
+    failedEvents?: FailedEvents,
+  ) {
     const engine = await server.engineForSpace(space);
     await settle(
       server.writeDocument(space, SERVER_EXECUTION_WATERMARK_DOC_ID, {
@@ -116,6 +121,7 @@ describe("SpaceServer", () => {
       stats,
       onEventDeferred: () => deferredCallbacks++,
       ...(policy === undefined ? {} : { policy }),
+      ...(failedEvents === undefined ? {} : { failedEvents }),
       decorateWaveCommitSink: (sink) => ({
         currentHeads: (space, docs) => sink.currentHeads(space, docs),
         concurrentWritePaths: (space, doc, seq) =>
@@ -525,5 +531,80 @@ describe("SpaceServer", () => {
     await clock.tick(budgetMs);
     expect(next.stats.events.deliveryFailureWakesFired).toBe(0);
     expect(next.entry("delivery-failed")?.consequenced).toBeUndefined();
+  });
+
+  it("writes the error of an event its pool failed only once every event that arrived before it has its consequence", async () => {
+    // An event whose handler held a worker the pool ended takes the error as
+    // its consequence without running (events.md §5), at its own arrival
+    // position (§2): an earlier event still pending, here one whose served
+    // copy deferred, holds it.
+
+    const failedEvents: FailedEvents = new Map();
+    const fixture = await openFixture(undefined, failedEvents);
+    await fixture.admitOne(0, "earlier");
+    await fixture.admitOne(1, "failed");
+    const reason = "injected: the handler held its worker's thread";
+    const event = {
+      sidecarId: sidecars[1],
+      eventId: "failed",
+      seq: fixture.entry("failed")!.seq!,
+    };
+    failedEvents.set(runEventKey(event), { event, reason });
+    const queued: QueuedEvent["served"][] = [];
+    {
+      using _queue = stub(
+        fixture.runtime.scheduler,
+        "queueEvent",
+        (...args: Parameters<typeof fixture.runtime.scheduler.queueEvent>) => {
+          queued.push(args[5]?.served);
+        },
+      );
+      await fixture.drain();
+    }
+    expect(queued.map((served) => served?.streamEntry?.sidecarId)).toEqual([
+      sidecars[0],
+    ]);
+    expect(fixture.entry("failed")?.consequenced).toBeUndefined();
+    expect(fixture.stats.events.failedWithWorker).toBe(0);
+
+    queued[0]!.onFailure!({ kind: "deferred", message: "injected deferral" });
+    await clock.tick(rearmMs);
+    expect(fixture.called).toEqual(["A"]);
+    expect(fixture.entry("earlier")?.consequenced).toBe(true);
+    expect(fixture.entry("failed")).toMatchObject({
+      consequenced: true,
+      error: reason,
+    });
+    expect(fixture.stats.events.failedWithWorker).toBe(1);
+    expect(failedEvents.size).toBe(0);
+  });
+
+  it("writes the error of the one entry its pool failed where another stream's pending entry carries the same event id", async () => {
+    // Event ids are unique only among one stream's pending entries
+    // (events.md §4), so the record of a failed event names its entry, and
+    // the other entry's commit leaves it in place.
+
+    const failedEvents: FailedEvents = new Map();
+    const fixture = await openFixture(undefined, failedEvents);
+    const onStream = (index: number) =>
+      (Engine.read(fixture.engine, { id: sidecars[index] })?.value as
+        | StreamEventsDocValue
+        | undefined)?.entries?.find((entry) => entry.eventId === "shared");
+    await fixture.admitOne(0, "shared");
+    await fixture.admitOne(1, "shared");
+    const reason = "injected: the handler held its worker's thread";
+    const event = {
+      sidecarId: sidecars[1],
+      eventId: "shared",
+      seq: onStream(1)!.seq!,
+    };
+    failedEvents.set(runEventKey(event), { event, reason });
+    await fixture.drain();
+
+    expect(fixture.called).toEqual(["A"]);
+    expect(onStream(0)?.consequenced).toBe(true);
+    expect(onStream(0)?.error).toBeUndefined();
+    expect(onStream(1)).toMatchObject({ consequenced: true, error: reason });
+    expect(failedEvents.size).toBe(0);
   });
 });
