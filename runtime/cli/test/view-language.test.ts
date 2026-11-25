@@ -81,6 +81,7 @@ import { dotLanguage } from "../lib/view/languages/dot/language.ts";
 import { dotenvLanguage } from "../lib/view/languages/dotenv/language.ts";
 import { assemblyLanguage } from "../lib/view/languages/assembly/language.ts";
 import { sqlLanguage } from "../lib/view/languages/sql/language.ts";
+import { systemdLanguage } from "../lib/view/languages/systemd/language.ts";
 import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
@@ -247,6 +248,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("dotenv"), dotenvLanguage);
   assertEquals(languageForName("git-config"), gitConfigLanguage);
   assertEquals(languageForName("gitmodules"), gitConfigLanguage);
+  assertEquals(languageForName("systemd"), systemdLanguage);
+  assertEquals(languageForName("systemd-unit"), systemdLanguage);
   assertEquals(languageForName("xml"), xmlLanguage);
   assertEquals(languageForName("svg"), xmlLanguage);
   assertEquals(languageForName("plist"), xmlLanguage);
@@ -300,6 +303,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "dot",
     "dotenv",
     "git-config",
+    "systemd",
     "proguard",
     "gitattributes",
     "linker-script",
@@ -387,6 +391,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "git-config",
     "gitconfig",
     "gitmodules",
+    "systemd",
+    "systemd-unit",
     "proguard",
     "r8",
     "gitattributes",

@@ -649,9 +649,10 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "toml",
-    // An INI or Git configuration section header is a TOML table header, and
-    // INI and Git configuration color its name as TOML colors a table's.
-    highlightingPeers: ["ini", "git-config"],
+    // An INI, Git configuration, or systemd section header is a TOML table
+    // header, and INI, Git configuration, and systemd color its name as TOML
+    // colors a table's.
+    highlightingPeers: ["ini", "git-config", "systemd"],
     surveyRepository: "labs",
     surveyCommit: "fbdd14d3fa220dfffcb52a423d1180e514c5134b",
     surveyPath: "mise.toml",
@@ -1042,10 +1043,11 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "properties",
-    // A shell or make variable assignment, an HCL or DOT attribute, an INI
-    // key, a dotenv variable, and a Git configuration variable are each a
-    // `name=value` line, and shell, make, HCL, DOT, INI, dotenv, and Git
-    // configuration color the name as properties files color their keys.
+    // A shell or make variable assignment, an HCL or DOT attribute, an INI or
+    // systemd key, a dotenv variable, and a Git configuration variable are
+    // each a `name=value` line, and shell, make, HCL, DOT, INI, systemd,
+    // dotenv, and Git configuration color the name as properties files color
+    // their keys.
     highlightingPeers: [
       "hcl",
       "shell",
@@ -1054,6 +1056,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
       "dot",
       "dotenv",
       "git-config",
+      "systemd",
     ],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "b457431c6f5e32305a2e6feb7901f8d05a9b2f6e",
@@ -1078,13 +1081,13 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "ini",
-    // An INI `name=value` line is a valid make assignment and a valid DOT
-    // attribute, and make and DOT color the name as INI colors its keys. An
-    // Ansible inventory host line is also a Git attributes line, whose
-    // attributes color as the host's variables. Rust reads the host line as an
-    // expression ending in a field access, and colors the field, which is the
-    // host's variable, as INI colors it.
-    highlightingPeers: ["make", "dot", "gitattributes", "rust"],
+    // An INI `name=value` line is a valid make assignment, a valid DOT
+    // attribute, and a valid systemd key, and make, DOT, and systemd color the
+    // name as INI colors its keys. An Ansible inventory host line is also a Git
+    // attributes line, whose attributes color as the host's variables. Rust
+    // reads the host line as an expression ending in a field access, and colors
+    // the field, which is the host's variable, as INI colors it.
+    highlightingPeers: ["make", "dot", "gitattributes", "rust", "systemd"],
     surveyRepository: "infra",
     surveyCommit: "cfe4ac630b0b1e223d57bed12ae02fa6c53b9eb2",
     surveyPath: "ansible/rapids-inventory.ini",
@@ -1123,8 +1126,16 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   {
     languageId: "dotenv",
     // A dotenv line is a `name=value` line, and properties files, INI, shell,
-    // make, HCL, and DOT color the name as dotenv colors a variable's.
-    highlightingPeers: ["properties", "ini", "shell", "make", "hcl", "dot"],
+    // make, HCL, DOT, and systemd color the name as dotenv colors a variable's.
+    highlightingPeers: [
+      "properties",
+      "ini",
+      "shell",
+      "make",
+      "hcl",
+      "dot",
+      "systemd",
+    ],
     surveyRepository: "labs",
     surveyCommit: "60cd866374f5b59bdf16c8469ad3f71cd35ac040",
     surveyPath: "runtime/toolshed/.env.example",
@@ -1167,9 +1178,10 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "git-config",
-    // A Git configuration section header reads as an INI section header, and
-    // INI colors the section name as Git configuration does.
-    highlightingPeers: ["ini"],
+    // A Git configuration section header reads as an INI or systemd section
+    // header, and INI and systemd color the section name as Git configuration
+    // does.
+    highlightingPeers: ["ini", "systemd"],
     surveyRepository: "pond",
     surveyCommit: "b812bb02648ef3017fa45f28ad0f4e38f9080028",
     surveyPath: ".gitmodules",
@@ -1194,6 +1206,54 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "submodule", className: "interfaceName" },
     afterEvidence: { text: "submodule", className: "interfaceName" },
     incompleteEvidence: { text: "submodule", className: "interfaceName" },
+  },
+  {
+    languageId: "systemd",
+    surveyRepository: "infra",
+    surveyCommit: "befe27df09467c60aa16b7f1fa1313daa1904fb2",
+    surveyPath:
+      "ansible/roles/ip-options-mitigation/files/cve-2026-98432-mitigation.service",
+    before: new URL("./systemd-infra/before.service", import.meta.url),
+    after: new URL("./systemd-infra/after.service", import.meta.url),
+    incomplete: new URL("./systemd-infra/incomplete.service", import.meta.url),
+    selection: {
+      filenames: [
+        "ansible/roles/ip-options-mitigation/files/cve-2026-98432-mitigation.service",
+        "memory-router/deploy/memory-router-key.socket",
+        "memory-router/deploy/memory-router.target",
+        "deploy/probe-alert@.service",
+        "backup.timer",
+      ],
+      unclaimedFilenames: ["memory-router/deploy/toolshed.service.d.example.conf"],
+      aliases: ["systemd", "systemd-unit"],
+    },
+    beforeEvidence: { text: "/usr/sbin/nft", className: "callName" },
+    afterEvidence: { text: "/usr/sbin/nft", className: "callName" },
+    incompleteEvidence: { text: "/usr/sbin/nft", className: "callName" },
+  },
+  {
+    languageId: "systemd",
+    surveyRepository: "legibility",
+    surveyCommit: "250063b5635660dc0b4addd03aaae588499cdc60",
+    surveyPath: "deploy/probe-self@.service",
+    before: new URL("./systemd-legibility/before.service", import.meta.url),
+    after: new URL("./systemd-legibility/after.service", import.meta.url),
+    incomplete: new URL(
+      "./systemd-legibility/incomplete.service",
+      import.meta.url,
+    ),
+    beforeEvidence: {
+      text: "/probe-code/deploy/probe-run.sh",
+      className: "callName",
+    },
+    afterEvidence: {
+      text: "/probe-code/deploy/probe-run.sh",
+      className: "callName",
+    },
+    incompleteEvidence: {
+      text: "/probe-code/deploy/probe-run.sh",
+      className: "callName",
+    },
   },
   {
     languageId: "proguard",
@@ -1266,8 +1326,10 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     // A pattern followed by one `name=value` attribute is also an Ansible
     // inventory host line, whose variable INI colors as Git attributes color
     // the attribute. A `name=value` attribute is also a DOT attribute, whose
-    // value DOT colors as Git attributes color the attribute's value.
-    highlightingPeers: ["ini", "dot"],
+    // value DOT colors as Git attributes color the attribute's value. A line
+    // holding an `=` is also a systemd setting, whose value systemd colors as
+    // Git attributes color the attribute's value.
+    highlightingPeers: ["ini", "dot", "systemd"],
     surveyRepository: "loom",
     surveyCommit: "f788015adc43cc8d7b3b3bb7f50f2066428a6dbc",
     surveyPath: "src/.gitattributes",
@@ -1348,9 +1410,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "xml",
-    // An attribute alone on its line is a dotenv `name=value` line, and dotenv
-    // colors the name as XML colors an attribute's.
-    highlightingPeers: ["dotenv"],
+    // An attribute alone on its line is a dotenv or systemd `name=value` line,
+    // and dotenv and systemd color the name as XML colors an attribute's.
+    highlightingPeers: ["dotenv", "systemd"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "6cc0468bdafdf8dc44cd86faba60ff5912ead945",
     surveyPath: "android/app/src/main/AndroidManifest.xml",
