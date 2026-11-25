@@ -17,7 +17,9 @@
  *   `./records/skip-list.ts`). A skipped test is still registered, as
  *   ignored, so it shows in the output. A `describe` none of whose tests
  *   will run does not run its `beforeAll` or `afterAll`, and a suite none
- *   of whose tests will run is ignored as a whole.
+ *   of whose tests will run is ignored as a whole. A step runs whenever
+ *   its test does, since the steps before it may have set up what it
+ *   reads; one the list names is reported as listed.
  * - It reports what each test file registered, and how each test went, to
  *   the run's spool (`CF_TEST_RECORDS_DIR`, `./records/results.ts`), a line
  *   as each test finishes.
@@ -232,6 +234,9 @@ interface Entry {
 
   /** Whether it has been reported, which happens once. */
   reported?: true;
+
+  /** Whether the skip list named it, which only a step that runs can be. */
+  readonly listed: boolean;
 }
 
 /** What has started and not finished, in the order it started. */
@@ -361,12 +366,14 @@ async function reported(
   name: readonly string[],
   container: () => boolean,
   body: () => Promise<void>,
+  listed = false,
 ): Promise<void> {
   const entry: Entry = {
     name,
     startedAt: now(),
     container,
     failure: undefined,
+    listed,
   };
   running.add(entry);
   try {
@@ -402,6 +409,7 @@ function reportEntry(entry: Entry): void {
     (entry.finishedAt ?? now()) - entry.startedAt,
     {
       ...(entry.container() ? { container: true as const } : {}),
+      ...(entry.listed ? { listed: true as const } : {}),
       ...(failure === undefined ? {} : { failure }),
     },
   );
@@ -1029,16 +1037,14 @@ function recording(
     refuseSanitizers(definition.name, definition);
     const stepName = [...name, definition.name];
     claim(stepName);
-    const skipped = definition.ignore === true || listed(stepName);
+    // A step runs whenever its test does: it is part of its test's body,
+    // and the steps before it may have set up what it reads. One the skip
+    // list names is written as listed, so that a lane that did not plan it
+    // records nothing of it.
+    const skipped = definition.ignore === true;
+    const asListed = listed(stepName);
     ranSteps ||= !skipped;
-    if (skipped) {
-      report(
-        stepName,
-        "skip",
-        0,
-        definition.ignore === true ? {} : { listed: true },
-      );
-    }
+    if (skipped) report(stepName, "skip", 0, asListed ? { listed: true } : {});
     let entered = false;
     const passed = await raw.step({
       ...definition,
@@ -1060,6 +1066,7 @@ function recording(
               test,
               [],
             ),
+          asListed,
         );
       },
     });
@@ -1068,6 +1075,7 @@ function recording(
     if (!passed && !skipped && !entered) {
       report(stepName, "fail", 0, {
         failure: { thrown: "Deno failed this step without running it" },
+        ...(asListed ? { listed: true as const } : {}),
       });
     }
     return passed;

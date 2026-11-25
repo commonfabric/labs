@@ -152,7 +152,9 @@ failure carries what it threw:
 A skip the file's skip list caused carries `"listed": true`, and
 `readResults` returns it apart from the records: a skip of the run's share
 says nothing about the test, and only the run that wrote the list knows which
-of its entries are its share.
+of its entries are its share. A step the list names still runs where its test
+does, since the steps before it may have set up what it reads, and its result
+carries `"listed": true` in the same way.
 
 A group's outcome is `fail` only where it failed on its own account: one of
 its hooks threw, or the test running steps threw. A group whose only failures

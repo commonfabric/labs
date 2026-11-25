@@ -257,13 +257,23 @@ describe("@commonfabric/test-support/test", () => {
     it("reports each listed test as listed, records nothing of it, and never runs it", () => {
       expect(outcomes(skipped.listed)).toMatchObject({
         "bakery > glaze > runs": "skip",
-        "delivery > drives": "skip",
       });
       const recorded = skipped.records.map((record) => record.test.n);
       expect(recorded).not.toContain("bakery > glaze > runs");
-      expect(recorded).not.toContain("delivery > drives");
       expect(skipped.logged).not.toContain("runs");
-      expect(skipped.logged).not.toContain("drives");
+    });
+
+    it("runs a listed step with its test, and reports it as listed rather than recording it", () => {
+      // A step is part of its test's body, and may read what the steps
+      // before it set up, so it runs whenever its test does.
+
+      expect(outcomes(skipped.listed)).toMatchObject({
+        "delivery > drives": "pass",
+      });
+      expect(skipped.records.map((record) => record.test.n)).not.toContain(
+        "delivery > drives",
+      );
+      expect(skipped.logged).toContain("drives");
     });
 
     it("skips every test a listed group holds", () => {

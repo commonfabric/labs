@@ -81,8 +81,10 @@ export interface ResultLine {
   failure?: string;
 
   /**
-   * Present on a skip the run's skip list asked for, rather than one the test
-   * declared: a fact about the run's share of the tests, not about the test.
+   * Present on a result the run's skip list named: a skip the list asked
+   * for, rather than one the test declared, or a step that ran only because
+   * its test did. It is a fact about the run's share of the tests, not about
+   * the test.
    */
   listed?: true;
 }
@@ -214,7 +216,7 @@ export function parseResultsLine(
   }
   if (container !== undefined && container !== true) return undefined;
   if (failure !== undefined && typeof failure !== "string") return undefined;
-  if (listed !== undefined && (listed !== true || outcome !== "skip")) {
+  if (listed !== undefined && listed !== true) {
     return undefined;
   }
   return {
@@ -261,10 +263,10 @@ export interface Results {
   records: TestRecord[];
 
   /**
-   * One for each test the run's skip list skipped. Kept apart from the
-   * records, since a skip the run's share caused says nothing about the
-   * test; the run that asked for the skips knows which of them do, and reads
-   * all of them to see that the file registered and reached each test.
+   * One for each test the run's skip list named. Kept apart from the
+   * records, since what the run's share caused says nothing about the test;
+   * the run that wrote the list knows which of them do, and reads all of
+   * them to see that the file registered and reached each test.
    */
   listed: TestRecord[];
 

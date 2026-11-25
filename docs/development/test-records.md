@@ -105,14 +105,15 @@ that is when none is named. The same rename applies to every variant.
   appears in the run's output and its results as skipped instead of
   disappearing. A name enclosing others, such as a `describe`, skips every test
   it encloses, and a `describe` none of whose tests will run does not run its
-  `beforeAll` or `afterAll`. The results mark a skip the list caused as listed,
-  and a lane ships no record of a test it listed because its plan gave the test
-  to another lane, or to none. A test a configuration declares unavailable is
-  listed by every lane that opens its file, and its skip is recorded by the lane
-  its plan gave it to. An identity the file does not name runs, so a test added
-  or renamed since the list was built runs. A list that cannot be read, or that
-  is not a skip list, stops the test file from loading, since running everything
-  is not what was asked.
+  `beforeAll` or `afterAll`. A step the list names runs anyway wherever its test
+  runs, since the steps before it may have set up what it reads. The results
+  mark what the list named as listed, and a lane ships no record of a test it
+  listed because its plan gave the test to another lane, or to none. A test a
+  configuration declares unavailable is listed by every lane that opens its
+  file, and its skip is recorded by the lane its plan gave it to. An identity
+  the file does not name runs, so a test added or renamed since the list was
+  built runs. A list that cannot be read, or that is not a skip list, stops the
+  test file from loading, since running everything is not what was asked.
 - `CF_TEST_AGENT` — an opaque label for the operating agent, recorded
   verbatim in the run context. Set it to tell one agent from another, or
   one checkout of a fleet from the next; it is never required. Left

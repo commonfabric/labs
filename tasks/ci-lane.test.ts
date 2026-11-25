@@ -4877,12 +4877,17 @@ describe("what a lane records about itself", () => {
                 result(["pantry", "stocks"], "skip", true),
                 result(["frosts"], "skip"),
                 result(["proofs"], "skip", true),
+                // A step runs with its test even where the list names it.
+                result(["delivery", "drives"], "pass", true),
               ]),
               cwd: context.root,
               results: { kind: "unit", scope: "bakery" },
             }]),
         }),
-        units: [{ unit: "a-unit", skip: ["glazes", "pantry"] }],
+        units: [{
+          unit: "a-unit",
+          skip: ["glazes", "pantry", "delivery > drives"],
+        }],
         runs: new Map([["a-unit", 1]]),
         projected: 0,
       };
@@ -4896,7 +4901,14 @@ describe("what a lane records about itself", () => {
       ]);
       // What the lane skipped stays in the pass's records, for accounting.
       expect(result_.executions[0]!.records.map((kept) => kept.test.n).sort())
-        .toEqual(["bakes", "frosts", "glazes", "pantry > stocks", "proofs"]);
+        .toEqual([
+          "bakes",
+          "delivery > drives",
+          "frosts",
+          "glazes",
+          "pantry > stocks",
+          "proofs",
+        ]);
       expect(accountFor(batch, [], result_.executions, new Set()).silent)
         .toEqual([]);
     } finally {
