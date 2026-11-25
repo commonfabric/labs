@@ -310,7 +310,9 @@ maintains listed collections maintains them without having loaded the
 declaring piece. The first time such a runtime's maintainer hears of a write
 to a space, it asks whether that space has a registry, without loading the
 document, and reads it only if it does. A space that holds no collection
-therefore takes on no watch of one.
+therefore takes on no watch of one. A write to the registry has the
+maintainer read it again, which is how it adopts a collection listed after
+its first read.
 
 ### Which runtime maintains
 
@@ -471,7 +473,9 @@ A collection's database records the declaration its tables were last brought
 up to, in `collection_meta`. When a runtime first learns of a collection, by
 declaring it, writing it, or reading it from the registry, it compares that
 record with the collection's declaration, and where they differ it brings the
-tables up to date:
+tables up to date. A runtime that already maintains the collection does the
+same once the collection's handle, which carries the declaration, is written
+with another declaration than the one it last brought the tables up to:
 
 1. A first write creates whatever table or index the declaration has gained,
    and adds the columns an existing table has gained.

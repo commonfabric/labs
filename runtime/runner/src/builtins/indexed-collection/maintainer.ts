@@ -30,7 +30,10 @@ import {
   refreshMemberRows,
   sameMemberRows,
 } from "./maintenance.ts";
-import { indexedCollectionRegistry } from "./registry.ts";
+import {
+  indexedCollectionRegistry,
+  indexedCollectionRegistryId,
+} from "./registry.ts";
 
 const logger = getLogger("indexed-collection");
 
@@ -80,6 +83,12 @@ interface CollectionState {
    * declaration, which every drain waits for.
    */
   reconciled: Promise<void>;
+
+  /**
+   * The declaration the tables were last found at or brought up to, as the
+   * JSON the database records; `undefined` until then.
+   */
+  declaration: string | undefined;
 
   /** Removes the maintenance event handler. */
   readonly cancel: () => void;
@@ -133,6 +142,7 @@ export class IndexedCollectionMaintainer {
   readonly #runtime: Runtime;
   readonly #mode: IndexedCollectionMaintenance;
   readonly #enabled: boolean;
+  readonly #registryId = indexedCollectionRegistryId();
   readonly #spaces = new Map<MemorySpace, SpaceState>();
 
   /** Per space, what settles once its last queued event's wave has. */
@@ -203,36 +213,94 @@ export class IndexedCollectionMaintainer {
   noteWrites(space: MemorySpace, ids: Iterable<string>): void {
     if (!this.#enabled || this.#disposed) return;
     const state = this.#spaceState(space);
+    const written = [...ids];
+    // A write to the registry can list a collection this runtime has not
+    // adopted, so a runtime that maintains listed collections reads the
+    // registry again, after any read in flight, which may predate the write.
+    if (this.#mode === "listed" && written.includes(this.#registryId)) {
+      state.read = false;
+      this.#readRegistry(space, state, state.loaded);
+    }
     // A space with no collection has nothing to follow. A runtime that
     // maintains listed collections knows that once the registry has been
     // read; any other, at once.
     if (state.collections.size === 0 && state.read) return;
-    for (const id of ids) state.early.add(id);
+    for (const id of written) state.early.add(id);
     if (state.read) return this.#flush(state);
     // The registry read is not tracked as async work of the runtime: only a
     // drain is, and a space that lists nothing starts none.
-    state.loaded ??= this.#loadRegistry(space, state).then((read) => {
-      state.read = read;
-      if (!read) state.loaded = undefined;
-    });
+    const loaded = state.loaded ?? this.#readRegistry(space, state);
     // Writes stay held while the registry could not be read, for the read
     // the next write starts.
-    void state.loaded.then(() => {
+    void loaded.then(() => {
       if (state.read) this.#flush(state);
     });
   }
 
-  /** Hands the writes held for a space to each of its collections. */
+  /**
+   * Helper for `noteWrites()`, which reads the registry of `space` once
+   * `after` has settled, and records whether it could. A read started later
+   * supersedes this one, which then records nothing.
+   */
+  #readRegistry(
+    space: MemorySpace,
+    state: SpaceState,
+    after?: Promise<void>,
+  ): Promise<void> {
+    const loaded: Promise<void> = (after ?? Promise.resolve())
+      .then(() => this.#loadRegistry(space, state))
+      .then((read) => {
+        if (state.loaded !== loaded) return;
+        state.read = read;
+        if (!read) state.loaded = undefined;
+      });
+    state.loaded = loaded;
+    return loaded;
+  }
+
+  /**
+   * Hands the writes held for a space to each of its collections. A write to
+   * a collection's handle, which carries its declaration, has the collection
+   * check its declaration again.
+   */
   #flush(state: SpaceState): void {
     if (state.early.size === 0 || this.#disposed) return;
     const written = [...state.early];
     state.early.clear();
     for (const collection of state.collections.values()) {
       for (const id of written) {
-        if (id !== collection.handle.id) collection.pending.add(id);
+        if (id === collection.handle.id) {
+          this.#redeclare(collection);
+        } else {
+          collection.pending.add(id);
+        }
       }
       this.#schedule(collection);
     }
+  }
+
+  /**
+   * Brings the tables of `collection` up to its declaration again, when the
+   * handle now carries another declaration than the one they were last
+   * brought up to. Drains wait for this as they wait for the first.
+   */
+  #redeclare(collection: CollectionState): void {
+    collection.reconciled = collection.reconciled.then(async () => {
+      if (this.#disposed) return;
+      const opened = await this.#open(collection);
+      if (
+        opened === undefined ||
+        JSON.stringify(opened.descriptor) === collection.declaration
+      ) {
+        return;
+      }
+      await this.#reconcile(collection);
+    }).catch((error) => {
+      if (!this.#disposed) {
+        logger.warn("reconcile-failed", () => [collection.handle.id, error]);
+      }
+    });
+    this.#runtime.trackAsyncWork(collection.reconciled);
   }
 
   /** Stops maintaining. Writes reported afterward are dropped. */
@@ -314,6 +382,7 @@ export class IndexedCollectionMaintainer {
       draining: undefined,
       withdrawn: 0,
       reconciled: Promise.resolve(),
+      declaration: undefined,
       cancel: this.#runtime.scheduler.addEventHandler(
         (tx: IExtendedStorageTransaction, event: MaintenanceEvent) =>
           this.#maintain(tx, handle, event),
@@ -441,6 +510,7 @@ export class IndexedCollectionMaintainer {
       `SELECT value FROM ${COLLECTION_META_TABLE} WHERE key = 'declaration'`,
     );
     const [row] = recorded.rows as { value?: unknown }[];
+    if (row?.value === declaration) collection.declaration = declaration;
     if (this.#disposed || row?.value === declaration) return;
     await this.#dispatch(collection, { record: "migrating", declaration });
     const { rows } = await provider.sqliteQuery(
@@ -450,6 +520,7 @@ export class IndexedCollectionMaintainer {
     await this.#reread(collection, groupMemberRows(opened.descriptor, rows));
     if (this.#disposed) return;
     await this.#dispatch(collection, { record: "declaration", declaration });
+    collection.declaration = declaration;
   }
 
   /** Returns the member cell `rows` is stored under. */
