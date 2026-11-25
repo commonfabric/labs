@@ -27,10 +27,13 @@ const space = signer.did();
 type Seen = { word: string; at?: Date; piece?: unknown };
 
 /**
- * A builtin that keeps a list of words in a store of its own, and on each run
- * over a word its input holds writes that word to the list with `write`, which
- * reads the list only if it means to. The
- * list's objects are each a document of their own.
+ * A builtin that keeps a list of words in a store of its own, and writes each
+ * word its input comes to hold to the list with `write`, which reads the list
+ * only if it means to. The list's objects are each a document of their own.
+ *
+ * The runtime may run a node again with nothing it read changed, as it does
+ * once the run's own commit lands, so the builtin keeps the word it last wrote
+ * beside the list and writes a word only when the input has moved to it.
  */
 function wordBuiltin(
   write: (list: Cell<Seen[]>, word: string) => void,
@@ -47,15 +50,16 @@ function wordBuiltin(
     (tx: IExtendedStorageTransaction) => {
       // The list reads as absent until the first write; `seen_words` reads it
       // with that in mind.
-      const store = runtime.getCell<{ seen: Seen[] }>(
+      const store = runtime.getCell<{ seen: Seen[]; last?: string }>(
         parentCell.space,
         { words: cause },
         undefined,
         tx,
       );
       const word = inputsCell.withTx(tx).key("word").get();
-      if (word !== undefined) {
-        write(store.key("seen"), word);
+      if (word !== store.key("last").get()) {
+        store.key("last").set(word);
+        if (word !== undefined) write(store.key("seen"), word);
       }
       sendResult(tx, store);
     },
