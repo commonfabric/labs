@@ -1,6 +1,7 @@
 /**
  * Rendering tests: renderTile turns a TileView into markup, shell wraps the grid
- * in the page. Pure string work — no server, no network, no subprocess.
+ * in the page, and the page's script brings the tiles up to date as updates
+ * arrive. No server, no network, no subprocess.
  */
 
 import {
@@ -8,6 +9,7 @@ import {
   assertEquals,
   assertExists,
   assertStringIncludes,
+  assertThrows,
 } from "@std/assert";
 import type { Status, TileView } from "./types.ts";
 import {
@@ -26,6 +28,8 @@ import {
 import { FAVICON_VERSION } from "./favicon.ts";
 import { followUpdates, liveUpdateStream } from "./stream-client.ts";
 import { reconcileTiles } from "./tiles-client.ts";
+import { type SentText, textToSend } from "./sent-text.ts";
+import { Window } from "happy-dom";
 import { TILE_LABEL_RULE } from "./chart-layout.ts";
 import { DASHBOARD_HEADER_RULES } from "./dashboard-header.ts";
 import { test } from "@commonfabric/test-support/test";
@@ -402,8 +406,6 @@ test("shell: the freshness age and the refresh interval reach both the text and 
     html,
     `const followUpdates = ${followUpdates.toString()};`,
   );
-  assertStringIncludes(html, `updateTiles(grid, update.gridHtml)`);
-  assertStringIncludes(html, `updateTiles(wide, update.wideHtml)`);
   assertStringIncludes(
     html,
     `if (update.shellVersion !== SHELL_VERSION) { location.reload(); return; }`,
@@ -491,6 +493,87 @@ test("shell: the injected script is JavaScript, and each injected function stand
   followed.check(Date.now());
   listeners.get("ping")!({ data: "1" });
   assertEquals(painted, 1, "a heartbeat repaints the page");
+});
+
+test("shell: the page applies each update's edits to the markup it was sent before", () => {
+  // The page's own script runs against the page parsed by happy-dom, with a
+  // stand-in for its event stream that the test delivers events through.
+  const tiles = (b: string) =>
+    renderTile("a", { status: "good", value: "1" }) +
+    renderTile("b", { status: "good", value: b });
+  const html = shell(tiles("1"), "", 0, 45_000, TEST_VERSION, "good");
+  const window = new Window({ url: "http://localhost/" });
+  try {
+    const page = new window.DOMParser().parseFromString(html, "text/html");
+    const listeners = new Map<string, (event: { data: string }) => void>();
+    class FakeSource {
+      readonly readyState = 1;
+      addEventListener(type: string, listener: (event: { data: string }) => void) {
+        listeners.set(type, listener);
+      }
+      close() {}
+    }
+    const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].at(-1)![1];
+    new Function(
+      "document",
+      "EventSource",
+      "setInterval",
+      "addEventListener",
+      "location",
+      script,
+    )(page, FakeSource, () => 0, () => {}, { reload: () => {} });
+
+    const deliver = (gridHtml: SentText) =>
+      listeners.get("update")!({
+        data: JSON.stringify({
+          gridHtml,
+          wideHtml: "",
+          ageSeconds: 0,
+          shellVersion: TEST_VERSION,
+          faviconStatus: "good",
+          faviconRedSince: null,
+          faviconRedAgeMs: null,
+          message: { text: "", updatedAt: null, revision: 0 },
+        }),
+      });
+    const tile = (label: string) => page.querySelector(`[data-tile-label="${label}"]`);
+    const value = (label: string) => tile(label)?.querySelector(".big")?.textContent;
+
+    deliver(tiles("1"));
+    const a = tile("a");
+    assertExists(a);
+    assertEquals(value("b"), "1");
+
+    const edits = textToSend(tiles("1"), tiles("2"));
+    assert(typeof edits !== "string", "the second update carries edits");
+    deliver(edits);
+    assertEquals(value("b"), "2");
+    assert(tile("a") === a, "a tile the edits leave alone keeps its element");
+
+    deliver({ from: tiles("2").length, edits: [] });
+    assertEquals(value("b"), "2");
+    // A stream opened again starts with the whole markup.
+    deliver(tiles("3"));
+    assertEquals(value("b"), "3");
+
+    // A failure showing an update leaves the page as it was, and the whole
+    // markup a new stream starts with puts it right.
+    const createElement = page.createElement.bind(page);
+    page.createElement = () => {
+      throw new Error("cannot show this update");
+    };
+    assertThrows(
+      () => deliver(textToSend(tiles("3"), tiles("4"))),
+      Error,
+      "cannot show this update",
+    );
+    page.createElement = createElement;
+    assertEquals(value("b"), "3");
+    deliver(tiles("4"));
+    assertEquals(value("b"), "4");
+  } finally {
+    window.close();
+  }
 });
 
 test("shell: live data and runtime settings keep the compatibility version", () => {
