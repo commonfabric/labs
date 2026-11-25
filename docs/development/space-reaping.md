@@ -73,6 +73,24 @@ if [ "$OTHER" != "$STORE" ] && [ -e "$OTHER" ]; then
   echo "$LIVE holds $OTHER, not $STORE: stop here" >&2
   exit 1
 fi
+# The instances the host runs, one per port from 8001: the layout infra
+# recorded in /opt/cf/releases/toolshed-capacity.json, or 5 API and 16
+# storage instances on a host without the file. Any other layout stops the
+# run ("Estuary deployment and verification" in deploying.md).
+PORTS=$(python3 - <<'PY'
+import json
+marker = "/opt/cf/releases/toolshed-capacity.json"
+layouts = [{"api": 5, "storage": 16}, {"api": 4, "storage": 12}]
+try:
+    with open(marker) as file:
+        capacity = json.load(file)
+except FileNotFoundError:
+    capacity = layouts[0]
+if capacity not in layouts:
+    raise SystemExit(f"{marker} records an unsupported Toolshed layout: {capacity!r}: stop here")
+print(*range(8001, 8001 + capacity["api"] + capacity["storage"]))
+PY
+)
 # The run's id names what it keeps in $REPLACED: the date and a random
 # suffix, so a second run on the same day keeps its own. Note it down; the
 # way back needs it.
@@ -90,8 +108,10 @@ cf space reap "$LIVE/$STORE" --dry-run --live "$LIVE/$STORE"
 #    back, so it stops the run; an empty one goes, and so does the `-shm`
 #    index, which holds no writes. Every instance has to report itself
 #    inactive before anything is read.
-for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
-for p in $(seq 8001 8021); do
+# The stop names the units by pattern, so it reaches every running
+# instance, one outside the recorded layout included.
+sudo systemctl stop 'toolshed-binary@*'
+for p in $PORTS; do
   state=$(systemctl is-active "toolshed-binary@$p" || true)
   if [ "$state" != inactive ]; then
     echo "toolshed-binary@$p is ${state:-unknown}, not inactive: stop here" >&2
@@ -153,8 +173,8 @@ while read -r cell; do
 done <"$REPLACED/$DID.cells-$RUN.txt"
 
 # 5. Start them all, and confirm the space reads as deleted.
-for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
-for p in $(seq 8001 8021); do systemctl is-active "toolshed-binary@$p"; done
+for p in $PORTS; do sudo systemctl start "toolshed-binary@$p"; done
+for p in $PORTS; do systemctl is-active "toolshed-binary@$p"; done
 cf inspect summary "$LIVE/$STORE"
 ```
 
@@ -203,10 +223,30 @@ if [ "$OTHER" != "$STORE" ] && [ -e "$OTHER" ]; then
   echo "$LIVE holds $OTHER, not $STORE: stop here" >&2
   exit 1
 fi
+# The instances the host runs, one per port from 8001: the layout infra
+# recorded in /opt/cf/releases/toolshed-capacity.json, or 5 API and 16
+# storage instances on a host without the file. Any other layout stops the
+# run ("Estuary deployment and verification" in deploying.md).
+PORTS=$(python3 - <<'PY'
+import json
+marker = "/opt/cf/releases/toolshed-capacity.json"
+layouts = [{"api": 5, "storage": 16}, {"api": 4, "storage": 12}]
+try:
+    with open(marker) as file:
+        capacity = json.load(file)
+except FileNotFoundError:
+    capacity = layouts[0]
+if capacity not in layouts:
+    raise SystemExit(f"{marker} records an unsupported Toolshed layout: {capacity!r}: stop here")
+print(*range(8001, 8001 + capacity["api"] + capacity["storage"]))
+PY
+)
 # Stop every instance, and stop here unless each reports itself inactive:
 # nothing moves while an instance may still have the result open.
-for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
-for p in $(seq 8001 8021); do
+# The stop names the units by pattern, so it reaches every running
+# instance, one outside the recorded layout included.
+sudo systemctl stop 'toolshed-binary@*'
+for p in $PORTS; do
   state=$(systemctl is-active "toolshed-binary@$p" || true)
   if [ "$state" != inactive ]; then
     echo "toolshed-binary@$p is ${state:-unknown}, not inactive: stop here" >&2
@@ -219,7 +259,7 @@ sudo mv -f "$STORE.restored" "$STORE"
 while read -r cell; do
   sudo mv -- "$REPLACED/$cell" "$LIVE/"
 done <"$REPLACED/$DID.cells-$RUN.txt"
-for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
+for p in $PORTS; do sudo systemctl start "toolshed-binary@$p"; done
 ```
 
 The companions removed belong to the reaped result, which holds nothing the

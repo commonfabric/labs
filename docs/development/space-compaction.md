@@ -65,15 +65,39 @@ check is each instance's `/api/meta`, whose `gitSha` names its release; a
 release is current enough when the guard's merge commit is its ancestor. An
 instance that does not answer within the bound, or answers without a
 40-digit `gitSha`, prints `NONE` and fails the check; the count at the end
-must read 21 of one sha before anything below is run:
+must read one sha for every instance the host runs before anything below is
+run. Which instances those are comes from the layout the host records, as
+the deploy workflow's check reads it
+([`deploying.md`](deploying.md#estuary-deployment-and-verification)), and a
+layout infra does not support prints an error and checks nothing:
 
 ```bash
+# The instances the host runs, one per port from 8001: the layout infra
+# recorded in /opt/cf/releases/toolshed-capacity.json, or 5 API and 16
+# storage instances on a host without the file. Any other layout stops
+# here ("Estuary deployment and verification" in deploying.md).
+PORTS=$(python3 - <<'PY'
+import json
+marker = "/opt/cf/releases/toolshed-capacity.json"
+layouts = [{"api": 5, "storage": 16}, {"api": 4, "storage": 12}]
+try:
+    with open(marker) as file:
+        capacity = json.load(file)
+except FileNotFoundError:
+    capacity = layouts[0]
+if capacity not in layouts:
+    raise SystemExit(f"{marker} records an unsupported Toolshed layout: {capacity!r}: stop here")
+print(*range(8001, 8001 + capacity["api"] + capacity["storage"]))
+PY
+)
+echo "${PORTS:?}" | wc -w   # the number of instances
+
 # On the host: every instance names its release, or the check fails loudly.
-for p in $(seq 8001 8021); do
+for p in ${PORTS:?}; do
   sha=$(curl -s --max-time 5 "localhost:$p/api/meta" | grep -o '"gitSha":"[0-9a-f]\{40\}"' | cut -d'"' -f4)
   echo "$p ${sha:-NONE}"
 done | tee /tmp/releases.txt
-awk '{print $2}' /tmp/releases.txt | sort | uniq -c   # exactly one line, "21 <sha>"; a NONE or a second sha = stop here
+awk '{print $2}' /tmp/releases.txt | sort | uniq -c   # exactly one line, "<the number of instances> <sha>"; a NONE or a second sha = stop here
 cf space compact --help    # on the host: an older cf has no such command
 
 # On a checkout with main fetched, with the one sha that line named
@@ -217,13 +241,17 @@ calls a one-time rewire; a reload wrote one commit.
 
 ## The host run
 
-Twenty-one systemd instances `toolshed-binary@8001` through `8021` serve
-`/data/memory`; nginx routes a space's websocket to one of them by a consistent
-hash of the space DID, and the Topics space hashed to port 8020 in October
-2026. Every instance can open every file, though, and a stop of the one the
-hash names does not establish that the others have released this one — so the
-recipe stops all twenty-one before the authoritative backup and the swap, as
-the staging copy does, and starts them all after. The space is down for the
+Systemd instances `toolshed-binary@8001` upward serve `/data/memory`: 21 of
+them, through `8021`, with server-side execution off, and 16, through `8016`,
+with it on. The host records which in `/opt/cf/releases/toolshed-capacity.json`
+([`deploying.md`](deploying.md#estuary-deployment-and-verification)), and each
+script below takes its ports from that record and stops on a layout infra does
+not support. nginx routes a space's websocket to one of them by a consistent
+hash of the space DID, so which one serves a space depends on the layout.
+Every instance can open every file, though, and a stop of the one the hash
+names does not establish that the others have released this one — so the
+recipe stops all of them before the authoritative backup and the swap, as the
+staging copy does, and starts them all after. The space is down for the
 window either way; the other spaces are down with it, which at a quiet hour
 costs less than a write landing on a file that is about to be replaced.
 
@@ -278,15 +306,36 @@ if [ "$OTHER" != "$STORE" ] && [ -e "$OTHER" ]; then
   echo "$LIVE holds $OTHER, not $STORE: stop here" >&2
   exit 1
 fi
+# The instances the host runs, one per port from 8001: the layout infra
+# recorded in /opt/cf/releases/toolshed-capacity.json, or 5 API and 16
+# storage instances on a host without the file. Any other layout stops the
+# run ("Estuary deployment and verification" in deploying.md).
+PORTS=$(python3 - <<'PY'
+import json
+marker = "/opt/cf/releases/toolshed-capacity.json"
+layouts = [{"api": 5, "storage": 16}, {"api": 4, "storage": 12}]
+try:
+    with open(marker) as file:
+        capacity = json.load(file)
+except FileNotFoundError:
+    capacity = layouts[0]
+if capacity not in layouts:
+    raise SystemExit(f"{marker} records an unsupported Toolshed layout: {capacity!r}: stop here")
+print(*range(8001, 8001 + capacity["api"] + capacity["storage"]))
+PY
+)
 
 # 0. Space, disk, which instance owns it, and the release each instance runs
 #    (the guard check above, again: a deploy between the preflight and the
-#    window would move it). Do not trust the record; check. The release
-#    check stops the script unless all 21 instances name one sha.
+#    window would move it). The owner is the instance whose
+#    /api/health/stats names the space, a count above 0 below. The release
+#    check stops the script unless every instance names one sha.
 df -h "$LIVE" "$REPLACED"
 ls -la "$LIVE" | grep -F "$DID" || true
-curl -s localhost:8020/api/health/stats | grep -c -F "$DID" || true
-for p in $(seq 8001 8021); do
+for p in $PORTS; do
+  echo "$p $(curl -s --max-time 5 "localhost:$p/api/health/stats" | grep -c -F "$DID" || true)"
+done
+for p in $PORTS; do
   sha=$(curl -s --max-time 5 "localhost:$p/api/meta" | grep -o '"gitSha":"[0-9a-f]\{40\}"' | cut -d'"' -f4 || true)
   echo "$p ${sha:-NONE}"
 done | tee "$REPLACED/releases-$DATE.txt"
@@ -344,6 +393,24 @@ if [ "$OTHER" != "$STORE" ] && [ -e "$OTHER" ]; then
   echo "$LIVE holds $OTHER, not $STORE: stop here" >&2
   exit 1
 fi
+# The instances the host runs, one per port from 8001: the layout infra
+# recorded in /opt/cf/releases/toolshed-capacity.json, or 5 API and 16
+# storage instances on a host without the file. Any other layout stops the
+# run ("Estuary deployment and verification" in deploying.md).
+PORTS=$(python3 - <<'PY'
+import json
+marker = "/opt/cf/releases/toolshed-capacity.json"
+layouts = [{"api": 5, "storage": 16}, {"api": 4, "storage": 12}]
+try:
+    with open(marker) as file:
+        capacity = json.load(file)
+except FileNotFoundError:
+    capacity = layouts[0]
+if capacity not in layouts:
+    raise SystemExit(f"{marker} records an unsupported Toolshed layout: {capacity!r}: stop here")
+print(*range(8001, 8001 + capacity["api"] + capacity["storage"]))
+PY
+)
 # The run's id names what it keeps in $REPLACED: the date and a random
 # suffix, so a second run on the same day keeps its own. Note it down; the
 # way back needs it.
@@ -355,8 +422,10 @@ echo "run id: $RUN"
 #    back, so it stops the run; an empty one goes, and so does the `-shm`
 #    index, which holds no writes. Every instance has to report itself
 #    inactive before anything is read.
-for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
-for p in $(seq 8001 8021); do
+# The stop names the units by pattern, so it reaches every running
+# instance, one outside the recorded layout included.
+sudo systemctl stop 'toolshed-binary@*'
+for p in $PORTS; do
   state=$(systemctl is-active "toolshed-binary@$p" || true)
   if [ "$state" != inactive ]; then
     echo "toolshed-binary@$p is ${state:-unknown}, not inactive: stop here" >&2
@@ -410,8 +479,8 @@ sudo install -o deploy -g deploy -m 644 "$REPLACED/$DID.compacted.sqlite" \
 sudo mv -f "$STORE.compacted" "$STORE"
 
 # 7. Start them all, and confirm.
-for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
-for p in $(seq 8001 8021); do systemctl is-active "toolshed-binary@$p"; done
+for p in $PORTS; do sudo systemctl start "toolshed-binary@$p"; done
+for p in $PORTS; do systemctl is-active "toolshed-binary@$p"; done
 ```
 
 After the start, the two checks the staging copy document ends with: the space
@@ -473,11 +542,31 @@ if [ "$OTHER" != "$STORE" ] && [ -e "$OTHER" ]; then
   echo "$LIVE holds $OTHER, not $STORE: stop here" >&2
   exit 1
 fi
+# The instances the host runs, one per port from 8001: the layout infra
+# recorded in /opt/cf/releases/toolshed-capacity.json, or 5 API and 16
+# storage instances on a host without the file. Any other layout stops the
+# run ("Estuary deployment and verification" in deploying.md).
+PORTS=$(python3 - <<'PY'
+import json
+marker = "/opt/cf/releases/toolshed-capacity.json"
+layouts = [{"api": 5, "storage": 16}, {"api": 4, "storage": 12}]
+try:
+    with open(marker) as file:
+        capacity = json.load(file)
+except FileNotFoundError:
+    capacity = layouts[0]
+if capacity not in layouts:
+    raise SystemExit(f"{marker} records an unsupported Toolshed layout: {capacity!r}: stop here")
+print(*range(8001, 8001 + capacity["api"] + capacity["storage"]))
+PY
+)
 
 # 1. Stop every instance, and stop here unless each reports itself inactive:
 #    nothing moves while an instance may still have the result open. (sudo.)
-for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
-for p in $(seq 8001 8021); do
+# The stop names the units by pattern, so it reaches every running
+# instance, one outside the recorded layout included.
+sudo systemctl stop 'toolshed-binary@*'
+for p in $PORTS; do
   state=$(systemctl is-active "toolshed-binary@$p" || true)
   if [ "$state" != inactive ]; then
     echo "toolshed-binary@$p is ${state:-unknown}, not inactive: stop here" >&2
@@ -501,8 +590,8 @@ sudo cp -p "$REPLACED/$DID.live-$RUN.sqlite" "$STORE.restored"
 sudo mv -f "$STORE.restored" "$STORE"
 
 # 4. Start them all, and confirm, as step 7 does. (sudo.)
-for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
-for p in $(seq 8001 8021); do systemctl is-active "toolshed-binary@$p"; done
+for p in $PORTS; do sudo systemctl start "toolshed-binary@$p"; done
+for p in $PORTS; do systemctl is-active "toolshed-binary@$p"; done
 ```
 
 Before step 7 has run, step 1 already holds and the rest is the same.
