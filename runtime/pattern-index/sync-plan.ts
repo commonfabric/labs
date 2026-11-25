@@ -13,7 +13,9 @@
  * `--moves-table` names where the repository records how its patterns
  * moved, relative to its root. Each entry's former paths are then in the
  * plan, so a moved file continues its old path's lineage. Without it there
- * are no moves to follow.
+ * are no moves to follow. A module table is imported, so its top-level code
+ * runs here, with this step's permissions: name only a module the repository
+ * trusts as it trusts its own build, or a JSON file.
  *
  * It holds no credential and contacts no index, so it is also the dry run.
  * It compiles in a runtime with in-memory storage, writing nothing to any
@@ -53,10 +55,25 @@ const gitTrackedFiles = async (repoRoot: string): Promise<string[]> => {
   );
 };
 
-/** Whether `value` is a table of moves: former paths to current ones. */
-const isMovesTable = (value: unknown): value is MovesTable =>
-  typeof value === "object" && value !== null && !Array.isArray(value) &&
-  Object.values(value).every((to) => typeof to === "string");
+/**
+ * Why `value` is not a table of moves (former paths to current ones), or
+ * undefined when it is. A path is never empty, and a directory moves only to
+ * a directory: a pair whose trailing `/` disagree would match no file, and
+ * the history of every file it meant would be lost with the job still green.
+ */
+const movesTableProblem = (value: unknown): string | undefined => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "it holds no table of moves (former path to current path)";
+  }
+  for (const [from, to] of Object.entries(value)) {
+    if (typeof to !== "string") return `${from} moves to something not a path`;
+    if (from === "" || to === "") return "it names an empty path";
+    if (from.endsWith("/") !== to.endsWith("/")) {
+      return `${from} and ${to} must both end in / to move a directory`;
+    }
+  }
+  return undefined;
+};
 
 /**
  * The repository's table of moves at `table`, relative to its root: a JSON
@@ -76,12 +93,9 @@ const repositoryMoves = async (
   const moves: unknown = path.endsWith(".json")
     ? JSON.parse(await Deno.readTextFile(path))
     : (await import(toFileUrl(path).href)).MOVED_PATTERN_KEYS;
-  if (!isMovesTable(moves)) {
-    throw new Error(
-      `${table} holds no table of moves (former path to current path)`,
-    );
-  }
-  return moves;
+  const problem = movesTableProblem(moves);
+  if (problem !== undefined) throw new Error(`${table}: ${problem}`);
+  return moves as MovesTable;
 };
 
 /** What a plan holds, for the job summary. */
@@ -128,7 +142,8 @@ const main = async (): Promise<number> => {
   }
   const repoRoot = resolve(flags["repo-root"] ?? ".");
   const movesTable = flags["moves-table"];
-  const moves = movesTable === undefined || movesTable === ""
+  // An empty name is a table named and not found, not the absence of one.
+  const moves = movesTable === undefined
     ? undefined
     : await repositoryMoves(repoRoot, movesTable);
   const signer = await Identity.generate();

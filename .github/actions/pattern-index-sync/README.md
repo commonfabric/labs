@@ -90,19 +90,28 @@ still stores an entry as a part when it has a required input with no default.
 
 A lineage belongs to a path. When the globs stop selecting a path (the file is
 deleted, moved, or newly excluded), its lineage is withdrawn: unlisted, and
-still readable by id. A path that comes back resumes the same lineage. A
-repository that records how its patterns moved keeps a moved file's lineage,
-history included: the sync tells the index the path the file moved from
-(`movedFrom`), and does not withdraw that path. The index refuses a move it
-cannot make, and the entry is reported failed rather than starting a new
-lineage. The table is at `moves-table`, relative to the repository root: a JSON
-object, or a module exporting `MOVED_PATTERN_KEYS` (Labs passes its own,
-`runtime/runner/src/pattern-key-moves.ts`), mapping former paths to current ones
-below `program-root`. A key ending in `/` moves a whole directory. A file may
-have several former paths, as when every old path points straight at the newest
-one; the sync takes the nearest the index holds a lineage for. Without
-`moves-table` no moves are followed, and a `moves-table` that names no table
-fails the plan.
+still readable by id. A path that comes back resumes the same lineage.
+
+A repository that records how its patterns moved keeps a moved file's lineage,
+history included. The table is at `moves-table`, relative to the repository
+root: a JSON object, or a module exporting `MOVED_PATTERN_KEYS` (Labs passes its
+own, `runtime/runner/src/pattern-key-moves.ts`), mapping former paths to current
+ones below `program-root`. A key and value that both end in `/` move a whole
+directory. A module table is imported, so its top-level code runs in the plan
+job; that job holds no credential, but name only a module the repository trusts
+as it trusts its own build, or use JSON. Without `moves-table` no moves are
+followed, and a `moves-table` that names no valid table fails the plan.
+
+A file may have several former paths, as when every old path points straight at
+the newest one. Its former lineage is that of the nearest one the index holds a
+lineage for, the globs no longer select, and no earlier entry claimed. That path
+is not withdrawn. When the file's path has no lineage of its own, the sync tells
+the index the path it moved from (`movedFrom`), and the index moves the lineage
+there. The index refuses a move it cannot make, and an entry the index did not
+confirm as moved is reported failed rather than starting a new lineage. When the
+entry fails, has no description, or already has a lineage of its own, the former
+path is kept and the summary lists it: a later sync moves it once the entry
+publishes, and dropping the move from the table withdraws it.
 
 Following moves backward can reach further than a file's real history: a new
 file in a directory the table moved takes the lineage of a deleted file at the

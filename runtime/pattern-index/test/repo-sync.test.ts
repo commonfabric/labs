@@ -452,23 +452,32 @@ describe("repo-sync", () => {
       expect(formerPathsIn("p", cycle)("p/a.tsx")).toEqual(["p/b.tsx"]);
     });
 
-    it("is what the plan records for each compiled entry", async () => {
+    it("is what the plan records for each entry, compiled or not", async () => {
       const plan = await planRepo(
-        { ...OPTIONS, formerPaths: formerPathsIn("patterns", moves) },
+        {
+          ...OPTIONS,
+          formerPaths: formerPathsIn("patterns", {
+            ...moves,
+            "c.tsx": "c/main.tsx",
+          }),
+        },
         planDeps({
           "patterns/apps/notes/main.tsx": DESCRIBED,
           "patterns/b.tsx": DESCRIBED,
+          "patterns/c/main.tsx": UNDESCRIBED,
         }),
       );
       expect(plan.entries.map((entry) => [
         entry.path,
-        entry.status === "compiled" ? entry.formerPaths : undefined,
+        entry.status,
+        entry.formerPaths,
       ])).toEqual([
-        ["patterns/apps/notes/main.tsx", [
+        ["patterns/apps/notes/main.tsx", "compiled", [
           "patterns/notes.tsx",
           "patterns/apps/notes/notes.tsx",
         ]],
-        ["patterns/b.tsx", undefined],
+        ["patterns/b.tsx", "compiled", undefined],
+        ["patterns/c/main.tsx", "undescribed", ["patterns/c.tsx"]],
       ]);
     });
   });
@@ -500,7 +509,7 @@ describe("repo-sync", () => {
         head("p/old.tsx"),
         head("p/deleted.tsx"),
       ]);
-      await publishPlan(
+      const report = await publishPlan(
         {
           entries: [{
             ...compiled("p/new/main.tsx"),
@@ -517,10 +526,11 @@ describe("repo-sync", () => {
       // The moved lineage is at its new path now; only the deleted file's
       // is withdrawn.
       expect(withdrawals).toEqual([["p/deleted.tsx"]]);
+      expect(report.kept).toEqual([]);
     });
 
     it("returns a move the index does not confirm as failed", async () => {
-      const { client } = fakeIndex([head("p/old.tsx")]);
+      const { client, withdrawals } = fakeIndex([head("p/old.tsx")]);
       // An index that predates moves drops `source.movedFrom` silently.
       client.publishPattern = (request) =>
         Promise.resolve({ patternId: request.patternId, created: true });
@@ -540,10 +550,60 @@ describe("repo-sync", () => {
         status: "failed",
         reason: "the index did not say it moved the lineage of p/old.tsx here",
       }]);
+      expect(withdrawals).toEqual([]);
+      expect(report.kept).toEqual(["p/old.tsx"]);
+    });
+
+    it("keeps, rather than withdraws, the former path of an entry that cannot take its lineage", async () => {
+      // A move the index did not confirm left a lineage at the new path; the
+      // other two entries failed to compile or have no description.
+      const { client, published, withdrawals } = fakeIndex([
+        head("p/new/main.tsx"),
+        head("p/old.tsx"),
+        head("p/broken-old.tsx"),
+        head("p/bare-old.tsx"),
+        head("p/deleted.tsx"),
+      ]);
+      const report = await publishPlan(
+        {
+          entries: [
+            { ...compiled("p/new/main.tsx"), formerPaths: ["p/old.tsx"] },
+            {
+              path: "p/broken/main.tsx",
+              status: "failed",
+              reason: "does not compile",
+              formerPaths: ["p/broken-old.tsx"],
+            },
+            {
+              path: "p/bare/main.tsx",
+              status: "undescribed",
+              formerPaths: ["p/bare-old.tsx"],
+            },
+          ],
+          selected: ["p/new/main.tsx", "p/broken/main.tsx", "p/bare/main.tsx"],
+        },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(published[0].source?.movedFrom).toBeUndefined();
+      expect(withdrawals).toEqual([["p/deleted.tsx"]]);
+      expect(report.kept).toEqual([
+        "p/bare-old.tsx",
+        "p/broken-old.tsx",
+        "p/old.tsx",
+      ]);
+      expect(report.entries.slice(1)).toEqual([
+        {
+          path: "p/broken/main.tsx",
+          status: "failed",
+          reason: "does not compile",
+        },
+        { path: "p/bare/main.tsx", status: "undescribed" },
+      ]);
     });
 
     it("returns a move the index refuses as failed", async () => {
-      const { client } = fakeIndex([head("p/old.tsx")]);
+      const { client, withdrawals } = fakeIndex([head("p/old.tsx")]);
       client.publishPattern = () =>
         Promise.reject(
           new PatternIndexError(
@@ -568,6 +628,9 @@ describe("repo-sync", () => {
         status: "failed",
       });
       expect(syncFailed(report)).toBe(true);
+      // Kept for the next sync to move.
+      expect(withdrawals).toEqual([]);
+      expect(report.kept).toEqual(["p/old.tsx"]);
     });
 
     it("names no predecessor for an entry with its own head, or whose former path is still selected or already claimed", async () => {
@@ -979,6 +1042,7 @@ describe("repo-sync", () => {
           { path: "p/g.tsx", status: "oversize", limit: "819200" },
         ],
         withdrawn: ["p/e.tsx"],
+        kept: ["p/old.tsx"],
         dormant: ["p/f.tsx"],
         gardeners: [{
           path: "p/b.tsx",
@@ -999,6 +1063,7 @@ describe("repo-sync", () => {
       expect(markdown).toContain("- `p/e.tsx`");
       expect(markdown).toContain("- `p/f.tsx`");
       expect(markdown).toContain("- `p/g.tsx`");
+      expect(markdown).toContain("- `p/old.tsx`");
     });
   });
 });

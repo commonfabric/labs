@@ -40,6 +40,10 @@ export default 1;
   "runtime/runner/src/pattern-key-moves.ts":
     `export const MOVED_PATTERN_KEYS = { "tally/": "counter/" };\n`,
   // A record of moves kept as JSON elsewhere: before that, it was one file.
+  // Tables that would lose every move: a directory moved to a file, and an
+  // empty path.
+  "file-for-directory.json": JSON.stringify({ "tally/": "counter/main.tsx" }),
+  "empty-path.json": JSON.stringify({ "": "counter/main.tsx" }),
   "moves.json": JSON.stringify({
     "count.tsx": "tally/main.tsx",
     "tally/": "counter/",
@@ -207,6 +211,25 @@ describe("sync-plan", () => {
     ]);
     expect(output.code).not.toBe(0);
     await expect(Deno.stat(`${repo}/unmoved.json`)).rejects.toThrow();
+  });
+
+  it("exits nonzero, writing no plan, when `--moves-table` names an empty path or an invalid table", async () => {
+    for (const table of ["", "file-for-directory.json", "empty-path.json"]) {
+      const output = await runPlan([
+        "--repo-root",
+        repo,
+        "--program-root",
+        "patterns",
+        "--include",
+        "patterns/counter/**",
+        "--moves-table",
+        table,
+        "--out",
+        `${repo}/invalid.json`,
+      ]);
+      expect(output.code).not.toBe(0);
+      await expect(Deno.stat(`${repo}/invalid.json`)).rejects.toThrow();
+    }
   });
 
   it("writes the same source hash and pattern id for the same source on a second run", async () => {

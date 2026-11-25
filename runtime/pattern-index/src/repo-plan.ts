@@ -9,11 +9,11 @@ import {
   basename,
   globToRegExp,
   join,
-  normalize,
   relative,
   resolve,
   SEPARATOR,
 } from "@std/path";
+import { normalize as normalizePosix } from "@std/path/posix";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import {
   type CompiledPattern,
@@ -194,14 +194,7 @@ const planEntry = async (
     resultSchema: compiled.resultSchema,
     standalone: isStandaloneEntry(path),
   });
-  const formerPaths = options.formerPaths?.(path) ?? [];
-  return {
-    path,
-    status: "compiled",
-    sourceHash,
-    request,
-    ...(formerPaths.length > 0 ? { formerPaths } : {}),
-  };
+  return { path, status: "compiled", sourceHash, request };
 };
 
 /**
@@ -222,8 +215,9 @@ export const formerPathsIn = (
   programRoot: string,
   table: MovesTable,
 ): (path: string) => readonly string[] => {
-  // The repository root itself (`.`) prefixes nothing.
-  const root = normalize(programRoot).replace(/\/+$/, "");
+  // Git and the table write paths with `/` on every platform. The repository
+  // root itself (`.`) prefixes nothing.
+  const root = normalizePosix(programRoot).replace(/\/+$/, "");
   const prefix = root === "." || root === "" ? "" : `${root}/`;
   const moves = Object.entries(table);
   /**
@@ -275,13 +269,19 @@ export const planRepo = async (
   const selected = await selectedPaths(options, deps);
   const entries: PlannedEntry[] = [];
   for (const path of selected) {
+    let entry: PlannedEntry;
     try {
       const source = await deps.readTextFile(join(options.repoRoot, path));
       if (!isEntrySource(source)) continue;
-      entries.push(await planEntry(path, source, root, options, deps));
+      entry = await planEntry(path, source, root, options, deps);
     } catch (error) {
-      entries.push({ path, status: "failed", reason: reasonOf(error) });
+      entry = { path, status: "failed", reason: reasonOf(error) };
     }
+    // Recorded whatever became of the entry, so a moved file that fails or
+    // has no description still keeps its old path's lineage from being
+    // withdrawn.
+    const formerPaths = options.formerPaths?.(path) ?? [];
+    entries.push(formerPaths.length > 0 ? { ...entry, formerPaths } : entry);
   }
   return { entries, selected };
 };
