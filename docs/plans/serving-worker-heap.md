@@ -185,6 +185,12 @@ Beyond these:
   client that opens many Topics in turn builds up the same cost. Releasing a piece
   when its last demand leaves is the same change at another site, and a demanded
   piece's writers are what `leaveDemandedEntity()` already tracks.
+- The release of a handler's result waits for the scheduler to be idle after
+  the commit. While events keep arriving with no idle between them, the pieces
+  every create in that run started stay running until the first idle, so a
+  burst of creates holds them all at once. The per-create figures above come
+  from creates sent one after another, which leave an idle between them, and
+  nothing has measured a burst.
 - A kept runtime (`parkedRuntimeRetentionMs`) holds whatever its tenure held.
 - Lower the heap limit once a day of real traffic shows what a worker needs.
 - Nothing here has run on rapids.
