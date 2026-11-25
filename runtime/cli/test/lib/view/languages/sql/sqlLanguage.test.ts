@@ -847,6 +847,17 @@ describe("sqlLanguage", () => {
     expect(classesOf(lines, "trigger")).toEqual(["typeKeyword"]);
   });
 
+  it("reads MySQL's syntax for an executed comment with no version number", () => {
+    const source = [
+      "/*! SET NAMES utf8mb4 */;",
+      'CREATE TABLE t (a varchar(10) DEFAULT "x");',
+    ].join("\n");
+    const lines = sqlLanguage.highlightLines(source);
+
+    expect(classesOf(lines, "SET")).toEqual(["keyword"]);
+    expect(classesOf(lines, '"x"')).toEqual(["string"]);
+  });
+
   it("labels each `create` statement with the kind of thing it makes and its name", () => {
     const source = [
       "create index concurrently if not exists recent on t (a);",

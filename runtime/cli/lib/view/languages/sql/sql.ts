@@ -327,7 +327,7 @@ function foreignBodies(
  * Whether `lexed`, which is `text` read in PostgreSQL's syntax, holds syntax
  * only MySQL reads outside its strings, comments, and bodies: a statement that
  * starts with a `#` comment or a `DELIMITER` command, neither of which starts a
- * PostgreSQL statement, or an executed comment, `/*!` and a version number.
+ * PostgreSQL statement, or an executed comment, which opens with `/*!`.
  */
 function holdsMysql(text: string, { tokens, comments }: Lexed): boolean {
   const word = (at: number) =>
@@ -336,7 +336,7 @@ function holdsMysql(text: string, { tokens, comments }: Lexed): boolean {
       : "";
   return comments.some((comment) =>
     comment.body === 0 &&
-    /^\/\*!\d/.test(text.slice(comment.start, comment.start + 4))
+    text.startsWith("/*!", comment.start)
   ) || tokens.some((token, index) => {
     const previous = tokens[index - 1];
     return token.body === 0 &&
