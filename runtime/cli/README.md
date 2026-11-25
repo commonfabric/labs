@@ -517,10 +517,10 @@ uses this fixture mechanism at both postures.
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, C, C++, CUDA, shell,
 makefile, Dockerfile, Java properties, INI, dotenv, Graphviz DOT, ProGuard, XML,
-Org mode, CSV, TSV, and assembly files use their own highlighting. A lowercase
-`.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`, `.h++`,
-`.tcc`, and an uppercase `.C` select C++; and `.cu` and `.cuh` select CUDA. C++
-and CUDA share one grammar, which colors CUDA's qualifiers, such as
+Org mode, CSV, TSV, assembly, and SQL files use their own highlighting. A
+lowercase `.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`,
+`.h++`, `.tcc`, and an uppercase `.C` select C++; and `.cu` and `.cuh` select
+CUDA. C++ and CUDA share one grammar, which colors CUDA's qualifiers, such as
 `__global__`, as keywords. C and C++ both write `.h` headers, so a `.h` file is
 colored in a mode that claims neither dialect, using the C++ grammar, which
 reads the declarations C headers usually make; a C header that uses one of C++'s
@@ -744,6 +744,24 @@ covers `.gitmodules`, user and system configuration named `.gitconfig` or
 `gitconfig`, a worktree's `config.worktree`, other files whose names end in
 `.gitconfig`, and Git LFS's `.lfsconfig`. The structure tree lists sections with
 the variables in each.
+
+SQL covers `.sql` files in PostgreSQL's lexical syntax, which SQLite's follows,
+or in MySQL's, for a file that holds syntax only MySQL reads, such as a
+statement that starts with a `#` comment, an executed comment such as
+`/*!40101 … */`, or a `DELIMITER` command, or one whose strings PostgreSQL's
+syntax leaves open at its end and MySQL's closes, as it does for `'it\'s'`. In
+MySQL's syntax, `#` starts a comment anywhere, `"…"` is a string, a backslash in
+a string escapes the next character, executed comments are colored as
+statements, and a `DELIMITER` command sets the text that ends a statement. A
+PostgreSQL dollar quote that follows `AS`, `DO`, or a `LANGUAGE` clause holds a
+function's or a block's body, which is colored as SQL when the statement names
+no language or names `sql` or `plpgsql`, and the variables its `declare` section
+names are colored as declarations. Any other dollar quote is a string, and so
+are the lines of data that pg_dump writes after a `COPY … FROM stdin` statement,
+and a line that starts with `\` is a psql command. The structure tree lists each
+`create` statement, labeled with the kind of thing it creates and the name it
+declares, and each `alter table` statement, with the columns each defines, apart
+from one inside a MySQL executed comment that adds no columns.
 
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
