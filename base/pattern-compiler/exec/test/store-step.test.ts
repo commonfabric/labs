@@ -260,3 +260,89 @@ describe("the store step of a result that holds a tree", () => {
     expect(positionsPlaced).toBeLessThanOrEqual(8);
   });
 });
+
+// `fixtures/followed-rows.tsx`: the rows of a `map` over `items`, an array of
+// references in the argument, each following its item's link to the owner,
+// and each looking up what the facts say of its title. The facts read every
+// item and, through `*`, every note, which the argument holds beside the
+// items, so the record of each row names positions of the argument at
+// `notes/*/title`.
+describe("the records a change of labels reaches over rows that name the facts", () => {
+  const started = async (size: number) => {
+    const given = new Given();
+    const link = (doc: string) => ({ $link: { doc, path: [] } });
+    const instance = new Instance(
+      await artifactOf("followed-rows"),
+      {
+        items: Array.from(
+          { length: size },
+          (_, index) => link(`item-${index}`),
+        ),
+        notes: [{ title: "t0" }],
+        owner: link("owner"),
+      },
+      {
+        transactions: given,
+        documents: [
+          { id: "owner", kind: "external", value: { name: "Ada" } },
+          ...Array.from({ length: size }, (_, index) => ({
+            id: `item-${index}`,
+            kind: "external",
+            value: { title: `t${index}`, owner: link("owner") },
+          })),
+        ],
+      },
+    );
+    /**
+     * The records whose labels are formed again, and the sets of positions
+     * looked at, once `paths` of the argument changed their labels alone,
+     * with `consumes` saying whether a read of a path consumes another label.
+     */
+    const relabeled = (
+      paths: string[][],
+      consumes: (path: readonly string[]) => boolean,
+    ) => {
+      const records = given.records.length;
+      const readers = instance.counts.labelReaders;
+      given.labelsChanged?.([{
+        doc: instance.argument,
+        paths,
+        unchanged: (path) => !consumes(path),
+      }], true);
+      instance.batch();
+      return {
+        records: given.records.slice(records).sort(),
+        readers: instance.counts.labelReaders - readers,
+      };
+    };
+    return { relabeled };
+  };
+
+  it("forms no label again where a label changed at an appended item and no read consumes another", async () => {
+    const [small, large] = [
+      (await started(10)).relabeled([["items", "10"]], () => false),
+      (await started(100)).relabeled([["items", "100"]], () => false),
+    ];
+
+    expect(small.records).toEqual([]);
+    expect(large.records).toEqual([]);
+    expect(large.readers).toBe(small.readers);
+  });
+
+  it("forms again the labels of the records that read every note where a note's label changed", async () => {
+    const { relabeled } = await started(3);
+
+    const { records } = relabeled(
+      [["notes", "0", "title"]],
+      (path) => path.join("/") === "notes/*/title",
+    );
+
+    // The count, and the look-up of each row.
+    expect(records).toEqual([
+      "unchanged $UI/children/0/0/children/2/children/0",
+      "unchanged $UI/children/0/1/children/2/children/0",
+      "unchanged $UI/children/0/2/children/2/children/0",
+      "unchanged count",
+    ]);
+  });
+});

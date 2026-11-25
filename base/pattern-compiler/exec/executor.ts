@@ -1100,6 +1100,12 @@ const membersUnread = (schema: Schema | undefined): Schema =>
  */
 const CHILDREN_UNREAD: Schema = { items: {} };
 
+/**
+ * The classes a slot observes a stored position in, each of which consumes
+ * a label of its own there.
+ */
+const OBSERVED_CLASSES = ["value", "identity", "shape"] as const;
+
 /** Brings the instances of a side-writing cone up to date. */
 type Writer = (context: Context) => void;
 
@@ -1505,6 +1511,13 @@ export type Counts = {
    * executor was started with.
    */
   recordRegistrations: number;
+  /**
+   * The sets of positions of records that changes of labels reached, to
+   * find the records whose labels are formed again
+   * (`Instance.#recordsReading`), on the instance the executor was started
+   * with.
+   */
+  labelReaders: number;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -3717,6 +3730,7 @@ export class Instance {
     positionsPlaced: 0,
     recordsNoted: 0,
     recordRegistrations: 0,
+    labelReaders: 0,
   };
   readonly valueOfOutput = new Map<number, number>();
   readonly bodies = new Map<number, (...given: unknown[]) => unknown>();
@@ -12323,60 +12337,66 @@ export class Instance {
 
   /**
    * On the root: the keys of the records whose inputs read a position at,
-   * above or below a label entry of `changes`. A `*` in a path a record
-   * read stands for every element, and a `*` in a changed path for every
-   * position a record read there.
+   * above or below a label entry of `changes` that consumes another label
+   * than before, in a class a slot observes a position in
+   * (`LabelChange.unchanged`). Where the store cannot tell, and at a path
+   * that names every element, a read there counts as changed. A `*` in a
+   * path a record read stands for every element, and a `*` in a changed
+   * path for every position a record read there. A position elsewhere in
+   * the document consumes the label it consumed before, whatever path it
+   * names. The work is the positions at, above and below the changed paths
+   * that some record read, and the sets of positions that read one whose
+   * label changed: the records that read a position whose label stayed are
+   * not looked at.
    */
   #recordsReading(changes: readonly LabelChange[]): Set<string> {
     this.#flushReads();
     const sets = new Set<ReadSet>();
-    const collect = (node: RecordReaders) => {
-      for (const reader of node.readers) sets.add(reader);
-      for (const child of node.children.values()) collect(child);
-    };
-    const walk = (node: RecordReaders, rest: readonly string[]) => {
-      if (rest.length === 0) {
-        collect(node);
-        return;
-      }
-      for (const reader of node.readers) sets.add(reader);
-      const [segment, ...more] = rest;
-      if (segment === "*") {
-        for (const child of node.children.values()) walk(child, more);
-        return;
-      }
-      for (const name of [segment, "*"]) {
-        const child = node.children.get(name);
-        if (child !== undefined) walk(child, more);
-      }
-    };
-    for (const { doc, paths } of changes) {
+    for (const { doc, paths, unchanged } of changes) {
       const root = this.#recordReaders.get(doc);
       if (root === undefined) continue;
-      for (const path of paths) walk(root, path);
+      // Each position once, however many changed paths reach it.
+      const asked = new Set<RecordReaders>();
+      const consider = (node: RecordReaders, at: readonly string[]) => {
+        if (node.readers.size === 0 || asked.has(node)) return;
+        asked.add(node);
+        const changed = unchanged === undefined || at.includes("*") ||
+          OBSERVED_CLASSES.some((observes) => !unchanged(at, observes));
+        if (!changed) return;
+        for (const reader of node.readers) sets.add(reader);
+      };
+      const below = (node: RecordReaders, at: readonly string[]) => {
+        consider(node, at);
+        for (const [name, child] of node.children) below(child, [...at, name]);
+      };
+      const walk = (
+        node: RecordReaders,
+        at: readonly string[],
+        rest: readonly string[],
+      ) => {
+        if (rest.length === 0) {
+          below(node, at);
+          return;
+        }
+        consider(node, at);
+        const [segment, ...more] = rest;
+        if (segment === "*") {
+          for (const [name, child] of node.children) {
+            walk(child, [...at, name], more);
+          }
+          return;
+        }
+        for (const name of [segment, "*"]) {
+          const child = node.children.get(name);
+          if (child !== undefined) walk(child, [...at, name], more);
+        }
+      };
+      for (const path of paths) walk(root, [], path);
     }
+    this.counts.labelReaders += sets.size;
     const found = new Set<string>();
     for (const set of sets) for (const key of set.keys) found.add(key);
     return found;
-  }
-
-  /**
-   * On the root: whether a position of the set `read` consumes another
-   * label than before `changes`, in a class a slot observes a position in.
-   * It does where the store cannot tell (`LabelChange.unchanged`), and at a
-   * path that names every element.
-   */
-  #readsChangedLabel(read: ReadSet, changes: readonly LabelChange[]): boolean {
-    for (const { doc, unchanged } of changes) {
-      for (const position of read.positions.values()) {
-        if (position.doc !== doc) continue;
-        if (unchanged === undefined || position.path.includes("*")) return true;
-        for (const observes of ["value", "identity", "shape"]) {
-          if (!unchanged(position.path, observes)) return true;
-        }
-      }
-    }
-    return false;
   }
 
   /**
@@ -13188,7 +13208,7 @@ export class Instance {
     const labelsOf = (positions: readonly Address[]) => {
       const labels = new Set<string>();
       for (const { doc, path } of positions) {
-        for (const observes of ["value", "identity", "shape"]) {
+        for (const observes of OBSERVED_CLASSES) {
           const label = hooks?.labelOf?.(doc, path, observes);
           if (label === undefined) return undefined;
           labels.add(`${observes}:${label}`);
@@ -13589,24 +13609,9 @@ export class Instance {
     // The records whose bindings name a container with a group that the
     // change made or emptied.
     for (const key of this.#memberLabelsChanged(changes)) regrouped.add(key);
-    const reading = this.#recordsReading(changes);
     // A record whose own positions consume the labels they consumed before
-    // has the label it was given.
-    // The records that share a set of positions share the answer.
-    const answered = new Map<ReadSet, boolean>();
-    for (const key of [...reading]) {
-      const set = this.#readSetOf.get(key);
-      if (set === undefined) {
-        reading.delete(key);
-        continue;
-      }
-      let reads = answered.get(set);
-      if (reads === undefined) {
-        reads = this.#readsChangedLabel(set, changes);
-        answered.set(set, reads);
-      }
-      if (!reads) reading.delete(key);
-    }
+    // has the label it was given, and is not among these.
+    const reading = this.#recordsReading(changes);
     // The rows a body wrote are given their record again when the body
     // next runs, whatever they hold.
     for (const key of reading) {
