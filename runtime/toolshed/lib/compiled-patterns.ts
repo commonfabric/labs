@@ -3,10 +3,11 @@
  * patterns, behind the experimental option `compiledPatterns`
  * (`docs/development/EXPERIMENTAL_OPTIONS.md`).
  *
- * With the option on, each serving runtime the main-thread serving loop
- * creates is given the loader of compiled pieces
- * (`serveCompiledPieces()` of `runtime/runner/src/compiled/serving.ts`)
- * with one `PatternCompiler` for the process, which runs the binary of
+ * With the option on, each serving runtime the serving loop creates is
+ * given the loader of compiled pieces (`serveCompiledPieces()` of
+ * `runtime/runner/src/compiled/serving.ts`) with one `PatternCompiler` for
+ * the thread the loop runs on, the main thread or each serving worker
+ * (`lib/serving-worker.ts`), which runs the binary of
  * `base/pattern-compiler` that `PATTERN_COMPILER_BINARY` names, in a child
  * process. A toolshed that is started with the option on and no such file
  * does not start: the fault is one of its configuration, and a loader
@@ -70,7 +71,7 @@ export const compiledPatternsForServing = (
     );
   }
   const cacheDir = envGet(PATTERN_COMPILER_CACHE_DIR);
-  // One compiler for every serving runtime of the process, made with the
+  // One compiler for every serving runtime of the thread, made with the
   // first of them: a compile of a source that is under way is shared.
   let installing:
     | Promise<(runtime: Runtime) => void>

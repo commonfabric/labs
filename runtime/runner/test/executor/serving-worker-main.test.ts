@@ -4,6 +4,7 @@
  * it over the worker's own port.
  */
 
+import { toFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
@@ -24,6 +25,7 @@ const space = "did:key:z6MkServingWorkerMainSpace" as MemorySpace;
 
 describe("serveFromPort()", () => {
   let channel: MessageChannel;
+  let directory: string;
   let server: Server;
   let bridge: ServingPortBridge;
 
@@ -34,6 +36,7 @@ describe("serveFromPort()", () => {
   const serve = async (
     options?: ServingWorkerMainOptions,
     apiUrl: string = new URL(import.meta.url).href,
+    experimental?: ServingWorkerInit["experimental"],
   ): Promise<void> => {
     serveFromPort(channel.port1, options);
     const init: ServingWorkerInit = {
@@ -44,7 +47,7 @@ describe("serveFromPort()", () => {
       apiUrl,
       policy: undefined,
       ensureSpaceRoots: false,
-      experimental: undefined,
+      experimental,
       route: undefined,
       compileOnHost: undefined,
       compileCacheDir: undefined,
@@ -52,9 +55,11 @@ describe("serveFromPort()", () => {
     await bridge.init(init);
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     channel = new MessageChannel();
-    server = newSharedServer();
+    // A file store, which is the only one a serving worker's runtimes open.
+    directory = await Deno.makeTempDir({ prefix: "serving-worker-main-" });
+    server = newSharedServer({ store: toFileUrl(`${directory}/`) });
     bridge = new ServingPortBridge({ server, port: channel.port2 });
   });
 
@@ -64,6 +69,7 @@ describe("serveFromPort()", () => {
     channel.port1.close();
     channel.port2.close();
     await server.close();
+    await Deno.remove(directory, { recursive: true });
   });
 
   it("sends LLM calls to the toolshed that started it", async () => {
@@ -86,6 +92,36 @@ describe("serveFromPort()", () => {
       timings: [],
     });
     expect(asked).toEqual([[space, verb, identity.did()]]);
+  });
+
+  it("gives each serving runtime it creates what the entry decides from the init's experimental options", async () => {
+    const decided: unknown[] = [];
+    const setUp: unknown[] = [];
+    await serve(
+      {
+        setUpRuntimes: (experimental) => {
+          decided.push(experimental?.compiledPatterns);
+          return (runtime) => {
+            setUp.push(runtime.experimental.compiledPatterns);
+            return Promise.resolve();
+          };
+        },
+        // A verb activates the space, which creates its serving runtime.
+        runLifecycleVerb: (host, verbSpace) =>
+          host.runLifecycleVerb(verbSpace, {
+            name: "probe",
+            run: () => Promise.resolve({ receipt: setUp.length, timings: [] }),
+          }),
+      },
+      undefined,
+      { compiledPatterns: true },
+    );
+
+    expect(
+      await bridge.runLifecycleVerb(space, { name: "probe", request: {} }),
+    ).toEqual({ receipt: 1, timings: [] });
+    expect(decided).toEqual([true]);
+    expect(setUp).toEqual([true]);
   });
 
   it("refuses every lifecycle verb when the entry runs none", async () => {

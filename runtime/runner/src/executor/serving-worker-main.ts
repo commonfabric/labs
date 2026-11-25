@@ -24,7 +24,12 @@ import { threadId } from "@node/worker_threads";
 import { collectedMemory } from "../collected-memory.ts";
 import { openSharedCompileCache } from "../compilation-cache/shared-compile-cache.deno.ts";
 import type { ModuleCompileWorker } from "../harness/module-compile-worker.ts";
-import type { ModuleByteCache, RuntimeFetch } from "../runtime.ts";
+import type {
+  ExperimentalOptions,
+  ModuleByteCache,
+  Runtime,
+  RuntimeFetch,
+} from "../runtime.ts";
 import { ExecutorHost } from "./host.ts";
 import { webSocketRoute } from "./routed-plane.ts";
 import { servingLoopDiagnostics } from "./serving-loop-diagnostics.ts";
@@ -70,6 +75,17 @@ export type ServingWorkerMainOptions = {
    * fails at once.
    */
   moduleCompiler?: ModuleCompileWorker;
+
+  /**
+   * What each serving runtime this worker creates is given before it
+   * serves, decided once from the experimental options the init names: a
+   * toolshed gives each the loader of compiled pieces where
+   * `compiledPatterns` is on. Absent, or returning nothing, each runtime
+   * serves as the factory made it.
+   */
+  setUpRuntimes?: (
+    experimental: ExperimentalOptions | undefined,
+  ) => ((runtime: Runtime) => Promise<void>) | undefined;
 };
 
 /**
@@ -126,24 +142,30 @@ export function serveFromPort(
     const moduleCompiler = init.compileOnHost === true
       ? plane.compiler
       : ownCompiler;
+    const createServingRuntime = servingRuntimeFactory({
+      server: plane.loopback,
+      identity,
+      apiUrl: new URL(init.apiUrl),
+      clientBuild: options.clientBuild,
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      ...(init.experimental === undefined
+        ? {}
+        : { experimental: init.experimental }),
+      ...(moduleByteCache === undefined ? {} : { moduleByteCache }),
+      ...(shared === undefined ? {} : { compileClaims: shared.compileClaims }),
+      ...(moduleCompiler === undefined ? {} : { moduleCompiler }),
+    });
+    const setUpRuntime = options.setUpRuntimes?.(init.experimental);
     const host = new ExecutorHost({
       server: plane.server,
       serviceIdentity: identity.did(),
-      createRuntime: servingRuntimeFactory({
-        server: plane.loopback,
-        identity,
-        apiUrl: new URL(init.apiUrl),
-        clientBuild: options.clientBuild,
-        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-        ...(init.experimental === undefined
-          ? {}
-          : { experimental: init.experimental }),
-        ...(moduleByteCache === undefined ? {} : { moduleByteCache }),
-        ...(shared === undefined
-          ? {}
-          : { compileClaims: shared.compileClaims }),
-        ...(moduleCompiler === undefined ? {} : { moduleCompiler }),
-      }),
+      createRuntime: setUpRuntime === undefined
+        ? createServingRuntime
+        : async (space, context) => {
+          const made = await createServingRuntime(space, context);
+          await setUpRuntime(made.runtime);
+          return made;
+        },
       ...(init.policy === undefined ? {} : { policy: init.policy }),
       ...(init.ensureSpaceRoots === undefined
         ? {}

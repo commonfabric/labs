@@ -163,6 +163,29 @@ require_command "deno" \
 require_command "curl" \
     "Install curl so startup can verify that local dev servers reached HTTP 200."
 
+# With the experimental option `compiledPatterns` on, the toolshed's serving
+# runtimes compile the source of a compiled piece with the binary of
+# `base/pattern-compiler` that PATTERN_COMPILER_BINARY names, and a toolshed
+# with the option on and no binary there does not start. Where the variable
+# is unset, the release build of this checkout is built, which is quick once
+# it is current, so that the toolshed compiles with the crate the checkout
+# holds. What it emits is kept under the toolshed's disposable cache, which
+# `restart-local-dev.sh --clear-cache` clears.
+if [[ "${EXPERIMENTAL_COMPILED_PATTERNS:-}" == "true" ]]; then
+    if [[ -z "${PATTERN_COMPILER_BINARY:-}" ]]; then
+        require_command "cargo" \
+            "Install Rust, or set PATTERN_COMPILER_BINARY to a built pattern compiler, to start with EXPERIMENTAL_COMPILED_PATTERNS=true."
+        echo "Building the pattern compiler (cargo build --release in base/pattern-compiler)..."
+        if ! (cd "$SCRIPT_DIR/../base/pattern-compiler" && cargo build --release --quiet); then
+            echo "Error: the pattern compiler did not build." >&2
+            exit 1
+        fi
+        PATTERN_COMPILER_BINARY="$(cd "$SCRIPT_DIR/../base/pattern-compiler" && pwd)/target/release/pattern-compiler"
+    fi
+    PATTERN_COMPILER_CACHE_DIR=${PATTERN_COMPILER_CACHE_DIR:-"$(cd "$SCRIPT_DIR/../runtime/toolshed" && pwd)/cache/pattern-compiler"}
+    export PATTERN_COMPILER_BINARY PATTERN_COMPILER_CACHE_DIR
+fi
+
 KEEP_ALIVE=false
 if [[ -n "${CODEX_SANDBOX:-}" ]]; then
     KEEP_ALIVE=true
@@ -631,6 +654,9 @@ if [[ "$INSPECT" == "true" ]]; then
 fi
 if [[ "$PORT_OFFSET" -ne 0 ]]; then
     echo "  Offset:   $PORT_OFFSET"
+fi
+if [[ "${EXPERIMENTAL_COMPILED_PATTERNS:-}" == "true" ]]; then
+    echo "  Compiled patterns: on, compiled with $PATTERN_COMPILER_BINARY"
 fi
 if [[ "$CF_HARNESS" == "true" ]]; then
     echo "  Console:  http://127.0.0.1:$CONSOLE_PORT"

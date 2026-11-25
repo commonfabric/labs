@@ -15,7 +15,10 @@ import {
   type RuntimeFetch,
 } from "@commonfabric/runner";
 import { buildInfo, toolshedClientBuild } from "./build-info.ts";
-import { compiledPatternsForServing } from "./compiled-patterns.ts";
+import {
+  compiledPatternsForServing,
+  PATTERN_COMPILER_BINARY,
+} from "./compiled-patterns.ts";
 import { publishServingExperimentalOverrides } from "./experimental-posture.ts";
 import { serverExecutionEnabledFromEnv } from "./server-execution-flag.ts";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
@@ -625,7 +628,8 @@ export function startServerExecutionHost(options: {
   const experimental = experimentalOptionsWithFollowedPosture(envGet);
   // With the experimental option `compiledPatterns` on: what gives each
   // serving runtime the loader of compiled pieces, or a refusal to start
-  // where no binary of the compiler is configured. Nothing with it off.
+  // where no binary of the compiler is configured. Nothing with it off. The
+  // serving workers make their own from the same environment.
   const serveCompiled = compiledPatternsForServing(experimental, envGet);
   console.log(
     `Server-execution v2: serving loop ON (service ${options.identity.did()})`,
@@ -748,13 +752,13 @@ export function startServerExecutionHost(options: {
     );
     if (serveCompiled !== undefined) {
       console.log(
-        "Server-execution v2: EXPERIMENTAL_COMPILED_PATTERNS is on, and the " +
-          "serving loop runs in Workers, whose runtimes are given no pattern " +
-          "compiler yet: no compiled piece is served. " +
-          "SERVER_EXECUTION_WORKER=false serves them on the main thread.",
+        "Server-execution v2: EXPERIMENTAL_COMPILED_PATTERNS is on; each " +
+          "serving worker compiles compiled pieces with the binary " +
+          `${envGet(PATTERN_COMPILER_BINARY)}`,
       );
     }
-    // The workers' entry adds the lifecycle verbs and the self-directed fetch
+    // The workers' entry adds the lifecycle verbs, the self-directed fetch
+    // and, with `compiledPatterns` on, the loader of compiled pieces
     // (lib/serving-worker.ts); they compile in this process's compile workers
     // and share the host's cache.
     const worker = new ServingWorkerPool({
