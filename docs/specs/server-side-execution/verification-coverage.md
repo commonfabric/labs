@@ -5209,14 +5209,20 @@ supply; OW29/OW32/OW34 closed):
     `argument` link of a result document the session holds names
     (`trackedAndPieceKeysFromEntries` in `server-sync.ts`, read in
     `#buildSessionDemand`). The demand pass structure-loads a marked row
-    as it does a root (`SpaceServer`'s demand pass). A piece's result
+    as it does a root (`SpaceServer`'s demand pass), except a marked
+    `computed:` row, which it loads only while the row is also marked
+    `valueless`, the document holding no value, and no node of the serving
+    runtime writes it: a stopped piece's unwritten derivation, which starts
+    the piece until it has derived it and releases it again (serving-loop.md
+    §1, "A computed document a demand names"). A piece's result
     document is not marked, since it is what a link to the piece names: a
     read of a list of links is sent it and starts no listed piece. Nor is
     a document whose `result` names a handling's `receipt:`. Pinned by
     `patterns/integration/fabrichat-file-store-multi-runtime.test.ts` and
     `patterns/system/fabrichat/file-store.test.tsx` with server execution
     on, by `runtime/piece/test/served-handler-child.test.ts` for the list
-    reads that start nothing and the derived value that does, and by
+    reads that start nothing, the derived value that does, and the list
+    read that reaches a value each listed child left unwritten, and by
     `runtime/memory/test/v2-server-demand-set.test.ts` for the marking.
     A list read whose items are `asCell` is sent each listed piece's
     stream and derived documents as well, so it still starts each piece.

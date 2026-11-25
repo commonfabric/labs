@@ -167,6 +167,8 @@ async function startInputSources(
             { originFollowed: options.originFollowed }),
           ...(options?.forEvent !== undefined &&
             { forEvent: options.forEvent }),
+          ...(options?.forRead !== undefined &&
+            { forRead: options.forRead }),
           ...(options?.enclosingSourcesOnly !== undefined &&
             { enclosingSourcesOnly: options.enclosingSourcesOnly }),
           ...(required && { sourcesRequired: true, propagateErrors: true }),
@@ -689,6 +691,13 @@ export type EnsurePieceOptions = {
    * (`RunnerStartOptions.forEvent`).
    */
   forEvent?: boolean;
+
+  /**
+   * The walk answers a read of a value the owning piece has not written, so
+   * each piece it starts, the pieces its inputs come from included, is started
+   * as one (`RunnerStartOptions.forRead`).
+   */
+  forRead?: boolean;
 };
 
 /**
@@ -890,7 +899,10 @@ async function ensureVerdict(
 
       // Start the existing piece - this registers event handlers without
       // re-running setup and potentially allocating different metadata cells.
-      await runtime.start(resultCell, { forEvent: options?.forEvent });
+      await runtime.start(resultCell, {
+        forEvent: options?.forEvent,
+        forRead: options?.forRead,
+      });
 
       logger.debug("ensure-piece", () => [
         `Piece started successfully`,

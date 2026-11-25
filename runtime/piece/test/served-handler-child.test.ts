@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
+import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
 import type { DID, MemorySpace } from "@commonfabric/memory/interface";
 import {
@@ -226,7 +227,15 @@ describe("served-handler-child", () => {
     // A link to the child names its result document, which a read of the list
     // is sent whatever its schema. A read of each child's title is sent the
     // child's argument too, which holds an input rather than a value the child
-    // derives, and the title, which the handler wrote.
+    // derives, and the title, which the handler wrote. A read of the value each
+    // child derives is sent the child's `computed:` document, which holds no
+    // value until the child runs.
+
+    /** A read of each child's derived value. */
+    const UPPER_LIST_SCHEMA = {
+      type: "array",
+      items: { type: "object", properties: { upper: { type: "string" } } },
+    } as const;
 
     /**
      * Reads `children` under `schema`, and returns what the read found of the
@@ -260,6 +269,153 @@ describe("served-handler-child", () => {
       });
       expect(read).toEqual({ title: "first" });
       expect(running).toBe(false);
+    });
+
+    it("derives for a view read the value each child derives, and stops the child again", async () => {
+      // The child runs until it has written what the read reached, which the
+      // store then serves as it serves any value a stopped piece wrote.
+
+      const pieces = await clientPieces();
+      const children = await addChildUnread(pieces, "first");
+      const list = children.asSchema(UPPER_LIST_SCHEMA) as Cell<any>;
+      expect(await pullFromServer(pieces.runtime, list)).toBe(true);
+
+      expect(list.get()?.[0]).toEqual({ upper: "FIRST" });
+      await host.whenQuiescent();
+      const child = (children as Cell<any>).key(0).resolveAsCell();
+      expect(await runningOnServer(child.getAsNormalizedFullLink())).toBe(
+        false,
+      );
+    });
+
+    it("pushes a tracked read of the list the value each child derives, and stops the child again", async () => {
+      // A watch rather than a view: the sync answers with the document the
+      // child left unwritten, and the value arrives once the child that read
+      // starts has derived it. The watch goes on tracking the document, and
+      // the child stops all the same. The serving loop's timers keep the
+      // process from going quiet, so the wait carries a stuck net.
+
+      const pieces = await clientPieces();
+      const children = await addChildUnread(pieces, "first");
+      const list = children.asSchema(UPPER_LIST_SCHEMA) as Cell<any>;
+      const derived = Promise.withResolvers<void>();
+      const cancel = list.sink((value: any) => {
+        if (value?.[0]?.upper === "FIRST") derived.resolve();
+      });
+      await list.sync();
+      await withStuckNet(
+        derived.promise,
+        "the value the child derives for the tracked read",
+      );
+
+      expect(list.get()?.[0]).toEqual({ upper: "FIRST" });
+      await host.whenQuiescent();
+      const child = (children as Cell<any>).key(0).resolveAsCell();
+      expect(await runningOnServer(child.getAsNormalizedFullLink())).toBe(
+        false,
+      );
+      cancel();
+    });
+
+    it("loads no root for a read of the value a running child has not derived", async () => {
+      // A child a client demands at the commit keeps running, with its value
+      // not yet derived. A node of the child writes the document, so the read's
+      // demand of it has that node derive it, and the demand pass has no piece
+      // to start.
+
+      const pieces = await clientPieces();
+      const demanded = await host.runLifecycleVerb(space, {
+        name: "stub demand",
+        run: (runtime) =>
+          Promise.resolve(
+            stub(runtime.scheduler, "pieceHasDemandedWriter", () => true),
+          ),
+      });
+      let children: Cell<unknown>;
+      try {
+        children = await addChildUnread(pieces, "first");
+      } finally {
+        demanded.restore();
+      }
+      // Read on the serving runtime: a client resolving the child's value
+      // would watch its document as a root of its own.
+      const { child, upperId } = await host.runLifecycleVerb(space, {
+        name: "inspect",
+        run: async (runtime) => {
+          const list = runtime.getCellFromLink(
+            children.getAsNormalizedFullLink(),
+          ) as Cell<any>;
+          await list.sync();
+          const child = list.key(0).resolveAsCell();
+          await child.sync();
+          return {
+            child: child.getAsNormalizedFullLink(),
+            upperId: child.key("upper").resolveAsCell()
+              .getAsNormalizedFullLink().id,
+          };
+        },
+      });
+      expect(await runningOnServer(child)).toBe(true);
+      expect((await serving.server.readDocument(space, upperId))?.value)
+        .toBeUndefined();
+
+      const list = children.asSchema(UPPER_LIST_SCHEMA) as Cell<any>;
+      const derived = Promise.withResolvers<void>();
+      const cancel = list.sink((value: any) => {
+        if (value?.[0]?.upper === "FIRST") derived.resolve();
+      });
+      await list.sync();
+      await withStuckNet(
+        derived.promise,
+        "the value the running child derives for the read",
+      );
+
+      expect(
+        host.spaceServer(space)!.accessForTestingOnly.demandedRootIds.has(
+          upperId,
+        ),
+      ).toBe(false);
+      cancel();
+    });
+
+    it("leaves the child stopped for a read of the value it derived before it stopped", async () => {
+      // The store holds what the child derived, which the read is sent as it
+      // stands, as it is for any value a stopped piece wrote. The serving
+      // runtime derives it here, so that no client demand on the child is left
+      // to start it again.
+
+      const pieces = await clientPieces();
+      const children = await addChildUnread(pieces, "first");
+      const listLink = children.getAsNormalizedFullLink();
+      const { child, stopDeriving } = await host.runLifecycleVerb(space, {
+        name: "derive",
+        run: async (runtime) => {
+          const list = runtime.getCellFromLink(listLink) as Cell<any>;
+          await list.sync();
+          const child = list.key(0).resolveAsCell();
+          await runtime.start(child);
+          const cancel = child.key("upper").sink(() => {});
+          return {
+            child: child.getAsNormalizedFullLink(),
+            stopDeriving: () => {
+              cancel();
+              runtime.runner.stop(child);
+            },
+          };
+        },
+      });
+      await host.whenQuiescent();
+      await host.runLifecycleVerb(space, {
+        name: "stop",
+        run: () => Promise.resolve(stopDeriving()),
+      });
+      expect(await runningOnServer(child)).toBe(false);
+
+      const list = children.asSchema(UPPER_LIST_SCHEMA) as Cell<any>;
+      expect(await pullFromServer(pieces.runtime, list)).toBe(true);
+
+      expect(list.get()?.[0]).toEqual({ upper: "FIRST" });
+      expect(await runningOnServer(child)).toBe(false);
     });
   });
 

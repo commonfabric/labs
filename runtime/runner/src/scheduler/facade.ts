@@ -1678,6 +1678,19 @@ export class Scheduler {
   }
 
   /**
+   * Whether a node registered here writes the instance key
+   * `(space, id, scope)`, which `enterDemandedEntity()` would make a demand
+   * root: the piece the node belongs to is running.
+   */
+  hasWriterOf(
+    address: { space: MemorySpace; id: string; scope: CellScope },
+  ): boolean {
+    return (this.#writeIndex.writersByEntity.get(
+      entityNameKey(address as never),
+    )?.size ?? 0) > 0;
+  }
+
+  /**
    * Starts recording the pieces whose nodes change, for a serving loop that
    * keeps a currency index (serving-loop.md §3b).
    */

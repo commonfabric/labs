@@ -460,10 +460,15 @@ transaction commits the result is released (`#releaseServedHandlerResult` in
 any of its actions that ran. A demand for one of its values, or an event to one
 of its streams, starts the piece as either starts a piece on a fresh runtime.
 A session demands one of its values when it is sent a document the piece's
-setup wrote, other than its argument, which holds inputs current without it. A
-read that stops at a link to the piece is sent only its result document, and
-starts nothing (`carriesPieceMeta` in `runtime/memory/v2/server-sync.ts`). A
-piece whose document a client session tracks at that commit keeps running,
+setup wrote, other than its argument, which holds inputs current without it,
+and other than a `computed:` document that holds a value, which the store
+serves as it stands. A `computed:` document the piece has not written holds
+none, so a read that reaches one through a link starts the piece until it has
+derived it, and releases it again ("A computed document a demand names"
+below). A read that stops at
+a link to the piece is sent only its result document, and starts nothing
+(`carriesPieceMeta` in `runtime/memory/v2/server-sync.ts`). A piece whose
+document a client session tracks at that commit keeps running,
 because that session's demand has already made its attempt to load it. The result
 pattern's index entry goes with the release, and so do the watches of the
 documents only the stopped pieces read: the release asks for the pass a stop
@@ -536,7 +541,8 @@ second in a row gives up on everything stale upstream
 pinned in
 `runtime/runner/test/executor/space-server-currency-upstream.test.ts`.
 
-**A computed document a demand names.** *(RULED 2026-11-21.)* A `computed:`
+**A computed document a demand names.** *(RULED 2026-11-21; AMENDED
+2026-11-25.)* A `computed:`
 document holds what a derivation wrote, with a `result` back-link to the piece
 that derives it and no pattern pointer of its own. A demand that names one as
 a root, as a session's watch of it or a row carried from another space (§3b)
@@ -548,12 +554,42 @@ that demands it: the serving identity's own instance is not the one
 demanded, and the space may hold none. An instance that does not exist yet
 has no back-link to read, so a demand carried from another space brings the
 piece with it (§3b). A `computed:` document a session was
-only sent, because a document it names links to it, is no root. A session
-watching a piece is sent every document the piece derives, and the piece
-starts from the root that reached them. A `computed:` root that holds no
-back-link parks as any root that is no piece's does. Impl: `isComputedId()` and
-the demand pass in `runtime/runner/src/executor/space-server.ts`; pinned in
-`runtime/runner/test/executor/space-server-computed-root.test.ts`.
+only sent, because a document it names links to it, is no root while it holds
+a value or a node of the serving runtime writes it. One that holds a value is
+the store's to serve as it stands, whether or not its piece runs. One a node
+writes belongs to a running piece, and the session's demand of it has that node
+derive it: a session watching a piece is sent every document the piece derives,
+and the piece starts from the root that reached them. One that holds no value
+and that no node writes is a root. Its piece is stopped and has not written
+it, as a piece a handler started is once the loop releases it before it runs
+("A piece a handler starts" above), and only a run of the piece can answer the
+read. The memory server marks the session's row for such a document
+`valueless` (`trackedAndPieceKeysFromEntries()` in
+`runtime/memory/v2/server-sync.ts`), and the demand pass structure-loads the
+row's key as it does a root a demand names, so where the loop keeps a currency
+index the root is judged first ("A root the store can serve" above). The load
+starts each piece it starts as a read's start (`RunnerStartOptions.forRead`),
+and once the runtime is idle after the demand pass that started it, the piece
+has derived what the read reached and is released again
+(`Runner.releaseReadStart()`), with the store holding what it derived. The
+pieces one pass started for reads are released together, so the document
+release they ask for is one pass. A piece something else has asked for since,
+another root's load, an event, a run, or an enclosing pattern, keeps running,
+and so does the piece of a key that a demand other than a read has made a root
+since. The row loses the mark
+once the piece writes the document, and its key stops being a root. A
+derivation that produced `undefined` leaves its document holding no value, as
+one that never ran does, so a read that reaches such a document of a stopped
+piece starts the piece again, briefly, each time the document's key is newly
+demanded. A list read whose items are
+links to pieces, with a schema that reaches only what each piece stores or
+derived before it stopped, starts none of them. A `computed:` root that holds
+no back-link parks as any root that is no piece's does. Impl: `isComputedId()`,
+`#rowRootReason()` and `#releaseReadStarts()` in the demand pass in
+`runtime/runner/src/executor/space-server.ts`, and `Runner.releaseReadStart()`;
+pinned in `runtime/runner/test/executor/space-server-computed-root.test.ts`,
+`runtime/piece/test/served-handler-child.test.ts` and
+`runtime/runner/test/runner-event-starts.test.ts`.
 
 **A nested piece a demand reaches.** A demand that reaches a nested instance's
 values starts the instances that enclose it first, whether or not it reaches
