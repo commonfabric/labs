@@ -29527,7 +29527,7 @@ provisional decisions from P535.
       is compared by its message with today's refusal of the setup commit. A
       piece whose start was refused so is no `not-compiled` finding and no
       skipped module. Seen failing first: the case of `withheld` against the
-      comparison of `c0480ed24e^` and the case of a refused start against the
+      comparison of `a04632cb2c` and the case of a refused start against the
       harness before the change (`gate-withheld-before.log`,
       `gate-start-refused-before.log`).
 1177. **The 17 scenarios after the fix** (`d1-seventeen.out`, and the full run
@@ -29560,15 +29560,15 @@ provisional decisions from P535.
       type and no other label (`withPoliciesAlone` of `declared-policy.ts`), so
       the remaining difference is a stored label and is not changed here.
 1179. **A spread in a function body (fixed; P538).** `footprint.rs`
-      (`Analyzer::object`, `SpreadProperty`) recorded the argument of a spread
-      as a member passed on and no read of it, after `footprint-analysis.md`
-      §3.3 ("Neither form reads a child"). The executor hands a body an input it
-      reads for its identity alone as a handle (`Host.#invoke`,
-      `Instance.handleOf`), and the spread the body runs in JavaScript copies
-      the own members of the handle, which are none. So a `lift` or an authored
-      function that spreads an element lost every member: over an array of
-      references, over the result of a `filter` over one, of one element by
-      index, and of a record of the argument that is no element
+      (`Analyzer::object`, the arm `SpreadProperty`) recorded the argument of a
+      spread as a member passed on and no read of it, after
+      `footprint-analysis.md` §3.3 ("Neither form reads a child"). The executor
+      hands a body an input it reads for its identity alone as a handle
+      (`Host.#invoke`, `Instance.handleOf`), and the spread the body runs in
+      JavaScript copies the own members of the handle, which are none. So a
+      `lift` or an authored function that spreads an element lost every member:
+      over an array of references, over the result of a `filter` over one, of
+      one element by index, and of a record of the argument that is no element
       (`{ ...extra, title: item.title }`), with a member before the spread, one
       behind it, or neither. Over an array of plain values in place and over the
       result of a `map` that builds its rows the body was handed the values and
@@ -29612,12 +29612,20 @@ These are the coordinator's and none is an owner ruling.
 - P535: the first start of a piece from a stored argument completes the argument
   document as its creation does (defaults, seeds, the policies of the argument
   type), in the transaction of the start, which acts for no principal.
-  Classified under `docs/development/cfc-spec-correspondence.md` as a host
-  arrangement: it calls `recordRelevantSchemaWritePolicyInput`,
+  Classified under `docs/development/cfc-spec-correspondence.md` without access
+  to the specification. It changes no file the procedure governs and no rule of
+  the commit preparation: it calls `recordRelevantSchemaWritePolicyInput`,
   `recordNewDocumentProtectedDefaults` and the attempted-write mark, which the
-  creation of an argument document and a handler's write already call, and adds
-  no rule to the commit preparation. It makes the compiled path refuse what it
-  committed.
+  creation of an argument document and a handler's write call. Recording the
+  schema and the marks is a host arrangement of the adapter. The seed is the
+  part the cited sentence does not state: CFC §8.15.4, as
+  `compiled/initialization.ts` quotes it, has the seed commit with the cell it
+  is of ("The value, its schema, and its label envelope commit together"), and
+  here the client's commit made the document and a later transaction of the
+  serving runtime installs the default in a field that was absent. Until a
+  reader of the specification confirms it, that part is a semantic gap. It makes
+  the compiled path refuse what it committed, and stores no label but the
+  policies.
 - P536: a value a stored argument supplies under a policy is held to the policy
   at the start, as today's setup holds the client's write, and a refused start
   stores the refusal as the reason. A semantic question it leaves: the client's
