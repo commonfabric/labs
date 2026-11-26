@@ -90,9 +90,14 @@ carries no authority either, and lowers nothing.
 
 A reviewed skill entry is a §4.8.2 trust statement:
 
-- `concrete` names exact bytes by digest: the pin
-  (`owner/repo/slug@<commit sha>`) and one digest for every file a run can load
-  from the bundle, which means `SKILL.md`, every resource and every script;
+- `concrete` names exact bytes by digest. The entry lists every file a run can
+  load from the bundle (`SKILL.md`, every resource, every script) with its
+  digest, keyed by its path relative to the bundle root. The `concrete` is the
+  digest of that sorted list, so the bundle is reviewed as a whole and an old
+  `SKILL.md` cannot be paired with a new resource. The entry also names the pin
+  (`owner/repo/slug@<commit sha>`), which must match too: the digests are the
+  identity and the pin is where the bytes live, so the same bytes under another
+  repository fail closed;
 - `implements` is `https://commonfabric.org/cfc/concepts/prompt-injection-free`,
   a concept §4.8.1 already lists;
 - `verifier` is the organization whose reviewed set holds the entry.
@@ -104,6 +109,24 @@ statements, kept wherever connectors live: a default set, plus organizations a
 person adds. Adding one is a potentially dangerous action, and the UI treats it
 as one (question 3). The runtime checks no signatures, so in practice the
 organization's branch protection is the signing key.
+
+Revocation and expiry belong to the set, not to new fields on the entry.
+Revoking an entry is a new commit of the set that drops it or lists it in the
+set's revocation file, as for connectors. Expiry is §4.8.2's optional
+`scope.validUntil`. Both are checked when the child starts and again at each
+file load. A failure fails closed with the generic "not accepted" status of
+§18.3.2. `CfcTrustStatement` in `trust.ts` has no `scope` yet, so it gains
+`validUntil`, an existing spec field.
+
+Every listed file is fetched from the pinned commit at acquisition. Only putting
+a resource into the model's context is lazy. Each load re-checks that file's
+digest, and a path the entry does not list is refused. Acquisition today admits
+only `SKILL.md` and `scripts/<name>` and refuses symlinks and nested directories
+(`isAdmittedScript`). Admitting resources reuses that rule.
+
+The frontmatter, `allowed-tools` included, is not part of what the entry
+vouches for beyond its bytes. It stays free-form labeled data (primitives §2).
+A child's tools come from what its parent hands it.
 
 Connector trust and skill trust share the closure but not the claim. A connector
 statement vouches for provenance (§5.6.3's `TrustedProvider ⊓ AuthoredBy`). A
@@ -129,11 +152,33 @@ boundary mints evidence for two exchange rules:
    disclosure/acknowledgment/disclaimer/assessment evidence that binds the same
    `kind`, `source`, and sink context". Without evidence here, a reviewed skill
    would need the person's acknowledgment for every routing field it steers,
-   like an unreviewed one. The atom that fits is
-   `CaveatAssessment{kind: prompt-influence, source: s, assessor, evidenceDigest,
-   result: "supported"}`, minted from the review. Sink policy decides where it
-   accepts a reviewer's assessment. That use is a question for Berni, because
-   the spec frames an assessment as a verifier's judgment about one output.
+   like an unreviewed one. The atom that fits is a `CaveatAssessment` minted
+   from the review, binding:
+   - `kind`: prompt-influence;
+   - `source`: the source-entry reference of the reviewed bytes;
+   - `assessor`: the statement's verifier;
+   - `evidenceDigest`: the digest of the entry and its file list;
+   - `sink`: the sinks the entry declares;
+   - `result`: `supported`;
+   - the time of the set commit.
+
+   It carries no `intentId`, because it is minted at source entry, before any
+   intent exists. Whether an assessment minted from a review, rather than from
+   one output, is admissible is a question for Berni.
+
+   The clearing is scoped by kind of field, following §8.10.5.2, under which
+   evidence sufficient for one sink class "MUST NOT be treated as sufficient for
+   routing-sensitive or public-release fields unless the policy explicitly says
+   so":
+   - content fields, at action and display sinks;
+   - routing fields, only at the sinks the entry declares;
+   - never for a public audience.
+
+   It is also scoped by source. An argument that an email also steered keeps
+   the email's clause, so the review never launders what the skill reads.
+
+One concept covers both jobs. Accepting a set for `prompt-injection-free`
+mints both the screening evidence and the assessment.
 
 Both are value-bound or source-bound. They never cover a summary of the skill,
 a script's output, a fetched page, or anything else whose `source` is not the
@@ -147,9 +192,22 @@ intents handed to it.
 ### 2.2 What a review must check
 
 Bytes are not behavior. Prose that tells the agent to fetch something and do
-what it says fails review: its bytes are clean, and the behavior they delegate
-is set by data. Scripts are code, so reviewing them is a different claim
-(section 4). A file of the bundle the entry does not list is unreviewed.
+what it says has clean bytes, and the behavior it delegates is set by data. The
+set's repository therefore keeps a versioned checklist, and each entry cites the
+version it was reviewed against in §4.8.2 `scope.conditions`. The prose fails
+review if it:
+
+1. tells the agent to fetch something and follow what it says;
+2. tells it to bypass checks, handle credentials, or contact destinations
+   unrelated to the skill's purpose;
+3. hides text, such as HTML comments, zero-width characters or encoded blobs;
+4. steers toward a tool or destination it does not name, or one that does not
+   fit its purpose (the routing scope in section 2.1 relies on this);
+5. refers to a file the entry does not list.
+
+Scripts are code, so what they do is a separate claim (section 4). Their bytes
+are still in the list, because the prose's meaning depends on the scripts it
+names, and swapping a script voids the review.
 
 ## 3. The interim: a reviewed child keeps its binding
 
@@ -215,14 +273,28 @@ Each piece becomes part of the hardened design:
 A script is code, and the review of a script is a claim about what it does, not
 about injection.
 
-- **A sealed run is a `read`, reviewed or not.** _Sealed_ means no network, a
-  fresh session, no fabric mount, a sandbox target and never the host, a fresh
-  scratch working directory for each call, and the run's workspace either
-  absent or read-only. Every channel out is then off or a labeled write to
-  scratch that dies with the call (§18.2.3). `commitEffect` exists only for "an
-  externally visible side effect" (§14.2.2), so the run is an untrusted
-  transition (question 7). It reads the skill's files, so its class is `read`.
-  The harness has no `pure` class and needs none.
+- **A sealed run is a `read`, reviewed or not.** _Sealed_ means:
+  - no network interface at all, rather than an egress policy, which also
+    closes the DNS hole (top/3594);
+  - a fresh session, and a fresh scratch working directory for each call;
+  - no fabric mount, and the run's workspace either absent or read-only;
+  - a sandbox target, never the host (acquired scripts are already refused on
+    the host);
+  - an environment cleared down to the declared arguments
+    (`createClearedHostProcessEnv` exists);
+  - argv, stdin and the working directory labeled as inputs
+    (`cfcInputLabelPaths` exists);
+  - the measured image digest on the invocation record (§18.2.2, §18.2.4.1),
+    and the script digest re-checked, as it already is;
+  - only stdout and stderr returned, still tainted.
+
+  Every channel out is then off or a labeled write to scratch that dies with
+  the call (§18.2.3). `commitEffect` exists only for "an externally visible side
+  effect" (§14.2.2), so the run is an untrusted transition (question 7). It
+  reads the skill's files, so its class is `read`. The harness has no `pure`
+  class and needs none. The class is computed from the resolved sandbox profile,
+  `read` when sealed and `side-effect` otherwise, and never declared. Scripts
+  the operator runs on the host stay `side-effect`.
 - **Today no run is sealed.** Egress is on by default, DNS is exempt
   (top/3594), a host target exists, and the default working directory is the
   persistent workspace, so a script's writes outlive the call. That is why
@@ -265,7 +337,7 @@ same for the parent run.
 | 1    | Reviewed-set entries as trust statements, and a delegation for each accepted set               | Partly. `trust.ts` has statements with pattern concretes, delegations and the closure, as deployment config. Per-person acceptance is question 3. |
 | 2    | A digest of the served bytes to match against                                                  | Yes: `acquire_skill`'s `valueDigest`, the external-ingest stamp, `run_skill_script`'s digest check.                                               |
 | 3    | The lowering predicate consults the closure; the manifest records the evidence; uncovered files refused | No. The `childPromptSlotBinding` computation in `prompt-loop.ts`, plus the resource and script tools.                                     |
-| 4    | Sealed `run_skill_script`, classed `read`; the literal `"side-effect"` replaced                | No. Independent of review, and it gives a lowered child something to do.                                                                         |
+| 4    | Sealed `run_skill_script`, classed `read`; the literal `"side-effect"` replaced                | No. Independent of review; built after steps 1 to 3 or alongside them. It lets a lowered child run scripts under `enforce-explicit` only: under the default `enforce-strict`, even a `read` needs `direct-command`. |
 | 5    | Source entry assigns prompt caveats to fetched text and script output; then the review mints `CaveatScreened` and `CaveatAssessment`, and the tier rules check `detector` | No (cleanup 4, top/1892). The tier rules in `standard-profile.ts` ignore `detector` today. |
 | 6    | Per-call authority: `PromptSlotInfluence` on invocation records, argument labels, `IntentOnce` | No (H9 / CT-2175). This deletes the lowering.                                                                                                     |
 | 7    | Script descriptors, registry snapshots, `ToolDescriptorBound`, the sink check                  | No (cleanups 5 and 6).                                                                                                                            |
@@ -279,20 +351,30 @@ These are provisional until Berni reviews the package, like the bridge plan's.
 1. **The interim.** A child whose skill is fully covered by an accepted review
    keeps the delegating run's binding, and the skill's text stays `quote`.
    Decided 2026-11-26.
-2. **The entry.** A reviewed skill is a trust statement in a reviewed set: the
-   pin, a digest for every bundle file, the concept `prompt-injection-free`,
-   and the organization as verifier. It sits beside connector entries, and there
-   is no separate skill registry.
-3. **What a review vouches for.** Should an accepted review also clear the
-   skill's steering at sinks (section 2.1, job 2), or only its injection risk?
-   Without the first, reviewed skills need an acknowledgment for every routing
-   field once sinks check influence.
-4. **Sealed scripts.** A sealed run is a `read` whether or not it was reviewed,
-   so step 4 serves unreviewed skills as well. Build it separately from the
-   review?
-5. **A Topic for the one-hop margin.** A lowered child's report returns to a
-   parent that ignores what it observes, so lowering is not a boundary, for
-   unreviewed skills too. File it?
+2. **The entry.** A reviewed skill is a trust statement in a reviewed set, beside
+   connector entries, with no separate skill registry. Decided 2026-11-26:
+   1. a digest per file, keyed by bundle-relative path, and the digest of that
+      sorted list as the `concrete`;
+   2. the pin required, and matched as well as the digests;
+   3. every listed file fetched at acquisition, each load re-checked, and
+      unlisted paths refused;
+   4. revocation and expiry kept in the set, with `validUntil` added to the
+      runtime's trust statements;
+   5. script bytes in the list, and what a script does claimed separately by a
+      tool descriptor in the same set file;
+   6. a versioned review checklist in the set's repository, cited from each
+      entry;
+   7. frontmatter and `allowed-tools` left as free-form labeled data.
+3. **What a review vouches for.** An accepted review clears the skill's own
+   injection risk and its steering. Steering is cleared for content fields, for
+   routing fields only at the sinks the entry declares, never for a public
+   audience, and only for the skill's own source. One concept covers both.
+   Decided 2026-11-26.
+4. **Sealed scripts.** Built as a separate track, after steps 1 to 3 or
+   alongside them, for reviewed and unreviewed skills alike. The effect class is
+   computed from the sandbox profile, never declared. Decided 2026-11-26.
+5. **The one-hop margin.** Filed as top/3722: a lowered child's report returns
+   to a parent that ignores what it observes, so lowering is not a boundary.
 
 ## For Berni
 
@@ -305,7 +387,8 @@ These are provisional until Berni reviews the package, like the bridge plan's.
    `spawnSubagent`: every call of a run the slot seeded, or something narrower?
 3. **A trust statement over text.** May a trust statement's `concrete` be a
    content digest of text rather than code, with `implements:
-   prompt-injection-free`? May accepting it mint value-stage `CaveatScreened`
+   prompt-injection-free`, and what atom type names it? `CodeHash` is defined
+   for code. May accepting it mint value-stage `CaveatScreened`
    for text that is instructions by design? §14.1.3 defines material risk as
    "attacker-provided instruction-like content", and the registry defines
    `InjectionSafe` as "instruction-inert", so the spec answers two ways. This is
