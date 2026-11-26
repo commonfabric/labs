@@ -367,6 +367,10 @@ a record: archive it to `docs/history/plans/` following the procedure in
   lists the checks the compiled path has to pass before its option is turned
   on for users, in eight groups, with where each stands and the order of
   work.
+- [Derivation by demand on the compiled path](compiled-pattern-derivation-by-demand.md)
+  is a design, not yet ruled on, that derives a compiled piece's shared part
+  once and each session's part only where a client watches it, with the label
+  rules that follow, six questions for the owner and seven rounds of work.
 
 ## Concepts not planned for deployment
 
