@@ -2802,15 +2802,29 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     }
                 }
                 ObjectPropertyKind::SpreadProperty(spread) => {
-                    // A spread reads no child (FA §3.3). The record gains
-                    // the projection the spread value has for each
-                    // property.
+                    // The record gains the projection the spread value
+                    // has for each property. A body runs the spread in
+                    // JavaScript, which copies each own member of what
+                    // the body is handed: a record the body is handed by
+                    // reference alone has no member to copy, so the
+                    // spread of an input that is a record or has no type
+                    // reads the input as a value. A handle, a reference
+                    // and a factory are spread as they are.
                     let val = self.eval(&spread.argument);
                     let kinds = self.kinds(&spread.argument);
                     if kinds.open {
                         self.observe(&val, Class::Enumeration);
                     } else if kinds.nullable && val.has_projection() {
                         self.observe(&val, Class::Shape);
+                    }
+                    if val.has_projection()
+                        && (kinds.untyped
+                            || (kinds.container
+                                && !kinds.handle
+                                && !kinds.reference
+                                && !kinds.factory))
+                    {
+                        self.observe(&val, Class::Value);
                     }
                     match &val {
                         Val::Built(inner) => {

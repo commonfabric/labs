@@ -198,6 +198,28 @@ fn value_stored_in_a_local_container_and_read_back_does_not_widen() {
 // ----- §3.8: what leaves the body -----
 
 #[test]
+fn spread_of_an_input_record_into_an_object_literal_reads_the_record_as_a_value() {
+    // A body runs the spread in JavaScript, which copies the members of
+    // what the body is handed.
+    assert_eq!(
+        reads("function f(rows: Donut[]) { return rows.map((row) => ({ ...row, glaze: \"plain\" })); }\n"),
+        ["rows : enumeration", "rows/* : value"]
+    );
+    assert_eq!(
+        reads("function f(donut: Donut, extra: { box: number }) { return { ...extra, name: donut.name }; }\n"),
+        ["donut.name : value", "extra : value"]
+    );
+}
+
+#[test]
+fn spread_of_a_handle_into_an_object_literal_reads_no_value() {
+    assert_eq!(
+        reads("function f(donut: Cell<Donut>) { return { ...donut }; }\n"),
+        ["donut : identity"]
+    );
+}
+
+#[test]
 fn record_moved_from_one_list_to_another_is_not_read() {
     // "a body that moves a record from one list to another does not read
     // the record".

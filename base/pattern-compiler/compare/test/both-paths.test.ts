@@ -51,16 +51,32 @@ const OPEN: Record<string, string[]> = {
     "step 2 flow",
     "step 3 flow",
   ],
-  // A `lift` whose body spreads an element of an array of references
-  // (`spreadOf`) stores `{}` on the compiled path: the crate's footprint
-  // reads a spread as the identity of its argument (`footprint.rs`,
-  // `SpreadProperty`), so the body is handed a reference stand-in, and
-  // the spread of it gives no member (`values`). The atom that names what
-  // transformed a member differs by construction, as for
+  // An item whose title holds its first value, the empty string, reads
+  // with no `title` on the compiled path until a handler writes the title,
+  // and so does each output that holds the item (`values`). The atom that
+  // names what transformed a member differs by construction, as for
   // `fixtures/get-iterated` (`flow`). Every other output stores what
-  // today's path stores, a link where the body returned an element it
-  // read through a link unchanged (note 1122).
+  // today's path stores: a link where the body returned an element it
+  // read through a link unchanged (note 1122), and the members of the
+  // element where the body spread it.
   "fixtures/returned-links": [
+    "start 0 values",
+    "start 1 values",
+    "start 2 values",
+    "start 2 flow",
+    "step 0 values",
+    "step 0 flow",
+    "step 1 flow",
+  ],
+  // A body that spreads an element of the result of a `filter` over an
+  // array of references (`ofFilter`) copies every member the element's
+  // document holds on the compiled path, the stream `name` among them, and
+  // on today's path the members the body's type declares (`values`, at
+  // every checkpoint from the start of the pattern on). The other
+  // differences are those of `fixtures/returned-links`: an item's title
+  // that holds its first value, and the atom that names what transformed
+  // a member.
+  "fixtures/spread-element": [
     "start 0 values",
     "start 1 values",
     "start 2 values",

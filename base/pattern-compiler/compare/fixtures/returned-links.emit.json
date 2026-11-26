@@ -356,7 +356,7 @@
                     "items",
                     "*"
                   ],
-                  "slot": 1
+                  "slot": 7
                 }
               ],
               "widenings": [],
@@ -384,7 +384,7 @@
                     "*",
                     "title"
                   ],
-                  "slot": 7
+                  "slot": 8
                 }
               ],
               "widenings": [],
@@ -412,7 +412,7 @@
                     "*",
                     "title"
                   ],
-                  "slot": 7
+                  "slot": 8
                 }
               ],
               "widenings": [],
@@ -562,7 +562,7 @@
               "selectors": [],
               "slots": [
                 0,
-                1
+                7
               ],
               "within": [],
               "writes": []
@@ -580,7 +580,7 @@
               "selectors": [],
               "slots": [
                 0,
-                7
+                8
               ],
               "within": [],
               "writes": []
@@ -598,7 +598,7 @@
               "selectors": [],
               "slots": [
                 0,
-                7
+                8
               ],
               "within": [],
               "writes": []
@@ -791,7 +791,7 @@
                   },
                   {
                     "op": "slot",
-                    "slot": 1
+                    "slot": 7
                   }
                 ],
                 "op": "derive"
@@ -815,7 +815,7 @@
                   },
                   {
                     "op": "slot",
-                    "slot": 7
+                    "slot": 8
                   }
                 ],
                 "op": "derive"
@@ -839,7 +839,7 @@
                   },
                   {
                     "op": "slot",
-                    "slot": 7
+                    "slot": 8
                   }
                 ],
                 "op": "derive"
@@ -919,6 +919,17 @@
             {
               "inPlace": true,
               "observes": "shape",
+              "path": [
+                "items",
+                "*"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
               "path": [
                 "items",
                 "*"

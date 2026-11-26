@@ -343,4 +343,35 @@ export const SCENARIOS: Scenario[] = [
       as: "alice",
     })),
   },
+  {
+    // Object literals with a spread (`fixtures/spread-element.tsx`), in
+    // function bodies and in the reactive tier: of an element of an array
+    // of references (`items`, two pieces of their own), of an array of
+    // plain values in place (`rows`), of the result of a `filter` and of a
+    // `map`, and of a record that is no element (`extra`).
+    name: "fixtures/spread-element",
+    pieces: [
+      ...["first", "second"].map((name) => ({
+        name,
+        module: "base/pattern-compiler/compare/fixtures/returned-item.tsx",
+        as: "alice",
+      })),
+      {
+        name: "spread",
+        module: "base/pattern-compiler/compare/fixtures/spread-element.tsx",
+        argument: ({ first, second }) => ({
+          items: [first, second],
+          rows: [{ title: "r", done: false, note: "n" }, { title: "s" }],
+          extra: { tag: "t", done: false },
+        }),
+        as: "alice",
+      },
+    ],
+    steps: ["first", "second"].map((piece) => ({
+      piece,
+      stream: "name",
+      event: { title: `the ${piece}` },
+      as: "alice",
+    })),
+  },
 ];
