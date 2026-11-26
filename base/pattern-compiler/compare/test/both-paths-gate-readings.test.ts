@@ -599,8 +599,21 @@ describe("the two-principal gate's readings", () => {
         "main.tsx:40:3: error [unsupported] A spread of a cell is not supported",
       ].join("\n");
 
+      const unparsed = [
+        "The pattern compiler refused the program:",
+        "data/words.txt: the module does not parse",
+        "  `data/words.txt` is not a `.ts` or `.tsx` file",
+        "main.tsx:1558:20: warning [removed-form:helper] `ifElse(...)` is a removed form.",
+      ].join("\n");
+
       expect(serving.firstErrorOf(message)).toBe(
         "The pattern compiler refused the program: main.tsx:40:3: error [unsupported] A spread of a cell is not supported",
+      );
+      expect(serving.firstErrorOf(unparsed)).toBe(
+        "The pattern compiler refused the program: data/words.txt: the module does not parse",
+      );
+      expect(serving.firstErrorOf("table is not a function")).toBe(
+        "table is not a function",
       );
     });
   });

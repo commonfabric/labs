@@ -7,7 +7,10 @@
  * Text a principal's own scope holds is listed in `scoped`, so that the
  * derived check (b) looks for it where the other principal reads. A step
  * whose handler writes such text into a document of the space on purpose
- * says so in `shares`.
+ * says so in `shares`. The principals' scoped values differ in length, and
+ * the fixtures derive a count and a predicate from them (`size`, `long`),
+ * listed in `derived` with what each principal's inputs produce, so that
+ * check (b) can find a derived value that holds no scoped text.
  */
 import { type GateScenario, PROFILE_NAMES } from "./both-paths-serving.ts";
 

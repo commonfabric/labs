@@ -1,4 +1,8 @@
 {
+  "fullRun": {
+    "scenarios": 419,
+    "ran": 276
+  },
   "entries": [
     {
       "scenario": "*",

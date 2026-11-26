@@ -1001,6 +1001,31 @@ export type Compared = {
   flow: FlowCounts;
   /** How many passes of reads each checkpoint took, on each path. */
   passes: { at: string; today?: number; compiled?: number }[];
+  /**
+   * At the last checkpoint, the documents no walk reached on each path:
+   * how many were matched with one of the other path, and the rest by
+   * their kind (`unmatchedKind`).
+   */
+  unreached: Record<
+    "today" | "compiled",
+    { matched: number; unmatched: Record<string, number> }
+  >;
+};
+
+/** The kind of a document no walk reached and no name matched. */
+const unmatchedKind = (document: StoredDocument, run: PathRun): string => {
+  const scope = scopeName(document, run);
+  const id = document.id;
+  const kind = id.startsWith("receipt:")
+    ? "receipt"
+    : isSidecar(document)
+    ? "stream sidecar"
+    : id === "of:server-execution-watermark"
+    ? "watermark"
+    : id.startsWith("cid:")
+    ? "content (schema, label, source)"
+    : "other";
+  return `${scope} ${kind}`;
 };
 
 /** Compares the labels of `la` and `lb`, held at `position`. */
@@ -1101,6 +1126,10 @@ export const compareRuns = (
   }
   const written: Compared["written"] = [];
   const passes: Compared["passes"] = [];
+  const unreachedCounts: Compared["unreached"] = {
+    today: { matched: 0, unmatched: {} },
+    compiled: { matched: 0, unmatched: {} },
+  };
   const firstSeen = new Set<string>();
   const once = (key: string, finding: Omit<Finding, "scenario">) => {
     if (firstSeen.has(key)) return;
@@ -1278,6 +1307,22 @@ export const compareRuns = (
     }
     const poolsA = poolCounts(today, pa, matchedA);
     const poolsB = poolCounts(compiled, pb, matchedB);
+    if (index === count - 1) {
+      for (
+        const [path, run, walked, matched] of [
+          ["today", today, pa, matchedA],
+          ["compiled", compiled, pb, matchedB],
+        ] as const
+      ) {
+        const counts = unreachedCounts[path];
+        counts.matched = matched.size;
+        for (const document of walked.unreached) {
+          if (matched.has(document)) continue;
+          const kind = unmatchedKind(document, run);
+          counts.unmatched[kind] = (counts.unmatched[kind] ?? 0) + 1;
+        }
+      }
+    }
     for (const pool of sorted([...poolsA.keys(), ...poolsB.keys()])) {
       const ca = poolsA.get(pool) ?? new Map();
       const cb = poolsB.get(pool) ?? new Map();
@@ -1393,6 +1438,7 @@ export const compareRuns = (
     },
     flow,
     passes,
+    unreached: unreachedCounts,
   };
 };
 
@@ -1505,6 +1551,7 @@ export type ScenarioResult = {
   errors?: Compared["errors"];
   flow?: FlowCounts;
   passes?: Compared["passes"];
+  unreached?: Compared["unreached"];
   /** Whether each piece ran as a compiled piece on the compiled path. */
   compiled?: Record<string, boolean>;
   /** Events a client could not send, for a scenario of the corpus. */
@@ -1618,6 +1665,7 @@ export const runScenario = async (
     errors: compared.errors,
     flow: compared.flow,
     passes: compared.passes,
+    unreached: compared.unreached,
     compiled: compiled.compiled,
     ms,
     runs,

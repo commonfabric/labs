@@ -43,7 +43,14 @@
  *   `runtime/runtime-client`), under the display ceiling the shell gives a
  *   user (`defaultDisplayCeiling`): a value, or `hidden by policy` where the
  *   gate refuses it. A link in the value is read the same way, two links
- *   deep.
+ *   deep. A read can demand more of a piece, so a checkpoint reads in
+ *   passes (`readUntilStill`): each pass reads every member for both
+ *   principals and waits for the serving loop, the server and every
+ *   client's scheduler and storage to be idle, until a pass writes no
+ *   document of any of the run's spaces; the reads of that pass are the
+ *   checkpoint's. A pass that writes the same documents an earlier pass of
+ *   the checkpoint wrote ends the passes, with those documents as
+ *   `unsettled`.
  * - **The homes.** Each principal has a home space whose root lists a
  *   profile of its own, under a schema whose confidentiality is the
  *   principal's `User` atom (`seedHome` of `wish-home.ts`), so that
@@ -463,18 +470,23 @@ const gateOf = (
 };
 
 /**
- * The first error of a message the serving compiler gives, where its lines
- * hold one (`<file>:<line>:<col>: error ...`), and its first line where they
- * do not: a refusal lists the warnings of a module before its errors.
+ * The first error of a message the serving compiler gives, after the
+ * message's first line: the first diagnostic that is not a warning (a line
+ * that is not indented and is not `<file>:<line>:<col>: warning ...`, such
+ * as `... error [...]` or `<file>: the module does not parse`). A refusal
+ * lists the warnings of a module before its errors, so the first lines of
+ * one can hold no error. A message with no such line gives its first line.
  */
 export const firstErrorOf = (message: string): string => {
-  const lines = message.split("\n").map((line) => line.trim()).filter((
-    line,
-  ) => line !== "");
-  const error = lines.find((line) => /(^|: )error(\b|\[| )/.test(line));
-  const first = lines[0] ?? "";
-  return (error === undefined || error === first ? first : `${first} ${error}`)
-    .slice(0, 600);
+  const lines = message.split("\n").filter((line) => line.trim() !== "");
+  const first = (lines[0] ?? "").trim();
+  const error = lines.slice(1).find((line) =>
+    !/^\s/.test(line) && !/: warning\b/.test(line)
+  );
+  return (error === undefined ? first : `${first} ${error.trim()}`).slice(
+    0,
+    600,
+  );
 };
 
 /** What `readUntilStill` gives. */

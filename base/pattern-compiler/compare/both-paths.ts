@@ -5,7 +5,10 @@
  * Run from the repository root, after `cargo build --release` in
  * `base/pattern-compiler`:
  *
- * `deno run -A --no-check base/pattern-compiler/compare/both-paths.ts <results.jsonl> [--sets=hand,named,corpus] [--only=<part of a name>] [--ledger=<file>]`
+ * `deno run -A --no-check base/pattern-compiler/compare/both-paths.ts <results.jsonl> [--sets=hand,named,corpus] [--only=<part of a name>[,<part>...]] [--ledger=<file>]`
+ *
+ * `--only` takes a comma list: a scenario whose name holds one of the parts
+ * runs. A run of every set with no `--only` is a full run.
  *
  * Each scenario runs on both paths under a serving loop with two principals,
  * A and B, that each hold a session (`both-paths-serving.ts`), and the runs
@@ -27,9 +30,15 @@
  * The command prints one line for each scenario (equal, differing with the
  * count of each kind of finding the ledger does not cover, or skipped with
  * the reason) and a summary, writes each scenario's findings and the summary
- * as JSON lines to `<results.jsonl>`, and exits 0 only where no scenario has
- * a finding that no entry of the ledger (`both-paths-accepted.json`) covers
- * and no entry covers nothing. What the runtimes log goes nowhere unless
+ * as JSON lines to `<results.jsonl>`, and exits 0 only where at least one
+ * scenario ran, no scenario has a finding that no entry of the ledger
+ * (`both-paths-accepted.json`) covers, no entry covers nothing, and, for a
+ * full run, no fewer scenarios were planned and ran than the ledger's
+ * `fullRun` records. The summary counts the scenarios the serving runtime
+ * did not run compiled by the first error of the refusal, and each
+ * scenario's line of results holds the positions with a flow atom on each
+ * path (`flow`), the passes of reads each checkpoint took (`passes`), and
+ * how many documents no walk reached were matched (`unreached`). What the runtimes log goes nowhere unless
  * `BOTH_PATHS_VERBOSE` is set; the runtimes' banners go to standard error.
  *
  * `--one-principal` in front of the arguments runs the harness of one
@@ -1074,9 +1083,22 @@ const runGate = async (args: string[]): Promise<number> => {
     }
   }
   const skippedReasons: Record<string, number> = {};
+  // The scenarios the serving runtime did not run compiled, by the code of
+  // the first error of the refusal, or its text where it has no code.
+  const notCompiled: Record<string, number> = {};
   for (const result of by("skipped")) {
-    const reason = (result.outcome as { reason: string }).reason.split(":")[0];
+    const full = (result.outcome as { reason: string }).reason;
+    const reason = full.split(":")[0];
     skippedReasons[reason] = (skippedReasons[reason] ?? 0) + 1;
+    if (reason === "the serving runtime did not run it compiled") {
+      const code = full.match(/: error \[([^\]]+)\]/)?.[1];
+      const why = code ??
+        full.split(": ").slice(3).join(": ").replace(
+          /^The pattern compiler refused the program: \S+: /,
+          "",
+        ).slice(0, 80);
+      notCompiled[why] = (notCompiled[why] ?? 0) + 1;
+    }
   }
   const summary = {
     summary: true,
@@ -1086,6 +1108,7 @@ const runGate = async (args: string[]): Promise<number> => {
     differing: by("differing").length,
     skipped: by("skipped").length,
     skippedReasons,
+    notCompiled,
     unexplained: kinds,
     accepted: covered.reduce((sum, n) => sum + n, 0),
     staleEntries: stale,
@@ -1099,6 +1122,9 @@ const runGate = async (args: string[]): Promise<number> => {
   );
   for (const [reason, n] of Object.entries(skippedReasons)) {
     console.log(`  skipped ${n}: ${reason}`);
+  }
+  for (const [why, n] of Object.entries(notCompiled)) {
+    console.log(`    not run compiled ${n}: ${why}`);
   }
   for (const [kind, n] of Object.entries(kinds)) {
     console.log(`  unexplained ${kind}: ${n}`);
