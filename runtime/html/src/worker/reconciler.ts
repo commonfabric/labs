@@ -93,6 +93,8 @@ import {
   readRefusal,
   type RenderLabelSummary,
   rootRenderPolicyFor,
+  schemaLabelSummary,
+  UNREADABLE_LABELS,
 } from "./display-fit.ts";
 import { generateChildKeys } from "./keying.ts";
 import type {
@@ -194,6 +196,10 @@ export const REMOTE_LOAD_PROPS: ReadonlyMap<string, ReadonlySet<string>> =
     ["cf-cfc-authorship", new Set(["avatar"])],
     ["cf-oauth", new Set(["auth"])],
     ["cf-profile-badge", new Set(["profile"])],
+    // A blob reference names the space whose host the image is fetched from,
+    // and the id the request's path carries.
+    ["cf-avatar", new Set(["blob"])],
+    ["cf-image", new Set(["blob"])],
     ["cf-render", new Set(["cell"])],
     ["cf-picker", new Set(["items"])],
     // The sandbox admits same-origin images, and a same-origin relay
@@ -502,7 +508,6 @@ export class WorkerReconciler {
         this.#handlers.set(id, handler);
         return id;
       },
-      getHandler: (id) => this.#handlers.get(id),
     };
   }
 
@@ -2125,17 +2130,9 @@ export class WorkerReconciler {
     try {
       labelView = this.#resolveCellLabelView(cell);
     } catch {
-      return { labelSource: "unreadable", confidentiality: [], integrity: [] };
+      return UNREADABLE_LABELS;
     }
-    if (labelView === undefined) {
-      return {
-        labelSource: "schema",
-        confidentiality: confidentialityLabelsFromCellSchema(
-          cell,
-        ) as readonly CfcConfClause[],
-        integrity: [],
-      };
-    }
+    if (labelView === undefined) return schemaLabelSummary(cell);
     return {
       labelSource: "stored",
       confidentiality: confidentialityLabels(labelView),
@@ -2367,25 +2364,6 @@ export class WorkerReconciler {
     return textIntegrity.requiredIntegrity.every((required) =>
       integrity.some((atom) => deepEqual(atom, required))
     );
-  }
-
-  #readCellValue(cell: Cell<unknown>): unknown {
-    const readableCell = cell as Cell<unknown> & {
-      get?: (options?: { traverseCells?: boolean }) => unknown;
-      getRawUntyped?: (options?: { frozen?: false }) => unknown;
-    };
-    try {
-      if (typeof readableCell.get === "function") {
-        return readableCell.get({ traverseCells: true });
-      }
-    } catch {
-      // Fall back to the raw read below.
-    }
-    try {
-      return readableCell.getRawUntyped?.({ frozen: false });
-    } catch {
-      return undefined;
-    }
   }
 
   #readCellPolicyValue(cell: Cell<unknown>): unknown {
@@ -5229,13 +5207,4 @@ export class WorkerReconciler {
     }
     return String(value);
   }
-}
-
-/**
- * Create a new reconciler instance.
- */
-export function createReconciler(
-  options: WorkerReconcilerOptions,
-): WorkerReconciler {
-  return new WorkerReconciler(options);
 }

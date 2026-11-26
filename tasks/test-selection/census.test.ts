@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { testIdentityKey } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { census, pricedForRun, unknownIdentity } from "./census.ts";
 import {
@@ -676,6 +676,23 @@ describe("what a measured set's gate offers a change", () => {
     ).toBe(false);
     expect(seen.gates[0]!.entry.test).toEqual(gateIdentity);
     expect(seen.gates[0]!.entry.score).toBe(0.6);
+  });
+
+  it("throws where a gate's unit carries two entries, naming both", () => {
+    const recorded = manifestOf([
+      ...manifest.entries,
+      ...["one", "two"].map((n) => ({
+        suite: "coverage-gate",
+        unit: "workspace-unit/runtime/bakery",
+        test: { ...gateIdentity, n },
+      })),
+    ]);
+    expect(() => census(suites, recorded, new Set(), new Set())).toThrow(
+      "the gate coverage-gate workspace-unit/runtime/bakery carries 2 " +
+        `entries, ${testIdentityKey({ ...gateIdentity, n: "one" })}, ` +
+        `${testIdentityKey({ ...gateIdentity, n: "two" })}, and a gate is ` +
+        "one verdict",
+    );
   });
 
   it("offers a gate nothing has recorded at the floor, under its identity", () => {

@@ -208,6 +208,14 @@ export const REQUEST_DISPOSITIONS = {
     kind: "no-cell-value",
     why: "the URL a space's host serves a blob at",
   },
+  [RequestType.SpaceHistoryList]: {
+    kind: "no-cell-value",
+    why: "a space's commit log: seqs, times and counts, and no document",
+  },
+  [RequestType.SpaceHistoryWatch]: lifecycle,
+  [RequestType.SpaceBranchCreate]: lifecycle,
+  [RequestType.SpaceBranchDelete]: lifecycle,
+  [RequestType.SpaceRestore]: write,
   [RequestType.GetSpaceRootPattern]: reference,
   [RequestType.PieceCreate]: reference,
   [RequestType.PieceGet]: reference,
@@ -265,6 +273,10 @@ export const NOTIFICATION_DISPOSITIONS = {
   [NotificationType.SpaceAccessLost]: lifecycle,
   [NotificationType.SpaceAccessRestored]: lifecycle,
   [NotificationType.ConnectionRestored]: lifecycle,
+  [NotificationType.SpaceSeqAdvanced]: {
+    kind: "no-cell-value",
+    why: "the newest seq of a space's commit log, and no document",
+  },
   [NotificationType.Telemetry]: {
     kind: "ungated",
     why: "telemetry markers, including a cell update's values",

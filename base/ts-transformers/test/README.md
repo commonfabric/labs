@@ -13,11 +13,10 @@ one-shot investigation scripts in `test/diagnostics/` — see
 
 **A. Drive an exported function directly.** Most `src/ast/*.ts` and
 `src/policy/*.ts` modules export pure functions that take a `ts.Node` and a
-`ts.TypeChecker`. Build a `ts.Program` from an in-memory source string, locate
-the node, call the function, assert on the result. See `ast/call-kind.test.ts`,
-`ast/dataflow.test.ts`, and `policy/capability-analysis.test.ts` for the
-program/host setup and node-finding helpers — copy the setup from the closest
-existing test for your source file rather than inventing a new one.
+`ts.TypeChecker`. Build a `ts.Program` from in-memory sources with
+`createInMemoryProgram` from `utils.ts`, locate the node, call the function,
+assert on the result. See `ast/call-kind.test.ts`, `ast/dataflow.test.ts`, and
+`policy/capability-analysis.test.ts` for node-finding helpers.
 
 **B. Drive the full pipeline.** `utils.ts` exports two entry points: a
 `transformSource` function returning the transformed output string, and a

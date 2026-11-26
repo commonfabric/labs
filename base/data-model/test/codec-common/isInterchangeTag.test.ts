@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -6,6 +5,7 @@ import {
   CODEC_TYPE_TAGS,
   isInterchangeTag,
 } from "@/codec-common";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("isInterchangeTag", () => {
   it("returns `true` for every tag in `CODEC_TYPE_TAGS`", () => {
@@ -39,6 +39,40 @@ describe("isInterchangeTag", () => {
     expect(isInterchangeTag("X")).toBe(true);
   });
 
+  describe("underscores", () => {
+    // `_` counts as a letter rather than as a digit, so it may stand anywhere
+    // in a component, including at its start, and may be the whole of one.
+
+    it("returns `true` for a tag with no prefix and no version holding `_`", () => {
+      expect(isInterchangeTag("my_hash")).toBe(true);
+      expect(isInterchangeTag("_sha")).toBe(true);
+      expect(isInterchangeTag("sha_")).toBe(true);
+      expect(isInterchangeTag("sha__256")).toBe(true);
+      expect(isInterchangeTag("_")).toBe(true);
+    });
+
+    it("returns `true` for a tag with prefixes and a version holding `_`", () => {
+      expect(isInterchangeTag("sys_x.sha@2")).toBe(true);
+      expect(isInterchangeTag("_.sha_@2")).toBe(true);
+      expect(isInterchangeTag("A.b_c.D_@2")).toBe(true);
+    });
+
+    it("returns `false` for a tag holding `_` with a prefix and no version", () => {
+      expect(isInterchangeTag("sys_x.sha")).toBe(false);
+      expect(isInterchangeTag("_._")).toBe(false);
+    });
+
+    it("returns `true` for a component of 100 characters holding `_`", () => {
+      expect(isInterchangeTag("_".repeat(100))).toBe(true);
+      expect(isInterchangeTag(`sys.${"_".repeat(100)}@1`)).toBe(true);
+    });
+
+    it("returns `false` for a component of 101 characters holding `_`", () => {
+      expect(isInterchangeTag("_".repeat(101))).toBe(false);
+      expect(isInterchangeTag(`sys.${"_".repeat(101)}@1`)).toBe(false);
+    });
+  });
+
   it("returns `false` for a tag with a prefix and no version", () => {
     // The version is optional on a tag with no prefix only.
 
@@ -51,6 +85,8 @@ describe("isInterchangeTag", () => {
     expect(isInterchangeTag("")).toBe(false);
     expect(isInterchangeTag("fid-1")).toBe(false);
     expect(isInterchangeTag("1sha")).toBe(false);
+    expect(isInterchangeTag("1_sha")).toBe(false);
+    expect(isInterchangeTag("sha$256")).toBe(false);
     expect(isInterchangeTag("sys..Boop@1")).toBe(false);
     expect(isInterchangeTag(".Boop@1")).toBe(false);
     expect(isInterchangeTag("Bytes@")).toBe(false);

@@ -1,3 +1,9 @@
+/**
+ * The personal home space, a tabbed view of your spaces, favorites, profile,
+ * Self, agent runs, chats, and social spaces. The Spaces tab lists your spaces
+ * with links to open or remove them and a field to create a new one, plus a
+ * setting for the default app new spaces use.
+ */
 import {
   __cf_data,
   computed,
@@ -27,6 +33,7 @@ import FavoritesManager from "../favorites-manager/favorites-manager.tsx";
 import Self from "../self/self.tsx";
 import SharedSpaceCollection, {
   type SharedSpaceCollectionOutput,
+  SOCIAL_SPACES_TAB,
 } from "../shared-space/shared-space-collection.tsx";
 import {
   sharedSpaceCollectionViewOf,
@@ -72,8 +79,12 @@ import ProfilePicker from "../profile-picker/profile-picker.tsx";
 import { refusalReasonText } from "../private-inbox/private-inbox-refusal-text.ts";
 import type { BackwardsCompatibleProfile } from "../profile-home/profile-home.tsx";
 import {
+  createOwnPrivateInbox,
+  createOwnPrivateInboxOnly,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
+  ensurePrivateInboxOnly,
+  isHomesOwnInbox,
   pointProfilesAtPrivateInbox,
   PrivateInboxAnswering,
   type PrivateInboxHolder,
@@ -89,9 +100,13 @@ import {
   TRUSTED_REPLACE_REFUSED_INBOX_ACTION,
 } from "../private-inbox/private-inbox.tsx";
 
-// Types from favorites-manager.tsx
+// A stored favorite, as `favoriteEntrySchema` in `@commonfabric/home-schemas`
+// declares it.
 type Favorite = {
-  cell: { [NAME]?: string };
+  // A link to the favorited piece. Typed as a cell, so reading a favorite does
+  // not read the piece: that read would join the piece's confidentiality into
+  // every handler that touches the favorites, and through them into the list.
+  cell: Writable<{ [NAME]?: string }>;
   // Discovery tags snapshotted from the piece's schema when favorited.
   tags: string[];
   userTags: string[];
@@ -165,16 +180,25 @@ export type HomeOutput = {
   // The user's chat manager: the index of the FabriChat rooms they belong to.
   // `wish({ query: "#chatManager" })` resolves to it.
   chatManager: FabriChatManagerOutput;
-  // The user's private inbox, where others deliver offers to them: the one the
-  // deciding profile points at, if the host vetted it, or, when no profile
-  // advertises an inbox, one it created. The deciding profile is the first, in
-  // the order `#profile` answers in, that points at an inbox. Home keeps the
-  // inbox it holds while that profile points at it, and while no profile
-  // points at an inbox. Each of their profiles that points at no inbox is
-  // pointed here; one that points at another inbox keeps it. Absent until
-  // `ensurePrivateInbox` runs, and while Home holds none and the advertised
-  // inbox failed vetting.
+  // The user's private inbox, where others deliver offers to them: an inbox
+  // Home adopted from a profile in its list that points at it, or Home's own,
+  // `ownPrivateInbox`, when no profile advertises an inbox, and in place of an
+  // inbox Home did not make. The host names an inbox to adopt only once it has
+  // vetted it and found that Home made it, though the owner's own code can
+  // have Home adopt another, through `ensurePrivateInbox`. Home keeps the
+  // inbox it holds while the deciding profile, the first in the order
+  // `#profile` answers in that points at an inbox, points at it, and while no
+  // profile points at an inbox. Each of their profiles that points at no
+  // inbox, or at one Home gave up or replaced, is pointed here; one that points
+  // at any other inbox keeps it. Absent until `ensurePrivateInbox` runs, and
+  // while Home holds none and the advertised inbox failed vetting.
   privateInbox: Writable<PrivateInboxHolder>;
+  // The private inbox Home created for itself, which it takes in place of one
+  // it replaces, or when it holds none. Only `createOwnPrivateInbox` and
+  // `createOwnPrivateInboxOnly` write it, and only once between them. Absent
+  // until Home first needs an inbox of its own: a Home that adopted an inbox
+  // it made, or holds one it made before this field, may never need one.
+  ownPrivateInbox: Writable<PrivateInboxHolder>;
   // The inboxes `privateInbox` held before, in the order Home gave them up, so
   // that what senders delivered to them stays readable.
   retainedPrivateInboxes: Writable<RetainedPrivateInboxes | Default<[]>>;
@@ -182,12 +206,13 @@ export type HomeOutput = {
   // `refusal`: why the host refused it, by the host's code; the refused inbox;
   // and when Home first recorded it. `ensurePrivateInbox` records one only
   // while that profile is in Home's list and still points at the refused inbox,
-  // which is not the one Home holds. The next ensure clears it when Home adopts
-  // or creates an inbox, when the deciding profile points at the inbox Home
-  // holds, or when no profile points at the refused inbox any longer; nothing
-  // else clears it automatically between ensures, though the owner's own code
-  // can, through `ensurePrivateInbox`. No `refusal` while there is none to
-  // report.
+  // which is not the one Home holds. The next ensure that records no refusal
+  // itself clears it when Home adopts an inbox or takes its own, when the
+  // deciding profile points at the inbox Home holds, or when no profile points
+  // at the refused inbox any longer. The owner clears it by replacing the
+  // refused inbox, through `replaceRefusedPrivateInbox`; nothing else clears it
+  // automatically between ensures, though the owner's own code can, through
+  // `ensurePrivateInbox`. No `refusal` while there is none to report.
   privateInboxRefusal: Writable<
     PrivateInboxRefusalHolder | Default<Record<PropertyKey, never>>
   >;
@@ -247,10 +272,13 @@ export type HomeOutput = {
   restoreProfile: Stream<ProfileRetirementEvent>;
   // Gives Home the private inbox the deciding profile advertises: it adopts the
   // one the host vetted and names, with that profile, when the profile is in
-  // Home's list and still points at it, or creates one when Home holds none
-  // and no profile points at an inbox, and points every profile that points at
-  // no inbox at Home's. It records the host's refusal of the deciding
-  // profile's inbox in `privateInboxRefusal`.
+  // Home's list and still points at it, or takes its own when Home holds none
+  // and no profile points at an inbox, or in place of an inbox the host has it
+  // replace, and points every profile that points at no inbox, or at a
+  // replaced one, at Home's. It has Home's own inbox created first, by
+  // `createOwnPrivateInbox`, when Home may need one and has none and the
+  // sender has not had one created first. It records the host's refusal of the
+  // deciding profile's inbox in `privateInboxRefusal`.
   // The host sends it the first time a runtime worker brings up Home, and
   // again at that worker's next bring-up if the ensure failed, so Home adopts
   // again only then. `requestPrivateInbox` sends it an event naming nothing,
@@ -263,10 +291,19 @@ export type HomeOutput = {
   // points at Home's inbox, or a final status saying why it never will.
   requestPrivateInbox: Stream<PrivateInboxRequest, PrivateInboxReceipt>;
   // For the owner, from the button on Home's refusal notice: replaces the
-  // refused inbox with the one Home holds, or with one it creates when it holds
-  // none, and points the profiles that point at the refused inbox at Home's.
+  // refused inbox with the one Home holds, or with its own when it holds none,
+  // and points the profiles that point at the refused inbox at Home's. While
+  // Home holds none and has none of its own, it does nothing, nor while Home
+  // holds none and its own is the refused inbox, when the notice offers no
+  // button.
   // Refused unless the renderer marks the event as a click on that button.
   replaceRefusedPrivateInbox: Stream<void>;
+  // For the host: creates Home's own private inbox when `ownPrivateInbox`
+  // holds none, and does nothing else. The host sends it, and waits for its
+  // run to commit, before it sends `ensurePrivateInbox` an event for which
+  // Home may need an inbox of its own, so that a creation that fails fails the
+  // host's ensure.
+  createOwnPrivateInbox: Stream<EnsurePrivateInboxEvent>;
   addFavorite: Stream<{
     piece: Writable<{ [NAME]?: string }>;
     tags?: string[];
@@ -281,6 +318,8 @@ export type HomeOutput = {
   removeSpace: Stream<{ did?: string; name?: string }>;
   adoptSpace: Stream<{ name: string; did: string }>;
   renameSpace: Stream<{ did: string; name: string }>;
+  // Which of Home's tabs is selected.
+  activeTab: Writable<string>;
 };
 
 // Handler to add a favorite
@@ -466,6 +505,10 @@ const Home = pattern(
     const privateInbox = new Writable<PrivateInboxHolder>({}).for(
       "privateInbox",
     );
+    // The inbox Home created for itself, which only the creating step writes.
+    const ownPrivateInbox = new Writable<PrivateInboxHolder>({}).for(
+      "ownPrivateInbox",
+    );
     // The inboxes Home held before, where `ensurePrivateInbox` moves the one
     // Home holds when it adopts another.
     const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([])
@@ -485,14 +528,36 @@ const Home = pattern(
       "privateInboxRequests",
     );
     // The refusal notice reads the refusal's code and time, and never its
-    // `inbox`: the stored link carries the label the refused inbox's owner
-    // gives its offers. The notice renders after everything else, for the
-    // reason the chats panel does, and the screen's header slot shows it
-    // above the tabs. Only its text is computed: its markup, button included,
-    // is static, and `refused` decides whether it shows.
+    // `inbox`: followed untyped, the stored link leads into the refused inbox,
+    // and the run joins the label its owner gives its offers. The notice
+    // renders after everything else, for the reason the chats panel does, and
+    // the screen's header slot shows it above the tabs. Only its text is
+    // computed: its markup is static, `refused` decides whether it shows, and
+    // `ownRefusedStyles` whether it offers the button.
     const refusalReason = privateInboxRefusal.key("refusal").key("reason");
     const refusedAt = privateInboxRefusal.key("refusal").key("refusedAt");
     const refused = computed(() => typeof refusedAt.get() === "number");
+    // Whether the refused inbox is Home's own while Home holds none, which the
+    // button's click never takes: the notice then hides the button and says
+    // why. It reads both links typed, as the click does, and compares them as
+    // `isHomesOwnInbox()` does, resolving Home's own and never the refused
+    // inbox. The markup stays static, and this decides only which part of it
+    // displays, so that Home's anonymous cells keep their numbers.
+    const ownRefusedStyles = computed(() => {
+      const own = ownPrivateInbox.get()?.piece;
+      const refusedInbox = privateInboxRefusal.get()?.refusal?.inbox;
+      const ownRefused = privateInbox.get()?.piece === undefined &&
+        own !== undefined && refusedInbox !== undefined &&
+        isHomesOwnInbox(own, refusedInbox);
+      return {
+        replace: { display: ownRefused ? "none" : "flex" },
+        ownRefused: {
+          fontSize: "12px",
+          color: "#666",
+          display: ownRefused ? "inline" : "none",
+        },
+      };
+    });
     const refusalNoticeText = computed(() => {
       const stored = refusalReason.get();
       const reason = typeof stored === "string" ? stored : "";
@@ -534,19 +599,36 @@ const Home = pattern(
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
     const chatManager = FabriChatManager({ sharedSpaceCatalog: catalog });
-    const ensurePrivateInboxStream = ensurePrivateInbox({
+    const pointProfiles = pointProfilesAtPrivateInbox({
       privateInbox,
+      retainedPrivateInboxes,
+      profiles,
+    });
+    // The ensure the creating step hands its event on to, once Home has an
+    // inbox of its own; it never asks for one.
+    const ensureOnceOwned = ensurePrivateInboxOnly({
+      privateInbox,
+      ownPrivateInbox,
       retainedPrivateInboxes,
       privateInboxRefusal,
       profiles,
-      pointProfiles: pointProfilesAtPrivateInbox({
-        privateInbox,
-        retainedPrivateInboxes,
-        profiles,
+      pointProfiles,
+    });
+    const ensurePrivateInboxStream = ensurePrivateInbox({
+      privateInbox,
+      ownPrivateInbox,
+      retainedPrivateInboxes,
+      privateInboxRefusal,
+      profiles,
+      pointProfiles,
+      createOwn: createOwnPrivateInbox({
+        ownPrivateInbox,
+        ensure: ensureOnceOwned,
       }),
     });
     const replaceRefusedInboxStream = replaceRefusedPrivateInbox({
       privateInbox,
+      ownPrivateInbox,
       privateInboxRefusal,
       privateInboxReplacement,
       repointProfiles: repointProfilesFromReplacedInbox({
@@ -599,6 +681,10 @@ const Home = pattern(
     const socialSpaceCollection = SharedSpaceCollection({
       catalog,
       view: sharedSpaces.view,
+      // Read from Home's own result, which leads nowhere, so that the
+      // collection is reached where it was and every unnamed node keeps its
+      // number.
+      selectedTab: home.activeTab,
     });
 
     return {
@@ -617,7 +703,7 @@ const Home = pattern(
               <cf-tab value="self">Self</cf-tab>
               <cf-tab value="agent-runs">Agent runs</cf-tab>
               <cf-tab value="chats">Chats</cf-tab>
-              <cf-tab value="social-spaces">Social spaces</cf-tab>
+              <cf-tab value={SOCIAL_SPACES_TAB}>Social spaces</cf-tab>
             </cf-tab-list>
             <cf-tab-panel value="agent-runs" id="home-agent-runs">
               {agentQueue}
@@ -720,7 +806,7 @@ const Home = pattern(
             <cf-tab-panel value="chats" id="home-chats">
               {chatManager}
             </cf-tab-panel>
-            <cf-tab-panel value="social-spaces" id="home-social-spaces">
+            <cf-tab-panel value={SOCIAL_SPACES_TAB} id="home-social-spaces">
               {socialSpaceCollection}
             </cf-tab-panel>
           </cf-tabs>
@@ -748,22 +834,35 @@ const Home = pattern(
                         {" "}
                         {refusalNoticeText.noticed}.
                       </span>
-                      <span style={{ fontSize: "12px", color: "#666" }}>
-                        Using a new inbox points the profiles that point at the
-                        refused one at Home's own inbox instead. A loom daemon
-                        running as an identity other than yours then stops
-                        receiving loom shares.
+                      <span
+                        id="home-private-inbox-own-refused"
+                        style={ownRefusedStyles.ownRefused}
+                      >
+                        The refused inbox is Home's own, so Home has no other
+                        inbox to use instead.
                       </span>
-                      <div>
-                        <cf-button
-                          id="home-private-inbox-replace"
-                          size="sm"
-                          data-ui-action={TRUSTED_REPLACE_REFUSED_INBOX_ACTION}
-                          onClick={replaceRefusedInboxStream}
-                        >
-                          Use a new inbox
-                        </cf-button>
-                      </div>
+                      <cf-vstack
+                        id="home-private-inbox-replace-offer"
+                        gap="1"
+                        style={ownRefusedStyles.replace}
+                      >
+                        <span style={{ fontSize: "12px", color: "#666" }}>
+                          Using a new inbox points the profiles that point at
+                          the refused one at Home's own inbox instead. A loom
+                          daemon running as an identity other than yours then
+                          stops receiving loom shares.
+                        </span>
+                        <div>
+                          <cf-button
+                            id="home-private-inbox-replace"
+                            size="sm"
+                            data-ui-action={TRUSTED_REPLACE_REFUSED_INBOX_ACTION}
+                            onClick={replaceRefusedInboxStream}
+                          >
+                            Use a new inbox
+                          </cf-button>
+                        </div>
+                      </cf-vstack>
                     </cf-vstack>
                   </cf-alert>
                 </div>
@@ -788,6 +887,7 @@ const Home = pattern(
       agentQueue,
       chatManager,
       privateInbox,
+      ownPrivateInbox,
       retainedPrivateInboxes,
       privateInboxRefusal,
       privateInboxReplacement,
@@ -840,6 +940,8 @@ const Home = pattern(
         ensure: ensurePrivateInboxStream,
       }),
       replaceRefusedPrivateInbox: replaceRefusedInboxStream,
+      createOwnPrivateInbox: createOwnPrivateInboxOnly({ ownPrivateInbox }),
+      activeTab,
     };
   },
   homeArgumentSchema,

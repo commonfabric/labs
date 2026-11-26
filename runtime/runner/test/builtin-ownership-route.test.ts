@@ -7,8 +7,8 @@
 // `docs/specs/cfc-enforcement-matrix.md` §4 keeps those stores off the route.
 // The rule is prose everywhere else; here it is the two sets being disjoint.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const BUILTINS = new URL("../src/builtins/", import.meta.url);
 

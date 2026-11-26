@@ -5,8 +5,9 @@
  */
 
 import { fromFileUrl } from "@std/path";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test({
+test({
   name: "Linux struct offsets match C headers",
   ignore: Deno.build.os !== "linux",
   async fn() {

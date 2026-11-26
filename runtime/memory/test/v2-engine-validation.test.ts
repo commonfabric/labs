@@ -23,11 +23,12 @@ import {
 } from "../v2.ts";
 import {
   FabricBytes,
-  FabricRegExp,
+  FabricEpochDay,
 } from "@commonfabric/data-model/fabric-primitives";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import { test } from "@commonfabric/test-support/test";
 
 const withEngine = async (
   fn: (engine: Engine) => void | Promise<void>,
@@ -53,7 +54,7 @@ const commit = (localSeq: number, extra: Record<string, unknown>) =>
     ...extra,
   }) as never;
 
-Deno.test("rejects a commit with no operations, reads, or preconditions", async () => {
+test("rejects a commit with no operations, reads, or preconditions", async () => {
   await withEngine((engine) => {
     assertThrows(
       () => applyCommit(engine, { sessionId: "s:a", commit: commit(1, {}) }),
@@ -63,7 +64,7 @@ Deno.test("rejects a commit with no operations, reads, or preconditions", async 
   });
 });
 
-Deno.test("rejects commits and reads against an unknown branch", async () => {
+test("rejects commits and reads against an unknown branch", async () => {
   await withEngine((engine) => {
     assertThrows(
       () =>
@@ -85,7 +86,7 @@ Deno.test("rejects commits and reads against an unknown branch", async () => {
   });
 });
 
-Deno.test("rejects reads at a seq beyond the branch head", async () => {
+test("rejects reads at a seq beyond the branch head", async () => {
   await withEngine((engine) => {
     assertThrows(
       () => read(engine, { id: "of:fid1:a", seq: 999 } as never),
@@ -95,7 +96,7 @@ Deno.test("rejects reads at a seq beyond the branch head", async () => {
   });
 });
 
-Deno.test("rejects stored revision rows that decode to non-documents", async () => {
+test("rejects stored revision rows that decode to non-documents", async () => {
   await withEngine((engine) => {
     applyCommit(engine, {
       sessionId: "s:a",
@@ -114,7 +115,7 @@ Deno.test("rejects stored revision rows that decode to non-documents", async () 
   });
 });
 
-Deno.test("rejects stored revision rows with an unexpected op", async () => {
+test("rejects stored revision rows with an unexpected op", async () => {
   await withEngine((engine) => {
     applyCommit(engine, {
       sessionId: "s:a",
@@ -131,7 +132,7 @@ Deno.test("rejects stored revision rows with an unexpected op", async () => {
   });
 });
 
-Deno.test("a valid set still reads back after the validation batteries", async () => {
+test("a valid set still reads back after the validation batteries", async () => {
   await withEngine((engine) => {
     applyCommit(engine, {
       sessionId: "s:a",
@@ -141,7 +142,7 @@ Deno.test("a valid set still reads back after the validation batteries", async (
   });
 });
 
-Deno.test("admits no operation but `set` against a content-addressed document", async () => {
+test("admits no operation but `set` against a content-addressed document", async () => {
   await withEngine((engine) => {
     const schema = { type: "string", title: "immutable" } as const;
     const id = `cid:${internSchemaAsTaggedHashString(schema)}`;
@@ -194,7 +195,7 @@ Deno.test("admits no operation but `set` against a content-addressed document", 
   });
 });
 
-Deno.test("compares content-addressed sets by content inside special objects", async () => {
+test("compares content-addressed sets by content inside special objects", async () => {
   await withEngine((engine) => {
     // A special object keeps its state in private fields, which a naive
     // structural walk conflates across distinct instances (CT-1770); the
@@ -231,7 +232,7 @@ Deno.test("compares content-addressed sets by content inside special objects", a
   });
 });
 
-Deno.test("accepts a content-addressed document whose content hashes to its id", async () => {
+test("accepts a content-addressed document whose content hashes to its id", async () => {
   await withEngine((engine) => {
     // A string, through the general content hash...
     const code = "export const answer = 42;";
@@ -260,7 +261,7 @@ Deno.test("accepts a content-addressed document whose content hashes to its id",
   });
 });
 
-Deno.test("rejects a content-addressed document whose content hashes to neither its id nor its schema id", async () => {
+test("rejects a content-addressed document whose content hashes to neither its id nor its schema id", async () => {
   await withEngine((engine) => {
     const codeId = `cid:${taggedHashStringOf("export const answer = 42;")}`;
     assertThrows(
@@ -289,19 +290,19 @@ Deno.test("rejects a content-addressed document whose content hashes to neither 
   });
 });
 
-Deno.test("rejects a content-addressed set whose value is not a document", async () => {
+test("rejects a content-addressed set whose value is not a document", async () => {
   await withEngine((engine) => {
-    // A `FabricRegExp` where the document belongs. Its `value` member is a JS
-    // `RegExp`, which hashes as the `FabricRegExp` itself does, so under this
+    // A `FabricEpochDay` where the document belongs. Its `value` member is
+    // the `bigint` it holds, and the id is that `bigint`'s hash, so under this
     // id the content check alone would pass it.
-    const pattern = new FabricRegExp(/a+/g);
-    const id = `cid:${taggedHashStringOf(pattern)}`;
+    const day = new FabricEpochDay(20_000n);
+    const id = `cid:${taggedHashStringOf(day.value)}`;
     assertThrows(
       () =>
         applyCommit(engine, {
           sessionId: "s:a",
           commit: commit(1, {
-            operations: [{ op: "set", id, value: pattern }],
+            operations: [{ op: "set", id, value: day }],
           }),
         }),
       ProtocolError,
@@ -310,7 +311,7 @@ Deno.test("rejects a content-addressed set whose value is not a document", async
   });
 });
 
-Deno.test("rejects a set that changes a content-addressed document", async () => {
+test("rejects a set that changes a content-addressed document", async () => {
   await withEngine((engine) => {
     const settled = { type: "string", title: "settled" } as const;
     const settledId = `cid:${internSchemaAsTaggedHashString(settled)}`;
@@ -360,7 +361,7 @@ Deno.test("rejects a set that changes a content-addressed document", async () =>
   });
 });
 
-Deno.test("rejects a content-addressed document written at a non-space scope", async () => {
+test("rejects a content-addressed document written at a non-space scope", async () => {
   await withEngine((engine) => {
     // A scoped partition could hold a divergent copy under one cid: id —
     // the immutability check reads at the operation's scope, and readers
@@ -385,7 +386,7 @@ Deno.test("rejects a content-addressed document written at a non-space scope", a
   });
 });
 
-Deno.test("validates the schema closure a commit's content references", async () => {
+test("validates the schema closure a commit's content references", async () => {
   await withEngine((engine) => {
     const leafSchema = { type: "string", title: "closure-leaf" } as const;
     const leafHash = internSchemaAsTaggedHashString(leafSchema);
@@ -441,7 +442,7 @@ Deno.test("validates the schema closure a commit's content references", async ()
   });
 });
 
-Deno.test("rejects incomplete or forged closures included in a commit", async () => {
+test("rejects incomplete or forged closures included in a commit", async () => {
   await withEngine((engine) => {
     const leafSchema = { type: "number", title: "partial-leaf" } as const;
     const leafHash = internSchemaAsTaggedHashString(leafSchema);
@@ -550,7 +551,7 @@ Deno.test("rejects incomplete or forged closures included in a commit", async ()
   });
 });
 
-Deno.test("serves a repeat schema reference from the per-engine verification cache", async () => {
+test("serves a repeat schema reference from the per-engine verification cache", async () => {
   await withEngine((engine) => {
     const leaf = { type: "string", title: "cache-hit-leaf" } as const;
     const leafHash = internSchemaAsTaggedHashString(leaf);
@@ -602,7 +603,7 @@ Deno.test("serves a repeat schema reference from the per-engine verification cac
   });
 });
 
-Deno.test("rejects a reference backed by a stored cid: document holding other content", async () => {
+test("rejects a reference backed by a stored cid: document holding other content", async () => {
   await withEngine((engine) => {
     const claimed = { type: "string", title: "impostor-claim" } as const;
     const claimedHash = internSchemaAsTaggedHashString(claimed);
@@ -652,7 +653,7 @@ Deno.test("rejects a reference backed by a stored cid: document holding other co
   });
 });
 
-Deno.test("treats an $alias-shaped record as plain data at the commit boundary", async () => {
+test("treats an $alias-shaped record as plain data at the commit boundary", async () => {
   await withEngine((engine) => {
     // An alias is a binding only by context. To the commit boundary this
     // record is plain data, so the `cid:` ref inside its `schema` member
@@ -684,7 +685,7 @@ Deno.test("treats an $alias-shaped record as plain data at the commit boundary",
     );
   });
 });
-Deno.test("applies an identical content-addressed re-set as a no-op", async () => {
+test("applies an identical content-addressed re-set as a no-op", async () => {
   await withEngine((engine) => {
     const schema = { type: "string", title: "elided-re-set" } as const;
     const id = `cid:${internSchemaAsTaggedHashString(schema)}`;
@@ -737,7 +738,7 @@ Deno.test("applies an identical content-addressed re-set as a no-op", async () =
   });
 });
 
-Deno.test("a replayed eliding commit reports its elision again", async () => {
+test("a replayed eliding commit reports its elision again", async () => {
   await withEngine((engine) => {
     const schema = { type: "string", title: "replayed-elision" } as const;
     const id = `cid:${internSchemaAsTaggedHashString(schema)}`;
@@ -764,7 +765,7 @@ Deno.test("a replayed eliding commit reports its elision again", async () => {
   });
 });
 
-Deno.test("validates the schema document a result's `schema` metadata references", async () => {
+test("validates the schema document a result's `schema` metadata references", async () => {
   await withEngine((engine) => {
     const resultSchema = {
       type: "object",
@@ -1049,7 +1050,7 @@ Deno.test("validates the schema document a result's `schema` metadata references
   });
 });
 
-Deno.test("validates the schema document a CFC envelope's schemaHash references", async () => {
+test("validates the schema document a CFC envelope's schemaHash references", async () => {
   await withEngine((engine) => {
     const envelopeSchema = {
       type: "object",
@@ -1395,7 +1396,7 @@ Deno.test("validates the schema document a CFC envelope's schemaHash references"
   });
 });
 
-Deno.test("validates the label documents a version-2 CFC envelope references", async () => {
+test("validates the label documents a version-2 CFC envelope references", async () => {
   await withEngine((engine) => {
     const envelopeSchema = {
       type: "object",
@@ -1529,6 +1530,25 @@ Deno.test("validates the label documents a version-2 CFC envelope references", a
       "does not hold a label",
     );
 
+    // So is one holding a class instance, which shows no own members for a
+    // check of members alone to refuse.
+    const instance = new FabricBytes(new Uint8Array([1, 2, 3]));
+    const instanceHash = taggedHashStringOf(instance);
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(5, {
+            operations: [
+              docWithLabel(`cid:${instanceHash}`),
+              setOp(`cid:${instanceHash}`, instance),
+            ],
+          }),
+        }),
+      ProtocolError,
+      "does not hold a label",
+    );
+
     // A stored label document whose bytes were changed out of band no
     // longer hashes to its id, and a later envelope naming it is refused:
     // the commit API rejects every `cid:` mutation, so direct database
@@ -1598,7 +1618,7 @@ Deno.test("validates the label documents a version-2 CFC envelope references", a
   });
 });
 
-Deno.test("walks a CFC envelope's schema-document closure transitively", async () => {
+test("walks a CFC envelope's schema-document closure transitively", async () => {
   await withEngine((engine) => {
     // A decomposed envelope root references its definitions as
     // `$ref: cid:` members. The closure walk must follow those
@@ -1652,7 +1672,7 @@ Deno.test("walks a CFC envelope's schema-document closure transitively", async (
   });
 });
 
-Deno.test("refuses a document whose CFC label map holds a numeric whole-field label or path", async () => {
+test("refuses a document whose CFC label map holds a numeric whole-field label or path", async () => {
   await withEngine((engine) => {
     const id = "of:numeric-label-carrier";
     const carrier = (entry: Record<string, unknown>) =>
@@ -1741,7 +1761,7 @@ Deno.test("refuses a document whose CFC label map holds a numeric whole-field la
   });
 });
 
-Deno.test("keeps a document stored with a numeric label writable while a write leaves its label map as stored", async () => {
+test("keeps a document stored with a numeric label writable while a write leaves its label map as stored", async () => {
   await withEngine((engine) => {
     const inline = { confidentiality: ["secret"], integrity: [] };
     const document = (
@@ -1835,7 +1855,7 @@ Deno.test("keeps a document stored with a numeric label writable while a write l
   });
 });
 
-Deno.test("refuses a document whose CFC label carries a reserved schema reference, however the reference got there", async () => {
+test("refuses a document whose CFC label carries a reserved schema reference, however the reference got there", async () => {
   await withEngine((engine) => {
     const id = "of:reserved-label-carrier";
     const reserved = linkRefFrom({

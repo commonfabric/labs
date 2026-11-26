@@ -1,8 +1,8 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { toDocumentPath } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   debugTransactionWrites,
@@ -15,6 +15,7 @@ import type {
   ITransactionJournal,
   TransactionWriteDetail,
 } from "../src/storage/interface.ts";
+import { reactivityLogFromActivities } from "../src/storage/reactivity-log.ts";
 
 // Simple test transaction journal
 class TestJournal implements ITransactionJournal {
@@ -66,6 +67,7 @@ function createTestTransaction(
   const journal = new TestJournal(novelty, history, activity);
   return {
     journal,
+    getReactivityLog: () => reactivityLogFromActivities(journal.activity()),
     status: () => ({ status: "done" as const, journal }),
   } as any;
 }
@@ -77,6 +79,7 @@ function createInspectableTransaction(
   const journal = new TestJournal([], [], activity);
   return {
     journal,
+    getReactivityLog: () => reactivityLogFromActivities(journal.activity()),
     getWriteDetails: () => writes,
     status: () => ({ status: "done" as const, journal }),
   } as any;
@@ -89,6 +92,7 @@ function createStatusTransaction(
   const journal = new TestJournal([], [], activity);
   return {
     journal,
+    getReactivityLog: () => reactivityLogFromActivities(journal.activity()),
     status: () => ({ status, journal }),
   } as any;
 }
@@ -338,7 +342,7 @@ describe("transaction-summary", () => {
 
     const debug = debugTransactionWrites(tx);
 
-    assertEquals(debug.includes("Total writes in activity: 1"), true);
+    assertEquals(debug.includes("Total writes in reactivity log: 1"), true);
     assertEquals(
       debug.includes("Write to: of:direct123/value (space: did:key:test)"),
       true,
@@ -470,7 +474,7 @@ describe("transaction-summary", () => {
 
     const debug = debugTransactionWrites(tx);
 
-    assertEquals(debug.includes("Total writes in activity: 1"), true);
+    assertEquals(debug.includes("Total writes in reactivity log: 1"), true);
     assertEquals(
       debug.includes("Write to: of:abc123/value (space: did:key:test)"),
       true,

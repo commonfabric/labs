@@ -12,13 +12,13 @@
  * implementation may sit behind the buffering layer.
  */
 
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromBase64url } from "@commonfabric/bytes/base64url";
 import {
   createHasher,
   type IncrementalHasher,
 } from "@commonfabric/content-hash";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 import { createHasherDeno } from "@/sha256-deno.ts";
 import { createHasherNoble } from "@/sha256-noble.ts";
 import {
@@ -61,6 +61,16 @@ for (const createFunc of createFuncs) {
       hasher.update(new Uint8Array([1, 2, 3]));
       expect(() => hasher.digest("a`b" as "base64url"))
         .toThrow("Unknown encoding: ``a`b``");
+    });
+
+    it("refuses an unknown encoding name after an input too long to buffer", () => {
+      // An implementation may digest a long input along a different path from
+      // a short one.
+
+      const hasher = createFunc();
+      hasher.update(new Uint8Array(5000));
+      expect(() => hasher.digest("hex" as "base64url"))
+        .toThrow("Unknown encoding: `hex`");
     });
 
     describe("after `digest()`", () => {
@@ -117,6 +127,15 @@ for (const createFunc of createFuncs) {
           for (let i = 0; i < bytes.length; i++) {
             hasher.update(bytes.subarray(i, i + 1));
           }
+          const got = hasher.digest();
+          expect(got).toEqual(hashBytes);
+        });
+
+        it("produces the expected byte-array hash from a short `update()` followed by the rest at once", () => {
+          const hasher = createFunc();
+          const split = Math.min(3, bytes.length);
+          hasher.update(bytes.subarray(0, split));
+          hasher.update(bytes.subarray(split));
           const got = hasher.digest();
           expect(got).toEqual(hashBytes);
         });

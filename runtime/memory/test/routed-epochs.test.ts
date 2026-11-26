@@ -4,6 +4,7 @@ import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 import { RoutedEpochStore } from "../v2/routed-epochs.ts";
 import { ROUTED_PROOF_HORIZON_SECONDS } from "../v2/routed-wire.ts";
@@ -11,7 +12,7 @@ const MIB = 1024 * 1024;
 const RETENTION = ROUTED_PROOF_HORIZON_SECONDS;
 const epoch = (i: number) => i.toString(16).padStart(32, "0");
 
-Deno.test("a restart keeps epochs and revocations and drops an earlier ledger's claims", async () => {
+test("a restart keeps epochs and revocations and drops an earlier ledger's claims", async () => {
   const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
   const [router, revoked] = await Promise.all(
     [81, 82].map(async (seed) =>
@@ -59,7 +60,7 @@ Deno.test("a restart keeps epochs and revocations and drops an earlier ledger's 
   }
 });
 
-Deno.test("epoch compaction remains restartable and durability failure stays latched", async () => {
+test("epoch compaction remains restartable and durability failure stays latched", async () => {
   const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
   const router = (await Identity.fromRaw(new Uint8Array(32).fill(85))).did();
   let store = new RoutedEpochStore(path);
@@ -90,7 +91,7 @@ Deno.test("epoch compaction remains restartable and durability failure stays lat
   }
 });
 
-Deno.test("truncated authority ledger fails closed", () => {
+test("truncated authority ledger fails closed", () => {
   const directory = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(`${directory}/ledger`, '["epoch"');
@@ -100,7 +101,7 @@ Deno.test("truncated authority ledger fails closed", () => {
   }
 });
 
-Deno.test("failed durable ledger replacement leaves authority fail-closed", async () => {
+test("failed durable ledger replacement leaves authority fail-closed", async () => {
   const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
   const router = (await Identity.fromRaw(new Uint8Array(32).fill(87))).did();
   const store = new RoutedEpochStore(path);
@@ -129,7 +130,7 @@ Deno.test("failed durable ledger replacement leaves authority fail-closed", asyn
   }
 });
 
-Deno.test("closed link epochs are forgotten once every proof bound to them expired", async () => {
+test("closed link epochs are forgotten once every proof bound to them expired", async () => {
   const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
   const router = (await Identity.fromRaw(new Uint8Array(32).fill(88))).did();
   const now = Math.floor(Date.now() / 1000);
@@ -169,7 +170,7 @@ Deno.test("closed link epochs are forgotten once every proof bound to them expir
   }
 });
 
-Deno.test("a ledger from before retirement records retires its epochs at load", async () => {
+test("a ledger from before retirement records retires its epochs at load", async () => {
   const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
   const router = (await Identity.fromRaw(new Uint8Array(32).fill(90))).did();
   Deno.writeTextFileSync(
@@ -190,7 +191,7 @@ Deno.test("a ledger from before retirement records retires its epochs at load", 
   }
 });
 
-Deno.test("a ledger past its bound is refused at load", () => {
+test("a ledger past its bound is refused at load", () => {
   const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
   try {
     // An earlier toolshed's claim lines are skipped at load, so only the
@@ -205,7 +206,7 @@ Deno.test("a ledger past its bound is refused at load", () => {
   }
 });
 
-Deno.test("an append after compaction is checked against the compacted size", async () => {
+test("an append after compaction is checked against the compacted size", async () => {
   const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
   const router = (await Identity.fromRaw(new Uint8Array(32).fill(96))).did();
   const store = new RoutedEpochStore(path);
@@ -226,7 +227,7 @@ Deno.test("an append after compaction is checked against the compacted size", as
   }
 });
 
-Deno.test("retirement and revocation survive compaction and reload", async () => {
+test("retirement and revocation survive compaction and reload", async () => {
   const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
   const [router, revoked] = await Promise.all(
     [91, 92].map(async (seed) =>
@@ -270,7 +271,7 @@ Deno.test("retirement and revocation survive compaction and reload", async () =>
   }
 });
 
-Deno.test("an epoch left live by a crash is retired once and keeps that time", async () => {
+test("an epoch left live by a crash is retired once and keeps that time", async () => {
   const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
   const router = (await Identity.fromRaw(new Uint8Array(32).fill(94))).did();
   const epoch = "ab".repeat(16);
@@ -309,7 +310,7 @@ Deno.test("an epoch left live by a crash is retired once and keeps that time", a
   }
 });
 
-Deno.test("an earlier toolshed's ledger near its bound compacts as it loads and keeps admitting links", async () => {
+test("an earlier toolshed's ledger near its bound compacts as it loads and keeps admitting links", async () => {
   // An earlier toolshed recorded client proofs here, within the same 32 MiB
   // bound; a restart past half of it once reached the bound before the next
   // compaction.
@@ -356,4 +357,59 @@ Deno.test("an earlier toolshed's ledger near its bound compacts as it loads and 
     store.close();
     Deno.removeSync(directory, { recursive: true });
   }
+});
+
+describe("RoutedEpochStore", () => {
+  describe("loading a ledger", () => {
+    it("treats an epoch line repeated after its retirement as an epoch consumed again, which the restart retires", async () => {
+      const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
+      const router = (await Identity.fromRaw(new Uint8Array(32).fill(97)))
+        .did();
+      const longAgo = Math.floor(Date.now() / 1000) - 2 * RETENTION;
+      Deno.writeTextFileSync(
+        path,
+        [
+          ["epoch", router, epoch(1)],
+          ["retire", router, epoch(1), longAgo],
+          ["epoch", router, epoch(1)],
+        ].map((record) => `${JSON.stringify(record)}\n`).join(""),
+      );
+      const store = new RoutedEpochStore(path);
+      try {
+        const loaded = Math.floor(Date.now() / 1000);
+        // The old retirement no longer holds, so the epoch's retention
+        // period runs from the load.
+        expect(() => store.consume(router, epoch(1), loaded)).toThrow(
+          "Routed memory request denied",
+        );
+        expect(
+          Deno.readTextFileSync(path).split("\n").filter((line) =>
+            line.startsWith('["epoch"')
+          ),
+        ).toEqual([JSON.stringify(["epoch", router, epoch(1)])]);
+        store.consume(router, epoch(1), loaded + RETENTION + 1);
+      } finally {
+        store.close();
+        Deno.removeSync(directory, { recursive: true });
+      }
+    });
+    it("throws for a record of a kind it does not know", async () => {
+      const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
+      const router = (await Identity.fromRaw(new Uint8Array(32).fill(98)))
+        .did();
+      try {
+        Deno.writeTextFileSync(
+          path,
+          `${JSON.stringify(["epoch", router, epoch(1)])}\n${
+            JSON.stringify(["forget", router, epoch(1)])
+          }\n`,
+        );
+        expect(() => new RoutedEpochStore(path)).toThrow(
+          "Routed memory request denied",
+        );
+      } finally {
+        Deno.removeSync(directory, { recursive: true });
+      }
+    });
+  });
 });

@@ -9,7 +9,6 @@ read_base_ports
 PORT_OFFSET=${PORT_OFFSET:-0}
 SHELL_PORT=${SHELL_PORT:-}
 TOOLSHED_PORT=${TOOLSHED_PORT:-}
-HEALTH_CHECK_TIMEOUT=${HEALTH_CHECK_TIMEOUT:-10}
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -76,7 +75,7 @@ check_server() {
     metrics_file=$(mktemp)
     error_file=$(mktemp)
 
-    if curl -sS -o /dev/null -w "%{http_code} %{time_total}" --max-time "$HEALTH_CHECK_TIMEOUT" "$url" >"$metrics_file" 2>"$error_file"; then
+    if curl -sS -o /dev/null -w "%{http_code} %{time_total}" "$url" >"$metrics_file" 2>"$error_file"; then
         curl_output="$(cat "$metrics_file")"
     else
         curl_exit=$?

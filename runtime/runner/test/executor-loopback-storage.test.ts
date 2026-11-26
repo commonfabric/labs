@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type * as MemoryClient from "@commonfabric/memory/v2/client";
+import { describe, it } from "@commonfabric/test-support/test";
 import { delegatingTransport } from "../src/executor/loopback-storage.ts";
 
 /**

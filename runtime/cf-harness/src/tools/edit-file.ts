@@ -317,9 +317,9 @@ const collectChangedLineSpans = (
     oldEnd -= 1;
     newEnd -= 1;
   }
-  if (oldStart === oldEnd && newStart === newEnd) {
-    return [];
-  }
+  // At least one range is left non-empty: the top-level call compares
+  // differing texts, and either side of a unique common anchor holds a line
+  // that differs.
 
   const anchor = findUniqueCommonAnchor(
     oldLines,
@@ -508,21 +508,11 @@ const observedStream = (
   segments: [{ text, label }],
 });
 
-const observedStreamText = (
-  observation: CfcStreamObservation,
-): string | undefined =>
-  observation.policy === "observed"
-    ? observation.segments.map((segment) => segment.text).join("")
-    : undefined;
-
 const diffObservationForEditOutput = (
   path: string,
-  read: CfcStreamObservation | undefined,
-  verify: CfcStreamObservation | undefined,
-): CfcStreamObservation | undefined => {
-  if (read === undefined || verify === undefined) {
-    return undefined;
-  }
+  read: CfcStreamObservation,
+  verify: CfcStreamObservation,
+): CfcStreamObservation => {
   const label = mergeCfcLabels([read.label, verify.label]);
   if (read.policy === "denied" || verify.policy === "denied") {
     return {
@@ -543,15 +533,13 @@ const diffObservationForEditOutput = (
       truncated: read.truncated === true || verify.truncated === true,
     };
   }
-  const oldText = observedStreamText(read);
-  const newText = observedStreamText(verify);
-  if (oldText === undefined || newText === undefined) {
-    return undefined;
-  }
+  const text = (
+    observation: Extract<CfcStreamObservation, { policy: "observed" }>,
+  ) => observation.segments.map((segment) => segment.text).join("");
   return observedStream(
     "stdout",
     label,
-    createUnifiedDiff(path, oldText, newText),
+    createUnifiedDiff(path, text(read), text(verify)),
   );
 };
 
@@ -568,9 +556,6 @@ const cfcResultForEditOutput = (
     readResult.stdout,
     verifyResult.stdout,
   );
-  if (stdout === undefined) {
-    return undefined;
-  }
   const stderrLabel = mergeCfcLabels([
     readResult.stderr.label,
     verifyResult.stderr.label,

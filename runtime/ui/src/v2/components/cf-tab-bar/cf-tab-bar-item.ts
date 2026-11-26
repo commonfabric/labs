@@ -130,10 +130,10 @@ export class CFTabBarItem extends BaseElement {
   ) {
     super.updated(changedProperties);
 
-    if (
-      changedProperties.has("selected") || changedProperties.has("disabled")
-    ) {
-      this._updateAriaAttributes();
+    // The host carries the state too, for `::part()` selectors.
+    if (changedProperties.has("selected")) {
+      if (this.selected) this.setAttribute("data-selected", "true");
+      else this.removeAttribute("data-selected");
     }
   }
 
@@ -145,6 +145,9 @@ export class CFTabBarItem extends BaseElement {
         ?disabled="${this.disabled}"
         part="item"
         data-selected="${this.selected}"
+        aria-current="${this.selected ? "page" : nothing}"
+        aria-disabled="${this.disabled ? "true" : nothing}"
+        tabindex="${this.selected && !this.disabled ? "0" : "-1"}"
         aria-label="${this.hideLabel ? this.label : nothing}"
         @click="${this._handleClick}"
       >
@@ -158,32 +161,6 @@ export class CFTabBarItem extends BaseElement {
         `}
       </button>
     `;
-  }
-
-  private _updateAriaAttributes(): void {
-    const button = this.button;
-    if (!button) return;
-
-    if (this.selected) {
-      button.setAttribute("aria-current", "page");
-    } else {
-      button.removeAttribute("aria-current");
-    }
-
-    if (this.disabled) {
-      button.setAttribute("aria-disabled", "true");
-      button.setAttribute("tabindex", "-1");
-    } else {
-      button.removeAttribute("aria-disabled");
-      button.setAttribute("tabindex", this.selected ? "0" : "-1");
-    }
-
-    // Also update data-selected on host for ::part() CSS selectors
-    if (this.selected) {
-      this.setAttribute("data-selected", "true");
-    } else {
-      this.removeAttribute("data-selected");
-    }
   }
 
   private _handleClick = (event: Event): void => {

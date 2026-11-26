@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   fromBase64Polyfill,
@@ -7,6 +6,7 @@ import {
   toUnpaddedBase64url,
   toUnpaddedBase64urlFromText,
 } from "@commonfabric/bytes/base64url";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TEST_PAIRS: { arr: readonly number[]; b64: string }[] = [
   { arr: [], b64: "" },
@@ -104,6 +104,17 @@ for (const fromBase64 of [fromBase64url, fromBase64Polyfill]) {
       ];
 
       for (const encoded of REFUSED) {
+        it(`throws on \`${encoded}\``, () => {
+          expect(() => fromBase64(encoded)).toThrow();
+        });
+      }
+    });
+
+    describe("characters outside the base64url alphabet", () => {
+      // Standard base64's `+` and `/`, ASCII punctuation, and characters past
+      // ASCII, which no table indexed by an ASCII code holds.
+
+      for (const encoded of ["AQ+/", "AQ.I", "AQ\u00e9I", "AQ\u{1f369}"]) {
         it(`throws on \`${encoded}\``, () => {
           expect(() => fromBase64(encoded)).toThrow();
         });

@@ -1,8 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { toMemorySpaceAddress } from "../src/link-utils.ts";
@@ -90,7 +91,7 @@ describe("scheduler-empty-reactive-reads", () => {
           expect((await update.commit().settled).error).toBeUndefined();
         }
 
-        const reads = tx.tx.getReactivityLog!().reads;
+        const reads = tx.tx.getReactivityLog().reads;
         expect(reads.length).toBeGreaterThan(0);
         const result = await tx.commit().settled;
         if (stale) {
@@ -98,7 +99,7 @@ describe("scheduler-empty-reactive-reads", () => {
             name: "StorageTransactionInconsistent",
             emptyReactiveCommit: true,
           });
-          expect(tx.tx.getReactivityLog!().reads).toEqual(reads);
+          expect(tx.tx.getReactivityLog().reads).toEqual(reads);
         } else {
           expect(result.error).toBeUndefined();
         }

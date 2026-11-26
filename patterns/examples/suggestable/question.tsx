@@ -1,3 +1,11 @@
+/**
+ * Asks a language model for one clarifying question about a topic, with
+ * multiple-choice options when the answer space is bounded, and shows it in a
+ * `cf-question` whose chosen answer is stored in a cell. It uses
+ * `generateObject` with a schema and makes no request until a topic is
+ * given.
+ */
+
 import {
   computed,
   Default,
@@ -10,6 +18,7 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
+import { promptAbout } from "./suggestion.ts";
 
 // ===== Types =====
 
@@ -50,10 +59,13 @@ const Question = pattern<QuestionInput, QuestionOutput>(
     // state and makes no call until one arrives. A question with no topic has
     // nothing to ask about, so the model is asked only once a caller names the
     // subject.
-    const prompt = computed(() => {
-      if (!topic) return "";
-      return `Generate a single, thoughtful clarifying question about: ${topic}. Include 2-4 multiple choice options if appropriate, or leave options empty for a free-text answer.`;
-    });
+    const prompt = computed(() =>
+      promptAbout(
+        topic,
+        "Generate a single, thoughtful clarifying question about: ",
+        ". Include 2-4 multiple choice options if appropriate, or leave options empty for a free-text answer.",
+      )
+    );
 
     const response = generateObject<{
       question: string;
@@ -93,7 +105,7 @@ const Question = pattern<QuestionInput, QuestionOutput>(
             {ifElse(
               response.pending,
               <div style="color: var(--cf-theme-color-text-secondary);">
-                <cf-loader show-elapsed /> Generating question...
+                <cf-loader showElapsed /> Generating question...
               </div>,
               <cf-question
                 question={computed(

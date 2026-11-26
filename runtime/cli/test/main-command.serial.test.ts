@@ -2,7 +2,6 @@
 // its own copy of the command tree, which reads the environment as it is built;
 // the query string is what makes the copy.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import {
@@ -12,6 +11,7 @@ import {
 } from "../commands/root.ts";
 import { test as testCommand } from "../commands/test-command.ts";
 import { argv, cf, checkStderr, stripAnsi, withEnv } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 class ExitError extends Error {
   constructor(readonly code: number) {
@@ -458,13 +458,21 @@ describe("main command", () => {
             CF_IDENTITY: "/nonexistent/identity.key",
             CF_API_URL: "http://127.0.0.1:8000",
           };
+          // A command that takes a positional before it reads the space is
+          // given one, so the run reaches the space rather than stopping at
+          // the missing argument.
+          const positionals: Record<string, string[]> = {
+            "pattern publish": ["./entry.tsx"],
+            "pattern share": ["./entry.tsx"],
+          };
           for (const entry of named) {
             if (!entry.includes(" ")) continue;
-            const absent = await cf(entry.split(" "), { env: reachesSpace });
+            const args = [...entry.split(" "), ...(positionals[entry] ?? [])];
+            const absent = await cf(args, { env: reachesSpace });
             expect(stripAnsi(absent.stderr.join("\n")), entry).toContain(
               'Missing required option: "--space"',
             );
-            const ambient = await cf(entry.split(" "), {
+            const ambient = await cf(args, {
               env: { ...reachesSpace, CF_SPACE: "ambient" },
             });
             expect(stripAnsi(ambient.stderr.join("\n")), entry).not.toContain(

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { defer } from "@commonfabric/async/defer";
@@ -30,6 +29,12 @@ import {
 } from "../src/ops/piece-controller.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const signer = await Identity.fromPassphrase("piece source lifecycle");
 
@@ -461,6 +466,33 @@ describe("piece source lifecycle", () => {
     await expect(
       piece.changeSource({ kind: "adopt" }),
     ).rejects.toThrow("piece is not following a source");
+  });
+
+  it("refuses to prepare a malformed action or a detach, and leaves the source as it was", async () => {
+    const piece = await pieces.create(versionProgram("current"), { input: {} });
+    await stampOrigin(piece, "system:current.tsx");
+    const before = getPieceSourceSnapshot(piece.getCell());
+
+    await expect(
+      piece.prepareSourceChange({ kind: "unsupported" } as never),
+    ).rejects.toThrow("unsupported piece source action");
+    await expect(
+      piece.prepareSourceChange({ kind: "detach" }),
+    ).rejects.toThrow("a detach adopts no candidate to prepare");
+    expect(getPieceSourceSnapshot(piece.getCell())).toEqual(before);
+  });
+
+  it("refuses a served change that names no prepared change, and leaves the source as it was", async () => {
+    const piece = await pieces.create(versionProgram("current"), { input: {} });
+    await stampOrigin(piece, "system:current.tsx");
+    const before = getPieceSourceSnapshot(piece.getCell());
+
+    await expect(
+      piece.changeSource({ kind: "detach" }, {
+        served: { actingUser: signer.did() },
+      }),
+    ).rejects.toThrow("a served source change applies a prepared change");
+    expect(getPieceSourceSnapshot(piece.getCell())).toEqual(before);
   });
 
   it("refuses an entered origin the source URL policy does not allow", async () => {

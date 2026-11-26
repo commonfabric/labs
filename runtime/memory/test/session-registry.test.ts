@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { SessionRegistry } from "../v2/session-registry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("session-registry", () => {
   it("refuses to resume a session opened with `elidedVerdicts` for a client that does not advertise it", () => {
@@ -198,5 +198,54 @@ describe("session-registry", () => {
       "c",
     );
     expect(resume(4, "d").resumed).toBe(true);
+  });
+
+  describe("updateSeenSeq()", () => {
+    it("returns the session with the highest sequence it has been told of", () => {
+      const registry = new SessionRegistry();
+      const { sessionId } = registry.open("space", {}, 0);
+      expect(registry.updateSeenSeq("space", sessionId, 5)?.seenSeq).toBe(5);
+      expect(registry.updateSeenSeq("space", sessionId, 3)?.seenSeq).toBe(5);
+      expect(registry.get("space", sessionId)?.seenSeq).toBe(5);
+    });
+    it("returns `null` for a session it does not hold", () => {
+      const registry = new SessionRegistry();
+      const { sessionId } = registry.open("space", {}, 0);
+      expect(registry.updateSeenSeq("other", sessionId, 5)).toBeNull();
+      expect(registry.updateSeenSeq("space", "missing", 5)).toBeNull();
+    });
+  });
+
+  describe("clearRoutedInterests()", () => {
+    it("empties the named session's watches and marks it for a full resync", () => {
+      const registry = new SessionRegistry();
+      const { sessionId } = registry.open("space", {}, 0);
+      const { sessionId: otherId } = registry.open("space", {}, 0);
+      for (const id of [sessionId, otherId]) {
+        const session = registry.get("space", id)!;
+        session.trackedIds.add("of:doc");
+        session.forceFullResync = false;
+      }
+
+      registry.clearRoutedInterests("space", sessionId);
+
+      const cleared = registry.get("space", sessionId)!;
+      expect([...cleared.trackedIds]).toEqual([]);
+      expect(cleared.forceFullResync).toBe("routed-restore");
+      const untouched = registry.get("space", otherId)!;
+      expect([...untouched.trackedIds]).toEqual(["of:doc"]);
+      expect(untouched.forceFullResync).toBe(false);
+    });
+    it("leaves every session as it was when it holds no session by that name", () => {
+      const registry = new SessionRegistry();
+      const { sessionId } = registry.open("space", {}, 0);
+      registry.get("space", sessionId)!.trackedIds.add("of:doc");
+
+      registry.clearRoutedInterests("space", "missing");
+
+      expect([...registry.get("space", sessionId)!.trackedIds]).toEqual([
+        "of:doc",
+      ]);
+    });
   });
 });

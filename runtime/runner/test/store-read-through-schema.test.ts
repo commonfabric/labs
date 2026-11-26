@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 import { Identity } from "@commonfabric/identity";
 import type { EntityDocument } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { decomposeSchema } from "../src/schema-decompose.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";

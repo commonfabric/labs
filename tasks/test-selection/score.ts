@@ -77,6 +77,14 @@ export interface Observation {
   seed?: number;
 
   /**
+   * The day the seed names, for a run of a push: the Pacific date the
+   * commit under test was committed on. Absent for a push that did not
+   * shuffle, and for any other run, whose seed can name another day, as
+   * the run of the next day's order does.
+   */
+  committedOn?: string;
+
+  /**
    * Who saw it: the branch for a continuous-integration run, the
    * reporting person's login for a local one.
    */
@@ -154,6 +162,14 @@ export interface IdentityState {
   lastMainByOrder?: MainOutcomes;
 
   /**
+   * The last `MAIN_ORDERS_COUNTED` days whose commits a push to `main`
+   * recorded this identity at, skipped or not, as `committedOn` gives
+   * them, the earliest first. Absent where the aggregate holds no such
+   * record. See `vanished`.
+   */
+  ordersOnMain?: string[];
+
+  /**
    * Failures on `main` that no later `main` run in their order has judged yet.
    * A failure that a later `main` run in its order passes was fixed by the
    * change between them, which makes it a new real test failure unless it
@@ -186,6 +202,34 @@ export function lastMainIn(
 ): "pass" | "fail" | undefined {
   return (outcomes?.find((held) => held.seed === seed) ?? outcomes?.at(-1))
     ?.outcome;
+}
+
+/**
+ * How many later orders in which `main` recorded others of an identity's
+ * unit, and not the identity, say it has gone (see `vanished`), and so how
+ * many of the orders `main` recorded each identity in are kept. With that
+ * many kept for each identity, a unit's identities between them hold that
+ * many of the orders `main` recorded the unit in after any one of them.
+ */
+export const MAIN_ORDERS_COUNTED = 2;
+
+/**
+ * The day an order's seed names, where it names one: a seed is the
+ * Pacific date of the commit a run tests, written `YYYYMMDD`.
+ */
+export function orderDay(seed: number | undefined): string | undefined {
+  const text = String(seed);
+  if (!/^\d{8}$/.test(text)) return undefined;
+  const day = `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6)}`;
+  return isDay(day) ? day : undefined;
+}
+
+/** The latest `MAIN_ORDERS_COUNTED` of two sets of days, the earliest first. */
+export function latestOrdersOnMain(
+  a: readonly string[],
+  b: readonly string[],
+): string[] {
+  return [...new Set([...a, ...b])].sort().slice(-MAIN_ORDERS_COUNTED);
 }
 
 /** `outcomes` with what `main` said in one order as its most recent. */
@@ -377,6 +421,7 @@ export function daysHeld(state: IdentityState): Set<string> {
     ...Object.keys(state.costByDay),
   ]);
   for (const pending of state.pendingMain) days.add(pending.day);
+  for (const day of state.ordersOnMain ?? []) days.add(day);
   return days;
 }
 
@@ -391,7 +436,9 @@ export function daysHeld(state: IdentityState): Set<string> {
  * the moved one is dropped, since a state holds one set's days.
  *
  * Which outcome `main` last gave goes with the history once `from` has
- * nothing left, and only to a state that has none of its own.
+ * nothing left, and only to a state that has none of its own. Each day
+ * `main` recorded `from` goes where that day goes, and `into` keeps the
+ * latest of those and its own.
  */
 export function moveHistory(
   from: IdentityState,
@@ -431,6 +478,14 @@ export function moveHistory(
     if (moves(pending.day)) into.pendingMain.push(pending);
   }
   from.pendingMain = from.pendingMain.filter((pending) => !moves(pending.day));
+  const recorded = from.ordersOnMain ?? [];
+  const moved = recorded.filter((day) => moves(day));
+  if (moved.length > 0) {
+    into.ordersOnMain = latestOrdersOnMain(into.ordersOnMain ?? [], moved);
+    const kept = recorded.filter((day) => !moves(day));
+    if (kept.length > 0) from.ordersOnMain = kept;
+    else delete from.ordersOnMain;
+  }
   if (daysHeld(from).size === 0 && into.lastMainByOrder === undefined) {
     if (from.lastMainByOrder !== undefined) {
       into.lastMainByOrder = from.lastMainByOrder;
@@ -1155,6 +1210,15 @@ export function foldObservations(
     // the last thing known about it. A failure elsewhere therefore goes
     // on being read as the default branch's, and is not credited to the
     // change in front of it.
+    //
+    // A skip does show that the tree holds the test, which is what the
+    // days `main` recorded it on are read for.
+    const committed = observation.committedOn;
+    if (observation.place === "main" && committed !== undefined) {
+      state.ordersOnMain = latestOrdersOnMain(state.ordersOnMain ?? [], [
+        committed,
+      ]);
+    }
     if (observation.outcome === "skip") continue;
 
     bump(state.runsByDay, day);

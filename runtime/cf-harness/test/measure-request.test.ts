@@ -1,8 +1,15 @@
 /** The per-tag first-request measurement, over a recorded run. */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
+
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { main, measureRequest } from "../scripts/measure-request.ts";
 
@@ -75,6 +82,121 @@ describe("measure-request", () => {
     expect(new Set(rows.map((row) => row.toolsBytes)).size).toBe(1);
   });
 
+  it("measures a run recorded with the result contract after the instructions as one recorded with it before them", async () => {
+    const before = await measureRequest(dir);
+    Deno.writeTextFileSync(
+      join(dir, "transcript.json"),
+      JSON.stringify([
+        {
+          role: "system",
+          content: [
+            "You are cf-harness.",
+            "",
+            "Additional instructions:",
+            "Answer in one line.",
+            "",
+            "Structured result contract:",
+            "Result schema (JSON):",
+            JSON.stringify({ type: "object" }),
+          ].join("\n"),
+        },
+        { role: "user", content: "Granted references for this run: none." },
+        { role: "user", content: "count to 100" },
+        { role: "assistant", content: "" },
+      ]),
+    );
+    expect(await measureRequest(dir)).toEqual(before);
+  });
+
+  it("measures a run recorded with the schema as its own system message as one recorded with it in the prompt", async () => {
+    const before = await measureRequest(dir);
+    Deno.writeTextFileSync(
+      join(dir, "transcript.json"),
+      JSON.stringify([
+        {
+          role: "system",
+          content: [
+            "You are cf-harness.",
+            "",
+            "Additional instructions:",
+            "Answer in one line.",
+            "",
+            "Structured result contract:",
+            "- The result schema follows these instructions as a message of its own.",
+          ].join("\n"),
+        },
+        {
+          role: "system",
+          content: `Result schema (JSON):\n${
+            JSON.stringify({ type: "object" })
+          }`,
+        },
+        { role: "user", content: "Granted references for this run: none." },
+        { role: "user", content: "count to 100" },
+        { role: "assistant", content: "" },
+      ]),
+    );
+    expect(await measureRequest(dir)).toEqual(before);
+  });
+
+  it("takes no heading the instructions quote for the real contract or schema, in either recorded order", async () => {
+    const quoted = [
+      "Answer in one line, like this example:",
+      "",
+      "Structured result contract:",
+      "Result schema (JSON):",
+      JSON.stringify({ type: "object", required: ["quoted"] }),
+      "That is all.",
+    ];
+    // The same instructions, as long, quoting no heading.
+    const defused = quoted.map((line) =>
+      line.replace("contract:", "contrakt:").replace("(JSON)", "(JSAN)")
+    );
+    const schema = JSON.stringify({ type: "object" });
+    const orders: Record<string, (instructions: string[]) => string[]> = {
+      "schema before the instructions": (instructions) => [
+        "You are cf-harness.",
+        "Result schema (JSON):",
+        schema,
+        "",
+        "Additional instructions:",
+        ...instructions,
+      ],
+      "contract after the instructions": (instructions) => [
+        "You are cf-harness.",
+        "",
+        "Additional instructions:",
+        ...instructions,
+        "",
+        "Structured result contract:",
+        "Result schema (JSON):",
+        schema,
+      ],
+      "no result schema": (instructions) => [
+        "You are cf-harness.",
+        "",
+        "Additional instructions:",
+        ...instructions,
+      ],
+    };
+    const measured = async (lines: string[]) => {
+      Deno.writeTextFileSync(
+        join(dir, "transcript.json"),
+        JSON.stringify([
+          { role: "system", content: lines.join("\n") },
+          { role: "user", content: "count to 100" },
+          { role: "assistant", content: "" },
+        ]),
+      );
+      return await measureRequest(dir);
+    };
+    for (const [order, system] of Object.entries(orders)) {
+      expect(await measured(system(quoted)), order).toEqual(
+        await measured(system(defused)),
+      );
+    }
+  });
+
   it("measures a recorded run with no result schema, additional instructions or pattern index", async () => {
     Deno.writeTextFileSync(
       join(dir, "transcript.json"),
@@ -120,5 +242,27 @@ describe("measure-request", () => {
     expect(await main([], out)).toBe(2);
     expect(logged).toEqual([]);
     expect(errors[0]).toContain("usage:");
+  });
+
+  it("exits 2 with its usage on standard error when run as a program with no directory", async () => {
+    // The entry point runs only as a program, so this spawns it, once: a
+    // spawned Deno is slow to start.
+
+    const root = fromFileUrl(new URL("../../..", import.meta.url));
+    const output = await runDenoCommandWithTemporaryLock({
+      root,
+      args: (lock) => [
+        "run",
+        "-A",
+        `--lock=${lock}`,
+        join(root, "runtime/cf-harness/scripts/measure-request.ts"),
+      ],
+    });
+    const decoder = new TextDecoder();
+    expect(output.code).toBe(2);
+    expect(decoder.decode(output.stdout)).toBe("");
+    expect(decoder.decode(output.stderr)).toContain(
+      "usage: measure-request.ts <recorded-artifact-dir>",
+    );
   });
 });

@@ -5,6 +5,7 @@
 // (`watchSetPartsV1`, section 4.3.5).
 
 import { assert, assertEquals, assertExists, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import { Server } from "../v2/server.ts";
 import {
   connect,
@@ -27,7 +28,10 @@ import {
 } from "../v2.ts";
 import {
   appendWatchSetPart,
+  encodeSyncParts,
+  encodeUnlessTooLong,
   halveSyncPart,
+  halveTooLong,
   type PartLimits,
   payloadFits,
   serverMessageSync,
@@ -38,6 +42,8 @@ import {
 } from "../v2/message-parts.ts";
 import type { JSONSchema } from "@commonfabric/api";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
+import { describe, it, test } from "@commonfabric/test-support/test";
+import { compressServerMessageSchemas } from "../v2/sync-schema-table.ts";
 import { countValues } from "./support/routed-slots.ts";
 import {
   testSessionOpenAuthFactory,
@@ -86,7 +92,7 @@ const join = (parts: ServerMessage[]): ServerMessage => {
 const valueCount = (message: ServerMessage): number =>
   countValues(JSON.parse(encodeMemoryBoundary(message).slice("fvj1:".length)));
 
-Deno.test("a split sync's parts fit their bounds and join to the sync", () => {
+test("a split sync's parts fit their bounds and join to the sync", () => {
   const limits: PartLimits = { bytes: 2048, values: 60 };
   const message = responseWith(syncOf(30));
   const parts = splitSyncMessage(message, SESSION, limits);
@@ -120,7 +126,7 @@ Deno.test("a split sync's parts fit their bounds and join to the sync", () => {
   assertEquals(join(parts), message);
 });
 
-Deno.test("a split effect joins to the effect", () => {
+test("a split effect joins to the effect", () => {
   const message: SessionEffectMessage = {
     type: "session/effect",
     ...SESSION,
@@ -137,7 +143,7 @@ Deno.test("a split effect joins to the effect", () => {
   assertEquals(join(parts), message);
 });
 
-Deno.test("an entry larger than a part goes alone, and a lone entry is not split", () => {
+test("an entry larger than a part goes alone, and a lone entry is not split", () => {
   const sync = syncOf(3);
   sync.upserts[1] = upsert(1, 5000);
   const parts = splitSyncMessage(responseWith(sync), SESSION, {
@@ -161,7 +167,18 @@ Deno.test("an entry larger than a part goes alone, and a lone entry is not split
   assertEquals(halveSyncPart(lone, SESSION), undefined);
 });
 
-Deno.test("a halved part keeps its place in the sequence", () => {
+describe("halveSyncPart()", () => {
+  it("returns `undefined` for a message that carries no sync", () => {
+    const response: ServerMessage = {
+      type: "response",
+      requestId: "req:1",
+      ok: { serverSeq: 40 },
+    };
+    expect(halveSyncPart(response, SESSION)).toBeUndefined();
+  });
+});
+
+test("a halved part keeps its place in the sequence", () => {
   const parts = splitSyncMessage(responseWith(syncOf(8)), SESSION, {
     bytes: 1500,
     values: null,
@@ -175,7 +192,210 @@ Deno.test("a halved part keeps its place in the sequence", () => {
   );
 });
 
-Deno.test("the assembler passes other sessions' messages between a split sync's parts", () => {
+test("a split part that says more follow keeps saying so on its last part", () => {
+  const parts = splitSyncMessage(
+    responseWith(syncOf(30, { more: true })),
+    SESSION,
+    { bytes: 2048, values: null },
+  );
+  assert(parts.length > 1);
+  assertEquals(
+    parts.map((part) => serverMessageSync(part)!.more),
+    parts.map(() => true as const),
+  );
+});
+
+// Each document links with a schema of its own. The connection's schema
+// table holds all of them, so the whole message is mostly table, and a part
+// carries only the schemas its documents use.
+const schemaOf = (n: number): JSONSchema => ({
+  type: "object",
+  properties: Object.fromEntries(
+    Array.from({ length: 60 }, (_, i) => [`field${n}x${i}`, {
+      type: "string",
+    }]),
+  ),
+});
+const linking = (count: number) =>
+  responseWith({
+    type: "sync",
+    fromSeq: 0,
+    toSeq: 40,
+    upserts: Array.from({ length: count }, (_, n) => ({
+      branch: "",
+      id: `of:linking-${n}`,
+      seq: n + 1,
+      doc: {
+        value: {
+          link: linkRefFrom({
+            id: `of:target-${n}`,
+            path: [],
+            schema: schemaOf(n),
+          }),
+        },
+      },
+    })),
+    removes: [],
+  } as unknown as SessionSync);
+const prepareSchemas = (message: ServerMessage) =>
+  compressServerMessageSchemas(message);
+// The engine's refusal of text past its longest string, at a smaller size.
+const encodeWithin = (ceiling: number) => (message: ServerMessage) => {
+  const encoded = encodeMemoryBoundary(message);
+  if (encoded.length > ceiling) throw new RangeError("Invalid string length");
+  return encoded;
+};
+// A third of the whole, which its schema table alone passes.
+const ceilingFor = (message: ServerMessage) =>
+  Math.floor(encodeMemoryBoundary(prepareSchemas(message)).length / 3);
+
+describe("halveTooLong()", () => {
+  const prepare = prepareSchemas;
+
+  it("halves a sync whose tables alone pass the ceiling until each half encodes", () => {
+    const message = linking(48);
+    const whole = serverMessageSync(prepare(message)) as SessionSync & {
+      schemaTable: Record<string, unknown>;
+    };
+    const ceiling = ceilingFor(message);
+    assert(encodeMemoryBoundary(whole.schemaTable as never).length > ceiling);
+
+    const halves = halveTooLong(
+      message,
+      SESSION,
+      prepare,
+      encodeWithin(ceiling),
+    );
+
+    assert(halves.length > 2);
+    for (const { part, prepared, payload } of halves) {
+      assert(payload.length <= ceiling);
+      assertEquals(payload, encodeMemoryBoundary(prepared));
+      const sync = serverMessageSync(prepared) as SessionSync & {
+        schemaTable: Record<string, unknown>;
+      };
+      assertEquals(
+        Object.keys(sync.schemaTable).length,
+        serverMessageSync(part)!.upserts.length,
+      );
+    }
+    assertEquals(join(halves.map(({ part }) => part)), message);
+  });
+
+  it("throws the engine's error for a single entry it cannot encode", () => {
+    assertThrows(
+      () => halveTooLong(linking(1), SESSION, prepare, encodeWithin(100)),
+      RangeError,
+      "Invalid string length",
+    );
+  });
+});
+
+describe("encodeSyncParts()", () => {
+  // The parts as the server sends them: each one prepared and encoded, the
+  // payload the prepared part's encoding, and the parts joining back to the
+  // sync they divide.
+  const assertDivides = (
+    parts: [ServerMessage, string][],
+    message: ServerMessage,
+  ) => {
+    for (const [prepared, payload] of parts) {
+      assertEquals(payload, encodeMemoryBoundary(prepared));
+    }
+    const syncs = parts.map(([prepared]) => serverMessageSync(prepared)!);
+    syncs.forEach((sync, index) =>
+      assertEquals(sync.more, index < syncs.length - 1 ? true : undefined)
+    );
+    const upserts = syncs.flatMap((sync) =>
+      sync.upserts.map((upsert) => upsert.id)
+    );
+    assertEquals(
+      upserts,
+      serverMessageSync(message)!.upserts.map((upsert) => upsert.id),
+    );
+  };
+
+  it("sends as they are the halves of a sync too long to encode whole, whose tables alone are too", () => {
+    const message = linking(48);
+    const prepared = prepareSchemas(message);
+    const ceiling = ceilingFor(message);
+    // Bounds every half fits, so a half goes as it is.
+    const limits: PartLimits = {
+      bytes: encodeMemoryBoundary(prepared).length,
+      values: null,
+    };
+
+    const parts = encodeSyncParts(
+      message,
+      prepared,
+      undefined,
+      SESSION,
+      limits,
+      prepareSchemas,
+      encodeWithin(ceiling),
+    );
+
+    assert(parts.length > 2);
+    for (const [, payload] of parts) assert(payload.length <= ceiling);
+    assertDivides(parts, message);
+  });
+
+  it("splits in turn a half that encodes but passes the bounds", () => {
+    const message = linking(48);
+    const limits: PartLimits = { bytes: 4096, values: null };
+
+    const parts = encodeSyncParts(
+      message,
+      prepareSchemas(message),
+      undefined,
+      SESSION,
+      limits,
+      prepareSchemas,
+      encodeWithin(ceilingFor(message)),
+    );
+
+    assert(parts.length > 12);
+    assertDivides(parts, message);
+  });
+
+  it("splits a sync that encodes whole but passes the bounds", () => {
+    const message = linking(48);
+    const prepared = prepareSchemas(message);
+    const limits: PartLimits = { bytes: 4096, values: null };
+
+    const parts = encodeSyncParts(
+      message,
+      prepared,
+      encodeMemoryBoundary(prepared),
+      SESSION,
+      limits,
+      prepareSchemas,
+    );
+
+    assert(parts.length > 1);
+    assertDivides(parts, message);
+  });
+
+  it("throws the engine's error for a single entry it cannot encode", () => {
+    const message = linking(1);
+    assertThrows(
+      () =>
+        encodeSyncParts(
+          message,
+          prepareSchemas(message),
+          undefined,
+          SESSION,
+          { bytes: 4096, values: null },
+          prepareSchemas,
+          encodeWithin(100),
+        ),
+      RangeError,
+      "Invalid string length",
+    );
+  });
+});
+
+test("the assembler passes other sessions' messages between a split sync's parts", () => {
   const parts = splitSyncMessage(responseWith(syncOf(10)), SESSION, {
     bytes: 1500,
     values: null,
@@ -198,7 +418,7 @@ Deno.test("the assembler passes other sessions' messages between a split sync's 
   );
 });
 
-Deno.test("the assembler passes a message for the session that carries no sync between its sync's parts", () => {
+test("the assembler passes a message for the session that carries no sync between its sync's parts", () => {
   const parts = splitSyncMessage(responseWith(syncOf(10)), SESSION, {
     bytes: 1500,
     values: null,
@@ -232,7 +452,7 @@ Deno.test("the assembler passes a message for the session that carries no sync b
   );
 });
 
-Deno.test("the assembler refuses a split sync's parts out of sequence", () => {
+test("the assembler refuses a split sync's parts out of sequence", () => {
   const parts = splitSyncMessage(responseWith(syncOf(10)), SESSION, {
     bytes: 1500,
     values: null,
@@ -267,7 +487,63 @@ Deno.test("the assembler refuses a split sync's parts out of sequence", () => {
   refuses([odd as ServerMessage]);
 });
 
-Deno.test("payloadFits counts the values of text long enough to exceed the bound", () => {
+describe("encodeUnlessTooLong()", () => {
+  const message = {
+    type: "response",
+    requestId: "too-long",
+    ok: {},
+  } as unknown as ServerMessage;
+
+  it("returns the message's encoding", () => {
+    assertEquals(encodeUnlessTooLong(message), encodeMemoryBoundary(message));
+  });
+
+  it("returns `undefined` when the encoding is longer than the engine's longest string", () => {
+    // The engine's own refusal of text past 2^29 - 24 UTF-16 units, which
+    // it raises before building any of it.
+    const tooLong = () => "x".repeat(2 ** 29);
+    assertEquals(encodeUnlessTooLong(message, tooLong), undefined);
+  });
+
+  it("throws any other failure to encode", () => {
+    const failing = () => {
+      throw new TypeError("Do not know how to serialize a BigInt");
+    };
+    assertThrows(() => encodeUnlessTooLong(message, failing), TypeError);
+  });
+
+  it("throws a stack overflow, which is a `RangeError` of another kind", () => {
+    // Nested deeper than the codec's recursion reaches.
+    let deep: unknown = 0;
+    for (let depth = 0; depth < 100_000; depth++) deep = [deep];
+    const nested = { ...message, ok: { deep } } as unknown as ServerMessage;
+    const error = assertThrows(() => encodeUnlessTooLong(nested), RangeError);
+    assertEquals(error.message, "Maximum call stack size exceeded");
+  });
+});
+
+test("payloadFits counts the UTF-8 bytes of characters of every width", () => {
+  // Two-, three- and four-byte characters, and lone surrogates, which the
+  // encoder writes as U+FFFD in three bytes, alone and among the others.
+  for (
+    const text of [
+      "é",
+      "中",
+      "😀",
+      "\ud800",
+      "\udc00",
+      "a\ud83d",
+      "é中😀\ud800x",
+    ]
+  ) {
+    const payload = `fvj1:"${text.repeat(50)}"`;
+    const bytes = new TextEncoder().encode(payload).length;
+    assert(payloadFits(payload, { bytes, values: null }), text);
+    assert(!payloadFits(payload, { bytes: bytes - 1, values: null }), text);
+  }
+});
+
+test("payloadFits counts the values of text long enough to exceed the bound", () => {
   const values = 100;
   const numbers = (n: number) => `fvj1:[${"0,".repeat(n - 1)}0]`;
   // Text of at most 201 characters cannot hold more than 100 values: 97
@@ -381,7 +657,7 @@ const watchThroughParts = async (
   }
 };
 
-Deno.test("a server splits a watch set's sync for a client that takes a sync in parts", async () => {
+test("a server splits a watch set's sync for a client that takes a sync in parts", async () => {
   const limits = { bytes: 2048, values: 400 };
   const messages = await watchThroughParts("sync-parts-split", limits);
   const response = messages.findIndex((message) =>
@@ -417,7 +693,7 @@ Deno.test("a server splits a watch set's sync for a client that takes a sync in 
   );
 });
 
-Deno.test("a server sends a sync whole to a client that does not take one in parts", async () => {
+test("a server sends a sync whole to a client that does not take one in parts", async () => {
   const messages = await watchThroughParts(
     "sync-parts-unnegotiated",
     { bytes: 2048, values: 400 },
@@ -513,7 +789,7 @@ const watchedThrough = async (
   }
 };
 
-Deno.test("a server sends a sync whole within the bounds of a whole message, and splits only one past them", async () => {
+test("a server sends a sync whole within the bounds of a whole message, and splits only one past them", async () => {
   const values = Array.from({ length: 24 }, (_, n) => ({
     n,
     text: "w".repeat(300),
@@ -538,7 +814,7 @@ Deno.test("a server sends a sync whole within the bounds of a whole message, and
   }
 });
 
-Deno.test("a server cuts a sync's parts by what its entries take once compacted", async () => {
+test("a server cuts a sync's parts by what its entries take once compacted", async () => {
   // Forty documents link with one large schema. Inline, each document is
   // about 2 KB and the sync about 80 KB; compacted, each is about 200 bytes
   // and the schema goes once in a table. Cut by the compacted entries, with
@@ -564,7 +840,7 @@ Deno.test("a server cuts a sync's parts by what its entries take once compacted"
   }
 });
 
-Deno.test("a server halves a sync whose own tables take it past its bounds", async () => {
+test("a server halves a sync whose own tables take it past its bounds", async () => {
   // Two documents, each linking with a large schema of its own. Compacted,
   // each document is small, and by their own sizes both fit one part; but
   // the message carries both schemas in its table, which takes it past the
@@ -665,7 +941,7 @@ Deno.test("a server halves a sync whose own tables take it past its bounds", asy
   }
 });
 
-Deno.test("a client applies a watch set and a commit that arrive in parts", async () => {
+test("a client applies a watch set and a commit that arrive in parts", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://sync-parts-client"),
@@ -766,7 +1042,7 @@ const watchSet = (count: number): WatchSetRequest => ({
   views: [],
 });
 
-Deno.test("a staged watch set's parts are numbered, fit their bounds and join to the set", () => {
+test("a staged watch set's parts are numbered, fit their bounds and join to the set", () => {
   const limits = { bytes: 1024, values: 80 };
   const message = watchSet(20);
   const parts = splitWatchSetRequest(message, limits);
@@ -874,7 +1150,7 @@ const rawSession = async (storeName: string) => {
   return { server, send, watch, open };
 };
 
-Deno.test("a server holds a watch set's staged parts and applies them as one set", async () => {
+test("a server holds a watch set's staged parts and applies them as one set", async () => {
   const { server, send, watch } = await rawSession("staged-set-applied");
   try {
     for (let part = 0; part < 3; part++) {
@@ -904,7 +1180,7 @@ Deno.test("a server holds a watch set's staged parts and applies them as one set
   }
 });
 
-Deno.test("a server refuses a staged part that does not follow the parts of its set it holds, and the rest of the set", async () => {
+test("a server refuses a staged part that does not follow the parts of its set it holds, and the rest of the set", async () => {
   const { server, send, watch } = await rawSession("staged-set-gap");
   const part = (
     requestId: string,
@@ -965,7 +1241,7 @@ Deno.test("a server refuses a staged part that does not follow the parts of its 
   }
 });
 
-Deno.test("a client stages a watch set past its connection's bounds", async () => {
+test("a client stages a watch set past its connection's bounds", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://staged-set-client"),
@@ -1029,7 +1305,7 @@ Deno.test("a client stages a watch set past its connection's bounds", async () =
   }
 });
 
-Deno.test("a client restores a watch set past its connection's bounds in staged parts, and the server applies all of it", async () => {
+test("a client restores a watch set past its connection's bounds in staged parts, and the server applies all of it", async () => {
   const server = (phase: string) =>
     new Server({
       ...testSessionOpenServerOptions,
@@ -1135,7 +1411,7 @@ Deno.test("a client restores a watch set past its connection's bounds in staged 
   }
 });
 
-Deno.test("a server holds at most 64 parts of a staged set before its last", async () => {
+test("a server holds at most 64 parts of a staged set before its last", async () => {
   const { server, send, watch } = await rawSession("staged-set-bound");
   try {
     for (let part = 0; part < 64; part++) {
@@ -1172,7 +1448,7 @@ Deno.test("a server holds at most 64 parts of a staged set before its last", asy
   }
 });
 
-Deno.test("a connection's staged sets hold at most 64 Mi characters together", async () => {
+test("a connection's staged sets hold at most 64 Mi characters together", async () => {
   const { server, send, watch, open } = await rawSession("staged-set-chars");
   // Parts of just under 8 Mi characters: eight fit the bound together.
   const pad = "x".repeat(8 * 1024 * 1024 - 1024);
@@ -1236,7 +1512,7 @@ Deno.test("a connection's staged sets hold at most 64 Mi characters together", a
   }
 });
 
-Deno.test("a client handles a message for the session that carries no sync between its sync's parts", async () => {
+test("a client handles a message for the session that carries no sync between its sync's parts", async () => {
   // A router answers some of a session's requests itself, between the parts
   // of the session's sync; here a presence notice stands in for its answer.
   // The client handles it and completes the sync, on the one connection.

@@ -13,10 +13,10 @@
  *     literal-union sibling does not.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import { getTypeFromCode } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const WIDEN = { widenLiterals: true };
 

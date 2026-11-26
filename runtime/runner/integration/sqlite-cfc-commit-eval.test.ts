@@ -15,7 +15,10 @@
  *    the row's label from the NEW value.
  */
 
+import { equal } from "@std/assert";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 
 import app from "../../toolshed/app.ts";
 import { cfcLabelViewForDereferenceTraces } from "../src/cfc/label-view.ts";
@@ -184,17 +187,35 @@ async function runTest(base: URL) {
             conf.push(atom);
           }
         }
-        return conf.map((a) => JSON.stringify(a));
+        return conf;
       };
       const row0 = await rowLabel(0);
-      if (!row0.includes(JSON.stringify("did:mailto:carol2@c.example"))) {
+      if (
+        !row0.some((atom) =>
+          equal(atom, {
+            type: CFC_ATOM_TYPE.User,
+            subject: "did:mailto:carol2@c.example",
+          })
+        )
+      ) {
         throw new Error(
-          `row 1's label must re-derive from the upserted sender; got ${row0}`,
+          `row 1's label must re-derive from the upserted sender; got ${
+            JSON.stringify(row0)
+          }`,
         );
       }
-      if (row0.includes(JSON.stringify("did:mailto:alice@a.example"))) {
+      if (
+        row0.some((atom) =>
+          equal(atom, {
+            type: CFC_ATOM_TYPE.User,
+            subject: "did:mailto:alice@a.example",
+          })
+        )
+      ) {
         throw new Error(
-          `row 1's label must NOT keep the pre-upsert sender; got ${row0}`,
+          `row 1's label must NOT keep the pre-upsert sender; got ${
+            JSON.stringify(row0)
+          }`,
         );
       }
 
@@ -211,7 +232,7 @@ async function runTest(base: URL) {
   }
 }
 
-Deno.test({
+test({
   name: "sqlite CFC 3.c server-side commit-time re-derivation (end to end)",
   fn: async () => {
     const server = Deno.serve({ port: 0 }, app.fetch);

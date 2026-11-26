@@ -37,8 +37,8 @@ export default pattern<HScrollStoryInput, HScrollStoryOutput>(() => {
             Horizontal Scrollable Area
           </div>
           <cf-hscroll
-            show-scrollbar={showScrollbar}
-            fade-edges={fadeEdges}
+            showScrollbar={showScrollbar}
+            fadeEdges={fadeEdges}
             style="border: 1px solid #e2e8f0; border-radius: 4px; padding: 8px;"
           >
             <cf-hstack gap="2">
@@ -82,7 +82,7 @@ export default pattern<HScrollStoryInput, HScrollStoryOutput>(() => {
             Image Gallery Style
           </div>
           <cf-hscroll
-            fade-edges
+            fadeEdges
             style="border: 1px solid #e2e8f0; border-radius: 4px; padding: 8px;"
           >
             <cf-hstack gap="2">

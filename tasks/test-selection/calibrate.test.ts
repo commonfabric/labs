@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { TestRecord } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import { maxOf } from "@commonfabric/collections/math";
 import {
   type BatchObservation,
@@ -1015,6 +1015,15 @@ describe("calibrate", () => {
         .toEqual(["oven"]);
       expect(fitted.suites.s?.unitHooks?.icing).toBeCloseTo(0.5, 1);
       expect(fitted.suites.unbatched).toBeUndefined();
+    });
+
+    it("fits nothing from a hooks figure whose name names no suite and unit", () => {
+      const batches = [observed({ ran: 40, spent: 92, units: 4 })];
+      const fitted = calibrate({ setup: new Map(), batches }, {
+        "hooks without a unit": { "2026-08-20": samplesOf([500]) },
+      });
+      expect(fitted).toEqual(calibrate({ setup: new Map(), batches }));
+      expect(fitted.suites.s).not.toHaveProperty("unitHooks");
     });
 
     it("names no hooks in a fit no unit of which has measured any", () => {

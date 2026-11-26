@@ -71,8 +71,8 @@
  * | cfcTriggerReadGating       | core-pinned `true`                               |
  * | cfcDecomposedEnvelopes     | core-default (off) — flip after every deployed   |
  * |                            | reader resolves stored roots' references         |
- * | cfcContentAddressedLabels  | core-default (off) — flip after every deployed   |
- * |                            | reader interprets version-2 envelopes            |
+ * | cfcContentAddressedLabels  | core-default (on) — version-2 envelopes; every   |
+ * |                            | reader interprets both versions                  |
  * | cfcPolicyEvaluation        | core-pinned `"enforce"`                          |
  * | cfcLabelMetadataProtection | core-pinned `"enforce"` (inv-12 Stage 1)         |
  * | cfcDeclaredMonotonicity    | core-pinned `"observe"` (WP5 §8.12.1; `enforce`  |
@@ -142,6 +142,16 @@
  * | moduleCompiler             | core-default (unset) — NEVER set by a preset:    |
  * |                            | only that same factory hands its runtimes the    |
  * |                            | compile worker its serving host owns             |
+ * | runBeacon                  | core-default (unset) — NEVER set by a preset:    |
+ * |                            | only that same factory, in a serving worker,     |
+ * |                            | hands its runtimes the worker's run beacon       |
+ * | indexedCollectionMaintenance | pinned `"none"` in productionServer /          |
+ * |                            | remoteClient / browserWorker: the toolshed they  |
+ * |                            | talk to maintains a space's collections, by its  |
+ * |                            | serving runtime or, with server execution off,   |
+ * |                            | its `IndexedCollectionHost`. Constructor default |
+ * |                            | in the single-process presets, which have no     |
+ * |                            | server and maintain their own collections        |
  *
  * One named departure a caller can opt into: `cfcPosture: "max-enforcement"`
  * (a `CoreParams` field) lays the {@link MAX_ENFORCEMENT_CFC_OPTIONS} bundle
@@ -241,6 +251,8 @@ export const RUNTIME_OPTION_KEYS = [
   "servingPosture",
   "compileTurns",
   "moduleCompiler",
+  "runBeacon",
+  "indexedCollectionMaintenance",
 ] as const satisfies readonly (keyof RuntimeOptions)[];
 
 export type RuntimeOptionKey = (typeof RUNTIME_OPTION_KEYS)[number];
@@ -260,6 +272,8 @@ export {
   EXPERIMENTAL_FLAG_AUTHORITY,
   type ExperimentalFlagAuthority,
   experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
+  FOLLOWED_POSTURE_ENV,
   parseFlagValue,
   parseServerExperimentalOptions,
   SERVER_EXPERIMENTAL_PATH,
@@ -358,8 +372,8 @@ export const MAX_ENFORCEMENT_SINK_CEILINGS: SinkMaxConfidentiality =
  *   preset dial (patternTest/unitTest).
  * - `cfcDecomposedEnvelopes` — gated on every deployed reader resolving
  *   stored roots' references, a readiness question, not an enforcement one.
- * - `cfcContentAddressedLabels` — gated the same way, on every deployed
- *   reader interpreting version-2 envelopes.
+ * - `cfcContentAddressedLabels` — a spelling of the stored envelope, not an
+ *   enforcement dial; the constructor default already writes version 2.
  * - `cfcTrustConfig` — deployment-specific declarations; nothing generic to
  *   bundle.
  * - `cfcPrefixProvenanceStats` — measurement, not enforcement.
@@ -510,7 +524,8 @@ function coreOptions(params: CoreParams): RuntimeOptions {
     // cfcContentAddressedLabels / cfcPolicyRecords / cfcTrustConfig /
     // cfcSinkMaxConfidentiality / cfcReadMaxConfidentiality /
     // cfcReadOnExceed are not among them: they ride the constructor defaults
-    // (off / none) until a first-party rollout begins, except where a preset
+    // (on for cfcContentAddressedLabels; off / none for the rest until a
+    // first-party rollout begins), except where a preset
     // adds a delta after these core options (browserWorker passes the host's
     // cfcTrustConfig and read ceiling). A caller that opts
     // into `cfcPosture` gets the named bundle's values over the pins, for
@@ -743,6 +758,7 @@ export const runtimePresets = {
         experimental: withServerExecutionDefault(params.experimental),
       }),
       patternEnvironment: { apiUrl: params.patternApiUrl ?? params.apiUrl },
+      indexedCollectionMaintenance: "none",
       ...(params.fetch !== undefined ? { fetch: params.fetch } : {}),
       ...(params.consoleHandler !== undefined
         ? { consoleHandler: params.consoleHandler }
@@ -768,6 +784,7 @@ export const runtimePresets = {
         experimental: withServerExecutionDefault(params.experimental),
       }),
       patternEnvironment: { apiUrl: params.apiUrl },
+      indexedCollectionMaintenance: "none",
       ...(params.memoryHost !== undefined
         ? { memoryUrl: params.memoryHost }
         : {}),
@@ -860,6 +877,7 @@ export const runtimePresets = {
       clientClass: "web",
       ...coreOptions(params),
       patternEnvironment: { apiUrl: params.apiUrl },
+      indexedCollectionMaintenance: "none",
       ...(params.spaceHostMap !== undefined
         ? { spaceHostMap: params.spaceHostMap }
         : {}),

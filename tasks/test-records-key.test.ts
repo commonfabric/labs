@@ -1,5 +1,4 @@
 import { encodeBase64 } from "@std/encoding/base64";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -15,6 +14,7 @@ import {
   runCli,
   setupCommand,
   uninstallCommand,
+  watchForInterrupt,
 } from "./test-records-key.ts";
 import {
   generateIdentity,
@@ -22,6 +22,12 @@ import {
   recipientFingerprint,
   seal,
 } from "./test-records-crypto.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** A key file whose private key can actually sign, as a real one does. */
 async function signingKey(): Promise<string> {
@@ -632,11 +638,29 @@ describe("test-records-key", () => {
         if (name === "SHELL") return "/bin/bash";
         return inner(name);
       };
-      await Deno.writeTextFile(join(home, ".bashrc"), "");
+      // A login bash reads `.bash_profile` first on macOS and `.bashrc`
+      // first elsewhere; the profile written is the one it reads second.
+      const [first, second] = Deno.build.os === "darwin"
+        ? [".bash_profile", ".bashrc"]
+        : [".bashrc", ".bash_profile"];
+      await Deno.writeTextFile(join(home, second), "");
 
-      expect(await collectCommand(deps)).toBe(0);
-      expect(await Deno.readTextFile(join(home, ".bashrc"))).toContain(
+      const printed: string[] = [];
+      const log = console.log;
+      console.log = (line: string) => printed.push(line);
+      try {
+        expect(await collectCommand(deps)).toBe(0);
+      } finally {
+        console.log = log;
+      }
+      expect(await Deno.readTextFile(join(home, second))).toContain(
         "CF_TEST_RECORDS_KEY_FILE",
+      );
+      expect(await Deno.stat(join(home, first)).catch(() => undefined))
+        .toBeUndefined();
+      expect(printed.join("\n")).toContain(
+        `${join(home, first)} does not exist, and a login shell here reads ` +
+          "it before the\nprofile just written.",
       );
     });
 
@@ -1746,6 +1770,67 @@ describe("test-records-key", () => {
   describe("INTERRUPT_NOTICE", () => {
     it("says how to pick the key up again", () => {
       expect(INTERRUPT_NOTICE).toContain("deno task test-records-key setup");
+    });
+  });
+
+  describe("watchForInterrupt()", () => {
+    /** Signals that hold the one listener registered, as the platform would. */
+    function heldSignals() {
+      const held: { handler?: () => void } = {};
+      return {
+        held,
+        signals: {
+          addSignalListener: (_: "SIGINT", handler: () => void) => {
+            held.handler = handler;
+          },
+          removeSignalListener: (_: "SIGINT", handler: () => void) => {
+            if (held.handler === handler) delete held.handler;
+          },
+        },
+      };
+    }
+
+    it("prints the notice and exits 130 on an interrupt", () => {
+      const { held, signals } = heldSignals();
+      const exits: number[] = [];
+      const printed: string[] = [];
+      const log = console.log;
+      console.log = (line: string) => printed.push(line);
+      try {
+        watchForInterrupt(signals, (code) => {
+          exits.push(code);
+          throw new Error("exited");
+        });
+        expect(() => held.handler?.()).toThrow("exited");
+      } finally {
+        console.log = log;
+      }
+      expect(printed).toEqual([INTERRUPT_NOTICE]);
+      expect(exits).toEqual([130]);
+    });
+
+    it("returns the call that takes its listener back off", () => {
+      const { held, signals } = heldSignals();
+      const stop = watchForInterrupt(signals, () => {
+        throw new Error("nothing interrupted");
+      });
+      expect(held.handler).toBeDefined();
+      stop();
+      expect(held.handler).toBeUndefined();
+    });
+
+    it("returns a call that does nothing where the platform delivers no interrupt", () => {
+      const stop = watchForInterrupt({
+        addSignalListener: () => {
+          throw new TypeError("unsupported signal");
+        },
+        removeSignalListener: () => {
+          throw new Error("nothing was registered");
+        },
+      }, () => {
+        throw new Error("nothing interrupted");
+      });
+      expect(() => stop()).not.toThrow();
     });
   });
 

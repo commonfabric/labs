@@ -4,7 +4,6 @@
 // store. What is pinned is the store's state, never the serving runtime's
 // own view of it.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
@@ -29,6 +28,12 @@ import {
   startServingMemoryServer,
 } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { loadVerifiedSourceClosure } from "../../runner/src/compilation-cache/cell-cache.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import {
@@ -45,6 +50,7 @@ import {
   confirmServedSetSource,
   finishServedRegistration,
   prepareServedRegistration,
+  readServedInstantiateReceipt,
   servedFollowPieceSource,
   type ServedFollowPreparation,
   type ServedFollowReceipt,
@@ -856,6 +862,37 @@ export default pattern(() => {
       expect(argument.get().seed).toBe("first");
     });
 
+    it("answers a later client the receipt its request key left, and nothing for another key or caller", async () => {
+      const receipt = await instantiate({ program: BASE_PROGRAM }, {
+        seed: "first",
+      }, {
+        requestKey: "read-back",
+      });
+      const pieces = await clientPieces();
+
+      expect(
+        await readServedInstantiateReceipt(
+          pieces,
+          "read-back",
+          aliceSigner.did(),
+        ),
+      ).toEqual(receipt);
+      expect(
+        await readServedInstantiateReceipt(
+          pieces,
+          "never-sent",
+          aliceSigner.did(),
+        ),
+      ).toBeUndefined();
+      expect(
+        await readServedInstantiateReceipt(
+          pieces,
+          "read-back",
+          (await Identity.generate()).did(),
+        ),
+      ).toBeUndefined();
+    });
+
     it("creates a piece a later client reads with the pattern pointer and argument the verb wrote", async () => {
       const receipt = await instantiate({ program: BASE_PROGRAM }, {
         seed: "planted",
@@ -1266,6 +1303,29 @@ export default pattern(() => {
       });
     });
 
+    it("confirms only the pattern, revision and origin the piece holds", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const receipt = await setSource(
+        created.pieceId,
+        { program: programOf(RELEASED_SOURCE) },
+        { origin: "system:followed.tsx" },
+      );
+      const { runtime } = await clientPieces();
+      await confirmServedSetSource(runtime, space, receipt);
+
+      for (
+        const altered of [
+          { ...receipt, pattern: { ...receipt.pattern, symbol: "other" } },
+          { ...receipt, pattern: created.pattern },
+          { ...receipt, revisionId: "no-such-revision" },
+          { ...receipt, origin: "system:numeric.tsx" },
+        ]
+      ) {
+        await expect(confirmServedSetSource(runtime, space, altered))
+          .rejects.toThrow("the source update did not commit");
+      }
+    });
+
     it("refuses an origin no piece can follow, and leaves the piece as it was", async () => {
       const created = await instantiate({ program: BASE_PROGRAM });
       const refusal = await refusalOf(
@@ -1527,6 +1587,25 @@ export default pattern(() => {
         pattern: receipt.pattern,
         origin: "system:numeric.tsx",
       });
+    });
+
+    it("confirms only the follow the piece holds", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const receipt = await follow(created.pieceId, "system:followed.tsx");
+      const { runtime } = await clientPieces();
+      await confirmServedFollow(runtime, space, receipt);
+
+      for (
+        const altered of [
+          { ...receipt, pattern: created.pattern },
+          { ...receipt, pattern: { ...receipt.pattern, symbol: "other" } },
+          { ...receipt, origin: "system:numeric.tsx" },
+          { ...receipt, revisionId: "no-such-revision" },
+        ]
+      ) {
+        await expect(confirmServedFollow(runtime, space, altered))
+          .rejects.toThrow("the follow did not commit");
+      }
     });
 
     it("refuses a follow pinned to a pattern or a revision the piece is off", async () => {

@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { parseDocument } from "./view-helpers.ts";
 import { buildPeekCard } from "../lib/view/card.ts";
+import { shownCells } from "../lib/view/display.ts";
 import type {
   Document,
   Line,
@@ -9,6 +10,7 @@ import type {
   TokenClass,
 } from "../lib/view/model.ts";
 import type { DefTarget, Semantics } from "../lib/view/languages/language.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function infoText(doc: Document, node: StructureNode, semantics?: Semantics) {
   return buildPeekCard(doc, node, semantics).info.map((l) => l.text).join("\n");
@@ -24,7 +26,7 @@ function findByLabel(doc: Document, label: string): StructureNode {
 // card title + "merges" line for merged generic AST nodes
 //
 
-Deno.test("card: a merged generic node names every AST kind it merges", () => {
+test("card: a merged generic node names every AST kind it merges", () => {
   // In `a as B`, the type annotation `B` is a TypeReference whose sole child is
   // the Identifier `B` over the same source range, so they merge into one
   // navigable node carrying both AST kinds.
@@ -51,7 +53,7 @@ const x = a as B;
   );
 });
 
-Deno.test("card: a single-kind generic node title shows its one AST kind", () => {
+test("card: a single-kind generic node title shows its one AST kind", () => {
   const doc = parseDocument(`// transformed: /app.ts
 foo();
 `);
@@ -65,7 +67,7 @@ foo();
   assert(!text.includes("merges"), "no merges line for a single-kind node");
 });
 
-Deno.test("card: a node with no AST kinds falls back to its structure kind", () => {
+test("card: a node with no AST kinds falls back to its structure kind", () => {
   // A synthetic node carrying no astKinds exercises the title fallback that
   // uses the structure kind instead of a joined AST-kind string.
   const node: StructureNode = {
@@ -95,7 +97,7 @@ Deno.test("card: a node with no AST kinds falls back to its structure kind", () 
 // detail sections by meta kind
 //
 
-Deno.test("card: a schema node renders its labeled type", () => {
+test("card: a schema node renders its labeled type", () => {
   const doc = parseDocument(`// transformed: /app.ts
 const __cfLift_1 = lift({
     type: "object",
@@ -116,7 +118,84 @@ const __cfLift_1 = lift({
   assert(text.includes("token"), "renders the schema field");
 });
 
-Deno.test("card: an import with named bindings lists the imported names", () => {
+test("card: a schema goes on one line only when it fits in columns, counting a Han character as two", () => {
+  // Twenty Han characters take forty columns, so the schema no longer fits
+  // its line's fifty-six; five take ten, so it does.
+  const schemaText = (key: string) => {
+    const doc = parseDocument(`// transformed: /app.ts
+const __cfLift_1 = lift({
+    type: "object",
+    properties: { ${key}: { type: "object", properties: { value: { type: "string" } }, required: ["value"] } },
+    required: ["${key}"]
+} as const satisfies __cfHelpers.JSONSchema, {
+    type: "string"
+} as const satisfies __cfHelpers.JSONSchema, (x) => x);
+`);
+    const node = doc.flatStructure.find((n) => n.meta?.kind === "schema");
+    assert(node, "found a schema-meta node");
+    return buildPeekCard(doc, node).info.map((l) => l.text);
+  };
+  const wide = schemaText("漢".repeat(20));
+  const narrow = schemaText("漢".repeat(5));
+
+  assert(wide.includes(`    ${"漢".repeat(20)}: {`), wide.join("\n"));
+  assert(wide.includes("      value: string"), wide.join("\n"));
+  assert(
+    narrow.includes(`schema  { ${"漢".repeat(5)}: { value: string } }`),
+    narrow.join("\n"),
+  );
+});
+
+test("card: a use's line is cut to fit its columns, keeping whole characters", () => {
+  const src = "// transformed: /app.ts\nconst target = 1;\n" +
+    `const u = target + "${"漢".repeat(40)}";\nconst v = target;\n`;
+  const doc = parseDocument(src);
+  const node = doc.flatStructure.find((n) => n.name === "target");
+  assert(node, "found the target");
+  const contexts = buildPeekCard(doc, node).info.flatMap((line) =>
+    line.spans.filter((span) => span.cls === "identifier").map((s) => s.text)
+  );
+  const cut = contexts.find((text) => text.startsWith("const u"));
+  assert(cut, contexts.join("\n"));
+
+  assert(cut.endsWith("漢…"), cut);
+  assertEquals(shownCells(cut).length, 55);
+  assert(contexts.includes("const v = target;"), contexts.join("\n"));
+});
+
+test("card: a use's line is cut after a whole emoji or accented letter, never inside one", () => {
+  // Each emoji with a skin tone is two code points in four UTF-16 code
+  // units, and each accented e two code points.
+  for (const piece of ["👍🏽", "e\u0301"]) {
+    const src = "// transformed: /app.ts\nconst target = 1;\n" +
+      `const u = target + "${piece.repeat(40)}";\n`;
+    const doc = parseDocument(src);
+    const node = doc.flatStructure.find((n) => n.name === "target");
+    assert(node, "found the target");
+    const cut = buildPeekCard(doc, node).info.flatMap((line) =>
+      line.spans.filter((span) => span.cls === "identifier").map((s) => s.text)
+    ).find((text) => text.startsWith("const u"));
+    assert(cut, "found the use");
+
+    assert(cut.endsWith(`${piece}…`), JSON.stringify(cut));
+    assert(shownCells(cut).length <= 56, JSON.stringify(cut));
+  }
+});
+
+test("card: a use's line writes each run of whitespace in it as one space", () => {
+  const src = "// transformed: /app.ts\nconst target = 1;\n" +
+    "const u =\t\ttarget  +   1;\n";
+  const doc = parseDocument(src);
+  const node = doc.flatStructure.find((n) => n.name === "target");
+  assert(node, "found the target");
+  const contexts = buildPeekCard(doc, node).info.flatMap((line) =>
+    line.spans.filter((span) => span.cls === "identifier").map((s) => s.text)
+  );
+
+  assert(contexts.includes("const u = target + 1;"), contexts.join("\n"));
+});
+
+test("card: an import with named bindings lists the imported names", () => {
   const doc = parseDocument(`// transformed: /app.ts
 import { lift, pattern } from "commonfabric";
 `);
@@ -127,7 +206,7 @@ import { lift, pattern } from "commonfabric";
   assert(text.includes("from") && text.includes('"commonfabric"'), text);
 });
 
-Deno.test("card: a side-effect import shows the side-effect marker", () => {
+test("card: a side-effect import shows the side-effect marker", () => {
   const doc = parseDocument(`// transformed: /app.ts
 import "polyfill";
 `);
@@ -140,7 +219,7 @@ import "polyfill";
   assert(text.includes('"polyfill"'), "names the module");
 });
 
-Deno.test("card: a type alias to a named type shows its alias text", () => {
+test("card: a type alias to a named type shows its alias text", () => {
   const doc = parseDocument(`// transformed: /app.ts
 type Alias = SomeOther;
 `);
@@ -151,7 +230,7 @@ type Alias = SomeOther;
   assert(text.includes("= SomeOther"), `alias text rendered: ${text}`);
 });
 
-Deno.test("card: an empty interface emits no member detail", () => {
+test("card: an empty interface emits no member detail", () => {
   const doc = parseDocument(`// transformed: /app.ts
 interface Empty {}
 `);
@@ -169,7 +248,7 @@ interface Empty {}
   assert(card.title.includes("interface Empty"));
 });
 
-Deno.test("card: a closure returning an object shows its return keys", () => {
+test("card: a closure returning an object shows its return keys", () => {
   const doc = parseDocument(`// transformed: /app.ts
 const make = () => { return { url: 1, ok: 2 }; };
 `);
@@ -185,7 +264,7 @@ const make = () => { return { url: 1, ok: 2 }; };
   assert(!text.includes("signature"), "untyped closure has no signature line");
 });
 
-Deno.test("card: a contract that calls inner builders lists them", () => {
+test("card: a contract that calls inner builders lists them", () => {
   const doc = parseDocument(
     `// transformed: /app.ts
 const __cfLift_1 = lift({ type: "object" } as const satisfies __cfHelpers.JSONSchema, { type: "object" } as const satisfies __cfHelpers.JSONSchema, () => {
@@ -209,7 +288,7 @@ const __cfLift_1 = lift({ type: "object" } as const satisfies __cfHelpers.JSONSc
 // outline overflow + glyphs
 //
 
-Deno.test("card: an outline past the cap shows a trailing 'N more' line", () => {
+test("card: an outline past the cap shows a trailing 'N more' line", () => {
   let src = "// transformed: /app.ts\n";
   for (let i = 0; i < 16; i++) src += `const v${i} = ${i};\n`;
   const doc = parseDocument(src);
@@ -220,7 +299,7 @@ Deno.test("card: an outline past the cap shows a trailing 'N more' line", () => 
   assert(text.includes("2 more"), `overflow line present: ${text}`);
 });
 
-Deno.test("card: the 'N more' line is a selectable expand target; expanding shows all", () => {
+test("card: the 'N more' line is a selectable expand target; expanding shows all", () => {
   let src = "// transformed: /app.ts\n";
   for (let i = 0; i < 16; i++) src += `const v${i} = ${i};\n`;
   const doc = parseDocument(src);
@@ -243,7 +322,7 @@ Deno.test("card: the 'N more' line is a selectable expand target; expanding show
   assert(!full.targets.some((t) => t.expand), "no expand target when expanded");
 });
 
-Deno.test("card: the outline picks a glyph for each child kind", () => {
+test("card: the outline picks a glyph for each child kind", () => {
   // A synthetic parent whose children span the glyph cases reachable from the
   // outline (which hoists through, and so never lists, generic node/comment
   // children).
@@ -301,7 +380,7 @@ Deno.test("card: the outline picks a glyph for each child kind", () => {
   assert(text.includes("·"), "default glyph for an unmapped kind");
 });
 
-Deno.test("card: the outline glyphs cover pattern/builder/closure/schema/type/import/return", () => {
+test("card: the outline glyphs cover pattern/builder/closure/schema/type/import/return", () => {
   const kinds: Array<StructureNode["kind"]> = [
     "pattern",
     "builder",
@@ -361,7 +440,7 @@ Deno.test("card: the outline glyphs cover pattern/builder/closure/schema/type/im
 // uses overflow
 //
 
-Deno.test("card: more than ten uses fold into a 'N more' line", () => {
+test("card: more than ten uses fold into a 'N more' line", () => {
   let src = "// transformed: /app.ts\nconst target = 1;\n";
   for (let i = 0; i < 13; i++) src += `const u${i} = target + ${i};\n`;
   const doc = parseDocument(src);
@@ -377,7 +456,7 @@ Deno.test("card: more than ten uses fold into a 'N more' line", () => {
 // deps overflow
 //
 
-Deno.test("card: more than ten dependencies fold into a 'N more' line", () => {
+test("card: more than ten dependencies fold into a 'N more' line", () => {
   let src = "// transformed: /app.ts\n";
   for (let i = 0; i < 12; i++) src += `const dep${i} = ${i};\n`;
   src += "function consumer() {\n  return " +
@@ -406,10 +485,11 @@ function fakeSemantics(
       typeof defs === "function" ? defs(offset) : defs,
     fileLines: () => null,
     prewarm: () => {},
+    dispose: () => {},
   };
 }
 
-Deno.test("card: deferred semantic dependencies remain in the folded count", () => {
+test("card: deferred semantic dependencies remain in the folded count", () => {
   let src = "// transformed: /app.ts\n";
   for (let i = 0; i < 41; i++) src += `const dep${i} = ${i};\n`;
   src += "function consumer() {\n  return " +
@@ -448,7 +528,7 @@ Deno.test("card: deferred semantic dependencies remain in the folded count", () 
   );
 });
 
-Deno.test("card: a deferred dependency does not use a same-named local jump", () => {
+test("card: a deferred dependency does not use a same-named local jump", () => {
   let src = "// transformed: /app.ts\nconst ext = 1;\n";
   src += "function consumer() {\n";
   for (let i = 0; i < 40; i++) src += `  unknown${i};\n`;
@@ -504,7 +584,7 @@ Deno.test("card: a deferred dependency does not use a same-named local jump", ()
   );
 });
 
-Deno.test("card: a call target defined inside the selected node is not a dependency", () => {
+test("card: a call target defined inside the selected node is not a dependency", () => {
   const doc = parseDocument(`// transformed: /app.ts
 function consumer() {
   const worker = { run(): void {} };
@@ -535,7 +615,7 @@ function consumer() {
   );
 });
 
-Deno.test("card: repeated calls to one target produce one dependency", () => {
+test("card: repeated calls to one target produce one dependency", () => {
   const doc = parseDocument(`// transformed: /app.ts
 const worker = { run(): void {} };
 [worker.run(), worker.run()];
@@ -567,7 +647,7 @@ const worker = { run(): void {} };
   );
 });
 
-Deno.test("card: a dependency that resolves in-blob jumps to its enclosing node", () => {
+test("card: a dependency that resolves in-blob jumps to its enclosing node", () => {
   const doc = parseDocument(`// transformed: /app.ts
 const helper = 1;
 function consumer() {
@@ -595,7 +675,7 @@ function consumer() {
   assertEquals(dep!.defEndOffset, helper.endOffset);
 });
 
-Deno.test("card: a dependency whose blob offset is in no node jumps to the raw site", () => {
+test("card: a dependency whose blob offset is in no node jumps to the raw site", () => {
   const doc = parseDocument(`// transformed: /app.ts
 const helper = 1;
 function consumer() {
@@ -620,7 +700,7 @@ function consumer() {
 // external ("defined elsewhere") section
 //
 
-Deno.test("card: symbols resolving to a file land in 'defined elsewhere'", () => {
+test("card: symbols resolving to a file land in 'defined elsewhere'", () => {
   const doc = parseDocument(`// transformed: /app.ts
 function consumer() {
   return alpha + beta + gamma;
@@ -649,7 +729,7 @@ function consumer() {
   assert(!text.includes("DEPENDS ON"), "no in-blob deps");
 });
 
-Deno.test("card: more than eight external symbols fold into a 'N more' line", () => {
+test("card: more than eight external symbols fold into a 'N more' line", () => {
   // Eleven distinct free identifiers, all resolving externally.
   const names = Array.from({ length: 11 }, (_, i) => `ext${i}`);
   let src = "// transformed: /app.ts\nfunction consumer() {\n  return ";
@@ -690,7 +770,7 @@ function identLine(text: string): Line {
   return { text, spans };
 }
 
-Deno.test("card: a short scalar-root schema renders inline", () => {
+test("card: a short scalar-root schema renders inline", () => {
   const node: StructureNode = {
     kind: "schema",
     label: "schema",
@@ -719,7 +799,7 @@ Deno.test("card: a short scalar-root schema renders inline", () => {
   assert(text.includes("string"), `scalar schema renders its type: ${text}`);
 });
 
-Deno.test("card: a wide scalar-root schema renders on its own indented line", () => {
+test("card: a wide scalar-root schema renders on its own indented line", () => {
   // A root type long enough to exceed the inline budget pushes the labeled
   // schema onto a heading plus a multiline body, whose scalar-root branch
   // emits a single indented type line.
@@ -758,7 +838,7 @@ Deno.test("card: a wide scalar-root schema renders on its own indented line", ()
   assert(indented, `scalar root on its own indented line: ${text}`);
 });
 
-Deno.test("card: a wide nested-object field renders as a multiline block", () => {
+test("card: a wide nested-object field renders as a multiline block", () => {
   // A contract whose input schema has a nested object too wide to fit inline,
   // forcing schemaMultiline → fieldMultiline's nested-object expansion. The
   // contract has captures so it is treated as carrying its own schemas.
@@ -821,7 +901,7 @@ Deno.test("card: a wide nested-object field renders as a multiline block", () =>
   );
 });
 
-Deno.test("card: an array-of-object field that exceeds the budget closes with }[]", () => {
+test("card: an array-of-object field that exceeds the budget closes with }[]", () => {
   const wide = "anotherExtremelyLongPropertyNameForcingTheMultilineLayout";
   const node: StructureNode = {
     kind: "builder",

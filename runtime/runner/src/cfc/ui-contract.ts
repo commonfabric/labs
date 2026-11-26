@@ -512,9 +512,9 @@ const uiContractCandidatesFromSchema = (
 
 export const trustedEventProvenanceMatchesUiContract = (
   provenance: unknown,
-  contract: UiContract | undefined,
+  contract: UiContract,
 ): boolean => {
-  if (contract === undefined || !isTrustedUiProvenance(provenance)) {
+  if (!isTrustedUiProvenance(provenance)) {
     return false;
   }
   if (
@@ -552,7 +552,7 @@ export const trustedEventProvenanceMatchesUiContract = (
 
 export const recordedTrustedEventProvenanceMatchesUiContract = (
   provenance: unknown,
-  contract: UiContract | undefined,
+  contract: UiContract,
 ): boolean => {
   if (!trustedEventProvenanceMatchesUiContract(provenance, contract)) {
     return false;
@@ -564,7 +564,7 @@ export const recordedTrustedEventProvenanceMatchesUiContract = (
     return false;
   }
 
-  switch (contract?.helper) {
+  switch (contract.helper) {
     case "UiAction":
       return dataset.uiAction === contract.action;
     case "UiPromptSlot":
@@ -572,8 +572,6 @@ export const recordedTrustedEventProvenanceMatchesUiContract = (
         (contract.role === undefined || dataset.uiRole === contract.role);
     case "UiDisclosure":
       return dataset.uiDisclosureKind === contract.kind;
-    default:
-      return false;
   }
 };
 

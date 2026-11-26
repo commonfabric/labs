@@ -909,70 +909,23 @@ export const classifyHarnessRunError = (
   error: unknown,
   options: ClassifyHarnessRunErrorOptions,
 ): HarnessFailureRecord => {
-  if (error instanceof ProcessTimeoutError) {
-    return createHarnessFailureRecord({
-      kind: "timeout",
-      source: options.source ?? "run_error",
-      detail: error.message,
-      at: options.at,
-      ...(options.toolId !== undefined ? { toolId: options.toolId } : {}),
-      ...(options.toolCallId !== undefined
-        ? { toolCallId: options.toolCallId }
-        : {}),
-      ...(options.outputId !== undefined ? { outputId: options.outputId } : {}),
-      ...(options.command !== undefined ? { command: options.command } : {}),
-      ...(options.commandName !== undefined
-        ? { commandName: options.commandName }
-        : {}),
-    });
-  }
+  const isProcessTimeout = error instanceof ProcessTimeoutError;
   const message = describeFailure(error);
   const normalized = message.toLowerCase();
-  if (
-    // Operation-neutral: the gateway client prefixes this with the operation
-    // ("chat.completions" or "responses"), and runs recorded before that
-    // change say "chat completion". Matching the stable tail classifies all
-    // three.
-    normalized.includes("transport request failed") &&
-    (normalized.includes("timed out") ||
-      normalized.includes("timeout"))
-  ) {
-    return createHarnessFailureRecord({
-      kind: "timeout",
-      source: options.source ?? "run_error",
-      detail: message,
-      at: options.at,
-      ...(options.toolId !== undefined ? { toolId: options.toolId } : {}),
-      ...(options.toolCallId !== undefined
-        ? { toolCallId: options.toolCallId }
-        : {}),
-      ...(options.outputId !== undefined ? { outputId: options.outputId } : {}),
-      ...(options.command !== undefined ? { command: options.command } : {}),
-      ...(options.commandName !== undefined
-        ? { commandName: options.commandName }
-        : {}),
-    });
-  }
-  if (normalized.includes("path escapes workspace root")) {
-    return createHarnessFailureRecord({
-      kind: "workspace_path_confusion",
-      source: options.source ?? "run_error",
-      detail: message,
-      at: options.at,
-      ...(options.toolId !== undefined ? { toolId: options.toolId } : {}),
-      ...(options.toolCallId !== undefined
-        ? { toolCallId: options.toolCallId }
-        : {}),
-      ...(options.outputId !== undefined ? { outputId: options.outputId } : {}),
-      ...(options.command !== undefined ? { command: options.command } : {}),
-      ...(options.commandName !== undefined
-        ? { commandName: options.commandName }
-        : {}),
-    });
-  }
-  const kind = normalized.includes("unknown builtin tool") ||
-      normalized.includes("did not return an outputid") ||
-      normalized.includes("chat completion response did not include a message")
+  const kind: HarnessFailureKind = isProcessTimeout ||
+      // Operation-neutral: the gateway client prefixes this with the
+      // operation ("chat.completions" or "responses"), and runs recorded
+      // before that change say "chat completion". Matching the stable tail
+      // classifies all three.
+      (normalized.includes("transport request failed") &&
+        (normalized.includes("timed out") || normalized.includes("timeout")))
+    ? "timeout"
+    : normalized.includes("path escapes workspace root")
+    ? "workspace_path_confusion"
+    : normalized.includes("unknown builtin tool") ||
+        normalized.includes(
+          "chat completion response did not include a message",
+        )
     ? "harness_error"
     : "unknown";
   return createHarnessFailureRecord({

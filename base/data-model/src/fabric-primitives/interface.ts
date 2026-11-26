@@ -30,7 +30,6 @@ export const FABRIC_PRIMITIVE_VALUE_TAGS = Object.freeze(
     FabricHash: "FabricHash",
     FabricBytes: "FabricBytes",
     FabricKeyPair: "FabricKeyPair",
-    FabricRegExp: "FabricRegExp",
     FabricUnavailable: "FabricUnavailable",
   } as const,
 );
@@ -66,9 +65,6 @@ export const FABRIC_PRIMITIVE_CODEC_TYPE_TAGS = Object.freeze(
 
     /** Constant for class `FabricKeyPair`. */
     KeyPair: "KeyPair@1",
-
-    /** Constant for class `FabricRegExp`. */
-    RegExp: "RegExp@1",
 
     /** Constant for class `FabricUnavailable`. */
     Unavailable: "Unavailable@1",

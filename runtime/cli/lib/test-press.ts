@@ -17,7 +17,21 @@ import { renderInProcess } from "@commonfabric/html/in-process";
 import { MockDoc } from "@commonfabric/html/mock-doc";
 import type { Cell } from "@commonfabric/runner";
 
-/** Which rendered control a `{ press }` step presses. */
+/** A modifier key a `{ press }` step can hold down during its click. */
+export type PressModifier = "alt" | "ctrl" | "meta" | "shift";
+
+/** The modifier keys a press step names, each with the event flag it sets. */
+const MODIFIER_FLAGS: Readonly<Record<PressModifier, string>> = {
+  alt: "altKey",
+  ctrl: "ctrlKey",
+  meta: "metaKey",
+  shift: "shiftKey",
+};
+
+const isPressModifier = (value: unknown): value is PressModifier =>
+  typeof value === "string" && Object.hasOwn(MODIFIER_FLAGS, value);
+
+/** Which rendered control a `{ press }` step presses, and how. */
 export interface PressTarget {
   /** The text the control shows, trimmed. */
   control: string;
@@ -29,16 +43,25 @@ export interface PressTarget {
    * holds no other control showing `control`.
    */
   within?: string;
+
+  /**
+   * The keys held down during the click, such as `["meta"]` for a Cmd-click
+   * on a Mac. The click sets the event's `altKey`, `ctrlKey`, `metaKey` and
+   * `shiftKey` from it, each false when its key is not named.
+   */
+  modifiers?: PressModifier[];
 }
 
 /**
- * The control a step names, from the step's `control` and `within`.
+ * The control a step names, from the step's `control` and `within`, and the
+ * keys its `modifiers` hold.
  *
- * @throws If `control` is not a string, or `within` is neither absent nor a
- *   string, naming the step by its index.
+ * @throws If `control` is not a string, `within` is neither absent nor a
+ *   string, or `modifiers` is neither absent nor a list of modifier names,
+ *   naming the step by its index.
  */
 export function pressTargetOf(
-  step: { control?: unknown; within?: unknown },
+  step: { control?: unknown; within?: unknown; modifiers?: unknown },
   index: number,
 ): PressTarget {
   if (typeof step.control !== "string") {
@@ -52,9 +75,20 @@ export function pressTargetOf(
       `Test step at index ${index} has a \`within\` that is not a string`,
     );
   }
+  const modifiers = step.modifiers;
+  if (
+    modifiers !== undefined &&
+    !(Array.isArray(modifiers) && modifiers.every(isPressModifier))
+  ) {
+    throw new Error(
+      `Test step at index ${index} has \`modifiers\` that are not a list of ` +
+        `${Object.keys(MODIFIER_FLAGS).map((key) => `"${key}"`).join(", ")}`,
+    );
+  }
   return {
     control: step.control,
     ...(step.within === undefined ? {} : { within: step.within }),
+    ...(modifiers === undefined ? {} : { modifiers: [...modifiers] }),
   };
 }
 
@@ -137,13 +171,18 @@ export async function pressRenderedControl(
   target: PressTarget,
   settle: () => Promise<void>,
 ): Promise<void> {
-  const mock = new MockDoc(
-    '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
+  const { document, renderOptions } = new MockDoc(
+    "<!DOCTYPE html><html><body></body></html>",
   );
-  const { document, renderOptions } = mock;
-  const container = document.getElementById("root");
-  if (!container) throw new Error("Could not find the press step's root");
+  const container = document.createElement("div");
   const errors: Error[] = [];
+  const failIfErrored = (what: string) => {
+    if (errors.length > 0) {
+      throw new Error(`A press step's ${what} failed: ${errors[0].message}`, {
+        cause: errors[0],
+      });
+    }
+  };
   const render = renderInProcess(container, vdomCell, {
     document,
     setProp: renderOptions.setProp,
@@ -153,31 +192,31 @@ export async function pressRenderedControl(
   try {
     await settle();
     render.flush();
-    if (errors.length > 0) {
-      throw new Error(`A press step's view failed: ${errors[0].message}`, {
-        cause: errors[0],
-      });
-    }
+    failIfErrored("view");
     const control = findPressTarget(
       container as unknown as RenderedNode,
       target,
     );
-    // The click a person makes: trusted, aimed at the control, and seen by
-    // every node on its way up, as it bubbles there.
+    // The click a person makes: trusted, aimed at the control, holding the
+    // keys the step names, and seen by every node on its way up, as it
+    // bubbles there.
     const path = pathFrom(control);
+    const held = new Set(target.modifiers);
     const click = {
       type: "click",
       isTrusted: true,
       target: control,
       composedPath: () => path,
+      ...Object.fromEntries(
+        Object.entries(MODIFIER_FLAGS).map(([key, flag]) => [
+          flag,
+          held.has(key as PressModifier),
+        ]),
+      ),
     };
     for (const node of path) node.dispatchEvent?.(click);
     // A handler that throws on the click is reported here, as a render error.
-    if (errors.length > 0) {
-      throw new Error(`A press step's click failed: ${errors[0].message}`, {
-        cause: errors[0],
-      });
-    }
+    failIfErrored("click");
   } finally {
     render.cancel();
   }

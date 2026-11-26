@@ -453,7 +453,7 @@ const ASSIGNMENT_OPERATORS = new Set<ts.SyntaxKind>([
 
 function isCapabilityAnalyzableFunction(
   node: ts.Node | undefined,
-): node is CapabilityAnalyzableFunction {
+): node is CapabilityAnalyzableFunction & { readonly body: ts.ConciseBody } {
   return !!node &&
     (
       ts.isArrowFunction(node) ||
@@ -623,7 +623,6 @@ function getParameterDeclaredCellKind(
   );
 }
 
-// A missing annotation (implicit any) or an explicit `any`/`unknown` parameter
 // A union parameter that mixes a recognized cell wrapper with a member the
 // contract cannot collapse to the same capability — for example
 // `AuthCell | Writable<Auth>`, or `Writable<Auth> | ReadonlyCell<Auth>`. Such a
@@ -632,15 +631,15 @@ function getParameterDeclaredCellKind(
 // — it does not fire for value-or-cell framework types (`FactoryInput<T>`,
 // `U | AnyBrandedCell<U>`), which are unions with no recognized-wrapper member
 // (or not unions at all), nor for bare `Cell<T>`, generics, or `any`/`unknown`.
+// It is asked only about a type `getExplicitCellKindFromTypeNode` resolves to
+// no single capability, so what is left to test is that some member is a
+// recognized wrapper.
 function isAmbiguousCellWrapperUnion(
   typeNode: ts.TypeNode | undefined,
   checker: ts.TypeChecker,
 ): boolean {
   const node = typeNode && unwrapTypeParentheses(typeNode);
   if (!node || !ts.isUnionTypeNode(node)) return false;
-  // If the union collapses to a single capability it is readable; only flag when
-  // it does not, yet at least one member is a recognized cell wrapper.
-  if (getExplicitCellKindFromTypeNode(node, checker)) return false;
   return node.types.some((member) =>
     !isNullOrUndefinedTypeNode(member) &&
     getExplicitCellKindFromTypeNode(member, checker) !== undefined
@@ -1594,15 +1593,8 @@ function isArrayIsArrayCall(
   const symbol = checker?.getSymbolAtLocation(target.name);
   if (symbol === undefined) return spelledArray;
   return (symbol.getDeclarations() ?? []).some((declaration) => {
-    let owner: ts.Node | undefined = declaration.parent;
-    while (
-      owner && !ts.isInterfaceDeclaration(owner) &&
-      !ts.isClassDeclaration(owner)
-    ) {
-      owner = owner.parent;
-    }
-    return owner !== undefined &&
-      (ts.isInterfaceDeclaration(owner) || ts.isClassDeclaration(owner)) &&
+    const owner = declaration.parent;
+    return (ts.isInterfaceDeclaration(owner) || ts.isClassDeclaration(owner)) &&
       owner.name?.text === "ArrayConstructor";
   });
 }
@@ -1621,9 +1613,8 @@ function isArrayIsArrayCall(
  * is handed by name, whose schema comes from the builder's type arguments or
  * is not emitted at all, so this summary never reaches its schema.
  */
-function returnsToACaller(fn: ts.Node): boolean {
+function returnsToACaller(fn: CapabilityAnalyzableFunction): boolean {
   if (ts.isFunctionDeclaration(fn) || ts.isMethodDeclaration(fn)) return true;
-  if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) return false;
   const holder = outermostTransparentWrapper(fn).parent;
   return holder !== undefined &&
     (ts.isVariableDeclaration(holder) || ts.isPropertyAssignment(holder) ||
@@ -1957,7 +1948,12 @@ function isKnownIdentityEqualsCallee(
   const current = unwrapExpression(expr);
 
   if (ts.isIdentifier(current)) {
-    if (current.text !== "equals" && current.text !== "equalLinks") {
+    // `equalsKey` returns the key `equals` matches by, so it uses its argument
+    // as `equals` does; it has no method form.
+    if (
+      current.text !== "equals" && current.text !== "equalLinks" &&
+      current.text !== "equalsKey"
+    ) {
       return false;
     }
     if (!checker) {
@@ -2190,8 +2186,6 @@ function assignParameterBindingAlias(
   }
 
   for (const element of name.elements) {
-    if (ts.isOmittedExpression(element)) continue;
-
     if (element.dotDotDotToken || element.initializer) {
       for (const ref of bindingRefs(source)) markWildcard(ref.root, ref.path);
       clearBindingAliases(element.name, aliases, aliasShapes);
@@ -2539,19 +2533,11 @@ export function analyzeFunctionCapabilities(
       isPatternCallback && name === parameterStateKeys[0] &&
       path[0] === SELF_PATH_SEGMENT;
 
-    const trackRead = (
-      name: string,
-      path: readonly string[],
-      options?: { identityOnly?: boolean },
-    ): void => {
+    const trackRead = (name: string, path: readonly string[]): void => {
       if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       state.reads.add(encodePath(path));
-      if (options?.identityOnly) {
-        state.hasIdentityUse = true;
-      } else {
-        state.hasNonIdentityUse = true;
-      }
+      state.hasNonIdentityUse = true;
     };
 
     const trackWrite = (name: string, path: readonly string[]): void => {
@@ -2650,9 +2636,6 @@ export function analyzeFunctionCapabilities(
       const state = ensureState(name);
       state.rawOpaquePaths.add(encodePath(path));
       state.hasNonIdentityUse = true;
-      if (path.length === 0) {
-        state.hasNonIdentityRootUse = true;
-      }
     };
 
     // Whether `name` is a handler's event. An event's values are copied into
@@ -2748,7 +2731,6 @@ export function analyzeFunctionCapabilities(
             holder,
             /^\d+$/.test(segment) ? ts.IndexKind.Number : ts.IndexKind.String,
           );
-        if (!type) return undefined;
       }
       return unwrapCellLikeType(type, checker);
     };
@@ -3549,15 +3531,12 @@ export function analyzeFunctionCapabilities(
       );
     };
 
-    const trackReadRef = (
-      ref: SourceRef,
-      options?: { identityOnly?: boolean },
-    ): void => {
+    const trackReadRef = (ref: SourceRef): void => {
       if (ref.dynamic) {
         trackDynamicRead(ref.root, ref.path);
         return;
       }
-      trackRead(ref.root, ref.path, options);
+      trackRead(ref.root, ref.path);
     };
 
     const trackWriteRef = (ref: SourceRef): void => {
@@ -3784,16 +3763,11 @@ export function analyzeFunctionCapabilities(
 
       // `index` walks the argument list; `paramIndex` walks parameter
       // positions. The two diverge only when a fixed-length tuple spread expands
-      // into several positions, so the loop update advances `paramIndex` by one
-      // per argument and the tuple branch adds the remaining positions.
-      for (
-        let index = 0, paramIndex = 0;
-        index < args.length;
-        index++, paramIndex++
-      ) {
-        const argument = args[index];
-        if (!argument) continue;
-
+      // into several positions, and `tupleExtra` counts the positions such
+      // spreads have added beyond one per argument.
+      let tupleExtra = 0;
+      for (const [index, argument] of args.entries()) {
+        const paramIndex = index + tupleExtra;
         const parameter = getParameterAtArgument(signature, paramIndex);
         const isSpreadArgument = ts.isSpreadElement(argument);
         // An array spread into a fixed parameter has unknown runtime length, so
@@ -3865,9 +3839,9 @@ export function analyzeFunctionCapabilities(
               if (mappedCount === tupleLength) suppressOrdinaryRead();
             }
           }
-          // The loop update advances `paramIndex` by one; the tuple fills
-          // `tupleLength` positions, so add the rest here.
-          paramIndex += tupleLength - 1;
+          // The tuple fills `tupleLength` positions where an argument fills
+          // one, so later arguments start that many positions further on.
+          tupleExtra += tupleLength - 1;
           continue;
         }
 
@@ -3945,7 +3919,9 @@ export function analyzeFunctionCapabilities(
     };
 
     const visitScopedFunctionBody = (
-      callback: CapabilityAnalyzableFunction,
+      callback: CapabilityAnalyzableFunction & {
+        readonly body: ts.ConciseBody;
+      },
       paramBindings?: ReadonlyMap<number, AliasBinding>,
     ): void => {
       const savedAliases = new Map(aliases);
@@ -3974,8 +3950,6 @@ export function analyzeFunctionCapabilities(
         }
 
         const body = callback.body;
-        if (!body) return;
-
         if (ts.isBlock(body)) {
           for (const statement of body.statements) {
             visit(statement);
@@ -4562,12 +4536,7 @@ export function analyzeFunctionCapabilities(
                   trackReadRef(resolvedSource);
                   trackEscapeRef(resolvedSource);
                 } else {
-                  trackReadRef(
-                    resolvedSource,
-                    identityOnlyArgumentUse
-                      ? { identityOnly: true }
-                      : undefined,
-                  );
+                  trackReadRef(resolvedSource);
                 }
               } else {
                 trackReadRef(resolvedSource);
@@ -4703,14 +4672,11 @@ export function analyzeFunctionCapabilities(
         const capabilityHandledArgs = new Set<number>();
         const calleeSummary = resolveInterproceduralSummary(node);
         if (calleeSummary) {
-          const count = Math.min(
-            calleeSummary.params.length,
-            node.arguments.length,
-          );
-          for (let index = 0; index < count; index++) {
+          for (const [index, argument] of node.arguments.entries()) {
+            // An argument past the callee's parameters is left to the
+            // handling of arguments no summary accounts for.
             const paramSummary = calleeSummary.params[index];
-            const argument = node.arguments[index];
-            if (!paramSummary || !argument) continue;
+            if (!paramSummary) break;
 
             // An argument that may be one of several refs passes each of them.
             const sources = resolveExactRefs(argument);
@@ -5024,12 +4990,10 @@ export function analyzeFunctionCapabilities(
         // Passing a tracked root object into an opaque helper can conceal
         // indirect traversal/mutation; conservatively disable shrinking.
         if (!identityArgumentCall) {
-          for (let index = 0; index < node.arguments.length; index++) {
+          for (const [index, argument] of node.arguments.entries()) {
             if (capabilityHandledArgs.has(index)) {
               continue;
             }
-            const argument = node.arguments[index];
-            if (!argument) continue;
             const unwrappedArgument = unwrapExpression(argument);
             if (!ts.isIdentifier(unwrappedArgument)) continue;
             for (const source of resolveExactRefs(unwrappedArgument)) {
@@ -5310,17 +5274,9 @@ export function analyzeFunctionCapabilities(
       }
     }
 
-    const params: CapabilityParamSummary[] = [];
-    for (let index = 0; index < fn.parameters.length; index++) {
-      const parameter = fn.parameters[index];
-      if (!parameter) continue;
-      const summaryName = ts.isIdentifier(parameter.name)
-        ? parameter.name.text
-        : `${PARAMETER_SUMMARY_PREFIX}${index}`;
-      const state = states.get(summaryName);
-      if (!state) continue;
-      params.push(buildCapabilityParamSummary(summaryName, state));
-    }
+    const params = parameterStateKeys.map((name) =>
+      buildCapabilityParamSummary(name, ensureState(name))
+    );
 
     const result: FunctionCapabilitySummary = unreadableCellArguments.length
       ? { params, unreadableCellArguments }

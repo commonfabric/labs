@@ -230,11 +230,10 @@ const observeChildExistence = (
  * in hand.
  */
 const childSchema = (
-  schema: JSONSchema | undefined,
+  schema: JSONSchema,
   key: string,
   container: "object" | "array",
 ): JSONSchema => {
-  if (schema === undefined) return true;
   const narrowed = ContextualFlowControl.schemaAtPath(
     ContextualFlowControl.settledForContainer(schema, container),
     [key],
@@ -291,6 +290,9 @@ export const defaultForAbsentValue = (
     : undefined;
 };
 
+/** A link a view is built at: it always carries the schema the view reads by. */
+type SchemaViewLink = NormalizedFullLink & { schema: JSONSchema };
+
 /**
  * Build a view over `value` at `link`, or report that the data does not match.
  *
@@ -309,7 +311,7 @@ export const defaultForAbsentValue = (
 export function materializeSchemaView(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
-  link: NormalizedFullLink,
+  link: SchemaViewLink,
   value: FabricValue,
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,
@@ -359,8 +361,7 @@ export function materializeSchemaView(
 
   const actualType = getJsonType(value);
   if (
-    schema !== undefined && actualType !== null &&
-    !schemaAcceptsType(schema, actualType)
+    actualType !== null && !schemaAcceptsType(schema, actualType)
   ) {
     return mismatch(`schema does not accept ${actualType}`);
   }
@@ -380,8 +381,8 @@ export function materializeSchemaView(
   // traversal does, instead of viewing what is behind it. Same predicate and
   // same projection, so a reader cannot tell which path answered.
   if (
-    value !== undefined && schema !== undefined &&
-    actualType !== null && isOpaquePosition(schema, actualType)
+    value !== undefined && actualType !== null &&
+    isOpaquePosition(schema, actualType)
   ) {
     tx.readValueOrThrow(link, { nonRecursive: true });
     return createOpaqueReference(runtime, link, tx, synced, cfcLabelView);
@@ -404,8 +405,6 @@ export function materializeSchemaView(
   // write below this path does not re-trigger a reader that never looked.
   tx.readValueOrThrow(link, { nonRecursive: true });
 
-  const viewLink: NormalizedFullLink = { ...link, schema };
-
   // The instant this view describes. Taken even where the transaction has not
   // written yet — that is the ordinary case, and it is the asking that puts a
   // later write on notice to keep the root it displaces.
@@ -415,7 +414,7 @@ export function materializeSchemaView(
     return createArrayView(
       runtime,
       tx,
-      viewLink,
+      link,
       value,
       cfcLabelView,
       synced,
@@ -453,7 +452,7 @@ export function materializeSchemaView(
   return createObjectView(
     runtime,
     tx,
-    viewLink,
+    link,
     value,
     cfcLabelView,
     synced,
@@ -467,7 +466,7 @@ export function materializeSchemaView(
  * stream.
  */
 const visibleKeys = (
-  schema: JSONSchema | undefined,
+  schema: JSONSchema,
   value: Record<string, FabricValue>,
 ): string[] => {
   const keys = Object.keys(value).filter((key) =>
@@ -558,7 +557,7 @@ const refuseMutation = (what: string): never => {
 function createObjectView(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
-  link: NormalizedFullLink,
+  link: SchemaViewLink,
   value: Record<string, FabricValue>,
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,
@@ -767,7 +766,7 @@ function createObjectView(
 function createArrayView(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
-  link: NormalizedFullLink,
+  link: SchemaViewLink,
   value: FabricValue[],
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,

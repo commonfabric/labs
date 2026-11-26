@@ -467,9 +467,8 @@ function onRoomEvent(event: PresenceRoomEvent): void {
   render();
 }
 
-/** Joins the presence room unless it is joined, and says who we are. */
+/** Joins the presence room, and says who we are. */
 function joinRoom(): void {
-  if (leaveRoom) return;
   roomStatus = "joining";
   leaveRoom = cursors.join(onRoomEvent);
   publishProfile();

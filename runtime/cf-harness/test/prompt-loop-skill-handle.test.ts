@@ -7,14 +7,13 @@
  * rather than by registry name.
  */
 
-import { describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { normalize } from "@std/path/posix";
 import { CfHarnessEngine } from "../src/engine.ts";
 import type { HarnessAssistantTranscriptMessage } from "../src/contracts/transcript.ts";
@@ -255,6 +254,9 @@ describe("prompt-loop delegate_task skillHandle", () => {
                       type: "search",
                       query: returnedToken ??
                         (location === "query" ? SKILL_TEXT : "public query"),
+                      // A non-text leaf, which the delegation boundary
+                      // passes through as it is.
+                      resultPage: 2,
                       ...(returnedToken === undefined
                         ? {}
                         : { [returnedToken]: "source note" }),
@@ -339,6 +341,9 @@ describe("prompt-loop delegate_task skillHandle", () => {
               expect(evidence.sources[0].title).toBe("Public title");
               expect(evidence.providerMetadata.searchCalls[0].action.query)
                 .toBe("public query");
+              expect(
+                evidence.providerMetadata.searchCalls[0].action.resultPage,
+              ).toBe(2);
             } else if (returnedToken !== undefined) {
               const raw = childMessages.find((message) =>
                 message.nativeModelToolResults !== undefined

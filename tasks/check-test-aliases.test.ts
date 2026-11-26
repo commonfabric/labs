@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   aliasDirectoryProblems,
@@ -28,25 +28,28 @@ async function writeAliasFiles(
   }
 }
 
+/** Runs git in a scratch repository, failing the test when git does. */
+async function scratchGit(dir: string, ...args: string[]): Promise<void> {
+  const { code, stderr } = await new Deno.Command("git", {
+    args,
+    cwd: dir,
+    env: {
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@example.com",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@example.com",
+    },
+    stdout: "null",
+    stderr: "piped",
+  }).output();
+  if (code !== 0) throw new Error(new TextDecoder().decode(stderr));
+}
+
 async function scratchRepo(
   committedAliases: Record<string, string> | undefined,
 ): Promise<{ dir: string; base: string }> {
   const dir = await Deno.makeTempDir({ prefix: "check-aliases-repo-" });
-  const git = async (...args: string[]) => {
-    const { code, stderr } = await new Deno.Command("git", {
-      args,
-      cwd: dir,
-      env: {
-        GIT_AUTHOR_NAME: "t",
-        GIT_AUTHOR_EMAIL: "t@example.com",
-        GIT_COMMITTER_NAME: "t",
-        GIT_COMMITTER_EMAIL: "t@example.com",
-      },
-      stdout: "null",
-      stderr: "piped",
-    }).output();
-    if (code !== 0) throw new Error(new TextDecoder().decode(stderr));
-  };
+  const git = (...args: string[]) => scratchGit(dir, ...args);
   await git("init", "--initial-branch=main");
   await Deno.mkdir(join(dir, "tasks"), { recursive: true });
   if (committedAliases !== undefined) {
@@ -64,9 +67,10 @@ async function scratchRepo(
   return { dir, base: new TextDecoder().decode(revParse.stdout).trim() };
 }
 
+/** Runs the gate in `dir`, naming `base` where it is given. */
 async function runGate(
   dir: string,
-  base: string,
+  base?: string,
 ): Promise<{ code: number; output: string }> {
   const result = await runDenoCommandWithTemporaryLock({
     root: REPO_ROOT,
@@ -80,7 +84,7 @@ async function runGate(
       "--allow-read",
       "--allow-run=git",
       join(REPO_ROOT, "tasks", "check-test-aliases.ts"),
-      base,
+      ...base === undefined ? [] : [base],
     ],
   });
   return {
@@ -95,10 +99,11 @@ const COMMITTED = { "glaze.test.ts.jsonl": ALIAS_LINE + "\n" };
 
 describe("check-test-aliases", () => {
   // The gate run whole, against scratch repositories: an append passes, a
-  // rewrite fails, a bad line fails, a file no reader loads fails, and a
-  // missing merge base is a setup error. Spawned through the frozen-lock
-  // helper with the repository's own config, since the scratch checkout has
-  // neither.
+  // rewrite fails, a bad line fails, a file no reader loads fails, a
+  // missing merge base is a setup error, and a run naming no base measures
+  // from the default branch the checkout tracks. Spawned through the
+  // frozen-lock helper with the repository's own config, since the scratch
+  // checkout has neither.
 
   it("passes a line appended to a committed file", async () => {
     const repo = await scratchRepo(COMMITTED);
@@ -228,6 +233,48 @@ describe("check-test-aliases", () => {
       expect(result.output).toContain(
         "tasks/test-identity-aliases.jsonl is outside",
       );
+    } finally {
+      await Deno.remove(repo.dir, { recursive: true }).catch(() => {});
+    }
+  });
+
+  it("compares against `upstream/main` where the checkout has one, and `origin/main` otherwise", async () => {
+    // `origin/main` is a commit older than `upstream/main`, which added a
+    // moved-path line naming a path the tree no longer holds. Measured from
+    // `origin/main`, that line is new, so it has to name something; measured
+    // from `upstream/main`, it is history.
+    const repo = await scratchRepo(COMMITTED);
+    try {
+      await writeAliasFiles(repo.dir, {
+        "moved-paths.jsonl": JSON.stringify({
+          date: "2026-08-17",
+          from: { p: "gone/old" },
+          to: { p: "gone/new" },
+        }) + "\n",
+      });
+      await scratchGit(repo.dir, "add", "-A");
+      await scratchGit(repo.dir, "commit", "-q", "-m", "upstream");
+      await scratchGit(
+        repo.dir,
+        "update-ref",
+        "refs/remotes/origin/main",
+        repo.base,
+      );
+      const fromOrigin = await runGate(repo.dir);
+      expect(fromOrigin.output).toContain(
+        "moved-paths.jsonl moves a path to gone/new, which names nothing",
+      );
+      expect(fromOrigin.code).toBe(1);
+
+      await scratchGit(
+        repo.dir,
+        "update-ref",
+        "refs/remotes/upstream/main",
+        "HEAD",
+      );
+      const fromUpstream = await runGate(repo.dir);
+      expect(fromUpstream.output).toContain("2 alias(es) in 2 file(s)");
+      expect(fromUpstream.code).toBe(0);
     } finally {
       await Deno.remove(repo.dir, { recursive: true }).catch(() => {});
     }

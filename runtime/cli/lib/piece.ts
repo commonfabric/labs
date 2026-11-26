@@ -21,7 +21,18 @@ import {
 } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
+import {
+  compileIndexedPattern,
+  type IndexedProgram,
+} from "@commonfabric/pattern-index/deploy";
+import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 import { setLLMUrl } from "@commonfabric/llm";
+import { openPatternIndexClient } from "@commonfabric/pattern-index/access";
+import {
+  findIndexedPiece,
+  type PatternIndexStore,
+  patternIndexStoreRoot,
+} from "@commonfabric/pattern-index/store";
 import {
   ownerReleaseByIntentRequest,
   ownerReleaseByIntentSignature,
@@ -50,8 +61,10 @@ import {
   PiecesController,
   type PieceSourceActionResult,
   PieceSourceChangedError,
+  readServedInstantiateReceipt,
   servedInstantiatePiece,
   ServedLifecycleRefusal,
+  type ServedPatternSource,
 } from "@commonfabric/piece/ops";
 import {
   declaredProperties,
@@ -68,7 +81,6 @@ import {
   decomposeSchema,
   encodeJsonPointer,
   entityIdFrom,
-  formatFabricRef,
   getCellOrThrow,
   getMetaLink,
   getPatternIdentityRef,
@@ -128,6 +140,7 @@ import {
   isObjectOrArray,
   isPlainObject,
 } from "@commonfabric/js-values/types";
+import { encodeDataFile } from "@commonfabric/text/data-file";
 import { caseFold } from "unicode-case-folding";
 
 import { isHandlerCell } from "../../fuse/callables.ts";
@@ -205,6 +218,22 @@ export interface EntryConfig {
   dataFilePaths?: string[];
 }
 
+/**
+ * A published pattern to create a piece from, in place of local source. The
+ * index is read as the space's identity, the principal the piece is created
+ * as.
+ */
+export interface IndexedPatternEntry {
+  /** The pattern's id in the index, as a search answers it. */
+  patternId: string;
+
+  /** Base URL of the pattern index that serves it. */
+  patternIndexUrl: string;
+}
+
+/** Where a new piece's program comes from: local files, or the index. */
+export type PieceEntry = EntryConfig | IndexedPatternEntry;
+
 export interface SpaceConfig {
   apiUrl: string;
   space: string;
@@ -270,6 +299,26 @@ export interface SetPiecePatternOptions {
    * absent, the update detaches the piece.
    */
   origin?: string;
+
+  /**
+   * Told what was deployed once storage accepted it; a caller that records
+   * each deploy (`cf`'s private versions) reads it here.
+   */
+  onDeployed?: (deployed: DeployedProgram) => void;
+}
+
+/** A program a deploy committed, and the pattern id it committed under. */
+export interface DeployedProgram {
+  program: RuntimeProgram;
+
+  /**
+   * Reads the pattern id the deploy committed; `undefined` when it cannot be
+   * read back. Lazy, so a caller that records nothing never pays the read.
+   */
+  patternId: () => Promise<string | undefined>;
+
+  /** The space the deploy wrote to, as a DID, and the piece it wrote. */
+  piece: { space: string; id: string };
 }
 
 export interface GetCellValueOptions {
@@ -559,12 +608,27 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
   loadIdentity?: typeof loadIdentity;
   getProgramFromFile?: typeof getProgramFromFile;
   getPinnedProgramFromFile?: typeof getPinnedProgramFromFile;
+  getProgramFromIndex?: typeof getProgramFromIndex;
+  readServedInstantiateReceipt?: typeof readServedInstantiateReceipt;
+
+  /** The transport index reads go over, in place of the global `fetch`. */
+  patternIndexFetch?: PatternIndexFetch;
+
+  /** The local index membership record, in place of the user's own. */
+  patternIndexStore?: PatternIndexStore;
   instantiatePieceOnServer?: typeof instantiatePieceOnServer;
   setPieceSourceOnServer?: typeof setPieceSourceOnServer;
   followPieceOnServer?: typeof followPieceOnServer;
 
   /** Where creation's phases report; the process-wide trace by default. */
   phaseTrace?: PhaseTrace;
+
+  /**
+   * Resolves when a created piece has had as long as it gets to start, and
+   * stops counting once `settled` aborts; {@link pieceStartDeadline} by
+   * default.
+   */
+  startDeadline?: (settled: AbortSignal) => Promise<void>;
 
   reportSearchError?: (
     pieceId: string,
@@ -670,6 +734,29 @@ export interface ConnectionOutput {
 }
 
 /**
+ * The hook a connection's runtime calls when a pattern navigates. It writes
+ * the line naming the piece navigated to on `line` at once, so a script can
+ * capture it without waiting, and a target it cannot name on `failure`.
+ */
+export function navigateReporter(
+  line: (message: string) => void,
+  failure: (message: string) => void,
+): (target: Cell<unknown>) => void {
+  return (target) => {
+    try {
+      const id = pieceId(target);
+      if (!id) {
+        failure("navigateTo: target missing piece id");
+        return;
+      }
+      line(`navigateTo new piece id ${id}`);
+    } catch (e) {
+      failure(`navigateTo callback error: ${describeFailure(e)}`);
+    }
+  };
+}
+
+/**
  * Opens a connection to the deployment at `config.apiUrl` and returns the
  * controller over it: a space session, a runtime carrying that deployment's
  * experimental options, and a server proven live before it returns. Memory
@@ -761,21 +848,7 @@ export async function loadPieces(
               });
             },
           ],
-          navigateCallback: (target) => {
-            try {
-              const id = pieceId(target);
-              if (!id) {
-                navigateFailure("navigateTo: target missing piece id");
-                return;
-              }
-              // Emit greppable line immediately so scripts can capture without waiting
-              navigateLine(`navigateTo new piece id ${id}`);
-            } catch (e) {
-              navigateFailure(
-                `navigateTo callback error: ${describeFailure(e)}`,
-              );
-            }
-          },
+          navigateCallback: navigateReporter(navigateLine, navigateFailure),
         }),
         ...(consoleHandler === undefined ? {} : { consoleHandler }),
       }),
@@ -900,6 +973,52 @@ async function getPinnedProgramFromFile(
     console.error(renderPinRewrite(rewrite));
   }
   return result.program;
+}
+
+/**
+ * The program a published pattern deploys as, and the index's display name
+ * for it, fetched and compiled into the
+ * space the way cf-harness's `run_pattern` deploys one: the published patterns
+ * it imports are drawn into the space first, so its `cf:pattern:` imports
+ * resolve, and a failure's message never quotes the indexed source.
+ *
+ * Compiling here, ahead of creation, is what gives a creation the shared
+ * path's failures: creation compiles the program again, from the cache this
+ * compile filled, and a served creation compiles it on the server.
+ *
+ * Unlike a program read from local files, this one's fabric imports are not
+ * pinned: it deploys exactly as the index serves it, as `run_pattern` deploys
+ * it.
+ *
+ * @throws IndexedPatternError when the index, a composed import, or the
+ * compile fails.
+ */
+async function getProgramFromIndex(
+  pieces: PiecesController,
+  config: SpaceConfig,
+  entry: IndexedPatternEntry,
+  deps: PieceOperationDependencies = {},
+): Promise<IndexedProgram> {
+  const signer = await (deps.loadIdentity ?? loadIdentity)(config.identity);
+  const { program, name } = await compileIndexedPattern({
+    runtime: pieces.runtime,
+    space: pieces.getSpace(),
+    patternId: entry.patternId,
+    // Signs as the identity and presents the chain from the person's index
+    // root when this machine holds one, as every index call from `cf` does.
+    getClient: () =>
+      openPatternIndexClient({
+        baseUrl: entry.patternIndexUrl,
+        signer,
+        ...(deps.patternIndexFetch === undefined
+          ? {}
+          : { fetchFn: deps.patternIndexFetch }),
+        ...(deps.patternIndexStore === undefined
+          ? {}
+          : { store: deps.patternIndexStore }),
+      }),
+  });
+  return { program, ...(name === undefined ? {} : { name }) };
 }
 
 // Returns an array of metadata about pieces to display.
@@ -1831,8 +1950,8 @@ function servedScope(
 async function createWithReceipt(
   config: SpaceConfig,
   pieces: PiecesController,
-  program: RuntimeProgram,
-  entry: EntryConfig,
+  source: ServedPatternSource,
+  repository: string | undefined,
   options: {
     input?: object;
     start?: boolean;
@@ -1850,9 +1969,7 @@ async function createWithReceipt(
       const request = {
         requestKey,
         ...(options?.input === undefined ? {} : { argument: options.input }),
-        ...(entry.repository === undefined
-          ? {}
-          : { repository: entry.repository }),
+        ...(repository === undefined ? {} : { repository }),
         ...(options?.slug === undefined ? {} : { slug: options.slug }),
         ...(options?.force === undefined ? {} : { force: options.force }),
         register: true,
@@ -1866,7 +1983,7 @@ async function createWithReceipt(
               {
                 ...request,
                 space: pieces.getSpace(),
-                program,
+                ...source,
                 ...(options?.start === false ? { start: false } : {}),
               },
             ),
@@ -1884,7 +2001,7 @@ async function createWithReceipt(
         () =>
           servedInstantiatePiece(pieces, {
             ...request,
-            source: { program },
+            source,
             actingUser,
           }),
         trace,
@@ -1933,6 +2050,20 @@ async function createWithReceipt(
   return receipt.pieceId;
 }
 
+/** How long `cf piece new` waits for a created piece to start. */
+const PIECE_START_TIMEOUT_MS = 60_000;
+
+/**
+ * Resolves once {@link PIECE_START_TIMEOUT_MS} has passed, unless `settled`
+ * aborts first, in which case it never resolves and holds no timer.
+ */
+function pieceStartDeadline(settled: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, PIECE_START_TIMEOUT_MS);
+    settled.addEventListener("abort", () => clearTimeout(timer));
+  });
+}
+
 /**
  * The error reporting that `cf piece new` found no space where it was pointed,
  * naming the command that creates one.
@@ -1946,7 +2077,17 @@ function noSpaceAnswers(error: SpaceNotFoundError): Error {
 }
 
 /**
- * Creates a new piece from source code and optional input.
+ * What creating a piece answers: the piece's id, and for a piece from the
+ * pattern index, the index's display name for the pattern when it has one.
+ */
+export interface NewPieceReceipt {
+  pieceId: string;
+  name?: string;
+}
+
+/**
+ * Creates a new piece from source code, or from a published pattern, and
+ * optional input.
  *
  * A `slug` that already points somewhere is refused the way `set-slug`
  * refuses one, and `force` takes it. With a request key or a serving
@@ -1955,9 +2096,9 @@ function noSpaceAnswers(error: SpaceNotFoundError): Error {
  * so it names the piece as well as the flag: an operator who meant to repoint
  * has an id to name, and one who did not has a piece to find.
  */
-export async function newPiece(
+export async function newPieceWithReceipt(
   config: SpaceConfig,
-  entry: EntryConfig,
+  entry: PieceEntry,
   options?: {
     /** Initial argument committed during setup, before registration or start. */
     input?: object;
@@ -1966,9 +2107,15 @@ export async function newPiece(
     slug?: string;
     force?: boolean;
     requestKey?: string;
+
+    /**
+     * Told what was deployed once the piece exists, for a piece made from
+     * local files; never for one from the index or a replay.
+     */
+    onDeployed?: (deployed: DeployedProgram) => void;
   },
   deps: PieceOperationDependencies = {},
-): Promise<string> {
+): Promise<NewPieceReceipt> {
   const pieces = await timeCliPhase(
     "newPiece.loadPieces",
     () => (deps.loadPieces ?? loadPieces)(config),
@@ -2014,53 +2161,107 @@ export async function newPiece(
     );
   }
 
-  const program = await timeCliPhase(
-    "newPiece.getProgramFromFile",
-    () =>
-      (deps.getPinnedProgramFromFile ?? getPinnedProgramFromFile)(
-        pieces,
-        entry,
+  // A creation replayed by its request key from the index answers from the
+  // receipt the first attempt left, naming the piece's pattern by identity:
+  // the index need not be reachable, nor the pattern still published, for a
+  // creation that already committed.
+  const replayed = "patternId" in entry && options?.requestKey !== undefined
+    ? await timeCliPhase(
+      "newPiece.readReceipt",
+      async () =>
+        (deps.readServedInstantiateReceipt ?? readServedInstantiateReceipt)(
+          pieces,
+          options.requestKey!,
+          (await (deps.loadIdentity ?? loadIdentity)(config.identity)).did(),
+        ),
+    )
+    : undefined;
+  const indexed = replayed !== undefined
+    ? undefined
+    : "patternId" in entry
+    ? await timeCliPhase(
+      "newPiece.getProgramFromIndex",
+      () =>
+        (deps.getProgramFromIndex ?? getProgramFromIndex)(
+          pieces,
+          config,
+          entry,
+          deps,
+        ),
+    )
+    : {
+      program: await timeCliPhase(
+        "newPiece.getProgramFromFile",
+        () =>
+          (deps.getPinnedProgramFromFile ?? getPinnedProgramFromFile)(
+            pieces,
+            entry,
+          ),
       ),
-  );
+    };
+  // Told only once the piece exists. The pattern id is what its pointer
+  // reads back, read only when the caller asks; a read that fails answers no
+  // id rather than failing a creation that succeeded.
+  const deployedFrom = (pieceId: string): void => {
+    if (
+      options?.onDeployed === undefined || indexed === undefined ||
+      "patternId" in entry
+    ) return;
+    options.onDeployed({
+      piece: { space: pieces.getSpace(), id: pieceId },
+      program: indexed.program,
+      patternId: () =>
+        pieces.get(pieceId, false).then(
+          (piece) => piece.getPatternRef(),
+        ).then((ref) => ref?.identity, () => undefined),
+    });
+  };
+  const source: ServedPatternSource = indexed === undefined
+    ? { pattern: replayed!.pattern }
+    : { program: indexed.program };
+  // What the receipt says beside the piece id: the index's display name, for
+  // a piece from the index that has one. A replay answers from the receipt,
+  // which records no name.
+  const named = indexed?.name === undefined ? {} : { name: indexed.name };
+  // A published pattern carries no repository locator of its own.
+  const repository = "patternId" in entry ? undefined : entry.repository;
   // A piece whose pattern never settles leaves `pieces.create` awaiting a
   // scheduler `idle()` that never resolves, and the runtime surfaces no
   // event that a start has definitively failed (a thrown pattern reports its
-  // error and still resolves; a stuck async load reports nothing). This
-  // wall-clock bound is the only thing that turns that hang into a message.
-  // When it fires, report the actual runtime error the pattern recorded while
-  // starting rather than only pointing at the server logs.
-  const PIECE_START_TIMEOUT_MS = 60_000;
+  // error and still resolves; a stuck async load reports nothing). The
+  // start's deadline is the only thing that turns that hang into a message.
+  // When it passes, report the actual runtime error the pattern recorded
+  // while starting rather than only pointing at the server logs.
   const runtimeErrors = runtimeErrorLog(pieces.runtime);
   const errorCountBefore = runtimeErrors.length;
+  const startDeadline = deps.startDeadline ?? pieceStartDeadline;
   const boundStart = <T>(starting: Promise<T>): Promise<T> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        const recorded = runtimeErrors.slice(errorCountBefore).at(-1)?.message;
-        const detail = recorded !== undefined
-          ? `A runtime error was reported while it started: ${recorded}`
-          : `Check toolshed logs for runtime errors.`;
-        reject(
-          new Error(
-            `Piece created but failed to start within ${
-              PIECE_START_TIMEOUT_MS / 1000
-            }s. ${detail}`,
-          ),
-        );
-      }, PIECE_START_TIMEOUT_MS);
+    const settled = new AbortController();
+    const expired = startDeadline(settled.signal).then((): never => {
+      const recorded = runtimeErrors.slice(errorCountBefore).at(-1)?.message;
+      const detail = recorded !== undefined
+        ? `A runtime error was reported while it started: ${recorded}`
+        : `Check toolshed logs for runtime errors.`;
+      throw new Error(
+        `Piece created but failed to start within ${
+          PIECE_START_TIMEOUT_MS / 1000
+        }s. ${detail}`,
+      );
     });
-    return Promise.race([starting, timeout]).finally(() => clearTimeout(timer));
+    return Promise.race([starting, expired]).finally(() => settled.abort());
   };
   // Receipt-backed creation returns after both setup and registration commit.
-  if (served || options?.requestKey !== undefined) {
+  // Only a request key replays a receipt, so a creation with no program to
+  // hand on (`indexed` absent) always takes this path.
+  if (served || options?.requestKey !== undefined || indexed === undefined) {
     const id = await timeCliPhase(
       "newPiece.create",
       () =>
         createWithReceipt(
           config,
           pieces,
-          program,
-          entry,
+          source,
+          repository,
           options,
           deps,
           boundStart,
@@ -2087,21 +2288,25 @@ export async function newPiece(
       throw error;
     });
     noteWroteTo(config.space);
-    return id;
+    deployedFrom(id);
+    return { pieceId: id, ...named };
   }
+  const program = indexed.program;
   const piece = await timeCliPhase(
     "newPiece.create",
     () =>
       boundStart(pieces.create(program, {
-        repository: entry.repository,
+        repository,
         start: options?.start,
         ...(options?.input === undefined ? {} : { input: options.input }),
       })),
   );
   // Here rather than after the registry add below: the piece now exists in
   // the space, and a slug or registry step that throws afterwards leaves a
-  // partial write that the operator is owed the location of.
+  // partial write that the operator is owed the location of. The source it
+  // runs is deployed either way, so it is a version either way.
   noteWroteTo(config.space);
+  deployedFrom(piece.id);
 
   if (options?.slug) {
     try {
@@ -2132,7 +2337,14 @@ export async function newPiece(
     () => pieces.add([piece.getCell()], { reconcile: false }),
   );
 
-  return piece.id;
+  return { pieceId: piece.id, ...named };
+}
+
+/** {@link newPieceWithReceipt}, answering only the new piece's id. */
+export async function newPiece(
+  ...args: Parameters<typeof newPieceWithReceipt>
+): Promise<string> {
+  return (await newPieceWithReceipt(...args)).pieceId;
 }
 
 /**
@@ -2544,7 +2756,7 @@ export async function setPiecePattern(
   const program = await (deps.getPinnedProgramFromFile ??
     getPinnedProgramFromFile)(pieces, entry);
   if (servesLifecycleVerbs(pieces)) {
-    return await updateOnServer(
+    const served = await updateOnServer(
       config,
       pieces,
       resolvedConfig.piece,
@@ -2554,6 +2766,13 @@ export async function setPiecePattern(
       options,
       deps,
     );
+    const patternId = served.ref.identity;
+    options.onDeployed?.({
+      piece: { space: served.space, id: resolvedConfig.piece },
+      program,
+      patternId: () => Promise.resolve(patternId),
+    });
+    return served;
   }
   const piece = await pieces.get(
     resolvedConfig.piece,
@@ -2569,6 +2788,12 @@ export async function setPiecePattern(
     ...(options.origin === undefined ? {} : { origin: options.origin }),
   });
   noteWroteTo(config.space);
+  const patternId = receipt.ref.identity;
+  options.onDeployed?.({
+    piece: { space: receipt.space, id: resolvedConfig.piece },
+    program,
+    patternId: () => Promise.resolve(patternId),
+  });
   return receipt;
 }
 
@@ -2601,13 +2826,83 @@ export async function checkPiecePattern(
   return await piece.checkPattern(program);
 }
 
+/** What a piece runs now: the pattern it points at and that pattern's source. */
+export interface RunningPattern {
+  /** The space (a DID) the piece is in. */
+  space: string;
+
+  /** The piece's id. */
+  id: string;
+
+  /** The content-addressed id of the pattern it runs. */
+  patternId: string;
+
+  program: RuntimeProgram;
+
+  /** The origin the piece follows, when it follows one (`setsrc --origin`). */
+  origin?: string;
+}
+
+/**
+ * Reads what the piece `config` names runs now, without changing it. The
+ * pattern pointer is read once, so the id and the source always match.
+ *
+ * @throws Error when the piece points at no pattern, or its pattern's source
+ * is not in the space.
+ */
+export async function readRunningPattern(
+  config: PieceConfig,
+  deps: PieceResolutionDeps = {},
+): Promise<RunningPattern> {
+  const pieces = await (deps.loadPieces ?? loadPieces)(config);
+  try {
+    const resolvedConfig = await resolvePieceConfigWithPieces(
+      config,
+      pieces,
+      deps,
+    );
+    const piece = await pieces.get(
+      resolvedConfig.piece,
+      false,
+      undefined,
+      resolvedConfig.pieceScope,
+    );
+    const ref = await piece.getPatternRef();
+    const program = ref === undefined
+      ? undefined
+      : await pieces.runtime.patternManager.getPatternSourceProgramByIdentity(
+        ref.identity,
+        pieces.getSpace(),
+      );
+    if (ref === undefined || program === undefined) {
+      throw new Error(
+        `Piece "${resolvedConfig.piece}" does not contain a pattern source.`,
+      );
+    }
+    return {
+      space: pieces.getSpace(),
+      id: resolvedConfig.piece,
+      patternId: ref.identity,
+      program: { ...program, mainExport: ref.symbol },
+      ...(ref.source.origin === undefined ? {} : { origin: ref.source.origin }),
+    };
+  } finally {
+    await pieces.dispose();
+  }
+}
+
 export async function savePiecePattern(
   config: PieceConfig,
   outPath: string,
+  deps: PieceResolutionDeps = {},
 ): Promise<void> {
   await ensureDir(outPath);
-  const pieces = await loadPieces(config);
-  const resolvedConfig = await resolvePieceConfigWithPieces(config, pieces);
+  const pieces = await (deps.loadPieces ?? loadPieces)(config);
+  const resolvedConfig = await resolvePieceConfigWithPieces(
+    config,
+    pieces,
+    deps,
+  );
   const piece = await pieces.get(
     resolvedConfig.piece,
     false,
@@ -2621,6 +2916,10 @@ export async function savePiecePattern(
     );
   }
   await writeSourcePackage(program, outPath);
+  await recordSavedIndexSource(
+    piece.id,
+    program.files.map((file) => join(outPath, file.name)),
+  );
   // Finding what the source declares parses it, which reaches the compiler.
   // deno-lint-ignore cf-imports/no-inline-module-import
   const { undeclaredDataFileWarning } = await import(
@@ -2628,6 +2927,28 @@ export async function savePiecePattern(
   );
   const warning = undeclaredDataFileWarning(program);
   if (warning !== undefined) console.log(warning);
+}
+
+/**
+ * Where the piece came from the pattern index (`cf piece new --from-index`),
+ * remembers that the files `written` are that pattern's source, so
+ * publishing it again credits the original as `remixedFrom`. Best effort: a
+ * missing or unreadable record costs that credit and nothing else.
+ */
+async function recordSavedIndexSource(
+  pieceId: string,
+  written: readonly string[],
+): Promise<void> {
+  try {
+    const found = await findIndexedPiece(patternIndexStoreRoot(), pieceId);
+    if (found !== undefined) {
+      await found.store.recordSource(written, found.patternId);
+    }
+  } catch (error) {
+    console.error(
+      `Could not record where this source came from: ${describeFailure(error)}`,
+    );
+  }
 }
 
 /**
@@ -2639,24 +2960,44 @@ export async function savePiecePattern(
  * layout it comes back to, and a `setsrc` from here resolves the same imports
  * and the same data files. A name that is not grounded belongs to no layout
  * and is refused rather than written somewhere arbitrary.
+ *
+ * Each file is written as the bytes it was stored from, so a binary media
+ * file, which the package holds as a `data:` URL, comes back as the image,
+ * font, or sound it was read from. Every name is checked and every file
+ * encoded before the first is written, so a refused name or a file that
+ * cannot be encoded writes nothing; a failure to write a file can still leave
+ * the files before it written.
  */
 export async function writeSourcePackage(
   program: RuntimeProgram,
   outPath: string,
 ): Promise<void> {
-  for (const { name, contents } of program.files) {
+  const files = program.files.map(({ name, contents }) => {
     if (name[0] !== "/") {
       throw new Error("Ungrounded file in pattern.");
     }
-    const outFilePath = join(outPath, name.substring(1));
-    await Deno.mkdir(dirname(outFilePath), { recursive: true });
-    await Deno.writeTextFile(outFilePath, contents);
+    return {
+      path: join(outPath, name.substring(1)),
+      bytes: encodeDataFile(contents, name),
+    };
+  });
+  for (const { path, bytes } of files) {
+    await Deno.mkdir(dirname(path), { recursive: true });
+    await Deno.writeFile(path, bytes);
   }
 }
 
-export async function applyPieceInput(config: PieceConfig, input: object) {
-  const pieces = await loadPieces(config);
-  const resolvedConfig = await resolvePieceConfigWithPieces(config, pieces);
+export async function applyPieceInput(
+  config: PieceConfig,
+  input: object,
+  deps: PieceResolutionDeps = {},
+) {
+  const pieces = await (deps.loadPieces ?? loadPieces)(config);
+  const resolvedConfig = await resolvePieceConfigWithPieces(
+    config,
+    pieces,
+    deps,
+  );
   const piece = await pieces.get(
     resolvedConfig.piece,
     false,
@@ -2805,8 +3146,10 @@ async function tryResolveLivePieceToolCallable(
  *
  * Under server execution dispatch starts nothing: the event goes to the server,
  * which runs the handler, and this process reads what is stored to resolve the
- * callable. Otherwise dispatch starts only the addressed piece before resolving
- * the requested callable, and a verb sending into an existing root's `addPiece`
+ * callable. Otherwise dispatch starts the addressed piece, after the pieces
+ * that enclose it (`startWithInputSources()` in
+ * `runtime/runner/src/ensure-piece-running.ts`), before resolving the
+ * requested callable, and a verb sending into an existing root's `addPiece`
  * stream has the scheduler start that root at delivery through
  * `ensurePieceRunningVerdict()` in `runtime/runner/src/ensure-piece-running.ts`.
  *
@@ -4433,16 +4776,11 @@ export async function linkPieces(
     } else if (resolvedTargetPath.length > 0) {
       // Schema refusal takes precedence over the overridable absence check.
       // The write repeats this check against metadata in its own transaction.
+      const targetInput = await targetPiece.input.getCell();
       try {
-        assertPieceInputPath(
-          await targetPiece.input.getCell(),
-          resolvedTargetPath,
-        );
+        assertPieceInputPath(targetInput, resolvedTargetPath);
       } catch (error) {
-        if (error instanceof PieceInputPathError) {
-          throw new LinkValidationError(error.message);
-        }
-        throw error;
+        throw asLinkRefusal(error);
       }
       const targetData = await timeCliPhase(
         "linkPieces.readTargetInput",
@@ -4495,12 +4833,19 @@ export async function linkPieces(
         ),
     );
   } catch (error) {
-    if (error instanceof PieceInputPathError) {
-      throw new LinkValidationError(error.message);
-    }
-    throw error;
+    throw asLinkRefusal(error);
   }
   noteWroteTo(config.space);
+}
+
+/**
+ * `error` as `cf piece link` reports it: a path the target's input schema
+ * does not declare is a refusal of the link, and anything else is itself.
+ */
+function asLinkRefusal(error: unknown): unknown {
+  return error instanceof PieceInputPathError
+    ? new LinkValidationError(error.message)
+    : error;
 }
 
 /**
@@ -4661,14 +5006,15 @@ function createPieceConnection(
 
 async function buildConnectionMap(
   config: SpaceConfig,
+  deps: PieceResolutionDeps,
 ): Promise<PieceConnectionMap> {
-  const pieces = await listPieces(config);
+  const pieces = await listPieces(config, deps);
   const connections: PieceConnectionMap = new Map();
 
   for (const piece of pieces) {
     const pieceConfig: PieceConfig = { ...config, piece: piece.id };
     try {
-      const details = await inspectPiece(pieceConfig);
+      const details = await inspectPiece(pieceConfig, deps);
       connections.set(piece.id, createPieceConnection(piece, details));
     } catch (error) {
       // Skip pieces that can't be inspected, but include them with no connections
@@ -4768,16 +5114,15 @@ export function formatSpaceMap(
       return generateAsciiMap(connections);
     case MapFormat.DOT:
       return generateDotMap(connections);
-    default:
-      throw new Error(`Unsupported format: ${format}`);
   }
 }
 
 export async function generateSpaceMap(
   config: SpaceConfig,
   format: MapFormat = MapFormat.ASCII,
+  deps: PieceResolutionDeps = {},
 ): Promise<string> {
-  const connections = await buildConnectionMap(config);
+  const connections = await buildConnectionMap(config, deps);
   return formatSpaceMap(connections, format);
 }
 
@@ -4935,7 +5280,7 @@ export async function inspectPiece(
     undefined,
     resolvedConfig.pieceScope,
   );
-  if (servedPieces(pieces)) await pullServed(pieces, piece.getCell());
+  await pullServed(pieces, piece.getCell());
 
   const id = piece.id;
   const name = piece.name();
@@ -4985,26 +5330,10 @@ async function inspectSlugTargetCell(
   const name = isObjectOrArray(result) && typeof result[NAME] === "string"
     ? result[NAME]
     : undefined;
-  const identityRef = getPatternIdentityRef(target);
-  const patternRef: PiecePatternRef | undefined = identityRef === undefined
-    ? undefined
-    : {
-      ...identityRef,
-      source: {
-        ref: formatFabricRef({
-          ref: {
-            kind: "uri",
-            scheme: "pattern",
-            hash: identityRef.identity,
-          },
-        }),
-      },
-    };
-
+  // The target is no piece document, so it carries no pattern to report.
   return {
     id: slug,
     name,
-    patternRef,
     result,
     cachedResultFields: cachedResultFields(target, result),
     readingFrom: [],
@@ -5025,10 +5354,11 @@ export async function getPieceView(
 }
 
 export function formatViewTree(view: unknown): string {
-  const format = (node: unknown, prefix: string, last: boolean): string => {
+  const format = (value: unknown, prefix: string, last: boolean): string => {
     const branch = last ? "└─ " : "├─ ";
-    if (!isVNodeLike(node)) {
-      return `${prefix}${branch}${String(node)}`;
+    const node = viewNodeOf(value);
+    if (node === undefined) {
+      return `${prefix}${branch}${String(value)}`;
     }
 
     const children = Array.isArray(node.children) ? node.children : [];
@@ -5537,13 +5867,26 @@ const describeClause = (clause: ReleasableClause): string =>
       : `${position.origin} (${position.observes})`
   ).join(", ");
 
+/** Where {@link readTerminalLine} writes its prompt and reads the answer. */
+export interface TerminalStreams {
+  input: ReadableStream<Uint8Array>;
+  output: { write(bytes: Uint8Array): Promise<number> };
+}
+
 /**
  * Reads, from the owner at a terminal, one line typed in answer to `prompt`,
- * or `null` at the end of input.
+ * or `null` at the end of input. The terminal is the process's standard input
+ * and standard error unless `terminal` names another.
  */
-const readTerminalLine = async (prompt: string): Promise<string | null> => {
-  await Deno.stderr.write(new TextEncoder().encode(prompt));
-  const reader = Deno.stdin.readable.getReader();
+export async function readTerminalLine(
+  prompt: string,
+  terminal: TerminalStreams = {
+    input: Deno.stdin.readable,
+    output: Deno.stderr,
+  },
+): Promise<string | null> {
+  await terminal.output.write(new TextEncoder().encode(prompt));
+  const reader = terminal.input.getReader();
   const decoder = new TextDecoder();
   let text = "";
   try {
@@ -5557,7 +5900,7 @@ const readTerminalLine = async (prompt: string): Promise<string | null> => {
   } finally {
     reader.releaseLock();
   }
-};
+}
 
 /**
  * An owner's release by intent (§8.12.7 route 2d) at one piece data path: the
@@ -5733,16 +6076,15 @@ async function loadPieceForRead(
 }
 
 /**
- * Waits, under server execution, until the serving runtime has reacted to
- * every authored commit at or below the server's head as of now, so a read
- * that follows a send, from this process or another, reads what the serving
- * runtime stored for it. Resolves at once in the OFF arm, where this runtime
- * runs what it reads, and against a server that advertises no serving loop.
- * Against one that serves without reporting authored commit boundaries, the
- * read goes ahead without the wait, and says so on stderr.
+ * Helper for {@link pullServed}, which waits, under server execution, until
+ * the serving runtime has reacted to every authored commit at or below the
+ * server's head as of now, so a read that follows a send, from this process or
+ * another, reads what the serving runtime stored for it. Resolves at once
+ * against a server that advertises no serving loop. Against one that serves
+ * without reporting authored commit boundaries, the read goes ahead without
+ * the wait, and says so on stderr.
  */
 async function waitForServedHead(pieces: PiecesController): Promise<void> {
-  if (pieces.runtime.experimental.serverExecution !== true) return;
   const space = pieces.getSpace();
   const head = await pieces.runtime.storageManager.open(space)
     .serverHeadSeq?.();
@@ -6424,14 +6766,22 @@ export async function recreateSpaceRootPattern(
   return piece.id;
 }
 
-function isVNodeLike(value: unknown): value is VNode {
+/**
+ * The view node `value` is, or the one its chain of `[UI]` wrappers ends at;
+ * `undefined` where the chain ends at something else or loops.
+ */
+function viewNodeOf(value: unknown): VNode | undefined {
   const visited = new Set<object>();
   while (isObjectOrArray(value) && UI in value) {
-    if (visited.has(value)) return false; // Cycle detected
+    if (visited.has(value)) return undefined;
     visited.add(value);
     value = value[UI];
   }
-  return (value as VNode)?.type === "vnode";
+  return isViewNode(value) ? value : undefined;
+}
+
+function isViewNode(value: unknown): value is VNode {
+  return isObjectOrArray(value) && value.type === "vnode";
 }
 
 /**
@@ -6442,10 +6792,11 @@ function isVNodeLike(value: unknown): value is VNode {
 export async function createSpace(
   config: Omit<SpaceConfig, "space">,
   label?: string,
+  deps: Pick<PieceOperationDependencies, "loadIdentity" | "loadPieces"> = {},
 ): Promise<string> {
-  const identity = await loadIdentity(config.identity);
+  const identity = await (deps.loadIdentity ?? loadIdentity)(config.identity);
   const homeConfig: SpaceConfig = { ...config, space: identity.did() };
-  const pieces = await loadPieces(homeConfig);
+  const pieces = await (deps.loadPieces ?? loadPieces)(homeConfig);
   const space = await pieces.createSpace(label);
   noteWroteTo(homeConfig.space);
   return space;

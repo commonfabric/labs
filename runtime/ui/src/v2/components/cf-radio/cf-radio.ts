@@ -1,6 +1,6 @@
 import { css, html } from "lit";
-import { ifDefined } from "lit/directives/if-defined.js";
 import { BaseElement } from "../../core/base-element.ts";
+import { HostActivationController } from "../../core/host-activation-controller.ts";
 
 /**
  * CFRadio - Single selection radio button component that works with cf-radio-group
@@ -9,7 +9,6 @@ import { BaseElement } from "../../core/base-element.ts";
  *
  * @attr {boolean} checked - Whether the radio button is checked
  * @attr {boolean} disabled - Whether the radio button is disabled
- * @attr {string} name - Radio button group name (required for grouping)
  * @attr {string} value - The value of the radio button (required)
  * @attr {boolean} required - Whether the radio button is required
  *
@@ -18,11 +17,14 @@ import { BaseElement } from "../../core/base-element.ts";
  * @fires cf-change - Fired when the radio button state changes with detail: { checked, value }
  *
  * @example
- * <cf-radio name="option" value="yes" checked>Yes</cf-radio>
- * <cf-radio name="option" value="no">No</cf-radio>
+ * <cf-radio-group>
+ *   <cf-radio value="yes">Yes</cf-radio>
+ *   <cf-radio value="no">No</cf-radio>
+ * </cf-radio-group>
  *
  * @note Use within cf-radio-group, which handles the arrow keys and the
- * selection among its radios. Each enabled radio is its own Tab stop.
+ * selection among its radios, and makes them one Tab stop. A radio outside a
+ * group is a Tab stop of its own while enabled.
  */
 
 export class CFRadio extends BaseElement {
@@ -97,19 +99,6 @@ export class CFRadio extends BaseElement {
       transform: scale(1);
     }
 
-    /* Hidden native input for form compatibility */
-    .sr-only {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      white-space: nowrap;
-      border-width: 0;
-    }
-
     /* Hover state */
     :host(:not([disabled]):hover) .radio:not(.checked) {
       border-color: var(--primary, #0f172a);
@@ -137,53 +126,34 @@ export class CFRadio extends BaseElement {
     checked: { type: Boolean, reflect: true },
     disabled: { type: Boolean, reflect: true },
     value: { type: String },
-    name: { type: String },
   };
 
   declare checked: boolean;
   declare disabled: boolean;
   declare value: string;
-  declare name: string;
+
+  #activation = new HostActivationController(this, {
+    role: "radio",
+    keys: [" "],
+    isDisabled: () => this.disabled,
+    activate: (event) => this.#select(event),
+    // A group keeps one Tab stop among its radios.
+    ownsTabStop: () => !this.closest("cf-radio-group"),
+  });
 
   constructor() {
     super();
     this.checked = false;
     this.disabled = false;
     this.value = "";
-    this.name = "";
   }
 
   override connectedCallback() {
-    if (!this.hasAttribute("role")) {
-      this.setAttribute("role", "radio");
-    }
     if (!this.hasAttribute("exportparts")) {
       this.setAttribute("exportparts", "radio,indicator");
     }
     super.connectedCallback();
-    this._updateAriaAttributes();
-
-    // Host owns role="radio" and focus — handle interaction here so
-    // keyboard (Space) and click both work regardless of where in the
-    // component they land.
-    this.addEventListener("click", this._handleClick);
-    this.addEventListener("keydown", this._handleKeydown);
-
-    // Check if within a radio group
-    const radioGroup = this.closest("cf-radio-group");
-    if (radioGroup) {
-      // Let the radio group manage the name
-      const groupName = radioGroup.getAttribute("name");
-      if (groupName && !this.name) {
-        this.name = groupName;
-      }
-    }
-  }
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    this.removeEventListener("click", this._handleClick);
-    this.removeEventListener("keydown", this._handleKeydown);
+    this.#updateAriaAttributes();
   }
 
   override updated(
@@ -194,7 +164,7 @@ export class CFRadio extends BaseElement {
     if (
       changedProperties.has("checked") || changedProperties.has("disabled")
     ) {
-      this._updateAriaAttributes();
+      this.#updateAriaAttributes();
     }
   }
 
@@ -218,29 +188,19 @@ export class CFRadio extends BaseElement {
         <span class="indicator" part="indicator"></span>
       </div>
       <slot></slot>
-      <input
-        type="radio"
-        class="sr-only"
-        ?checked="${this.checked}"
-        ?disabled="${this.disabled}"
-        name="${ifDefined(this.name || undefined)}"
-        value="${this.value}"
-        tabindex="-1"
-        aria-hidden="true"
-      />
     `;
   }
 
-  private _updateAriaAttributes() {
+  #updateAriaAttributes() {
     this.setAttribute("aria-checked", String(this.checked));
-    this.setAttribute("aria-disabled", String(this.disabled));
-    this.tabIndex = this.disabled ? -1 : 0;
+    // The group moves its Tab stop when a radio's state changes.
+    this.closest("cf-radio-group")?.dispatchEvent(new Event("radio-state"));
   }
 
-  private _handleClick(event: Event) {
-    if (this.disabled || this.checked) {
+  #select(event: MouseEvent) {
+    // Like a native radio, a checked one stays checked.
+    if (this.checked) {
       event.preventDefault();
-      event.stopPropagation();
       return;
     }
 
@@ -260,30 +220,15 @@ export class CFRadio extends BaseElement {
       this.emit("cf-change", { checked: this.checked, value: this.value });
     }
   }
+}
 
-  private _handleKeydown(event: KeyboardEvent) {
-    if (this.disabled) {
-      return;
-    }
-
-    // Handle Space key
-    if (event.key === " " || event.key === "Spacebar") {
-      event.preventDefault();
-      this._handleClick(event);
-    }
+declare global {
+  interface HTMLElementTagNameMap {
+    "cf-radio": CFRadio;
   }
 
-  /**
-   * Focus the radio button programmatically
-   */
-  override focus(): void {
-    super.focus();
-  }
-
-  /**
-   * Blur the radio button programmatically
-   */
-  override blur(): void {
-    super.blur();
+  interface HTMLElementEventMap {
+    /** Sent by a radio to the cf-radio-group around it when clicked. */
+    "radio-click": CustomEvent<{ radio: CFRadio }>;
   }
 }

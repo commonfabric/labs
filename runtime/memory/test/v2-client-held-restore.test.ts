@@ -5,10 +5,10 @@
  */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import { Identity } from "@commonfabric/identity";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import { getMemoryProtocolFlags } from "../v2.ts";
 import {
   connect,
@@ -337,7 +337,7 @@ const settled = (promise: Promise<unknown>) => {
   return () => done;
 };
 
-Deno.test("a retriable reopen denial holds only that session on a shared connection", async () => {
+test("a retriable reopen denial holds only that session on a shared connection", async () => {
   // After the drop, A's reopens are denied twice, as while its toolshed is
   // down, and then succeed.
   const peer = new RoutedPeer((space, open) =>
@@ -367,7 +367,7 @@ Deno.test("a retriable reopen denial holds only that session on a shared connect
   }
 });
 
-Deno.test("a reconnect reopens a bounded number of sessions at once", async () => {
+test("a reconnect reopens a bounded number of sessions at once", async () => {
   // A router counts each open in flight against the connection; all of a
   // large connection's reopens at once would meet its limit.
   const peer = new RoutedPeer((_space, open) => open === 1 ? "ok" : "hold");
@@ -395,7 +395,7 @@ Deno.test("a reconnect reopens a bounded number of sessions at once", async () =
   }
 });
 
-Deno.test("settleBounded runs at most the limit at once and settles in order", async () => {
+test("settleBounded runs at most the limit at once and settles in order", async () => {
   let running = 0, most = 0;
   const results = await settleBounded([1, 2, 3, 4, 5, 6, 7], 3, async (n) => {
     running++;
@@ -413,7 +413,7 @@ Deno.test("settleBounded runs at most the limit at once and settles in order", a
   assertEquals(await settleBounded([], 3, () => Promise.resolve()), []);
 });
 
-Deno.test("a capacity refusal during a restore holds the session and reports no lost access", async () => {
+test("a capacity refusal during a restore holds the session and reports no lost access", async () => {
   // A router or toolshed at a capacity limit refuses a reopen, or the watch
   // set after it, marked retriable. The session waits and tries again; only
   // a final denial ends it as access lost.
@@ -477,7 +477,7 @@ Deno.test("a capacity refusal during a restore holds the session and reports no 
   }
 });
 
-Deno.test("a permanent reopen denial still ends only that session", async () => {
+test("a permanent reopen denial still ends only that session", async () => {
   const peer = new RoutedPeer((space, open) =>
     space === SPACE_A && open === 2 ? "permanent" : "ok"
   );
@@ -500,7 +500,7 @@ Deno.test("a permanent reopen denial still ends only that session", async () => 
   }
 });
 
-Deno.test("a signed open's retriable denial still reconnects the client", async () => {
+test("a signed open's retriable denial still reconnects the client", async () => {
   // A function signs each open itself, so a retriable denial is an
   // anti-replay race only a new connection's challenge heals.
   const peer = new RoutedPeer((space, open) =>
@@ -518,7 +518,7 @@ Deno.test("a signed open's retriable denial still reconnects the client", async 
   }
 });
 
-Deno.test("a held restore that keeps failing restarts the connection with backoff", async () => {
+test("a held restore that keeps failing restarts the connection with backoff", async () => {
   // A's reopen alternates a retriable denial, which holds it, with an error
   // only a new connection heals, which restarts the connection.
   const peer = new RoutedPeer((space, open) =>
@@ -544,7 +544,7 @@ Deno.test("a held restore that keeps failing restarts the connection with backof
   }
 });
 
-Deno.test("a session that restores before a held one leaves the restart backoff alone", async () => {
+test("a session that restores before a held one leaves the restart backoff alone", async () => {
   // B restores first on each connection, before A is held again; its
   // reopen ends no hold, so it must not reset the backoff A's restarts need.
   const peer = new RoutedPeer((space, open) =>
@@ -564,7 +564,7 @@ Deno.test("a session that restores before a held one leaves the restart backoff 
   }
 });
 
-Deno.test("restarts back off from the start again once no session is held", async () => {
+test("restarts back off from the start again once no session is held", async () => {
   // Four rounds of hold-then-fail restart the connection with growing
   // backoff; A then restores on its own, and a later restart waits the base
   // delay again.
@@ -592,7 +592,7 @@ Deno.test("restarts back off from the start again once no session is held", asyn
   }
 });
 
-Deno.test("a peer that denies a reopen and then drops is reconnected to with backoff", async () => {
+test("a peer that denies a reopen and then drops is reconnected to with backoff", async () => {
   const peer = new RoutedPeer(
     (space, open) => space === SPACE_A && open > 1 ? "retriable" : "ok",
     undefined,
@@ -611,7 +611,7 @@ Deno.test("a peer that denies a reopen and then drops is reconnected to with bac
   }
 });
 
-Deno.test("a full reconnect with no session held resets the restart backoff", async () => {
+test("a full reconnect with no session held resets the restart backoff", async () => {
   // Four rounds of hold-then-fail restart the connection; the fifth
   // reconnect restores A outright, and a later restart waits the base delay.
   const opened: number[] = [];
@@ -640,7 +640,7 @@ Deno.test("a full reconnect with no session held resets the restart backoff", as
   }
 });
 
-Deno.test("closing the last held session resets the restart backoff", async () => {
+test("closing the last held session resets the restart backoff", async () => {
   const peer = new RoutedPeer((space, open) =>
     space === SPACE_A && open > 1
       ? (open % 2 === 0 ? "retriable" : "session-error")
@@ -665,7 +665,7 @@ Deno.test("closing the last held session resets the restart backoff", async () =
   }
 });
 
-Deno.test("closing one held session keeps the restart backoff while another is held", async () => {
+test("closing one held session keeps the restart backoff while another is held", async () => {
   // A's held retries keep failing, which restarts the connection with
   // growing backoff, and B stays held throughout. Closing A must not reset
   // the backoff B's restarts still need.
@@ -695,7 +695,7 @@ Deno.test("closing one held session keeps the restart backoff while another is h
   }
 });
 
-Deno.test("a drop once no session is held reconnects without the last restart's backoff", async () => {
+test("a drop once no session is held reconnects without the last restart's backoff", async () => {
   const peer = new RoutedPeer((space, open) =>
     space === SPACE_A && open > 1
       ? (open % 2 === 0 ? "retriable" : "session-error")
@@ -720,7 +720,7 @@ Deno.test("a drop once no session is held reconnects without the last restart's 
   }
 });
 
-Deno.test("closing the client during a restart's backoff sends no handshake", async () => {
+test("closing the client during a restart's backoff sends no handshake", async () => {
   const peer = new RoutedPeer(() => "ok");
   const client = await connect({ transport: peer });
   await client.mount(SPACE_A, {}, principal());
@@ -730,7 +730,7 @@ Deno.test("closing the client during a restart's backoff sends no handshake", as
   assertEquals(peer.hellos, 1);
 });
 
-Deno.test("a restart that lands as the reconnect loop ends still reconnects", async () => {
+test("a restart that lands as the reconnect loop ends still reconnects", async () => {
   // Each round lands a restart a few more microtasks after the session
   // restored: while the loop still restores, as it ends, or after it.
   const peer = new RoutedPeer(() => "ok");
@@ -752,7 +752,7 @@ Deno.test("a restart that lands as the reconnect loop ends still reconnects", as
   }
 });
 
-Deno.test("a held session's backoff starts over on a new connection", async () => {
+test("a held session's backoff starts over on a new connection", async () => {
   // Four holds back off to 400 ms; a drop then hands A to a new connection,
   // where its next hold waits the base delay again.
   const opened: number[] = [];
@@ -775,7 +775,7 @@ Deno.test("a held session's backoff starts over on a new connection", async () =
   }
 });
 
-Deno.test("a principal's retriable denial against a direct peer still reconnects", async () => {
+test("a principal's retriable denial against a direct peer still reconnects", async () => {
   // Without `connectionAuth` even a principal signs each open, so the
   // denial is an anti-replay race only a new connection heals.
   const peer = new RoutedPeer(
@@ -796,7 +796,7 @@ Deno.test("a principal's retriable denial against a direct peer still reconnects
   }
 });
 
-Deno.test("a held restore failing where the transport cannot restart fails the session", async () => {
+test("a held restore failing where the transport cannot restart fails the session", async () => {
   // Without `reset` the client cannot discard the connection, so a held
   // restore that needs a new one fails the client rather than waiting.
   const peer = new RoutedPeer(
@@ -824,7 +824,7 @@ Deno.test("a held restore failing where the transport cannot restart fails the s
   }
 });
 
-Deno.test("a restart while the reconnect loop restores still reconnects", async () => {
+test("a restart while the reconnect loop restores still reconnects", async () => {
   // B's reopen waits while the loop restores, and the restart lands then.
   const peer = new RoutedPeer((space, open) =>
     space === SPACE_B && open === 2 ? "hold" : "ok"
@@ -847,7 +847,7 @@ Deno.test("a restart while the reconnect loop restores still reconnects", async 
   }
 });
 
-Deno.test("a drop while a session is held hands it to the reconnect", async () => {
+test("a drop while a session is held hands it to the reconnect", async () => {
   const peer = new RoutedPeer((space, open) =>
     space === SPACE_A && open === 2 ? "retriable" : "ok"
   );
@@ -876,7 +876,7 @@ Deno.test("a drop while a session is held hands it to the reconnect", async () =
   }
 });
 
-Deno.test("a restore started while a session is held replaces its retry", async () => {
+test("a restore started while a session is held replaces its retry", async () => {
   // The restore's reopen waits, as on a slow peer, past the held retry's
   // backoff; the retry must not reopen A alongside it, or after it.
   const peer = new RoutedPeer((space, open) =>
@@ -910,7 +910,7 @@ Deno.test("a restore started while a session is held replaces its retry", async 
   }
 });
 
-Deno.test("a held session's backoff starts over once it restores", async () => {
+test("a held session's backoff starts over once it restores", async () => {
   // Four holds back off to 200 ms; after a success, the next hold waits
   // the base delay again.
   let denyFrom = 2, denyTo = 5;
@@ -939,7 +939,7 @@ Deno.test("a held session's backoff starts over once it restores", async () => {
   }
 });
 
-Deno.test("terminating a held session clears its retry", async () => {
+test("terminating a held session clears its retry", async () => {
   const peer = new RoutedPeer((space, open) =>
     space === SPACE_A && open > 1 ? "retriable" : "ok"
   );
@@ -964,7 +964,7 @@ Deno.test("terminating a held session clears its retry", async () => {
   }
 });
 
-Deno.test("a denial while re-establishing the watch set holds the session and sends it again", async () => {
+test("a denial while re-establishing the watch set holds the session and sends it again", async () => {
   // The reopen starts a new server session, whose watch set is denied
   // retriably; the retry resumes that session and must still send it.
   const peer = new RoutedPeer(
@@ -999,7 +999,7 @@ Deno.test("a denial while re-establishing the watch set holds the session and se
   }
 });
 
-Deno.test("an overlapping restore leaves the restoring state to the latest", async () => {
+test("an overlapping restore leaves the restoring state to the latest", async () => {
   // Two restores overlap: the first finishing must not end the second's
   // restoring state, or a commit is sent before the second has restored.
   const peer = new RoutedPeer((space, open) =>
@@ -1030,7 +1030,7 @@ Deno.test("an overlapping restore leaves the restoring state to the latest", asy
   }
 });
 
-Deno.test("closing the client while a session is held leaves no retry running", async () => {
+test("closing the client while a session is held leaves no retry running", async () => {
   const timers = trackTimers();
   try {
     const peer = new RoutedPeer((space, open) =>
@@ -1049,7 +1049,7 @@ Deno.test("closing the client while a session is held leaves no retry running", 
   }
 });
 
-Deno.test("cancelling a held session's route ends its retries", async () => {
+test("cancelling a held session's route ends its retries", async () => {
   const peer = new RoutedPeer((space, open) =>
     space === SPACE_A && open > 1 ? "retriable" : "ok"
   );
@@ -1075,7 +1075,7 @@ Deno.test("cancelling a held session's route ends its retries", async () => {
   }
 });
 
-Deno.test("a route cancelled before a watch-set denial leaves the session unheld", async () => {
+test("a route cancelled before a watch-set denial leaves the session unheld", async () => {
   // The reopen starts a new server session; the route is cancelled while
   // its watch set waits, and the watch set is then denied retriably.
   const peer = new RoutedPeer(
@@ -1118,7 +1118,7 @@ const slowRetry = (space: string, open: number): Reply =>
     ? "hold"
     : "ok";
 
-Deno.test("cancelling a route while its held retry reopens ends the hold, not the connection", async () => {
+test("cancelling a route while its held retry reopens ends the hold, not the connection", async () => {
   const peer = new RoutedPeer(slowRetry);
   const client = await connect({ transport: peer });
   const route = new AbortController();
@@ -1135,7 +1135,7 @@ Deno.test("cancelling a route while its held retry reopens ends the hold, not th
   }
 });
 
-Deno.test("closing a session while its held retry reopens leaves the connection", async () => {
+test("closing a session while its held retry reopens leaves the connection", async () => {
   const peer = new RoutedPeer(slowRetry);
   const client = await connect({ transport: peer });
   try {
@@ -1154,7 +1154,7 @@ Deno.test("closing a session while its held retry reopens leaves the connection"
   }
 });
 
-Deno.test("a drop while a held retry reopens leaves the session to the reconnect", async () => {
+test("a drop while a held retry reopens leaves the session to the reconnect", async () => {
   const peer = new RoutedPeer(slowRetry);
   const client = await connect({ transport: peer });
   try {
@@ -1173,7 +1173,7 @@ Deno.test("a drop while a held retry reopens leaves the session to the reconnect
   }
 });
 
-Deno.test("a hold that ends leaves no listener on the session's route", async () => {
+test("a hold that ends leaves no listener on the session's route", async () => {
   const peer = new RoutedPeer((space, open) =>
     space === SPACE_A && open === 2 ? "retriable" : "ok"
   );
@@ -1212,7 +1212,7 @@ Deno.test("a hold that ends leaves no listener on the session's route", async ()
   }
 });
 
-Deno.test("a held retry whose signer outlives its connection leaves the next connection alone", async () => {
+test("a held retry whose signer outlives its connection leaves the next connection alone", async () => {
   const peer = new RoutedPeer(() => "ok");
   // connection.auth: the mount's passes, the reconnect's two are refused as
   // retriable so A is held, and later ones pass. A held retry sends a
@@ -1275,7 +1275,7 @@ Deno.test("a held retry whose signer outlives its connection leaves the next con
   }
 });
 
-Deno.test("a reconnect signs anew rather than sending a statement refused on the connection before", async () => {
+test("a reconnect signs anew rather than sending a statement refused on the connection before", async () => {
   const peer = new RoutedPeer(() => "ok");
   // The reconnect's connection.auth is refused for now, so A is held with
   // that statement kept; a second reconnect must not send it again.
@@ -1320,7 +1320,7 @@ Deno.test("a reconnect signs anew rather than sending a statement refused on the
   }
 });
 
-Deno.test("a held retry after a router refuses a challenge for now waits a second", async () => {
+test("a held retry after a router refuses a challenge for now waits a second", async () => {
   const peer = new RoutedPeer(() => "ok");
   // Challenges last two seconds, too short to send a refused statement
   // again, so each retry asks for a challenge; the first two are refused.
@@ -1359,7 +1359,7 @@ Deno.test("a held retry after a router refuses a challenge for now waits a secon
   }
 });
 
-Deno.test("a watch set refused on a held retry keeps the reconnect backoff growing", async () => {
+test("a watch set refused on a held retry keeps the reconnect backoff growing", async () => {
   const peer = new RoutedPeer(
     (space, open) => space === SPACE_A && open > 1 ? "new" : "ok",
     (space) => space === SPACE_A ? "retriable" : "ok",
@@ -1397,7 +1397,7 @@ Deno.test("a watch set refused on a held retry keeps the reconnect backoff growi
   }
 });
 
-Deno.test("a client a held retry fails does not handshake again", async () => {
+test("a client a held retry fails does not handshake again", async () => {
   const peer = new RoutedPeer(
     (space, open) =>
       space === SPACE_A && open > 1

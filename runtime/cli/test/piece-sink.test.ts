@@ -14,12 +14,12 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { CellImpl } from "../../runner/src/cell.ts";
 import { type PieceConfig, sinkCellValue } from "../lib/piece.ts";
@@ -71,10 +71,12 @@ interface Driven {
  *
  * With `handleRuntime`, the slot holds a `Cell` of that runtime rather than a
  * plain value — the handle an `asCell` projection stores — whose members
- * record what is asked of it.
+ * record what is asked of it. With `storesNothing` as well, the slot stores
+ * nothing while its projection still reads as that handle, as an `asCell`
+ * projection of an absent slot does.
  */
 function driving(
-  options: { handleRuntime?: Runtime } = {},
+  options: { handleRuntime?: Runtime; storesNothing?: boolean } = {},
 ): { pieces: PiecesController; driven: Driven } {
   const calls: string[] = [];
   let fire: (() => void) | undefined;
@@ -112,7 +114,7 @@ function driving(
     get: () => held,
     // What the slot stores, which is what decides whether the subscription
     // reads through a handle. A case that holds a plain value stores one.
-    getRaw: () => held,
+    getRaw: () => options.storesNothing ? undefined : held,
     pull: () => {
       calls.push("pull");
       return Promise.resolve(held);
@@ -394,6 +396,36 @@ describe("sinkCellValue()", () => {
       "pull",
       "pull handle",
       "sink handle",
+    ]);
+  });
+
+  it("subscribes on the slot when it stores nothing, though its projection reads as a handle", async () => {
+    // Kills: asking the projection before the stored slot, which follows a
+    // handle standing for nothing.
+
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(config.apiUrl),
+      storageManager,
+    });
+    const { pieces, driven } = driving({
+      handleRuntime: runtime,
+      storesNothing: true,
+    });
+    try {
+      await sinkCellValue(config, ["topics", 3], () => {}, {}, {
+        loadPieces: () => Promise.resolve(pieces),
+        ...RESOLVES,
+      });
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+    expect(driven.calls).toEqual([
+      `get ${config.piece} false -`,
+      "result topics/3",
+      "pull",
+      "sink",
     ]);
   });
 

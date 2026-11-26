@@ -15,7 +15,6 @@
  * a record one order of keys.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { type FabricValue, valueEqual } from "@";
@@ -36,10 +35,10 @@ import {
   FabricEpochNsec,
   FabricHash,
   FabricKeyPair,
-  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
 import type { FabricPrimitiveClassesByName } from "@/fabric-primitives/impl.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** One value, and the exact text it encodes to and decodes from. */
 type TextCase = {
@@ -259,20 +258,7 @@ const CLASS_CASES: Readonly<
           new Uint8Array([4, 5]),
         ),
       text:
-        'fvj1:{"/KeyPair@1":{"algorithm":"Ed25519","privateKey":"BAU","publicKey":"AQID"}}',
-    },
-  ],
-  FabricRegExp: [
-    {
-      what: "an `es2025` regular expression",
-      make: () => new FabricRegExp(/ab+c/gi),
-      text:
-        'fvj1:{"/RegExp@1":{"flags":"gi","flavor":"es2025","source":"ab+c"}}',
-    },
-    {
-      what: "a regular expression of another flavor",
-      make: () => new FabricRegExp("pcre2", "a++", "x"),
-      text: 'fvj1:{"/RegExp@1":{"flags":"x","flavor":"pcre2","source":"a++"}}',
+        'fvj1:{"/KeyPair@1":{"algorithm":"Ed25519","privateKey":{"/Bytes@1":"BAU"},"publicKey":{"/Bytes@1":"AQID"}}}',
     },
   ],
   FabricUnavailable: [
@@ -290,7 +276,7 @@ const CLASS_CASES: Readonly<
       what: "an error with a message",
       make: () => new FabricUnavailable("error", "network", "offline"),
       text:
-        'fvj1:{"/Unavailable@1":{"errorKind":"network","errorMessage":"offline","reason":"error"}}',
+        'fvj1:{"/Unavailable@1":{"errorKind":"network","message":"offline","reason":"error"}}',
     },
   ],
   FabricError: [

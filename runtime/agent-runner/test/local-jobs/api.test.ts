@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { spy } from "@std/testing/mock";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   createLocalJobApi,
@@ -9,6 +8,7 @@ import {
 import { LocalJobBrowserHost } from "../../src/local-jobs/browser-host.ts";
 import type { LocalJobProfile } from "../../src/local-jobs/profiles.ts";
 import { LocalJobStore } from "../../src/local-jobs/store.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TOKEN = "t0ken";
 
@@ -40,9 +40,10 @@ const apiWith = (
     fabricLane?: () => boolean;
     heartbeatMs?: number;
     browserHost?: (id: string) => LocalJobBrowserHost | undefined;
+    store?: LocalJobStore;
   } = {},
 ) => {
-  const store = LocalJobStore.open(":memory:");
+  const store = options.store ?? LocalJobStore.open(":memory:");
   const kicked: string[] = [];
   const cancelled: string[] = [];
   const stopping = new AbortController();
@@ -453,6 +454,72 @@ describe("local-jobs/api", () => {
         resultSchema: true,
       });
     });
+
+    describe("after the host's profiles change", () => {
+      // A job was accepted under a Codex pin, with a bound only a Codex
+      // run can hold; the host then pins the profile to the gateway, or
+      // drops it.
+
+      const CODEX: LocalJobProfile = { ...ASK, modelProvider: "openai-codex" };
+      const GATEWAY: LocalJobProfile = {
+        ...ASK,
+        modelProvider: "openai-compatible-gateway",
+      };
+      const BOUNDED = { ...BODY, maxOutputTokens: 64 };
+
+      const acceptedThenRepinned = async (
+        now: Map<string, LocalJobProfile>,
+      ) => {
+        const before = apiWith({ profiles: new Map([["ask", CODEX]]) });
+        const accepted = await before.post("/jobs", BOUNDED);
+        expect(accepted.status).toBe(201);
+        const { job } = await accepted.json();
+        return { job, after: apiWith({ profiles: now, store: before.store }) };
+      };
+
+      it("answers the identical request with the job it accepted", async () => {
+        const { job, after } = await acceptedThenRepinned(
+          new Map([["ask", GATEWAY]]),
+        );
+        const again = await after.post("/jobs", BOUNDED);
+
+        expect(again.status).toBe(200);
+        expect((await again.json()).job.id).toBe(job.id);
+        expect(after.kicked).toEqual([]);
+      });
+
+      it("answers the identical request with its job when the host names its profile no more", async () => {
+        const { job, after } = await acceptedThenRepinned(new Map());
+        const again = await after.post("/jobs", BOUNDED);
+
+        expect(again.status).toBe(200);
+        expect((await again.json()).job.id).toBe(job.id);
+      });
+
+      it("returns 409 for another request under the accepted key", async () => {
+        const { after } = await acceptedThenRepinned(
+          new Map([["ask", GATEWAY]]),
+        );
+        const other = await after.post("/jobs", { ...BOUNDED, task: "Other" });
+
+        expect(other.status).toBe(409);
+        expect((await other.json()).code).toBe("idempotency_conflict");
+      });
+
+      it("returns 400 beyond_profile for the bounded request under a new key", async () => {
+        const { after } = await acceptedThenRepinned(
+          new Map([["ask", GATEWAY]]),
+        );
+        const fresh = await after.post("/jobs", {
+          ...BOUNDED,
+          idempotencyKey: "weaver-ask:2",
+        });
+
+        expect(fresh.status).toBe(400);
+        expect((await fresh.json()).code).toBe("beyond_profile");
+        expect(after.store.list(10)).toHaveLength(1);
+      });
+    });
   });
 
   describe("POST /jobs/<id>/messages", () => {
@@ -811,6 +878,30 @@ describe("local-jobs/api", () => {
           expect(response.status).toBe(413);
           expect((await response.json()).code).toBe("too_large");
         }
+      } finally {
+        store.close();
+      }
+    });
+    it("returns 400 invalid_request for a message body that cannot be read, accepting no message", async () => {
+      const { post, call, store } = apiWith();
+      try {
+        const { job } = await (await post("/jobs", BODY)).json();
+        const events = [...store.events(job.id, 0)];
+        const response = await call(`/jobs/${job.id}/messages`, {
+          method: "POST",
+          body: new ReadableStream({
+            start(controller) {
+              controller.error(new Error("the connection dropped"));
+            },
+          }),
+        });
+
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({
+          code: "invalid_request",
+          error: "The body could not be read.",
+        });
+        expect([...store.events(job.id, 0)]).toEqual(events);
       } finally {
         store.close();
       }

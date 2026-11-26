@@ -17,7 +17,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { ValidationError } from "@cliffy/command";
 
@@ -39,6 +38,7 @@ import {
   deferSkewNoteUntilFailureExit,
   resetDeferredSkewNoteForTest,
 } from "../lib/version-check.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6MkjcdxtxTiUWkPkPffhs8ENkCcJjuRCQPpJFb2xyzwHqEk";
 const PIECE = "fid1:call-from-command-piece";
@@ -336,6 +336,24 @@ describe("callFromCommand()", () => {
         { ...discard, executePieceCallable: stubExecutor(dispatches) },
       );
       expect(dispatches[0].deps.showLinks).toBe(true);
+    });
+
+    it("throws for `--show-links` beside `--filter`, and dispatches nothing", async () => {
+      const dispatches: Dispatch[] = [];
+      const { deps, exited } = exitSinks();
+      await expect(
+        callFromCommand(
+          { ...options, showLinks: true },
+          "call",
+          "addItem",
+          [],
+          ["--cell", PIECE, "addItem", "--", "--filter", ".keep == true"],
+          ["--filter", ".keep == true"],
+          { ...deps, executePieceCallable: stubExecutor(dispatches) },
+        ),
+      ).rejects.toThrow("--show-links cannot be combined");
+      expect(exited).toEqual([]);
+      expect(dispatches).toEqual([]);
     });
   });
 
@@ -761,6 +779,25 @@ describe("callFromCommand()", () => {
       expect(printed).toHaveLength(1);
       expect(printed[0]).toMatch(/^Invalid --filter predicate at column 7/);
       expect(exited).toEqual([1]);
+      expect(dispatches).toEqual([]);
+    });
+
+    it("reports an empty read predicate to the caller, and dispatches nothing", async () => {
+      const dispatches: Dispatch[] = [];
+      const { deps, printed, exited } = exitSinks();
+      await expect(
+        callFromCommand(
+          options,
+          "call",
+          "addItem",
+          [],
+          ["--cell", PIECE, "addItem", "--", "--filter", " "],
+          ["--filter", " "],
+          { ...deps, executePieceCallable: stubExecutor(dispatches) },
+        ),
+      ).rejects.toThrow("exit-sentinel");
+      expect(exited).toEqual([1]);
+      expect(printed).toEqual(["--filter predicate must not be empty"]);
       expect(dispatches).toEqual([]);
     });
 

@@ -71,10 +71,15 @@ the probes.
 ### Fragments
 
 A leaf is a node with no steps under it: `null`, a boolean, a number, a string,
-`undefined`, a symbol, a bigint, or a value of a primitive type, such as
-`Bytes@1`, a temporal quantity, `Hash@1`, `KeyPair@1`, `RegExp@1` or
-`Unavailable@1`. Only a leaf has a fragment, and every leaf has one, unless a
-patch states it.
+or a value of one of the format's leaf types, as section 12 of
+[`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md)
+lists them. These are `Bytes@1`, `Hash@1`, the four temporal quantities, and the
+types that carry a JavaScript primitive, which are `BigInt@1`,
+`SpecialNumber@1`, `Symbol@1` and `Undefined@1`. A value of any other type the
+format defines is an instance, `KeyPair@1` and `Unavailable@1` among them, and a
+value under a tag no codec claims is an unknown value (see "Special forms"
+below). Only a leaf has a fragment, and every leaf has one, unless a patch
+states it.
 
 A fragment is the leaf's canonical `fvj1:` text, written on its own, prefix and
 all, as sections 10 and 11 of
@@ -118,6 +123,8 @@ An instance's fields are these, in this order:
 | `Link@1`        | `payload`, a record.                                                    |
 | `Error@1`       | `type`, `name`, `message`, `stack` and `cause` where present, `extras`. |
 | `Problematic@1` | `tag`, `state`, and `error`.                                            |
+| `KeyPair@1`     | `algorithm`, `publicKey`, and `privateKey`.                             |
+| `Unavailable@1` | `reason`, then `errorKind` and `message` where present.                 |
 
 The open-ended part of an instance is always a field holding a record, so its
 keys are probed as a record's are. An `Error`'s `extras` is probed even when it
@@ -156,18 +163,11 @@ to apply to it. A reader that does not meet every requirement an entry names
 skips the entry: the case is not applicable to it, which is neither a pass nor a
 divergence. An entry with no `requires` applies to every reader.
 
-`flavors` is a list of regular-expression flavors whose patterns the reader must
-construct, as section 3 of
+Each field needs a guarantee of at least the figure given, by one of the
+measures section 12 of
 [`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md)
-describes for `RegExp@1`. It marks a case whose outcome depends on constructing
-one, such as a pattern that fails to construct: the format requires no flavor,
-and a reader that does not construct one stores its patterns unvalidated, so the
-outcome differs. Cases are marked by hand.
-
-The other fields each need a guarantee of at least the figure given, by one of
-the measures section 12 of `3-json-encoding.md` defines. A reader whose stated
-guarantee by that measure is below the figure skips the entry, whether or not it
-would in fact handle the value:
+defines. A reader whose stated guarantee by that measure is below the figure
+skips the entry, whether or not it would in fact handle the value:
 
 - `arrayLength`: the length of the longest array, counting each hole a run
   stands for.
@@ -187,8 +187,8 @@ These are computed from the entry's text, and each is present only where it is
 past the floor section 12 sets for its measure, which every conforming reader
 guarantees.
 
-This package meets every requirement either fixture names. It constructs
-`es2025` patterns, and no entry names a size.
+This package meets every requirement either fixture names: no entry names a
+size.
 
 ## Checking with a codec of known behavior
 

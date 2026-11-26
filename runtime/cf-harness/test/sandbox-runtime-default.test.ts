@@ -6,7 +6,6 @@
  * and no case reads the store of the machine it runs on.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -59,7 +58,14 @@ import {
   unnamedRuntimeMountNote,
 } from "../src/sandbox/runtime-selection.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
+import { readsDespiteMode } from "./support/reads-despite-mode.ts";
 import { responsesBodyFromChatFixture } from "./support/responses-fixture.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The pieces an installed native store holds, as paths relative to it. */
 const SHIM = join("bin", "runsc");
@@ -282,28 +288,6 @@ const notSetUp = (store: string, problem: string): string =>
   "No sandbox runtime is named, so the default applies, which on macOS is " +
   `the native \`runsc\` runtime, and it is not set up at \`${store}\`: ` +
   `${problem}. Set it up there.`;
-
-/**
- * Whether this process reads a file whose mode forbids it, as root does,
- * found by trying. A case that needs a file it cannot read is skipped where
- * it can.
- */
-const readsDespiteMode = (): boolean => {
-  const dir = Deno.makeTempDirSync({ prefix: "sandbox-runtime-mode-" });
-  try {
-    const file = join(dir, "locked");
-    Deno.writeTextFileSync(file, "");
-    Deno.chmodSync(file, 0o000);
-    try {
-      Deno.readTextFileSync(file);
-      return true;
-    } catch {
-      return false;
-    }
-  } finally {
-    Deno.removeSync(dir, { recursive: true });
-  }
-};
 
 /** What `promise` rejects with, or `undefined` where it resolves. */
 const rejection = (promise: Promise<unknown>): Promise<unknown> =>

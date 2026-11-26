@@ -1,4 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
+import { expect } from "@std/expect";
 import { join } from "@std/path";
 import {
   FileHarnessCredentialStore,
@@ -6,6 +7,7 @@ import {
   InMemoryHarnessCredentialStore,
 } from "../src/auth/credential-store.ts";
 import type { OpenAICodexOAuthCredential } from "../src/auth/types.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 const credential = (
   owner: string,
@@ -69,18 +71,18 @@ const assertQueuedUpdateCanAbort = async (
   await store.update("local", "openai-codex", (current) => current);
 };
 
-Deno.test("in-memory credential store cancels queued mutations", async () => {
+test("in-memory credential store cancels queued mutations", async () => {
   await assertQueuedUpdateCanAbort(new InMemoryHarnessCredentialStore());
 });
 
-Deno.test("file credential store cancels queued local lock waits", async () => {
+test("file credential store cancels queued local lock waits", async () => {
   const root = await Deno.makeTempDir();
   await assertQueuedUpdateCanAbort(
     new FileHarnessCredentialStore({ path: join(root, "auth.json") }),
   );
 });
 
-Deno.test("file credential store cancels a cross-process advisory-lock wait", async () => {
+test("file credential store cancels a cross-process advisory-lock wait", async () => {
   if (Deno.build.os === "windows") return;
   const root = await Deno.makeTempDir();
   const path = join(root, "auth.json");
@@ -147,7 +149,7 @@ file.close();`,
   );
 });
 
-Deno.test("file credential store is owner-isolated, atomic, and private", async () => {
+test("file credential store is owner-isolated, atomic, and private", async () => {
   const root = await Deno.makeTempDir();
   const path = join(root, "harness-home", "auth.json");
   const store = new FileHarnessCredentialStore({ path });
@@ -176,7 +178,7 @@ Deno.test("file credential store is owner-isolated, atomic, and private", async 
   assertEquals(names.sort(), ["auth.json", "auth.json.lock"]);
 });
 
-Deno.test("file credential store serializes mutations across store instances", async () => {
+test("file credential store serializes mutations across store instances", async () => {
   const root = await Deno.makeTempDir();
   const path = join(root, "auth.json");
   const first = new FileHarnessCredentialStore({ path });
@@ -197,7 +199,7 @@ Deno.test("file credential store serializes mutations across store instances", a
   );
 });
 
-Deno.test("file credential store preserves prototype-shaped owner keys", async () => {
+test("file credential store preserves prototype-shaped owner keys", async () => {
   const root = await Deno.makeTempDir();
   const store = new FileHarnessCredentialStore({
     path: join(root, "auth.json"),
@@ -211,7 +213,7 @@ Deno.test("file credential store preserves prototype-shaped owner keys", async (
   );
 });
 
-Deno.test("file credential store rejects non-private and symlinked homes", async () => {
+test("file credential store rejects non-private and symlinked homes", async () => {
   if (Deno.build.os === "windows") return;
   const root = await Deno.makeTempDir();
   const publicHome = join(root, "public-home");
@@ -265,7 +267,7 @@ Deno.test("file credential store rejects non-private and symlinked homes", async
   );
 });
 
-Deno.test("file credential store surfaces malformed storage without overwriting it", async () => {
+test("file credential store surfaces malformed storage without overwriting it", async () => {
   const root = await Deno.makeTempDir();
   const path = join(root, "auth.json");
   const store = new FileHarnessCredentialStore({ path });
@@ -282,7 +284,7 @@ Deno.test("file credential store surfaces malformed storage without overwriting 
   assertEquals(store.lastValidSnapshot(), lastValid);
 });
 
-Deno.test("file credential store keeps stored bytes out of its read failure", async () => {
+test("file credential store keeps stored bytes out of its read failure", async () => {
   const root = await Deno.makeTempDir();
   const path = join(root, "auth.json");
   const refreshToken = "rt-EXTREMELY-SECRET-REFRESH-VALUE";
@@ -308,7 +310,7 @@ Deno.test("file credential store keeps stored bytes out of its read failure", as
   assertEquals(echoed, [], `error echoed stored bytes: ${error.message}`);
 });
 
-Deno.test("file credential store rejects malformed owners and expiries fail-closed", async () => {
+test("file credential store rejects malformed owners and expiries fail-closed", async () => {
   const root = await Deno.makeTempDir();
   const path = join(root, "auth.json");
   const malformedDocuments = [
@@ -331,7 +333,7 @@ Deno.test("file credential store rejects malformed owners and expiries fail-clos
   }
 });
 
-Deno.test("logout deletes only the selected owner/provider entry", async () => {
+test("logout deletes only the selected owner/provider entry", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.set("loom:user-a", "openai-codex", credential("a"));
   await store.set("loom:user-b", "openai-codex", credential("b"));
@@ -345,7 +347,7 @@ Deno.test("logout deletes only the selected owner/provider entry", async () => {
   );
 });
 
-Deno.test("version-1 credential documents migrate on mutation without losing owners", async () => {
+test("version-1 credential documents migrate on mutation without losing owners", async () => {
   const root = await Deno.makeTempDir();
   const path = join(root, "auth.json");
   const original = {
@@ -379,7 +381,7 @@ Deno.test("version-1 credential documents migrate on mutation without losing own
   );
 });
 
-Deno.test("credential store never overwrites unknown future documents", async () => {
+test("credential store never overwrites unknown future documents", async () => {
   const root = await Deno.makeTempDir();
   const path = join(root, "auth.json");
   const future = '{"version":3,"owners":{},"health":{},"future":true}';
@@ -394,7 +396,7 @@ Deno.test("credential store never overwrites unknown future documents", async ()
   assertEquals(await Deno.readTextFile(path), future);
 });
 
-Deno.test("credential health is atomic with credentials and logout removes both", async () => {
+test("credential health is atomic with credentials and logout removes both", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.updateRecord("local", "openai-codex", () => ({
     credential: credential("local"),
@@ -410,7 +412,7 @@ Deno.test("credential health is atomic with credentials and logout removes both"
   assertEquals(await store.getHealth("local", "openai-codex"), undefined);
 });
 
-Deno.test("file credential health lookup and logout survive reopen", async () => {
+test("file credential health lookup and logout survive reopen", async () => {
   const root = await Deno.makeTempDir();
   const path = join(root, "auth.json");
   const store = new FileHarnessCredentialStore({ path });
@@ -451,7 +453,7 @@ for (
     ],
   ] as const
 ) {
-  Deno.test(`${name} credential store rejects orphan health atomically`, async () => {
+  test(`${name} credential store rejects orphan health atomically`, async () => {
     const { store, readBytes } = await createStore();
     await store.set("local", "openai-codex", credential("original"));
     const originalBytes = await readBytes?.();
@@ -481,7 +483,7 @@ for (
   });
 }
 
-Deno.test("file credential store finishes an atomic commit after its updater starts", async () => {
+test("file credential store finishes an atomic commit after its updater starts", async () => {
   const root = await Deno.makeTempDir();
   const path = join(root, "auth.json");
   const store = new FileHarnessCredentialStore({ path });
@@ -499,4 +501,75 @@ Deno.test("file credential store finishes an atomic commit after its updater sta
     ))?.accountId,
     "account-replacement",
   );
+});
+
+describe("credential-store", () => {
+  describe("FileHarnessCredentialStore", () => {
+    describe("rejects a malformed document without overwriting it", () => {
+      for (
+        const [description, document, detail] of [
+          ["a JSON array", "[]", "credential store must contain a JSON object"],
+          [
+            "an owner entry that is not an object",
+            '{"version":1,"owners":{"local":[]}}',
+            "invalid credential owner entry",
+          ],
+          [
+            "a credential that is not an object",
+            '{"version":1,"owners":{"local":{"openai-codex":"token"}}}',
+            "invalid openai-codex credential entry",
+          ],
+        ] as const
+      ) {
+        it(`throws a read failure naming ${description}`, async () => {
+          const root = await Deno.makeTempDir();
+          const path = join(root, "auth.json");
+          await Deno.writeTextFile(path, document, { mode: 0o600 });
+          const store = new FileHarnessCredentialStore({ path });
+
+          await expect(
+            store.set("local", "openai-codex", credential("replacement")),
+          ).rejects.toThrow(`failed to read credential store: ${detail}`);
+          expect(await Deno.readTextFile(path)).toBe(document);
+        });
+      }
+    });
+
+    it("throws the open failure of a lock file that cannot be created", async () => {
+      // The lock file's name is the store's plus ".lock", so a store name at
+      // the file-name limit leaves the lock name over it.
+      const root = await Deno.makeTempDir();
+      const store = new FileHarnessCredentialStore({
+        path: join(root, `${"a".repeat(250)}.json`),
+      });
+
+      await expect(
+        store.set("local", "openai-codex", credential("local")),
+      ).rejects.toThrow("File name too long");
+      expect([...Deno.readDirSync(root)]).toEqual([]);
+    });
+
+    it("throws the commit failure and removes its temporary file", async () => {
+      const root = await Deno.makeTempDir();
+      const path = join(root, "auth.json");
+      const store = new FileHarnessCredentialStore({ path });
+
+      // Another process putting a directory where the store renames its
+      // document makes the commit fail after the temporary file is written.
+      await expect(
+        store.updateRecord("local", "openai-codex", async () => {
+          await Deno.mkdir(path);
+          return { credential: credential("local") };
+        }),
+      ).rejects.toBeInstanceOf(Deno.errors.IsADirectory);
+      expect([...Deno.readDirSync(root)].map((entry) => entry.name).sort())
+        .toEqual(["auth.json", "auth.json.lock"]);
+      expect((await Deno.lstat(path)).isDirectory).toBe(true);
+      expect(store.lastValidSnapshot()).toEqual({
+        version: 2,
+        owners: {},
+        health: {},
+      });
+    });
+  });
 });

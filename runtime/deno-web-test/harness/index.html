@@ -9,4 +9,7 @@ li[state="error"] {
 <h1>Deno Web Test</h1>
 <h2 id="title"></h2>
 <ul id="tests"></ul>
-<script type="module" src="/harness.js"></script>
+<script type="module">
+import { start } from "/harness.js";
+start(globalThis);
+</script>

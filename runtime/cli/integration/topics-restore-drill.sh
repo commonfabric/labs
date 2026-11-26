@@ -232,6 +232,19 @@ deno run --allow-run --allow-read --allow-env \
 }
 
 step "verify: byte-exact content, live board link, idempotent rerun"
+# The restore asks the board which paths it publishes before it applies, and
+# relinks only those. This board is of the same generation as its topic, so
+# every wiring link the topic declares must have been relinked and read back,
+# and none left out for want of a board path.
+for FIELD in mentionable boardCrossrefs boardCrossrefIndex; do
+  grep -qx "$FIELD: board link present" "$WORK/restore.log" &&
+    ok "restore relinked $FIELD and read it back" ||
+    bad "restore log has no '$FIELD: board link present' line"
+done
+grep -q 'not restored (the board publishes no' "$WORK/restore.log" &&
+  bad "restore left a link out for want of a board path:
+$(grep 'not restored (the board publishes no' "$WORK/restore.log")" ||
+  ok "no link left out for want of a board path"
 "${CF[@]}" cell get -q --piece "$TOPIC" --space "$SPACE" --api-url "$API_URL" \
   body --input > "$WORK/live-body.json" 2> /dev/null
 jq -e --slurpfile live "$WORK/live-body.json" \

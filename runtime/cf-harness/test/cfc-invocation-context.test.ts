@@ -1,6 +1,8 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 import {
   CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
@@ -11,7 +13,7 @@ import {
 } from "../src/contracts/cfc-invocation-context.ts";
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 
-Deno.test("createHarnessCfcInvocationContext summarizes measured invocation inputs without raw values", async () => {
+test("createHarnessCfcInvocationContext summarizes measured invocation inputs without raw values", async () => {
   // Spec: specs/cfc/18-runtime-implementation-profiles.md §18.2.4.1
   // requires measured execution bundles to bind argv/env/cwd facts. The
   // cf-harness sidecar is provenance transport for those facts; it carries
@@ -121,7 +123,7 @@ Deno.test("createHarnessCfcInvocationContext summarizes measured invocation inpu
   }
 });
 
-Deno.test("createHarnessCfcInvocationContext derives integrity prompt-slot influence labels for selected invocation inputs", async () => {
+test("createHarnessCfcInvocationContext derives integrity prompt-slot influence labels for selected invocation inputs", async () => {
   const promptSlot = {
     type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
     source: { type: "cf-harness.test-input", surface: "cli" },
@@ -194,7 +196,7 @@ Deno.test("createHarnessCfcInvocationContext derives integrity prompt-slot influ
   assertEquals(context.cfcInputLabels, undefined);
 });
 
-Deno.test("createHarnessCfcInvocationContext labels no prompt-slot influence when no input path is selected", async () => {
+test("createHarnessCfcInvocationContext labels no prompt-slot influence when no input path is selected", async () => {
   const context = await createHarnessCfcInvocationContext({
     sequence: 1,
     runId: "run-no-label-paths",
@@ -221,7 +223,7 @@ Deno.test("createHarnessCfcInvocationContext labels no prompt-slot influence whe
   assertEquals(context.cfcInputLabels, undefined);
 });
 
-Deno.test("createHarnessCfcInvocationContext can label prompt-slot and model-context inputs separately", async () => {
+test("createHarnessCfcInvocationContext can label prompt-slot and model-context inputs separately", async () => {
   const promptSlot = {
     type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
     source: { type: "cf-harness.test-input", surface: "cli" },
@@ -284,7 +286,7 @@ Deno.test("createHarnessCfcInvocationContext can label prompt-slot and model-con
   });
 });
 
-Deno.test("createHarnessCfcInvocationContext drops a confidentiality-position prompt-slot influence atom from a saved model context", async () => {
+test("createHarnessCfcInvocationContext drops a confidentiality-position prompt-slot influence atom from a saved model context", async () => {
   // A model context saved by a run that minted the atom as confidentiality
   // still holds it there when that run resumes.
   const savedInfluence = {
@@ -328,7 +330,7 @@ Deno.test("createHarnessCfcInvocationContext drops a confidentiality-position pr
   });
 });
 
-Deno.test("createHarnessCfcInvocationContext keeps explicit trusted labels apart from derived prompt-slot labels", async () => {
+test("createHarnessCfcInvocationContext keeps explicit trusted labels apart from derived prompt-slot labels", async () => {
   const explicitAtom = {
     type: "test.cfc/ExplicitTrustedInput",
     subject: "trusted-sidecar",
@@ -386,7 +388,7 @@ Deno.test("createHarnessCfcInvocationContext keeps explicit trusted labels apart
   });
 });
 
-Deno.test("summarizeCfcInvocationRunManifest carries the manifest's read ceiling", () => {
+test("summarizeCfcInvocationRunManifest carries the manifest's read ceiling", () => {
   assertEquals(
     summarizeCfcInvocationRunManifest(
       {
@@ -411,4 +413,50 @@ Deno.test("summarizeCfcInvocationRunManifest carries the manifest's read ceiling
       promptSlotPresent: false,
     },
   );
+});
+
+describe("cfc-invocation-context", () => {
+  describe("createHarnessCfcInvocationContext()", () => {
+    it("names only the manifest fields present on a prompt-slot influence atom", async () => {
+      // A Loom manifest that names its source but no wish or dispatch class
+      // contributes only the source to the atom's provenance.
+      const context = await createHarnessCfcInvocationContext({
+        sequence: 1,
+        runId: "run-labels",
+        createdAt: "2026-05-14T17:00:00.000Z",
+        toolId: "bash",
+        operation: "shell",
+        cfcEnforcementMode: "enforce-explicit",
+        cwd: "/workspace",
+        promptSlot: {
+          type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
+          source: { type: "cf-harness.test-input", surface: "cli" },
+          role: "direct-command",
+          kernelName: "cf-harness",
+          surface: "cli",
+        },
+        runManifest: {
+          present: true,
+          source: "loom",
+          promptSlotPresent: true,
+        },
+        command: "printf hello",
+        cfcInputLabelPaths: [["command"]],
+      });
+
+      expect(context.promptSlotInfluenceLabels?.entries).toEqual([{
+        path: ["command"],
+        label: {
+          integrity: [{
+            type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
+            version: 1,
+            role: "direct-command",
+            kernelName: "cf-harness",
+            surface: "cli",
+            runManifest: { source: "loom" },
+          }],
+        },
+      }]);
+    });
+  });
 });

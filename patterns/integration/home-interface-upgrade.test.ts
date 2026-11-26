@@ -7,7 +7,6 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { deepFreeze } from "@commonfabric/data-model";
@@ -41,6 +40,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const owner = await Identity.fromPassphrase("Home interface state retention");
 
@@ -162,8 +162,10 @@ describe("Home interface upgrade", () => {
         expect(entry).toBeDefined();
         // Snapshots of Home at `676e4cae1b` and `181f2464ac`, before the
         // interface change, each leaving `spaceName` out where it has no value
-        // so that it compiles on the authoring path. Retaining the entry path
-        // keeps each production dependency's identity intact.
+        // so that it compiles on the authoring path, and binding its private
+        // inbox's handlers as the current `private-inbox.tsx` requires.
+        // Retaining the entry path keeps each production dependency's identity
+        // intact.
         entry!.contents = oldHome;
         let home: Cell<unknown>;
         if (mode === "explicit") {
@@ -197,8 +199,11 @@ describe("Home interface upgrade", () => {
         const earlierInbox = await home.key("privateInbox").key("piece")
           .asSchema<Cell<unknown>>({ asCell: ["cell"] }).pull();
         expect(earlierInbox).toBeDefined();
+        // Home forgets both the inbox it holds and the one it created for
+        // itself, which it holds, so that the next ensure creates another.
         const retainTx = runtime.edit();
         home.withTx(retainTx).key("privateInbox").set({});
+        home.withTx(retainTx).key("ownPrivateInbox").set({});
         home.withTx(retainTx).key("retainedPrivateInboxes").set([earlierInbox]);
         runtime.prepareTxForCommit(retainTx);
         expect((await retainTx.commit().settled).error).toBeUndefined();

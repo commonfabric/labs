@@ -5,11 +5,11 @@
  * from the file alone but where this package's decoder refuses the text.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { sha256 } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { FabricValue } from "@/interface.ts";
 import { UnknownValue } from "@/codec-common";
@@ -18,7 +18,6 @@ import { fabricInstanceClassesByName, FabricLink } from "@/fabric-instances";
 import {
   FabricKeyPair,
   fabricPrimitiveClassesByName,
-  FabricRegExp,
 } from "@/fabric-primitives";
 import {
   FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
@@ -223,7 +222,7 @@ describe("hash-conformance", () => {
     }
   });
 
-  it("has a case whose value is an instance of each concrete class but those with stub codecs", () => {
+  it("has a case whose value is an instance of each concrete class but those with stub codecs or none", () => {
     const values = HASH_CONFORMANCE_CASES_FOR_TESTING_ONLY.map((c) => c.make());
     const classes = {
       ...fabricPrimitiveClassesByName(),
@@ -404,6 +403,38 @@ describe("hash-conformance", () => {
       });
     });
 
+    it("throws given spec bytes that are not hexadecimal, two digits to a byte", () => {
+      for (const spec of ["2g", "22 0"]) {
+        expect(() =>
+          hashConformanceFixtureTextForTestingOnly([
+            { name: "true", section: "s", make: () => true, spec },
+          ])
+        ).toThrow(
+          `Not lowercase hexadecimal bytes: ${spec.replaceAll(" ", "")}`,
+        );
+      }
+    });
+
+    it("throws what decoding the value's text and mods throws, other than a refusal", () => {
+      // A link holding itself directly in its payload is a value no patch can
+      // make, a link holding its payload frozen. Building one takes a getter
+      // in the payload, which reads the link once it exists.
+
+      let link: FabricValue = null;
+      link = new FabricLink(Object.freeze({
+        get a() {
+          return link;
+        },
+      }));
+      expect(() =>
+        hashConformanceFixtureTextForTestingOnly([
+          { name: "link", section: "s", make: () => link },
+        ])
+      ).toThrow(
+        'The patch at ["payload","a"] does not hold once all are made.',
+      );
+    });
+
     it("throws given `equals` naming no earlier case", () => {
       expect(() =>
         hashConformanceFixtureTextForTestingOnly([
@@ -442,19 +473,6 @@ describe("hash-conformance", () => {
           },
         ])
       ).toThrow("a and b: their hashes are equal, but neither names the other");
-    });
-
-    it("returns an entry requiring the flavors a case marks", () => {
-      const entry = soleEntryOf([
-        {
-          name: "flavored",
-          section: "s",
-          make: () => new FabricRegExp("es2025", "a", ""),
-          requires: { flavors: ["es2025"] },
-        },
-      ]);
-
-      expect(entry.requires).toEqual({ flavors: ["es2025"] });
     });
 
     it("returns an entry requiring the member count of a record past the floor", () => {

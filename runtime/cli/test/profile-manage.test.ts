@@ -6,7 +6,6 @@
  * profiles are made by `createProfile()`, as profile-create.test.ts drives it.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { fromFileUrl } from "@std/path";
@@ -30,7 +29,14 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { blobDocumentId } from "@commonfabric/runner/blob-record";
 import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { PiecesController } from "@commonfabric/piece/ops";
 
@@ -54,6 +60,7 @@ import {
 
 const signer = await Identity.fromPassphrase("cf-profile-manage");
 const stranger = await Identity.fromPassphrase("cf-profile-manage stranger");
+const nobody = await Identity.fromPassphrase("cf-profile-manage nobody");
 
 // A PNG's signature and header chunk start, which is what a picture is checked
 // by; a profile stores the bytes as they are.
@@ -71,6 +78,8 @@ const picture = new Uint8Array([
   0,
   13,
 ]);
+// Another picture, by the same check.
+const otherPicture = new Uint8Array([...picture, 1]);
 const space = signer.did();
 
 /** A list of profile links, each read as the link it is. */
@@ -220,6 +229,32 @@ describe("profile management", () => {
     return (await listProfiles(CONFIG, { loadPieces })).map((each) =>
       each.name
     );
+  }
+
+  /**
+   * Has the home connection answer that the identity has no home, and refuse
+   * to create one. Returns the stub on `ensureDefaultPattern()`, whose calls
+   * say whether a home was asked for; both are restored on disposal.
+   */
+  async function homeless() {
+    const pieces = await loadPieces(CONFIG);
+    const absent = stub(
+      pieces,
+      "getDefaultPattern",
+      () => Promise.resolve(undefined),
+    );
+    const created = stub(
+      pieces,
+      "ensureDefaultPattern",
+      () => Promise.reject(new Error("Home was created.")),
+    );
+    return {
+      created,
+      [Symbol.dispose]() {
+        absent.restore();
+        created.restore();
+      },
+    };
   }
 
   /**
@@ -384,6 +419,15 @@ describe("profile management", () => {
       expect(await listProfiles(CONFIG, { loadPieces })).toEqual([]);
     });
 
+    it("returns no profiles, creating no home, when the identity's home is not there", async () => {
+      await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
+      expect(await listedNames()).toEqual(["Ada"]);
+      using home = await homeless();
+
+      expect(await listProfiles(CONFIG, { loadPieces })).toEqual([]);
+      expect(home.created.calls).toHaveLength(0);
+    });
+
     it("returns each profile's name, space and address, the first marked current", async () => {
       const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
         loadPieces,
@@ -500,6 +544,30 @@ describe("profile management", () => {
         expect(listed.map((each) => each.name)).toEqual(["Ada"]);
       });
 
+      it("leaves out a retired-list entry the profiles list does not hold, and one whose document is absent", async () => {
+        await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
+        const absent = runtime.getCell(nobody.did(), "no profile written")
+          .getAsNormalizedFullLink();
+        await listInHome(absent);
+        await listInHome(absent, "retiredProfiles");
+        const retiredOnly = runtime.getCell(stranger.did(), "retired only")
+          .getAsNormalizedFullLink();
+        await listInHome(retiredOnly, "retiredProfiles");
+        const listedSpaces = (
+          host.key("profiles").asSchema(linkListSchema).get() ?? []
+        ).map((each) => each.getAsNormalizedFullLink().space);
+        expect(listedSpaces).toContain(nobody.did());
+        expect(listedSpaces).not.toContain(stranger.did());
+
+        const listed = await listProfiles(CONFIG, { loadPieces }, {
+          includeRetired: true,
+        });
+
+        expect(listed.map((each) => [each.name, each.retired])).toEqual([
+          ["Ada", undefined],
+        ]);
+      });
+
       it("throws, naming the space, when a retired profile cannot be read", async () => {
         await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
         const alan = await createProfile({ ...CONFIG, name: "Alan" }, {
@@ -547,22 +615,12 @@ describe("profile management", () => {
 
   describe("retireProfile()", () => {
     it("throws, creating no home, for a person who has none", async () => {
-      const pieces = await loadPieces(CONFIG);
-      using _homeless = stub(
-        pieces,
-        "getDefaultPattern",
-        () => Promise.resolve(undefined),
-      );
-      using created = stub(
-        pieces,
-        "ensureDefaultPattern",
-        () => Promise.reject(new Error("Home was created.")),
-      );
+      using home = await homeless();
 
       await expect(
         retireProfile({ ...CONFIG, profileSpace: space }, { loadPieces }),
       ).rejects.toThrow(/has no home/);
-      expect(created.calls).toHaveLength(0);
+      expect(home.created.calls).toHaveLength(0);
     });
 
     it("leaves the retired profile out of the list, and the rest in it", async () => {
@@ -751,6 +809,20 @@ describe("profile management", () => {
       expect(await listedNames()).toEqual(["Ada"]);
     });
 
+    it("throws, creating no home, for a person who has none", async () => {
+      const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
+        loadPieces,
+      });
+      using home = await homeless();
+
+      await expect(
+        attestProfileName({ ...CONFIG, profileSpace: ada.space }, {
+          loadPieces,
+        }),
+      ).rejects.toThrow(`${space} has no home, so it has no profiles.`);
+      expect(home.created.calls).toHaveLength(0);
+    });
+
     it("refuses a space no listed profile lives in", async () => {
       await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
 
@@ -785,6 +857,24 @@ describe("profile management", () => {
       );
 
       expect(await listedNames()).toEqual(["Countess"]);
+    });
+
+    it("throws, creating no home and storing no name, for a person who has none", async () => {
+      const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
+        loadPieces,
+      });
+      {
+        using home = await homeless();
+
+        await expect(
+          renameProfile(
+            { ...CONFIG, profileSpace: ada.space, name: "Countess" },
+            { loadPieces },
+          ),
+        ).rejects.toThrow(`${space} has no home, so it has no profiles.`);
+        expect(home.created.calls).toHaveLength(0);
+      }
+      expect(await listedNames()).toEqual(["Ada"]);
     });
 
     it("refuses a blank name and leaves the stored one", async () => {
@@ -920,47 +1010,81 @@ describe("profile management", () => {
         .toBeUndefined();
     });
 
-    it("reports a picture another principal set as not the owner's", async () => {
+    it("uploads a picture of 200 KiB as a blob in the profile's own space, and holds no bytes of it inline", async () => {
       const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
         loadPieces,
       });
-      // The profile's space lets anyone write, and the picture's writer
-      // labels the value with whoever wrote it.
-      profileSigner = stranger;
+      const large = new Uint8Array(200 * 1024);
+      large.set(picture);
+
+      await setProfilePicture(
+        { ...CONFIG, profileSpace: ada.space, bytes: large },
+        { loadPieces },
+      );
+
+      const [listed] = await listProfiles(CONFIG, { loadPieces });
+      expect(listed.picture).toEqual(large);
+      expect(listed.pictureByOwner).toBe(true);
+      const profile = runtime.getCellFromEntityId<{
+        picture?: FabricBytes;
+        pictureBlob?: { space?: string; id?: string };
+      }>(spaceOf(ada), ada.id);
+      await profile.sync();
+      const { picture: inline, pictureBlob } = profile.get() ?? {};
+      expect(inline?.length).toBe(0);
+      expect(pictureBlob?.space).toBe(ada.space);
+      const record = await server.readDocument(
+        spaceOf(ada),
+        blobDocumentId(pictureBlob?.id ?? ""),
+      );
+      expect(record?.value).toEqual({
+        type: "image/png",
+        body: new FabricBytes(large),
+      });
+    });
+
+    it("refuses a picture another principal sets, and keeps the owner's", async () => {
+      const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
+        loadPieces,
+      });
       await setProfilePicture(
         { ...CONFIG, profileSpace: ada.space, bytes: picture },
         { loadPieces },
       );
+
+      profileSigner = stranger;
+      await expect(
+        setProfilePicture(
+          { ...CONFIG, profileSpace: ada.space, bytes: otherPicture },
+          { loadPieces },
+        ),
+      ).rejects.toThrow(/Only the profile's owner can set its picture/);
       profileSigner = signer;
 
       const [listed] = await listProfiles(CONFIG, { loadPieces });
       expect(listed.picture).toEqual(picture);
-      expect(listed.pictureByOwner).toBe(false);
-
-      await setProfilePicture(
-        { ...CONFIG, profileSpace: ada.space, bytes: picture },
-        { loadPieces },
-      );
-      expect((await listProfiles(CONFIG, { loadPieces }))[0].pictureByOwner)
-        .toBe(true);
+      expect(listed.pictureByOwner).toBe(true);
     });
 
     it("reports a picture stored without a label as not attested to its owner, and attests it with `keepCurrent`", async () => {
       const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
         loadPieces,
       });
-      // A picture as a writer that brings no policy stores it: bytes, and no
-      // label.
+      // A stand-in for a picture stored before the field had a policy: the
+      // stored policy is taken away, and bytes are written with no label.
       const profile = runtime.getCellFromEntityId<{ picture?: unknown }>(
         spaceOf(ada),
         ada.id,
       );
       await profile.sync();
+      const stored = profile.key("picture").resolveAsCell()
+        .getAsNormalizedFullLink();
+      const strip = runtime.edit();
+      seedStoredEnvelope(strip, { ...stored, path: ["cfc"] }, undefined);
+      runtime.prepareTxForCommit(strip);
+      expect((await strip.commit().settled).error).toBeUndefined();
       const tx = runtime.edit();
-      tx.writeValueOrThrow(
-        profile.key("picture").resolveAsCell().getAsNormalizedFullLink(),
-        new FabricBytes(picture),
-      );
+      tx.writeValueOrThrow(stored, new FabricBytes(picture));
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
 
@@ -975,6 +1099,19 @@ describe("profile management", () => {
       const [kept] = await listProfiles(CONFIG, { loadPieces });
       expect(kept.picture).toEqual(picture);
       expect(kept.pictureByOwner).toBe(true);
+    });
+
+    it("refuses `keepCurrent` for a space no listed profile lives in", async () => {
+      await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
+
+      await expect(
+        setProfilePicture(
+          { ...CONFIG, profileSpace: stranger.did(), keepCurrent: true },
+          { loadPieces },
+        ),
+      ).rejects.toThrow(
+        `No listed profile of ${space} lives in ${stranger.did()}.`,
+      );
     });
 
     it("refuses `keepCurrent` for a profile with no picture, and stores none", async () => {

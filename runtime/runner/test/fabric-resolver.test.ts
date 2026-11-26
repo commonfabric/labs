@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -6,6 +5,12 @@ import {
   type Program,
   type Source,
 } from "@commonfabric/js-compiler";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -365,6 +370,25 @@ describe("FabricAwareResolver", () => {
     expect(await sourceOnly.resolveDataFile("/other.json")).toBeUndefined();
     expect(await apart.resolveDataFile(data.name)).toBe(data);
     expect(await apart.resolveSource(data.name)).toBeUndefined();
+  });
+
+  it("lists a directory through the wrapped resolver, and lists nothing where it cannot", async () => {
+    // A wrapper that always offered a listing would hide the wrapped
+    // resolver's lack of one from the build, whose refusal names the module.
+
+    const listing = new FabricAwareResolver(
+      new InMemoryProgram("/main.tsx", { "/assets/glaze.png": "" }),
+      { runtime, space },
+    );
+    const notListing = new FabricAwareResolver({
+      main: () => Promise.resolve({ name: "/main.tsx", contents: "" }),
+      resolveSource: () => Promise.resolve(undefined),
+    }, { runtime, space });
+
+    expect(await listing.listDataFiles?.("/assets")).toEqual([
+      "/assets/glaze.png",
+    ]);
+    expect(notListing.listDataFiles).toBeUndefined();
   });
 
   it("refuses to mount a 33rd distinct pattern, and still returns those already mounted", async () => {

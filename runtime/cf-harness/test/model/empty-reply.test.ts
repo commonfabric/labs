@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { emptyReplyDiagnostic } from "../../src/model/empty-reply.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("empty-reply", () => {
   it("bounds the raw payload and records its original UTF-8 byte count", () => {
@@ -25,6 +25,16 @@ describe("empty-reply", () => {
     expect(diagnostic?.responseBodyBytes).toBe(
       new TextEncoder().encode(serialized).length,
     );
+  });
+
+  it("throws for an empty reply whose payload is not an object", () => {
+    expect(() =>
+      emptyReplyDiagnostic(
+        { role: "assistant", content: " " },
+        "chat-completions",
+        "not a response",
+      )
+    ).toThrow("Empty-reply evidence requires a provider response object");
   });
 
   it("omits evidence for a tool-only reply", () => {

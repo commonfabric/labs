@@ -7,9 +7,9 @@
  * in scope.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import plugin from "./lint-bench-console.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function diagnose(source: string, fileName = "sample.bench.ts"): string[] {
   return Deno.lint.runPlugin(plugin, fileName, source).map((d) => d.message);
@@ -75,6 +75,34 @@ describe("lint-bench-console", () => {
     `);
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(LOST);
+  });
+
+  it("follows a recursive helper, past a call to a function the file does not define", () => {
+    const messages = diagnose(`
+      function report(depth) {
+        if (depth > 0) report(depth - 1);
+        console.error(depth);
+      }
+      Deno.bench("a", () => {
+        measure();
+        report(2);
+      });
+    `);
+    expect(messages.length).toBe(1);
+    expect(messages[0]).toContain(LOST);
+  });
+
+  it("reports a stdout method in a helper bound by destructuring, which no body reaches by name", () => {
+    const messages = diagnose(`
+      const { report } = (detail) => {
+        console.log(detail);
+      };
+      Deno.bench("a", () => {
+        report("how big");
+      });
+    `);
+    expect(messages.length).toBe(1);
+    expect(messages[0]).toContain(STDOUT);
   });
 
   it("reports a stdout method in a body as a lost diagnostic", () => {
@@ -151,6 +179,17 @@ describe("lint-bench-console", () => {
       Deno.bench("a", () => {
         Deno.stderr.writeSync(encoder.encode("how big\\n"));
       });
+    `)).toEqual([]);
+  });
+
+  it("returns nothing for a private member read off console", () => {
+    expect(diagnose(`
+      class Probe {
+        #log() {}
+        run() {
+          console.#log("how big");
+        }
+      }
     `)).toEqual([]);
   });
 

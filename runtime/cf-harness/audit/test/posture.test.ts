@@ -11,11 +11,16 @@
  * reports the absence of evidence as evidence.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import { harnessFabricSessionPosture } from "../../src/cfc-posture.ts";
+import type {
+  HarnessCfcEnforcementModeSource,
+  HarnessCfcPolicySnapshot,
+} from "../../src/contracts/cfc-policy-snapshot.ts";
 import type {
   HarnessFabricSessionCfcPosture,
   HarnessRunState,
@@ -54,6 +59,13 @@ const stateOf = (run: RunEvidence): HarnessRunState => {
     throw new Error("the fixture's run state did not load");
   }
   return run.runState.value;
+};
+
+const snapshotOf = (run: RunEvidence): HarnessCfcPolicySnapshot => {
+  if (run.policySnapshot.status !== "present") {
+    throw new Error("the fixture's policy snapshot did not load");
+  }
+  return run.policySnapshot.value;
 };
 
 /** A session posture recorded with whatever `overrides` say. */
@@ -104,7 +116,7 @@ describe("posture", () => {
       // the sink list would have said is not established — while AUD-15's
       // subject, where each dial came from, is recorded either way.
       const posture = recordedPosture({});
-      delete (posture as { record?: unknown }).record;
+      delete posture.record;
       expect(
         verdicts((root) => {
           stateOf(root).fabricSessionCfc = posture;
@@ -121,7 +133,7 @@ describe("posture", () => {
   describe("a session claiming no named posture", () => {
     it("reports the sink check not-applicable, having no claimed coverage to fall short of", () => {
       const posture = recordedPosture({});
-      delete (posture as { posture?: unknown }).posture;
+      delete posture.posture;
       expect(
         verdicts((root) => {
           stateOf(root).fabricSessionCfc = posture;
@@ -133,19 +145,14 @@ describe("posture", () => {
   describe("AUD-15 over the policy snapshot", () => {
     /** The fixture with the snapshot's mode source and mode set. */
     const withSnapshotMode = (
-      source: string,
-      mode: string,
+      source: HarnessCfcEnforcementModeSource,
+      mode: CfcEnforcementMode,
     ): Record<string, CheckVerdict> =>
       verdicts((root) => {
         stateOf(root).fabricSessionCfc = recordedPosture({});
-        if (root.policySnapshot.status !== "present") {
-          throw new Error("the fixture's policy snapshot did not load");
-        }
-        const snapshot = root.policySnapshot.value as {
-          cfc: { enforcementMode: string; enforcementModeSource: string };
-        };
-        snapshot.cfc.enforcementModeSource = source;
-        snapshot.cfc.enforcementMode = mode;
+        const { cfc } = snapshotOf(root);
+        cfc.enforcementModeSource = source;
+        cfc.enforcementMode = mode;
       });
 
     it("is inconclusive when the snapshot is absent, so the source is unknown", () => {
@@ -181,18 +188,70 @@ describe("posture", () => {
       );
     });
 
+    describe("a snapshot recorded before the mode source existed", () => {
+      // Such a snapshot says nothing about where its mode came from, so it can
+      // be cleared only by a mode that could not have fallen back at all.
+
+      /** AUD-15's outcome with no mode source and the snapshot's mode set. */
+      const withoutSource = (mode: CfcEnforcementMode) => {
+        const root = structuredClone(family.root);
+        stateOf(root).fabricSessionCfc = recordedPosture({});
+        const { cfc } = snapshotOf(root);
+        // The field is required of a snapshot written today, so the type has
+        // no way to say it is missing; an older snapshot simply lacks it.
+        Reflect.deleteProperty(cfc, "enforcementModeSource");
+        cfc.enforcementMode = mode;
+        return auditRunFamily({ root, children: [] }, POSTURE_CHECKS)
+          .find((result) => result.checkId === "AUD-15")!;
+      };
+
+      it("passes a mode no weaker than the session claims", () => {
+        const outcome = withoutSource("enforce-strict");
+        expect(outcome.verdict).toBe("pass");
+        expect(outcome.message).toContain("does not record");
+        expect(outcome.message).not.toContain("undefined");
+      });
+
+      it("reads a source that names no known one as unrecorded", () => {
+        // The artifact is read unchecked, so a malformed one can hold
+        // anything where the source belongs.
+        for (const recorded of [null, 7, "made-up"]) {
+          const root = structuredClone(family.root);
+          stateOf(root).fabricSessionCfc = recordedPosture({});
+          const { cfc } = snapshotOf(root);
+          Reflect.set(cfc, "enforcementModeSource", recorded);
+          cfc.enforcementMode = "observe";
+          const outcome = auditRunFamily({ root, children: [] }, POSTURE_CHECKS)
+            .find((result) => result.checkId === "AUD-15")!;
+
+          expect(outcome.verdict).toBe("inconclusive");
+          expect(outcome.evidence).toEqual([{
+            artifact: "policy-snapshot.json",
+            pointer: "cfc.enforcementModeSource",
+            detail: "absent",
+          }]);
+        }
+      });
+
+      it("reports a mode weaker than the session claims inconclusive, naming the source absent", () => {
+        const outcome = withoutSource("observe");
+        expect(outcome.verdict).toBe("inconclusive");
+        expect(outcome.message).not.toContain("undefined");
+        expect(outcome.evidence).toEqual([{
+          artifact: "policy-snapshot.json",
+          pointer: "cfc.enforcementModeSource",
+          detail: "absent",
+        }]);
+      });
+    });
+
     it("fails a default-sourced enforcement mode weaker than the session claims", () => {
       expect(
         verdicts((root) => {
           stateOf(root).fabricSessionCfc = recordedPosture({});
-          if (root.policySnapshot.status !== "present") {
-            throw new Error("the fixture's policy snapshot did not load");
-          }
-          const snapshot = root.policySnapshot.value as {
-            cfc: { enforcementMode: string; enforcementModeSource: string };
-          };
-          snapshot.cfc.enforcementModeSource = "default";
-          snapshot.cfc.enforcementMode = "observe";
+          const { cfc } = snapshotOf(root);
+          cfc.enforcementModeSource = "default";
+          cfc.enforcementMode = "observe";
         })["AUD-15"],
       ).toBe("fail");
     });

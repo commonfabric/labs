@@ -35,6 +35,7 @@ import { StateEffect } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { NAME } from "@commonfabric/runner/shared";
 import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 
 import type { MentionRefMap } from "../../core/mention-refs.ts";
 import type { MentionableArray } from "../../core/mentionable.ts";
@@ -197,7 +198,7 @@ function pillWidth(element: CFCodeEditor, label?: string): number {
   return pillOf(element, label).getBoundingClientRect().width;
 }
 
-Deno.test("a pill renders the short name its universe row carries, not its destination's own", async () => {
+test("a pill renders the short name its universe row carries, not its destination's own", async () => {
   const named = await mount(secondItem({ row: "42", published: "7" }));
   const bare = await mount(secondItem());
   try {
@@ -214,7 +215,7 @@ Deno.test("a pill renders the short name its universe row carries, not its desti
   }
 });
 
-Deno.test("a pill's width follows the short name it was given", async () => {
+test("a pill's width follows the short name it was given", async () => {
   const short = await mount(secondItem({ row: "4" }));
   const long = await mount(secondItem({ row: "4242" }));
   try {
@@ -230,7 +231,7 @@ Deno.test("a pill's width follows the short name it was given", async () => {
   }
 });
 
-Deno.test("a pill whose destination no universe row stands for renders no marker, whatever it publishes", async () => {
+test("a pill whose destination no universe row stands for renders no marker, whatever it publishes", async () => {
   const { element, done } = await mount(
     secondItem({ published: "42" }),
     {
@@ -261,7 +262,7 @@ Deno.test("a pill whose destination no universe row stands for renders no marker
   }
 });
 
-Deno.test("clicking the short name navigates to the destination", async () => {
+test("clicking the short name navigates to the destination", async () => {
   const { element, destination, done } = await mount(secondItem({ row: "42" }));
   try {
     const pill = pillOf(element);
@@ -309,7 +310,7 @@ Deno.test("clicking the short name navigates to the destination", async () => {
   }
 });
 
-Deno.test("a pill drops the short name when its destination is replaced", async () => {
+test("a pill drops the short name when its destination is replaced", async () => {
   // The first destination publishes the name its row carries, so the number
   // showing could have come from either; what replacing it does is what says
   // which one the pill reads.

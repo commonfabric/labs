@@ -40,6 +40,14 @@ const ServingContextStorage = (isDeno()
 
 const servingContext = new ServingContextStorage<boolean>();
 
+/**
+ * A store of a serving loop's own, carried per async context the way the
+ * serving context is.
+ */
+export function servingLocalStore<T>(): AsyncLocalStore<T> {
+  return new ServingContextStorage<T>();
+}
+
 /** Indicates whether the caller is running a serving loop's work. */
 export function inServingContext(): boolean {
   return servingContext.getStore() === true;

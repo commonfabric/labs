@@ -184,9 +184,5 @@ export async function main(
 }
 
 if (import.meta.main) {
-  Deno.exitCode = await main(
-    Deno.args,
-    (name) => Deno.env.get(name),
-    new Date(),
-  );
+  Deno.exitCode = await main(Deno.args, Deno.env.get, new Date());
 }

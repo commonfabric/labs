@@ -1,17 +1,35 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   buildInviteLink,
   createInviteCredentials,
+  INVITE_LINK_SCHEME,
   inviteCodeVerifier,
   isInviteId,
+  isInviteProfileSuggestion,
   isInviteSecret,
   normalizeInviteHost,
   parseInviteLink,
+  SPACE_INVITE_CAPABILITY,
 } from "../space-invites.ts";
 
 const space = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8MuKWGmRfDCwAZDGBnSpXXX";
+const inviter = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+/**
+ * Returns the message of what `parse` throws, so a test can check both the
+ * refusal code and that nothing else, such as the code, is in it.
+ */
+function refusal(parse: () => unknown): string {
+  try {
+    parse();
+  } catch (error) {
+    return (error as Error).message;
+  }
+  throw new Error("expected a refusal");
+}
 
 describe("space-invites", () => {
   it("accepts canonical loopback HTTP origins across the loopback address range", () => {
@@ -117,7 +135,6 @@ describe("space-invites", () => {
     ).toThrow("invalid-link");
   });
   it("round trips an optional inviter DID in the query, outside the code verifier", () => {
-    const inviter = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
     const invite = {
       host: "https://example.com",
       space,
@@ -275,5 +292,174 @@ describe("space-invites", () => {
         code: "A".repeat(42) + "B",
       })
     ).toThrow("invalid-request");
+  });
+  describe("parseInviteLink()", () => {
+    const invite = {
+      host: "https://service.example",
+      space,
+      ...createInviteCredentials(),
+    };
+    const link = buildInviteLink("https://links.example", invite);
+    const query = link.search;
+    const scheme = `${INVITE_LINK_SCHEME}://join${query}`;
+
+    it("names the scheme `fbrc`", () => {
+      expect(INVITE_LINK_SCHEME).toBe("fbrc");
+    });
+    it("returns the same invitation for the `/join`, `/open`, and `fbrc://join` forms", () => {
+      const withInviter = buildInviteLink("https://links.example", {
+        ...invite,
+        inviter,
+      });
+      for (
+        const [built, expected] of [[link, invite], [withInviter, {
+          ...invite,
+          inviter,
+        }]] as const
+      ) {
+        expect(parseInviteLink(built)).toEqual(expected);
+        expect(parseInviteLink(built.href.replace("/join?", "/open?")))
+          .toEqual(expected);
+        expect(
+          parseInviteLink(
+            `${INVITE_LINK_SCHEME}://join${built.search}${built.hash}`,
+          ),
+        ).toEqual(expected);
+      }
+    });
+    it("returns the service named in the query as `host`, never the link's own origin", () => {
+      const parsed = parseInviteLink(`${scheme}${link.hash}`)!;
+      expect(parsed.host).toBe("https://service.example");
+      expect(inviteCodeVerifier(parsed)).toBe(inviteCodeVerifier(invite));
+    });
+    it("returns the invitation for a fragmentless `fbrc://join` link given the code apart from it", () => {
+      expect(parseInviteLink(scheme, { code: invite.code })).toEqual(invite);
+      expect(parseInviteLink(`${scheme}#`, { code: invite.code })).toEqual(
+        invite,
+      );
+    });
+    it("returns `undefined` for the setup reply and for URLs that name no invitation", () => {
+      for (
+        const other of [
+          `${INVITE_LINK_SCHEME}://setup?n=abc123`,
+          // A space link grants nothing and is never an invitation.
+          `${INVITE_LINK_SCHEME}://space?host=https://service.example&space=${space}`,
+          // Nor is an action this reader does not know, such as a later one.
+          `${INVITE_LINK_SCHEME}://other${query}${link.hash}`,
+          `${INVITE_LINK_SCHEME}://other${query}`,
+          // The setup action is never an invitation, whatever it carries.
+          `${INVITE_LINK_SCHEME}://setup${query}${link.hash}`,
+          `https://links.example/setup${query}${link.hash}`,
+          `https://links.example/join/${query}${link.hash}`,
+          // Another site's `/open` or `/join`, naming no invitation field.
+          "https://drive.example/open?id=abc",
+          "https://meet.example/join?confno=1#pwd=x",
+          "https://links.example/open",
+        ]
+      ) {
+        expect(parseInviteLink(other), other).toBeUndefined();
+        expect(parseInviteLink(other, { code: invite.code }), other)
+          .toBeUndefined();
+      }
+    });
+    it("throws `invalid-link`, without the code, for a malformed scheme-form or separated-code invitation", () => {
+      const cases: [string, { code?: string }][] = [
+        // No code anywhere.
+        [scheme, {}],
+        [`${scheme}#`, {}],
+        // A code both in the fragment and apart from it.
+        [`${scheme}${link.hash}`, { code: invite.code }],
+        // Any fragment beside a separate code.
+        [`${scheme}#inviter=${inviter}`, { code: invite.code }],
+        [`${scheme}#=junk`, { code: invite.code }],
+        [`${scheme}#&&&`, { code: invite.code }],
+        // A `/join` or `/open` URL naming an invitation field is one.
+        ["https://links.example/open?invite=x&id=abc", {}],
+        // A separate code is defined only for the scheme form.
+        [link.href.replace(link.hash, ""), { code: invite.code }],
+        [link.href.replace(link.hash, "").replace("/join?", "/open?"), {
+          code: invite.code,
+        }],
+        // A malformed `join`, or a scheme URL naming no action.
+        [`${INVITE_LINK_SCHEME}://JOIN${query}${link.hash}`, {}],
+        [`${INVITE_LINK_SCHEME}:join${query}${link.hash}`, {}],
+        [`${INVITE_LINK_SCHEME}:/join${query}${link.hash}`, {}],
+        [`${INVITE_LINK_SCHEME}:///join${query}${link.hash}`, {}],
+        [`${INVITE_LINK_SCHEME}://${query}`, { code: invite.code }],
+        [`${INVITE_LINK_SCHEME}://join/${query}${link.hash}`, {}],
+        [`${INVITE_LINK_SCHEME}://join/x${query}`, { code: invite.code }],
+        [`${INVITE_LINK_SCHEME}://join:5${query}${link.hash}`, {}],
+        [`${INVITE_LINK_SCHEME}://someone@join${query}${link.hash}`, {}],
+        // Unknown, missing, or misplaced keys.
+        [`${scheme}&note=hello${link.hash}`, {}],
+        [`${scheme}&code=${invite.code}`, {}],
+        [`${scheme}&code=${invite.code}`, { code: invite.code }],
+        [`${scheme.replace(/&invite=[^&]*/, "")}${link.hash}`, {}],
+        [`${scheme}${link.hash}&access=OWNER`, {}],
+      ];
+      for (const [malformed, options] of cases) {
+        expect(refusal(() => parseInviteLink(malformed, options)), malformed)
+          .toBe(
+            "invalid-link",
+          );
+      }
+    });
+    it("throws `invalid-request` for a separate code that is not an invitation secret", () => {
+      expect(refusal(() => parseInviteLink(scheme, { code: "short" }))).toBe(
+        "invalid-request",
+      );
+    });
+  });
+  describe("isInviteProfileSuggestion()", () => {
+    it("returns `true` for a name alone and for a name with a canonical picture", () => {
+      expect(isInviteProfileSuggestion({ name: "Sam" })).toBe(true);
+      expect(isInviteProfileSuggestion({ name: "Sam", picture: "AA" })).toBe(
+        true,
+      );
+    });
+    it("returns `false` for a value that is not a record", () => {
+      for (const value of [null, undefined, "Sam", 7, [{ name: "Sam" }]]) {
+        expect(isInviteProfileSuggestion(value)).toBe(false);
+      }
+    });
+    it("returns `false` for a record with a field besides `name` and `picture`", () => {
+      expect(isInviteProfileSuggestion({ name: "Sam", email: "s@example.com" }))
+        .toBe(false);
+    });
+    it("returns `false` for a malformed name", () => {
+      for (const name of [undefined, "", " Sam", "Sam\n", "S".repeat(129)]) {
+        expect(isInviteProfileSuggestion({ name })).toBe(false);
+      }
+    });
+    it("returns `false` for a picture that is not canonical unpadded base64url", () => {
+      for (
+        const picture of [
+          7,
+          "AA==",
+          "A+/A",
+          // One character left over after the last whole byte.
+          "A",
+          // Nonzero bits past the last whole byte.
+          "AB",
+        ]
+      ) expect(isInviteProfileSuggestion({ name: "Sam", picture })).toBe(false);
+    });
+    it("returns `false` for a picture larger than the capability allows", () => {
+      const { maxPictureBytes } = SPACE_INVITE_CAPABILITY.suggestedProfile;
+      const picture = (bytes: number) =>
+        toUnpaddedBase64url(new Uint8Array(bytes));
+      expect(
+        isInviteProfileSuggestion({
+          name: "Sam",
+          picture: picture(maxPictureBytes),
+        }),
+      ).toBe(true);
+      expect(
+        isInviteProfileSuggestion({
+          name: "Sam",
+          picture: picture(maxPictureBytes + 1),
+        }),
+      ).toBe(false);
+    });
   });
 });

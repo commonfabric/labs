@@ -1,10 +1,12 @@
 /** Sandboxed pattern content and its inherited host presentation. */
 
 import {
+  type AssetRecord,
   CommonIframeSandboxElement as _,
   type FabricBridge,
   type IframePresentation,
   IPC,
+  toAssetRecord,
 } from "@commonfabric/iframe-sandbox";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isCellHandle, type RuntimeClient } from "@commonfabric/runtime-client";
@@ -27,6 +29,12 @@ export const iframePresentationContext = createContext<
   "cf-iframe-presentation",
 );
 
+/** The assets of a guest given none. */
+const NO_ASSETS: AssetRecord = Object.freeze({});
+
+/** The `source` of the error that refuses an `assets` value. */
+const ASSETS_ERROR_SOURCE = "cf-iframe assets";
+
 /**
  * CFIframe - An iframe to execute arbitrary scripts
  *
@@ -38,6 +46,11 @@ export const iframePresentationContext = createContext<
  * @prop {string} script - Module source the guest runs once its document is
  *   parsed, which the sandbox inlines into the document and escapes there,
  *   so a bundled guest need not be escaped into its document by hand
+ * @prop {object} assets - Static assets, a record from a name matching
+ *   `[A-Za-z0-9_-]+` to a base64 `data:` URL. The guest's document refers to
+ *   one as `cf-asset:<name>`, and its script reads one with
+ *   `fabric.asset(name)`. Any other value is refused: the element shows why,
+ *   and holds the guest closed until `assets` changes.
  * @prop {object} bridge - Explicit capability bridge
  * @prop {object} context - Convenience context. A cell, or a record of cells
  *   bound as `$context={{ state, output }}`, grants each of its fields as a
@@ -60,6 +73,7 @@ export class CFIframe extends BaseElement {
   static override properties = {
     src: { type: String },
     script: { attribute: false },
+    assets: { attribute: false },
     context: { type: Object },
     bridge: { type: Object },
     resourceKinds: { attribute: false },
@@ -69,6 +83,7 @@ export class CFIframe extends BaseElement {
 
   declare src: string;
   declare script: string;
+  declare assets: AssetRecord | null;
   declare context: object | null;
   declare bridge: FabricBridge | null;
   declare resourceKinds:
@@ -83,6 +98,12 @@ export class CFIframe extends BaseElement {
 
   private _contextBridge: FabricBridge = { resources: {} };
   private _contextReady = true;
+
+  /**
+   * The guest's assets, as `assets` held them when last checked, or
+   * `undefined` while that check refuses them, which holds the guest closed.
+   */
+  #checkedAssets: AssetRecord | undefined = NO_ASSETS;
 
   /**
    * The context setup still under way, if any. A newer setup aborts it, and
@@ -120,6 +141,7 @@ export class CFIframe extends BaseElement {
     super();
     this.src = "";
     this.script = "";
+    this.assets = null;
     this.context = null;
     this.bridge = null;
     this.resourceKinds = null;
@@ -287,16 +309,12 @@ export class CFIframe extends BaseElement {
   }
 
   private dismissError() {
-    const retryContext = this._errorDetails?.source === "cf-iframe context";
-    this._errorDetails = null;
-    if (retryContext) this.prepareContextBridge();
+    this.#clearError();
   }
 
   private fixError() {
     this.emit("fix", this._errorDetails);
-    const retryContext = this._errorDetails?.source === "cf-iframe context";
-    this._errorDetails = null;
-    if (retryContext) this.prepareContextBridge();
+    this.#clearError();
   }
 
   private prepareContextBridge() {
@@ -304,6 +322,7 @@ export class CFIframe extends BaseElement {
     this.#contextSetup = undefined;
     if (this._errorDetails?.source === "cf-iframe context") {
       this._errorDetails = null;
+      this.#reportHeldAssets();
     }
     if (this.bridge || !this.context) {
       this._contextBridge = { resources: {} };
@@ -351,7 +370,60 @@ export class CFIframe extends BaseElement {
     }
   }
 
+  /**
+   * Checks `assets`, refusing it while it is not a record from a name to a
+   * base64 `data:` URL: the guest is held closed, and the error says why
+   * unless an error from another source is showing, which dismissing reports
+   * this one after. A check that passes clears the error an earlier one
+   * raised.
+   */
+  #checkAssets() {
+    if (this._errorDetails?.source === ASSETS_ERROR_SOURCE) {
+      this._errorDetails = null;
+    }
+    try {
+      this.#checkedAssets = toAssetRecord(this.assets ?? NO_ASSETS);
+    } catch (error) {
+      this.#checkedAssets = undefined;
+      // An error from another source stays: dismissing a context failure
+      // retries the context, which writing over it would lose.
+      if (this._errorDetails !== null) return;
+      const description = describeFailure(error);
+      this._errorDetails = {
+        description,
+        source: ASSETS_ERROR_SOURCE,
+        lineno: 0,
+        colno: 0,
+        stacktrace: description,
+      };
+    }
+  }
+
+  /**
+   * Helper for the dismiss and fix handlers, which clears the error showing:
+   * a context failure retries the context, and assets still refused are
+   * reported in its place.
+   */
+  #clearError() {
+    const source = this._errorDetails?.source;
+    this._errorDetails = null;
+    if (source === "cf-iframe context") this.prepareContextBridge();
+    if (source !== ASSETS_ERROR_SOURCE) this.#reportHeldAssets();
+  }
+
+  /**
+   * Helper for the members above that clear an error from another source,
+   * which reports the refusal of assets `#checkAssets()` held back while that
+   * error showed.
+   */
+  #reportHeldAssets() {
+    if (this._errorDetails === null && this.#checkedAssets === undefined) {
+      this.#checkAssets();
+    }
+  }
+
   protected override willUpdate(changed: PropertyValues<this>) {
+    if (changed.has("assets")) this.#checkAssets();
     if (
       changed.has("bridge") || changed.has("context") ||
       changed.has("resourceKinds") ||
@@ -364,7 +436,10 @@ export class CFIframe extends BaseElement {
 
   override render() {
     const bridge = this.bridge ?? this._contextBridge;
-    const source = this.bridge || this._contextReady ? this.src : "";
+    const assets = this.#checkedAssets;
+    const source = assets !== undefined && (this.bridge || this._contextReady)
+      ? this.src
+      : "";
     return html`
       <common-iframe-sandbox
         .bridge="${bridge}"
@@ -374,6 +449,7 @@ export class CFIframe extends BaseElement {
           ? this.#presentationConsumer.value ?? null
           : this.presentation}"
         .script="${this.script}"
+        .assets="${assets ?? NO_ASSETS}"
         height="100%"
         width="100%"
         style="border: none;"

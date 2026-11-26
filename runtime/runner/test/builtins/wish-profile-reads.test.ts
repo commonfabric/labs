@@ -6,12 +6,17 @@
  * time.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/logger";
 import { defer } from "@commonfabric/async/defer";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { wish } from "../../src/builtins/wish.ts";
 import type { Cell } from "../../src/cell.ts";

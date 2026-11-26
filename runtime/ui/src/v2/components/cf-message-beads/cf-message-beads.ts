@@ -6,7 +6,7 @@ import type {
 } from "@commonfabric/api";
 import { MessagesSchema } from "@commonfabric/runner/component-read-contract";
 import type { CellHandle } from "@commonfabric/runtime-client";
-import { css, html, nothing, render } from "lit";
+import { css, html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
@@ -35,10 +35,11 @@ function beadLabel(msg: BuiltInLLMMessage): string {
   if (typeof msg.content === "string") {
     return `${msg.role}: ${clip(msg.content, 50)}`;
   }
-
+  // The cell's schema says only that each message is an object, so one can
+  // arrive with no content.
   if (!Array.isArray(msg.content)) return msg.role;
 
-  const parts = msg.content as BuiltInLLMContentPart[];
+  const parts = msg.content;
 
   const tc = parts.find(
     (p: BuiltInLLMContentPart) => p.type === "tool-call",
@@ -64,10 +65,26 @@ function beadLabel(msg: BuiltInLLMMessage): string {
   return msg.role;
 }
 
+/** Inline style of the tooltip a hovered bead shows its label in. */
+const TOOLTIP_STYLE = [
+  "position: fixed",
+  "z-index: 1001",
+  "pointer-events: none",
+  "background: #1e293b",
+  "color: #e2e8f0",
+  "padding: 2px 7px",
+  "border-radius: 4px",
+  "font: 500 11px/1.3 system-ui, sans-serif",
+  "white-space: nowrap",
+  "max-width: 240px",
+  "overflow: hidden",
+  "text-overflow: ellipsis",
+  "box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2)",
+].join("; ");
+
 export class CFMessageBeads extends BaseElement {
   private _cellController = createCellController<BuiltInLLMMessage[]>(this, {
     timing: { strategy: "immediate" },
-    onChange: () => this.requestUpdate(),
   });
 
   static override styles = [
@@ -225,13 +242,6 @@ export class CFMessageBeads extends BaseElement {
       undefined;
   }
 
-  override firstUpdated(changedProperties: Map<string, unknown>): void {
-    super.firstUpdated(changedProperties);
-    if (this.messages !== undefined) {
-      this._cellController.bind(this.messages, MessagesSchema);
-    }
-  }
-
   override willUpdate(changedProperties: Map<string, unknown>): void {
     super.willUpdate(changedProperties);
     if (changedProperties.has("messages") && this.messages !== undefined) {
@@ -244,66 +254,35 @@ export class CFMessageBeads extends BaseElement {
     this.#unmountTooltip();
   }
 
-  #mountTooltip(): void {
-    if (this.#tooltip) return;
+  #mountTooltip(): HTMLDivElement {
     const el = document.createElement("div");
-    el.style.position = "fixed";
-    el.style.zIndex = "1001";
-    el.style.pointerEvents = "none";
+    el.style.cssText = TOOLTIP_STYLE;
     el.dataset.cfMessageBeadsTooltip = "";
     document.body.appendChild(el);
-    this.#tooltip = el;
+    return el;
   }
 
   #unmountTooltip(): void {
-    if (this.#tooltip) {
-      render(nothing, this.#tooltip);
-      this.#tooltip.remove();
-      this.#tooltip = null;
-    }
+    this.#tooltip?.remove();
+    this.#tooltip = null;
   }
 
+  /**
+   * Shows `msg`'s label in the tooltip, centered above `beadEl`, or below it
+   * where there is no room above, and kept inside the viewport's sides.
+   */
   #showTooltip(msg: BuiltInLLMMessage, beadEl: HTMLElement): void {
-    this.#mountTooltip();
-    const label = beadLabel(msg);
-    const tpl = html`
-      <style>
-      .tp {
-        position: fixed;
-        background: #1e293b;
-        color: #e2e8f0;
-        padding: 2px 7px;
-        border-radius: 4px;
-        font: 500 11px/1.3 system-ui, sans-serif;
-        white-space: nowrap;
-        max-width: 240px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
-        pointer-events: none;
-      }
-      </style>
-      <div class="tp">${label}</div>
-    `;
-    render(tpl, this.#tooltip!);
+    const tooltip = this.#tooltip ??= this.#mountTooltip();
+    tooltip.textContent = beadLabel(msg);
 
     const rect = beadEl.getBoundingClientRect();
-    const panel = this.#tooltip!.querySelector(".tp") as HTMLElement;
-    if (!panel) return;
-
-    // Place offscreen for measurement, then position
-    panel.style.top = "-9999px";
-    panel.style.left = "-9999px";
-
-    requestAnimationFrame(() => {
-      const pr = panel.getBoundingClientRect();
-      let top = rect.top - pr.height - 4;
-      let left = rect.left + rect.width / 2 - pr.width / 2;
-      left = Math.max(4, Math.min(left, globalThis.innerWidth - pr.width - 4));
-      if (top < 4) top = rect.bottom + 4;
-      panel.style.top = `${Math.round(top)}px`;
-      panel.style.left = `${Math.round(left)}px`;
-    });
+    const pr = tooltip.getBoundingClientRect();
+    let top = rect.top - pr.height - 4;
+    let left = rect.left + rect.width / 2 - pr.width / 2;
+    left = Math.max(4, Math.min(left, globalThis.innerWidth - pr.width - 4));
+    if (top < 4) top = rect.bottom + 4;
+    tooltip.style.top = `${Math.round(top)}px`;
+    tooltip.style.left = `${Math.round(left)}px`;
   }
 
   private _onBeadEnter = (e: Event, index: number) => {

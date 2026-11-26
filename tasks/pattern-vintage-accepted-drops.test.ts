@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   acceptedDropsFor,
@@ -6,6 +5,7 @@ import {
   withoutAcceptedDrops,
 } from "./pattern-vintage-accepted-drops.ts";
 import { isReduction } from "../runtime/piece/test/state-continuity-harness.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("pattern-vintage-accepted-drops", () => {
   const drops: AcceptedStateDrop[] = [
@@ -87,6 +87,28 @@ describe("pattern-vintage-accepted-drops", () => {
         value: { title: "a" },
         applied: new Set(["crossrefs"]),
       });
+    });
+
+    it("leaves a value that cannot hold the named path as it was", () => {
+      const nested = new Set(["topics[].crossrefs", "meta.crossrefs"]);
+      const state = {
+        topics: "not a list",
+        meta: [{ crossrefs: 1 }],
+        other: new Map([["crossrefs", 1]]),
+      };
+
+      expect(strip(state, nested)).toEqual({
+        value: state,
+        applied: new Set(),
+      });
+      expect(strip(state, nested).value).toBe(state);
+    });
+
+    it("leaves an object that is not a bare literal as it was", () => {
+      const held = new Map([["crossrefs", 1]]);
+
+      expect(strip({ topics: [held] }).value).toEqual({ topics: [held] });
+      expect(strip({ topics: [held] }).applied).toEqual(new Set());
     });
 
     it("removes a named path from every element of its list", () => {

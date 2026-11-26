@@ -12,8 +12,9 @@
 import { assertEquals } from "@std/assert";
 import type { DiffEdit, DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { diffSource } from "../lib/view/diffedit.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("diffedit gate: save skips a verified hunk whose path parsed but has no captured base content", () => {
+test("diffedit gate: save skips a verified hunk whose path parsed but has no captured base content", () => {
   // A real one-file, one-hunk diff that `parseDiff` accepts (a `diff --git`
   // header, a `---`/`+++` pair, and a counted body), so save's `modelHunks`
   // holds one hunk and matches it to the recorded `hunks[0]`.
@@ -33,7 +34,7 @@ Deno.test("diffedit gate: save skips a verified hunk whose path parsed but has n
   const edit: DiffEdit = {
     lines: new Map([[5, { absPath: "/ghost/m.ts", newLine: 0, markerLen: 1 }]]),
     fileText: new Map([["/unrelated/other.ts", "kept\n"]]),
-    oldFileLines: [],
+    oldFileLines: () => null,
     languages: [],
     hunks: [
       { absPath: "/ghost/m.ts", newStart: 1, newCount: 1, verified: true },

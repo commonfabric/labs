@@ -27,7 +27,9 @@ export interface Key {
   readonly ctrl?: boolean;
 
   /** Alt/Meta modifier (from `ESC <key>` or a CSI modifier param). For an
-   * Alt+letter, `name` is the letter and `char` is unset. */
+   * Alt+letter, `name` is the letter, and `char` is the character the key
+   * typed when the terminal reports one, such as the `ß` that Option+S types
+   * on a Mac. */
   readonly alt?: boolean;
 
   readonly shift?: boolean;
@@ -109,7 +111,10 @@ export function decodeKeys(buf: Uint8Array): DecodeResult {
           i = end + PASTE_END.length;
           continue;
         }
-        keys.push(csiToKey(buf[j], params));
+        const key = buf[j] === 0x75
+          ? reportedKey(params)
+          : csiToKey(buf[j], params);
+        if (key) keys.push(key);
         i = j + 1;
         continue;
       }
@@ -119,20 +124,11 @@ export function decodeKeys(buf: Uint8Array): DecodeResult {
         i += 1;
         continue;
       }
-      // Meta/Alt: `ESC <key>` is Alt+key. Backspace → alt-backspace
-      // (backward-kill-word); a control byte → ctrl with alt; a printable byte
-      // → the letter with `alt`.
-      if (n === 0x7f || n === 0x08) {
-        keys.push({ name: "backspace", alt: true });
-        i += 2;
-        continue;
-      }
-      if (n < 0x20) {
-        keys.push({
-          name: `ctrl-${String.fromCharCode(n + 96)}`,
-          ctrl: true,
-          alt: true,
-        });
+      // Meta/Alt: `ESC <key>` is Alt+key. A control byte or Delete → its key
+      // with `alt`, so Backspace is alt-backspace (backward-kill-word); a
+      // printable byte → the letter with `alt`.
+      if (n < 0x20 || n === 0x7f) {
+        keys.push({ ...byteKey(n), alt: true });
         i += 2;
         continue;
       }
@@ -148,27 +144,8 @@ export function decodeKeys(buf: Uint8Array): DecodeResult {
       continue;
     }
 
-    if (b === 0x0d || b === 0x0a) {
-      keys.push({ name: "enter" });
-      i += 1;
-    } else if (b === 0x09) {
-      keys.push({ name: "tab" });
-      i += 1;
-    } else if (b === 0x7f || b === 0x08) {
-      keys.push({ name: "backspace" });
-      i += 1;
-    } else if (b === 0x03) {
-      keys.push({ name: "ctrl-c", ctrl: true });
-      i += 1;
-    } else if (b < 0x20) {
-      keys.push({ name: `ctrl-${String.fromCharCode(b + 96)}`, ctrl: true });
-      i += 1;
-    } else if (b === 0x20) {
-      keys.push({ name: "space", char: " " });
-      i += 1;
-    } else if (b < 0x80) {
-      const ch = String.fromCharCode(b);
-      keys.push({ name: ch, char: ch });
+    if (b < 0x80) {
+      keys.push(byteKey(b));
       i += 1;
     } else {
       // Multi-byte UTF-8: the lead byte's high bits give the sequence length.
@@ -220,18 +197,22 @@ function indexOf(
   return -1;
 }
 
-/** Decode the `1;<m>` modifier suffix of a CSI sequence: m-1 is a bitmask of
- * shift(1)/alt(2)/ctrl(4). */
-function modifiers(params: string): {
+/** The modifier bits of the modifier field of a CSI sequence, `m` or
+ * `m:event`, where m-1 is a bitmask of shift(1)/alt(2)/ctrl(4) and other
+ * keys. */
+function modifierBits(field: string | undefined): number {
+  return (parseInt(field ?? "", 10) || 1) - 1;
+}
+
+interface Modifiers {
   shift?: boolean;
   alt?: boolean;
   ctrl?: boolean;
-} {
-  const parts = params.split(";");
-  const m = parts.length > 1 ? parseInt(parts[1], 10) : 0;
-  if (!m || m < 2) return {};
-  const bits = m - 1;
-  const out: { shift?: boolean; alt?: boolean; ctrl?: boolean } = {};
+}
+
+/** The modifiers among the modifier bits `bits` that the viewer binds. */
+function modifiers(bits: number): Modifiers {
+  const out: Modifiers = {};
   if (bits & 1) out.shift = true;
   if (bits & 2) out.alt = true;
   if (bits & 4) out.ctrl = true;
@@ -239,7 +220,7 @@ function modifiers(params: string): {
 }
 
 function csiToKey(final: number, params: string): Key {
-  const mods = modifiers(params);
+  const mods = modifiers(modifierBits(params.split(";")[1]));
   switch (final) {
     case 0x41:
       return { name: "up", ...mods };
@@ -269,15 +250,150 @@ function csiToKey(final: number, params: string): Key {
         ? sgrMouseToKey(params.slice(1), final === 0x6d)
         : { name: "unknown" };
     case 0x7e:
-      return tildeKey(params);
+      return tildeKey(params, mods);
     default:
       return { name: "unknown" };
   }
 }
 
-function tildeKey(params: string): Key {
+/** The kitty keyboard protocol's modifier bits for Super, Hyper, and Meta,
+ * which on a Mac include Command. */
+const COMMAND_BITS = 8 | 16 | 32;
+
+/** The kitty keyboard protocol's modifier bit for Caps Lock. */
+const CAPS_LOCK_BIT = 64;
+
+/** The code points the kitty keyboard protocol gives keys that type no
+ * character of their own, such as Caps Lock and the keypad's keys. */
+const FUNCTIONAL_KEYS = { from: 0xe000, to: 0xf8ff };
+
+/** The characters of the keypad's keys that type, from KP_0, in the kitty
+ * keyboard protocol's order. */
+const KEYPAD_TEXT = { from: 57399, text: "0123456789./*-+\r=," };
+
+/** The keys the keypad's keys that move stand for, from KP_LEFT, in the kitty
+ * keyboard protocol's order. */
+const KEYPAD_MOVES = {
+  from: 57417,
+  names: [
+    "left",
+    "right",
+    "up",
+    "down",
+    "pageup",
+    "pagedown",
+    "home",
+    "end",
+    "unknown", // Insert, which `CSI 2 ~` also decodes as
+    "delete",
+  ],
+};
+
+/** Whether `code` is Caps Lock, Scroll Lock, Num Lock, or a modifier, which
+ * the kitty keyboard protocol reports pressed on its own. */
+function isModifier(code: number): boolean {
+  return (code >= 57358 && code <= 57360) || (code >= 57441 && code <= 57454);
+}
+
+/**
+ * Decodes the parameters of `CSI key:shifted:base ; modifiers ; text u`, a
+ * key as the kitty keyboard protocol reports it: its code point, the code
+ * points of the key with Shift and of the key in the same place on a US
+ * keyboard, the modifier bits plus one, and the code points of the text it
+ * typed. Each part but the first may be left out. Escape, Enter, Tab,
+ * Backspace, and Ctrl with Space, `?`, or a character from `@` to `~` decode as
+ * the byte a terminal otherwise sends for them does. Returns null for a key
+ * pressed with Command, Super, Hyper, or
+ * Meta, none of which the viewer binds, and for a modifier pressed on its
+ * own.
+ */
+function reportedKey(params: string): Key | null {
+  const [keyField, modField, textField = ""] = params.split(";");
+  const [key, shifted, base] = keyField.split(":").map(codePoint);
+  const bits = modifierBits(modField);
+  const text = textField.split(":").map(codePoint).flatMap((point) =>
+    point !== undefined && point >= 0x20 && point !== 0x7f
+      ? [String.fromCodePoint(point)]
+      : []
+  ).join("");
+  // Key 0 is text that no key typed.
+  if (key === 0 && text) return typedKey(text);
+  if (key === undefined || key === 0) return { name: "unknown" };
+  if (bits & COMMAND_BITS || isModifier(key)) return null;
+  const mods = modifiers(bits);
+  const move = KEYPAD_MOVES.names[key - KEYPAD_MOVES.from];
+  if (move) return { name: move, ...mods };
+  const keypad = KEYPAD_TEXT.text[key - KEYPAD_TEXT.from];
+  // With Alt or Ctrl, a key that types a letter outside ASCII is named by the
+  // letter in its place on a US keyboard, as a terminal without the protocol
+  // names it.
+  const byBase = (mods.alt || mods.ctrl) && base !== undefined && key >= 0x80;
+  const c = keypad?.charCodeAt(0) ?? (byBase ? base : key);
+  if (c >= FUNCTIONAL_KEYS.from && c <= FUNCTIONAL_KEYS.to) {
+    return { name: "unknown" };
+  }
+  if (c === 0x09 && mods.shift) return { name: "shift-tab" };
+  // Ctrl turns the character the key types, with Shift if it is down, into
+  // a control byte as a terminal does: `?` into Delete, and Space and `@` to
+  // `~` into the byte of their low five bits.
+  const typed = mods.shift && !byBase && shifted !== undefined ? shifted : c;
+  const byte = c < 0x20 || c === 0x7f
+    ? c
+    : !mods.ctrl
+    ? -1
+    : typed === 0x3f
+    ? 0x7f
+    : typed === 0x20 || (typed >= 0x40 && typed < 0x7f)
+    ? typed & 0x1f
+    : -1;
+  if (byte >= 0) {
+    return mods.alt ? { ...byteKey(byte), alt: true } : byteKey(byte);
+  }
+  const letter = String.fromCodePoint(c);
+  const name = !mods.shift
+    ? letter
+    : !byBase && shifted !== undefined
+    ? String.fromCodePoint(shifted)
+    : letter.toUpperCase();
+  if (mods.alt || mods.ctrl) {
+    return { name, ...mods, ...(text ? { char: text } : {}) };
+  }
+  return typedKey(
+    text || (!mods.shift && bits & CAPS_LOCK_BIT ? letter.toUpperCase() : name),
+  );
+}
+
+/** The key a terminal sends as the byte `b`, below 0x80, on its own. */
+function byteKey(b: number): Key {
+  if (b === 0x1b) return { name: "escape" };
+  if (b === 0x0d || b === 0x0a) return { name: "enter" };
+  if (b === 0x09) return { name: "tab" };
+  if (b === 0x7f || b === 0x08) return { name: "backspace" };
+  if (b < 0x20) {
+    return { name: `ctrl-${String.fromCharCode(b + 96)}`, ctrl: true };
+  }
+  return typedKey(String.fromCharCode(b));
+}
+
+/** The key that typed `text`. */
+function typedKey(text: string): Key {
+  return text === " "
+    ? { name: "space", char: " " }
+    : { name: text, char: text };
+}
+
+/** The code point `field` gives as a decimal number, or undefined when it
+ * gives none. */
+function codePoint(field: string): number | undefined {
+  const point = Number(field);
+  return field !== "" && Number.isInteger(point) && point >= 0 &&
+      point <= 0x10ffff && (point < 0xd800 || point > 0xdfff)
+    ? point
+    : undefined;
+}
+
+function tildeKey(params: string, mods: Modifiers): Key {
   const code = parseInt(params.split(";")[0] || "0", 10);
-  const mods = modifiers(params);
   switch (code) {
     case 1:
     case 7:

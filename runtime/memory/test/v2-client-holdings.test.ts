@@ -9,10 +9,10 @@
 
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { defer } from "@commonfabric/async/defer";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   decodeMemoryBoundary,

@@ -1,7 +1,6 @@
 /** Exercises Battleship placement, shot tracking, and player display helpers. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import {
@@ -16,6 +15,7 @@ import {
   isShipSunk,
 } from "../../../showcase/battleship/shared/game-logic.tsx";
 import type { Ship } from "../../../showcase/battleship/shared/types.tsx";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Every placement draws orientation, row, and column. The second candidate
 // repeats the carrier's start; the remaining candidates occupy separate rows.

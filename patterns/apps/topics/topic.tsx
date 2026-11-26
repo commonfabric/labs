@@ -58,7 +58,12 @@ export interface TopicAuthor {
    * whose author kind is unknown. */
   kind: string;
   name: string;
-  /** The bytes of the author's profile picture, when they have one. */
+  /** The blob holding the author's profile picture, when they have one. Its
+   * type is spelled out, not named, because `TOPIC_UPGRADE_SCHEMA` embeds
+   * this type's schema where a reference to a named type does not resolve. */
+  pictureBlob?: { space: string; id: string };
+  /** The bytes of the author's profile picture, when their profile holds it
+   * as bytes. */
   picture?: FabricBytes;
   /** Avatar text, snapshotted instead when the author's profile has no
    * picture. */
@@ -466,6 +471,17 @@ export interface TopicInput {
    * a reader can see it, rather than leaving it to convention. */
   boardCrossrefs?: ReadonlyCell<TopicCrossrefRow[] | Default<[]>>;
 
+  /** The board's index of that pivot by topic number, which lets a topic find
+   * its row without reading the others; see `backlinksOf`. Only a shortcut:
+   * the lookup uses it when it is an index of the very pivot `boardCrossrefs`
+   * names and holds this topic's row, and reads the pivot otherwise, so an
+   * absent, stale, or mismatched index costs reads and never changes the
+   * answer. */
+  boardCrossrefIndex?: ReadonlyCell<
+    // deno-lint-ignore ban-types
+    Default<TopicCrossrefIndex, { byName: {} }>
+  >;
+
   /**
    * The number the board calls this topic by, stored here and published as
    * the topic's `shortName`. The board's create allocates it over the board's
@@ -552,6 +568,9 @@ export type TopicMentionRefMap = Record<string, TopicMentionRef>;
  */
 export interface TopicMentionSource {
   mentions: ComparableCell<unknown>[] | Default<[]>;
+
+  /** The topic's number, which the pivot files the topic's row under. */
+  shortName?: string;
 }
 
 /**
@@ -567,19 +586,59 @@ export interface TopicMentionSource {
  * come from the same distinct list, so that topic appears once, at its first
  * entry, in the `mentionedBy` of each topic it mentions, and never in its own.
  *
- * Both sides are declared `unknown`, which is the whole design rather than a
- * shortcut. A row holds cell REFERENCES — `unknown` is the declaration that
- * lets a cell be written into one without a cast, and the one that stops any
- * reader of the table expanding a topic it did not ask for. Each consumer
- * declares what it wants to see through them.
+ * Both sides are declared `ComparableCell`, which is the whole design rather
+ * than a shortcut. A row holds cell REFERENCES, and a cell declaration is what
+ * stops a reader of the table at the reference. `unknown` does not: a query
+ * walks through a link it reaches under `unknown` into the document behind it,
+ * and every row's topic is a Topic piece, so a Topic's input read under a pivot
+ * declared that way carried every Topic's piece document (130 MB of a 135 MB
+ * sync on a board of 3,264 topics). Each consumer declares what it wants to see
+ * through the references.
  */
 export interface TopicCrossrefRow {
-  /** The topic this row is about. `unknown` because it is written as a
-   * reference and only ever compared — `equals` takes the raw link. Anything
-   * wider retrieves the piece instead of pointing at it: declared `object`,
-   * this field reads back as the whole expanded topic, `$UI` tree included. */
-  topic: unknown;
-  mentionedBy: unknown[];
+  /** The topic this row is about. A cell because it is written as a reference
+   * and only ever compared — `equals` takes the raw link. Anything wider
+   * retrieves the piece instead of pointing at it: declared `object`, this
+   * field reads back as the whole expanded topic, `$UI` tree included. */
+  topic: ComparableCell<unknown>;
+  mentionedBy: ComparableCell<unknown>[];
+}
+
+/**
+ * A pivot row as the board publishes it: a {@link TopicCrossrefRow} and the
+ * number of the topic it describes, which the board's index files the row
+ * under.
+ *
+ * A topic declares its pivot through `TopicCrossrefRow`, which carries no
+ * number. It never reads one, and a topic wired to a board that publishes no
+ * number would otherwise be demanding a string of an open contract.
+ */
+export interface TopicCrossrefNamedRow extends TopicCrossrefRow {
+  /** The number of the topic this row describes, absent for a topic with
+   * none. A hint for finding the row, which never decides whether a row is a
+   * topic's own: that is `equals` on `topic`. */
+  name?: string;
+}
+
+/**
+ * The board's mention pivot grouped by topic number: under each number, the
+ * pivot's positions whose rows carry it, in pivot order.
+ *
+ * An element is a position of the pivot named by `source` rather than a copy
+ * of a row, so a reader sees the row the pivot holds there now, or nothing at
+ * a position past the pivot's current end. The index decides nothing about
+ * membership: a reader checks the row it finds is its own.
+ */
+export interface TopicCrossrefIndex {
+  /** The pivot the positions belong to. A cell for the reason
+   * `TopicCrossrefRow.topic` is: it is written as a reference and only ever
+   * compared. */
+  source?: ComparableCell<unknown>;
+
+  /** The pivot's positions, by the number their rows carry. A position past
+   * the pivot's current end holds nothing, so a reader compares an element as
+   * a cell before it reads one. */
+  byName: Record<string, TopicCrossrefRow[]>;
 }
 
 /**
@@ -1971,36 +2030,89 @@ export const submitProfileLink = handler<void, SubmitProfileLinkState>(
  * as one — find the row whose `topic` is this piece, hand back its
  * `mentionedBy`. Nothing else about the table is touched.
  *
- * It re-runs whenever any row changes, which at board scale is often. That is
- * fine, and deliberately so: the rows are addressed by the topic each describes
- * rather than by position, so a re-run over an unchanged board recomputes the
- * same links and writes nothing. What would make it expensive is reading
- * through the references, which is why the parameter declares them `unknown`:
- * `topic` is compared by identity and `mentionedBy` is passed through as links,
- * so surveying the whole table expands no topic at all.
+ * It finds the row by number when it can. When `index` is an index of the
+ * pivot `table` names — the two compare `equals` — and this topic has a
+ * number, it reads the positions filed under that number and keeps the rows
+ * whose `topic` is this piece, reading no other row. A position past the end of
+ * a pivot that has since shrunk reads as nothing, and is passed over. When any
+ * of that fails — no index, an index of another pivot or a stale one, no
+ * number, or no row of this topic's among those positions — it scans the whole
+ * table. The pivot holds at most one row per topic, so either way the answer
+ * is that row's `mentionedBy`, or nothing: the index decides how much is read,
+ * never what is returned.
  *
- * HACK, as elsewhere in this pattern: reads `unknown[]`, publishes
- * `TopicSummary[]`. A reference through a lift is a link and resolves to the
- * whole topic however little the lift declared, so the assertion states what a
- * consumer receives while the narrow parameter bounds what this reads.
+ * A scan re-runs whenever any row changes, which at board scale is often. That
+ * is fine: the rows are addressed by the topic each describes rather than by
+ * position, so a re-run over an unchanged board recomputes the same links and
+ * writes nothing. What would make it expensive is reading through the
+ * references, which is why the parameter declares both sides cells: `topic` is
+ * compared by identity and `mentionedBy` is passed through as links, so
+ * surveying the whole table expands no topic at all. Declared `unknown`, the
+ * `mentionedBy` entries would not stop the walk that loads the table, which
+ * would bring every mentioning topic's piece document with it.
+ *
+ * HACK, as elsewhere in this pattern: reads cells, publishes `TopicSummary[]`.
+ * A reference through a lift is a link and resolves to the whole topic however
+ * little the lift declared, so the assertion states what a consumer receives
+ * while the narrow parameter bounds what this reads.
  */
 const backlinksOf = lift((
-  { table, self }: {
-    table:
-      | { topic: ComparableCell<unknown>; mentionedBy: unknown[] }[]
-      | Default<[]>;
+  { table, index, self, shortName }: {
+    table: ReadonlyCell<
+      {
+        topic: ComparableCell<unknown>;
+        mentionedBy: ComparableCell<unknown>[];
+      }[]
+    >;
+    index: ReadonlyCell<
+      Default<{
+        source?: ComparableCell<unknown>;
+        byName: Record<
+          string,
+          {
+            topic: ComparableCell<unknown>;
+            mentionedBy: ComparableCell<unknown>[];
+          }[]
+        >;
+        // deno-lint-ignore ban-types
+      }, { byName: {} }>
+    >;
     self: ComparableCell<unknown>;
+    shortName: string | undefined;
   },
-): TopicSummary[] =>
+): TopicSummary[] => {
+  if (
+    typeof shortName === "string" && isMemberName(shortName) &&
+    equals(table, index.key("source"))
+  ) {
+    const bucket = index.key("byName").key(shortName);
+    const count = bucket.get()?.length ?? 0;
+    // A position past the end of a pivot that has since shrunk holds nothing,
+    // and reading its value is refused by the row schema, so each element is
+    // compared as a cell and only the element that is this topic's row is
+    // read.
+    let found = false;
+    const mentioners: unknown[] = [];
+    for (let at = 0; at < count; at++) {
+      if (equals(self, bucket.key(at).key("topic"))) {
+        found = true;
+        for (const mention of bucket.key(at).key("mentionedBy").get() ?? []) {
+          mentioners.push(mention);
+        }
+      }
+    }
+    if (found) return mentioners as TopicSummary[];
+  }
   // `filter` + `flatMap` rather than `find`, so a topic with no row on the
   // table — no board wired in — yields an empty array from the shape of the
   // expression instead of from a `?? []` bolted onto a miss. At most one row
   // matches: the board's pivot builds one row per distinct topic, compared by
   // `equals` as this lookup compares.
-  table
+  const mentioners: unknown[] = (table.get() ?? [])
     .filter((row) => equals(self, row.topic))
-    .flatMap((row) => row.mentionedBy) as TopicSummary[]
-);
+    .flatMap((row) => row.mentionedBy);
+  return mentioners as TopicSummary[];
+});
 
 /**
  * Every piece this topic points at, from both places a reference can come from:
@@ -2439,6 +2551,7 @@ export default pattern<TopicInput, TopicOutput>(
       references,
       mentioned,
       boardCrossrefs,
+      boardCrossrefIndex,
       shortName,
       [SELF]: self,
     },
@@ -2627,7 +2740,8 @@ export default pattern<TopicInput, TopicOutput>(
     const hasBody = body.get().trim().length > 0;
 
     // Inbound: who points at this topic, looked up in the board's pivot rather
-    // than derived a second time.
+    // than derived a second time, through the board's index of it by number
+    // when the two are wired to the same pivot.
     //
     // The binding's name is the name of the document the lookup is stored in,
     // and it is published as `referencedBy`. On the deployed board, many
@@ -2639,7 +2753,9 @@ export default pattern<TopicInput, TopicOutput>(
     // space scope, where every reader finds it.
     const backlinks = backlinksOf({
       table: boardCrossrefs,
+      index: boardCrossrefIndex,
       self,
+      shortName,
     });
     const hasReferences = backlinks.length > 0;
     // Only what THIS pattern owns is offered for removal. The union `mentions`
@@ -2906,6 +3022,7 @@ export default pattern<TopicInput, TopicOutput>(
                         >
                           <cf-hstack gap="2" align="center">
                             <cf-avatar
+                              blob={comment.author?.pictureBlob}
                               bytes={comment.author?.picture}
                               src={comment.author?.avatar || ""}
                               name={topicAuthorLabel(comment.author)}

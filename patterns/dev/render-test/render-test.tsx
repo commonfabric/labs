@@ -1,6 +1,14 @@
 // PATTERN TIER: fixture — scaffolding that pins a bug or drives the
 // runtime. Do not copy from this file. Tiers: patterns/index.md
-import { Cell, Default, handler, NAME, pattern, UI } from "commonfabric";
+import {
+  Cell,
+  Default,
+  handler,
+  NAME,
+  pattern,
+  UI,
+  type VNode,
+} from "commonfabric";
 
 interface SubItem {
   label: string;
@@ -17,6 +25,11 @@ export interface Input {
   title: string | Default<"Render Test">;
   globalCounter: number | Default<0>;
   items: Item[] | Default<[]>;
+}
+
+export interface Output extends Input {
+  [NAME]: string;
+  [UI]: VNode;
 }
 
 // Root level: increment global counter
@@ -79,7 +92,7 @@ const incrementSubItem = handler<unknown, { subItem: Cell<SubItem> }>(
   },
 );
 
-export default pattern<Input, Input>(({ title, globalCounter, items }) => {
+export default pattern<Input, Output>(({ title, globalCounter, items }) => {
   return {
     [NAME]: title,
     [UI]: (

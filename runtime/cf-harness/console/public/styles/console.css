@@ -799,6 +799,11 @@ button[disabled] {
   padding: 0;
 }
 
+.index-mine {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
 .index-tag {
   color: #6d3fbe;
   margin-right: 0.35rem;

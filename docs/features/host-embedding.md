@@ -174,7 +174,18 @@ DOM). A host embeds by listening for:
   tab"). A host that calls `preventDefault()` owns the new tab and can
   apply its own URL scheme. Left uncancelled, the default builds a
   fabric URL and calls `globalThis.open`, which on a non-shell origin is
-  a 404 tab — so a host that mounts these components binds this one. The
+  a 404 tab — so a host that mounts these components binds this one.
+  A labelled `cf-cell-link` resolves its target when clicked, so the event
+  can come after the click. By default it comes once the target lands, with
+  no tab opened in advance, which suits a host that takes the event itself:
+  Loom's pattern panes navigate in place. A host whose new tabs open through
+  the default path turns reserving on with `setNewTabReservation(true)`; the
+  shell's `Navigation` does. Then a target that takes longer than
+  `NEW_TAB_RESERVE_AFTER_MS` (one second) gets a tab reserved while the
+  gesture still allows one, and the event carries `claimReservedTab()`. A
+  host that cancels it and wants a tab calls `claimReservedTab()` and points
+  the tab at its own URL, since the gesture was spent on the reservation; a
+  host that cancels without claiming leaves the tab to be closed. The
   conceptual browser form is described by
   [Common Fabric URLs](../specs/fabric-urls.md). No deployment is planned; the
   current event behavior remains authoritative.
@@ -557,9 +568,16 @@ refused, or when the run throws or its event is dropped or refused admission.
 A run that finishes without an error resolves it, whether or not it wrote
 anything; a handler that turns an event down throws, with a reason a person can
 read, which fails its run and rejects the send. Under server execution the run is the served one, and its outcome is the
-consequence the serving loop recorded for the event. `sendStrict()` waits the
-same way when given `{ awaitHandling: true }`, and otherwise confirms only that
-the runtime took the event.
+consequence the serving loop recorded for the event. A served run that read
+data its stream's space doesn't admit has its outcome withheld, the same
+whether it committed or not
+([events.md §5](../specs/server-side-execution/events.md#5-failure-semantics)):
+the response to `cell:send-reviewed` is then `{ handling: "withheld" }` in
+place of an empty one, and the send resolves with it and never rejects, so a
+native client can say the action was sent and that its outcome is private. A
+client that ignores the field reads the response as a success. `sendStrict()`
+waits the same way when given `{ awaitHandling: true }`, and otherwise
+confirms only that the runtime took the event.
 
 The runtime's ordinary checks still apply: the writer the contract names, the
 surface and action, the actor, and the space's access list. The mark reaches a

@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 // Importing this module also registers the custom matcher it defines.
 import { stripSymbols } from "../src/equal-ignoring-symbols.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const testSymbol1 = Symbol("test1");
 const testSymbol2 = Symbol("test2");
@@ -256,6 +256,21 @@ describe("`toMatchObjectIgnoringSymbols()` matcher", () => {
     expect(() => {
       expect({ value: 1 }).toMatchObjectIgnoringSymbols({ value: 2 });
     }).toThrow();
+  });
+
+  it("matches a primitive against the same primitive", () => {
+    expect("glaze").toMatchObjectIgnoringSymbols("glaze");
+  });
+
+  it("throws when a primitive meets an object", () => {
+    expect(() => {
+      expect("glaze").toMatchObjectIgnoringSymbols({ value: "glaze" });
+    }).toThrow("expected object to match when ignoring symbols");
+    expect(() => {
+      expect({ value: { nested: 1 } }).toMatchObjectIgnoringSymbols({
+        value: 1,
+      });
+    }).toThrow("expected object to match when ignoring symbols");
   });
 
   it("matches `NaN` against `NaN`", () => {

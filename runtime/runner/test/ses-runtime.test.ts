@@ -1,13 +1,14 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { identitySourceMap } from "@commonfabric/js-compiler/source-map";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   ensureSESLockdown,
   evaluateFunctionSourceInSES,
   SESRuntime,
 } from "../src/sandbox/ses-runtime.ts";
+import { runLockedDownProcess } from "./support/run-locked-down-process.ts";
 
 type StackHook = ((error: Error) => string) | undefined;
 
@@ -162,6 +163,45 @@ describe("ses-runtime", () => {
       expect(add(1, 2)).toBe(3);
       expect(() => evaluateFunctionSourceInSES("globalThis.Deno.exit"))
         .toThrow();
+    });
+  });
+
+  describe("ensureSESLockdown()", () => {
+    it("lets a locked-down process that does not fail exit with status 0", async () => {
+      const { code, stdout, stderr } = await runLockedDownProcess("succeed");
+
+      expect(stdout).toContain("intrinsics frozen: true");
+      expect(stderr).not.toContain("Uncaught");
+      expect(stderr).not.toContain("SES_");
+      expect(code).toBe(0);
+    });
+
+    it("exits a locked-down process with status 1 when a rejection escapes the top level", async () => {
+      const { code, stdout, stderr } = await runLockedDownProcess("reject");
+
+      expect(stdout).toContain("intrinsics frozen: true");
+      expect(stderr).toContain(
+        "Uncaught (in promise) Error: rejected at the top level",
+      );
+      expect(code).toBe(1);
+    });
+
+    it("exits a locked-down process with status 1 when a rejected promise has no handler", async () => {
+      const { code, stdout, stderr } = await runLockedDownProcess("abandon");
+
+      expect(stdout).toContain("intrinsics frozen: true");
+      expect(stderr).toContain(
+        "Uncaught (in promise) Error: rejected with no handler",
+      );
+      expect(code).toBe(1);
+    });
+
+    it("exits a locked-down process with status 1 when a timer callback throws", async () => {
+      const { code, stdout, stderr } = await runLockedDownProcess("throw");
+
+      expect(stdout).toContain("intrinsics frozen: true");
+      expect(stderr).toContain("Uncaught Error: thrown from a timer");
+      expect(code).toBe(1);
     });
   });
 });

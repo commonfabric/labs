@@ -1,8 +1,11 @@
 import ts from "typescript";
-import { getCellKind } from "@commonfabric/schema-generator/cell-brand";
 
-import { classifyOpaquePathTerminalCall } from "../../opaque-roots.ts";
-import { createReactiveWrapperForExpression } from "../rewrite-helpers.ts";
+import {
+  createReactiveWrapperForExpression,
+  hasSyntheticComputeCallbackAncestor,
+  isAlreadySyntheticComputeOwned,
+} from "../rewrite-helpers.ts";
+import { isCellReadTerminalCall } from "../../call-root-support.ts";
 import {
   findPendingComputeWrapCandidate,
   isJsxLocalRewriteContainer,
@@ -15,53 +18,8 @@ function isHelperOwnedCellGetExpression(
   expression: ts.Expression,
   context: Parameters<Emitter>[0]["context"],
 ): expression is ts.CallExpression {
-  if (
-    !ts.isCallExpression(expression) ||
-    classifyOpaquePathTerminalCall(expression) !== "get"
-  ) {
-    return false;
-  }
-
-  const callee = expression.expression;
-  if (
-    !ts.isPropertyAccessExpression(callee) &&
-    !ts.isElementAccessExpression(callee)
-  ) {
-    return false;
-  }
-
-  try {
-    const receiverType = context.checker.getTypeAtLocation(callee.expression);
-    const cellKind = getCellKind(receiverType, context.checker);
-    return cellKind === "cell" || cellKind === "stream";
-  } catch {
-    return false;
-  }
-}
-
-function hasSyntheticComputeCallbackAncestor(
-  node: ts.Node,
-  context: Parameters<Emitter>[0]["context"],
-): boolean {
-  let current = node.parent;
-  while (current) {
-    if (
-      (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) &&
-      context.isSyntheticComputeCallback(current)
-    ) {
-      return true;
-    }
-    current = current.parent;
-  }
-  return false;
-}
-
-function isAlreadySyntheticComputeOwned(
-  node: ts.Node,
-  context: Parameters<Emitter>[0]["context"],
-): boolean {
-  return context.getReactiveContext(node).kind === "compute" &&
-    context.isSyntheticComputeOwnedNode(node);
+  return ts.isCallExpression(expression) &&
+    isCellReadTerminalCall(expression, context);
 }
 
 interface RewriteHelperOwnedExpressionParams {

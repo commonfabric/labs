@@ -27,11 +27,16 @@ export function commutesWithTailAppends(
   reads: readonly (readonly string[])[],
   writes: readonly (readonly string[])[],
 ): boolean {
-  const held = sidecarEntries(before);
-  const now = sidecarEntries(after);
-  if (held === undefined || now === undefined) return false;
+  const heldSidecar = sidecarParts(before);
+  const nowSidecar = sidecarParts(after);
+  if (heldSidecar === undefined || nowSidecar === undefined) return false;
+  const held = heldSidecar.entries;
+  const now = nowSidecar.entries;
   if (now.length < held.length) return false;
-  if (!agreeOutsideEntries(before, after)) return false;
+  if (
+    !agreeExcept(heldSidecar.document, nowSidecar.document, "value") ||
+    !agreeExcept(heldSidecar.value, nowSidecar.value, "entries")
+  ) return false;
   for (let i = 0; i < held.length; i++) {
     if (!valueEqual(held[i], now[i])) return false;
   }
@@ -51,29 +56,18 @@ export function commutesWithTailAppends(
   );
 }
 
-/** A stream sidecar document's `value.entries` log, or `undefined` for a
- * value of another shape. */
-function sidecarEntries(
-  document: FabricValue | undefined,
-): readonly FabricValue[] | undefined {
+/** A stream sidecar document, its `value`, and its `value.entries` log, or
+ * `undefined` for a value of another shape. */
+function sidecarParts(document: FabricValue | undefined): {
+  document: Readonly<Record<string, FabricValue>>;
+  value: Readonly<Record<string, FabricValue>>;
+  entries: readonly FabricValue[];
+} | undefined {
   if (!isObjectNotArray(document)) return undefined;
   const value = document.value;
   if (!isObjectNotArray(value)) return undefined;
   const entries = value.entries;
-  return Array.isArray(entries) ? entries : undefined;
-}
-
-/** Whether two stream sidecar documents agree on everything but their
- * `value.entries` logs. */
-function agreeOutsideEntries(
-  a: FabricValue | undefined,
-  b: FabricValue | undefined,
-): boolean {
-  if (!isObjectNotArray(a) || !isObjectNotArray(b)) return false;
-  const aValue = a.value;
-  const bValue = b.value;
-  if (!isObjectNotArray(aValue) || !isObjectNotArray(bValue)) return false;
-  return agreeExcept(a, b, "value") && agreeExcept(aValue, bValue, "entries");
+  return Array.isArray(entries) ? { document, value, entries } : undefined;
 }
 
 function agreeExcept(

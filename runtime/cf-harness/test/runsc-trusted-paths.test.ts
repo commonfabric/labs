@@ -7,7 +7,6 @@
  * filesystem takes it.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -22,6 +21,12 @@ import type {
   ProcessRunResult,
   ProcessSpawnRequest,
 } from "../src/sandbox/process-runner.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The three settings under test, by the option that carries each. */
 const TRUSTED = [
@@ -89,6 +94,19 @@ const searchesDespiteMode = (): boolean => {
     }
   } finally {
     Deno.chmodSync(dir, 0o700);
+    Deno.removeSync(dir, { recursive: true });
+  }
+};
+
+/** Whether this system makes a symbolic link whose target is empty. */
+const makesEmptyLinks = (): boolean => {
+  const dir = Deno.makeTempDirSync({ prefix: "runsc-trusted-paths-link-" });
+  try {
+    Deno.symlinkSync("", join(dir, "empty"));
+    return true;
+  } catch {
+    return false;
+  } finally {
     Deno.removeSync(dir, { recursive: true });
   }
 };
@@ -251,6 +269,16 @@ describe("runsc", () => {
         );
       });
 
+      it("throws for a relative binary where the working directory is gone, asking for an absolute path", async () => {
+        const gone = join(root, "gone");
+        await Deno.mkdir(gone);
+        Deno.chdir(gone);
+        await Deno.remove(gone);
+        expect(() => resolveWith("runscBinary", "outside/runsc")).toThrow(
+          /^runsc binary outside\/runsc cannot be resolved: the working directory could not be read \(.*\); give an absolute path$/,
+        );
+      });
+
       it("throws for a bare name no `PATH` entry holds, naming what it searched for", () => {
         const empty = join(root, "empty");
         Deno.mkdirSync(empty);
@@ -306,6 +334,33 @@ describe("runsc", () => {
           await Deno.mkdir(join(workspace, "tools"));
           const config = resolveWith(option, throughTheWorkspace(leaf));
           expect(config[option]).toBe(join(outside, leaf));
+        });
+
+        it("throws for a path whose `..` follows a file", () => {
+          expect(() => resolveWith(option, `${outside}/policy.json/../${leaf}`))
+            .toThrow(
+              `cannot be resolved: ${outside}/policy.json is not a directory`,
+            );
+        });
+
+        it("returns the real path of a path whose `..` climbs out of a top-level directory", () => {
+          // `/<top>/..` is the root, whatever `<top>` is.
+          const top = outside.split("/")[1];
+          const config = resolveWith(option, `/${top}/..${outside}/${leaf}`);
+          expect(config[option]).toBe(join(outside, leaf));
+        });
+
+        it({
+          name: "throws for a path through a link whose target is empty",
+          // Linux makes no link whose target is empty; macOS does.
+          ignore: !makesEmptyLinks(),
+          fn: () => {
+            const link = join(outside, "empty");
+            Deno.symlinkSync("", link);
+            expect(() => resolveWith(option, join(link, leaf))).toThrow(
+              `leads through a symbolic link whose target does not exist (${link})`,
+            );
+          },
         });
 
         it("throws for a path whose `..` follows a component that does not exist", () => {

@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   FrameReader,
   MAX_FRAME_BYTES,
   readDelivery,
   relayAddress,
 } from "@commonfabric/github-webhooks/relay";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ENCODER = new TextEncoder();
 

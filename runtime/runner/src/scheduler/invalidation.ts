@@ -1,5 +1,6 @@
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
+import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-keys";
 
 import type {
   ChangeGroup,
@@ -9,8 +10,16 @@ import type {
   StorageNotification,
 } from "../storage/interface.ts";
 import { isPermanentAuthorizationRefusal } from "../storage/rejection.ts";
+import { normalizeCellScope } from "../scope.ts";
 import { summarizeTriggerTraceValue } from "./diagnostics.ts";
-import { dirtyFanOutAll, dirtyFanOutForCause } from "./fan-out.ts";
+import {
+  dirtyFanOutAll,
+  dirtyFanOutForCause,
+  type FanOutNodeState,
+  fanOutRunApplied,
+  fanOutSlotChanged,
+} from "./fan-out.ts";
+import { entityNameKey } from "./keys.ts";
 import type { MaterializerIndexState } from "./materializers.ts";
 import type { NodeRegistry, SchedulerNode } from "./node-record.ts";
 import type { TriggerIndexState } from "./trigger-index.ts";
@@ -76,6 +85,52 @@ export function shapableWakeGroupKey(
   return undefined;
 }
 
+/** The scope names a document id can have a writer registered under. */
+const WRITER_SCOPES = ["space", "user", "session"] as const;
+
+/**
+ * Tells each node that runs once for each viewer, and writes a document
+ * `notification` changed an instance of, which instance changed and whether
+ * one of its own runs changed it. The node answers from that which of its
+ * runs an instance holds the write of (`fanOutHoldsSlot()`).
+ */
+function noteFanOutChanges(
+  state: Pick<StorageNotificationState, "nodes" | "writersOf">,
+  notification: Extract<StorageNotification, { changes: unknown }>,
+): void {
+  // Only a commit this runtime made names the run that made it: a change
+  // the store pushed, and a write taken back, are no run's.
+  const source = notification.type === "commit"
+    ? notification.source
+    : undefined;
+  for (const change of notification.changes) {
+    const { id, scope, scopeKey } = change.address;
+    const told = new Set<FanOutNodeState>();
+    for (const writerScope of WRITER_SCOPES) {
+      const writers = state.writersOf(
+        entityNameKey({ space: notification.space, id, scope: writerScope }),
+      );
+      for (const writer of writers ?? []) {
+        const fanOut = state.nodes.get(writer)?.fanOut;
+        if (fanOut === undefined || told.has(fanOut)) continue;
+        told.add(fanOut);
+        fanOutSlotChanged(
+          fanOut,
+          scopeKey ??
+            (normalizeCellScope(scope) === "space" ? "space" : ANY_INSTANCE),
+          id,
+          source,
+        );
+      }
+    }
+  }
+  const action = source?.sourceAction as Action | undefined;
+  const fanOut = action === undefined
+    ? undefined
+    : state.nodes.get(action)?.fanOut;
+  if (fanOut !== undefined) fanOutRunApplied(fanOut, source!);
+}
+
 export function processStorageNotification(
   state: StorageNotificationState,
   notification: StorageNotification,
@@ -85,6 +140,7 @@ export function processStorageNotification(
   if (!("changes" in notification)) {
     return;
   }
+  noteFanOutChanges(state, notification);
 
   // One charge per notification (one commit or one push): every reader wake this
   // notification produces observes the same instant, so they share one burst token
@@ -523,6 +579,11 @@ export interface StorageNotificationState {
   readonly pending: ReadonlySet<Action>;
   readonly getActionId: (action: Action) => string;
   readonly recordCellUpdate: (change: IMemoryChange) => void;
+
+  /** The actions registered as writing the document `entity` names. */
+  readonly writersOf: (
+    entity: SpaceScopeAndURI,
+  ) => Iterable<Action> | undefined;
   readonly recordTriggerTrace: (entry: TriggerTraceEntry) => void;
   readonly markInvalid: (
     action: Action,

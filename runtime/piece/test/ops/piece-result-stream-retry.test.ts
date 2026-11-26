@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { createSession, Identity } from "@commonfabric/identity";
@@ -15,6 +14,7 @@ import { type Pattern, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { NormalizedFullLink } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import { scopeCallerEventId } from "../../../runner/src/scheduler/event-identity.ts";
 import { PieceController } from "../../src/ops/piece-controller.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";

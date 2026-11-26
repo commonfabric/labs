@@ -1,8 +1,8 @@
 /// <reference lib="deno.unstable" />
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import plugin from "./lint-spread-arguments.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The source text of each spread the rule reports in `source`. */
 function reported(source: string): string[] {
@@ -53,6 +53,17 @@ describe("lint-spread-arguments", () => {
       Other.max(...times);
       records[push](...more);
       const all = [...records, ...more];
+    `)).toEqual([]);
+  });
+
+  it("returns nothing for a spread into a private method of that name", () => {
+    expect(reported(`
+      class Queue {
+        #push(...items) {}
+        add(more) {
+          this.#push(...more);
+        }
+      }
     `)).toEqual([]);
   });
 });

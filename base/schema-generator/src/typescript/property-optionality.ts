@@ -35,18 +35,9 @@ export function isDefaultNodeWithUndefined(
     return false;
   }
 
-  const typeArgs = typeNode.typeArguments;
-  if (!typeArgs || typeArgs.length === 0) {
-    return false;
-  }
-
-  const innerTypeNode = typeArgs[0];
-  if (!innerTypeNode) {
-    return false;
-  }
-
-  const innerType = checker.getTypeFromTypeNode(innerTypeNode);
-  return isUnionWithUndefined(innerType);
+  const innerTypeNode = typeNode.typeArguments?.[0];
+  return innerTypeNode !== undefined &&
+    isUnionWithUndefined(checker.getTypeFromTypeNode(innerTypeNode));
 }
 
 export function isOptionalSymbol(symbol: ts.Symbol): boolean {

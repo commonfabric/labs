@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import {
@@ -11,6 +10,7 @@ import {
   sampleManifest,
   serializeManifest,
 } from "@commonfabric/test-support/records";
+import { afterEach, beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   makeTestSelectionSource,
@@ -152,19 +152,21 @@ describe("test-selection-history", () => {
       ]);
       expect(manifest?.generatedAt).toBe(last.generatedAt);
       expect(flakes.value).toBe("2 flaky tests");
-      expect(selection.value).toBe("25%");
+      expect(selection.value).toBe(
+        "25%<small> tests · </small>25%<small> time</small>",
+      );
       expect(history.samples).toEqual([
         {
           at: Date.parse(first.generatedAt),
-          counts: { flaky: 0, corpusSeconds: 4, selectedSeconds: 1 },
+          counts: { flaky: 0, corpus: 4, selected: 1 },
         },
         {
           at: Date.parse(middle.generatedAt),
-          counts: { flaky: 1, corpusSeconds: 4, selectedSeconds: 2 },
+          counts: { flaky: 1, corpus: 4, selected: 2 },
         },
         {
           at: Date.parse(last.generatedAt),
-          counts: { flaky: 2, corpusSeconds: 4, selectedSeconds: 1 },
+          counts: { flaky: 2, corpus: 4, selected: 1 },
         },
       ]);
       expect(history.errors).toEqual([]);
@@ -223,7 +225,9 @@ describe("test-selection-history", () => {
           selection.promise,
         ]);
         expect(flakeHeadline.value).toBe(status === 200 ? "1 flaky test" : "—");
-        expect(selectionHeadline.value).toBe(status === 200 ? "50%" : "—");
+        expect(selectionHeadline.value).toBe(
+          status === 200 ? "50%<small> tests · </small>50%<small> time</small>" : "—",
+        );
         if (status !== 200) {
           expect(flakeHeadline.status).toBe("unknown");
           expect(selectionHeadline.status).toBe("unknown");
@@ -370,7 +374,7 @@ describe("test-selection-history", () => {
         cacheFile,
       });
       const history = await restarted.history();
-      expect(history.samples.map((sample) => sample.counts?.corpusSeconds)).toEqual([
+      expect(history.samples.map((sample) => sample.counts?.corpus)).toEqual([
         4,
         4,
       ]);
@@ -443,7 +447,7 @@ describe("test-selection-history", () => {
         fetchImpl: store.fetchImpl,
         cacheFile,
       }).history();
-      expect(later.samples.map((sample) => sample.counts?.corpusSeconds)).toEqual([4]);
+      expect(later.samples.map((sample) => sample.counts?.corpus)).toEqual([4]);
       expect(store.reads.filter((n) => !n.startsWith("list:"))).toEqual([name]);
     });
 
@@ -569,8 +573,8 @@ describe("test-selection-history", () => {
       time.tick(MANIFEST_SHARE_MS + 1);
       expect((await source.history()).samples[0].counts).toEqual({
         flaky: 1,
-        corpusSeconds: 4,
-        selectedSeconds: 2,
+        corpus: 4,
+        selected: 2,
       });
       expect(store.reads.filter((name) => !name.startsWith("list:")))
         .toEqual([objectName(manifest.generatedAt)]);
@@ -596,7 +600,7 @@ describe("test-selection-history", () => {
         null,
         null,
         null,
-        { flaky: 0, corpusSeconds: 4, selectedSeconds: 0 },
+        { flaky: 0, corpus: 4, selected: 0 },
       ]);
       expect(result.errors).toHaveLength(2);
       store.objects[objectName(broken.generatedAt)] = serializeManifest(broken);
@@ -607,7 +611,7 @@ describe("test-selection-history", () => {
       time.tick(MANIFEST_SHARE_MS + 1);
       const recovered = await source.history();
       expect(recovered.errors).toEqual([]);
-      expect(recovered.samples.map((sample) => sample.counts?.corpusSeconds)).toEqual([
+      expect(recovered.samples.map((sample) => sample.counts?.corpus)).toEqual([
         undefined,
         4,
         4,
@@ -680,8 +684,8 @@ describe("test-selection-history", () => {
         counts: {
           [objectName(manifest.generatedAt)]: {
             flaky: 0,
-            corpusSeconds: 1,
-            selectedSeconds: 0,
+            corpus: 1,
+            selected: 0,
           },
         },
       };
@@ -696,12 +700,23 @@ describe("test-selection-history", () => {
             counts: {
               [objectName(manifest.generatedAt)]: {
                 flaky: 0,
-                corpusSeconds: -1,
+                corpus: -1,
+                selected: 0,
+              },
+            },
+          }),
+          // Test times in place of counts of tests.
+          JSON.stringify({
+            ...incompatible,
+            counts: {
+              [objectName(manifest.generatedAt)]: {
+                flaky: 0,
+                corpusSeconds: 1,
                 selectedSeconds: 0,
               },
             },
           }),
-          // Counts of tests with no test time.
+          // Counts with no corpus.
           JSON.stringify({
             ...incompatible,
             counts: {
@@ -720,8 +735,8 @@ describe("test-selection-history", () => {
         }).history();
         expect(history.samples[0].counts).toEqual({
           flaky: 1,
-          corpusSeconds: 4,
-          selectedSeconds: 2,
+          corpus: 4,
+          selected: 2,
         });
         expect(history.errors).toEqual([]);
       }
@@ -737,8 +752,8 @@ describe("test-selection-history", () => {
       const failed = await source.history();
       expect(failed.samples[0].counts).toEqual({
         flaky: 1,
-        corpusSeconds: 4,
-        selectedSeconds: 2,
+        corpus: 4,
+        selected: 2,
       });
       expect(failed.errors).toHaveLength(1);
       expect(failed.errors[0]).toContain("Could not write history cache");
@@ -817,8 +832,8 @@ describe("test-selection-history", () => {
     };
     const counts = (value: number) => ({
       flaky: value,
-      corpusSeconds: 100,
-      selectedSeconds: value,
+      corpus: 100,
+      selected: value,
     });
 
     it("breaks lines at missing measurements without compressing time or changing scale", () => {
@@ -846,14 +861,14 @@ describe("test-selection-history", () => {
       expect(chart.duration).toBe(5 * DAY);
     });
 
-    it("uses each sample's corpus time for the selected percentage", () => {
-      // The last corpus has the second's count of tests and twice its time.
+    it("uses each sample's corpus size for the selected percentage", () => {
+      // The last corpus holds twice as many tests as the second.
       const sample = (at: number, corpus: number, selected: number) => ({
         at,
         counts: {
           flaky: 1,
-          corpusSeconds: corpus,
-          selectedSeconds: selected,
+          corpus,
+          selected,
         },
       });
       const history: SelectionHistory = {

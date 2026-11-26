@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -6,11 +5,18 @@ import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { ROUTED_HOLDINGS_LIMIT } from "@commonfabric/memory/v2/routed-limits";
 import { cfcLabelDocumentHash } from "@commonfabric/runner/cfc";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { MirrorData } from "./mirror.ts";
 import {
   applyDocs,
   boardFile,
   fetchedFrom,
+  identityDid,
   loadMirror,
   openDocSource,
   refreshMirror,
@@ -607,6 +613,36 @@ describe("sync", () => {
       }
     });
 
+    it("opens sessions that declare they are not demand", async () => {
+      const identity = join(dir, "identity.key");
+      await Deno.writeFile(identity, await Identity.generatePkcs8());
+      const demand: unknown[] = [];
+      const source = await openDocSource(
+        { apiUrl: "http://localhost:1", space: SPACE, identity },
+        {
+          settings: () =>
+            Promise.resolve({
+              experimental: {},
+              memoryHost: new URL("https://memory.example"),
+            }),
+          Sessions: class extends board.Sessions {
+            constructor(
+              address: ConstructorParameters<typeof board.Sessions>[0],
+              ...rest: unknown[]
+            ) {
+              super(address);
+              demand.push(rest[3]);
+            }
+          },
+        },
+      );
+      try {
+        expect(demand).toEqual([false]);
+      } finally {
+        await source.close();
+      }
+    });
+
     it("derives the space's DID from a space name", async () => {
       const identity = join(dir, "identity.key");
       await Deno.writeFile(identity, await Identity.generatePkcs8());
@@ -771,6 +807,24 @@ describe("sync", () => {
     });
   });
 
+  describe("identityDid()", () => {
+    it("returns the DID of the identity the keyfile holds", async () => {
+      const path = join(dir, "identity.key");
+      const pkcs8 = await Identity.generatePkcs8();
+      await Deno.writeFile(path, pkcs8);
+
+      expect(await identityDid(path)).toBe(
+        (await Identity.fromPkcs8(pkcs8)).did(),
+      );
+    });
+
+    it("throws naming a keyfile it cannot read", async () => {
+      await expect(identityDid(join(dir, "absent.key"))).rejects.toThrow(
+        "absent.key",
+      );
+    });
+  });
+
   describe("loadMirror()", () => {
     it("returns what `saveMirror()` wrote, to a file only its owner reads", async () => {
       const path = join(dir, "nested", "copy.json");
@@ -811,6 +865,26 @@ describe("sync", () => {
 
       expect(Object.keys((await loadMirror(path)).docs).sort()).toEqual([
         "cid:x",
+        "of:fid1:new",
+      ]);
+    });
+
+    it("lets go of an entry followed before the copy kept what it went through, so that it is followed again", async () => {
+      const path = join(dir, "unrouted.json");
+      const followed = { piece: "of:fid1:p", input: "of:fid1:i" };
+      await Deno.writeTextFile(
+        path,
+        JSON.stringify({
+          pieces: {
+            "of:fid1:old": followed,
+            "of:fid1:odd": { ...followed, via: ["of:fid1:odd", 2] },
+            "of:fid1:new": { ...followed, via: ["of:fid1:new"] },
+          },
+          docs: {},
+        }),
+      );
+
+      expect(Object.keys((await loadMirror(path)).pieces)).toEqual([
         "of:fid1:new",
       ]);
     });

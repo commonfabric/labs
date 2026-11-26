@@ -5,7 +5,88 @@ import { css, html } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
 
 declare global {
-  var Plaid: any;
+  var Plaid: PlaidLink | undefined;
+}
+
+/** Plaid's Link SDK, which its script installs as `globalThis.Plaid`. */
+export interface PlaidLink {
+  create(config: PlaidLinkConfig): PlaidLinkHandler;
+}
+
+/** What `Plaid.create()` takes: the link token and Link's callbacks. */
+export interface PlaidLinkConfig {
+  token: string;
+  onSuccess(publicToken: string, metadata: unknown): void;
+  onExit(error: PlaidLinkError | null, metadata: unknown): void;
+  onEvent(
+    eventName: string,
+    metadata: { institution_name?: string | null },
+  ): void;
+}
+
+/** The error Link hands `onExit` when the user did not finish. */
+export interface PlaidLinkError {
+  error_message?: string | null;
+  display_message?: string | null;
+}
+
+/** An open-able Link flow, as `Plaid.create()` returns it. */
+export interface PlaidLinkHandler {
+  open(): void;
+  destroy(): void;
+}
+
+/** What the element reaches outside itself for. */
+export interface PlaidLinkEnvironment {
+  fetch(input: string, init: RequestInit): Promise<Response>;
+  loadPlaid(): Promise<PlaidLink>;
+}
+
+const PLAID_LINK_SCRIPT =
+  "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
+
+/** The part of a document that `loadPlaidLink()` adds a script to. */
+export interface ScriptDocument {
+  createElement(tagName: "script"): HTMLScriptElement;
+  readonly head: { appendChild(node: Node): unknown };
+}
+
+/**
+ * The load of Plaid's script each document has under way or has finished,
+ * observed from the moment the script was added, so that later callers share
+ * its outcome rather than wait on events that have already fired.
+ */
+const plaidLoads = new WeakMap<ScriptDocument, Promise<PlaidLink>>();
+
+/**
+ * Loads Plaid's Link script into `document`, unless it is loading or loaded
+ * there already, and resolves with the SDK it installs on `scope`. Rejects
+ * when the script fails to load or installs nothing; the next call then adds
+ * the script afresh.
+ */
+export function loadPlaidLink(
+  document: ScriptDocument,
+  scope: { readonly Plaid?: PlaidLink } = globalThis,
+): Promise<PlaidLink> {
+  if (scope.Plaid) return Promise.resolve(scope.Plaid);
+  const loading = plaidLoads.get(document);
+  if (loading) return loading;
+
+  const script = document.createElement("script");
+  script.src = PLAID_LINK_SCRIPT;
+  script.async = true;
+  const load = new Promise<PlaidLink>((resolve, reject) => {
+    const settle = () => {
+      if (scope.Plaid) return resolve(scope.Plaid);
+      plaidLoads.delete(document);
+      reject(new Error("Failed to load Plaid Link script"));
+    };
+    script.addEventListener("load", settle);
+    script.addEventListener("error", settle);
+  });
+  plaidLoads.set(document, load);
+  document.head.appendChild(script);
+  return load;
 }
 
 export interface PlaidAuthData {
@@ -61,10 +142,20 @@ export class CFPlaidLink extends BaseElement {
   declare authStatus: string;
   declare plaidScriptLoaded: boolean;
 
-  private plaidHandler: any = null;
+  #environment: PlaidLinkEnvironment;
+  #plaid: PlaidLink | undefined;
+  #plaidHandler: PlaidLinkHandler | null = null;
 
-  constructor() {
+  /**
+   * Constructs an element that reaches the network and Plaid's Link SDK
+   * through `environment`.
+   */
+  constructor(environment: PlaidLinkEnvironment = {
+    fetch: (input, init) => fetch(input, init),
+    loadPlaid: () => loadPlaidLink(document),
+  }) {
     super();
+    this.#environment = environment;
     this.products = ["transactions"];
     this.isLoading = false;
     this.authStatus = "";
@@ -73,49 +164,28 @@ export class CFPlaidLink extends BaseElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.loadPlaidScript();
+    this.#environment.loadPlaid().then(
+      (plaid) => {
+        this.#plaid = plaid;
+        this.plaidScriptLoaded = true;
+      },
+      (error) => {
+        console.error("Failed to load Plaid Link script", error);
+        this.authStatus =
+          "Failed to load Plaid Link. Please refresh and try again.";
+      },
+    );
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
-    if (this.plaidHandler) {
-      this.plaidHandler.destroy();
-      this.plaidHandler = null;
-    }
-  }
-
-  private loadPlaidScript() {
-    if (globalThis.Plaid) {
-      this.plaidScriptLoaded = true;
-      return;
-    }
-
-    const existingScript = document.querySelector(
-      'script[src*="plaid.com/link/v2/stable/link-initialize.js"]',
-    );
-    if (existingScript) {
-      existingScript.addEventListener("load", () => {
-        this.plaidScriptLoaded = true;
-      });
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
-    script.async = true;
-    script.onload = () => {
-      this.plaidScriptLoaded = true;
-    };
-    script.onerror = () => {
-      console.error("Failed to load Plaid Link script");
-      this.authStatus =
-        "Failed to load Plaid Link. Please refresh and try again.";
-    };
-    document.head.appendChild(script);
+    this.#plaidHandler?.destroy();
+    this.#plaidHandler = null;
   }
 
   async handleConnectClick() {
-    if (!this.plaidScriptLoaded || !globalThis.Plaid) {
+    const plaid = this.#plaid;
+    if (!plaid) {
       this.authStatus = "Plaid Link is still loading, please wait...";
       return;
     }
@@ -125,109 +195,20 @@ export class CFPlaidLink extends BaseElement {
 
     const authCellId = JSON.stringify(this.auth?.ref());
 
-    const payload = {
-      authCellId,
-      products: this.products,
-    };
-
     try {
-      const response = await fetch(
-        "/api/integrations/plaid-oauth/create-link-token",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
+      const response = await this.#post("create-link-token", {
+        authCellId,
+        products: this.products,
+      });
       const data = await response.json();
 
       if (!data.linkToken) {
         throw new Error("No link token received from server");
       }
 
-      this.initializePlaidLink(data.linkToken, authCellId);
+      this.#openLink(plaid, data.linkToken, authCellId);
     } catch (error) {
       console.error("Error creating link session:", error);
-      this.authStatus = `Error: ${describeFailure(error)}`;
-      this.isLoading = false;
-    }
-  }
-
-  private initializePlaidLink(linkToken: string, authCellId: string) {
-    if (this.plaidHandler) {
-      this.plaidHandler.destroy();
-    }
-
-    const config = {
-      token: linkToken,
-      onSuccess: async (publicToken: string, _metadata: any) => {
-        this.authStatus = "Processing authentication...";
-        await this.handlePublicToken(publicToken, authCellId);
-      },
-      onExit: (error: any, _metadata: any) => {
-        if (error) {
-          this.authStatus = `Authentication failed: ${
-            error.error_message || error.display_message || "Unknown error"
-          }`;
-        } else {
-          this.authStatus = "Authentication cancelled";
-        }
-        this.isLoading = false;
-      },
-      onEvent: (eventName: string, metadata: any) => {
-        if (eventName === "OPEN") {
-          this.authStatus = "Link opened...";
-        } else if (eventName === "SELECT_INSTITUTION") {
-          this.authStatus = `Connecting to ${
-            metadata.institution_name || "bank"
-          }...`;
-        } else if (eventName === "SUBMIT_CREDENTIALS") {
-          this.authStatus = "Verifying credentials...";
-        }
-      },
-    };
-
-    this.plaidHandler = globalThis.Plaid.create(config);
-    this.plaidHandler.open();
-  }
-
-  private async handlePublicToken(publicToken: string, authCellId: string) {
-    this.isLoading = true;
-    this.authStatus = "Exchanging token...";
-
-    try {
-      const response = await fetch(
-        "/api/integrations/plaid-oauth/exchange-token",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            publicToken,
-            authCellId,
-          }),
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const _result = await response.json();
-      this.authStatus = "Bank account connected successfully!";
-      this.isLoading = false;
-
-      this.requestUpdate();
-    } catch (error) {
-      console.error("Error exchanging token:", error);
       this.authStatus = `Error: ${describeFailure(error)}`;
       this.isLoading = false;
     }
@@ -240,23 +221,7 @@ export class CFPlaidLink extends BaseElement {
     const authCellId = JSON.stringify(this.auth?.ref());
 
     try {
-      const response = await fetch(
-        "/api/integrations/plaid-oauth/remove-item",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            authCellId,
-            itemId,
-          }),
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      await this.#post("remove-item", { authCellId, itemId });
 
       this.authStatus = "Bank connection removed successfully";
       this.isLoading = false;
@@ -366,6 +331,75 @@ export class CFPlaidLink extends BaseElement {
         </div>
       </div>
     `;
+  }
+
+  /** Posts `body` as JSON to the Plaid integration's `path`. */
+  async #post(path: string, body: unknown): Promise<Response> {
+    const response = await this.#environment.fetch(
+      `/api/integrations/plaid-oauth/${path}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return response;
+  }
+
+  #openLink(plaid: PlaidLink, linkToken: string, authCellId: string) {
+    this.#plaidHandler?.destroy();
+
+    this.#plaidHandler = plaid.create({
+      token: linkToken,
+      onSuccess: async (publicToken) => {
+        this.authStatus = "Processing authentication...";
+        await this.#handlePublicToken(publicToken, authCellId);
+      },
+      onExit: (error) => {
+        if (error) {
+          this.authStatus = `Authentication failed: ${
+            error.error_message || error.display_message || "Unknown error"
+          }`;
+        } else {
+          this.authStatus = "Authentication cancelled";
+        }
+        this.isLoading = false;
+      },
+      onEvent: (eventName, metadata) => {
+        if (eventName === "OPEN") {
+          this.authStatus = "Link opened...";
+        } else if (eventName === "SELECT_INSTITUTION") {
+          this.authStatus = `Connecting to ${
+            metadata.institution_name || "bank"
+          }...`;
+        } else if (eventName === "SUBMIT_CREDENTIALS") {
+          this.authStatus = "Verifying credentials...";
+        }
+      },
+    });
+    this.#plaidHandler.open();
+  }
+
+  async #handlePublicToken(publicToken: string, authCellId: string) {
+    this.isLoading = true;
+    this.authStatus = "Exchanging token...";
+
+    try {
+      await this.#post("exchange-token", { publicToken, authCellId });
+      this.authStatus = "Bank account connected successfully!";
+      this.isLoading = false;
+
+      this.requestUpdate();
+    } catch (error) {
+      console.error("Error exchanging token:", error);
+      this.authStatus = `Error: ${describeFailure(error)}`;
+      this.isLoading = false;
+    }
   }
 
   static override styles = [

@@ -14,11 +14,7 @@ import type {
   TransactionReactivityLog,
 } from "../storage/interface.ts";
 import { localReadWakeDependencies } from "../storage/local-read-policy.ts";
-import { reactivityLogFromActivities } from "../storage/reactivity-log.ts";
-import {
-  getDirectTransactionReactivityLog,
-  getTransactionWriteDetails,
-} from "../storage/transaction-inspection.ts";
+import { getTransactionWriteDetails } from "../storage/transaction-inspection.ts";
 import type {
   AnnotatedEventHandler,
   EventHandler,
@@ -84,7 +80,7 @@ export function trustedEventWriteCandidatesFromTransaction(
     }
   }
 
-  const transactionLog = txToTransactionReactivityLog(tx);
+  const transactionLog = tx.getReactivityLog();
   for (
     const write of [
       ...transactionLog.writes,
@@ -154,19 +150,9 @@ export function sameReactivityLog(a: ReactivityLog, b: ReactivityLog): boolean {
 export function txToReactivityLog(
   tx: IExtendedStorageTransaction,
 ): ReactivityLog {
-  const log = toSchedulerReactivityLog(txToTransactionReactivityLog(tx));
+  const log = toSchedulerReactivityLog(tx.getReactivityLog());
   const wakes = localReadWakeDependencies(tx);
   return wakes.length === 0 ? log : { ...log, reads: [...log.reads, ...wakes] };
-}
-
-function txToTransactionReactivityLog(
-  tx: IExtendedStorageTransaction,
-): TransactionReactivityLog {
-  const direct = getDirectTransactionReactivityLog(tx);
-  if (direct) {
-    return direct;
-  }
-  return reactivityLogFromActivities(tx.journal.activity());
 }
 
 function toSchedulerReactivityLog(

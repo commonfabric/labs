@@ -1,8 +1,4 @@
 import type { FabricKeyPair as ApiFabricKeyPair } from "@/api.ts";
-import {
-  fromBase64url,
-  toUnpaddedBase64url,
-} from "@commonfabric/bytes/base64url";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { backtickQuote } from "@commonfabric/text/markdown";
@@ -10,7 +6,7 @@ import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
-import { ProblematicValue } from "@/codec-common";
+import { hasOnlyKeys, ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
@@ -30,14 +26,25 @@ import {
 } from "./interface.ts";
 
 /**
- * The encoded state of a {@link FabricKeyPair} that holds material: the
- * algorithm name, and the two keys as base64url. This is the only state JSON
- * carries, a pair holding handles having no representation in that format.
+ * The state of a {@link FabricKeyPair} that holds material, which is also its
+ * JSON state: the algorithm name, and the two keys' bytes. This is the only
+ * state JSON carries, a pair holding handles having no representation in that
+ * format.
  */
 type FabricKeyPairMaterialState = {
-  algorithm: string;
-  publicKey: string;
-  privateKey: string;
+  readonly algorithm: string;
+  readonly publicKey: FabricBytes;
+  readonly privateKey: FabricBytes;
+};
+
+/**
+ * What a {@link FabricKeyPair} that holds handles stores: the shape of
+ * {@link FabricKeyPairMaterialState}, with a `CryptoKey` in each key slot.
+ */
+type FabricKeyPairHandleState = {
+  readonly algorithm: string;
+  readonly publicKey: CryptoKey;
+  readonly privateKey: CryptoKey;
 };
 
 /**
@@ -71,7 +78,8 @@ type RealmHandleState = {
  *   return them, and {@link #cryptoKeyPair} returns both in the record shape
  *   Web Crypto uses.
  * * It **holds material**: the two keys as bytes. {@link #publicKeyBytes} and
- *   {@link #privateKeyBytes} return them.
+ *   {@link #privateKeyBytes} return them, and {@link #state} returns both
+ *   beside the algorithm name.
  *
  * {@link #hasMaterial} says which, and {@link #algorithm} names the algorithm
  * either way.
@@ -89,20 +97,24 @@ type RealmHandleState = {
  * class a codec in the JSON registry claims, and which that format still
  * cannot express.
  *
+ * A pair holding material encodes and hashes as though it were a
+ * `FabricInstance` tagged `KeyPair@1` whose state is {@link #state}: the JSON
+ * codec decomposes it, writing each key as a `Bytes@1` of its own, and the
+ * hasher feeds it in the instance layout. That it is a `FabricPrimitive` is a
+ * distinction of this implementation rather than of the data model.
+ *
  * Immutable: instances are `Object.freeze()`-d at construction time, and the
  * material arm holds `FabricBytes`, which own their buffers outright. Instance
  * state is elided by the debug renderer, so a private key does not reach a log
  * through a `console.log()` of the value that holds it.
  */
 export class FabricKeyPair extends BaseFabricPrimitive {
-  /** The algorithm name. */
-  readonly #algorithm: string;
-
-  /** The public key, in whichever form this instance holds. */
-  readonly #publicKey: CryptoKey | FabricBytes;
-
-  /** The private key, in the same form as {@link #publicKey}. */
-  readonly #privateKey: CryptoKey | FabricBytes;
+  /**
+   * The state, frozen: for a pair holding material, exactly the record
+   * `.state` returns; for a pair holding handles, the same shape with the two
+   * `CryptoKey`s in the key slots.
+   */
+  readonly #state: FabricKeyPairMaterialState | FabricKeyPairHandleState;
 
   /**
    * Constructs an instance, either from a `CryptoKeyPair` -- whose two keys
@@ -131,19 +143,20 @@ export class FabricKeyPair extends BaseFabricPrimitive {
       if (pairOrAlgorithm === "") {
         throw new Error("Cannot construct a key pair with no algorithm name.");
       }
-      this.#algorithm = pairOrAlgorithm;
-      this.#publicKey = FabricKeyPair.#toFabricBytes(publicKey, "publicKey");
-      this.#privateKey = FabricKeyPair.#toFabricBytes(
-        privateKey,
-        "privateKey",
-      );
+      this.#state = Object.freeze({
+        algorithm: pairOrAlgorithm,
+        publicKey: FabricKeyPair.#toFabricBytes(publicKey, "publicKey"),
+        privateKey: FabricKeyPair.#toFabricBytes(privateKey, "privateKey"),
+      });
     } else {
       const { publicKey: pub, privateKey: priv } = FabricKeyPair.#validPair(
         pairOrAlgorithm,
       );
-      this.#algorithm = pub.algorithm.name;
-      this.#publicKey = pub;
-      this.#privateKey = priv;
+      this.#state = Object.freeze({
+        algorithm: pub.algorithm.name,
+        publicKey: pub,
+        privateKey: priv,
+      });
     }
   }
 
@@ -163,12 +176,25 @@ export class FabricKeyPair extends BaseFabricPrimitive {
 
   /** The algorithm name (e.g. `"Ed25519"`). */
   get algorithm(): string {
-    return this.#algorithm;
+    return this.#state.algorithm;
   }
 
   /** Whether this instance holds key material, as opposed to handles. */
   get hasMaterial(): boolean {
-    return this.#publicKey instanceof FabricBytes;
+    return this.#state.publicKey instanceof FabricBytes;
+  }
+
+  /**
+   * The state, a frozen record of the algorithm name and the two keys' bytes.
+   * This is what the JSON codec encodes and what the hasher reads. Throws when
+   * this instance holds handles.
+   */
+  get state(): FabricKeyPairMaterialState {
+    if (!this.hasMaterial) {
+      throw new Error("Cannot produce a state: this key pair holds handles.");
+    }
+
+    return this.#state as FabricKeyPairMaterialState;
   }
 
   /**
@@ -185,29 +211,29 @@ export class FabricKeyPair extends BaseFabricPrimitive {
     }
 
     return {
-      publicKey: this.#publicKey as CryptoKey,
-      privateKey: this.#privateKey as CryptoKey,
+      publicKey: this.#state.publicKey as CryptoKey,
+      privateKey: this.#state.privateKey as CryptoKey,
     };
   }
 
   /** The public key's handle. Throws when this instance holds material. */
   get publicCryptoKey(): CryptoKey {
-    return this.#handleOf(this.#publicKey);
+    return this.#handleOf(this.#state.publicKey);
   }
 
   /** The private key's handle. Throws when this instance holds material. */
   get privateCryptoKey(): CryptoKey {
-    return this.#handleOf(this.#privateKey);
+    return this.#handleOf(this.#state.privateKey);
   }
 
   /** The public key's bytes. Throws when this instance holds handles. */
   get publicKeyBytes(): FabricBytes {
-    return this.#materialOf(this.#publicKey);
+    return this.#materialOf(this.#state.publicKey);
   }
 
   /** The private key's bytes. Throws when this instance holds handles. */
   get privateKeyBytes(): FabricBytes {
-    return this.#materialOf(this.#privateKey);
+    return this.#materialOf(this.#state.privateKey);
   }
 
   /**
@@ -249,6 +275,22 @@ export class FabricKeyPair extends BaseFabricPrimitive {
     Object.freeze(this.prototype);
   }
 
+  /**
+   * The keys of a state holding material, in either format: the whole of what
+   * the codecs read from one.
+   */
+  static #MATERIAL_STATE_KEYS: readonly string[] = Object.freeze([
+    "algorithm",
+    "publicKey",
+    "privateKey",
+  ]);
+
+  /** The keys of a realm state holding handles. */
+  static #HANDLE_STATE_KEYS: readonly string[] = Object.freeze([
+    "publicKey",
+    "privateKey",
+  ]);
+
   static #jsonCodec = Object.freeze(
     new (class KeyPairCodec
       extends BaseNonterminalCodec<never, FabricKeyPairMaterialState> {
@@ -274,18 +316,22 @@ export class FabricKeyPair extends BaseFabricPrimitive {
           );
         }
 
-        return Object.freeze({
-          algorithm: value.#algorithm,
-          publicKey: toUnpaddedBase64url(value.publicKeyBytes.slice()),
-          privateKey: toUnpaddedBase64url(value.privateKeyBytes.slice()),
-        });
+        return value.state;
       }
 
-      /** @inheritDoc */
+      /**
+       * @inheritDoc
+       *
+       * A state holding any key besides the three is refused, being one this
+       * class never writes.
+       */
       canDecode(state: FabricValue): state is FabricKeyPairMaterialState {
         return isPlainObject(state) &&
-          (["algorithm", "publicKey", "privateKey"] as const).every((key) =>
-            Object.hasOwn(state, key) && (typeof state[key] === "string")
+          hasOnlyKeys(state, FabricKeyPair.#MATERIAL_STATE_KEYS) &&
+          Object.hasOwn(state, "algorithm") &&
+          (typeof state.algorithm === "string") &&
+          (["publicKey", "privateKey"] as const).every((key) =>
+            Object.hasOwn(state, key) && (state[key] instanceof FabricBytes)
           );
       }
 
@@ -299,11 +345,7 @@ export class FabricKeyPair extends BaseFabricPrimitive {
         const { algorithm, publicKey, privateKey } = state;
 
         try {
-          return new FabricKeyPair(
-            algorithm,
-            new FabricBytes(fromBase64url(publicKey), true),
-            new FabricBytes(fromBase64url(privateKey), true),
-          );
+          return new FabricKeyPair(algorithm, publicKey, privateKey);
         } catch (e) {
           return ProblematicValue.make(
             typeTag,
@@ -332,19 +374,25 @@ export class FabricKeyPair extends BaseFabricPrimitive {
       encode(value: FabricKeyPair, _env: LiveEnvironment): RealmCodecValue {
         if (!value.hasMaterial) {
           return Object.freeze({
-            publicKey: value.#publicKey as CryptoKey,
-            privateKey: value.#privateKey as CryptoKey,
+            publicKey: value.#state.publicKey as CryptoKey,
+            privateKey: value.#state.privateKey as CryptoKey,
           });
         }
 
         return Object.freeze({
-          algorithm: value.#algorithm,
+          algorithm: value.#state.algorithm,
           publicKey: value.publicKeyBytes.sliceBuffer(),
           privateKey: value.privateKeyBytes.sliceBuffer(),
         });
       }
 
-      /** @inheritDoc */
+      /**
+       * @inheritDoc
+       *
+       * A state holding any key besides those of its arm is refused, being
+       * one this class never writes; for the handles arm that includes an
+       * `algorithm`, present even holding `undefined`.
+       */
       canDecode(
         state: RealmCodecValue,
       ): state is RealmMaterialState | RealmHandleState {
@@ -366,14 +414,15 @@ export class FabricKeyPair extends BaseFabricPrimitive {
           FabricKeyPair.#isCryptoKey(publicKey) &&
           FabricKeyPair.#isCryptoKey(privateKey)
         ) {
-          return algorithm === undefined;
+          return hasOnlyKeys(state, FabricKeyPair.#HANDLE_STATE_KEYS);
         }
 
         // Non-empty, which is the one thing the constructor refuses about an
         // algorithm name. Left to `decode()` it would arrive as a constructor
         // throw, which that method reports as a detached buffer -- the only
         // other way its construction can fail.
-        return (typeof algorithm === "string") && (algorithm !== "") &&
+        return hasOnlyKeys(state, FabricKeyPair.#MATERIAL_STATE_KEYS) &&
+          (typeof algorithm === "string") && (algorithm !== "") &&
           (publicKey instanceof ArrayBuffer) &&
           (privateKey instanceof ArrayBuffer);
       }
@@ -419,8 +468,8 @@ export class FabricKeyPair extends BaseFabricPrimitive {
   /**
    * The codec for instances of this class.
    *
-   * Nonterminal: the state is three strings, each a `FabricValue` the walker
-   * expands in turn.
+   * Nonterminal: the state is the algorithm name and the two keys as
+   * `FabricBytes`, each a `FabricValue` the walker expands in turn.
    */
   static get [JSON_CODEC](): NonterminalCodec {
     return this.#jsonCodec;

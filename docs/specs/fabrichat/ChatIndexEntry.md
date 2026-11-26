@@ -20,6 +20,9 @@ interface ChatIndexEntry {
   /** The room's title as the manager last read it; absent for none. */
   title?: string;
 
+  /** Where the room's conversation stood as the manager last heard. */
+  activity?: { count: number; newestAt?: FabricEpochNsec };
+
   /** The opaque revision of the membership. */
   revision?: string;
 }
@@ -63,6 +66,20 @@ interface ChatIndexEntry {
   that member's runtime, which can't write this user's manager, so this user's
   hint changes once they next visit the room. A client that shows the room's
   current title reads it from the room.
+- **`activity`** is a hint too: the room's `messages.count` and
+  `messages.newestAt` ([`ChatMessageList`](ChatMessageList.md)) as the manager
+  last heard them. It hears them when it accepts or joins the room, and when
+  it handles a `joinRoom` that no message or reaction sent, as a visit to the
+  room sends, each of which reads them from the room; and from the `joinRoom`
+  a message this user sends in the room carries, which reads nothing of the
+  room: the length of its message list once the message is recorded, and the
+  message's `sentAt`. It is absent until the manager first hears, as for a
+  room this user has just created. A reaction changes neither. Another
+  member's message reaches this user's manager by no event, since that
+  member's runtime can't write this user's Home, so this user's hint changes
+  once they next visit the room, or send in it. A client that shows the
+  room's current activity reads it from the room, which opens the room's
+  space.
 - **`revision`** is the opaque token supplied by the manager's `rooms` view
   for the room's membership. A request to [`forget`](ChatManagerOutput.md) uses
   that listed entry's revision, so that a choice made since by another client

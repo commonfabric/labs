@@ -1,3 +1,4 @@
+// deno-lint-ignore-file cf-test/registration -- a fixture testing the browser harness's own `Deno.test`
 import { assertEquals } from "@std/assert";
 
 Deno.test("a bundled module loads into a realm the page creates", async function () {

@@ -6,12 +6,13 @@ import {
   readShellServerExecutionDefineFrom,
   resolveGitShaFrom,
 } from "@/lib/build-info.ts";
+import { test } from "@commonfabric/test-support/test";
 
 if (env.ENV !== "test") {
   throw new Error("ENV must be 'test'");
 }
 
-Deno.test("normalize", async (t) => {
+test("normalize", async (t) => {
   await t.step("returns null for null/undefined", () => {
     assertEquals(normalize(null), null);
     assertEquals(normalize(undefined), null);
@@ -28,7 +29,7 @@ Deno.test("normalize", async (t) => {
   });
 });
 
-Deno.test("resolveGitShaFrom", async (t) => {
+test("resolveGitShaFrom", async (t) => {
   await t.step("explicit override wins over baked value", () => {
     assertEquals(
       resolveGitShaFrom("override-sha", "baked-sha", "source-run-sha"),
@@ -69,7 +70,7 @@ Deno.test("resolveGitShaFrom", async (t) => {
   });
 });
 
-Deno.test("readBuildInfoFrom", async (t) => {
+test("readBuildInfoFrom", async (t) => {
   const tempDir = await Deno.makeTempDir({ prefix: "build-info-test-" });
   const pathFor = (name: string) => `${tempDir}/${name}`;
 
@@ -178,7 +179,7 @@ Deno.test("readBuildInfoFrom", async (t) => {
   }
 });
 
-Deno.test("readShellServerExecutionDefineFrom", async (t) => {
+test("readShellServerExecutionDefineFrom", async (t) => {
   // The shell's baked server-execution posture rides the same COMPILED marker
   // (tasks/build-binaries.ts writes it from the build environment — the value
   // runtime/shell/felt.config.ts bakes as the shell's define). CI's

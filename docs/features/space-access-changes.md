@@ -60,8 +60,10 @@ Limiting the calls to spaces the calling pattern itself created is not built.
 
 A service DID or a delegating DID is not refused as `principal`. The memory
 server's configuration names both (`acl.serviceDids` and `acl.delegatingDids`,
-set from toolshed's environment), and nothing hands either list to a runtime,
-so a runtime cannot tell one from any other DID. A service DID already holds
+set from toolshed's environment), and behind the memory router
+`acl.isDelegatingPeer` adds each toolshed identity the router's directory
+lists to the delegating class. Nothing hands any of these to a runtime, so a
+runtime cannot tell one from any other DID. A service DID already holds
 `OWNER` in every space at the memory server, so an entry for one adds nothing
 there. A delegating DID, the identity a toolshed's serving runtime presents,
 holds nothing of its own; what an entry granting one would let a serving

@@ -7,11 +7,11 @@
  * they were.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { spy } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { loadStoredCfcEnvelope } from "../src/cfc/prepare.ts";
 import { cfcSchemaEntries } from "../src/cfc/schema-label-view.ts";
@@ -276,6 +276,155 @@ export default pattern<Input, Output>(({ about, roster, notes }) => ({
 }));
 `;
 
+// A list of notes, each pushed as a document of its own, that `post` and
+// `amend` may write, each from its own surface's trusted event, as a
+// FabriChat room's `messages` are.
+const POLICY_SOURCE = `/// <cts-enable />
+import {
+  Default,
+  handler,
+  pattern,
+  Stream,
+  type TrustedActionWrite,
+  Writable,
+  type WritePolicyAnyOf,
+} from "commonfabric";
+
+interface Note {
+  text: string;
+}
+
+const post = handler<{ text: string }, { notes: NotesCell }>(
+  ({ text }, { notes }) => {
+    notes.push({ text } as SentNote);
+  },
+);
+
+const amend = handler<{ text: string }, { notes: NotesCell }>(
+  ({ text }, { notes }) => {
+    notes.key(0).set({ text } as SentNote);
+  },
+);
+
+type SentNote = WritePolicyAnyOf<Note, [
+  TrustedActionWrite<unknown, typeof post, "Post", "GuardedRoom">,
+  TrustedActionWrite<unknown, typeof amend, "Amend", "GuardedRoom">,
+]>;
+
+type NotesCell = Writable<SentNote[] | Default<[]>>;
+
+interface Input {
+  notes?: NotesCell;
+}
+
+interface Output {
+  notes: Note[];
+  post: Stream<{ text: string }>;
+  amend: Stream<{ text: string }>;
+}
+
+export default pattern<Input, Output>(({ notes }) => ({
+  notes,
+  post: post({ notes }),
+  amend: amend({ notes }),
+}));
+`;
+
+/**
+ * `POLICY_SOURCE` with `repost`, a third writer of the notes, from the
+ * surface `post` is written from. It lists the alternatives in another order,
+ * the new one first.
+ */
+const EXTENDED_POLICY_SOURCE = POLICY_SOURCE
+  .replace(
+    "type SentNote = WritePolicyAnyOf<Note, [",
+    `const repost = handler<{ text: string }, { notes: NotesCell }>(
+  ({ text }, { notes }) => {
+    notes.push({ text: \`again: \${text}\` } as SentNote);
+  },
+);
+
+type SentNote = WritePolicyAnyOf<Note, [
+  TrustedActionWrite<unknown, typeof repost, "Post", "GuardedRoom">,`,
+  )
+  .replace(
+    "  amend: Stream<{ text: string }>;",
+    "  amend: Stream<{ text: string }>;\n  repost: Stream<{ text: string }>;",
+  )
+  .replace(
+    "  amend: amend({ notes }),",
+    "  amend: amend({ notes }),\n  repost: repost({ notes }),",
+  );
+
+/** The route `policyModules()` serves the notes' records module at. */
+const recordsRoute = "/api/patterns/system/guarded-records.tsx";
+
+/**
+ * `POLICY_SOURCE` across two modules, so that each alternative's writer is of
+ * an artifact of its own: `post`, and `extra`'s writers, in
+ * `guarded-records.tsx`, and `amend` in the room's own module. `members` are
+ * further alternatives of the notes' policy, which the room's module lists,
+ * and `imports` the names it imports for them.
+ */
+const policyModules = (
+  extra = "",
+  members = "",
+  imports = "",
+): Record<string, string> => ({
+  [recordsRoute]: `/// <cts-enable />
+import { handler, Writable } from "commonfabric";
+
+export interface Note {
+  text: string;
+}
+
+export const post = handler<{ text: string }, { notes: Writable<Note[]> }>(
+  ({ text }, { notes }) => {
+    notes.push({ text });
+  },
+);
+${extra}`,
+  [route]: `/// <cts-enable />
+import {
+  Default,
+  handler,
+  pattern,
+  Stream,
+  type TrustedActionWrite,
+  Writable,
+  type WritePolicyAnyOf,
+} from "commonfabric";
+import { type Note, post${imports} } from "./guarded-records.tsx";
+
+const amend = handler<{ text: string }, { notes: Writable<Note[]> }>(
+  ({ text }, { notes }) => {
+    notes.key(0).set({ text });
+  },
+);
+
+type SentNote = WritePolicyAnyOf<Note, [
+  TrustedActionWrite<unknown, typeof post, "Post", "GuardedRoom">,
+  TrustedActionWrite<unknown, typeof amend, "Amend", "GuardedRoom">,${members}
+]>;
+
+interface Input {
+  notes?: Writable<SentNote[] | Default<[]>>;
+}
+
+interface Output {
+  notes: Note[];
+  post: Stream<{ text: string }>;
+  amend: Stream<{ text: string }>;
+}
+
+export default pattern<Input, Output>(({ notes }) => ({
+  notes,
+  post: post({ notes }),
+  amend: amend({ notes }),
+}));
+`,
+});
+
 /** What a test reads off a room. */
 type Room = Record<string, unknown>;
 
@@ -336,38 +485,54 @@ function trustedEvent<T extends object>(action: string, fields: T): T {
 }
 
 /**
+ * A source the `system:` origin serves: the text of its one module, at
+ * `route`, or the text of each of its modules by the route it is served at.
+ */
+type Served = string | Readonly<Record<string, string>>;
+
+/** The modules of `served`, by the route each is served at. */
+const modulesOf = (served: Served): Readonly<Record<string, string>> =>
+  typeof served === "string" ? { [route]: served } : served;
+
+/** The identity of the program `served` names, entered at `route`. */
+const servedIdentity = (served: Served): Promise<string> =>
+  resolveEntryIdentity(route, (name) => {
+    const contents = modulesOf(served)[name];
+    return contents === undefined
+      ? Promise.reject(new Error(`no module at ${name}`))
+      : Promise.resolve(contents);
+  });
+
+/**
  * Creates a room from `previous`, served as the `system:` origin's source,
  * and lets `prime` write its guarded fields. Then serves `current` instead,
  * reconciles the room, and hands what came of it to `probe`.
  */
 async function reconcileRelease(
   name: string,
-  previous: string,
-  current: string,
+  previous: Served,
+  current: Served,
   prime: (runtime: Runtime, room: Cell<Room>) => Promise<void>,
   probe: (released: Released) => void | Promise<void>,
 ): Promise<void> {
   const signer = await Identity.fromPassphrase(`guarded argument ${name}`);
-  const previousIdentity = await resolveEntryIdentity(
-    route,
-    () => Promise.resolve(previous),
-  );
-  const currentIdentity = await resolveEntryIdentity(
-    route,
-    () => Promise.resolve(current),
-  );
-  let served = { contents: previous, identity: previousIdentity };
+  const previousIdentity = await servedIdentity(previous);
+  const currentIdentity = await servedIdentity(current);
+  let served = { modules: modulesOf(previous), identity: previousIdentity };
   const runtime = new Runtime(runtimePresets.unitTest({
     apiUrl: new URL("https://room.test"),
     storageManager: StorageManager.emulate({ as: signer }),
     fetch: (input) => {
       const url = new URL(input instanceof Request ? input.url : input);
-      if (url.pathname !== route) {
+      const contents = served.modules[url.pathname];
+      if (contents === undefined) {
         return Promise.resolve(new Response("not found", { status: 404 }));
       }
       return Promise.resolve(
         new Response(
-          url.searchParams.has("identity") ? served.identity : served.contents,
+          url.pathname === route && url.searchParams.has("identity")
+            ? served.identity
+            : contents,
         ),
       );
     },
@@ -375,7 +540,10 @@ async function reconcileRelease(
   try {
     const program: RuntimeProgram = {
       main: route,
-      files: [{ name: route, contents: previous }],
+      files: Object.entries(modulesOf(previous)).map(([name, contents]) => ({
+        name,
+        contents,
+      })),
     };
     const tx = runtime.edit();
     const pattern = await runtime.patternManager.compilePattern(program, {
@@ -391,7 +559,7 @@ async function reconcileRelease(
     await prime(runtime, room);
     expect(getPatternIdentityRef(room)?.identity).toBe(previousIdentity);
 
-    served = { contents: current, identity: currentIdentity };
+    served = { modules: modulesOf(current), identity: currentIdentity };
     const outcome = await runtime.sourceReconciler.reconcile(room);
     await runtime.runner.idlePointerMaintenance();
     await room.pull();
@@ -1157,6 +1325,514 @@ interface Input {
           expect(room.get().titles).toEqual([{ title: "tea" }]);
         },
       );
+    });
+  });
+
+  describe("a write policy a release extends", () => {
+    // The notes' stored policy names `post` and `amend`. A release may add a
+    // writer whose artifact already holds authority at the position, on a
+    // gesture the policy pairs with that artifact; the stored alternatives
+    // stay as stored, and every writer writes afterwards. Each release here
+    // also adds a field with a default, so its setup writes the argument
+    // document, merging the envelope the document stores with its own.
+
+    /** `modules` with a `title` field added to the room's input. */
+    const withTitle = (modules: Served): Record<string, string> =>
+      Object.fromEntries(
+        Object.entries(modulesOf(modules)).map(([name, contents]) => [
+          name,
+          name === route
+            ? contents.replace(
+              "interface Input {\n",
+              'interface Input {\n  title?: Default<string, "">;\n',
+            )
+            : contents,
+        ]),
+      );
+
+    /** The binding each alternative the notes' stored policy lists names. */
+    const storedWriters = (runtime: Runtime, room: Cell<Room>): unknown => {
+      const ifc = storedClaimsAt(runtime, room, "notes/*") as
+        | { writePolicyAnyOf?: { writeAuthorizedBy: unknown }[] }
+        | undefined;
+      return ifc?.writePolicyAnyOf?.map(({ writeAuthorizedBy }) =>
+        (writeAuthorizedBy as { __ctWriterIdentityOf: { path: unknown } })
+          .__ctWriterIdentityOf.path
+      );
+    };
+
+    const prime = async (runtime: Runtime, room: Cell<Room>) => {
+      await send(runtime, room, "post", trustedEvent("Post", { text: "hi" }));
+      expect(room.get().notes).toEqual([{ text: "hi" }]);
+      expect(storedWriters(runtime, room)).toEqual([["post"], ["amend"]]);
+    };
+
+    it("adopts a release that adds a writer, stores its alternative after the stored ones, and every writer then writes", async () => {
+      await reconcileRelease(
+        "policy-release",
+        POLICY_SOURCE,
+        withTitle(EXTENDED_POLICY_SOURCE),
+        prime,
+        async ({ outcome, room, runtime, recorded, currentIdentity }) => {
+          expect(recorded?.detail).toBeUndefined();
+          expect(outcome).toBe("updated");
+          expect(getPatternIdentityRef(room)?.identity).toBe(currentIdentity);
+          expect(storedWriters(runtime, room)).toEqual([
+            ["post"],
+            ["amend"],
+            ["repost"],
+          ]);
+
+          await send(
+            runtime,
+            room,
+            "repost",
+            trustedEvent("Post", { text: "hi" }),
+          );
+          await send(
+            runtime,
+            room,
+            "amend",
+            trustedEvent("Amend", { text: "hello" }),
+          );
+          await send(
+            runtime,
+            room,
+            "post",
+            trustedEvent("Post", { text: "bye" }),
+          );
+          expect(room.get().notes).toEqual([
+            { text: "hello" },
+            { text: "again: hi" },
+            { text: "bye" },
+          ]);
+        },
+      );
+    });
+
+    describe("beside a slot another writer's claim guards, which the document holds", () => {
+      // The room also keeps a roster only `join` writes, and holds an entry
+      // in it, which the release's setup restates as it found it. The
+      // restatement waiver takes the policy the release extends for an
+      // unchanged one, so the release is adopted, and the extended policy is
+      // stored.
+
+      const join = `
+const join = handler<{ name: string }, { roster: Writable<string[]> }>(
+  ({ name }, { roster }) => {
+    roster.push(name);
+  },
+);
+`;
+
+      /** `source` with the roster, guarded as `guard` says. */
+      const withRoster = (
+        source: string,
+        guard = "Default<WriteAuthorizedBy<string[], typeof join>, []>",
+      ) =>
+        source
+          .replace(
+            "  type WritePolicyAnyOf,\n",
+            "  type WritePolicyAnyOf,\n  type WriteAuthorizedBy,\n",
+          )
+          .replace("interface Note {", `${join}\ninterface Note {`)
+          .replace(
+            "interface Input {\n",
+            `interface Input {\n  roster?: ${guard};\n`,
+          )
+          .replace(
+            "  post: Stream<{ text: string }>;",
+            "  post: Stream<{ text: string }>;\n  join: Stream<{ name: string }>;",
+          )
+          .replace(
+            "export default pattern<Input, Output>(({ notes }) => ({\n  notes,",
+            "export default pattern<Input, Output>(({ notes, roster }) => ({\n  notes,\n  join: join({ roster }),",
+          );
+
+      /** The entries the room's argument stores in its roster. */
+      const storedRoster = (room: Cell<Room>): unknown =>
+        (room.getArgumentCell<Room>()!.getRaw() as { roster?: unknown })
+          .roster;
+
+      const primeRoster = async (runtime: Runtime, room: Cell<Room>) => {
+        await prime(runtime, room);
+        await send(runtime, room, "join", { name: "ada" });
+        expect(storedRoster(room)).toEqual(["ada"]);
+      };
+
+      it("adopts a release that adds a writer to the notes, and keeps the roster as it was", async () => {
+        await reconcileRelease(
+          "roster-policy-release",
+          withRoster(POLICY_SOURCE),
+          withTitle(withRoster(EXTENDED_POLICY_SOURCE)),
+          primeRoster,
+          ({ outcome, room, runtime, recorded, currentIdentity }) => {
+            expect(recorded?.detail).toBeUndefined();
+            expect(outcome).toBe("updated");
+            expect(getPatternIdentityRef(room)?.identity).toBe(currentIdentity);
+            expect(storedWriters(runtime, room)).toEqual([
+              ["post"],
+              ["amend"],
+              ["repost"],
+            ]);
+            expect(storedRoster(room)).toEqual(["ada"]);
+          },
+        );
+      });
+
+      it("refuses a release that adds a writer to the notes and labels each note, and keeps the stored policy", async () => {
+        // An appended writer beside another change at the same position is a
+        // change to its policy.
+        const labeled = (source: string) =>
+          source
+            .replace(
+              "  type WritePolicyAnyOf,\n",
+              "  type WritePolicyAnyOf,\n  type AuthoredByCurrentUser,\n",
+            )
+            .replace(
+              "type SentNote = WritePolicyAnyOf<Note, [",
+              "type SentNote = AuthoredByCurrentUser<WritePolicyAnyOf<Note, [",
+            )
+            .replace(
+              /(TrustedActionWrite<unknown, typeof amend, "Amend", "GuardedRoom">,\n)\]>;/,
+              "$1]>>;",
+            );
+        const current = withTitle(withRoster(labeled(EXTENDED_POLICY_SOURCE)));
+        expect(modulesOf(current)[route]).toContain(
+          "AuthoredByCurrentUser<WritePolicyAnyOf<Note",
+        );
+        await reconcileRelease(
+          "roster-labeled-policy-release",
+          withRoster(POLICY_SOURCE),
+          current,
+          primeRoster,
+          ({ outcome, room, runtime, recorded, previousIdentity }) => {
+            expect(outcome).not.toBe("updated");
+            expect(recorded?.detail).toContain("at /roster");
+            expect(getPatternIdentityRef(room)?.identity).toBe(
+              previousIdentity,
+            );
+            expect(storedWriters(runtime, room)).toEqual([
+              ["post"],
+              ["amend"],
+            ]);
+          },
+        );
+      });
+    });
+
+    describe("beneath a claim on the whole list, which the document holds", () => {
+      // `post` alone may write the notes list as a whole, and the room holds
+      // a note in it, which the release's setup restates as it found it. A
+      // writer the release appends beneath that claim changes the policy of
+      // the slot the restatement is waived for, so the waiver does not take
+      // it for an unchanged one.
+
+      /** `source` with the notes list guarded as a whole by `post`. */
+      const guardedList = (source: string) =>
+        source
+          .replace(
+            "  type WritePolicyAnyOf,\n",
+            "  type WritePolicyAnyOf,\n  type WriteAuthorizedBy,\n",
+          )
+          .replaceAll("{ notes: NotesCell }", "{ notes: Writable<SentNote[]> }")
+          .replace(
+            "type NotesCell = Writable<SentNote[] | Default<[]>>;",
+            "type NotesCell = Writable<Default<WriteAuthorizedBy<SentNote[], typeof post>, []>>;",
+          );
+
+      it("refuses a release that adds a writer to the notes, and keeps the stored policy", async () => {
+        const previous = guardedList(POLICY_SOURCE);
+        expect(previous).toContain(
+          "WriteAuthorizedBy<SentNote[], typeof post>",
+        );
+        await reconcileRelease(
+          "whole-list-policy-release",
+          previous,
+          withTitle(guardedList(EXTENDED_POLICY_SOURCE)),
+          prime,
+          ({ outcome, room, runtime, recorded, previousIdentity }) => {
+            expect(outcome).not.toBe("updated");
+            expect(recorded?.detail).toContain("at /notes");
+            expect(getPatternIdentityRef(room)?.identity).toBe(
+              previousIdentity,
+            );
+            expect(storedWriters(runtime, room)).toEqual([
+              ["post"],
+              ["amend"],
+            ]);
+          },
+        );
+      });
+    });
+
+    describe("a writer appended where the waiver cannot tell the position, or above the restated slot", () => {
+      // Each room holds a value under `join`'s lone claim, which the release's
+      // setup restates as it found it, and the release appends a writer to a
+      // policy at or beneath that slot. The waiver compares such a position
+      // exactly, and one whose path it cannot tell, so each is refused.
+
+      /**
+       * `source` with `repost` appended to the `typeName` write policy, as the
+       * alternative `alternative`.
+       */
+      const appending = (
+        source: string,
+        typeName: string,
+        write: string,
+        alternative =
+          'TrustedActionWrite<unknown, typeof repost, "Post", "GuardedRoom">',
+      ) =>
+        withTitle(
+          source
+            .replace(
+              `type ${typeName} = WritePolicyAnyOf<`,
+              `const repost = handler<{ text: string }, { notes: NotesCell }>(
+  ({ text }, { notes }) => {
+    ${write}
+  },
+);
+
+type ${typeName} = WritePolicyAnyOf<`,
+            )
+            .replace(
+              /(type \w+ = WritePolicyAnyOf<[^,]+, \[\n)/,
+              `$1  ${alternative},\n`,
+            )
+            .replace(
+              "  join: Stream<{ name: string }>;",
+              "  join: Stream<{ name: string }>;\n  repost: Stream<{ text: string }>;",
+            )
+            .replace(
+              "  join: join({ notes }),",
+              "  join: join({ notes }),\n  repost: repost({ notes }),",
+            ),
+        );
+
+      it("refuses a release that adds a writer to a rest claim beside a named member of the guarded record, and keeps the stored policy", async () => {
+        // The rest claim beside `owner` describes no single path, so only the
+        // policy comparison reaches it.
+        const previous = `/// <cts-enable />
+import {
+  Default,
+  handler,
+  pattern,
+  Stream,
+  type TrustedActionWrite,
+  Writable,
+  type WriteAuthorizedBy,
+  type WritePolicyAnyOf,
+} from "commonfabric";
+
+const post = handler<{ text: string }, { notes: NotesCell }>(
+  ({ text }, { notes }) => {
+    notes.set({ ...notes.get(), [text]: text as SentText });
+  },
+);
+
+type SentText = WritePolicyAnyOf<string, [
+  TrustedActionWrite<unknown, typeof post, "Post", "GuardedRoom">,
+]>;
+
+interface Members {
+  owner?: string;
+  [name: string]: SentText | string | undefined;
+}
+
+const join = handler<{ name: string }, { notes: NotesCell }>(
+  ({ name }, { notes }) => {
+    notes.set({ ...notes.get(), [name]: name as SentText });
+  },
+);
+
+type NotesCell = Writable<Members>;
+
+interface Input {
+  notes?: Default<
+    WriteAuthorizedBy<Members, typeof join>,
+    Record<PropertyKey, never>
+  >;
+}
+
+interface Output {
+  notes: Members;
+  post: Stream<{ text: string }>;
+  join: Stream<{ name: string }>;
+}
+
+export default pattern<Input, Output>(({ notes }) => ({
+  notes,
+  post: post({ notes }),
+  join: join({ notes }),
+}));
+`;
+        const current = appending(
+          previous,
+          "SentText",
+          "notes.set({ ...notes.get(), [text]: text as SentText });",
+        );
+        expect(modulesOf(current)[route]).toContain("typeof repost");
+        await reconcileRelease(
+          "rest-policy-release",
+          previous,
+          current,
+          async (runtime, room) => {
+            await send(runtime, room, "join", { name: "ada" });
+            expect(room.getArgumentCell<Room>()!.getRaw()).toEqual({
+              notes: { ada: "ada" },
+            });
+          },
+          ({ outcome, room, recorded, previousIdentity }) => {
+            expect(outcome).not.toBe("updated");
+            expect(recorded?.detail).toContain("at /notes");
+            expect(getPatternIdentityRef(room)?.identity).toBe(
+              previousIdentity,
+            );
+          },
+        );
+      });
+
+      it("refuses a release that adds a writer to a policy at and above the guarded slots, and keeps the stored policy", async () => {
+        // `join` alone writes the roster's `items`, beneath a policy on the
+        // whole roster, naming no gesture, that the release extends. Both are
+        // restated as the room holds them, so both writer refusals are
+        // deferred, and the appended writer lands at one deferred path and
+        // above the other.
+        const previous = `/// <cts-enable />
+import {
+  Default,
+  handler,
+  pattern,
+  Stream,
+  type TrustedActionWrite,
+  Writable,
+  type WriteAuthorizedBy,
+  type WritePolicyAnyOf,
+} from "commonfabric";
+
+const join = handler<{ name: string }, { notes: NotesCell }>(
+  ({ name }, { notes }) => {
+    notes.key("items").push(name);
+  },
+);
+
+interface Roster {
+  items?: WriteAuthorizedBy<string[], typeof join>;
+}
+
+type SentRoster = WritePolicyAnyOf<Roster, [
+  WriteAuthorizedBy<unknown, typeof join>,
+]>;
+
+type NotesCell = Writable<Roster>;
+
+interface Input {
+  notes?: Default<SentRoster, Record<PropertyKey, never>>;
+}
+
+interface Output {
+  notes: Roster;
+  join: Stream<{ name: string }>;
+}
+
+export default pattern<Input, Output>(({ notes }) => ({
+  notes,
+  join: join({ notes }),
+}));
+`;
+        const current = appending(
+          previous,
+          "SentRoster",
+          'notes.key("items").push(text);',
+          "WriteAuthorizedBy<unknown, typeof repost>",
+        );
+        expect(modulesOf(current)[route]).toContain("typeof repost");
+        await reconcileRelease(
+          "above-policy-release",
+          previous,
+          current,
+          async (runtime, room) => {
+            await send(runtime, room, "join", { name: "ada" });
+            expect(room.getArgumentCell<Room>()!.getRaw()).toEqual({
+              notes: { items: ["ada"] },
+            });
+          },
+          ({ outcome, room, recorded, previousIdentity }) => {
+            expect(outcome).not.toBe("updated");
+            expect(recorded?.detail).toContain("at /notes");
+            expect(getPatternIdentityRef(room)?.identity).toBe(
+              previousIdentity,
+            );
+          },
+        );
+      });
+    });
+
+    describe("a writer added to another artifact's gesture", () => {
+      // `rewrite` is of the records module, whose lineage the stored policy
+      // pairs with `Post` alone. `Amend` it pairs only with the room's own
+      // module.
+
+      const rewrite = `
+export const rewrite = handler<{ text: string }, { notes: Writable<Note[]> }>(
+  ({ text }, { notes }) => {
+    notes.key(0).set({ text: \`rewritten: \${text}\` });
+  },
+);
+`;
+
+      /** The release, its `rewrite` alternative naming `action`. */
+      const releaseNaming = (action: string) =>
+        withTitle(policyModules(
+          rewrite,
+          `\n  TrustedActionWrite<unknown, typeof rewrite, "${action}", "GuardedRoom">,`,
+          ", rewrite",
+        ));
+
+      it("refuses the release for good, records why, and keeps the stored policy", async () => {
+        await reconcileRelease(
+          "crossed-policy-release",
+          policyModules(),
+          releaseNaming("Amend"),
+          prime,
+          ({ outcome, room, runtime, recorded, previousIdentity }) => {
+            expect(outcome).toBe("rejected");
+            expect(recorded).toMatchObject({
+              outcome: "refused",
+              reason: "apply-failed",
+            });
+            expect(recorded?.detail).toContain(
+              "writePolicyAnyOf must remain stable at /notes/*",
+            );
+            expect(getPatternIdentityRef(room)?.identity).toBe(
+              previousIdentity,
+            );
+            expect(storedWriters(runtime, room)).toEqual([
+              ["post"],
+              ["amend"],
+            ]);
+          },
+        );
+      });
+
+      it("adopts the release where the artifact already pairs the gesture", async () => {
+        await reconcileRelease(
+          "paired-policy-release",
+          policyModules(),
+          releaseNaming("Post"),
+          prime,
+          ({ outcome, room, runtime, recorded, currentIdentity }) => {
+            expect(recorded?.detail).toBeUndefined();
+            expect(outcome).toBe("updated");
+            expect(getPatternIdentityRef(room)?.identity).toBe(currentIdentity);
+            expect(storedWriters(runtime, room)).toEqual([
+              ["post"],
+              ["amend"],
+              ["rewrite"],
+            ]);
+          },
+        );
+      });
     });
   });
 });

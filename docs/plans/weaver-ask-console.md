@@ -205,7 +205,7 @@ after approval.
 `interrupted` as `canceled`, `timeout`, `restart`, or `delivery_failed` for a
 delivered request whose batch failed after it, its effect unknown), the outcome (executor, transport status, Loom's summary fields,
 and the complete body up to 256 KiB, omitted with its size above that), the
-protocol check, and the limits: 16 KiB of args, a 2,000-character receipt, and
+protocol check, and the limits: 2 MiB of serialized UTF-8 JSON args, a 2,000-character receipt, and
 no 500-character result cap. `/api/task` and stdio `start_session`/`start_turn`
 take `protocol: {protocolVersion, requires}` and refuse a mismatch with
 `protocol_mismatch` before any session or turn starts. An older console ignores

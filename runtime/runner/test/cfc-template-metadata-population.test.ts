@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
@@ -7,6 +6,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -31,6 +31,7 @@ import type { IFCLabel } from "../src/cfc/mod.ts";
 import type { CfcMetadata, LabelMapEntry } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase(
   "runner-cfc-template-metadata-population",
@@ -164,11 +165,12 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
 
   const entriesOf = (id: string): StoredEntry[] => {
     const replica = storageManager!.open(space).replica as unknown as {
-      getDocument(id: string): {
-        cfc?: { labelMap?: { entries: StoredEntry[] } };
-      } | undefined;
+      getDocument(id: string): { cfc?: unknown } | undefined;
     };
-    return replica.getDocument(id)?.cfc?.labelMap?.entries ?? [];
+    return storedLabelEntries<StoredEntry>(
+      replica.getDocument(id)?.cfc,
+      (labelId) => replica.getDocument(labelId),
+    );
   };
 
   // The schema write-policy input a cell write records for its target. The

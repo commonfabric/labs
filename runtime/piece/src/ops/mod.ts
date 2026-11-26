@@ -156,6 +156,7 @@ export {
   confirmServedSetSource,
   finishServedRegistration,
   prepareServedRegistration,
+  readServedInstantiateReceipt,
   servedFollowPieceSource,
   type ServedFollowPreparation,
   type ServedFollowReceipt,

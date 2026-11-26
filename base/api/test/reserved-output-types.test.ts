@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type {
   CHIP_UI as CHIP_UI_TYPE,
@@ -7,11 +6,18 @@ import type {
   FsProjection,
   NAME as NAME_TYPE,
   PatternFunction,
+  ReadonlyCell,
+  Stream,
+  Suggestion,
+  SuggestionPatternVerb,
+  SUGGESTIONS as SUGGESTIONS_TYPE,
   TILE_UI as TILE_UI_TYPE,
   UI as UI_TYPE,
   VIEWS as VIEWS_TYPE,
   VNode,
+  Writable,
 } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The assertions in this file are made when it is type-checked (tasks/check.sh
 // runs `deno check` over base/api), not when it runs. `pattern` and the
@@ -29,6 +35,7 @@ declare const TILE_UI: typeof TILE_UI_TYPE;
 declare const CHIP_UI: typeof CHIP_UI_TYPE;
 declare const FS: typeof FS_TYPE;
 declare const VIEWS: typeof VIEWS_TYPE;
+declare const SUGGESTIONS: typeof SUGGESTIONS_TYPE;
 
 /**
  * A group of facts a host may draw natively, and the field offering it. The
@@ -48,6 +55,15 @@ declare const reactiveUi: FactoryInput<VNode>;
 declare const reactiveName: FactoryInput<string>;
 declare const reactiveFs: FactoryInput<FsProjection>;
 const plainVNode: VNode = { type: "vnode", name: "div", props: undefined };
+
+/** What a handler a suggestion's act sends to receives. */
+interface AddItemEvent {
+  title: string;
+}
+declare const addItem: Stream<AddItemEvent>;
+declare const suggestionCell: Writable<Suggestion>;
+declare const readonlySuggestion: ReadonlyCell<Suggestion>;
+declare const reactiveSuggestions: FactoryInput<ReadonlyCell<Suggestion>[]>;
 
 function reservedOutputTypeChecks() {
   // Every reserved key with a correct shape, beside the author's own field.
@@ -165,6 +181,43 @@ function reservedOutputTypeChecks() {
     count: 3,
   }));
 
+  // [SUGGESTIONS] holds one cell per card, so the cell is the card's
+  // identity: a writable cell, a read-only one, or a reactive list of them.
+  const suggestions = pattern(() => ({
+    [SUGGESTIONS]: [suggestionCell, readonlySuggestion],
+    count: 3,
+  }));
+
+  const reactiveSuggestionList = pattern(() => ({
+    [SUGGESTIONS]: reactiveSuggestions,
+    count: 3,
+  }));
+
+  // A card written inline has no cell to be its identity.
+  const inlineSuggestion: Suggestion = {
+    title: "Add cake",
+    acts: [{
+      kind: "pattern.verb",
+      label: "Add",
+      verb: addItem,
+      payload: { title: "Cake" },
+    }],
+  };
+  const inlineSuggestions = pattern(() => ({
+    // @ts-expect-error [SUGGESTIONS] holds cells, not inline suggestions
+    [SUGGESTIONS]: [inlineSuggestion],
+    count: 3,
+  }));
+
+  // An act typed by its handler's event checks the payload against it.
+  const badSuggestionAct: SuggestionPatternVerb<AddItemEvent> = {
+    kind: "pattern.verb",
+    label: "Add",
+    verb: addItem,
+    // @ts-expect-error a pattern.verb's payload is what its verb receives
+    payload: { name: "Cake" },
+  };
+
   return {
     valid,
     reactive,
@@ -182,6 +235,10 @@ function reservedOutputTypeChecks() {
     badViewsString,
     viewsArrayCompilesToday,
     viewsVNodeCompilesToday,
+    suggestions,
+    reactiveSuggestionList,
+    inlineSuggestions,
+    badSuggestionAct,
   };
 }
 

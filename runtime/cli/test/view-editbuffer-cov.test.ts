@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { EditBuffer } from "../lib/view/editbuffer.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function at(b: EditBuffer): [number, number] {
   return [b.row, b.col];
@@ -9,14 +10,14 @@ function at(b: EditBuffer): [number, number] {
 // construction / setText / spliceLines
 //
 
-Deno.test("editbuffer: constructor splits on newlines, single line otherwise", () => {
+test("editbuffer: constructor splits on newlines, single line otherwise", () => {
   const b = new EditBuffer("a\nb\nc");
   assertEquals(b.lines, ["a", "b", "c"]);
   const empty = new EditBuffer("");
   assertEquals(empty.lines, [""], "empty text is one empty line");
 });
 
-Deno.test("editbuffer: setText replaces content, clamps cursor, keeps baseline", () => {
+test("editbuffer: setText replaces content, clamps cursor, keeps baseline", () => {
   const b = new EditBuffer("original");
   assert(!b.dirty());
   // Place cursor out of range; setText must clamp into the new content.
@@ -28,7 +29,7 @@ Deno.test("editbuffer: setText replaces content, clamps cursor, keeps baseline",
   assertEquals(b.baseline(), "original");
 });
 
-Deno.test("editbuffer: setText clears mark and resets goal/kill/yank", () => {
+test("editbuffer: setText clears mark and resets goal/kill/yank", () => {
   const b = new EditBuffer("abcdef");
   b.setMark();
   assertEquals(b.mark, { row: 0, col: 0 });
@@ -37,7 +38,7 @@ Deno.test("editbuffer: setText clears mark and resets goal/kill/yank", () => {
   assertEquals(b.text(), "xyz");
 });
 
-Deno.test("editbuffer: spliceLines replaces a range and positions the cursor", () => {
+test("editbuffer: spliceLines replaces a range and positions the cursor", () => {
   const b = new EditBuffer("a\nb\nc");
   // Replace the single line at row 1 with a removed/added pair.
   b.spliceLines(1, 1, ["-b", "+B"], 1, 2);
@@ -45,7 +46,7 @@ Deno.test("editbuffer: spliceLines replaces a range and positions the cursor", (
   assertEquals(at(b), [2, 2], "cursor at row+cursorRow, cursorCol");
 });
 
-Deno.test("editbuffer: spliceLines that empties the buffer falls back to one empty line", () => {
+test("editbuffer: spliceLines that empties the buffer falls back to one empty line", () => {
   const b = new EditBuffer("only");
   // Remove the only line with an empty replacement: lines becomes [].
   b.spliceLines(0, 1, [], 0, 0);
@@ -54,7 +55,7 @@ Deno.test("editbuffer: spliceLines that empties the buffer falls back to one emp
   assertEquals(at(b), [0, 0]);
 });
 
-Deno.test("editbuffer: spliceLines clamps cursor into the replacement", () => {
+test("editbuffer: spliceLines clamps cursor into the replacement", () => {
   const b = new EditBuffer("a\nb\nc");
   b.spliceLines(0, 3, ["short"], 5, 99);
   assertEquals(b.text(), "short");
@@ -69,7 +70,7 @@ Deno.test("editbuffer: spliceLines clamps cursor into the replacement", () => {
 // vertical motion (moveUp)
 //
 
-Deno.test("editbuffer: moveUp keeps a goal column across short lines", () => {
+test("editbuffer: moveUp keeps a goal column across short lines", () => {
   const b = new EditBuffer("first line\nx\nlast line");
   b.row = 2;
   b.col = 7;
@@ -79,7 +80,7 @@ Deno.test("editbuffer: moveUp keeps a goal column across short lines", () => {
   assertEquals(at(b), [0, 7]);
 });
 
-Deno.test("editbuffer: moveUp at the top row is a no-op", () => {
+test("editbuffer: moveUp at the top row is a no-op", () => {
   const b = new EditBuffer("top\nbottom");
   b.row = 0;
   b.col = 2;
@@ -91,7 +92,7 @@ Deno.test("editbuffer: moveUp at the top row is a no-op", () => {
 // buffer-edge motion
 //
 
-Deno.test("editbuffer: moveBufferStart goes to row 0 col 0", () => {
+test("editbuffer: moveBufferStart goes to row 0 col 0", () => {
   const b = new EditBuffer("aaa\nbbb\nccc");
   b.row = 2;
   b.col = 3;
@@ -99,7 +100,7 @@ Deno.test("editbuffer: moveBufferStart goes to row 0 col 0", () => {
   assertEquals(at(b), [0, 0]);
 });
 
-Deno.test("editbuffer: moveBufferEnd goes to the last line's end", () => {
+test("editbuffer: moveBufferEnd goes to the last line's end", () => {
   const b = new EditBuffer("aaa\nbbb\ncccc");
   b.row = 0;
   b.col = 0;
@@ -111,7 +112,7 @@ Deno.test("editbuffer: moveBufferEnd goes to the last line's end", () => {
 // insertion edge
 //
 
-Deno.test("editbuffer: insert of an empty string is a no-op", () => {
+test("editbuffer: insert of an empty string is a no-op", () => {
   const b = new EditBuffer("abc");
   b.col = 1;
   b.insert("");
@@ -119,7 +120,7 @@ Deno.test("editbuffer: insert of an empty string is a no-op", () => {
   assertEquals(at(b), [0, 1], "cursor unchanged");
 });
 
-Deno.test("editbuffer: insert of a multi-line string splits and inserts", () => {
+test("editbuffer: insert of a multi-line string splits and inserts", () => {
   const b = new EditBuffer("XY");
   b.col = 1;
   b.insert("a\nb");
@@ -131,7 +132,7 @@ Deno.test("editbuffer: insert of a multi-line string splits and inserts", () => 
 // deletion (line joins)
 //
 
-Deno.test("editbuffer: deleteForward deletes a character mid-line", () => {
+test("editbuffer: deleteForward deletes a character mid-line", () => {
   const b = new EditBuffer("abc");
   b.col = 1; // before "b", col < line length
   b.deleteForward();
@@ -139,7 +140,7 @@ Deno.test("editbuffer: deleteForward deletes a character mid-line", () => {
   assertEquals(at(b), [0, 1], "cursor stays put");
 });
 
-Deno.test("editbuffer: deleteForward at line end joins with the next line", () => {
+test("editbuffer: deleteForward at line end joins with the next line", () => {
   const b = new EditBuffer("ab\ncd");
   b.row = 0;
   b.col = 2; // end of "ab"
@@ -157,7 +158,7 @@ Deno.test("editbuffer: deleteForward at line end joins with the next line", () =
 // killLine / killWholeLine
 //
 
-Deno.test("editbuffer: killLine mid-line kills to the end of the line", () => {
+test("editbuffer: killLine mid-line kills to the end of the line", () => {
   const b = new EditBuffer("hello world");
   b.col = 6; // col < line length, so it kills "world"
   b.killLine();
@@ -167,7 +168,7 @@ Deno.test("editbuffer: killLine mid-line kills to the end of the line", () => {
   assertEquals(b.text(), "hello world");
 });
 
-Deno.test("editbuffer: killLine at end of line kills the newline (joins next)", () => {
+test("editbuffer: killLine at end of line kills the newline (joins next)", () => {
   const b = new EditBuffer("ab\ncd");
   b.row = 0;
   b.col = 2; // at end of "ab"
@@ -181,7 +182,7 @@ Deno.test("editbuffer: killLine at end of line kills the newline (joins next)", 
   );
 });
 
-Deno.test("editbuffer: killLine at the very end of the buffer is a no-op", () => {
+test("editbuffer: killLine at the very end of the buffer is a no-op", () => {
   const b = new EditBuffer("solo");
   b.moveLineEnd();
   b.killLine();
@@ -189,7 +190,7 @@ Deno.test("editbuffer: killLine at the very end of the buffer is a no-op", () =>
   assertEquals(b.killRing.length, 0, "nothing killed at buffer end");
 });
 
-Deno.test("editbuffer: killWholeLine on a multi-line buffer removes the line", () => {
+test("editbuffer: killWholeLine on a multi-line buffer removes the line", () => {
   const b = new EditBuffer("a\nb\nc");
   b.row = 1;
   b.killWholeLine();
@@ -197,7 +198,7 @@ Deno.test("editbuffer: killWholeLine on a multi-line buffer removes the line", (
   assertEquals(at(b), [1, 0]);
 });
 
-Deno.test("editbuffer: killWholeLine on the last line clamps the row back", () => {
+test("editbuffer: killWholeLine on the last line clamps the row back", () => {
   const b = new EditBuffer("a\nb");
   b.row = 1; // last line
   b.killWholeLine();
@@ -205,7 +206,7 @@ Deno.test("editbuffer: killWholeLine on the last line clamps the row back", () =
   assertEquals(b.row, 0, "row clamps back into range after removal");
 });
 
-Deno.test("editbuffer: killWholeLine on the only line empties it in place", () => {
+test("editbuffer: killWholeLine on the only line empties it in place", () => {
   const b = new EditBuffer("solo");
   b.killWholeLine();
   assertEquals(b.text(), "", "the single line is emptied, not removed");
@@ -222,7 +223,7 @@ Deno.test("editbuffer: killWholeLine on the only line empties it in place", () =
 // killRegion / yank / yankPop early returns
 //
 
-Deno.test("editbuffer: killRegion with no mark is a no-op", () => {
+test("editbuffer: killRegion with no mark is a no-op", () => {
   const b = new EditBuffer("hello");
   b.mark = null;
   b.col = 3;
@@ -232,14 +233,14 @@ Deno.test("editbuffer: killRegion with no mark is a no-op", () => {
   assertEquals(b.col, 3, "cursor unchanged");
 });
 
-Deno.test("editbuffer: yank with an empty ring does nothing", () => {
+test("editbuffer: yank with an empty ring does nothing", () => {
   const b = new EditBuffer("abc");
   assertEquals(b.killRing.length, 0);
   b.yank();
   assertEquals(b.text(), "abc", "nothing to yank");
 });
 
-Deno.test("editbuffer: yankPop without a preceding yank is a no-op", () => {
+test("editbuffer: yankPop without a preceding yank is a no-op", () => {
   const b = new EditBuffer("abc");
   b.killRing = ["X", "Y"];
   // No yank happened, so yankIndex is -1 and lastYank is null.
@@ -247,7 +248,7 @@ Deno.test("editbuffer: yankPop without a preceding yank is a no-op", () => {
   assertEquals(b.text(), "abc", "yank-pop requires a preceding yank");
 });
 
-Deno.test("editbuffer: yankPop after a yank replaces with the next ring entry", () => {
+test("editbuffer: yankPop after a yank replaces with the next ring entry", () => {
   const b = new EditBuffer("");
   b.killRing = ["A", "B", "C"];
   b.yank();
@@ -264,7 +265,7 @@ Deno.test("editbuffer: yankPop after a yank replaces with the next ring entry", 
 // pushKill empty-text guard
 //
 
-Deno.test("editbuffer: killLine on an empty last line kills nothing", () => {
+test("editbuffer: killLine on an empty last line kills nothing", () => {
   // killLine at end of a non-final empty line joins; on the final empty line
   // it falls through to neither branch, so the ring stays empty.
   const b = new EditBuffer("");
@@ -277,7 +278,7 @@ Deno.test("editbuffer: killLine on an empty last line kills nothing", () => {
   assertEquals(b.text(), "");
 });
 
-Deno.test("editbuffer: killWordForward with no word ahead pushes nothing", () => {
+test("editbuffer: killWordForward with no word ahead pushes nothing", () => {
   // nextWordEnd finds no word, so cut returns "" and pushKill's empty-text
   // guard short-circuits without touching the ring.
   const b = new EditBuffer("foo   ");
@@ -291,7 +292,7 @@ Deno.test("editbuffer: killWordForward with no word ahead pushes nothing", () =>
 // case operations
 //
 
-Deno.test("editbuffer: capitalizeWord with no letter/number leaves the word as-is", () => {
+test("editbuffer: capitalizeWord with no letter/number leaves the word as-is", () => {
   const b = new EditBuffer("--- rest");
   b.col = 0;
   // nextWordEnd skips "--- " then lands on "rest"; but to exercise the no-match
@@ -309,7 +310,7 @@ Deno.test("editbuffer: capitalizeWord with no letter/number leaves the word as-i
   assertEquals(b.text(), "--- Rest");
 });
 
-Deno.test("editbuffer: a word op whose word ends on the next line just moves to line end", () => {
+test("editbuffer: a word op whose word ends on the next line just moves to line end", () => {
   // Cursor is on a line of only non-word chars; nextWordEnd crosses to the next
   // line, so transformWord bails and moves the cursor to the current line end.
   const b = new EditBuffer("...\nword");
@@ -328,7 +329,7 @@ Deno.test("editbuffer: a word op whose word ends on the next line just moves to 
 // multi-line cut (via killRegion across lines)
 //
 
-Deno.test("editbuffer: killRegion across multiple lines cuts and rejoins", () => {
+test("editbuffer: killRegion across multiple lines cuts and rejoins", () => {
   const b = new EditBuffer("one\ntwo\nthree\nfour");
   b.row = 0;
   b.col = 1; // after "o" on line 0
@@ -346,7 +347,7 @@ Deno.test("editbuffer: killRegion across multiple lines cuts and rejoins", () =>
   );
 });
 
-Deno.test("editbuffer: killRegion handles a mark after point (orderPoints swaps)", () => {
+test("editbuffer: killRegion handles a mark after point (orderPoints swaps)", () => {
   const b = new EditBuffer("0123456789");
   b.col = 7;
   b.setMark(); // mark is after where the cursor ends up
@@ -360,7 +361,7 @@ Deno.test("editbuffer: killRegion handles a mark after point (orderPoints swaps)
   assertEquals(b.col, 2);
 });
 
-Deno.test("editbuffer: killWordForward across a line boundary cuts multiple lines", () => {
+test("editbuffer: killWordForward across a line boundary cuts multiple lines", () => {
   // Cursor at the end of a line of separators forces nextWordEnd to cross to the
   // next line, so the kill spans two lines and exercises the multi-line cut.
   const b = new EditBuffer("ab \ncd");
@@ -380,7 +381,7 @@ Deno.test("editbuffer: killWordForward across a line boundary cuts multiple line
 // word scanning across lines
 //
 
-Deno.test("editbuffer: moveWordForward crosses blank/short lines to the next word", () => {
+test("editbuffer: moveWordForward crosses blank/short lines to the next word", () => {
   const b = new EditBuffer("ab\n\ncd");
   b.row = 0;
   b.col = 2; // end of "ab"
@@ -392,7 +393,7 @@ Deno.test("editbuffer: moveWordForward crosses blank/short lines to the next wor
   );
 });
 
-Deno.test("editbuffer: moveWordForward at the very end of the buffer stays put", () => {
+test("editbuffer: moveWordForward at the very end of the buffer stays put", () => {
   const b = new EditBuffer("ab\n   ");
   b.row = 1;
   b.col = 3; // end of the all-space final line
@@ -404,7 +405,7 @@ Deno.test("editbuffer: moveWordForward at the very end of the buffer stays put",
   );
 });
 
-Deno.test("editbuffer: moveWordBackward crosses an earlier line to the previous word", () => {
+test("editbuffer: moveWordBackward crosses an earlier line to the previous word", () => {
   const b = new EditBuffer("cd\n\nab");
   b.row = 2;
   b.col = 0; // start of "ab"
@@ -412,7 +413,7 @@ Deno.test("editbuffer: moveWordBackward crosses an earlier line to the previous 
   assertEquals(at(b), [0, 0], "lands at the start of cd on the earlier line");
 });
 
-Deno.test("editbuffer: moveWordBackward skips trailing separators back to the word", () => {
+test("editbuffer: moveWordBackward skips trailing separators back to the word", () => {
   // The cursor sits after non-word characters on the same line, so prevWordStart
   // first skips those separators backward, then the word, all on one line.
   const b = new EditBuffer("bar...");
@@ -421,7 +422,7 @@ Deno.test("editbuffer: moveWordBackward skips trailing separators back to the wo
   assertEquals(at(b), [0, 0], "skips the dots and the word back to its start");
 });
 
-Deno.test("editbuffer: moveWordBackward at the very start of the buffer stays put", () => {
+test("editbuffer: moveWordBackward at the very start of the buffer stays put", () => {
   const b = new EditBuffer("   \nab");
   b.row = 0;
   b.col = 0; // already at the start; nothing before

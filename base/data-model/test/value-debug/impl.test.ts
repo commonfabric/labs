@@ -16,7 +16,6 @@
  * what a case file cannot express.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -31,6 +30,7 @@ import {
 import { REALM_CODEC } from "@/codec-common";
 import { FabricLink } from "@/fabric-instances";
 import { FabricBytes, FabricEpochNsec } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("impl", () => {
   describe("toCompactDebugString", () => {

@@ -10,9 +10,9 @@
  * any comparison that walks indices alone.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("deepEqual()", () => {
   describe("primitives", () => {
@@ -299,6 +299,13 @@ describe("deepEqual()", () => {
       const nullProto = Object.create(null);
       nullProto.a = 1;
       expect(deepEqual(plain, nullProto)).toBe(false);
+    });
+
+    it("returns `false` for an array vs a non-array whose constructor is `Array`", () => {
+      const arrayLike = Object.setPrototypeOf({}, Array.prototype);
+
+      expect(deepEqual([], arrayLike)).toBe(false);
+      expect(deepEqual(arrayLike, [])).toBe(false);
     });
   });
 

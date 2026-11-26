@@ -31,6 +31,30 @@ export interface TestIdentity {
   v?: string;
 }
 
+/**
+ * The separator between the parts of a test's name: a `describe` and what
+ * it holds, or a test and a step inside it.
+ */
+export const NAME_SEPARATOR = " > ";
+
+/**
+ * The names of every test enclosing the test a name identifies, outermost
+ * first: `"a > b > c"` is inside `"a"` and `"a > b"`. Each separator is a
+ * place the name may be cut, overlapping ones included, so a step of a
+ * test named `"a >"`, which reports as `"a > > b"`, is inside `"a >"`.
+ */
+export function enclosingNames(name: string): string[] {
+  const names: string[] = [];
+  for (
+    let at = name.indexOf(NAME_SEPARATOR);
+    at >= 0;
+    at = name.indexOf(NAME_SEPARATOR, at + 1)
+  ) {
+    names.push(name.slice(0, at));
+  }
+  return names;
+}
+
 /** Stable JSON-array key for grouping records by test identity. */
 export function testIdentityKey(test: TestIdentity): string {
   return JSON.stringify(

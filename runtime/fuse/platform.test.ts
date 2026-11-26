@@ -1,7 +1,8 @@
 import { assertEquals } from "@std/assert";
 import { COMMON_SYMBOLS } from "./platform.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("reverse-invalidation symbols are nonblocking", () => {
+test("reverse-invalidation symbols are nonblocking", () => {
   // The FUSE daemon runs fuse_session_loop on an FFI thread and answers every
   // request on the isolate thread. A reverse invalidation (notify_inval_entry /
   // notify_inval_inode) enters the Linux kernel and takes the parent
@@ -24,12 +25,12 @@ Deno.test("reverse-invalidation symbols are nonblocking", () => {
   );
 });
 
-Deno.test("session loop is nonblocking", () => {
+test("session loop is nonblocking", () => {
   // The session loop owns one FFI thread for the mount's lifetime.
   assertEquals(COMMON_SYMBOLS.fuse_session_loop.nonblocking, true);
 });
 
-Deno.test("reply functions stay synchronous", () => {
+test("reply functions stay synchronous", () => {
   // Reply functions are called synchronously from inside the op callbacks,
   // which run on the isolate thread. They hand an answer back to an outstanding
   // request rather than waiting on a lock, so they stay blocking; making them

@@ -7,6 +7,7 @@ import {
   directoryExists,
   openWithCommand,
 } from "../../src/drivers/claude-agent-sdk.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function fakeQuery(messages: unknown[]) {
   const generator = (async function* () {
@@ -20,7 +21,7 @@ function fakeQuery(messages: unknown[]) {
   });
 }
 
-Deno.test("Claude driver lists all-project sessions and reads system messages", async () => {
+test("Claude driver lists all-project sessions and reads system messages", async () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const sdk = {
     listSessions: (options?: Record<string, unknown>) => {
@@ -99,7 +100,7 @@ Deno.test("Claude driver lists all-project sessions and reads system messages", 
   );
 });
 
-Deno.test("Claude bypassPermissions mode requires explicit opt-in", () => {
+test("Claude bypassPermissions mode requires explicit opt-in", () => {
   const source = {
     id: "claude-code:default",
     driver: "claude-agent-sdk" as const,
@@ -120,7 +121,7 @@ Deno.test("Claude bypassPermissions mode requires explicit opt-in", () => {
   );
 });
 
-Deno.test("Claude acknowledges bypass permission prompts", async () => {
+test("Claude acknowledges bypass permission prompts", async () => {
   let queryOptions: Record<string, unknown> | undefined;
   const sdk = {
     getSessionInfo: () =>
@@ -159,7 +160,7 @@ Deno.test("Claude acknowledges bypass permission prompts", async () => {
   assertEquals(queryOptions?.allowDangerouslySkipPermissions, true);
 });
 
-Deno.test("aborted Claude startup retains the stopped state", async () => {
+test("aborted Claude startup retains the stopped state", async () => {
   let queryCalls = 0;
   const sdk = {
     getSessionInfo: () => Promise.resolve(undefined),
@@ -195,7 +196,7 @@ Deno.test("aborted Claude startup retains the stopped state", async () => {
   assertEquals(queryCalls, 0);
 });
 
-Deno.test("Claude driver reports connector-owned queries as active", async () => {
+test("Claude driver reports connector-owned queries as active", async () => {
   let release!: () => void;
   const blocked = new Promise<void>((resolve) => release = resolve);
   const info = {
@@ -243,7 +244,7 @@ Deno.test("Claude driver reports connector-owned queries as active", async () =>
   }
 });
 
-Deno.test("Claude session reads retain activity observed when the read starts", async () => {
+test("Claude session reads retain activity observed when the read starts", async () => {
   let releasePrompt!: () => void;
   const promptBlocked = new Promise<void>((resolve) => releasePrompt = resolve);
   let releaseRead!: () => void;
@@ -301,7 +302,7 @@ Deno.test("Claude session reads retain activity observed when the read starts", 
   }
 });
 
-Deno.test("Claude prompt maps terminal SDK errors to failed receipts", async () => {
+test("Claude prompt maps terminal SDK errors to failed receipts", async () => {
   const sdk = {
     getSessionInfo: () =>
       Promise.resolve({
@@ -329,7 +330,7 @@ Deno.test("Claude prompt maps terminal SDK errors to failed receipts", async () 
   assertStringIncludes(result.error?.message ?? "", "turn limit reached");
 });
 
-Deno.test("Claude resumes a session from its recorded working directory", async () => {
+test("Claude resumes a session from its recorded working directory", async () => {
   let queryOptions: Record<string, unknown> | undefined;
   const sdk = {
     getSessionInfo: () =>
@@ -363,7 +364,7 @@ Deno.test("Claude resumes a session from its recorded working directory", async 
   assertEquals(queryOptions?.cwd, "/session/worktree");
 });
 
-Deno.test("Claude rejects a second prompt while resolving session metadata", async () => {
+test("Claude rejects a second prompt while resolving session metadata", async () => {
   let releaseLookup!: () => void;
   const lookupBlocked = new Promise<void>((resolve) => releaseLookup = resolve);
   let markLookupStarted!: () => void;
@@ -407,57 +408,64 @@ Deno.test("Claude rejects a second prompt while resolving session metadata", asy
   }
 });
 
-Deno.test("Claude cancels a prompt while resolving session metadata", async () => {
-  let releaseLookup!: () => void;
-  const lookupBlocked = new Promise<void>((resolve) => releaseLookup = resolve);
-  let markLookupStarted!: () => void;
-  const lookupStarted = new Promise<void>((resolve) =>
-    markLookupStarted = resolve
-  );
-  let queryCalled = false;
-  const sdk = {
-    getSessionInfo: async () => {
-      markLookupStarted();
-      await lookupBlocked;
-      return {
-        sessionId: "session-1",
-        summary: "First task",
-        cwd: "/session/worktree",
-        createdAt: 1_000,
-        lastModified: 2_000,
-      };
-    },
-    query: () => {
-      queryCalled = true;
-      return fakeQuery([]);
-    },
-  } as unknown as ClaudeSdkAdapter;
-  const driver = new ClaudeAgentSdkDriver(
-    { id: "claude-code:default", driver: "claude-agent-sdk", enabled: true },
-    sdk,
-  );
-  let cancellationReadyCalls = 0;
-
-  try {
-    const prompt = driver.prompt("session-1", { text: "continue" }, {
-      onCancellationReady: () => {
-        cancellationReadyCalls++;
+test("Claude cancels a prompt while resolving session metadata", async () => {
+  // The cancellation wins over the lookup's answer, whether it resolves or
+  // rejects.
+  for (const lookupRejects of [false, true]) {
+    let releaseLookup!: () => void;
+    const lookupBlocked = new Promise<void>((resolve) =>
+      releaseLookup = resolve
+    );
+    let markLookupStarted!: () => void;
+    const lookupStarted = new Promise<void>((resolve) =>
+      markLookupStarted = resolve
+    );
+    let queryCalled = false;
+    const sdk = {
+      getSessionInfo: async () => {
+        markLookupStarted();
+        await lookupBlocked;
+        if (lookupRejects) throw new Error("metadata unavailable");
+        return {
+          sessionId: "session-1",
+          summary: "First task",
+          cwd: "/session/worktree",
+          createdAt: 1_000,
+          lastModified: 2_000,
+        };
       },
-    });
-    await lookupStarted;
-    assertEquals(cancellationReadyCalls, 1);
-    assertEquals((await driver.cancel("session-1")).status, "succeeded");
-    releaseLookup();
-    const result = await prompt;
-    assertEquals(result.status, "failed");
-    assertEquals(result.error?.code, "cancelled");
-    assertEquals(queryCalled, false);
-  } finally {
-    releaseLookup();
+      query: () => {
+        queryCalled = true;
+        return fakeQuery([]);
+      },
+    } as unknown as ClaudeSdkAdapter;
+    const driver = new ClaudeAgentSdkDriver(
+      { id: "claude-code:default", driver: "claude-agent-sdk", enabled: true },
+      sdk,
+    );
+    let cancellationReadyCalls = 0;
+
+    try {
+      const prompt = driver.prompt("session-1", { text: "continue" }, {
+        onCancellationReady: () => {
+          cancellationReadyCalls++;
+        },
+      });
+      await lookupStarted;
+      assertEquals(cancellationReadyCalls, 1);
+      assertEquals((await driver.cancel("session-1")).status, "succeeded");
+      releaseLookup();
+      const result = await prompt;
+      assertEquals(result.status, "failed", String(lookupRejects));
+      assertEquals(result.error?.code, "cancelled", String(lookupRejects));
+      assertEquals(queryCalled, false);
+    } finally {
+      releaseLookup();
+    }
   }
 });
 
-Deno.test("stopping Claude prevents pending and later prompts from starting", async () => {
+test("stopping Claude prevents pending and later prompts from starting", async () => {
   let releaseLookup!: () => void;
   const lookupBlocked = new Promise<void>((resolve) => releaseLookup = resolve);
   let markLookupStarted!: () => void;
@@ -505,7 +513,7 @@ Deno.test("stopping Claude prevents pending and later prompts from starting", as
   }
 });
 
-Deno.test("a stopped Claude query cannot untrack its replacement", async () => {
+test("a stopped Claude query cannot untrack its replacement", async () => {
   let releaseStopped!: () => void;
   const stoppedBlocked = new Promise<void>((resolve) =>
     releaseStopped = resolve
@@ -567,7 +575,7 @@ Deno.test("a stopped Claude query cannot untrack its replacement", async () => {
   }
 });
 
-Deno.test("Claude reports a missing prompt session before starting a query", async () => {
+test("Claude reports a missing prompt session before starting a query", async () => {
   let queryCalled = false;
   const sdk = {
     getSessionInfo: () => Promise.resolve(undefined),
@@ -587,7 +595,7 @@ Deno.test("Claude reports a missing prompt session before starting a query", asy
   assertEquals(queryCalled, false);
 });
 
-Deno.test("Claude reports session lookup failures as retryable", async () => {
+test("Claude reports session lookup failures as retryable", async () => {
   const sdk = {
     getSessionInfo: () => Promise.reject(new Error("metadata unavailable")),
   } as unknown as ClaudeSdkAdapter;
@@ -603,7 +611,7 @@ Deno.test("Claude reports session lookup failures as retryable", async () => {
   assertStringIncludes(result.error?.message ?? "", "metadata unavailable");
 });
 
-Deno.test("Claude interrupted query without a terminal result is unknown", async () => {
+test("Claude interrupted query without a terminal result is unknown", async () => {
   let release!: () => void;
   let markStarted!: () => void;
   const blocked = new Promise<void>((resolve) => release = resolve);
@@ -642,7 +650,7 @@ Deno.test("Claude interrupted query without a terminal result is unknown", async
   assertEquals((await prompt).status, "unknown");
 });
 
-Deno.test("multiple Claude sources isolate config directories for short SDK operations", async () => {
+test("multiple Claude sources isolate config directories for short SDK operations", async () => {
   const previous = Deno.env.get("CLAUDE_CONFIG_DIR");
   Deno.env.set("CLAUDE_CONFIG_DIR", "/sentinel");
   const observed: string[] = [];
@@ -688,7 +696,7 @@ Deno.test("multiple Claude sources isolate config directories for short SDK oper
   }
 });
 
-Deno.test("Claude prompts use explicit source env and run concurrently", async () => {
+test("Claude prompts use explicit source env and run concurrently", async () => {
   const previous = Deno.env.get("CLAUDE_CONFIG_DIR");
   Deno.env.set("CLAUDE_CONFIG_DIR", "/sentinel");
   let release!: () => void;
@@ -783,7 +791,7 @@ Deno.test("Claude prompts use explicit source env and run concurrently", async (
   }
 });
 
-Deno.test("Claude driver handles message, cursor, and live control edges", async () => {
+test("Claude driver handles message, cursor, and live control edges", async () => {
   const active = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const calls: string[] = [];
@@ -825,7 +833,7 @@ Deno.test("Claude driver handles message, cursor, and live control edges", async
       Promise.resolve([{
         type: "future",
         uuid: "nested",
-        message: { content: ["one", { text: "two" }, null] },
+        message: { content: ["one", { text: "two" }, { type: "image" }, null] },
       }]),
     renameSession: () => Promise.resolve(),
     query: () => query,
@@ -879,7 +887,7 @@ Deno.test("Claude driver handles message, cursor, and live control edges", async
   ]);
 });
 
-Deno.test("Claude prompt env excludes another source's temporary globals", async () => {
+test("Claude prompt env excludes another source's temporary globals", async () => {
   const key = "CLAUDE_TEST_FIRST_SOURCE_ONLY";
   const previous = Deno.env.get(key);
   Deno.env.delete(key);
@@ -973,7 +981,7 @@ function sdkWithoutSessions(calls: Array<{ method: string; args: unknown[] }>) {
 
 const NEW_SESSION_ID = "6f1a3c0e-9d2b-4c7a-8e5f-0123456789ab";
 
-Deno.test("Claude driver lists the source directory's sessions when `cwd` is configured", async () => {
+test("Claude driver lists the source directory's sessions when `cwd` is configured", async () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const scoped = new ClaudeAgentSdkDriver(
     {
@@ -1002,7 +1010,7 @@ Deno.test("Claude driver lists the source directory's sessions when `cwd` is con
   }]);
 });
 
-Deno.test("Claude driver starts a session under a caller-chosen id in its source's directory, titled through the query", async () => {
+test("Claude driver starts a session under a caller-chosen id in its source's directory, titled through the query", async () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const events: string[] = [];
   const sdk = {
@@ -1075,7 +1083,7 @@ Deno.test("Claude driver starts a session under a caller-chosen id in its source
   assertEquals(resumed.options.cwd, "/work/labs");
 });
 
-Deno.test("Claude driver starts an unscoped source's session in the directory the start names, made absolute", async () => {
+test("Claude driver starts an unscoped source's session in the directory the start names, made absolute", async () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const driver = new ClaudeAgentSdkDriver(
     { id: "claude-code:default", driver: "claude-agent-sdk", enabled: true },
@@ -1094,7 +1102,7 @@ Deno.test("Claude driver starts an unscoped source's session in the directory th
   assertEquals(outcome.result?.cwd, resolve("relative/checkout"));
 });
 
-Deno.test("Claude driver refuses a start it cannot begin: a stopped driver, a failed lookup, a cancellation during the lookup", async () => {
+test("Claude driver refuses a start it cannot begin: a stopped driver, a failed lookup, a cancellation during the lookup", async () => {
   const source = {
     id: "claude-code:labs",
     driver: "claude-agent-sdk" as const,
@@ -1162,7 +1170,7 @@ Deno.test("Claude driver refuses a start it cannot begin: a stopped driver, a fa
   }
 });
 
-Deno.test("Claude driver refuses to start a session that already exists", async () => {
+test("Claude driver refuses to start a session that already exists", async () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const sdk = {
     ...sdkWithoutSessions(calls),
@@ -1191,7 +1199,7 @@ Deno.test("Claude driver refuses to start a session that already exists", async 
   assertEquals(calls.map((call) => call.method), ["getSessionInfo"]);
 });
 
-Deno.test("Claude driver refuses a start whose id or directory is unusable", async () => {
+test("Claude driver refuses a start whose id or directory is unusable", async () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const scoped = new ClaudeAgentSdkDriver(
     {
@@ -1235,7 +1243,7 @@ Deno.test("Claude driver refuses a start whose id or directory is unusable", asy
   assertEquals(calls, []);
 });
 
-Deno.test("Claude driver applies a start's mode to the first turn, drops it when the start fails, and refuses one it does not advertise", async () => {
+test("Claude driver applies a start's mode to the first turn, drops it when the start fails, and refuses one it does not advertise", async () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const driver = new ClaudeAgentSdkDriver(
     {
@@ -1352,7 +1360,7 @@ Deno.test("Claude driver applies a start's mode to the first turn, drops it when
   assertEquals(afterThrow.options.permissionMode, "plan");
 });
 
-Deno.test("Claude driver starts a session on the desktop: opens the app's link with the folder and the prompt, runs no query, and pairs the session the app makes", async () => {
+test("Claude driver starts a session on the desktop: opens the app's link with the folder and the prompt, runs no query, and pairs the session the app makes", async () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const listed: Array<Record<string, unknown>> = [];
   const sdk = {
@@ -1615,7 +1623,7 @@ Deno.test("Claude driver starts a session on the desktop: opens the app's link w
   assertEquals(late?.startedAs, undefined);
 });
 
-Deno.test("Claude driver refuses a desktop start it cannot make: off macOS, with a mode, a prompt the app would cut, a folder that is not a directory, an app that is not installed, a link the app did not open, or a surface it does not offer", async () => {
+test("Claude driver refuses a desktop start it cannot make: off macOS, with a mode, a prompt the app would cut, a folder that is not a directory, an app that is not installed, a link the app did not open, or a surface it does not offer", async () => {
   const ok = {
     installed: () => Promise.resolve(true),
     openUrl: () => Promise.resolve(true),
@@ -1686,7 +1694,7 @@ Deno.test("Claude driver refuses a desktop start it cannot make: off macOS, with
   );
 });
 
-Deno.test("the desktop helpers answer false for an app that is not there, a folder that is not a directory, and an opener that is missing or refuses, without opening anything", async () => {
+test("the desktop helpers answer false for an app that is not there, a folder that is not a directory, and an opener that is missing or refuses, without opening anything", async () => {
   assertEquals(await desktopAppInstalled("/nonexistent/Claude.app"), false);
   assertEquals(await desktopAppInstalled(Deno.cwd()), true);
   assertEquals(await directoryExists(Deno.cwd()), true);

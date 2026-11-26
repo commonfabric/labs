@@ -4,6 +4,8 @@ import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { resetCfcDenialAnnouncements } from "@commonfabric/runner/cfc";
 import { getLogger } from "@commonfabric/logger";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -18,12 +20,8 @@ import type { VDomOp } from "../src/vdom-ops.ts";
 // everything it emits and everything it logs by default. The explanation names
 // a label this viewer was not cleared to see, and both the emitted operations
 // and the worker console belong to the page the gate scrubbed.
-//
-// `Deno.test` rather than `describe`/`it`: this package installs its fake
-// clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
-// a `@std/testing/bdd` `it()` callback never receives that context.
 
-Deno.test("worker reconciler CFC denials", async (t) => {
+test("worker reconciler CFC denials", async (t) => {
   const signer = await Identity.fromPassphrase(
     "worker reconciler cfc denials",
   );
@@ -135,7 +133,7 @@ Deno.test("worker reconciler CFC denials", async (t) => {
           ? { renderConfidentialityCeiling: { atoms: [] } }
           : {}),
       }).mount(tree);
-      await t.settle();
+      await clock.settle();
       await options.after?.();
     } finally {
       cancel();
@@ -246,7 +244,7 @@ Deno.test("worker reconciler CFC denials", async (t) => {
           after: async () => {
             for (let update = 0; update < 10; update++) {
               await writeSecret(`Referral: revision ${update}`);
-              await t.settle();
+              await clock.settle();
             }
           },
         });
@@ -341,6 +339,53 @@ Deno.test("worker reconciler CFC denials", async (t) => {
         }, { collector: collectOps(), debug: true });
         expect(said).toContain(TEXT_BLOCK);
         expect(said).toContain("signed-release");
+      },
+    );
+
+    // A ceiling denial of a cell whose schema cannot be walked for its labels
+    // reports a label that could not be read, not one the schema declares.
+    await t.step(
+      "names an unwalkable schema's label as unreadable when the ceiling blocks its cell",
+      async () => {
+        const collector = collectOps();
+        const said = await mounted({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [
+            unsignedText.asSchema({
+              anyOf: [{ type: "string" }, { $ref: "#/$defs/Undefined" }],
+            }) as never,
+          ],
+        }, { collector, ceiling: true, debug: true });
+        expect(collector.texts()).toContain("Content hidden by policy");
+        expect(said).toContain(CEILING_BLOCK);
+        expect(said).toContain('"labelSource":"unreadable"');
+      },
+    );
+
+    // A text-integrity denial reports the label it read as a ceiling denial
+    // does: a schema that cannot be walked for its labels is a label that
+    // could not be read, not one the schema declares.
+    await t.step(
+      "names an unwalkable schema's label as unreadable when integrity rejects its text",
+      async () => {
+        const said = await mounted({
+          type: "vnode",
+          name: "cf-cfc-authorship",
+          props: {
+            verifyTextIntegrity: true,
+            allowLiteralText: true,
+            requiredTextIntegrity: signedReleaseAtom,
+          },
+          children: [
+            unsignedText.asSchema({
+              anyOf: [{ type: "string" }, { $ref: "#/$defs/Undefined" }],
+            }) as never,
+          ],
+        }, { collector: collectOps(), debug: true });
+        expect(said).toContain(TEXT_BLOCK);
+        expect(said).toContain('"labelSource":"unreadable"');
       },
     );
 

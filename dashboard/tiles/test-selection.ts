@@ -1,9 +1,11 @@
 /**
  * Reports what the newest selection manifest would have a pull request
- * run: what share of the corpus's test time the lanes of a change touching
- * nothing would run, and how much time that is against the whole corpus.
- * What such a change runs is fixed by its discretionary target, so the share
- * falls as the corpus grows.
+ * run: what share of the corpus's tests, and of their test time, the lanes
+ * of a change touching nothing would run, and how many tests that is
+ * against the whole corpus. What such a change runs is bounded by its
+ * discretionary target, which is a number of seconds, so the share of test
+ * time falls as the corpus's test time grows, while the share of tests
+ * depends on what each chosen test costs.
  *
  * It goes amber on either of two counts. The manifest has gone stale, and
  * selection quality decays with it. Or the corpus holds a test that costs
@@ -38,6 +40,7 @@ import {
   corpusSeconds,
   laneBudgetOf,
   MANIFEST_SHARE_MS,
+  selectedCount,
   selectedSeconds,
   shareLabel,
 } from "../test-selection-manifest.ts";
@@ -48,7 +51,6 @@ import {
 } from "../test-selection-page.ts";
 import { REPO } from "../config.ts";
 import { publisherRunning } from "../test-selection-activity.ts";
-import { humanDuration } from "../tile-render-values.ts";
 import type { Status, Tile, TileView } from "../types.ts";
 
 /** Hours before a manifest is stale enough to say so. */
@@ -83,19 +85,21 @@ function selectionView(
   manifest: Manifest | undefined,
   clock?: () => number,
 ): TileView {
-  const corpus = manifest === undefined ? 0 : corpusSeconds(manifest);
-  if (manifest === undefined || corpus === 0) {
+  if (manifest === undefined || manifest.entries.length === 0) {
     return {
       status: "unknown",
       value: "—",
       sub: manifest === undefined
         ? "no selection manifest yet"
-        : manifest.entries.length === 0
-        ? "selection manifest has no tests"
-        : "selection manifest has no test time",
+        : "selection manifest has no tests",
     };
   }
-  const selected = selectedSeconds(manifest);
+  const corpus = manifest.entries.length;
+  const selected = selectedCount(manifest);
+  const seconds = selectedSeconds(manifest);
+  const corpusTime = corpusSeconds(manifest);
+  const tests = shareLabel(selected, corpus);
+  const time = shareLabel(seconds, corpusTime);
   const age = (clock?.() ?? Date.now()) - Date.parse(manifest.generatedAt);
   const ageHours = age / 3_600_000;
   const budget = laneBudgetOf(manifest.dials);
@@ -114,9 +118,10 @@ function selectionView(
   const badge = `${compactSpan(age)} old`;
   return {
     status,
-    value: shareLabel(selected, corpus),
+    value: `${tests}<small> tests · </small>${time}<small> time</small>`,
+    valueLabel: `${tests} of tests, ${time} of test time`,
     // The condition the tile is colored for takes this line, worst
-    // first, and the test time holds it while none has.
+    // first, and the counts of tests and test time hold it while none has.
     sub: broken > 0
       ? `cost model broken: ${broken} alarm${broken === 1 ? "" : "s"}`
       : over
@@ -125,9 +130,9 @@ function selectionView(
       ? `${groupDigits(unplaceable)} test${
         unplaceable === 1 ? "" : "s"
       } too long for any lane`
-      : `${humanDuration(selected * 1_000)} of ${
-        humanDuration(corpus * 1_000)
-      } test time`,
+      : `${groupDigits(selected)} of ${groupDigits(corpus)} · ${
+        compactSpan(seconds * 1_000)
+      } of ${compactSpan(corpusTime * 1_000)}`,
     aside: stale
       ? `<span class="hfacet" title="${badge}">${badge}</span>`
       : undefined,

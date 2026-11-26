@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { createCfHarnessCliCapabilities } from "../src/cli.ts";
 import { createHarnessChatSessionStatus } from "../src/contracts/interactive-chat.ts";
@@ -21,6 +20,7 @@ import {
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import type { SandboxRuntime } from "../src/sandbox/types.ts";
 import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const model = "gpt-5.6-terra";
 const provider = "openai-codex";
@@ -219,7 +219,7 @@ describe("codex-native-search", () => {
     expect(JSON.stringify(assistant.nativeModelToolResults)).toContain(
       "https://example.test/source",
     );
-    const input = await toResponsesInput([assistant], model, provider, "test");
+    const input = await toResponsesInput([assistant], model, provider);
     expect(input.input).toEqual(searchOutput);
   });
 
@@ -231,7 +231,7 @@ describe("codex-native-search", () => {
       "test",
     );
     const edited = { ...assistant, content: "Filtered answer." };
-    const input = await toResponsesInput([edited], model, provider, "test");
+    const input = await toResponsesInput([edited], model, provider);
     expect(JSON.stringify(input.input)).not.toContain("example.test/source");
     expect(JSON.stringify(input.input)).not.toContain("A sourced answer.");
     expect(JSON.stringify(input.input)).toContain("Filtered answer.");
@@ -405,7 +405,6 @@ describe("codex-native-search", () => {
       [assistant, tool],
       model,
       provider,
-      "test",
     );
     expect(input.input).toEqual([...output, {
       type: "function_call_output",
@@ -424,7 +423,6 @@ describe("codex-native-search", () => {
         [edited],
         model,
         provider,
-        "test",
       );
       expect(JSON.stringify(reconstructed.input)).not.toContain("url_citation");
       expect(JSON.stringify(reconstructed.input)).not.toContain(
@@ -456,13 +454,12 @@ describe("codex-native-search", () => {
       provider,
       "test",
     );
-    await expect(toResponsesInput([assistant], "gpt-other", provider, "test"))
+    await expect(toResponsesInput([assistant], "gpt-other", provider))
       .rejects.toThrow("does not match");
     const dropped = await toResponsesInput(
       [assistant],
       "gpt-other",
       provider,
-      "test",
       undefined,
       "drop",
     );
@@ -470,7 +467,6 @@ describe("codex-native-search", () => {
       [assistant],
       model,
       "openai-compatible-gateway",
-      "test",
     );
     for (const result of [dropped, foreign]) {
       expect(JSON.stringify(result.input)).not.toContain("web_search_call");
@@ -505,7 +501,7 @@ describe("codex-native-search", () => {
       });
       const restored = store.getSession("search")!.transcript;
       expect(restored).toEqual([assistant]);
-      const input = await toResponsesInput(restored, model, provider, "test");
+      const input = await toResponsesInput(restored, model, provider);
       expect(input.input).toEqual(searchOutput);
     } finally {
       store.close();
@@ -519,7 +515,7 @@ describe("codex-native-search", () => {
         state: { version: 1, sourceModel: model, output: [searchOutput[0]] },
       },
     };
-    const input = await toResponsesInput([old], model, provider, "test");
+    const input = await toResponsesInput([old], model, provider);
     expect(input.input[0]).toEqual(searchOutput[0]);
     expect(input.input.filter((i) => i.type === "message")).toHaveLength(1);
   });
@@ -590,6 +586,61 @@ describe("codex-native-search", () => {
     expect(sources).toHaveLength(33);
   });
 
+  it("returns only usable citations, titling an untitled one by its host", () => {
+    const sources = codexSearchSources([
+      { type: "reasoning", content: [] },
+      {
+        type: "message",
+        content: [
+          null,
+          { type: "refusal", annotations: [] },
+          {
+            type: "output_text",
+            annotations: [
+              null,
+              { type: "file_citation", url: "https://example.test/file" },
+              { type: "url_citation", url: 42 },
+              { type: "url_citation", url: "not a url" },
+              {
+                type: "url_citation",
+                url: `https://example.test/${"x".repeat(4097)}`,
+              },
+              { type: "url_citation", url: "https://untitled.example.test/a" },
+              {
+                type: "url_citation",
+                url: "https://untitled.example.test/a",
+                title: "Repeated",
+              },
+              {
+                type: "url_citation",
+                url: "http://titled.example.test/",
+                title: "Titled",
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    expect(sources).toEqual([
+      {
+        url: "https://untitled.example.test/a",
+        title: "untitled.example.test",
+      },
+      { url: "http://titled.example.test/", title: "Titled" },
+    ]);
+  });
+
+  it("returns an empty footer when no result carries a source", () => {
+    expect(searchSourceSummary([{
+      type: "cf-harness.native-model-tool-result",
+      toolId: "openai_web_search",
+      provider,
+      providerMetadata: { searchCalls: [] },
+      sources: [],
+    }])).toBe("");
+  });
+
   it("retains citation-only follow-up answers after an earlier search", async () => {
     const output = [searchOutput[2]];
     const assistant = normalizeTerminalResponse(
@@ -602,7 +653,7 @@ describe("codex-native-search", () => {
       url: "https://example.test/source",
       title: "Example source",
     }]);
-    expect((await toResponsesInput([assistant], model, provider, "test")).input)
+    expect((await toResponsesInput([assistant], model, provider)).input)
       .toEqual(output);
   });
 
@@ -633,7 +684,7 @@ describe("codex-native-search", () => {
         },
       };
       const restored =
-        (await toResponsesInput([broken], model, provider, "test")).input;
+        (await toResponsesInput([broken], model, provider)).input;
       expect(JSON.stringify(restored)).toContain("A sourced answer.");
       expect(JSON.stringify(restored)).not.toContain("Stale replacement");
       expect(JSON.stringify(restored)).not.toContain("url_citation");

@@ -105,6 +105,8 @@ export interface MatrixConfig {
 }
 
 export interface CaseConfig {
+  /** The lunch-poll entry file to open, relative to its directory. */
+  program?: string;
   optionCount: number;
   /** Sessions in the case: every user opens the poll and joins it. */
   userCount: number;
@@ -290,7 +292,7 @@ async function collectConvergence(
 
 const traceCursors = new Map<string, number>();
 const VOTE_COLORS = ["green", "yellow", "red"] as const;
-let matrixProgram = "main.tsx";
+const DEFAULT_PROGRAM = "main.tsx";
 const ROOT_PATH = dirname(dirname(fromFileUrl(import.meta.url)));
 const LUNCH_POLL_DIR = join(ROOT_PATH, "apps", "lunch-poll");
 
@@ -572,11 +574,20 @@ function compactTopReadSites(
     .slice(0, 6);
 }
 
-function compactSessionSample(
+/**
+ * One session's sample: what its poll output reads and what its scheduler
+ * reports, compacted. Both arrive from the session's runtime as plain values,
+ * so a field missing or of the wrong type reads as empty rather than throwing,
+ * except an output that is not an object at all. Exported so a test can hand
+ * it the malformed values a runtime could send.
+ */
+export function sessionSample(
   label: string,
-  poll: PollOutputSummary,
-  diagnostics: DiagnosticsSummary,
+  output: unknown,
+  snapshot: RuntimeDiagnosticsSnapshot,
 ): CompactSessionSample {
+  const poll = pollSummary(output);
+  const diagnostics = diagnosticsSummary(label, snapshot);
   const recent = diagnostics.settle.recent;
   const slowest = diagnostics.actions.slowestNew[0];
   return {
@@ -674,14 +685,15 @@ async function samplePhase(
   const startedAt = performance.now();
   await runActions();
   await harness.settle(3);
-  const sessions = await Promise.all(harness.sessions.map(async (session) => {
-    const poll = pollSummary(await session.read());
-    const diagnostics = diagnosticsSummary(
-      session.label,
-      await session.diagnostics(),
-    );
-    return compactSessionSample(session.label, poll, diagnostics);
-  }));
+  const sessions = await Promise.all(
+    harness.sessions.map(async (session) =>
+      sessionSample(
+        session.label,
+        await session.read(),
+        await session.diagnostics(),
+      )
+    ),
+  );
   const sample = {
     phase,
     elapsedMs: performance.now() - startedAt,
@@ -731,8 +743,8 @@ async function claimIdentities(
  * write survived: a vote lost to commit contention is what the churn and
  * convergence sections report.
  */
-function checkPhase(
-  phase: PhaseSample,
+export function checkPhase(
+  phase: Pick<PhaseSample, "phase" | "sessions">,
   requirement: string,
   reached: (poll: CompactSessionSample["poll"]) => boolean,
 ): void {
@@ -756,7 +768,7 @@ async function optionIds(session: MultiRuntimeSession): Promise<string[]> {
 
 function createHarness(config: CaseConfig): Promise<MultiRuntimeHarness> {
   return MultiRuntimeHarness.create({
-    programPath: `${LUNCH_POLL_DIR}/${matrixProgram}`,
+    programPath: `${LUNCH_POLL_DIR}/${config.program ?? DEFAULT_PROGRAM}`,
     rootPath: ROOT_PATH,
     diagnostics: true,
     sessions: Array.from(
@@ -828,8 +840,9 @@ export async function runCase(config: CaseConfig): Promise<CaseResult> {
         `concurrent-vote-round-${round + 1}`,
         harness,
         async () => {
+          // The options phase checked that the host sees options, so this
+          // has an id to vote for.
           const ids = await optionIds(host);
-          if (ids.length === 0) return;
           await Promise.all(
             voters.map((session, index) =>
               session.send("castVote", {
@@ -945,21 +958,33 @@ function explicitCasesArg(
   const prefix = "--cases=";
   const arg = args.find((entry) => entry.startsWith(prefix));
   if (!arg) return undefined;
-  const cases = arg.slice(prefix.length).split(",").flatMap((entry) => {
-    const match = entry.trim().match(/^(\d+)x(\d+)$/);
-    if (!match) return [];
-    const optionCount = Number(match[1]);
-    const userCount = Number(match[2]);
-    validateUserCount(userCount, entry.trim());
-    validateVoters(config.voters, userCount, entry.trim());
-    return [{
-      optionCount,
-      userCount,
-      voteRounds: config.voteRounds,
-      voters: config.voters,
-    }];
+  return arg.slice(prefix.length).split(",").map((entry) => {
+    const source = entry.trim();
+    const match = source.match(/^(\d+)x(\d+)$/);
+    if (!match) {
+      throw new Error(
+        `--cases entries must be <options>x<users>; got "${source}" in ${arg}`,
+      );
+    }
+    return caseConfig(config, Number(match[1]), Number(match[2]), source);
   });
-  return cases.length > 0 ? cases : undefined;
+}
+
+function caseConfig(
+  config: MatrixConfig,
+  optionCount: number,
+  userCount: number,
+  source: string,
+): CaseConfig {
+  validateUserCount(userCount, source);
+  validateVoters(config.voters, userCount, source);
+  return {
+    program: config.program,
+    optionCount,
+    userCount,
+    voteRounds: config.voteRounds,
+    voters: config.voters,
+  };
 }
 
 function validateUserCount(userCount: number, source: string): void {
@@ -1040,48 +1065,49 @@ export function casesFromConfig(
   config: MatrixConfig,
   args: readonly string[] = Deno.args,
 ): CaseConfig[] {
-  const explicit = explicitCasesArg(config, args);
-  if (explicit) return explicit;
-  const cases: CaseConfig[] = [];
-  for (const optionCount of config.optionCounts) {
-    for (const userCount of config.userCounts) {
-      validateUserCount(userCount, `${optionCount}x${userCount}`);
-      validateVoters(config.voters, userCount, `${optionCount}x${userCount}`);
-      cases.push({
-        optionCount,
-        userCount,
-        voteRounds: config.voteRounds,
-        voters: config.voters,
-      });
-    }
-  }
-  return cases;
+  return explicitCasesArg(config, args) ??
+    config.optionCounts.flatMap((optionCount) =>
+      config.userCounts.map((userCount) =>
+        caseConfig(
+          config,
+          optionCount,
+          userCount,
+          `${optionCount}x${userCount}`,
+        )
+      )
+    );
 }
 
-async function run(): Promise<void> {
-  // A headless probe measures the derive-and-commit graph of the pattern and
-  // hosts its own in-process memory server, which has no serving loop. Under
-  // the ON posture the harness instead targets the integration environment's
-  // toolshed (`env.API_URL`) and, with none running, waits on it forever. So
-  // when the caller has not chosen a posture, pin the OFF arm for this
-  // process; an explicit `EXPERIMENTAL_SERVER_EXECUTION` still wins.
-  if (Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION") === undefined) {
-    Deno.env.set("EXPERIMENTAL_SERVER_EXECUTION", "false");
-  }
-  const config = matrixConfigFromArgs(Deno.args);
-  matrixProgram = config.program;
-  const cases = casesFromConfig(config, Deno.args);
-  const startedAt = performance.now();
-  const results: ({ ok: true; result: CaseResult } | {
-    ok: false;
-    case: CaseConfig;
-    error: string;
-  })[] = [];
+/** What one case of a matrix came to: its result, or why it failed. */
+export type CaseOutcome =
+  | { ok: true; result: CaseResult }
+  | { ok: false; case: CaseConfig; error: string };
 
+/** The JSON document the probe writes to stdout. */
+export interface MatrixReport {
+  kind: "lunch-poll-scaling-diagnostics";
+  config: MatrixConfig;
+  elapsedMs: number;
+  results: CaseOutcome[];
+}
+
+/**
+ * Run every case the command line names, in order, with `runOne`. A case that
+ * fails is reported among the results rather than ending the matrix; a
+ * command line that names no valid matrix throws before any case runs.
+ */
+export async function runMatrix(
+  args: readonly string[],
+  runOne: (config: CaseConfig) => Promise<CaseResult> = runCase,
+): Promise<MatrixReport> {
+  const config = matrixConfigFromArgs(args);
+  const cases = casesFromConfig(config, args);
+  const startedAt = performance.now();
+  const results: CaseOutcome[] = [];
   for (const caseConfig of cases) {
     console.error(`[lunch-poll diagnose] case ${describeCase(caseConfig)}`);
     try {
-      results.push({ ok: true, result: await runCase(caseConfig) });
+      results.push({ ok: true, result: await runOne(caseConfig) });
     } catch (error) {
       results.push({
         ok: false,
@@ -1092,22 +1118,26 @@ async function run(): Promise<void> {
       });
     }
   }
-
-  console.log(JSON.stringify(
-    {
-      kind: "lunch-poll-scaling-diagnostics",
-      config,
-      elapsedMs: performance.now() - startedAt,
-      results,
-    },
-    null,
-    2,
-  ));
+  return {
+    kind: "lunch-poll-scaling-diagnostics",
+    config,
+    elapsedMs: performance.now() - startedAt,
+    results,
+  };
 }
 
 if (import.meta.main) {
+  // The probe measures the derive-and-commit graph of the pattern in the
+  // sessions' own runtimes, which is the OFF arm; under ON the harness moves
+  // that work behind a serving memory server it hosts. So when the caller has
+  // not chosen a posture, pin the OFF arm for this process; an explicit
+  // `EXPERIMENTAL_SERVER_EXECUTION` still wins.
+  Deno.env.set(
+    "EXPERIMENTAL_SERVER_EXECUTION",
+    Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION") ?? "false",
+  );
   try {
-    await run();
+    console.log(JSON.stringify(await runMatrix(Deno.args), null, 2));
   } catch (error) {
     console.error(describeFailure(error));
     Deno.exit(1);

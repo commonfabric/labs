@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   HARNESS_SUBAGENT_PROFILES,
   type HarnessSubagentProfile,
 } from "../../src/contracts/subagent.ts";
 import { delegateTaskTool } from "../../src/tools/delegate-task.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const offered = (subagentProfiles?: readonly HarnessSubagentProfile[]) => {
   const descriptor = delegateTaskTool.descriptorForRuntime?.(

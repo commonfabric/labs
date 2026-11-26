@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -10,6 +9,12 @@ import {
   parseAliasLine,
   readAliasDirectory,
 } from "./aliases.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const FULL: AliasLine = {
   date: "2026-08-17",
@@ -85,6 +90,25 @@ describe("aliases", () => {
         to: { k: "unit", s: "patisserie", n: "one test" },
       });
       expect(typeof parseAliasLine(line)).toBe("string");
+    });
+
+    it("returns an error for a line that is not an object", () => {
+      expect(parseAliasLine("null")).toBe("is not an object");
+      expect(parseAliasLine('"2026-08-17"')).toBe("is not an object");
+    });
+
+    it("returns an error for an identity that is not an object", () => {
+      const line = JSON.stringify({ ...FULL, from: "unit/bakery" });
+      expect(parseAliasLine(line)).toBe("has a malformed `from`");
+    });
+
+    it("returns an error for an identity whose kind or scope is not a name", () => {
+      for (const from of [{ ...FULL.from, k: 1 }, { ...FULL.from, s: "" }]) {
+        const line = JSON.stringify({ ...FULL, from });
+        expect(parseAliasLine(line)).toBe("has a malformed `from`");
+      }
+      const line = JSON.stringify({ ...FULL, to: { ...FULL.to, k: "" } });
+      expect(parseAliasLine(line)).toBe("has a malformed `to`");
     });
 
     it("returns an error for a variant-scoped alias", () => {
@@ -324,6 +348,22 @@ describe("aliases", () => {
         { k: "gate", s: "ci", n: "kitchen/oven/a.ts" },
         "2026/08/10",
       )).toEqual({ k: "gate", s: "ci", n: "renamed" });
+    });
+
+    it("keeps the name where a full-identity mapping's target gives none", () => {
+      // `parseAliasLine()` refuses such a line, and the constructor takes
+      // lines from anywhere.
+
+      const resolver = new AliasResolver([
+        { ...FULL, to: { k: "unit", s: "patisserie" } },
+      ]);
+      expect(
+        resolver.resolve(
+          { k: "unit", s: "bakery", n: "glaze > sets" },
+          "2026/08/10",
+        ),
+      )
+        .toEqual({ k: "unit", s: "patisserie", n: "glaze > sets" });
     });
 
     it("stops on a malformed cycle instead of hanging", () => {

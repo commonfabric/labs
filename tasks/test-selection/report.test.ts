@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   type CoverageFigures,
   type TestIdentity,
   testIdentityKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   aliasLineFor,
@@ -996,6 +996,8 @@ describe("report", () => {
         pullRequest: withNewRealTestFailures(
           "census > drops a unit the tree no longer has",
           4,
+          "census > drops a unit the tree no longer had",
+          "census > keeps a unit the tree no longer has",
         ),
       }))).toEqual([]);
     });

@@ -510,9 +510,7 @@ export class PatternContextValidationTransformer
   /**
    * Whether `expression` names the input parameter of the `pattern()`
    * callback it appears in: the first parameter, bound to a plain name and not
-   * a rest parameter, of a callback that is a `pattern()` callback's or of a
-   * standalone function definition, which is how a callback held in a `const`
-   * reads.
+   * a rest parameter, of a `pattern()` callback.
    */
   #isPatternInputParameter(
     expression: ts.Expression,
@@ -535,9 +533,6 @@ export class PatternContextValidationTransformer
       callback.parameters[0] !== declaration
     ) {
       return false;
-    }
-    if (isStandaloneFunctionDefinition(callback)) {
-      return true;
     }
     const semantics = getCallbackBoundarySemantics(
       callback,
@@ -751,8 +746,7 @@ export class PatternContextValidationTransformer
     }
 
     const lastStatement = func.body.statements.at(-1);
-    const diagnosticsSeen = new Set<number>();
-    const reportOnce = (
+    const report = (
       node: ts.Node,
       type:
         | "pattern-context:assignment"
@@ -762,9 +756,6 @@ export class PatternContextValidationTransformer
         | "pattern-context:var-declaration",
       message: string,
     ) => {
-      const start = node.getStart(context.sourceFile);
-      if (diagnosticsSeen.has(start)) return;
-      diagnosticsSeen.add(start);
       context.reportDiagnostic({
         severity: "error",
         type,
@@ -782,7 +773,7 @@ export class PatternContextValidationTransformer
         const isTerminalReturn = node.parent === func.body &&
           node === lastStatement;
         if (!isTerminalReturn) {
-          reportOnce(
+          report(
             node,
             "pattern-context:early-return",
             `Early returns are not supported in pattern bodies. ` +
@@ -794,7 +785,7 @@ export class PatternContextValidationTransformer
 
       if (ts.isVariableDeclarationList(node)) {
         if ((node.flags & ts.NodeFlags.Let) !== 0) {
-          reportOnce(
+          report(
             node,
             "pattern-context:let-declaration",
             `let declarations are not supported in pattern-owned callback bodies. ` +
@@ -803,7 +794,7 @@ export class PatternContextValidationTransformer
         } else if (
           (node.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) === 0
         ) {
-          reportOnce(
+          report(
             node,
             "pattern-context:var-declaration",
             `var declarations are not supported in pattern-owned callback bodies. ` +
@@ -819,7 +810,7 @@ export class PatternContextValidationTransformer
         ts.isWhileStatement(node) ||
         ts.isDoStatement(node)
       ) {
-        reportOnce(
+        report(
           node,
           "pattern-context:loop",
           `Loop statements are not supported in pattern-owned callback bodies. ` +
@@ -832,7 +823,7 @@ export class PatternContextValidationTransformer
         node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
         node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
       ) {
-        reportOnce(
+        report(
           node,
           "pattern-context:assignment",
           `Reassignment is not supported in pattern-owned callback bodies. ` +
@@ -985,21 +976,6 @@ export class PatternContextValidationTransformer
     if (ts.isGetAccessorDeclaration(node)) return "getter";
     if (ts.isSetAccessorDeclaration(node)) return "setter";
     return "method";
-  }
-
-  #getStaticMemberName(name: ts.PropertyName): string | undefined {
-    if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name)) {
-      return name.text;
-    }
-    if (ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) {
-      return name.text;
-    }
-    if (
-      ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression)
-    ) {
-      return name.expression.text;
-    }
-    return undefined;
   }
 
   /**
@@ -1214,37 +1190,23 @@ export class PatternContextValidationTransformer
    * - Move the reactive operation out of the standalone function
    * - Use patternTool() which handles closure capture automatically
    *
-   * Exception: Functions passed inline to patternTool() are handled by the
-   * patternTool transformer and don't need validation here.
-   *
-   * Limitation: This check is purely syntactic — it only recognizes functions
-   * passed *inline* as the first argument to patternTool(). If a function is
-   * defined separately and then passed to patternTool(), e.g.:
+   * A function passed inline to patternTool() is a call argument, not a
+   * standalone definition, so it never reaches this check. The check is
+   * syntactic: a function defined separately and then passed to
+   * patternTool(), e.g.:
    *
    *   const myFn = ({ query }) => { return computed(...) };
    *   const tool = patternTool(myFn);
    *
-   * ...the validator will still flag myFn, because it can't trace dataflow to
-   * see that it ends up as a patternTool argument. The workaround is to inline
-   * the function into the patternTool() call.
+   * is still flagged, because the check does not trace dataflow to see that
+   * it ends up as a patternTool argument. The workaround is to inline the
+   * function into the patternTool() call.
    */
   #validateStandaloneFunction(
     func: ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration,
     context: TransformationContext,
     checker: ts.TypeChecker,
   ): void {
-    // Skip if this function is passed to patternTool()
-    if (!ts.isFunctionDeclaration(func)) {
-      const boundarySemantics = getCallbackBoundarySemantics(
-        func,
-        checker,
-        context,
-      );
-      if (boundarySemantics.isPatternToolCallback) {
-        return;
-      }
-    }
-
     // Walk the function body looking for reactive operations
     const visitBody = (node: ts.Node): void => {
       // Skip nested function definitions - they have their own scope
@@ -1344,24 +1306,6 @@ export class PatternContextValidationTransformer
       return true;
     }
 
-    if (ts.isParameter(node.parent) && node.parent.name === node) {
-      return true;
-    }
-
-    if (
-      ts.isFunctionDeclaration(node.parent) &&
-      node.parent.name === node
-    ) {
-      return true;
-    }
-
-    if (
-      ts.isFunctionExpression(node.parent) &&
-      node.parent.name === node
-    ) {
-      return true;
-    }
-
     if (
       ts.isJsxOpeningElement(node.parent) ||
       ts.isJsxClosingElement(node.parent) ||
@@ -1375,12 +1319,9 @@ export class PatternContextValidationTransformer
 
   #isInsideTypeNode(node: ts.Node): boolean {
     let current: ts.Node | undefined = node.parent;
-    while (current) {
+    while (current && !ts.isExpression(current)) {
       if (this.#isTypeNode(current)) {
         return true;
-      }
-      if (ts.isExpression(current)) {
-        return false;
       }
       current = current.parent;
     }
@@ -1423,17 +1364,15 @@ export class PatternContextValidationTransformer
       return false;
     }
 
-    let current: ts.Node | undefined = declaration.parent;
-    while (current) {
+    for (
+      let current = declaration.parent;
+      !ts.isSourceFile(current);
+      current = current.parent
+    ) {
       if (ts.isFunctionLike(current)) {
         return true;
       }
-      if (ts.isSourceFile(current)) {
-        return false;
-      }
-      current = current.parent;
     }
-
     return false;
   }
 

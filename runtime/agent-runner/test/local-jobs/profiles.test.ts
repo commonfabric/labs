@@ -1,11 +1,12 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
+  type LocalJobNarrowing,
   type LocalJobProfile,
   narrowLocalJobProfile,
   readLocalJobProfiles,
 } from "../../src/local-jobs/profiles.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A profile as a host file states it. */
 const ASK = {
@@ -81,6 +82,14 @@ describe("local-jobs/profiles", () => {
       });
     });
 
+    it("reads a command endpoint that names no relevant commands as naming none", async () => {
+      const commands = { url: ASK.commands.url, actor: ASK.commands.actor };
+      const profile = (await read({ ask: { ...ASK, commands } })).get("ask")!;
+
+      expect(profile.commands).toEqual(commands);
+      expect(profile.commands).not.toHaveProperty("relevant");
+    });
+
     it("retains host model bounds and refuses widening them", async () => {
       const profile = (await read({
         ask: { ...ASK, maxInputBytes: 65536, maxOutputTokens: 8192 },
@@ -109,6 +118,68 @@ describe("local-jobs/profiles", () => {
       }
     });
 
+    it("keeps a shared cache affinity key a request cannot drop, and refuses an empty one", async () => {
+      const profiles = await read({
+        brief: { ...ASK, cacheAffinityKey: "loom-brief" },
+        ask: ASK,
+      });
+      const brief = profiles.get("brief")!;
+      expect(brief.cacheAffinityKey).toBe("loom-brief");
+      expect("cacheAffinityKey" in profiles.get("ask")!).toBe(false);
+      expect(narrowLocalJobProfile(brief, { maxModelTurns: 4 })).toMatchObject({
+        profile: { cacheAffinityKey: "loom-brief" },
+      });
+      for (const bad of ["", "  ", 7, null]) {
+        await expect(read({ ask: { ...ASK, cacheAffinityKey: bad } })).rejects
+          .toThrow("cacheAffinityKey");
+      }
+    });
+
+    it("keeps the model provider a profile names, which a request can neither set nor change", async () => {
+      const profiles = await read({
+        pinned: { ...ASK, modelProvider: "openai-codex", maxOutputTokens: 64 },
+        ask: ASK,
+      });
+      const pinned = profiles.get("pinned")!;
+      const ask = profiles.get("ask")!;
+      expect(pinned.modelProvider).toBe("openai-codex");
+      expect("modelProvider" in ask).toBe(false);
+      // A stand-in for a request body carrying a field no request may set.
+      const asking = {
+        maxModelTurns: 4,
+        modelProvider: "openai-compatible-gateway",
+      } as LocalJobNarrowing;
+      expect(narrowLocalJobProfile(pinned, asking)).toMatchObject({
+        profile: { modelProvider: "openai-codex", maxModelTurns: 4 },
+      });
+      expect(narrowLocalJobProfile(ask, asking)).toEqual({
+        profile: { ...ask, maxModelTurns: 4 },
+      });
+    });
+
+    it("refuses a request that names a bound under a profile pinned to the gateway", async () => {
+      const profiles = await read({
+        gateway: { ...ASK, modelProvider: "openai-compatible-gateway" },
+        codex: { ...ASK, modelProvider: "openai-codex" },
+      });
+      for (const bound of [{ maxInputBytes: 4096 }, { maxOutputTokens: 64 }]) {
+        expect(narrowLocalJobProfile(profiles.get("gateway")!, bound))
+          .toEqual({
+            refusal:
+              "The profile runs on `openai-compatible-gateway`, which cannot verify `maxInputBytes` or `maxOutputTokens`, so a request may name neither.",
+          });
+        expect(narrowLocalJobProfile(profiles.get("codex")!, bound))
+          .toMatchObject({ profile: bound });
+      }
+    });
+
+    it("refuses a model provider `cf-harness` does not accept, naming the ones it does", async () => {
+      await expect(read({ ask: { ...ASK, modelProvider: "anthropic" } }))
+        .rejects.toThrow(
+          "Local job profile `ask`: `modelProvider` must be one of openai-compatible-gateway, openai-codex.",
+        );
+    });
+
     it("reads a browser host grant, and leaves a withheld one out", async () => {
       const profiles = await read({
         ask: { ...ASK, browserHost: true },
@@ -128,6 +199,11 @@ describe("local-jobs/profiles", () => {
           "carry",
         ),
       ).toEqual({ ...CARRY, patternIndexPublish: true });
+      expect(
+        (await read({ carry: { ...CARRY, patternIndexOrigin: "agent" } })).get(
+          "carry",
+        ),
+      ).toEqual({ ...CARRY, patternIndexOrigin: "agent" });
     });
 
     it("reads a fabric session with no pattern index or subagents", async () => {
@@ -214,6 +290,25 @@ describe("local-jobs/profiles", () => {
       ],
       ["a model that is not a string", { ...ASK, model: 7 }, "`model`"],
       [
+        "a model provider it does not know",
+        { ...ASK, modelProvider: "anthropic" },
+        "`modelProvider`",
+      ],
+      [
+        "a model provider that is not a string",
+        { ...ASK, modelProvider: 7 },
+        "`modelProvider`",
+      ],
+      [
+        "model call bounds on a provider that cannot verify them",
+        {
+          ...ASK,
+          modelProvider: "openai-compatible-gateway",
+          maxOutputTokens: 64,
+        },
+        "`maxInputBytes` and `maxOutputTokens`",
+      ],
+      [
         "a reasoning effort it does not know",
         { ...ASK, reasoningEffort: "extreme" },
         "`reasoningEffort`",
@@ -253,6 +348,24 @@ describe("local-jobs/profiles", () => {
         "a publish flag that is not true or false",
         { ...CARRY, patternIndexPublish: "no" },
         "`patternIndexPublish`",
+      ],
+      [
+        "an origin other than agent",
+        { ...CARRY, patternIndexOrigin: "self" },
+        '`patternIndexOrigin` must be "agent"',
+      ],
+      [
+        "an origin with no pattern index",
+        {
+          ...carryWithout(
+            "patternIndexUrl",
+            "patternIndexPublish",
+            "subagentProfiles",
+          ),
+          tools: ["run_pattern"],
+          patternIndexOrigin: "agent",
+        },
+        "`patternIndexOrigin` needs `patternIndexUrl`",
       ],
       [
         "a publish flag with no pattern index",

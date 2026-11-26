@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type BreakRegistryEntry,
@@ -6,6 +5,7 @@ import {
   deriveRequiredPatternKeys,
   guardBreakRegistryEntries,
   guardUnevaluableExemptions,
+  judgeBreakRegistries,
   recordExistsUnder,
 } from "./pattern-break-registry-guards.ts";
 import { UNEVALUABLE_PATTERNS } from "./pattern-compat-unevaluable.ts";
@@ -13,6 +13,7 @@ import {
   DEFAULT_APP_PATTERN_SOURCE,
   HOME_PATTERN_SOURCE,
 } from "../runtime/piece/src/system-pattern-url.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const entry = (overrides: Partial<BreakRegistryEntry>): BreakRegistryEntry => ({
   registry: "pattern-compat-accepted-breaks",
@@ -355,5 +356,86 @@ describe("pattern-break-registry-guards", () => {
       requiredPatternKeys: (required as { keys: ReadonlySet<string> }).keys,
       recordExists: recordExistsUnder(),
     })).toEqual([]);
+  });
+
+  describe("judgeBreakRegistries()", () => {
+    const required = "apps/required/main.tsx";
+    const requiredUrl = `https://example.com/api/patterns/${required}`;
+
+    it("returns the required keys when every shipped entry is permitted", () => {
+      expect(judgeBreakRegistries({})).toEqual(
+        deriveRequiredPatternKeys(
+          [HOME_PATTERN_SOURCE, DEFAULT_APP_PATTERN_SOURCE],
+        ),
+      );
+    });
+
+    it("returns the unmapped report for a system URL naming no pattern", () => {
+      const judged = judgeBreakRegistries({
+        systemPatternUrls: ["https://example.com/elsewhere.tsx"],
+      });
+
+      expect("error" in judged && judged.error).toContain(
+        "https://example.com/elsewhere.tsx",
+      );
+    });
+
+    it("returns the required keys when no entry names a required pattern", () => {
+      expect(judgeBreakRegistries({
+        systemPatternUrls: [requiredUrl],
+        entries: [entry({})],
+        recordExists: () => true,
+      })).toEqual({ keys: new Set([required]) });
+    });
+
+    it("returns one finding for an entry naming a required pattern", () => {
+      const named = entry({ pattern: required });
+
+      expect(judgeBreakRegistries({
+        systemPatternUrls: [requiredUrl],
+        entries: [named],
+        recordExists: () => true,
+      })).toEqual({
+        error: "1 pattern-exemption entry is not permitted:\n\n" +
+          `  ${named.registry}: ${required}\n` +
+          "    names a required pattern — an auto-updating root takes an " +
+          "accepted break only under a `requiredPatternOverride` naming who " +
+          "ruled it",
+      });
+    });
+
+    it("returns every finding, the unevaluable list's included, when asked to judge it", () => {
+      const judged = judgeBreakRegistries({
+        systemPatternUrls: [requiredUrl],
+        entries: [entry({})],
+        recordExists: () => false,
+        unevaluable: new Set([required]),
+      });
+
+      expect("error" in judged && judged.error).toMatch(
+        /^2 pattern-exemption entries are not permitted:\n\n/,
+      );
+      expect("error" in judged && judged.error).toContain("does not exist");
+      expect("error" in judged && judged.error).toContain(
+        `  pattern-compat-unevaluable: ${required}\n`,
+      );
+    });
+  });
+
+  describe("recordExistsUnder()", () => {
+    it("returns true for a file under the root and false for anything else", async () => {
+      const root = await Deno.makeTempDir({ prefix: "registry-guards-" });
+      try {
+        await Deno.mkdir(`${root}/docs`);
+        await Deno.writeTextFile(`${root}/docs/record.md`, "");
+        const recordExists = recordExistsUnder(root);
+
+        expect(recordExists("docs/record.md")).toBe(true);
+        expect(recordExists("docs/absent.md")).toBe(false);
+        expect(recordExists("docs")).toBe(false);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
   });
 });

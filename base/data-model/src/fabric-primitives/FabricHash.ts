@@ -13,7 +13,11 @@ import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
-import { isInterchangeTag, ProblematicValue } from "@/codec-common";
+import {
+  hasOnlyKeys,
+  isInterchangeTag,
+  ProblematicValue,
+} from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
@@ -157,6 +161,9 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
     Object.freeze(this.prototype);
   }
 
+  /** The keys a state holds in either format, which the codecs read whole. */
+  static #STATE_KEYS: readonly string[] = Object.freeze(["tag", "hash"]);
+
   static #jsonCodec = Object.freeze(
     new (class HashCodec extends BaseNonterminalCodec<never, FabricHashState> {
       /** Constructs an instance. */
@@ -178,10 +185,13 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
        * @inheritDoc
        *
        * An algorithm tag outside the general tag syntax is refused along with
-       * the rest of a malformed state.
+       * the rest of a malformed state, and so is a state holding any key
+       * besides `tag` and `hash`.
        */
       canDecode(state: FabricValue): state is FabricHashState {
-        return isPlainObject(state) && Object.hasOwn(state, "tag") &&
+        return isPlainObject(state) &&
+          hasOnlyKeys(state, FabricHash.#STATE_KEYS) &&
+          Object.hasOwn(state, "tag") &&
           Object.hasOwn(state, "hash") && isInterchangeTag(state.tag) &&
           (typeof state.hash === "string");
       }
@@ -238,12 +248,15 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
        * @inheritDoc
        *
        * An algorithm tag outside the general tag syntax is refused along with
-       * the rest of a malformed state.
+       * the rest of a malformed state, and so is a state holding any key
+       * besides `tag` and `hash`.
        */
       canDecode(
         state: RealmCodecValue,
       ): state is { readonly tag: string; readonly hash: ArrayBuffer } {
-        return isPlainObject(state) && Object.hasOwn(state, "tag") &&
+        return isPlainObject(state) &&
+          hasOnlyKeys(state, FabricHash.#STATE_KEYS) &&
+          Object.hasOwn(state, "tag") &&
           Object.hasOwn(state, "hash") &&
           isInterchangeTag((state as { tag?: unknown }).tag) &&
           ((state as { hash?: unknown }).hash instanceof ArrayBuffer);

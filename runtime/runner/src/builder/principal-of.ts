@@ -134,7 +134,8 @@ export function principalsOf(
  * Returns the principal `target`'s value's own cell represents, by the rule
  * `cfc/written-principal.ts` states (`writtenPrincipalAt()`): the one
  * principal the label of the cell a write to `target` lands in names, when
- * the value is the whole of that cell and no link stored there leads
+ * the value is the whole of that cell, that cell is in the space of the
+ * document holding `target`'s field, and no link stored there leads
  * elsewhere, or `undefined` otherwise, and for a `target` passed as
  * `undefined`. In a reactive computation the result updates when the label
  * or the links change; in a handler, a document still loading withdraws the

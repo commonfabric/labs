@@ -71,10 +71,15 @@ describe("a served run that read a document under an unresolved grant", () => {
       return load.promise;
     };
 
+    // A serving runtime's stamper writes the entry's consequence mark into
+    // the handler's own transaction in the home space; none is installed
+    // here, so the handler writes there itself, as every drained run does.
+    const mark = runtime.getCell<number>(space, `${name}-mark`, undefined);
     const runs = { count: 0 };
     const handler: EventHandler = (actionTx) => {
       runs.count++;
       cold.withTx(actionTx).get();
+      mark.withTx(actionTx).set(runs.count);
     };
     runtime.scheduler.addEventHandler(
       handler,

@@ -240,23 +240,19 @@ const unchangedSearchOutput = (
 
 export const materializeUserContent = async (
   message: Extract<HarnessTranscriptMessage, { role: "user" }>,
-  label: string,
 ): Promise<ResponsesInputItem[]> => {
   const content: ResponsesInputItem[] = message.content.length > 0
     ? [{ type: "input_text", text: message.content }]
     : [];
   for (const attachment of message.imageAttachments ?? []) {
-    const part = await materializeImageAttachmentContentPart(attachment);
-    const partRecord = part as Record<string, unknown>;
-    const imageUrl = isObjectOrArray(partRecord.image_url)
-      ? (partRecord.image_url as Record<string, unknown>).url
-      : undefined;
-    if (typeof imageUrl !== "string") {
-      throw new Error(
-        `failed to materialize image attachment for ${label}`,
-      );
-    }
-    content.push({ type: "input_image", detail: "auto", image_url: imageUrl });
+    const { image_url } = await materializeImageAttachmentContentPart(
+      attachment,
+    );
+    content.push({
+      type: "input_image",
+      detail: "auto",
+      image_url: image_url.url,
+    });
   }
   return content;
 };
@@ -265,7 +261,6 @@ export const toResponsesInput = async (
   transcript: readonly HarnessTranscriptMessage[],
   model: string,
   providerId: string,
-  label: string,
   // Used only when the transcript carries no system message. Callers that omit
   // it send no `instructions` at all, so a run without a system prompt is not
   // silently given one.
@@ -274,11 +269,28 @@ export const toResponsesInput = async (
 ): Promise<
   { instructions: string | undefined; input: ResponsesInputItem[] }
 > => {
-  // Instructions always come from the whole transcript: pruning drops earlier
-  // turns from `input`, and the system prompt must survive that.
-  const systemText = transcript.filter((message) => message.role === "system")
-    .map((message) => message.content).join("\n\n");
-  const instructions = systemText.length > 0 ? systemText : defaultInstructions;
+  // The system prompt always comes from the whole transcript: pruning drops
+  // earlier turns from `input`, and the system prompt must survive that.
+  //
+  // The first system message is `instructions` and each later one opens
+  // `input` as its own developer message. GPT-5.6 and later cache a prompt
+  // only through the ends of whole messages, and every message in the opening
+  // developer block ends at a boundary a later request can reuse. A run that
+  // shares its first few system messages with an earlier run therefore reads
+  // them from the cache, however much the messages after them differ; text the
+  // runs share inside one message is reused only when the whole message is.
+  const systemMessages = transcript.filter((message) =>
+    message.role === "system" && message.content.length > 0
+  );
+  const instructions = systemMessages.length > 0
+    ? systemMessages[0].content
+    : defaultInstructions;
+  const layers: ResponsesInputItem[] = systemMessages.slice(1).map((
+    message,
+  ) => ({
+    role: "developer",
+    content: [{ type: "input_text", text: message.content }],
+  }));
 
   // Prune at the newest assistant turn carrying compaction: that item already
   // encodes everything before it. Starting at an assistant message keeps
@@ -299,14 +311,14 @@ export const toResponsesInput = async (
     }
   }
 
-  const input: ResponsesInputItem[] = [...carried];
+  const input: ResponsesInputItem[] = [...layers, ...carried];
   for (const [index, message] of transcript.entries()) {
     if (index < boundary) continue;
     switch (message.role) {
       case "system":
         break;
       case "user": {
-        const content = await materializeUserContent(message, label);
+        const content = await materializeUserContent(message);
         if (content.length > 0) input.push({ role: "user", content });
         break;
       }

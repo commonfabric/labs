@@ -1,12 +1,12 @@
 import {
   isLLMNativeModelToolResults,
+  type LLMContent,
   LLMGenerateObjectRequest,
   LLMGenerateObjectResponse,
   type LLMNativeModelToolResult,
   LLMRequest,
   LLMResponse,
   LLMToolCall,
-  LLMToolResult,
 } from "./types.ts";
 import { assertJsonTransportSafe } from "./schema-transport.ts";
 
@@ -24,14 +24,8 @@ export class LLMStreamError extends Error {
  * Checks CI=true (CI runners) and ENV=test (set by deno task test).
  * Evaluated once at module load — these vars never change mid-process.
  */
-const _isTestEnvironment = (() => {
-  try {
-    return Deno?.env?.get?.("CI") === "true" ||
-      Deno?.env?.get?.("ENV") === "test";
-  } catch {
-    return false;
-  }
-})();
+const _isTestEnvironment = readEnv("CI") === "true" ||
+  readEnv("ENV") === "test";
 
 const TEST_GUARD_MESSAGE =
   "LLMClient: live LLM calls are blocked in test environments. " +
@@ -58,27 +52,70 @@ export function normalizeLLMResponse(data: unknown, id: string): LLMResponse {
   } as LLMResponse;
 }
 
-function getInitialLLMUrl(): string {
-  if (typeof globalThis.location !== "undefined") {
-    return globalThis.location.protocol + "//" + globalThis.location.host +
-      "/api/ai/llm";
+/**
+ * The LLM endpoint a process starts with: the one on the host that served the
+ * page at `location`, else the one on the API at `apiUrl`, else none. An
+ * `apiUrl` that is not a URL is passed over the way a missing one is. A
+ * process with none can be given one by `setLLMUrl()`; a call can also name
+ * its own, as a runtime's builtins do for the deployment its host named.
+ */
+export function initialLLMUrl(
+  location: Pick<Location, "protocol" | "host"> | undefined,
+  apiUrl: string | undefined,
+): string | undefined {
+  // A Deno worker also has a location, but it is its module's file: URL, and
+  // a POST there fails, so only an http(s) location names the toolshed.
+  if (
+    location &&
+    (location.protocol === "http:" || location.protocol === "https:")
+  ) {
+    return location.protocol + "//" + location.host + "/api/ai/llm";
   }
-  try {
-    const apiUrl = Deno?.env?.get?.("API_URL");
-    if (apiUrl) {
-      return new URL("/api/ai/llm", apiUrl).toString();
-    }
-  } catch {
-    // Permission denied or Deno not available — fall through
+  if (apiUrl && URL.canParse(apiUrl)) {
+    return new URL("/api/ai/llm", apiUrl).toString();
   }
-  return "//api/ai/llm";
+  return undefined;
 }
 
-let llmApiUrl = getInitialLLMUrl();
+/** The environment variable `name`, where there is one to read. */
+function readEnv(name: string): string | undefined {
+  try {
+    return Deno?.env?.get?.(name);
+  } catch {
+    // Permission denied or Deno not available.
+    return undefined;
+  }
+}
+
+let llmApiUrl = initialLLMUrl(globalThis.location, readEnv("API_URL"));
 
 export const setLLMUrl = (toolshedUrl: string) => {
   llmApiUrl = new URL("/api/ai/llm", toolshedUrl).toString();
 };
+
+/**
+ * The endpoint LLM calls without a per-space endpoint are sent to, or
+ * `undefined` while this process has none.
+ */
+export const getLLMUrl = (): string | undefined => llmApiUrl;
+
+/**
+ * The endpoint a call is sent to: its own, else the process's. A call with
+ * neither is refused before anything is sent, naming what would have set one,
+ * rather than sent to a URL no fetch can resolve.
+ */
+function endpointFor(endpoint: string | URL | undefined): string {
+  const url = endpoint?.toString() ?? llmApiUrl;
+  if (url === undefined) {
+    throw new Error(
+      "LLMClient: this call names no endpoint and this process has no LLM " +
+        "endpoint. A runtime built from a deployment-facing preset names " +
+        "its own; otherwise one comes from `setLLMUrl()`, the `API_URL` " +
+        "environment variable, or the http(s) page the process runs in.",
+    );
+  }
+  return url;
+}
 
 //
 // Mock Mode for Testing
@@ -86,6 +123,41 @@ export const setLLMUrl = (toolshedUrl: string) => {
 
 type MockResponseMatcher = (request: LLMRequest) => boolean;
 type MockObjectResponseMatcher = (request: LLMGenerateObjectRequest) => boolean;
+
+/**
+ * Answers the requests an `LLMClient` makes in place of the LLM service. While
+ * one is installed with `setLLMResponder()`, every request goes to it and none
+ * reaches the network. The JSON-transport checks on schemas run first, so a
+ * responder sees only requests the service could have received.
+ */
+export interface LLMResponder {
+  /**
+   * Answers a `sendRequest()`. A streamed request carries `callback`, which
+   * the responder calls with the text so far, as the service's stream would.
+   */
+  sendRequest(
+    request: LLMRequest,
+    callback: PartialCallback | undefined,
+    abortSignal: AbortSignal | undefined,
+  ): Promise<LLMResponse>;
+
+  /** Answers a `generateObject()`. */
+  generateObject(
+    request: LLMGenerateObjectRequest,
+    abortSignal: AbortSignal | undefined,
+  ): Promise<LLMGenerateObjectResponse>;
+}
+
+let responder: LLMResponder | undefined;
+
+/**
+ * Installs `next` as the answerer of every request any `LLMClient` in this
+ * process makes, replacing the mock catalog or another responder. `undefined`
+ * removes it, and requests go to the LLM service again.
+ */
+export function setLLMResponder(next: LLMResponder | undefined): void {
+  responder = next;
+}
 
 type MockEntry =
   | { type: "sendRequest"; matcher: MockResponseMatcher; response: LLMResponse }
@@ -95,29 +167,17 @@ type MockEntry =
     response: LLMGenerateObjectResponse;
   };
 
-class MockCatalog {
+let mockGate: (() => Promise<void>) | undefined;
+
+/**
+ * The responder `enableMockMode()` installs: answers from registered mock
+ * responses, each used once, the first registered match winning.
+ */
+class MockCatalog implements LLMResponder {
   #mocks: MockEntry[] = [];
-  #enabled = false;
-
-  enable(): void {
-    this.#enabled = true;
-  }
-
-  disable(): void {
-    this.#enabled = false;
-  }
 
   clear(): void {
     this.#mocks = [];
-  }
-
-  reset(): void {
-    this.disable();
-    this.clear();
-  }
-
-  isEnabled(): boolean {
-    return this.#enabled;
   }
 
   addResponse(matcher: MockResponseMatcher, response: LLMResponse): void {
@@ -131,32 +191,45 @@ class MockCatalog {
     this.#mocks.push({ type: "generateObject", matcher, response });
   }
 
-  /**
-   * Find a matching sendRequest mock. Skips generateObject entries.
-   * Removes the matched mock (one-time use).
-   */
-  findResponse(request: LLMRequest): LLMResponse | undefined {
+  async sendRequest(
+    request: LLMRequest,
+    callback: PartialCallback | undefined,
+  ): Promise<LLMResponse> {
     const index = this.#mocks.findIndex((m) =>
       m.type === "sendRequest" && m.matcher(request)
     );
-    if (index === -1) return undefined;
-    const [mock] = this.#mocks.splice(index, 1);
-    if (mock.type === "sendRequest") return mock.response;
+    const [mock] = index === -1 ? [] : this.#mocks.splice(index, 1);
+    if (mock?.type !== "sendRequest") {
+      throw new Error(
+        "Mock mode enabled but no matching mock response found for sendRequest",
+      );
+    }
+    if (mockGate) await mockGate();
+    // The callback gets the whole text at once rather than in pieces.
+    if (callback) {
+      const content = mock.response.content;
+      const text = typeof content === "string"
+        ? content
+        : content.find((part) => part.type === "text")?.text;
+      if (text) callback(text);
+    }
+    return mock.response;
   }
 
-  /**
-   * Find a matching generateObject mock. Skips sendRequest entries.
-   * Removes the matched mock (one-time use).
-   */
-  findObjectResponse(
+  async generateObject(
     request: LLMGenerateObjectRequest,
-  ): LLMGenerateObjectResponse | undefined {
+  ): Promise<LLMGenerateObjectResponse> {
     const index = this.#mocks.findIndex((m) =>
       m.type === "generateObject" && m.matcher(request)
     );
-    if (index === -1) return undefined;
-    const [mock] = this.#mocks.splice(index, 1);
-    if (mock.type === "generateObject") return mock.response;
+    const [mock] = index === -1 ? [] : this.#mocks.splice(index, 1);
+    if (mock?.type !== "generateObject") {
+      throw new Error(
+        "Mock mode enabled but no matching mock response found for generateObject request",
+      );
+    }
+    if (mockGate) await mockGate();
+    return mock.response;
   }
 }
 
@@ -165,8 +238,6 @@ class MockCatalog {
 // Deno runs test files in separate processes by default, so this is safe
 // as long as tests within a single file don't run in parallel.
 const mockCatalog = new MockCatalog();
-
-let mockGate: (() => Promise<void>) | undefined;
 
 /**
  * Hold every matched mock response open until `gate` resolves.
@@ -204,14 +275,14 @@ export function setMockResponseGate(
  * ```
  */
 export function enableMockMode(): void {
-  mockCatalog.enable();
+  responder = mockCatalog;
 }
 
 /**
  * Disable mock mode - requests will go to the real API.
  */
 export function disableMockMode(): void {
-  mockCatalog.disable();
+  if (responder === mockCatalog) responder = undefined;
 }
 
 /**
@@ -226,8 +297,8 @@ export function clearMockResponses(): void {
  * Reset mock mode - disable and clear all responses.
  */
 export function resetMockMode(): void {
-  mockCatalog.reset();
-  mockGate = undefined;
+  disableMockMode();
+  clearMockResponses();
 }
 
 /**
@@ -337,17 +408,66 @@ export function failureHint(status: number, parameters: string): string {
   return "The LLM service turned the request down.";
 }
 
-function extractMessageText(
-  content: unknown,
+/** The text parts of a message's content, joined by spaces. */
+export function extractMessageText(
+  content: LLMContent | undefined,
 ): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((p: any) => p.type === "text")
-      .map((p: any) => p.text ?? "")
-      .join(" ");
+  if (content === undefined || typeof content === "string") {
+    return content ?? "";
   }
-  return "";
+  return content.flatMap((part) => part.type === "text" ? [part.text] : [])
+    .join(" ");
+}
+
+/**
+ * The first of `assertions` that `request` fails, described, or `undefined`
+ * when it meets them all.
+ */
+export function requestMismatch(
+  assertions: ConversationFixtureAssertions,
+  request: LLMRequest | LLMGenerateObjectRequest,
+): string | undefined {
+  if (
+    assertions.messageCount !== undefined &&
+    request.messages.length !== assertions.messageCount
+  ) {
+    return `expected ${assertions.messageCount} messages, got ${request.messages.length}`;
+  }
+  for (const needle of assertions.messagesContain ?? []) {
+    if (
+      !request.messages.some((m) =>
+        extractMessageText(m.content).includes(needle)
+      )
+    ) {
+      return `expected some message to contain "${needle}"`;
+    }
+  }
+  if (assertions.lastMessageContains !== undefined) {
+    const last = request.messages[request.messages.length - 1];
+    const text = extractMessageText(last?.content);
+    if (!text.includes(assertions.lastMessageContains)) {
+      return `expected last message to contain "${assertions.lastMessageContains}", got "${text}"`;
+    }
+  }
+  if (assertions.hasTools) {
+    const tools = "tools" in request && request.tools
+      ? Object.keys(request.tools)
+      : [];
+    for (const toolName of assertions.hasTools) {
+      if (!tools.includes(toolName)) {
+        return `expected tool "${toolName}" in request, got [${
+          tools.join(", ")
+        }]`;
+      }
+    }
+  }
+  if (
+    assertions.systemContains !== undefined &&
+    !(request.system ?? "").includes(assertions.systemContains)
+  ) {
+    return `expected system prompt to contain "${assertions.systemContains}"`;
+  }
+  return undefined;
 }
 
 function runAssertions(
@@ -356,64 +476,12 @@ function runAssertions(
   entryIndex: number,
   fixtureDescription?: string,
 ): void {
+  const mismatch = requestMismatch(assertions, request);
+  if (mismatch === undefined) return;
   const label = fixtureDescription
     ? `Fixture "${fixtureDescription}" entry ${entryIndex}`
     : `Fixture entry ${entryIndex}`;
-
-  if (assertions.messageCount !== undefined) {
-    if (request.messages.length !== assertions.messageCount) {
-      throw new Error(
-        `${label}: expected ${assertions.messageCount} messages, got ${request.messages.length}`,
-      );
-    }
-  }
-
-  if (assertions.messagesContain) {
-    for (const needle of assertions.messagesContain) {
-      const found = request.messages.some((m) =>
-        extractMessageText(m.content).includes(needle)
-      );
-      if (!found) {
-        throw new Error(
-          `${label}: expected some message to contain "${needle}"`,
-        );
-      }
-    }
-  }
-
-  if (assertions.lastMessageContains) {
-    const last = request.messages[request.messages.length - 1];
-    const text = last ? extractMessageText(last.content) : "";
-    if (!text.includes(assertions.lastMessageContains)) {
-      throw new Error(
-        `${label}: expected last message to contain "${assertions.lastMessageContains}", got "${text}"`,
-      );
-    }
-  }
-
-  if (assertions.hasTools) {
-    const tools = "tools" in request && request.tools
-      ? Object.keys(request.tools)
-      : [];
-    for (const toolName of assertions.hasTools) {
-      if (!tools.includes(toolName)) {
-        throw new Error(
-          `${label}: expected tool "${toolName}" in request, got [${
-            tools.join(", ")
-          }]`,
-        );
-      }
-    }
-  }
-
-  if (assertions.systemContains) {
-    const system = request.system ?? "";
-    if (!system.includes(assertions.systemContains)) {
-      throw new Error(
-        `${label}: expected system prompt to contain "${assertions.systemContains}"`,
-      );
-    }
-  }
+  throw new Error(`${label}: ${mismatch}`);
 }
 
 /**
@@ -433,7 +501,7 @@ function runAssertions(
  * ```
  */
 export function loadConversationFixture(fixture: ConversationFixture): void {
-  mockCatalog.enable();
+  enableMockMode();
 
   const description = fixture.description;
 
@@ -487,6 +555,17 @@ export async function loadConversationFixtureFile(
 }
 
 export class LLMClient {
+  readonly #fetch: typeof fetch | undefined;
+
+  /**
+   * Constructs a client that sends its requests with `fetchFn`. Without one it
+   * sends them with the global `fetch`. A test environment refuses a request
+   * sent with the global `fetch`, however the client was given it.
+   */
+  constructor(fetchFn?: typeof fetch) {
+    this.#fetch = fetchFn;
+  }
+
   async generateObject(
     request: LLMGenerateObjectRequest,
     abortSignal?: AbortSignal,
@@ -508,55 +587,22 @@ export class LLMClient {
     // purpose regardless of where it would have gone.
     assertJsonTransportSafe(request.schema, "The generateObject schema");
 
-    // Check for mock mode
-    if (mockCatalog.isEnabled()) {
-      const mockResponse = mockCatalog.findObjectResponse(request);
-      if (mockResponse) {
-        if (mockGate) await mockGate();
-        // Simulate async behavior
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        return mockResponse;
-      }
-      throw new Error(
-        "Mock mode enabled but no matching mock response found for generateObject request",
-      );
-    }
+    if (responder) return await responder.generateObject(request, abortSignal);
 
-    // Guard: block live calls in test environments
-    if (_isTestEnvironment) {
-      throw new Error(TEST_GUARD_MESSAGE);
-    }
-
-    const endpoint = opts?.endpoint?.toString() ?? llmApiUrl;
     // TODO(danfuzz): `assertJsonTransportSafe` above covers the SCHEMA, but
     // the request's `messages` cross unchecked: a `FabricValue` in message
     // content (assembled runner-side from live cell reads) stringifies to
     // `{}` here, silently. The payload wants the same transport-safety
     // check the schema gets.
-    const response = await fetch(endpoint + "/generateObject", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-      signal: abortSignal,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(
-        `%c[generateObject Error]%c HTTP ${response.status}\n` +
-          `Response: ${errorText}\n` +
-          `%c${failureHint(response.status, "messages, schema, model, etc.")}`,
-        "color: red; font-weight: bold",
-        "color: inherit",
-        "color: gray; font-style: italic",
-      );
-      throw new Error(
-        `HTTP error! status: ${response.status}, body: ${errorText}`,
-      );
-    }
-
-    const data = await response.json();
-    return data;
+    const response = await this.#post(
+      opts?.endpoint,
+      "/generateObject",
+      request,
+      abortSignal,
+      "generateObject",
+      "messages, schema, model, etc.",
+    );
+    return await response.json();
   }
 
   /**
@@ -596,61 +642,56 @@ export class LLMClient {
       );
     }
 
-    // Check for mock mode
-    if (mockCatalog.isEnabled()) {
-      const mockResponse = mockCatalog.findResponse(request);
-      if (mockResponse) {
-        if (mockGate) await mockGate();
-        // NOTE: Streaming simulation calls the callback once with the full
-        // text rather than delivering incremental chunks. Tests that depend on
-        // partial-chunk behavior will need a more granular mock.
-        if (callback && request.stream) {
-          let text = "";
-          if (typeof mockResponse.content === "string") {
-            text = mockResponse.content;
-          } else if (Array.isArray(mockResponse.content)) {
-            const textPart = mockResponse.content.find((p: any) =>
-              p.type === "text"
-            ) as any;
-            text = textPart?.text || "";
-          }
-
-          if (text) {
-            callback(text);
-          }
-        }
-
-        // Simulate async behavior
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        return mockResponse;
-      }
-      throw new Error(
-        "Mock mode enabled but no matching mock response found for sendRequest",
-      );
-    }
-
-    // Guard: block live calls in test environments
-    if (_isTestEnvironment) {
-      throw new Error(TEST_GUARD_MESSAGE);
+    if (responder) {
+      return await responder.sendRequest(request, callback, abortSignal);
     }
 
     // TODO(danfuzz): same gap as `generateObject` above — tool input schemas
     // are checked with `assertJsonTransportSafe`, but the request's
     // `messages`/`system` data is not, and a `FabricValue` in it stringifies
     // to `{}` here, silently.
-    const response = await fetch(opts?.endpoint?.toString() ?? llmApiUrl, {
+    const response = await this.#post(
+      opts?.endpoint,
+      "",
+      request,
+      abortSignal,
+      "generateText",
+      "messages, prompt, model, etc.",
+    );
+    return await readLLMResponse(response, callback);
+  }
+
+  /**
+   * POSTs `request` as JSON to `path` under `endpoint` (the process's endpoint
+   * where the call names none), and returns the response once it has
+   * succeeded. A failed response is logged under `label`, with a hint naming
+   * `parameters` where the request is to blame, and thrown.
+   */
+  async #post(
+    endpoint: string | URL | undefined,
+    path: string,
+    request: LLMRequest | LLMGenerateObjectRequest,
+    abortSignal: AbortSignal | undefined,
+    label: string,
+    parameters: string,
+  ): Promise<Response> {
+    const send = this.#fetch ?? fetch;
+    // Block live calls in test environments.
+    if (_isTestEnvironment && send === globalThis.fetch) {
+      throw new Error(TEST_GUARD_MESSAGE);
+    }
+    const response = await send(endpointFor(endpoint) + path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
       signal: abortSignal,
     });
-
     if (!response.ok) {
       const errorText = await response.text();
       console.error(
-        `%c[generateText Error]%c HTTP ${response.status}\n` +
+        `%c[${label} Error]%c HTTP ${response.status}\n` +
           `Response: ${errorText}\n` +
-          `%c${failureHint(response.status, "messages, prompt, model, etc.")}`,
+          `%c${failureHint(response.status, parameters)}`,
         "color: red; font-weight: bold",
         "color: inherit",
         "color: gray; font-style: italic",
@@ -659,8 +700,7 @@ export class LLMClient {
         `HTTP error! status: ${response.status}, body: ${errorText}`,
       );
     }
-
-    return await readLLMResponse(response, callback);
+    return response;
   }
 }
 
@@ -706,7 +746,6 @@ function assembleLLMReply(id: string, callback?: PartialCallback) {
   let buffer = "";
   let text = "";
   const toolCalls: LLMToolCall[] = [];
-  const toolResults: LLMToolResult[] = [];
   let nativeModelToolResults: LLMNativeModelToolResult[] | undefined;
 
   const takeEvent = (line: string, place: "line" | "final") => {
@@ -725,12 +764,6 @@ function assembleLLMReply(id: string, callback?: PartialCallback) {
           id: event.toolCallId,
           name: event.toolName,
           input: event.args,
-        });
-      } else if (event.type === "tool-result") {
-        toolResults.push({
-          toolCallId: event.toolCallId,
-          result: event.result,
-          error: event.error,
         });
       } else if (event.type === "finish") {
         if (isLLMNativeModelToolResults(event.nativeModelToolResults)) {

@@ -305,10 +305,7 @@ function generationDigestValue(
   }
 }
 
-function canonicalLabelView(
-  labelView: CfcLabelView | undefined,
-): CfcLabelView | undefined {
-  if (!labelView) return undefined;
+function canonicalLabelView(labelView: CfcLabelView): CfcLabelView {
   return {
     version: 1,
     entries: [...labelView.entries].map((entry) => ({

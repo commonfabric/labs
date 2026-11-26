@@ -122,14 +122,19 @@ agent's tool calls:
 
 ```bash
 export CF_API_URL='https://estuary.saga-castor.ts.net'
-export CF_SPACE='topics-dev-476ea34f'
-export TOPICS_BOARD='/of:fid1:jtdD-DSmuGrLGSt_6sJ3DS_7jmerrkKTEnW3fZV9e34'
+export CF_SPACE='did:key:z6MknaHtzD7bZjEfbF4nAbzQBQcERadRVt91eYRtyjaTKbYK'
+export TOPICS_BOARD='/of:fid1:rMKK3pYbF5IWa7KQL5oe-nd7WyFceQhXjOl2lyWwPVo'
 export CF_IDENTITY="${CF_IDENTITY:-$HOME/.config/commonfabric/identity.key}"
 ```
 
 There, the running piece is authoritative. Estuary routinely trails the
 checkout, so discover a piece's contract before calling a verb on it, and read
 back what a call wrote.
+
+The board's space has no name: its DID is its address. A link whose space is
+`topics-dev-476ea34f` points at the board's earlier space, which is kept
+read-only as an archive. Its Topics are all on the current board under the same
+numbers, so find one there by its number, and write to it there.
 
 | Read                            | When you are                                                                                                              |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |

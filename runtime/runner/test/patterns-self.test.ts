@@ -2,12 +2,17 @@
 // self-referential data structures, serialization, and type inference.
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 // Import types from public API for compile-time type tests
 import type { Reactive } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { createBuilder } from "../src/builder/factory.ts";
 import { type JSONSchema, SELF } from "../src/builder/types.ts";

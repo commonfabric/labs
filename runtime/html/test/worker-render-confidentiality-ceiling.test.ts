@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { normalizeRenderConfidentialityCeiling } from "../src/worker/types.ts";
 
@@ -9,6 +9,10 @@ describe("normalizeRenderConfidentialityCeiling()", () => {
 
   it("returns undefined for an absent ceiling", () => {
     expect(normalizeRenderConfidentialityCeiling(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined for `null`, a host's declaration of no ceiling", () => {
+    expect(normalizeRenderConfidentialityCeiling(null)).toBeUndefined();
   });
 
   it("keeps the atoms and caveat kinds of a well-formed ceiling", () => {
@@ -37,7 +41,6 @@ describe("normalizeRenderConfidentialityCeiling()", () => {
       const [name, value] of [
         ["a string", "medical"],
         ["a number", 1],
-        ["null", null],
         ["a boolean", true],
       ] as const
     ) {

@@ -17,7 +17,6 @@
  * to land.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { FileSystemHarnessArtifactStore } from "../../src/artifacts.ts";
@@ -34,6 +33,7 @@ import {
   scriptedModel,
   ScriptedSandboxRuntime,
 } from "./support/episode.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** What the sandbox printed, which an unmediated enforcing run must withhold. */
 const UNMEDIATED_STDOUT = "unmediated-output-line";

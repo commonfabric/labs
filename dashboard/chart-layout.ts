@@ -30,6 +30,7 @@ export function tileContentRules(
   .drill{min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:10px;color:var(--text-muted);letter-spacing:0;text-transform:none}
   .hfacet{min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:var(--text-muted);letter-spacing:0;text-transform:none;font-variant-numeric:tabular-nums;margin-right:8px}
   .big{font-size:30px;font-weight:600;margin:0;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .big small{font-size:13px;font-weight:400;color:var(--text-muted)}
   .sub{font-size:13px;color:var(--text-muted);margin:5px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .running{display:inline-flex;align-items:center;gap:5px;font-size:10px;color:var(--text-muted);letter-spacing:.02em;text-transform:none;margin-top:10px}
   .lbl .running{margin-top:0;margin-right:8px}

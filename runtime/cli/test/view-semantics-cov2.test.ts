@@ -23,6 +23,7 @@ import {
 import type { DiffMaps } from "../lib/view/diffdoc.ts";
 import { typeScriptLanguage } from "../lib/view/languages/typescript/language.ts";
 import type { Document } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const CWD = Deno.cwd();
 
@@ -75,7 +76,7 @@ function cwdThatThrows(): string {
 // createSemantics: setup-time guards
 //
 
-Deno.test("semantics: a text that throws while splitting yields no service", () => {
+test("semantics: a text that throws while splitting yields no service", () => {
   // `splitSections` reads `text.length` first; that throw is caught and the
   // factory returns null — the documented "returns null only when even the
   // lightweight setup is impossible" path.
@@ -83,7 +84,7 @@ Deno.test("semantics: a text that throws while splitting yields no service", () 
   assertEquals(sem, undefined, "an unsplittable text gives no service at all");
 });
 
-Deno.test("semantics: an un-discoverable config falls back to an empty import map", () => {
+test("semantics: an un-discoverable config falls back to an empty import map", () => {
   // A cwd the path helpers reject makes `discoverConfig` throw; `safe()` returns
   // undefined and the `?? { importMap: {}, root: cwd }` fallback supplies an
   // empty map. The service is still constructed (non-null), it simply cannot
@@ -97,16 +98,17 @@ Deno.test("semantics: an un-discoverable config falls back to an empty import ma
   assertEquals(sem!.typeAt(nameOffsetOf(doc, "y")), null);
 });
 
-Deno.test("semantics: a build failure latches and every later query stays silent", () => {
+test("semantics: a build failure latches and every later query stays silent", () => {
   // The bad cwd makes the compiler host throw inside build(); the catch sets
-  // `failed = true`. prewarm() (the first build attempt) latches it; the
-  // following typeAt/definitionOf/fileLines calls hit the `if (failed)` short
-  // circuit and the `if (!prog)` guard, all returning their empty answers.
+  // `failed = true`. The first typeAt latches it; the following
+  // typeAt/definitionOf/fileLines calls hit the `if (failed)` short circuit
+  // and the `if (!prog)` guard, all returning their empty answers.
   const blob = `// transformed: /m.ts\nconst x = 1;\nconst y = x;`;
   const doc = parseDocument(blob);
   const sem = createSemantics(blob, { cwd: cwdThatThrows() })!;
-  sem.prewarm(); // first build(): host throws, failed latches
-  // Second build() (via typeAt) returns undefined immediately through `failed`.
+  // First build(): host throws, failed latches.
+  assertEquals(sem.typeAt(nameOffsetOf(doc, "x")), null);
+  // Second build() returns undefined immediately through `failed`.
   assertEquals(sem.typeAt(nameOffsetOf(doc, "y")), null);
   assertEquals(sem.definitionOf(nameOffsetOf(doc, "y")), []);
   // fileLines does not depend on the program, but the bad root still rejects
@@ -118,27 +120,25 @@ Deno.test("semantics: a build failure latches and every later query stays silent
 // createSemantics: per-query catch wrappers
 //
 
-Deno.test("semantics: typeAt swallows a throw raised while locating the section", () => {
-  // The program builds; then an offset that throws on numeric coercion makes
-  // `sectionAt` throw inside typeAt's try. The catch returns null.
+test("semantics: typeAt swallows a throw raised while locating the section", () => {
+  // An offset that throws on numeric coercion makes `sectionAt` throw inside
+  // typeAt's try. The catch returns null.
   const blob = `// transformed: /m.ts\nconst x: number = 1;\nconst y = x;`;
   const sem = createSemantics(blob, { cwd: CWD })!;
-  sem.prewarm(); // build succeeds, so the throw is post-build inside the query
   assertEquals(sem.typeAt(offsetThatThrows()), null);
 });
 
-Deno.test("semantics: definitionOf swallows a throw and caches the empty result", () => {
+test("semantics: definitionOf swallows a throw and caches the empty result", () => {
   // Same hostile offset, but through definitionOf: the throw lands in its try,
   // the catch resets `out` to [], and the empty array is memoized.
   const blob = `// transformed: /m.ts\nconst x: number = 1;\nconst y = x;`;
   const sem = createSemantics(blob, { cwd: CWD })!;
-  sem.prewarm();
   const bad = offsetThatThrows();
   const first = sem.definitionOf(bad);
   assertEquals(first, [], "a throw during resolution yields an empty list");
 });
 
-Deno.test("semantics: fileLines swallows a throw from the containment check", () => {
+test("semantics: fileLines swallows a throw from the containment check", () => {
   // A path that throws when stringified makes the in-workspace check throw
   // inside fileLines' try; the catch returns null.
   const blob = `// transformed: /m.ts\nconst x = 1;`;
@@ -150,7 +150,7 @@ Deno.test("semantics: fileLines swallows a throw from the containment check", ()
 // createDiffSemantics: setup-time fallback
 //
 
-Deno.test("diff semantics: an un-discoverable config still runs the fallback", () => {
+test("diff semantics: an un-discoverable config still runs the fallback", () => {
   // With a cwd the path helpers reject, `discoverConfig` throws and the diff
   // factory takes its `?? { importMap: {}, root: cwd }` fallback before the
   // root-file containment check runs against that (now invalid) root. The check
@@ -179,7 +179,7 @@ Deno.test("diff semantics: an un-discoverable config still runs the fallback", (
   }
 });
 
-Deno.test("diff semantics: fileLines swallows a throw from the containment check", () => {
+test("diff semantics: fileLines swallows a throw from the containment check", () => {
   // A real, buildable diff service; then a path that throws on stringify makes
   // the workspace-containment check throw inside fileLines' try. The catch
   // returns null.

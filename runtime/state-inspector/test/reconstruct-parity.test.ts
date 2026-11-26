@@ -17,6 +17,7 @@ import {
   read,
 } from "@commonfabric/memory/v2/engine";
 import type { FabricValue } from "@commonfabric/api";
+import { test } from "@commonfabric/test-support/test";
 
 import { openSpace } from "../db.ts";
 import { reconstructDocument } from "../reconstruct.ts";
@@ -44,7 +45,7 @@ function assertParity(
   }
 }
 
-Deno.test("reconstruct parity with memory-v2 engine", async (t) => {
+test("reconstruct parity with memory-v2 engine", async (t) => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const engine = await open({ url: toFileUrl(path) });
   try {
@@ -144,8 +145,8 @@ Deno.test("reconstruct parity with memory-v2 engine", async (t) => {
         }],
       },
     });
-    // The same id, set on the PARENT before the fork would-be base — prove the
-    // child patch does NOT inherit it.
+    // The same id, set on the PARENT before the fork: the fork holds what its
+    // parent held at the fork point, so the child's patch replays over it.
     applyCommit(engine, {
       sessionId: "session:p:s",
       commit: {
@@ -174,9 +175,14 @@ Deno.test("reconstruct parity with memory-v2 engine", async (t) => {
     });
 
     await t.step(
-      "child-local patch reconstructs within the child (not inherited base)",
+      "a fork's patch replays over the document it inherits at the fork point",
       () => {
         const e = read(engine, { id: "entity:inheritedbase", branch: "feat2" });
+        assertEquals(
+          e,
+          { value: { parent: 1, child: 2 } },
+          "engine sanity: the fork's patch applies over the inherited document",
+        );
         assertParity(path, "entity:inheritedbase", "feat2", e);
         // parent unaffected
         assertParity(

@@ -366,7 +366,7 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
                 <cf-cell-link $cell={gridView} />
               </cf-hstack>
 
-              <cf-table full-width hover>
+              <cf-table fullWidth hover>
                 <tbody>
                   {visiblePieces.map((piece) => {
                     const isNotebook = computed(() => {

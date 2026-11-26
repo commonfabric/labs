@@ -3,6 +3,7 @@ import type {
   CollectionIndexData,
   CollectionIndexKey,
   CollectionIndexKeyEntry,
+  DID,
   GroupIndex,
   KeyIndex,
   ReadonlyCell,
@@ -41,6 +42,7 @@ import {
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { isCfLinkColumn } from "@commonfabric/memory/sqlite/columns";
 import {
+  isSqliteDbRef,
   type ScopeKeyIdentity,
   type SqliteDbRef,
   type SqliteParamsWire,
@@ -96,13 +98,32 @@ import {
 } from "./builder/types.ts";
 import type { AggregateOperation } from "./builtins/aggregate.ts";
 import { listResultSchema } from "./builtins/list-result-schema.ts";
+import {
+  type IndexedCollectionDescriptor,
+  indexedCollectionDescriptorOf,
+  indexedKindOf,
+} from "./builtins/indexed-collection/definition.ts";
+import {
+  addMemberRows,
+  deleteMemberRows,
+  type IndexedCollectionWriter,
+  maintenanceRevisionCell,
+  memberKeysOf,
+  type MemberRows,
+  nextMaintenanceRevision,
+  projectMember,
+} from "./builtins/indexed-collection/maintenance.ts";
+import { listIndexedCollection } from "./builtins/indexed-collection/registry.ts";
 import { encodeCellToSigilString } from "./builtins/sqlite/cf-link-codec.ts";
 import { sqliteQueryNodeFactory } from "./builtins/sqlite/query-node.ts";
 import { checkSqliteRowLabelWrite } from "./builtins/sqlite/row-label-write.ts";
 import { checkSqliteWriteCeiling } from "./builtins/sqlite/write-ceiling.ts";
 import { type Cancel, isCancel, useCancelGroup } from "./cancel.ts";
 import { ContextualFlowControl, declaredSchemaScope } from "./cfc.ts";
-import { cfcSchemaGivesNoShape } from "./cfc/schema-primitives.ts";
+import {
+  cfcSchemaDeclaresArray,
+  cfcSchemaGivesNoShape,
+} from "./cfc/schema-primitives.ts";
 import {
   cfcAcquisitionViewForDereferenceTraces,
   type CfcLabelView,
@@ -120,6 +141,8 @@ import { collectConsumedLabel } from "./cfc/prepare.ts";
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
+  StoredCfcMetadataError,
+  storesCfcEnvelope,
 } from "./cfc/metadata.ts";
 import { cfcConfidentialityForObservationNode } from "./cfc/observation.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
@@ -137,7 +160,11 @@ import {
   portableSnapshotLinks,
   resolveImmutableValueLinks,
 } from "./data-uri.ts";
-import { actingForEmission, waveRunContextOf } from "./executor/wave.ts";
+import {
+  actingForEmission,
+  waveRunContextOf,
+  waveSettlementOf,
+} from "./executor/wave.ts";
 import { immutableCellsFor, pinImmutableCell } from "./immutable-cell.ts";
 import { areLinksSame } from "./link-equality.ts";
 import {
@@ -221,6 +248,7 @@ import {
 } from "./storage/reactivity-log.ts";
 import { getTransactionReadActivities } from "./storage/transaction-inspection.ts";
 import { fromURI, toURI } from "./uri-utils.ts";
+import { writtenPrincipalAt } from "./written-principal.ts";
 
 ensureNotRenderThread();
 
@@ -251,9 +279,21 @@ type SinkOptions = {
    * links, as `collectConsumedLabel()` joins them for a transaction, and pass
    * the join to the callback as a third argument. The label metadata is read
    * on the sink's transaction, so a label-only write to anything the read
-   * reached re-fires the sink. Off by default.
+   * reached re-fires the sink. Where a document the read reached stores
+   * labels this build cannot interpret, the callback is handed no join, and
+   * no value or the projection of none, and the sink stays subscribed. Off
+   * by default.
    */
   includeConsumedLabel?: boolean;
+
+  /**
+   * Read the principal the own cell of the sink's value represents
+   * (`writtenPrincipalAt()`) on the sink's transaction, and pass it to the
+   * callback as a fourth argument. The links to that cell and its label are
+   * then dependencies of the sink, so a relink or a relabel runs it again.
+   * Off by default.
+   */
+  includeWrittenPrincipal?: boolean;
 };
 
 /** The labels a sink's read consumed; see `SinkOptions.includeConsumedLabel`. */
@@ -381,7 +421,10 @@ const storedSchemaForWritePolicyInput = (
     type: "application/json",
     path: [],
   }, {
-    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    meta: Object.freeze({
+      ...ignoreReadForScheduling,
+      ...internalVerifierRead,
+    }),
   });
   if (!isObjectOrArray(stored) || stored.value === undefined) {
     return undefined;
@@ -415,13 +458,6 @@ export const recordRelevantSchemaWritePolicyInput = (
   );
 };
 
-/** Whether `schema` declares an array: by type, or by describing items. */
-const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
-  isObjectOrArray(schema) &&
-  (schema.type === "array" ||
-    (Array.isArray(schema.type) && schema.type.includes("array")) ||
-    schema.items !== undefined || schema.prefixItems !== undefined);
-
 /**
  * Whether an item write under a missing parent, which the stored envelope
  * describes as `schema`, writes an item of an array. The storage write creates
@@ -434,7 +470,7 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
  * the envelope's checks of the member it declares there apply to the write.
  */
 const missingParentIsArray = (schema: JSONSchema | undefined): boolean =>
-  cfcSchemaGivesNoShape(schema) || schemaDeclaresArray(schema);
+  cfcSchemaGivesNoShape(schema) || cfcSchemaDeclaresArray(schema);
 
 /** The kinds of value {@link schemaAdmitsLength} tells apart. */
 type ValueKind = "array" | "string" | "object" | "other";
@@ -522,11 +558,13 @@ const schemaAdmitsLength = (schema: JSONSchema): boolean => {
 /**
  * The schema write-policy input for a write landing at an item of an array:
  * the array itself, with the item's schema as its `items`. A candidate
- * envelope spells each segment of an input's path as a named property, and
- * the stored envelope spells the array as an array, so an input recorded at
- * the index alone could never merge with it — and a claim on the items is
- * declared at `*`, which an input at the array reaches and one at the index
- * would answer for by a type clash instead.
+ * envelope places an index of an input's path as an item of an array only
+ * where the stored envelope declares an array above it, and as a named
+ * property anywhere else. An input recorded at the index of an array the
+ * stored envelope gives no shape, or of one in a document that stores no
+ * envelope yet, would therefore describe the array as an object, in the
+ * envelope the write persists. Recorded at the array, it describes what the
+ * parent holds.
  *
  * The item's schema is the writer's where it holds one, else the stored
  * envelope's at the item — a writer through a bare link answers to the
@@ -575,11 +613,11 @@ const arrayItemPolicyInput = (
   // too.
   const held = tx.readValueOrThrow(parent, {
     nonRecursive: true,
-    meta: {
+    meta: Object.freeze({
       ...ignoreReadForScheduling,
       ...internalVerifierRead,
       ...excludeReadFromConflict,
-    },
+    }),
   });
   if (
     !Array.isArray(held) &&
@@ -626,6 +664,14 @@ export const recordWriteDestinationPolicyInput = (
   schema: JSONSchema | undefined,
   schemaRole?: "output",
 ): void => {
+  // A write whose schema declares no policy, into a document that stores no
+  // envelope, has no policy input at the destination or at any array above
+  // it, so it reads no parent and builds no array schema.
+  if (
+    !schemaHasIfc(resolveSchema(schema)) && !storesCfcEnvelope(tx, destination)
+  ) {
+    return;
+  }
   const policyInput = arrayItemPolicyInput(tx, destination, schema);
   recordRelevantSchemaWritePolicyInput(
     tx,
@@ -792,6 +838,31 @@ const doneStatusTxView = (
   }) as IExtendedStorageTransaction;
 };
 
+/** The done-status views {@link withheldStatusTxView} made. */
+const withheldDeliveries = new WeakSet<IExtendedStorageTransaction>();
+
+/**
+ * A done-status view of `tx` for a delivery whose handling read data its
+ * stream's space doesn't admit, so that its outcome is withheld (events.md
+ * §5): the handling may have committed or not, and the view says neither.
+ */
+export const withheldStatusTxView = (
+  tx: IExtendedStorageTransaction,
+): IExtendedStorageTransaction => {
+  const view = doneStatusTxView(tx);
+  withheldDeliveries.add(view);
+  return view;
+};
+
+/**
+ * Whether `tx`, the transaction a sender's commit callback reads, reports a
+ * delivery whose outcome is withheld: its handling read data its stream's
+ * space doesn't admit, so whether it committed is not told (events.md §5).
+ * Such a transaction reports `done`.
+ */
+export const isWithheldDelivery = (tx: IExtendedStorageTransaction): boolean =>
+  withheldDeliveries.has(tx);
+
 /**
  * Whether `tx` is a speculative echo that withdrew: its run named an
  * `inSpace(...)` target this runtime leaves unresolved, so the transaction
@@ -871,6 +942,7 @@ declare module "@commonfabric/api" {
         value: Readonly<T>,
         cfcLabel?: CfcLabelView | undefined,
         consumed?: SinkConsumedLabel,
+        writtenPrincipal?: DID,
       ) => Cancel | undefined | void,
       options?: SinkOptions,
     ): Cancel;
@@ -1356,6 +1428,26 @@ export function createCell<T>(
 }
 
 /**
+ * Returns the write half of the database handle cell at `link`, bound to
+ * `tx`: its `exec()` records a SQLite write onto that transaction.
+ */
+export function createSqliteWriter(
+  runtime: Runtime,
+  link: NormalizedFullLink,
+  tx: IExtendedStorageTransaction,
+): IndexedCollectionWriter {
+  const writer = new CellImpl(runtime, tx, link, false, undefined, "sqlite");
+  maintenanceWriters.add(writer);
+  return writer;
+}
+
+/**
+ * The handles `createSqliteWriter()` made. Their writes are maintenance's,
+ * marked in the collection's maintenance revision rather than on its handle.
+ */
+const maintenanceWriters = new WeakSet<object>();
+
+/**
  * Mark a cell handle as covered by a document-level sync barrier owned by the
  * caller. Separate handles for the same document otherwise each try to load it.
  */
@@ -1443,7 +1535,10 @@ let pullProjectedOf: <R>(
   project: (value: unknown) => R,
   options: { awaitDurability?: boolean },
 ) => Promise<R>;
-let writeTargetOf: (cell: CellImpl<FabricValue>) => Cell<FabricValue>;
+let resolveAsCellOf: (
+  cell: CellImpl<FabricValue>,
+  lastNode: LastNode,
+) => Cell<FabricValue>;
 let sinkProjectedOf: <R>(
   cell: CellImpl<FabricValue>,
   project: (value: unknown) => R,
@@ -1451,6 +1546,7 @@ let sinkProjectedOf: <R>(
     value: R,
     cfcLabel?: CfcLabelView | undefined,
     consumed?: SinkConsumedLabel,
+    writtenPrincipal?: DID,
   ) => Cancel | undefined | void,
   options: SinkOptions,
 ) => Cancel;
@@ -1512,7 +1608,8 @@ export class CellImpl<T extends FabricValue>
 
   /**
    * Keeps this cell's document loaded for as long as this cell can read it
-   * (`IStorageManager.holdDocument()`), once the cell has loaded it.
+   * (`IStorageManager.holdDocument()`), once the cell has loaded it or was
+   * taken by `key()` from a cell holding it.
    */
   #documentHold: object | undefined;
 
@@ -1922,33 +2019,26 @@ export class CellImpl<T extends FabricValue>
   }
 
   get(options?: { traverseCells?: boolean }): Readonly<StripDefaultBrand<T>> {
-    if (!this.#synced) this.#startLoad(); // No await, just kicking this off
+    let synced = this.#synced;
+    if (!synced) {
+      this.#startLoad(); // No await, just kicking this off
+      synced = this.#synced;
+    }
 
-    // Per-transaction read cache: within one ready transaction, repeatedly
-    // reading the same cell with no intervening write recomputes an identical
-    // result -- same value, the same reactive reads already registered on the
-    // tx, and the same CFC state. Reuse the prior result when the tx supports
-    // caching (the non-reactive sample() wrapper does not) and is still open.
-    // The tx clears this cache on any write, so a hit only happens when nothing
-    // has changed since the last read. Key by the stable value of the view ref
+    // Per-transaction read cache: within one transaction, repeatedly reading
+    // the same cell with no intervening write recomputes an identical result
+    // -- same value, the same reactive reads already registered on the tx, and
+    // the same CFC state. The tx decides when it may serve a cached result
+    // (`IExtendedStorageTransaction.getCachedReadResult()`); the non-reactive
+    // sample() wrapper caches nothing. Key by the stable value of the view ref
     // (link + CFC label view), not link object identity, so equivalent CellImpl
     // wrappers in the same tx can share the cached traversal result. `variant`
     // separates reads that differ in options or synced state.
     const tx = this.#tx;
-    const cacheable = tx !== undefined &&
-      tx.getCachedReadResult !== undefined &&
-      tx.status().status === "ready" &&
-      // Once CFC is prepared, the real read path's `read-after-prepare`
-      // invalidation is load-bearing: bypass the cache so a post-prepare read
-      // still goes through readOrThrow() and invalidates the prepared digest.
-      tx.getCfcState().prepare.status !== "prepared";
-    const variant = `${options?.traverseCells ?? false}|${this.#synced}`;
-    const cacheKey = cacheable ? this.#viewRefHash() : undefined;
-    if (cacheable) {
-      const cached = tx.getCachedReadResult!(cacheKey!, variant);
-      if (cached !== undefined) {
-        return cached.value as Readonly<StripDefaultBrand<T>>;
-      }
+    const variant = `${options?.traverseCells ?? false}|${synced}`;
+    const cached = tx?.getCachedReadResult?.(this.#viewRefHash(), variant);
+    if (cached !== undefined) {
+      return cached.value as Readonly<StripDefaultBrand<T>>;
     }
 
     logger.timeStart("cell", "get");
@@ -1957,7 +2047,7 @@ export class CellImpl<T extends FabricValue>
       this.#tx,
       this.#viewRef,
       [],
-      { ...options, synced: this.#synced },
+      { ...options, synced },
     );
     // A stream holds no value, so a read of a stream handle returns the
     // stream. The read finds that out rather than assuming it, because the
@@ -1983,12 +2073,7 @@ export class CellImpl<T extends FabricValue>
         this.#link,
       );
     }
-    if (cacheable) {
-      // Re-read `#_link`: validateAndTransform (via viewRef -> link) may have
-      // run `#ensureLink()` and replaced it with the completed link object, which
-      // is the identity subsequent get()s will hash.
-      tx.setCachedReadResult!(this.#viewRefHash(), variant, value);
-    }
+    tx?.setCachedReadResult?.(this.#viewRefHash(), variant, value);
     return value;
   }
 
@@ -2074,7 +2159,7 @@ export class CellImpl<T extends FabricValue>
       // link-resolution's kicks. Ordinary load failures resolve from the
       // replica; the terminal session check below rejects terminal failures.
       this.#runtime.storageManager.trackUntilSettled(
-        this.#startLoad().catch(() => {}),
+        this.#startLoad(),
       );
     }
 
@@ -2202,9 +2287,6 @@ export class CellImpl<T extends FabricValue>
         ".exec() must be called within a transaction (e.g. inside a handler)",
       );
     }
-    if (!this.#tx.recordSqliteWrite) {
-      throw new Error("storage transaction does not support sqlite writes");
-    }
     // `"sqlite"` is a type-level kind (the public `SqliteDb` type restricts who
     // can call `.exec`); at runtime we validate the actual handle value rather
     // than `#kind`, since handler-input materialization doesn't always stamp the
@@ -2329,10 +2411,133 @@ export class CellImpl<T extends FabricValue>
     // object-in-array and would split the handle's inline rule term lists
     // back into per-element linked docs — the split sqliteDatabase stores the
     // handle raw specifically to avoid (a second runtime can't load those).
+    if (maintenanceWriters.has(this)) {
+      // Maintenance writes beside the handlers that add to the collection,
+      // and every one of those reads this handle. Its writes are marked in
+      // a document of their own, so that none of them costs a handler its
+      // commit.
+      maintenanceRevisionCell(this.#runtime, this.space, handle.id, this.#tx)
+        .set(nextMaintenanceRevision());
+      return;
+    }
+    // A collection that names a guard has each of its writers write it too,
+    // here, in the transaction that carries the database write. The guard is
+    // an ordinary cell of the pattern's, so whatever writer policy the
+    // pattern declared on it decides this write, and a refusal takes the
+    // database write with it.
+    const guard = (handle as { guard?: unknown }).guard;
+    if (isCellLink(guard)) {
+      const cell = this.#runtime.getCellFromLink(
+        guard as Parameters<Runtime["getCellFromLink"]>[0],
+        undefined,
+        this.#tx,
+      ) as Cell<number>;
+      // A count, and a fresh one where the cell holds anything else: the
+      // write is what the guard is for, not the value.
+      const count: unknown = cell.get();
+      cell.set(typeof count === "number" ? count + 1 : 1);
+    }
     const rev = ((handle as { rev?: unknown }).rev as number | undefined) ?? 0;
     (this.withTx(this.#tx) as unknown as Cell<{ rev: number }>).key("rev").set(
       rev + 1,
     );
+  }
+
+  /**
+   * Adds a member to this indexed collection: mirrors its declared fields
+   * into the tables of `kind`, in this cell's transaction. Adding a member
+   * the collection already holds refreshes its rows. Throws outside a
+   * transaction, on a receiver that is not an indexed collection, on a kind
+   * it does not declare, and on a member that is not a cell of the
+   * collection's own space.
+   */
+  add(kind: string, member: unknown): void {
+    const collection = this.#indexedCollectionDescriptor();
+    if (collection === undefined || !this.#tx) {
+      throw new TypeError(
+        "`.add()` is only available on an indexed collection, within a " +
+          "transaction (e.g. inside a handler)",
+      );
+    }
+    const { descriptor } = indexedKindOf(collection, String(kind));
+    const cell = asBoundCell(member);
+    if (cell === undefined) {
+      throw new TypeError("an indexed collection holds cells only");
+    }
+    // The collection hears of writes in its own space, so a member elsewhere
+    // would be mirrored once and never followed.
+    if (cell.getAsNormalizedFullLink().space !== this.space) {
+      throw new TypeError(
+        "an indexed collection holds cells of its own space only",
+      );
+    }
+    const rows = projectMember(this.#tx, kind, descriptor, cell);
+    addMemberRows(this, descriptor, rows);
+    // A runtime that maintains the collections of spaces whose declaring
+    // piece it never loaded finds this one in the registry, so the commit
+    // that gives the collection a member lists it.
+    const value: unknown = this.getRaw({ lastNode: "value" });
+    if (isSqliteDbRef(value)) {
+      listIndexedCollection(
+        this.#runtime,
+        this.#tx,
+        this.withTx(this.#tx).resolveAsCell(),
+        value.id,
+      );
+    }
+    // A piece the calling handler has just made is set up only if something
+    // the handler writes refers to it, and a row is not such a write. The
+    // handle is written by every `exec()` already, so it carries the
+    // reference, of the member added last.
+    (this.withTx(this.#tx) as unknown as Cell<{ latest: unknown }>).key(
+      "latest",
+    ).set(cell);
+    const bound = cell.withTx(this.#tx);
+    this.#registerIndexedCollection([
+      bound.getAsNormalizedFullLink().id,
+      bound.resolveAsCell().getAsNormalizedFullLink().id,
+    ], rows);
+  }
+
+  /**
+   * Helper for the indexed-collection methods, which returns this cell's
+   * collection descriptor, or `undefined` when its value is not the handle
+   * of one.
+   */
+  #indexedCollectionDescriptor(): IndexedCollectionDescriptor | undefined {
+    return indexedCollectionDescriptorOf(this.getRaw({ lastNode: "value" }));
+  }
+
+  /**
+   * Helper for the indexed-collection methods, which makes the collection
+   * known to the runtime's maintainer once this transaction's writes are
+   * durable, and has it re-read the members whose own documents are
+   * `members`. A member added in the transaction that creates it can hold
+   * fields this transaction has not written yet, and the commit carrying them
+   * can reach the maintainer before the member's rows exist to be found.
+   */
+  #registerIndexedCollection(
+    members: readonly string[] = [],
+    added?: MemberRows,
+  ): void {
+    const handle = this.resolveAsCell().getAsNormalizedFullLink();
+    const value: unknown = this.getRaw({ lastNode: "value" });
+    if (!isSqliteDbRef(value)) return;
+    const id = value.id;
+    const maintainer = this.#runtime.indexedCollections;
+    const durable = () => {
+      maintainer.register(handle, id);
+      if (added !== undefined) maintainer.noteAdded(handle.space, id, added);
+      maintainer.noteWrites(handle.space, members);
+    };
+    this.#tx!.addCommitCallback((settledTx, result) => {
+      if (result.error) return;
+      const settlement = waveSettlementOf(settledTx);
+      if (settlement === undefined) return durable();
+      void settlement.then((verdict) => {
+        if (!verdict.error) durable();
+      });
+    });
   }
 
   set(newValue: AnyCellWrapping<T> | T): Cell<T> {
@@ -2390,10 +2595,13 @@ export class CellImpl<T extends FabricValue>
     // each addressed from `resolvedToValueLink`, which the unmarked
     // resolution above produced.
     if (
-      this.isStream(resolvedToValueLink, {
-        ...ignoreReadForScheduling,
-        ...writeDestinationRead,
-      })
+      this.isStream(
+        resolvedToValueLink,
+        Object.freeze({
+          ...ignoreReadForScheduling,
+          ...writeDestinationRead,
+        }),
+      )
     ) {
       // Stream behavior
 
@@ -2681,6 +2889,15 @@ export class CellImpl<T extends FabricValue>
                   ));
                   return;
                 }
+                // A handling whose outcome is withheld may have committed or
+                // not. It is reported `done`, never as a failure, so that
+                // nothing retries or reports an error for a delivery that may
+                // have landed, and `isWithheldDelivery()` is what tells the
+                // view apart from a handling that committed.
+                if (consequence.kind === "withheld") {
+                  callerOnCommit(withheldStatusTxView(echoTx));
+                  return;
+                }
                 // Only a consequence the overlay observed is the served
                 // outcome; a runtime with no overlay reports the echo's own.
                 callerOnCommit(
@@ -2800,11 +3017,11 @@ export class CellImpl<T extends FabricValue>
             // carries is no input of this run (CFC §18.6.2, write-destination
             // reads; `docs/specs/cfc-write-destination-reads.md`).
             const currentEntries = this.#tx.readValueOrThrow(entriesLink, {
-              meta: {
+              meta: Object.freeze({
                 ...ignoreReadForScheduling,
                 ...mergeableOpRead,
                 ...writeDestinationRead,
-              },
+              }),
             });
             const emittedEntry = {
               eventId: emittedId,
@@ -3124,7 +3341,7 @@ export class CellImpl<T extends FabricValue>
         newValue,
         this.#frame?.cause,
         undefined,
-        frameAnchorIds(this.#frame),
+        frameAnchorIds(this.#frame, newValue),
       );
 
       // The value at `writeLink` is now the one supplied here, whatever the
@@ -3311,7 +3528,7 @@ export class CellImpl<T extends FabricValue>
     // exposing content or length to the caller. It joins neither observed
     // labels nor conflict preconditions; explicit handler reads retain both.
     const currentValue = this.#tx.readValueOrThrow(resolvedLink, {
-      meta: { ...mergeableOpRead, ...writeDestinationRead },
+      meta: Object.freeze({ ...mergeableOpRead, ...writeDestinationRead }),
     });
     const cause = this.#frame?.cause;
 
@@ -3326,7 +3543,7 @@ export class CellImpl<T extends FabricValue>
         currentValue,
         values,
         cause,
-        frameAnchorIds(this.#frame),
+        frameAnchorIds(this.#frame, values, currentValue),
       );
     } else {
       if (currentValue !== undefined) {
@@ -3365,7 +3582,7 @@ export class CellImpl<T extends FabricValue>
         [...created, ...values],
         cause,
         undefined,
-        frameAnchorIds(this.#frame),
+        frameAnchorIds(this.#frame, [...created, ...values]),
       );
     }
 
@@ -3407,8 +3624,14 @@ export class CellImpl<T extends FabricValue>
       resolvedLink,
       resolvedLink.schema ?? this.schema,
     );
+    // The destination snapshot decides only whether each candidate is
+    // appended, and where, as `push()`'s does: what is written is the
+    // caller's candidates, and nothing returns to the caller. So it joins
+    // neither observed labels nor conflict preconditions. Resolving an
+    // existing element's link to compare it reads that element's document
+    // as an ordinary observation, and explicit handler reads retain theirs.
     let currentValue = this.#tx.readValueOrThrow(resolvedLink, {
-      meta: mergeableOpRead,
+      meta: Object.freeze({ ...mergeableOpRead, ...writeDestinationRead }),
     });
     const cause = this.#frame?.cause;
     const stored = Array.isArray(currentValue);
@@ -3498,7 +3721,7 @@ export class CellImpl<T extends FabricValue>
         existing,
         toAdd,
         cause,
-        frameAnchorIds(this.#frame),
+        frameAnchorIds(this.#frame, toAdd, existing),
       );
     } else {
       diffAndUpdate(
@@ -3508,7 +3731,7 @@ export class CellImpl<T extends FabricValue>
         [...existing, ...toAdd],
         cause,
         undefined,
-        frameAnchorIds(this.#frame),
+        frameAnchorIds(this.#frame, [...existing, ...toAdd]),
       );
     }
     this.#tx.recordMergeableOp?.(resolvedLink, {
@@ -3583,11 +3806,6 @@ export class CellImpl<T extends FabricValue>
       throw new Error(
         "Cell.applyChanges() requires a transaction and a string value\n" +
           "help: use in handlers only, ensure cell is typed as string",
-      );
-    }
-    if (!this.#tx.recordTextChanges) {
-      throw new Error(
-        "Cell.applyChanges() requires a transaction that records text changes",
       );
     }
     if (!this.#synced) this.#startLoad();
@@ -3752,10 +3970,25 @@ export class CellImpl<T extends FabricValue>
 
   remove(
     ref: T extends (infer U)[] ? (U | AnyCell<U>) : never,
+    memberOfKind?: unknown,
   ): void {
     type ElemT = T extends (infer U)[] ? U : never;
     const got = this.get();
     if (!Array.isArray(got)) {
+      // On an indexed collection, `remove()` takes a member out of it, named
+      // as `add()` names one: `ref` is the kind, and `memberOfKind` the
+      // member. The signature a pattern compiles against, which requires
+      // both, is `IndexedCollections.remove()`.
+      const collection = this.#indexedCollectionDescriptor();
+      const member = asBoundCell(memberOfKind);
+      if (collection !== undefined && member !== undefined && this.#tx) {
+        const { kind, descriptor } = indexedKindOf(collection, String(ref));
+        for (const key of memberKeysOf(member.withTx(this.#tx))) {
+          deleteMemberRows(this, kind, descriptor, key);
+        }
+        this.#registerIndexedCollection();
+        return;
+      }
       throw new Error("Can't remove from non-array value");
     }
     const array = got as ElemT[];
@@ -3938,7 +4171,7 @@ export class CellImpl<T extends FabricValue>
       }
     }
 
-    return new CellImpl(
+    const child = new CellImpl(
       this.#runtime,
       this.#tx,
       currentLink,
@@ -3946,7 +4179,11 @@ export class CellImpl<T extends FabricValue>
       this.#causeContainer,
       kind,
       rebaseCfcLabelView(this.#cfcLabelView, childPath),
-    ) as unknown as Cell<any>;
+    );
+    // A key addresses the same document, in the same transaction, so the
+    // child shares this cell's hold on it.
+    child.#documentHold = this.#documentHold;
+    return child as unknown as Cell<any>;
   }
 
   asSchema<S extends JSONSchema = JSONSchema>(
@@ -4030,6 +4267,7 @@ export class CellImpl<T extends FabricValue>
       value: Readonly<T>,
       cfcLabel?: CfcLabelView | undefined,
       consumed?: SinkConsumedLabel,
+      writtenPrincipal?: DID,
     ) => Cancel | undefined | void,
     options: SinkOptions = {},
   ): Cancel {
@@ -4053,7 +4291,7 @@ export class CellImpl<T extends FabricValue>
         // cell as synced and will not start a second load of its own, so keep
         // this promise in the shared settled pool until the first load lands.
         this.#runtime.storageManager.trackUntilSettled(
-          this.#startLoad().catch(() => {}),
+          this.#startLoad(),
         );
       }
       return subscribeToReferencedDocs(
@@ -4076,6 +4314,7 @@ export class CellImpl<T extends FabricValue>
       value: R,
       cfcLabel?: CfcLabelView | undefined,
       consumed?: SinkConsumedLabel,
+      writtenPrincipal?: DID,
     ) => Cancel | undefined | void,
     options: SinkOptions,
   ): Cancel {
@@ -4085,7 +4324,7 @@ export class CellImpl<T extends FabricValue>
     }
     if (!this.#synced) {
       this.#runtime.storageManager.trackUntilSettled(
-        this.#startLoad().catch(() => {}),
+        this.#startLoad(),
       );
     }
     return subscribeToReferencedDocs(
@@ -4120,10 +4359,14 @@ export class CellImpl<T extends FabricValue>
 
   /**
    * Starts loading this cell's backing doc for a read that does not wait for
-   * the load, and returns the load's promise.
+   * the load, and returns a promise that settles when the load does. The
+   * promise never rejects: a load that fails is logged, and the read that
+   * started it sees the doc as absent.
    */
-  #startLoad(): Promise<unknown> {
-    return this.#load(true);
+  #startLoad(): Promise<void> {
+    return this.#load(true).then(() => {}, (error: unknown) => {
+      logger.warn("load-failed", "loading a cell failed", this.#link, error);
+    });
   }
 
   /**
@@ -4180,7 +4423,7 @@ export class CellImpl<T extends FabricValue>
   ): Cancel {
     if (!this.#synced) {
       this.#runtime.storageManager.trackUntilSettled(
-        this.#startLoad().catch(() => {}),
+        this.#startLoad(),
       );
     }
 
@@ -4200,16 +4443,27 @@ export class CellImpl<T extends FabricValue>
     }, options);
   }
 
+  /**
+   * The cell this one's links lead to. It comes from link resolution rather
+   * than from a read of the target, so it takes the nearest schema a crossed
+   * link stores that constrains, whatever this cell's own schema declares.
+   * This cell's schema stays only where it declares a stream and the stored
+   * schema declares nothing but one, and a `default` this cell declares
+   * carries over where the stored schema declares none
+   * (`docs/specs/link-schema-precedence.md`, "The read entry").
+   */
   resolveAsCell(): Cell<T> {
     return this.#resolveAsCell("value");
   }
 
   /**
-   * The cell this one's links lead to, for `"value"`, or the cell a write to
+   * The cell this one's links lead to, for `"value"`, the cell a write to
    * this one lands in, for `"writeRedirect"`: write redirects are followed,
-   * and a link stored there as the value is not.
+   * and a link stored there as the value is not, or the cell this one's field
+   * is, for `"top"`: the links on the way to it are followed, and none stored
+   * there is.
    */
-  #resolveAsCell(lastNode: "value" | "writeRedirect"): Cell<T> {
+  #resolveAsCell(lastNode: LastNode): Cell<T> {
     const readTx = this.#runtime.readTx(this.#tx);
     const tracesBefore = readTx.getCfcState().dereferenceTraces.length;
     let link: NormalizedFullLink = resolveLink(
@@ -4389,7 +4643,10 @@ export class CellImpl<T extends FabricValue>
     // with this cell's own value).
     if (onlyIfDifferent) {
       const current = this.#tx.readValueOrThrow(this.#link, {
-        meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+        meta: Object.freeze({
+          ...ignoreReadForScheduling,
+          ...internalVerifierRead,
+        }),
       });
       if (valueEqual(current, inlined)) return;
     }
@@ -4428,7 +4685,10 @@ export class CellImpl<T extends FabricValue>
       "writeRedirect",
     );
     const value = this.#tx.readValueOrThrow(writeLink, {
-      meta: { ...markReadAsAttemptedWrite, ...allowMutableTransactionRead },
+      meta: Object.freeze({
+        ...markReadAsAttemptedWrite,
+        ...allowMutableTransactionRead,
+      }),
     });
     if (value === undefined) {
       throw new Error("Cannot apply a CFC schema to an absent value");
@@ -4442,7 +4702,10 @@ export class CellImpl<T extends FabricValue>
 
   getArgumentCell<U>(schema?: JSONSchema): Cell<U> | undefined {
     const metaReadOptions = {
-      meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+      meta: Object.freeze({
+        ...ignoreReadForScheduling,
+        ...internalVerifierRead,
+      }),
     };
     const linkObj = this.getMetaRaw("argument", metaReadOptions);
     if (linkObj === undefined) return undefined;
@@ -5177,7 +5440,7 @@ export class CellImpl<T extends FabricValue>
       cell.#pullProjected(project, options, false);
     sinkProjectedOf = (cell, project, callback, options) =>
       cell.#sinkProjected(project, callback, options);
-    writeTargetOf = (cell) => cell.#resolveAsCell("writeRedirect");
+    resolveAsCellOf = (cell, lastNode) => cell.#resolveAsCell(lastNode);
   }
 }
 
@@ -5381,6 +5644,7 @@ function subscribeToReferencedDocs<T>(
     value: T,
     cfcLabel?: CfcLabelView | undefined,
     consumed?: SinkConsumedLabel,
+    writtenPrincipal?: DID,
   ) => Cancel | undefined | void,
   runtime: Runtime,
   ref: CellViewRef,
@@ -5403,48 +5667,94 @@ function subscribeToReferencedDocs<T>(
       const schema = link.schema;
       const needsTraversal = schema === undefined ||
         ContextualFlowControl.isTrueSchema(schema);
-      // sink() always kicks off sync before subscribing. Preserve that state
-      // on asCell projections created for the callback, just as get() does, so
-      // nested sinks reuse the root query instead of opening one per cut point.
-      const newValue = validateAndTransform(runtime, wrappedTx, ref, [], {
-        synced: true,
-      });
-      // A projection reads what it delivers, and those reads are this sink's
-      // dependencies. A sink delivering the value itself hears every change
-      // under it, so the whole of the value is read.
-      if (
-        project === undefined && needsTraversal && newValue !== undefined &&
-        newValue !== null
-      ) {
-        deepTraverse(newValue);
+      const read = (): {
+        delivered: T;
+        cfcLabel: CfcLabelView | undefined;
+        writtenPrincipal: DID | undefined;
+        consumed: SinkConsumedLabel | undefined;
+      } => {
+        // sink() always kicks off sync before subscribing. Preserve that state
+        // on asCell projections created for the callback, just as get() does,
+        // so nested sinks reuse the root query instead of opening one per cut
+        // point.
+        const newValue = validateAndTransform(runtime, wrappedTx, ref, [], {
+          synced: true,
+        });
+        // A projection reads what it delivers, and those reads are this sink's
+        // dependencies. A sink delivering the value itself hears every change
+        // under it, so the whole of the value is read.
+        if (
+          project === undefined && needsTraversal && newValue !== undefined &&
+          newValue !== null
+        ) {
+          deepTraverse(newValue);
+        }
+        // Read the label on the SINK's transaction (`tx`), not the child
+        // `extraTx`, so the cfc-metadata read joins this sink's reactive
+        // dependency set: a later label-only write re-fires the sink.
+        // `cfcLabelViewForResolvedCell` is a pure store read that also follows
+        // a link the path crosses part way through, since the label vouching
+        // for a bound value is stored on the document that holds it. It kicks
+        // no cross-space sync: the value read above resolved the same link and
+        // kicked those targets already, and the sink re-fires when they arrive.
+        // `internalVerifierRead` keeps it reactive but out of CFC taint. Raw
+        // here — the worker redacts before it leaves.
+        const cfcLabel = options.includeCfcLabel
+          ? cfcLabelViewForResolvedCell(createCell(runtime, link, tx), {
+            kickCrossSpaceTargets: false,
+          })
+          : undefined;
+        // The projection reads on the sink's transaction, before the consumed
+        // labels are joined, so that both they and the sink's dependencies
+        // cover what it reads: a field the schema leaves untyped holds a value
+        // that reads what it holds only once it is looked at.
+        const delivered = project === undefined ? newValue : project(newValue);
+        // The principal is read on the sink's transaction too, before the
+        // consumed labels are joined, so that what it reads, the links it
+        // follows included, is consumed as well.
+        const writtenPrincipal = options.includeWrittenPrincipal
+          ? writtenPrincipalAt(tx, createCell(runtime, link, tx))
+          : undefined;
+        // Each consumed document's labels are read so that this sink sees
+        // them, as the label above is: a write of a label alone, the value
+        // left as it was, runs the sink again with what it then consumes.
+        const consumed = options.includeConsumedLabel
+          ? collectConsumedLabel(tx, { subscribe: true })
+          : undefined;
+        return {
+          delivered: delivered as T,
+          cfcLabel,
+          writtenPrincipal,
+          consumed,
+        };
+      };
+      let delivered: T;
+      let cfcLabel: CfcLabelView | undefined;
+      let writtenPrincipal: DID | undefined;
+      let consumed: SinkConsumedLabel | undefined;
+      try {
+        ({ delivered, cfcLabel, writtenPrincipal, consumed } = read());
+      } catch (error) {
+        // A read reaching a document whose stored labels this build cannot
+        // interpret fails closed, whether its value read crossed the document
+        // or its labels were joined. A sink that decides on what its read
+        // consumed is handed no labels for it, which it decides on as labels
+        // that could not be read, and the projection of no value. It stays
+        // subscribed to what the read reached before it failed, so a later
+        // write it can interpret runs it again. Any other sink fails.
+        if (
+          !options.includeConsumedLabel ||
+          !(error instanceof StoredCfcMetadataError)
+        ) {
+          throw error;
+        }
+        delivered =
+          (project === undefined ? undefined : project(undefined)) as T;
+        cfcLabel = undefined;
+        writtenPrincipal = undefined;
+        consumed = undefined;
       }
-      // Read the label on the SINK's transaction (`tx`), not the child `extraTx`,
-      // so the cfc-metadata read joins this sink's reactive dependency set: a
-      // later label-only write re-fires the sink. `cfcLabelViewForResolvedCell`
-      // is a pure store read that also follows a link the path crosses part
-      // way through, since the label vouching for a bound value is stored on
-      // the document that holds it. It kicks no cross-space sync: the value
-      // read above resolved the same link and kicked those targets already,
-      // and the sink re-fires when they arrive. `internalVerifierRead` keeps
-      // it reactive but out of CFC taint. Raw here — the worker redacts before
-      // it leaves.
-      const cfcLabel = options.includeCfcLabel
-        ? cfcLabelViewForResolvedCell(createCell(runtime, link, tx), {
-          kickCrossSpaceTargets: false,
-        })
-        : undefined;
-      // The projection reads on the sink's transaction, before the consumed
-      // labels are joined, so that both they and the sink's dependencies
-      // cover what it reads: a field the schema leaves untyped holds a value
-      // that reads what it holds only once it is looked at.
-      const delivered = project === undefined ? newValue : project(newValue);
-      // Each consumed document's labels are read so that this sink sees
-      // them, as the label above is: a write of a label alone, the value
-      // left as it was, runs the sink again with what it then consumes.
-      const consumed = options.includeConsumedLabel
-        ? collectConsumedLabel(tx, { subscribe: true })
-        : undefined;
-      sink.cleanup = callback(delivered, cfcLabel, consumed);
+      sink.cleanup = callback(delivered, cfcLabel, consumed, writtenPrincipal);
 
       // no async await here, but that also means no retry. TODO(seefeld): Should
       // we add a retry? So far all sinks are read-only, so they get re-triggered
@@ -5836,13 +6146,49 @@ function validateStaticData(value: unknown): void {
  * frame that nothing pops until that runtime is disposed, so a cell made while
  * a runtime is alive always carries one and this always hands back a source.
  * Making the cell inside a handler or a lift puts that frame's counter behind
- * the ids instead. Where the cell was made is what decides, not where the write
- * happens.
+ * the ids instead, and making it inside a builtin's run puts `written` behind
+ * them (`Frame.builtinRun`). Where the cell was made is what decides, not where
+ * the write happens.
  */
 export function frameAnchorIds(
   frame: Frame | undefined,
-): (() => number) | undefined {
-  return frame === undefined ? undefined : () => frame.generatedIdCounter++;
+  written: unknown,
+  extending?: readonly unknown[],
+): (() => string | number) | undefined {
+  if (frame === undefined) return undefined;
+  if (frame.builtinRun !== true) return () => frame.generatedIdCounter++;
+  // Under a builtin's run the seeds come from the write: what it writes (with,
+  // for an append, the stored array it extends) and a count from zero within it. A builtin's run restarts its frame's counter, and its stores
+  // are read back and written again by its later runs, so seeding from the
+  // counter would hand a new element the id an earlier run gave another.
+  // Seeded from the write, every runtime running the node mints the same
+  // documents for the same write (speculation.md §2), and a write of
+  // anything else mints documents of its own. What is hashed is the write in
+  // the form it is stored in: builder artifacts flattened as the write path
+  // flattens them (`diffAndUpdate()`), cells as links and a `Date` as its
+  // instant, since `createRef` reads a raw `Date` as `{}`. It is hashed once,
+  // on the first element anchored.
+  let writeId: string | undefined;
+  let count = 0;
+  return () => {
+    writeId ??= toURI(
+      createRef(
+        {
+          // The flattened write is a `CellLinkInput` that the type of
+          // `flattenBuilderArtifacts()` cannot state; `convertCellsToLinks()`
+          // vets what it walks, and refuses what is not.
+          write: convertCellsToLinks(
+            flattenBuilderArtifacts(written, {
+              isLeaf: isCellResultForDereferencing,
+            }) as CellLinkInput,
+          ),
+          ...(extending === undefined ? {} : { extending }),
+        },
+        frame.cause,
+      ),
+    );
+    return `${writeId}/${count++}`;
+  };
 }
 
 /**
@@ -5988,11 +6334,21 @@ export function pullProjected<R>(
 /**
  * The cell a write to `cell` lands in, as `resolveAsCell()` resolves one: its
  * write redirects are followed, and a link stored there as the value is not.
- * A host that must tell a value written into a cell from one reached through
- * a link stored there compares this with `cell.resolveAsCell()`.
+ * `writtenPrincipalAt()` compares it with `cell.resolveAsCell()` to tell a
+ * value written into a cell from one reached through a link stored there.
  */
 export function resolveWriteTarget(cell: Cell<unknown>): Cell<unknown> {
-  return writeTargetOf(requireCellImpl(cell));
+  return resolveAsCellOf(requireCellImpl(cell), "writeRedirect");
+}
+
+/**
+ * The cell `cell`'s field is, as `resolveAsCell()` resolves one: the links on
+ * the way to it are followed, and none stored there is.
+ * `writtenPrincipalAt()` reads from it the space of the document holding the
+ * field.
+ */
+export function resolveField(cell: Cell<unknown>): Cell<unknown> {
+  return resolveAsCellOf(requireCellImpl(cell), "top");
 }
 
 /**
@@ -6003,7 +6359,8 @@ export function resolveWriteTarget(cell: Cell<unknown>): Cell<unknown> {
  * labels included, runs it again. What the projection reaches is what the
  * subscription depends on: a part of the value it never reads is a part
  * whose change does not run it. A stream holds no value to project, and is
- * refused.
+ * refused. `options` asks for the cell's label and the principal the value's
+ * own cell represents with each value, as `SinkOptions` describes.
  */
 export function sinkProjected<R>(
   cell: Cell<unknown>,
@@ -6012,17 +6369,21 @@ export function sinkProjected<R>(
     value: R,
     consumed: SinkConsumedLabel | undefined,
     cfcLabel: CfcLabelView | undefined,
+    writtenPrincipal: DID | undefined,
   ) => Cancel | undefined | void,
-  options: { includeCfcLabel?: boolean } = {},
+  options: { includeCfcLabel?: boolean; includeWrittenPrincipal?: boolean } =
+    {},
 ): Cancel {
   return sinkProjectedOf(
     requireCellImpl(cell),
     project,
-    (value, cfcLabel, consumed) => callback(value, consumed, cfcLabel),
+    (value, cfcLabel, consumed, writtenPrincipal) =>
+      callback(value, consumed, cfcLabel, writtenPrincipal),
     {
       readOnly: true,
       includeConsumedLabel: true,
       includeCfcLabel: options.includeCfcLabel,
+      includeWrittenPrincipal: options.includeWrittenPrincipal,
     },
   );
 }

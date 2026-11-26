@@ -21,11 +21,9 @@ import {
   ErrorNotification,
   EventIntentOutcomeNotification,
   EventNeedsAttentionNotification,
-  InitializationData,
   IPCClientMessage,
   IPCClientNotification,
   IPCClientRequest,
-  IPCRemoteMessage,
   IPCRemoteNotification,
   IPCRemoteResponse,
   NavigateRequestNotification,
@@ -37,6 +35,7 @@ import {
   RuntimeErrorCode,
   SpaceAccessLostNotification,
   SpaceAccessRestoredNotification,
+  SpaceSeqAdvancedNotification,
   TelemetryNotification,
   TransportNotificationType,
   VDomBatchNotification,
@@ -56,23 +55,6 @@ export function isCellRef(value: unknown): value is CellRef {
   return Array.isArray(value.path) && typeof value.id === "string" &&
     !!value.id &&
     isDID(value.space);
-}
-
-/**
- * Is `value` an {@link InitializationData}? The shallowest guard here: it
- * checks `apiUrl` and `spaceDid` are strings and that `identity` is present at
- * all, and looks at nothing else the type declares. What it establishes is
- * that initialization has something to work with, not that the worker will
- * accept it.
- */
-export function isInitializationData(
-  value: unknown,
-): value is InitializationData {
-  return (
-    isObjectNotArray(value) &&
-    typeof value.apiUrl === "string" && !!value.identity &&
-    typeof value.spaceDid === "string"
-  );
 }
 
 /**
@@ -121,17 +103,6 @@ export function isIPCClientNotification(
 }
 
 /**
- * Is `value` anything the worker sends the connection -- a response or a
- * notification? The transport's own traffic is not included: a ready or
- * worker-console notification is handled before dispatch reaches here.
- */
-export function isIPCRemoteMessage(
-  value: unknown,
-): value is IPCRemoteMessage {
-  return isIPCRemoteResponse(value) || isIPCRemoteNotification(value);
-}
-
-/**
  * Is `value` an {@link IPCRemoteResponse}? A numeric `msgId` identifies one,
  * and a present `error` must be a string. A bare `{ msgId }` therefore
  * qualifies, that being how the worker acks a request whose handler returned
@@ -166,6 +137,7 @@ export function isIPCRemoteNotification(
     isSpaceAccessLostNotification(value) ||
     isSpaceAccessRestoredNotification(value) ||
     isConnectionRestoredNotification(value) ||
+    isSpaceSeqAdvancedNotification(value) ||
     isEventIntentOutcomeNotification(value);
 }
 
@@ -313,6 +285,15 @@ export function isConnectionRestoredNotification(
 ): value is ConnectionRestoredNotification {
   return isObjectNotArray(value) &&
     value.type === NotificationType.ConnectionRestored;
+}
+
+/** Recognizes a report that a space's newest seq moved forward. */
+export function isSpaceSeqAdvancedNotification(
+  value: unknown,
+): value is SpaceSeqAdvancedNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.SpaceSeqAdvanced && isDID(value.space) &&
+    Number.isSafeInteger(value.seq) && (value.seq as number) >= 0;
 }
 
 /**

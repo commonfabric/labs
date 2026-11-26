@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { PatchOp } from "../../v2.ts";
 import { applyPatch, PatchApplyError } from "../../v2/patch.ts";

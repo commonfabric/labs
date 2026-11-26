@@ -5,7 +5,15 @@
  *
  * Run: deno task cf test patterns/showcase/wordsearch/wordsearch.test.tsx
  */
-import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
 import {
   childNodes,
   clickButton,
@@ -104,6 +112,8 @@ export default pattern(() => {
       // The PDF carries the title.
       { action: action(() => title.set("Orchard")) },
       { assertion: assert(() => puzzle.pdf.includes("(Orchard) Tj")) },
+      // The piece is named by its title.
+      { assertion: assert(() => puzzle[NAME] === "Orchard") },
 
       // A word left out is named, with the reason.
       { action: action(() => words.set(["cat", "x", "unbelievably"])) },

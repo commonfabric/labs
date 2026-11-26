@@ -15,7 +15,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   ASSUMED_COLUMNS,
@@ -26,6 +25,7 @@ import {
   statusLine,
   wrapped,
 } from "../lib/shuttle/page.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Helper for the cases below, which is `count` lines called `1`, `2`, … */
 function lines(count: number): string[] {

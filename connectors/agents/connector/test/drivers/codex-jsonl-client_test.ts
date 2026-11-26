@@ -1,6 +1,7 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { FakeTime } from "@std/testing/time";
 import { CodexJsonlClient } from "../../src/drivers/codex-jsonl-client.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const DEFERRED_SERVER = String.raw`#!/usr/bin/env python3
 import json, os, signal, sys
@@ -111,7 +112,12 @@ for line in sys.stdin:
         continue
     method = message.get("method")
     if method == "initialize":
+        print("protocol server started", file=sys.stderr, flush=True)
         print(json.dumps({"id": message["id"], "result": {}}), flush=True)
+    elif method == "unterminated":
+        sys.stdout.write(json.dumps({"method": "event/last", "params": {}}))
+        sys.stdout.flush()
+        break
     elif method == "server-request":
         print(json.dumps({
             "jsonrpc": "2.0",
@@ -140,7 +146,7 @@ function outcome<T>(promise: Promise<T>) {
   );
 }
 
-Deno.test("Codex client rejects invalid lifecycle operations", async () => {
+test("Codex client rejects invalid lifecycle operations", async () => {
   assertThrows(
     () => new CodexJsonlClient([]),
     Error,
@@ -160,7 +166,7 @@ Deno.test("Codex client rejects invalid lifecycle operations", async () => {
   );
 });
 
-Deno.test("Codex client handles server requests and notification pressure", async () => {
+test("Codex client handles server requests and notification pressure", async () => {
   const directory = await Deno.makeTempDir();
   const server = `${directory}/protocol-server`;
   await Deno.writeTextFile(server, PROTOCOL_SERVER);
@@ -228,7 +234,35 @@ Deno.test("Codex client handles server requests and notification pressure", asyn
   }
 });
 
-Deno.test("Codex requests remain pending until the server responds", async () => {
+test("Codex client admits one of two concurrent starts and reads an unterminated final frame", async () => {
+  const directory = await Deno.makeTempDir();
+  const server = `${directory}/protocol-server`;
+  await Deno.writeTextFile(server, PROTOCOL_SERVER);
+  await Deno.chmod(server, 0o755);
+  const client = new CodexJsonlClient([server]);
+  try {
+    const starts = await Promise.all([
+      outcome(client.start()),
+      outcome(client.start()),
+    ]);
+    assertEquals(starts, [
+      { ok: true, value: {} },
+      { ok: false, error: "Error: Codex App Server already started" },
+    ]);
+
+    const last = client.waitForNotification((message) =>
+      message.method === "event/last"
+    );
+    const call = outcome(client.call("unterminated"));
+    assertEquals(await last, { method: "event/last", params: {} });
+    assertEquals((await call).ok, false);
+  } finally {
+    await client.stop();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+test("Codex requests remain pending until the server responds", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/deferred-codex`;
   await Deno.writeTextFile(server, DEFERRED_SERVER);
@@ -247,7 +281,7 @@ Deno.test("Codex requests remain pending until the server responds", async () =>
   }
 });
 
-Deno.test("Codex notification waits remain pending until a match arrives", async () => {
+test("Codex notification waits remain pending until a match arrives", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/deferred-codex`;
   await Deno.writeTextFile(server, DEFERRED_SERVER);
@@ -271,7 +305,7 @@ Deno.test("Codex notification waits remain pending until a match arrives", async
   }
 });
 
-Deno.test("Codex restart discards buffered notifications", async () => {
+test("Codex restart discards buffered notifications", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/deferred-codex`;
   await Deno.writeTextFile(server, DEFERRED_SERVER);
@@ -297,7 +331,7 @@ Deno.test("Codex restart discards buffered notifications", async () => {
   }
 });
 
-Deno.test("Codex waits for failed startup cleanup before retrying", async () => {
+test("Codex waits for failed startup cleanup before retrying", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/retry-codex`;
   const attempts = `${dir}/attempts`;
@@ -314,7 +348,7 @@ Deno.test("Codex waits for failed startup cleanup before retrying", async () => 
   }
 });
 
-Deno.test("stopping Codex twice at once settles both calls together", async () => {
+test("stopping Codex twice at once settles both calls together", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/deferred-codex`;
   await Deno.writeTextFile(server, DEFERRED_SERVER);
@@ -339,7 +373,7 @@ Deno.test("stopping Codex twice at once settles both calls together", async () =
   }
 });
 
-Deno.test("stopping Codex rejects pending requests and notification waits", async () => {
+test("stopping Codex rejects pending requests and notification waits", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/deferred-codex`;
   await Deno.writeTextFile(server, DEFERRED_SERVER);
@@ -368,7 +402,7 @@ Deno.test("stopping Codex rejects pending requests and notification waits", asyn
   }
 });
 
-Deno.test("aborting the Codex owner stops the child and rejects pending work", async () => {
+test("aborting the Codex owner stops the child and rejects pending work", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/deferred-codex`;
   const exitMarker = `${dir}/child-exited`;
@@ -499,7 +533,7 @@ Deno.test("aborting the Codex owner stops the child and rejects pending work", a
   }
 });
 
-Deno.test("Codex returns matching buffered notifications after child exit", async () => {
+test("Codex returns matching buffered notifications after child exit", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/deferred-codex`;
   await Deno.writeTextFile(server, DEFERRED_SERVER);
@@ -534,7 +568,7 @@ Deno.test("Codex returns matching buffered notifications after child exit", asyn
   }
 });
 
-Deno.test("Codex rejects notification waits after the child exits", async () => {
+test("Codex rejects notification waits after the child exits", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/deferred-codex`;
   await Deno.writeTextFile(server, DEFERRED_SERVER);
@@ -561,7 +595,7 @@ Deno.test("Codex rejects notification waits after the child exits", async () => 
   }
 });
 
-Deno.test("Codex terminates a server that emits malformed JSON", async () => {
+test("Codex terminates a server that emits malformed JSON", async () => {
   const directory = await Deno.makeTempDir();
   const server = `${directory}/malformed-server`;
   await Deno.writeTextFile(server, MALFORMED_SERVER);

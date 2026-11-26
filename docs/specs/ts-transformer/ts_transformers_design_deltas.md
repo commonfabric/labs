@@ -649,7 +649,6 @@ fields/defaults unless an explicit author opt-in narrowing model is introduced.
 **Current complexity:** multiple partially-overlapping helpers:
 
 - `isInsideSafeCallbackWrapper`
-- `isInsideSafeWrapper`
 - `isInsideRestrictedContext`
 - `isInRestrictedReactiveContext`
 

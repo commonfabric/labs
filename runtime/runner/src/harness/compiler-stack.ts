@@ -28,6 +28,7 @@ export {
 } from "@commonfabric/ts-transformers";
 export {
   collectDataFileNames,
+  collectDataReads,
   collectImportSpecifiers,
   getTypeScriptEnvironmentTypes,
   scanModuleDeclarations,

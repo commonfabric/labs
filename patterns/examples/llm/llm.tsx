@@ -1,3 +1,9 @@
+/**
+ * A one-question chat: ask a question in the message input and the
+ * answer appears below, with a loader while the model is thinking. It
+ * demonstrates the `generateText` built-in driven by a cell used as the
+ * prompt, and its `pending` and `result` states.
+ */
 import {
   BuiltInLLMContent,
   Default,
@@ -66,7 +72,7 @@ export default pattern<LLMTestInput>(({ title }) => {
         {llmResponse.pending
           ? (
             <div>
-              <cf-loader show-elapsed /> Thinking...
+              <cf-loader showElapsed /> Thinking...
             </div>
           )
           : llmResponse.result

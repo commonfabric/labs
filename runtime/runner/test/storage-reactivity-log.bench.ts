@@ -119,7 +119,7 @@ Deno.bench(
       }
 
       for (let index = 0; index < 100; index += 1) {
-        tx.getReactivityLog?.();
+        tx.getReactivityLog();
       }
 
       await tx.commit().settled;

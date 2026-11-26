@@ -1,0 +1,29 @@
+# cf-legibility builder-self agent. The instance name is the person key:
+# systemctl start probe-self@mike
+[Unit]
+Description=cf-legibility probe agent (builder-self %i)
+After=network-online.target
+Wants=network-online.target
+# Restart=on-failure alone never reaches the failed state, so OnFailure= never
+# fires and a permanent fault looks identical to a busy service: on 2026-08-10
+# a refused checkout restarted every 10s for 21.5 hours and nothing told
+# anyone. Twenty attempts (~200s with RestartSec below) absorbs a transient
+# network or lock failure; past that the fault is not going to clear itself,
+# so stop retrying and raise it. Revival is explicit: systemctl reset-failed.
+StartLimitIntervalSec=1800
+StartLimitBurst=20
+OnFailure=probe-alert@self-%i.service
+
+[Service]
+User=probe-self-%i
+WorkingDirectory=/srv/probe/self-%i/probe-code
+EnvironmentFile=/etc/probe/self-%i.env
+Environment=PROBE_CLASS=self-%i
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/srv/probe/self-%i/probe-code/deploy/probe-run.sh self-%i
+Environment=PYTHONPATH=/srv/probe/self-%i/probe-code/src
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
@@ -22,14 +22,6 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 const signer = await Identity.fromPassphrase("storage transaction completion");
 const space = signer.did();
 
-function reactivityLogOf(
-  tx: { getReactivityLog?: () => { reads: unknown[]; writes: unknown[] } },
-): { reads: unknown[]; writes: unknown[] } {
-  const log = tx.getReactivityLog?.();
-  if (!log) throw new Error("transaction has no reactivity log");
-  return log;
-}
-
 describe("a completed storage transaction", () => {
   it("releases its activity once its commit completes", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
@@ -46,12 +38,12 @@ describe("a completed storage transaction", () => {
       const tx = runtime.edit();
       cell.withTx(tx).set({ value: 1 });
       cell.withTx(tx).get();
-      expect(reactivityLogOf(tx).writes.length).toBeGreaterThan(0);
+      expect(tx.getReactivityLog().writes.length).toBeGreaterThan(0);
 
       const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
 
-      const completed = reactivityLogOf(tx);
+      const completed = tx.getReactivityLog();
       expect(completed.reads.length).toBe(0);
       expect(completed.writes.length).toBe(0);
     } finally {
@@ -89,7 +81,7 @@ describe("a completed storage transaction", () => {
       const rejected = await second.commit().settled;
       expect(rejected.error?.name).toBe("StorageTransactionInconsistent");
 
-      const completed = reactivityLogOf(second);
+      const completed = second.getReactivityLog();
       expect(completed.reads.length).toBeGreaterThan(0);
       expect(completed.writes.length).toBeGreaterThan(0);
     } finally {
@@ -116,7 +108,7 @@ describe("a completed storage transaction", () => {
 
       tx.abort("test");
 
-      const completed = reactivityLogOf(tx);
+      const completed = tx.getReactivityLog();
       expect(completed.reads.length).toBeGreaterThan(0);
       expect(completed.writes.length).toBeGreaterThan(0);
     } finally {

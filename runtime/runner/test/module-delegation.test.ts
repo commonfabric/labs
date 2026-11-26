@@ -1,9 +1,16 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import { Runtime } from "../src/runtime.ts";
+import { Runtime, type ServerRunInfo } from "../src/runtime.ts";
+import { stampWaveRunContext } from "../src/executor/wave.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -24,6 +31,7 @@ import {
   deriveModuleDelegations,
   loadCompiledClosure,
   loadVerifiedSourceClosure,
+  type ModuleDelegationMap,
   setCompileCacheRuntimeVersionForTesting,
   type SourceDoc,
   sourceDocKey,
@@ -32,6 +40,7 @@ import {
   writeSourceDocs,
 } from "../src/compilation-cache/cell-cache.ts";
 import {
+  getPatternIdentityRef,
   getPieceSourceSnapshot,
   type PieceSourceTransition,
   preparePieceSourceTransitionBaseline,
@@ -454,6 +463,59 @@ describe("module identity delegation", () => {
     );
   });
 
+  // Runs `source-update-release-gc-helper.ts` with `args` and returns the
+  // report it prints. Collection needs `--expose-gc` and the real clock,
+  // which this package's test task does not give, so the helper runs in a
+  // process of its own, under the Deno running this test, which the task's
+  // `--allow-run` names, and not whichever copy comes first on PATH
+  // (docs/development/TESTING.md, "Tests that start Deno").
+  const runReleaseHelper = async (args: string[]): Promise<unknown> => {
+    const helper = new URL(
+      "./source-update-release-gc-helper.ts",
+      import.meta.url,
+    );
+    const output = await new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "-A",
+        "--v8-flags=--expose-gc",
+        fromFileUrl(helper),
+        ...args,
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    const stdout = new TextDecoder().decode(output.stdout);
+    expect(
+      output.success,
+      `helper failed:\n${new TextDecoder().decode(output.stderr)}\n${stdout}`,
+    ).toBe(true);
+    // Loggers may write above the report; the report is the last line.
+    const lines = stdout.trim().split("\n");
+    return JSON.parse(lines[lines.length - 1]);
+  };
+
+  it("keeps the successor's source documents loaded from preparing an update to staging it, through release passes, and no longer", async () => {
+    expect(await runReleaseHelper([])).toEqual({
+      keptThroughRelease: true,
+      stageError: null,
+      staged: "previous",
+      releasedOnceDone: true,
+    });
+  });
+
+  it("stages a prepared update whose successor's source documents a release dropped, loading them again", async () => {
+    // The staging that follows the transition's commit loads the successor's
+    // source documents before its transaction reads them.
+
+    expect(await runReleaseHelper(["--without-holds"])).toEqual({
+      keptThroughRelease: false,
+      stageError: null,
+      staged: "previous",
+      releasedOnceDone: true,
+    });
+  });
+
   it("refuses forged and mismatched source update preparations", async () => {
     const manager = runtime.patternManager;
     const forged = {} as PreparedSourceUpdate;
@@ -497,6 +559,35 @@ describe("module identity delegation", () => {
         )
           .toThrow("source update preparation does not match the transition");
       }
+      // Prepared over a piece recording nothing, staged over one that records
+      // something: the record moved after the preparation composed with it.
+      expect(() =>
+        manager.stageSourceUpdate(
+          prepared,
+          space,
+          previous.identity,
+          candidate.identity,
+          tx,
+          {
+            delegations: new Map(),
+            edges: new Map([[
+              previous.identity,
+              new Map([["recorded-since", { at: [0], terminal: [] }]]),
+            ]]),
+            position: 0,
+          },
+        )
+      ).toThrow("source update preparation does not match the transition");
+      expect(
+        manager.stageSourceUpdate(
+          prepared,
+          space,
+          previous.identity,
+          candidate.identity,
+          tx,
+          { delegations: new Map(), edges: new Map(), position: 0 },
+        ).delegations,
+      ).toBeInstanceOf(Map);
     } finally {
       tx.abort();
     }
@@ -518,6 +609,158 @@ describe("module identity delegation", () => {
     } finally {
       storedTx.abort();
     }
+  });
+
+  it("closes the candidate's modules over the recorded edges and the derived ones, stamped at the record's position", async () => {
+    // `candidate` replaces `previous` at the same file. The piece's history
+    // records `previous` succeeding "older" at 2, which succeeds "oldest" at
+    // 1, and a "stray" module the candidate reaches through nothing.
+    // `previous`'s own record lists all of its chain, and "foreign", which
+    // another piece's history gave it.
+    const previous = moduleFor(moduleProgram("old"));
+    const candidate = moduleFor(moduleProgram("new"));
+    expect(
+      (await runtime.editWithRetry((tx) => {
+        writeSourceDocs(
+          runtime,
+          space,
+          [previous],
+          previous.identity,
+          tx,
+          new Map([[
+            previous.identity,
+            new Set(["older", "oldest", "foreign"]),
+          ]]),
+        );
+        writeSourceDocs(runtime, space, [candidate], candidate.identity, tx);
+      })).error,
+    ).toBeUndefined();
+    const recorded = {
+      delegations: new Map([[previous.identity, new Set(["older", "oldest"])]]),
+      edges: new Map([
+        [previous.identity, new Map([["older", { at: [2], terminal: [] }]])],
+        ["older", new Map([["oldest", { at: [1], terminal: [] }]])],
+        ["stray", new Map([["elsewhere", { at: [1], terminal: [] }]])],
+      ]),
+      position: 3,
+    };
+    const manager = runtime.patternManager;
+    const prepared = await manager.prepareSourceUpdate(
+      space,
+      previous.identity,
+      candidate.identity,
+      recorded,
+    );
+    const tx = runtime.edit({ sourceUpdate: prepared });
+    try {
+      const next = manager.stageSourceUpdate(
+        prepared,
+        space,
+        previous.identity,
+        candidate.identity,
+        tx,
+        recorded,
+      );
+
+      expect(next.delegations).toStrictEqual(
+        new Map([[
+          candidate.identity,
+          new Set([previous.identity, "older", "oldest", "foreign"]),
+        ]]),
+      );
+      // The successor's edge takes the record's position, and an entry of the
+      // record's list the edges did not already reach becomes the
+      // successor's terminal edge there, which the walk stops at.
+      expect(next.edges).toStrictEqual(
+        new Map([
+          [previous.identity, new Map([["older", { at: [2], terminal: [] }]])],
+          ["older", new Map([["oldest", { at: [1], terminal: [] }]])],
+          ["stray", new Map([["elsewhere", { at: [1], terminal: [] }]])],
+          [
+            candidate.identity,
+            new Map([
+              [previous.identity, { at: [3], terminal: [] }],
+              ["foreign", { at: [], terminal: [3] }],
+            ]),
+          ],
+        ]),
+      );
+    } finally {
+      tx.abort();
+    }
+  });
+
+  describe("the staging after a source update commits", () => {
+    const delegated = {
+      acting: { user: "did:key:z6MkSourceUpdateActor" },
+      capabilityRef: "source-update-grant",
+    };
+
+    /**
+     * Commit a source update in a transaction whose run carries `delegated`,
+     * on a runtime whose storage serves `home`, and return the stamps of the
+     * staging that follows.
+     */
+    const stagingStamps = async (home: string): Promise<ServerRunInfo[]> => {
+      Object.defineProperty(storageManager, "servingHomeSpace", {
+        get: () => home,
+        configurable: true,
+      });
+      const stamps: ServerRunInfo[] = [];
+      using _stamps = stub(runtime, "stampServerRun", (_tx, info) => {
+        if (info.actionId.startsWith("compile-cache/delegation-staging/")) {
+          stamps.push(info);
+        }
+      });
+      const previous = moduleFor(moduleProgram("old"));
+      const candidate = moduleFor(moduleProgram("new"));
+      expect(
+        (await runtime.editWithRetry((tx) => {
+          writeSourceDocs(runtime, space, [previous], previous.identity, tx);
+          writeSourceDocs(runtime, space, [candidate], candidate.identity, tx);
+        })).error,
+      ).toBeUndefined();
+      const manager = runtime.patternManager;
+      const prepared = await manager.prepareSourceUpdate(
+        space,
+        previous.identity,
+        candidate.identity,
+      );
+      const tx = runtime.edit({ sourceUpdate: prepared });
+      stampWaveRunContext(tx, {
+        actionId: "source update",
+        kind: "event-handler",
+        ...delegated,
+      });
+      manager.stageSourceUpdate(
+        prepared,
+        space,
+        previous.identity,
+        candidate.identity,
+        tx,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await manager.flushCompileCacheWrites();
+      return stamps;
+    };
+
+    it("carries the transition's delegated carriage into a space foreign to the serving runtime's home space", async () => {
+      const home = (await Identity.fromPassphrase("module delegation home"))
+        .did();
+
+      expect(await stagingStamps(home)).toStrictEqual([{
+        actionId: expect.stringMatching(/^compile-cache\/delegation-staging\//),
+        kind: "bookkeeping",
+        delegated,
+      }]);
+    });
+
+    it("carries no delegated carriage into the serving runtime's home space", async () => {
+      expect(await stagingStamps(space)).toStrictEqual([{
+        actionId: expect.stringMatching(/^compile-cache\/delegation-staging\//),
+        kind: "bookkeeping",
+      }]);
+    });
   });
 
   for (const artifact of ["missing source", "untrusted compiled record"]) {
@@ -868,6 +1111,47 @@ describe("module identity delegation", () => {
     expect(delegations.get("new-main")).toEqual(new Set(["old-main"]));
     expect(delegations.get("new-topic")).toEqual(new Set(["old-topic"]));
     expect(delegations.get("new-naming")).toEqual(new Set(["old-naming"]));
+  });
+
+  it("matches each module of a pattern whose entry moved twice to the module the checkout compiled before both moves", () => {
+    // The fixture's folder moved into `dev/`, and then its entry alone was
+    // renamed, so the entry moved twice and a module beside it once.
+    const module = (identity: string, filename: string): CacheableModule => ({
+      identity,
+      filename,
+      source: "export {};",
+      js: "export {};",
+      imports: [],
+    });
+    const doc = (filename: string): SourceDoc => ({
+      kind: "source",
+      code: "export {};",
+      filename,
+      imports: [],
+    });
+    const previous = new Map<string, SourceDoc>([
+      [
+        "old-main",
+        doc("/packages/patterns/map-captured-object-spread/main.tsx"),
+      ],
+      [
+        "old-helper",
+        doc("/packages/patterns/map-captured-object-spread/helper.ts"),
+      ],
+    ]);
+    const delegations = deriveModuleDelegations(previous, [
+      module(
+        "new-main",
+        "/patterns/dev/map-captured-object-spread/map-captured-object-spread.tsx",
+      ),
+      module(
+        "new-helper",
+        "/patterns/dev/map-captured-object-spread/helper.ts",
+      ),
+    ], { previous: "old-main", next: "new-main" });
+
+    expect(delegations.get("new-main")).toEqual(new Set(["old-main"]));
+    expect(delegations.get("new-helper")).toEqual(new Set(["old-helper"]));
   });
 
   it("matches a renamed entry to the entry it replaces, and nothing else across the rename", () => {
@@ -1363,7 +1647,11 @@ describe("module identity delegation", () => {
     )!;
     const successor = moduleFor(moduleProgram("new"));
 
-    const storeSuccessorSource = async (): Promise<void> => {
+    const storeSuccessorSource = async (
+      delegations: ModuleDelegationMap = new Map([
+        [successor.identity, new Set([oldIdentity])],
+      ]),
+    ): Promise<void> => {
       const sourceTx = runtime.edit();
       writeSourceDocs(
         runtime,
@@ -1371,7 +1659,7 @@ describe("module identity delegation", () => {
         [successor],
         successor.identity,
         sourceTx,
-        new Map([[successor.identity, new Set([oldIdentity])]]),
+        delegations,
       );
       runtime.prepareTxForCommit(sourceTx);
       expect((await sourceTx.commit().settled).error).toBeUndefined();
@@ -1555,6 +1843,92 @@ describe("module identity delegation", () => {
       ).toBe(false);
     });
 
+    describe("given the delegations a source revision records", () => {
+      it("registers each recorded entry whose successor is a module of the successor's closure, though the closure's records carry none", async () => {
+        await storeSuccessorSource(new Map());
+
+        await runtime.patternManager.readInheritedAuthority(
+          space,
+          successor.identity,
+          [oldIdentity],
+          new Map([[successor.identity, new Set([oldIdentity])]]),
+        );
+
+        expect(
+          runtime.grantsModuleDelegation(
+            space,
+            successor.identity,
+            oldIdentity,
+          ),
+        ).toBe(true);
+      });
+
+      it("registers no recorded entry whose successor is not a module of the successor's closure", async () => {
+        await storeSuccessorSource(new Map());
+
+        await runtime.patternManager.readInheritedAuthority(
+          space,
+          successor.identity,
+          [oldIdentity],
+          new Map([
+            [successor.identity, new Set([oldIdentity])],
+            ["outside-the-closure", new Set([oldIdentity])],
+          ]),
+        );
+
+        expect(
+          runtime.grantsModuleDelegation(
+            space,
+            successor.identity,
+            oldIdentity,
+          ),
+        ).toBe(true);
+        expect(
+          runtime.grantsModuleDelegation(
+            space,
+            "outside-the-closure",
+            oldIdentity,
+          ),
+        ).toBe(false);
+      });
+
+      it("registers no recorded entry when the space holds no verified closure for the successor", async () => {
+        await runtime.patternManager.readInheritedAuthority(
+          space,
+          successor.identity,
+          [oldIdentity],
+          new Map([[successor.identity, new Set([oldIdentity])]]),
+        );
+
+        expect(
+          runtime.grantsModuleDelegation(
+            space,
+            successor.identity,
+            oldIdentity,
+          ),
+        ).toBe(false);
+      });
+
+      it("registers what the successor's records carry when it records none", async () => {
+        await storeSuccessorSource();
+
+        await runtime.patternManager.readInheritedAuthority(
+          space,
+          successor.identity,
+          [oldIdentity],
+          new Map(),
+        );
+
+        expect(
+          runtime.grantsModuleDelegation(
+            space,
+            successor.identity,
+            oldIdentity,
+          ),
+        ).toBe(true);
+      });
+    });
+
     it("settles without a grant when reading the successor's closure fails", async () => {
       await storeSuccessorSource();
 
@@ -1671,6 +2045,53 @@ describe("module identity delegation", () => {
       await observer.start(observed);
 
       expect(await setName(observer, observed, "after")).toBe("v2:after");
+    });
+
+    it("grants the next pattern nothing from the piece's earlier patterns after a transition that is no source update", async () => {
+      // v1 to v2 is a source update. v2 to v3 is not: its baseline does not
+      // retain v2, as for an update from an origin nobody gates, so nothing
+      // promised v3 any authority of v1's or v2's.
+      const v1Identity = getPatternIdentityRef(piece)!.identity;
+      await moveToV2();
+      const v2Identity = getPatternIdentityRef(piece)!.identity;
+      expect(
+        (piece.getMetaRaw("pieceSourceDelegations") as { identity?: string })
+          ?.identity,
+      ).toBe(v2Identity);
+      const v3 = await runtime.patternManager.compilePattern(
+        writerProgram("v3"),
+        { space },
+      );
+      const expected = getPieceSourceSnapshot(
+        piece,
+        runtime.runner.sessionPatternPointerFor(piece),
+      )!;
+      await runtime.runSynced(piece, v3, {}, {
+        expectedPatternIdentity: expected.pattern,
+        pieceSourceTransition: {
+          revisionId: crypto.randomUUID(),
+          baseline: { kind: "unavailable" },
+          timestamp: Date.now(),
+          operation: "edit",
+          origin: null,
+          expected,
+        },
+      });
+      const v3Identity = getPatternIdentityRef(piece)!.identity;
+      expect(v3Identity).not.toBe(v2Identity);
+
+      // The member carries v2's entries over to v3, and v3's closure holds
+      // none of the modules they name.
+      expect(
+        (piece.getMetaRaw("pieceSourceDelegations") as { identity?: string })
+          ?.identity,
+      ).toBe(v3Identity);
+      await observer.start(observed);
+      for (const predecessor of [v1Identity, v2Identity]) {
+        expect(
+          observer.grantsModuleDelegation(space, v3Identity, predecessor),
+        ).toBe(false);
+      }
     });
 
     it("does not start a piece stopped while the authority read is in flight", async () => {

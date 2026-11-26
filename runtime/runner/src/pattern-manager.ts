@@ -1,7 +1,7 @@
 import type { Source } from "@commonfabric/js-compiler";
 import { getLogger } from "@commonfabric/logger";
 import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import {
   brandTrustedPattern,
@@ -26,13 +26,15 @@ import { ColdLoadNegativeMemo } from "./cold-load-negative-memo.ts";
 import {
   isPatternCoverageCacheRuntimeVersion,
   moduleByteCacheRuntimeVersion,
+  storedSourceByteCacheVersion,
 } from "./compilation-cache/cache-variants.ts";
 import {
   buildSourceDocs,
   type ClosureLoadTally,
+  compileCacheClosureHoldsStamp,
   COMPILED_INTEGRITY_ATOM,
   compiledDocKey,
-  deriveModuleDelegations,
+  deriveModulePredecessors,
   getCompileCacheRuntimeVersion,
   loadCompiledClosure,
   loadSourceClosure,
@@ -40,17 +42,26 @@ import {
   type ModuleDelegationMap,
   moduleDelegationsFromDocs,
   planCompileCacheWriteChunks,
-  recordUndeclarablePolicyStore,
+  repairCompileCacheStamps,
   ROOT_LINK_SPECIFIER,
   sourceClosureNeedsParser,
   type SourceDoc,
   sourceDocKey,
   stageModuleDelegations,
   writeSourceAndCompiledDocs,
+  writeSourceAnnotation,
   writeSourceDocs,
 } from "./compilation-cache/cell-cache.ts";
+import {
+  composeRecordedEdges,
+  type StampedEdges,
+} from "./module-delegations.ts";
 import { createRef } from "./create-ref.ts";
-import { waveSettlementOf } from "./executor/wave.ts";
+import {
+  delegatedCarriageOf,
+  waveRunContextOf,
+  waveSettlementOf,
+} from "./executor/wave.ts";
 import {
   deterministicCompileError,
   isDeterministicCompileFailure,
@@ -73,7 +84,7 @@ import type { MemorySpace, Runtime, ServerRunInfo } from "./runtime.ts";
 import type { PatternManagerSizes } from "./runtime-sizes.ts";
 
 import {
-  isFabricImportSpecifier,
+  type FabricRef,
   parseFabricRef,
   pinnedIdentity,
 } from "./sandbox/fabric-import-specifier.ts";
@@ -115,7 +126,7 @@ export type CompileCacheWriter = (
 
 declare const preparedSourceUpdateBrand: unique symbol;
 
-/** Verified, operation-local authority for an atomic source transition. */
+/** Verified, operation-local authority for one source transition. */
 export interface PreparedSourceUpdate {
   readonly [preparedSourceUpdateBrand]: true;
 }
@@ -125,8 +136,101 @@ type SourceUpdatePreparation = {
   previousEntryIdentity: string;
   entryIdentity: string;
   runtimeVersion: string | undefined;
+
+  /**
+   * The delegations the update grants the candidate's modules, closed over
+   * `edges` (`composeRecordedEdges()`). The update's transaction is
+   * pinned to them, and they are registered and staged once it commits.
+   */
   delegations: ModuleDelegationMap;
+
+  /**
+   * The edges the piece's member records once the update commits: the
+   * previous record's, and the ones this update derives, stamped with the
+   * position it records them at.
+   */
+  edges: StampedEdges;
+
+  /**
+   * What the piece's `pieceSourceDelegations` member records for the
+   * previous pattern, as the caller read it before preparing. The transition
+   * checks that the member still holds it.
+   */
+  recordedPrevious: PieceSourceRecord;
+
+  /**
+   * The hold tokens (`IStorageManager.holdDocument()`) of the candidate's
+   * source documents, kept for as long as the preparation is. The transition
+   * verifies the candidate's source closure synchronously, inside its own
+   * transaction (`applyPieceSourceTransition()`), which reads only documents
+   * already loaded, so a release pass between preparing and that commit must
+   * leave them loaded.
+   */
+  documentHolds: readonly object[];
 };
+
+/**
+ * What a piece's `pieceSourceDelegations` member records for a pattern, read
+ * for a transition that records the member: `delegations`, the closed
+ * delegations of the modules of that pattern's closure, which a start
+ * registers; `edges`, every delegation edge the piece's history recorded,
+ * each with the history positions it was recorded at; and `position`, one
+ * past the piece's history length as read, which the next transition stamps
+ * the edges it records with. The history only grows, and every transition, a
+ * source update or not, appends to it, so `position` exceeds every stamp
+ * already recorded.
+ */
+export type PieceSourceRecord = {
+  delegations: ModuleDelegationMap;
+  edges: StampedEdges;
+  position: number;
+};
+
+/** A record that records nothing, read at `position`. */
+export function emptyPieceSourceRecord(position: number): PieceSourceRecord {
+  return { delegations: new Map(), edges: new Map(), position };
+}
+
+/** A canonical key for `delegations`, equal for equal maps. */
+function moduleDelegationsKey(delegations: ModuleDelegationMap): string {
+  return JSON.stringify(
+    [...delegations].map(([identity, predecessors]) =>
+      [identity, [...predecessors].sort(utf8Compare)] as const
+    ).sort(([a], [b]) => utf8Compare(a, b)),
+  );
+}
+
+/** A canonical key for `edges`, stamps included, equal for equal edges. */
+function stampedEdgesKey(edges: StampedEdges): string {
+  return JSON.stringify(
+    [...edges].map(([identity, predecessors]) =>
+      [
+        identity,
+        [...predecessors].map(([predecessor, { at, terminal }]) =>
+          [
+            predecessor,
+            [...at].sort((a, b) => a - b),
+            [...terminal].sort((a, b) => a - b),
+          ] as const
+        ).sort(([a], [b]) => utf8Compare(a, b)),
+      ] as const
+    ).sort(([a], [b]) => utf8Compare(a, b)),
+  );
+}
+
+/**
+ * A canonical key for `record`'s member fields, equal for records equal in
+ * both. The position is left out: it is one past the history's length, and
+ * the transition refuses a history whose last revision is not the one the
+ * preparation read (`samePieceSourceSnapshot()`), so the two cannot differ
+ * where this key is compared.
+ */
+function pieceSourceRecordKey(record: PieceSourceRecord): string {
+  return JSON.stringify([
+    moduleDelegationsKey(record.delegations),
+    stampedEdgesKey(record.edges),
+  ]);
+}
 
 const logger = getLogger("pattern-manager");
 
@@ -243,7 +347,12 @@ export function sourceCfcMetadataProhibitsCrossSpaceCopy(
   }) ?? false;
 }
 
-function throwableStorageError(error: CommitError): Error {
+/**
+ * Returns `error` as a throwable `Error`: the error itself when it is one, and
+ * otherwise a new `Error` carrying its `message` and `name`, with `error` as
+ * its `cause`. Exported for testing.
+ */
+export function throwableStorageError(error: CommitError): Error {
   if (error instanceof Error) return error;
   return Object.assign(new Error(error.message), {
     name: error.name,
@@ -356,9 +465,9 @@ function cacheEntriesIncludePatternCoverage(
  * data that predates that guard.
  *
  * Parsing needs the compiler stack, which the caller loads when some module
- * carries no attested list.
+ * carries no attested list. Exported for testing.
  */
-function fabricImportRefsFromSource(
+export function fabricImportRefsFromSource(
   doc: SourceDoc,
   attestedImports: readonly string[] | undefined,
 ): CacheableModule["imports"] {
@@ -370,8 +479,12 @@ function fabricImportRefsFromSource(
   const refs: CacheableModule["imports"] = [];
   const seen = new Set<string>();
   for (const specifier of specifiers) {
-    if (!isFabricImportSpecifier(specifier)) continue;
-    const ref = parseFabricRef(specifier);
+    let ref: FabricRef | undefined;
+    try {
+      ref = parseFabricRef(specifier);
+    } catch {
+      continue;
+    }
     if (ref === undefined) continue;
     const targetIdentity = pinnedIdentity(ref);
     if (targetIdentity === undefined) continue;
@@ -383,7 +496,11 @@ function fabricImportRefsFromSource(
   return refs;
 }
 
-function uniqueCacheableImports(
+/**
+ * Returns `imports` without repeats: the first of each specifier and target
+ * pair, in order. Exported for testing.
+ */
+export function uniqueCacheableImports(
   imports: CacheableModule["imports"],
 ): CacheableModule["imports"] {
   const seen = new Set<string>();
@@ -583,6 +700,23 @@ function programCompilationKey(
   );
 }
 
+/**
+ * Helper for `#byteCacheBodiesOrTurn()`, which names the turn at a cold
+ * compile of `identities` under `runtimeVersion`: the same for every compile
+ * of the same modules, in whatever order they are listed, and fixed in length.
+ */
+function compileTurnKey(
+  runtimeVersion: string,
+  identities: readonly string[],
+): string {
+  return toURI(
+    createRef(
+      { runtimeVersion, identities: [...identities].sort() },
+      "compile turn",
+    ),
+  );
+}
+
 export class PatternManager {
   #runtime: Runtime;
 
@@ -747,11 +881,17 @@ export class PatternManager {
 
   /**
    * Program entry module identity → the identities of every module that
-   * program evaluated with, from the latest evaluation that ran it as its
-   * main module. A release of a pattern reads it to say which modules' writer
-   * stamps the release's schema can carry (see `programModuleIdentities`).
+   * program evaluated with, and the source file each was evaluated from, from
+   * the latest evaluation that ran it as its main module. A release of a
+   * pattern reads it to say which modules' writer stamps the release's schema
+   * can carry (see `programModuleIdentities`), and a review of an update to it
+   * what delegations that update proposes (see
+   * `proposedSourceUpdateDelegations`).
    */
-  readonly #programModules = new Map<string, ReadonlySet<string>>();
+  readonly #programModules = new Map<string, {
+    readonly identities: ReadonlySet<string>;
+    readonly filenames: ReadonlyMap<string, string>;
+  }>();
 
   /**
    * In-flight compiled-cache write-backs; awaited by
@@ -850,6 +990,13 @@ export class PatternManager {
    * persisted × the variants it wrote there.
    */
   #persistedClosureSpaces = new Map<string, Map<MemorySpace, Set<string>>>();
+
+  /**
+   * The closures, by `stringTupleKey([space, identity])`, whose stamp repair
+   * this session refused: a refusal stands until the records change, so it is
+   * not tried again here.
+   */
+  #unrepairedStampedClosures = new Set<string>();
 
   /**
    * Failed replications _parked_ for event-driven re-supply (the one supplier
@@ -1526,7 +1673,14 @@ export class PatternManager {
     if (toSpace === fromSpace) return;
 
     const entryRef = this.getArtifactEntryRef(pattern);
-    if (!entryRef) return;
+    if (!entryRef) {
+      logger.debug("closure-replication-skipped", () => [
+        `from=${fromSpace}`,
+        `to=${toSpace}`,
+        "reason=no-artifact-entry",
+      ]);
+      return;
+    }
     this.#issueReplication({
       entryIdentity: entryRef.identity,
       fromSpace,
@@ -1557,9 +1711,17 @@ export class PatternManager {
    * matching record wakes it instead.
    *
    * A copy a load issued on its own (`copyForLoad`) that its target refuses
-   * for want of a grant logs `closure-copy-refused` at debug instead: the
-   * session may only read that space, which is no fault, and no re-run can
-   * supply the grant. */
+   * for want of a grant logs `closure-copy-refused` instead: the session may
+   * only read that space, which is no fault, and no re-run can supply the
+   * grant.
+   *
+   * Each replication logs `closure-replication-issued` and then exactly one
+   * of `closure-replication-committed`, once its writes have been accepted,
+   * `closure-copy-refused` or `closure-replication-failed`, all at info or
+   * above and all naming its ticket, so a space left without a closure shows
+   * in the log whether its copy was issued and how it ended. A serving wave
+   * that later withdraws a write it accepted logs
+   * `compile-cache-writeback-withdrawn` with the entry and the space. */
   #issueReplication(
     replication: ClosureReplication,
     reissueOf?: { wantedIdentity: string },
@@ -1567,6 +1729,18 @@ export class PatternManager {
     const { entryIdentity, fromSpace, toSpace, delegated, copyForLoad } =
       replication;
     const ticket = this.#nextReplicationTicket++;
+    const issuedAt = performance.now();
+    logger.info("closure-replication-issued", () => [
+      `entry=${entryIdentity}`,
+      `from=${fromSpace}`,
+      `to=${toSpace}`,
+      `ticket=${ticket}`,
+      ...(reissueOf !== undefined
+        ? ["trigger=reissue"]
+        : copyForLoad
+        ? ["trigger=load-from-memory"]
+        : []),
+    ]);
     const settled = this.#replicateClosures(
       entryIdentity,
       fromSpace,
@@ -1575,6 +1749,12 @@ export class PatternManager {
       delegated,
       ticket,
     ).then(() => {
+      logger.info("closure-replication-committed", () => [
+        `entry=${entryIdentity}`,
+        `to=${toSpace}`,
+        `ticket=${ticket}`,
+        `ms=${Math.round(performance.now() - issuedAt)}`,
+      ]);
       if (reissueOf !== undefined) {
         logger.warn("closure-replication-healed", () => [
           `entry=${entryIdentity}`,
@@ -1585,10 +1765,11 @@ export class PatternManager {
       }
     }).catch((error) => {
       if (copyForLoad && isGrantRefusal(error)) {
-        logger.debug("closure-copy-refused", () => [
+        logger.info("closure-copy-refused", () => [
           `entry=${entryIdentity}`,
           `from=${fromSpace}`,
           `to=${toSpace}`,
+          `ticket=${ticket}`,
           String(error),
         ]);
         return;
@@ -1597,6 +1778,7 @@ export class PatternManager {
         `entry=${entryIdentity}`,
         `from=${fromSpace}`,
         `to=${toSpace}`,
+        `ticket=${ticket}`,
         String(error),
       ]);
       if (error instanceof ClosureReplicationSupplyError) {
@@ -1785,7 +1967,9 @@ export class PatternManager {
    * began is supplied by the next session that writes it), and a space the
    * session has written into, or is writing into, is copied into no more. A
    * space the session may only read refuses the copy, and the refusal is
-   * logged at debug as `closure-copy-refused`, not as a failed replication:
+   * logged at info as `closure-copy-refused`, not as a failed replication
+   * (a repair from a retained compile logs its own refusal at debug, as
+   * `compile-cache-repair-refused`):
    * the next session that writes the closure as a principal who may write
    * that space supplies it.
    */
@@ -1818,12 +2002,6 @@ export class PatternManager {
       return;
     }
     if (!this.#markClosureCopyIssued(space, entryIdentity)) return;
-    logger.debug("closure-replication-issued", () => [
-      `entry=${entryIdentity}`,
-      `from=${origin}`,
-      `to=${space}`,
-      "trigger=load-from-memory",
-    ]);
     this.#issueReplication({
       entryIdentity,
       fromSpace: origin,
@@ -1844,7 +2022,7 @@ export class PatternManager {
     const key = (identity: string) => stringTupleKey([space, identity]);
     if (this.#closureCopiesIssued.has(key(entryIdentity))) return false;
     for (
-      const identity of this.#programModules.get(entryIdentity) ??
+      const identity of this.#programModules.get(entryIdentity)?.identities ??
         [entryIdentity]
     ) {
       this.#closureCopiesIssued.add(key(identity));
@@ -2147,9 +2325,6 @@ export class PatternManager {
     const fabricDependencies = new Set<string>();
     for (const [identity, doc] of sourceDocs) {
       const compiled = compiledDocs?.get(identity);
-      if (runtimeVersion !== undefined && !compiled) {
-        throw new Error(`compiled doc missing for ${identity}`);
-      }
       const fabricImports = compiled?.kind === "data"
         ? []
         : fabricImportRefsFromSource(doc, compiled?.sourceImports);
@@ -2231,13 +2406,18 @@ export class PatternManager {
   }
 
   /**
-   * Derive proposed authority from two verified durable source closures. The
-   * proposal belongs to this update and remains absent from ordinary transactions.
+   * Derive proposed authority from two verified durable source closures,
+   * composed with `recordedPrevious`, what the piece's
+   * `pieceSourceDelegations` member records for the previous pattern
+   * (`getPieceSourceDelegations()`). The proposal belongs to this update and
+   * remains absent from ordinary transactions; the update's own transaction
+   * is pinned to it (`sourceUpdateDelegations()`).
    */
   async prepareSourceUpdate(
     space: MemorySpace,
     previousEntryIdentity: string,
     entryIdentity: string,
+    recordedPrevious: PieceSourceRecord = emptyPieceSourceRecord(0),
   ): Promise<PreparedSourceUpdate> {
     const tx = this.#runtime.edit();
     try {
@@ -2260,16 +2440,29 @@ export class PatternManager {
           "cannot authorize source update without verified source closures",
         );
       }
+      // The transition verifies the candidate's source closure inside its
+      // commit, reading only what is loaded, and fails when a document is
+      // missing rather than loading it. Nothing else keeps what the load above
+      // read: the cells that read it go with this call, so a release pass
+      // before the commit would drop those documents. The preparation holds
+      // them for as long as it lives, taken here, while they are loaded.
+      const documentHolds: object[] = [];
+      for (const identity of candidate.keys()) {
+        const { id, scope } = this.#runtime
+          .getCell(space, sourceDocKey(identity))
+          .getAsNormalizedFullLink();
+        const hold = this.#runtime.storageManager.holdDocument?.({
+          space,
+          id,
+          scope,
+        });
+        if (hold !== undefined) documentHolds.push(hold);
+      }
       const runtimeVersion = await this.compileCacheRuntimeVersion({
         patternCoverage: this.#patternCoverageFor() !== undefined,
       });
-      const prepared = Object.freeze({}) as PreparedSourceUpdate;
-      this.#sourceUpdates.set(prepared, {
-        space,
-        previousEntryIdentity,
-        entryIdentity,
-        runtimeVersion,
-        delegations: deriveModuleDelegations(
+      const { delegations, edges } = composeRecordedEdges(
+        deriveModulePredecessors(
           previous,
           [...candidate].map(([identity, doc]) => ({
             identity,
@@ -2277,6 +2470,19 @@ export class PatternManager {
           })),
           { previous: previousEntryIdentity, next: entryIdentity },
         ),
+        recordedPrevious,
+        candidate.keys(),
+      );
+      const prepared = Object.freeze({}) as PreparedSourceUpdate;
+      this.#sourceUpdates.set(prepared, {
+        space,
+        previousEntryIdentity,
+        entryIdentity,
+        runtimeVersion,
+        documentHolds,
+        recordedPrevious,
+        delegations,
+        edges,
       });
       return prepared;
     } finally {
@@ -2303,34 +2509,224 @@ export class PatternManager {
     };
   }
 
-  /** Stage the proposal with its matching source transition and register on commit. */
+  /**
+   * The writer-authority delegations an update in `space` from the program
+   * `previousEntryIdentity` names to the program `entryIdentity` names would
+   * propose, for a review to judge the update by before it is prepared: what
+   * `prepareSourceUpdate()` derives, from the same verified source closures
+   * where `space` holds the candidate's. Where it does not yet, as for a
+   * candidate compiled without being stored, the candidate's modules are the
+   * ones this session evaluated it with, which leave out a module the
+   * program imports only for its types, so the review can then miss a
+   * delegation the update proposes. `undefined` where neither is at hand, or
+   * the previous program's source closure does not verify in `space`, which
+   * leaves an update nothing to propose. `recordedPrevious` is as for
+   * `prepareSourceUpdate()`.
+   */
+  async proposedSourceUpdateDelegations(
+    space: MemorySpace,
+    previousEntryIdentity: string,
+    entryIdentity: string,
+    recordedPrevious: PieceSourceRecord = emptyPieceSourceRecord(0),
+  ): Promise<ModuleDelegationMap | undefined> {
+    const tx = this.#runtime.edit();
+    try {
+      const previous = await loadVerifiedSourceClosure(
+        this.#runtime,
+        space,
+        previousEntryIdentity,
+        tx,
+      );
+      if (!previous?.has(previousEntryIdentity)) return undefined;
+      const stored = await loadVerifiedSourceClosure(
+        this.#runtime,
+        space,
+        entryIdentity,
+        tx,
+      );
+      const evaluated = this.#programModules.get(entryIdentity);
+      const candidate = stored?.has(entryIdentity)
+        ? [...stored].map(([identity, doc]) => ({
+          identity,
+          filename: doc.filename,
+        }))
+        : evaluated === undefined
+        ? undefined
+        : [...evaluated.identities].flatMap((identity) => {
+          const filename = evaluated.filenames.get(identity);
+          return filename === undefined ? [] : [{ identity, filename }];
+        });
+      if (candidate === undefined) return undefined;
+      return composeRecordedEdges(
+        deriveModulePredecessors(previous, candidate, {
+          previous: previousEntryIdentity,
+          next: entryIdentity,
+        }),
+        recordedPrevious,
+        candidate.map(({ identity }) => identity),
+      ).delegations;
+    } finally {
+      tx.abort("source update proposal derived");
+    }
+  }
+
+  /**
+   * Whether `prepared` was composed with `recordedPrevious`, what the
+   * piece's `pieceSourceDelegations` member records for the previous pattern
+   * as read in the transition's transaction. Where it was not, the member
+   * moved after the preparation read it, and the transition is refused as
+   * one whose source moved.
+   */
+  sourceUpdateComposedWith(
+    prepared: PreparedSourceUpdate,
+    recordedPrevious: PieceSourceRecord,
+  ): boolean {
+    const proposal = this.#sourceUpdates.get(prepared);
+    return proposal !== undefined &&
+      pieceSourceRecordKey(proposal.recordedPrevious) ===
+        pieceSourceRecordKey(recordedPrevious);
+  }
+
+  /**
+   * Check that `prepared` matches the source transition `tx` makes, and
+   * return what the transition records in the piece's member for the
+   * successor (`prepareSourceUpdate()`): the closed delegations of its
+   * modules, and the direct edges of the piece's history.
+   * `recordedPrevious` is what the member records for the previous pattern,
+   * read in `tx`; a preparation composed with something else does not match.
+   * Once `tx` commits, this registers the delegations and stages them on the
+   * successor's cache records (`#stageCommittedDelegations()`).
+   */
   stageSourceUpdate(
     prepared: PreparedSourceUpdate,
     space: MemorySpace,
     previousEntryIdentity: string,
     entryIdentity: string,
     tx: IExtendedStorageTransaction,
-  ): void {
+    recordedPrevious: PieceSourceRecord = emptyPieceSourceRecord(0),
+  ): { delegations: ModuleDelegationMap; edges: StampedEdges } {
     const proposal = this.#sourceUpdates.get(prepared);
     if (
       proposal === undefined || proposal.space !== space ||
       proposal.previousEntryIdentity !== previousEntryIdentity ||
-      proposal.entryIdentity !== entryIdentity
+      proposal.entryIdentity !== entryIdentity ||
+      pieceSourceRecordKey(proposal.recordedPrevious) !==
+        pieceSourceRecordKey(recordedPrevious)
     ) {
       throw new Error(
         "source update preparation does not match the transition",
       );
     }
-    const committed = stageModuleDelegations(
-      this.#runtime,
-      space,
-      proposal.delegations,
-      proposal.runtimeVersion,
-      tx,
-    );
+    const { delegations, edges, runtimeVersion } = proposal;
+    // The transition writes no cache record: its transaction reads the
+    // piece's data, and a record every later setup of the module reads would
+    // take that label. The successor's authority is registered once the
+    // transition commits, and staged on its records after that, on a cache
+    // transaction of its own, which carries the transition's delegated
+    // carriage, as a cache write-back carries its triggering run's.
+    const delegated = delegatedCarriageOf(waveRunContextOf(tx));
     tx.addVerdictCallback((_tx, result) => {
-      if (result.ok) this.#runtime.registerModuleDelegations(space, committed);
+      if (!result.ok) return;
+      this.#runtime.registerModuleDelegations(space, delegations);
+      void this.#stageCommittedDelegations({
+        space,
+        entryIdentity,
+        delegations,
+        runtimeVersion,
+      }, delegated);
     });
+    return { delegations, edges };
+  }
+
+  /**
+   * Helper for `stageSourceUpdate()`, which
+   * stages `target.delegations`, granted by a source update that has
+   * committed, on the successor's source and compiled records, on a
+   * transaction of its own that reads nothing but those records, and
+   * registers the union it staged. `delegated` is the committed
+   * transition's delegated carriage, which the staging carries into a space
+   * foreign to a serving runtime's home space (`#stampCacheWrite()`).
+   *
+   * It is tracked as a cache write (`flushCompileCacheWrites()`), but not as
+   * a closure persist, and its wave's outcome is not watched: it changes one
+   * field of records the space already holds (`stageModuleDelegations()`
+   * refuses a record that is absent), so neither its progress nor a
+   * withdrawal says anything about whether the space holds the closure. A
+   * failed or withdrawn staging is not retried. The piece's own authority
+   * does not depend on it, since the piece's member records it, and the
+   * piece's next committed update stages the closed entries of the modules
+   * it then runs, which carry it on for those modules.
+   *
+   * TODO: A grant whose staging failed is missing from the records for good
+   * where nothing of this piece's carries it to them, and what reads only
+   * the records is refused it, where `main`'s staging in the transition
+   * would have kept it: a runtime from before the member that makes any
+   * transition of the piece after the failed staging, a source update or
+   * not, after which the member names another pattern and is ignored, and
+   * the unstaged record decides (`setsrc-module-delegation.test.ts`, "loses a grant
+   * whose staging failed when a runtime from before the record makes the
+   * piece's next update", and "…moves the piece without a source update");
+   * a source update of another piece from the ungranted module, which takes
+   * in its unstaged record and so carries the loss into that piece's record
+   * and on to its successors; and a write that a module of another piece
+   * makes, through a link, into a field the granting module protects, since
+   * that runtime registers the grant only from the records. Each needs the
+   * failed staging first, and each refuses, never grants.
+   */
+  async #stageCommittedDelegations(
+    target: Pick<
+      SourceUpdatePreparation,
+      "space" | "entryIdentity" | "delegations" | "runtimeVersion"
+    >,
+    delegated: WritebackDelegation | undefined,
+  ): Promise<void> {
+    const { space, entryIdentity, delegations, runtimeVersion } = target;
+    const identities = [...delegations.keys()];
+    const targets = identities.map((identity) => ({ identity }));
+    const settlements: Promise<WaveSettlement>[] = [];
+    let committed: ModuleDelegationMap = new Map();
+    const staging = (async () => {
+      await (runtimeVersion === undefined
+        ? this.#syncSourceCacheWriteTargets(space, targets)
+        : this.#syncCompileCacheWriteTargets(space, targets, {
+          runtimeVersion,
+        }));
+      return await this.#editCacheWrite(settlements, (tx) => {
+        // Bookkeeping stamp, the same §3d reason as the write-backs'.
+        this.#stampCacheWrite(
+          tx,
+          space,
+          `compile-cache/delegation-staging/${entryIdentity}`,
+          delegated,
+        );
+        committed = stageModuleDelegations(
+          this.#runtime,
+          space,
+          delegations,
+          runtimeVersion,
+          tx,
+        );
+      });
+    })();
+    this.#trackCacheWriteBack(space, entryIdentity, [], staging);
+    try {
+      const { error } = await staging;
+      if (error !== undefined) {
+        logger.warn("delegation-staging-failed", () => [
+          `staging the delegations of ${entryIdentity} in ${space} failed`,
+          error,
+        ]);
+        return;
+      }
+      this.#runtime.registerModuleDelegations(space, committed);
+    } catch (error) {
+      logger.warn("delegation-staging-failed", () => [
+        `staging the delegations of ${entryIdentity} in ${space} failed`,
+        error,
+      ]);
+    } finally {
+      this.#untrackCacheWriteBack(space, entryIdentity, [], staging);
+    }
   }
 
   /**
@@ -2353,17 +2749,119 @@ export class PatternManager {
     identities: Iterable<string>,
   ): Promise<void> {
     const tx = this.#runtime.edit();
+    const stamped: string[] = [];
     try {
       let parserNeeded = false;
       for (const identity of new Set(identities)) {
         if (PatternManager.isKeylessPatternIdentity(identity)) continue;
-        if (!await this.#closureVerifiesWithoutParser(space, identity, tx)) {
-          parserNeeded = true;
+        const { verifies, closure } = await this.#closureVerifiesWithoutParser(
+          space,
+          identity,
+          tx,
+        );
+        if (!verifies) parserNeeded = true;
+        // The source closure is already loaded here, so asking whether a
+        // record of it is stamped syncs only its compiled records.
+        if (
+          closure !== undefined &&
+          await this.#closureHoldsStamp(space, identity, tx, closure)
+        ) {
+          stamped.push(identity);
         }
       }
       if (parserNeeded) await ensureCompilerStack();
     } finally {
       tx.abort("source closure verification prepared");
+    }
+    for (const identity of stamped) {
+      await this.#repairCompileCacheStamps(space, identity);
+    }
+  }
+
+  /**
+   * Helper for `prepareSourceClosureVerification()`, which returns whether a
+   * record of `identity`'s closure in `space` holds a flow stamp, read in
+   * `tx` (`compileCacheClosureHoldsStamp()`), and is not one this session's
+   * repair already gave up on.
+   */
+  async #closureHoldsStamp(
+    space: MemorySpace,
+    identity: string,
+    tx: IExtendedStorageTransaction,
+    closure: ReadonlyMap<string, SourceDoc>,
+  ): Promise<boolean> {
+    if (
+      this.#unrepairedStampedClosures.has(stringTupleKey([space, identity]))
+    ) {
+      return false;
+    }
+    try {
+      return await compileCacheClosureHoldsStamp(
+        this.#runtime,
+        space,
+        identity,
+        await this.compileCacheRuntimeVersion({
+          patternCoverage: this.#patternCoverageFor() !== undefined,
+        }),
+        tx,
+        closure,
+      );
+    } catch (error) {
+      logger.warn("compile-cache-stamp-check-failed", () => [
+        `entry=${identity}`,
+        `space=${space}`,
+        error,
+      ]);
+      return false;
+    }
+  }
+
+  /**
+   * Helper for `prepareSourceClosureVerification()`, which repairs the
+   * compile-cache records of `identity`'s closure in `space` that a flow stamp
+   * labeled (`repairCompileCacheStamps()`), so that the verification and setup
+   * that follow read them unlabeled. A repair this session may not commit, as
+   * in a read-only session, is logged and leaves the records as they were.
+   */
+  async #repairCompileCacheStamps(
+    space: MemorySpace,
+    identity: string,
+  ): Promise<void> {
+    const key = stringTupleKey([space, identity]);
+    if (this.#unrepairedStampedClosures.has(key)) return;
+    try {
+      const runtimeVersion = await this.compileCacheRuntimeVersion({
+        patternCoverage: this.#patternCoverageFor() !== undefined,
+      });
+      const outcome = await repairCompileCacheStamps(
+        this.#runtime,
+        space,
+        identity,
+        runtimeVersion,
+        (tx) =>
+          this.#runtime.stampServerRun(tx, {
+            actionId: `compile-cache/stamp-repair/${identity}`,
+            kind: "bookkeeping",
+            directCommit: true,
+          }),
+      );
+      // A refusal stands until the records change. A conflict is a race the
+      // next load may win, and a session refused write access may be granted
+      // it, so each of those is tried again.
+      if (outcome === "refused") this.#unrepairedStampedClosures.add(key);
+      if (outcome !== "clean" && outcome !== "unverified") {
+        logger.debug("compile-cache-stamp-repair", () => [
+          `entry=${identity}`,
+          `space=${space}`,
+          outcome,
+        ]);
+      }
+    } catch (error) {
+      logger.warn("compile-cache-stamp-repair-failed", () => [
+        `entry=${identity}`,
+        `space=${space}`,
+        error,
+      ]);
     }
   }
 
@@ -2378,20 +2876,18 @@ export class PatternManager {
     space: MemorySpace,
     identity: string,
     tx: IExtendedStorageTransaction,
-  ): Promise<boolean> {
+  ): Promise<{ verifies: boolean; closure?: Map<string, SourceDoc> }> {
+    let closure: Map<string, SourceDoc> | undefined;
     try {
-      const closure = await loadSourceClosure(
-        this.#runtime,
-        space,
-        identity,
-        tx,
-      );
-      if (closure === undefined) return true;
-      if (!sourceClosureNeedsParser(this.#runtime, space, closure)) return true;
+      closure = await loadSourceClosure(this.#runtime, space, identity, tx);
+      if (closure === undefined) return { verifies: true };
+      if (!sourceClosureNeedsParser(this.#runtime, space, closure)) {
+        return { verifies: true, closure };
+      }
       const runtimeVersion = await this.compileCacheRuntimeVersion({
         patternCoverage: this.#patternCoverageFor() !== undefined,
       });
-      if (runtimeVersion === undefined) return false;
+      if (runtimeVersion === undefined) return { verifies: false, closure };
       await loadCompiledClosure(
         this.#runtime,
         space,
@@ -2399,14 +2895,17 @@ export class PatternManager {
         { runtimeVersion },
         tx,
       );
-      return !sourceClosureNeedsParser(this.#runtime, space, closure);
+      return {
+        verifies: !sourceClosureNeedsParser(this.#runtime, space, closure),
+        closure,
+      };
     } catch (error) {
       logger.warn("source-closure-preparation-read-failed", () => [
         `entry=${identity}`,
         `space=${space}`,
         error,
       ]);
-      return false;
+      return { verifies: false, closure };
     }
   }
 
@@ -2430,18 +2929,26 @@ export class PatternManager {
    * predecessor the successor inherits nothing from stays ungranted, and a
    * failed read is logged rather than rejected, leaving the runtime's grants
    * as they were.
+   *
+   * `recorded` is what the piece's `pieceSourceDelegations` member records
+   * for `identity` (`getPieceSourceDelegations()`), which the source update
+   * wrote in its own transaction and so is there before the staging on the
+   * cache records lands, or whether or not it ever does. Each closure read
+   * also registers those of its entries whose successor is a module of that
+   * closure, and no other. The read writes nothing.
    */
   readInheritedAuthority(
     space: MemorySpace,
     identity: string,
     predecessorIdentities: Iterable<string>,
+    recorded?: ModuleDelegationMap,
   ): Promise<void> | undefined {
     if (PatternManager.isKeylessPatternIdentity(identity)) return undefined;
     const predecessors = [...predecessorIdentities];
     if (!this.#owesInheritedAuthority(space, identity, predecessors)) {
       return undefined;
     }
-    return this.#readStoredDelegations(space, identity, predecessors);
+    return this.#readStoredDelegations(space, identity, predecessors, recorded);
   }
 
   /**
@@ -2476,14 +2983,22 @@ export class PatternManager {
     space: MemorySpace,
     identity: string,
     predecessors: readonly string[],
+    recorded: ModuleDelegationMap | undefined,
   ): Promise<void> {
     const tx = this.#runtime.edit();
     try {
-      await this.#readCompiledDelegations(space, identity, tx);
+      const compiled = await this.#readCompiledDelegations(space, identity, tx);
+      this.#registerRecordedDelegations(space, recorded, compiled);
       if (!this.#owesInheritedAuthority(space, identity, predecessors)) {
         return;
       }
-      await loadVerifiedSourceClosure(this.#runtime, space, identity, tx);
+      const source = await loadVerifiedSourceClosure(
+        this.#runtime,
+        space,
+        identity,
+        tx,
+      );
+      this.#registerRecordedDelegations(space, recorded, source);
     } catch (error) {
       logger.warn("inherited-authority-read-failed", () => [
         `reading the delegations of ${identity} in ${space} failed`,
@@ -2495,22 +3010,55 @@ export class PatternManager {
   }
 
   /**
+   * Helper for `#readStoredDelegations()`, which registers each entry of
+   * `recorded` whose successor is a module of `closure`, a closure of the
+   * successor that a read has just verified. Without either it registers
+   * nothing. It writes nothing: a start or swap only reads.
+   */
+  #registerRecordedDelegations(
+    space: MemorySpace,
+    recorded: ModuleDelegationMap | undefined,
+    closure:
+      | ReadonlyMap<
+        string,
+        { readonly delegatedModuleIdentities?: readonly string[] }
+      >
+      | undefined,
+  ): void {
+    if (recorded === undefined || closure === undefined) return;
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/101 Authority
+    // read from the piece's `pieceSourceDelegations` member rather than from
+    // a verified closure's own records. The member is written only through the runtime's meta
+    // seam, in the source update's transaction (`applyPieceSourceTransition()`).
+    const keyed = new Map(
+      [...recorded].filter(([successor]) => closure.has(successor)),
+    );
+    if (keyed.size > 0) this.#runtime.registerModuleDelegations(space, keyed);
+  }
+
+  /**
    * Helper for `#readStoredDelegations()`, which reads `identity`'s compiled
    * closure for this runtime version in `tx`, registering the delegations it
-   * carries. A failed read is logged and registers nothing: the source closure
-   * is read on its own after it, and can still supply every grant.
+   * carries, and returns it. A failed read is logged, registers nothing, and
+   * returns `undefined`: the source closure is read on its own after it, and
+   * can still supply every grant.
    */
   async #readCompiledDelegations(
     space: MemorySpace,
     identity: string,
     tx: IExtendedStorageTransaction,
-  ): Promise<void> {
+  ): Promise<
+    ReadonlyMap<
+      string,
+      { readonly delegatedModuleIdentities?: readonly string[] }
+    > | undefined
+  > {
     try {
       const runtimeVersion = await this.compileCacheRuntimeVersion({
         patternCoverage: this.#patternCoverageFor() !== undefined,
       });
-      if (runtimeVersion === undefined) return;
-      await loadCompiledClosure(
+      if (runtimeVersion === undefined) return undefined;
+      return await loadCompiledClosure(
         this.#runtime,
         space,
         identity,
@@ -2522,16 +3070,17 @@ export class PatternManager {
         `reading the compiled closure of ${identity} in ${space} failed`,
         error,
       ]);
+      return undefined;
     }
   }
 
   /**
-   * Helper for the compiles that consult the process byte cache, which returns
+   * Helper for the compiles that consult the shared byte cache, which returns
    * what it holds for `identities`. On a miss, and where this runtime shares
-   * turns at a cold compile, it also holds this runtime's turn, and reads again
-   * once the turn comes, since the compile that held it may have put those
-   * modules. `endTurn` ends a turn it holds; the caller calls it once it has
-   * compiled and put the modules, or failed to.
+   * turns at a cold compile, it also holds this runtime's turn for those
+   * modules, and reads again once the turn comes, since the compile that held
+   * it may have put them. `endTurn` ends a turn it holds; the caller calls it
+   * once it has compiled and put the modules, or failed to.
    */
   async #byteCacheBodiesOrTurn(
     runtimeVersion: string,
@@ -2546,8 +3095,17 @@ export class PatternManager {
     if (held !== undefined || compileTurns === undefined) {
       return { bodies: held };
     }
-    const endTurn = await compileTurns.take();
-    const bodies = byteCache.getCompleteSet(runtimeVersion, identities);
+    const endTurn = await compileTurns.take(
+      compileTurnKey(runtimeVersion, identities),
+    );
+    let bodies;
+    try {
+      bodies = byteCache.getCompleteSet(runtimeVersion, identities);
+    } catch (error) {
+      // The caller is handed the turn only on a return.
+      endTurn();
+      throw error;
+    }
     if (bodies === undefined) return { bodies, endTurn };
     endTurn();
     return { bodies };
@@ -2918,12 +3476,14 @@ export class PatternManager {
             compiledBodiesServed = true;
             return storageBodiesNeedingRepair;
           }
-          // Process byte cache (cross-runtime, cross-space): a full hit skips
+          // Shared byte cache (cross-runtime, cross-space): a full hit skips
           // the transform-and-emit step (`compileToModules`: TS program build,
-          // type-check, CF transform, emit). Trust by provenance: bytes this
-          // process compiled were SES-verified then; bytes a test seeded from a
-          // CI disk file are trusted via the workflow cache key, which
-          // fingerprints every compile input.
+          // type-check, CF transform, emit). Trust by provenance: bytes a
+          // runtime compiled were SES-verified then, and the cache holds only
+          // what this process or another toolshed on the host put, in a
+          // directory that belongs to the user the toolsheds run as; bytes a
+          // test seeded from a CI disk file are trusted via the workflow cache
+          // key, which fingerprints every compile input.
           const { bodies: processBodies, endTurn } = await this
             .#byteCacheBodiesOrTurn(cacheOpts.runtimeVersion, identities);
           endCompileTurn = endTurn;
@@ -3672,7 +4232,12 @@ export class PatternManager {
    * closure `input` describes, calls `onCompiled` once the compile step has
    * finished, and evaluates the compiled modules. The closure is the same
    * bytes in every space that verifies it; `input.space` only decides where
-   * its fabric imports are resolved.
+   * its fabric imports are resolved. Where this runtime shares a byte cache,
+   * the compile takes its modules from there when it holds them all, takes
+   * its turn for them otherwise, and puts what it compiled once the
+   * evaluation has verified it. It reads and puts under the stored-source
+   * version (`storedSourceByteCacheVersion()`), which a compile of fresh
+   * source never reads.
    */
   async #compileAndEvaluateClosure(
     input: ColdCompilationInput,
@@ -3680,50 +4245,81 @@ export class PatternManager {
   ): Promise<ColdCompilationResult> {
     const harness = this.#runtime.harness;
     const { entryIdentity, sourceFiles, dataFiles, patternCoverage } = input;
-    const compiled = await harness.compileResolvedToRecordGraph(
-      sourceFiles,
-      input.entryFilename,
-      {
-        fabricImports: { space: input.space },
-        ...(patternCoverage ? { patternCoverage } : {}),
-        sourcePackages: input.sourcePackages,
-      },
-    );
-    if (compiled.entryIdentity !== entryIdentity) {
-      throw deterministicCompileError(
-        `source closure recompiled to ${compiled.entryIdentity}, expected ${entryIdentity}`,
-      );
-    }
-    onCompiled();
-    const cachedModules: CachedCompiledModule[] = compiled.modules.map(
-      (module) => ({
-        identity: module.identity,
-        filename: module.filename,
-        code: module.js,
-        ...(module.isData ? { isData: true } : {}),
-        ...(module.sourceMap !== undefined
-          ? { sourceMap: module.sourceMap as never }
-          : {}),
-        // The spans naming the lines this body's coverage probes stand for.
-        ...(module.patternCoverageSpans !== undefined
-          ? { patternCoverageSpans: module.patternCoverageSpans }
-          : {}),
-        ...(module.builderSourceSites !== undefined
-          ? { builderSourceSites: module.builderSourceSites }
-          : {}),
-        imports: module.imports,
-      }),
-    );
-    const result = await harness.evaluateCachedModules(
-      cachedModules,
-      entryIdentity,
-      {
+    const byteCache = this.#runtime.moduleByteCache;
+    const ownVersion = byteCache === undefined
+      ? undefined
+      : await this.compileCacheRuntimeVersion({
+        patternCoverage: patternCoverage !== undefined,
+      });
+    const runtimeVersion = ownVersion === undefined
+      ? undefined
+      : storedSourceByteCacheVersion(ownVersion);
+    let endCompileTurn: (() => void) | undefined;
+    try {
+      const compiled = await harness.compileResolvedToRecordGraph(
         sourceFiles,
-        ...(dataFiles.length === 0 ? {} : { dataFiles }),
-        ...(patternCoverage ? { patternCoverage } : {}),
-      },
-    );
-    return { modules: compiled.modules, result };
+        input.entryFilename,
+        {
+          fabricImports: { space: input.space },
+          ...(patternCoverage ? { patternCoverage } : {}),
+          sourcePackages: input.sourcePackages,
+          ...(runtimeVersion === undefined ? {} : {
+            precompiledModulesFor: async ({ identities }) => {
+              const { bodies, endTurn } = await this.#byteCacheBodiesOrTurn(
+                runtimeVersion,
+                identities,
+              );
+              endCompileTurn = endTurn;
+              return bodies;
+            },
+          }),
+        },
+      );
+      if (compiled.entryIdentity !== entryIdentity) {
+        throw deterministicCompileError(
+          `source closure recompiled to ${compiled.entryIdentity}, expected ${entryIdentity}`,
+        );
+      }
+      onCompiled();
+      const cachedModules: CachedCompiledModule[] = compiled.modules.map(
+        (module) => ({
+          identity: module.identity,
+          filename: module.filename,
+          code: module.js,
+          ...(module.isData ? { isData: true } : {}),
+          ...(module.sourceMap !== undefined
+            ? { sourceMap: module.sourceMap as never }
+            : {}),
+          // The spans naming the lines this body's coverage probes stand for.
+          ...(module.patternCoverageSpans !== undefined
+            ? { patternCoverageSpans: module.patternCoverageSpans }
+            : {}),
+          ...(module.builderSourceSites !== undefined
+            ? { builderSourceSites: module.builderSourceSites }
+            : {}),
+          imports: module.imports,
+        }),
+      );
+      const result = await harness.evaluateCachedModules(
+        cachedModules,
+        entryIdentity,
+        {
+          sourceFiles,
+          ...(dataFiles.length === 0 ? {} : { dataFiles }),
+          ...(patternCoverage ? { patternCoverage } : {}),
+        },
+      );
+      // Put only now, so that the cache holds no body a verifier has not
+      // passed: the evaluation above verified each one before running it. The
+      // turn is held until they are put, so a compile that waited for it
+      // finds them.
+      if (byteCache !== undefined && runtimeVersion !== undefined) {
+        byteCache.putAll(runtimeVersion, compiled.modules);
+      }
+      return { modules: compiled.modules, result };
+    } finally {
+      endCompileTurn?.();
+    }
   }
 
   /**
@@ -3739,9 +4335,6 @@ export class PatternManager {
   ): Pattern {
     this.registerEvaluatedModules(result);
     const { main } = result;
-    if (!main) {
-      throw new Error("Pattern compilation produced no exports.");
-    }
     // Usually an authored export, but a map/filter/flatMap `op` reloads by a
     // transformer HOIST symbol (`__cfReg`, e.g. `__cfPattern_1`) that is not an
     // export — `registerEvaluatedModules` above indexed it, so resolve it there.
@@ -3794,7 +4387,10 @@ export class PatternManager {
       assertNoReservedHoistExports(byId);
       const main = [...byId].find(([, exports]) => exports === result.main);
       if (main !== undefined) {
-        this.#programModules.set(main[0], new Set(byId.keys()));
+        this.#programModules.set(main[0], {
+          identities: new Set(byId.keys()),
+          filenames: result.sourcePathByIdentity ?? new Map(),
+        });
       }
       for (const [identity, exports] of byId) {
         // `#modulesByIdentity` keeps the whole namespace for MODULE reuse on a
@@ -3845,7 +4441,7 @@ export class PatternManager {
    * one.
    */
   programModuleIdentities(identity: string): ReadonlySet<string> | undefined {
-    return this.#programModules.get(identity);
+    return this.#programModules.get(identity)?.identities;
   }
 
   /**
@@ -4162,14 +4758,10 @@ export class PatternManager {
     this.#compileCacheWrites.delete(write);
     this.#pendingCacheWriteBacks.delete(write);
     for (const identity of identities) {
-      const spaces = this.#closurePersistsInFlight.get(identity);
-      const count = spaces?.get(space);
-      if (spaces === undefined || count === undefined) continue;
-      if (count > 1) {
-        spaces.set(space, count - 1);
-        continue;
-      }
-      spaces.delete(space);
+      const spaces = this.#closurePersistsInFlight.get(identity) ?? new Map();
+      const count = (spaces.get(space) ?? 1) - 1;
+      if (count > 0) spaces.set(space, count);
+      else spaces.delete(space);
       if (spaces.size === 0) this.#closurePersistsInFlight.delete(identity);
     }
     this.#runtime.telemetry.submit({
@@ -4291,6 +4883,26 @@ export class PatternManager {
     return result;
   }
 
+  /**
+   * Helper for the cache writes, which stamps `tx`, a write to `space`'s
+   * compile cache, as the bookkeeping run `actionId`. A write to a space
+   * foreign to a serving runtime's home space also carries `delegated`, the
+   * triggering run's delegated carriage (`protocol.md` §2b), without which
+   * the wave's accept gate refuses the crossing.
+   */
+  #stampCacheWrite(
+    tx: IExtendedStorageTransaction,
+    space: MemorySpace,
+    actionId: string,
+    delegated: WritebackDelegation | undefined,
+  ): void {
+    this.#runtime.stampServerRun(tx, {
+      actionId,
+      kind: "bookkeeping",
+      ...this.#runtime.delegationForWriteTo(space, delegated),
+    });
+  }
+
   async #writeBackSourceCache(
     settlements: Promise<WaveSettlement>[],
     space: MemorySpace,
@@ -4311,11 +4923,12 @@ export class PatternManager {
       // FOREIGN-space writeback additionally carries the triggering run's
       // delegated carriage (protocol.md §2b) — without it the wave's accept
       // gate refuses the crossing.
-      this.#runtime.stampServerRun(tx, {
-        actionId: `compile-cache/source-writeback/${entryIdentity}`,
-        kind: "bookkeeping",
-        ...this.#runtime.delegationForWriteTo(space, delegated),
-      });
+      this.#stampCacheWrite(
+        tx,
+        space,
+        `compile-cache/source-writeback/${entryIdentity}`,
+        delegated,
+      );
       committedModuleDelegations = writeSourceDocs(
         this.#runtime,
         space,
@@ -4414,11 +5027,12 @@ export class PatternManager {
         // Bookkeeping stamp, same §3d reason as writeBackSourceCache
         // above (the triage-confirmed second offender: this writeback
         // refused unstamped on the serving runtime).
-        this.#runtime.stampServerRun(tx, {
-          actionId: `compile-cache/writeback/${entryIdentity}`,
-          kind: "bookkeeping",
-          ...this.#runtime.delegationForWriteTo(space, delegated),
-        });
+        this.#stampCacheWrite(
+          tx,
+          space,
+          `compile-cache/writeback/${entryIdentity}`,
+          delegated,
+        );
         chunkDelegations = writeSourceAndCompiledDocs(
           this.#runtime,
           space,
@@ -4467,7 +5081,7 @@ export class PatternManager {
    */
   async #syncSourceCacheWriteTargets(
     space: MemorySpace,
-    modules: readonly CacheableModule[],
+    modules: readonly Pick<CacheableModule, "identity">[],
   ): Promise<void> {
     await Promise.all(
       modules.map((module) =>
@@ -4479,7 +5093,7 @@ export class PatternManager {
   /** As {@link #syncSourceCacheWriteTargets}, for source and compiled records. */
   async #syncCompileCacheWriteTargets(
     space: MemorySpace,
-    modules: readonly CacheableModule[],
+    modules: readonly Pick<CacheableModule, "identity">[],
     opts: { runtimeVersion: string },
   ): Promise<void> {
     await Promise.all(
@@ -4501,9 +5115,6 @@ export class PatternManager {
   ): Pattern {
     this.registerEvaluatedModules(result);
     const { main } = result;
-    if (!main) {
-      throw new Error("Pattern compilation produced no exports.");
-    }
     const exportName = program.mainExport ?? "default";
     if (!(exportName in main)) {
       throw new Error(
@@ -4732,9 +5343,8 @@ export class PatternManager {
     } finally {
       readTx.abort?.("get-pattern-source-files read complete");
     }
-    if (sourceDocs === undefined) return undefined;
-    const entry = sourceDocs.get(entryIdentity);
-    if (entry === undefined) return undefined;
+    const entry = sourceDocs?.get(entryIdentity);
+    if (sourceDocs === undefined || entry === undefined) return undefined;
     const sourceRoots = sourcePackagePaths(
       entry,
       sourceDocs,
@@ -4790,21 +5400,7 @@ export class PatternManager {
         actionId: `pattern-annotate/${entryIdentity}`,
         kind: "bookkeeping",
       });
-      const cell = this.#runtime.getCell<
-        { annotations?: Record<string, unknown> }
-      >(
-        space,
-        sourceDocKey(entryIdentity),
-        undefined,
-        tx,
-      );
-      recordUndeclarablePolicyStore(tx, cell);
-      const current = cell.get();
-      const annotations = {
-        ...(isObjectOrArray(current?.annotations) ? current!.annotations : {}),
-        [key]: link,
-      };
-      cell.key("annotations").set(annotations);
+      writeSourceAnnotation(this.#runtime, space, entryIdentity, key, link, tx);
     });
   }
 

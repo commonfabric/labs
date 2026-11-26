@@ -20,11 +20,7 @@
 
 import type { FabricValue } from "@";
 import { FabricError } from "@/fabric-instances";
-import {
-  FabricBytes,
-  FabricEpochNsec,
-  FabricRegExp,
-} from "@/fabric-primitives";
+import { FabricBytes, FabricEpochNsec } from "@/fabric-primitives";
 
 /** Container sizes: the empty case, then five orders of magnitude. */
 export const SIZES = [0, 1, 10, 100, 1000, 10000, 100000] as const;
@@ -79,7 +75,6 @@ export const SINGLES: readonly (readonly [string, FabricValue])[] = [
   ["undefined", undefined],
   ["bytes", new FabricBytes(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]))],
   ["epoch-nsec", new FabricEpochNsec(1_700_000_000_000_000_000n)],
-  ["regexp", new FabricRegExp(/wildcard.*match/gi)],
   ["error", FabricError.fromNativeError(new Error("bench"))],
   [
     "quote-escape",
@@ -236,7 +231,6 @@ export function makeOmnibus(leaves: number): FabricValue {
       missing: undefined,
       big: BigInt(i) * 1_000_000_007n,
       when: new FabricEpochNsec(BigInt(i) * 1_000_000n),
-      pattern: new FabricRegExp(/x/g),
       blob: new FabricBytes(new Uint8Array([i & 0xff, (i >> 8) & 0xff])),
       nested: Object.freeze({
         depth: 1,

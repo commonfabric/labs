@@ -35,17 +35,20 @@ import {
 } from "./foreign-spaces.ts";
 import {
   createHarnessHandleTable,
+  handleRefsShareAddress,
   mintAddressHandle,
   parseHandleRef,
 } from "./handle-table.ts";
 import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import type { HarnessHandleTable } from "./contracts/handle-table.ts";
 import type {
+  HarnessHeldInput,
   HarnessInputCell,
   HarnessInputCellSpec,
 } from "./contracts/input-cells.ts";
 
 export type {
+  HarnessHeldInput,
   HarnessInputCell,
   HarnessInputCellSpec,
 } from "./contracts/input-cells.ts";
@@ -87,6 +90,40 @@ export interface NamedPieceAddress {
   /** The slug, already held to `validateSlug`. */
   slug: string;
 }
+
+/** A piece's own id, as an `of:` link names it without the scheme. */
+export const PIECE_ID_PATTERN = /^fid1:[A-Za-z0-9_-]{43}$/;
+
+/** A host's stored address for a whole piece, read by {@link parseStoredPieceAddress}. */
+export interface StoredPieceAddress {
+  /** The space the address names, as the host spelled it. */
+  space: string;
+
+  /** The piece's id, held to {@link PIECE_ID_PATTERN}. */
+  id: string;
+}
+
+/**
+ * Reads `text` as the address a host stores for a whole piece:
+ * `pattern:<space>/<piece-id>`, or `pattern:<space>/of:<piece-id>`, the
+ * spelling Loom records a component in. Answers `undefined` for anything
+ * else, a {@link NamedPieceAddress}'s slug form included, so a caller can
+ * scan arbitrary text with it. This is the address a model must never hold:
+ * it is the form that crosses to a model only as a handle.
+ */
+export const parseStoredPieceAddress = (
+  text: string,
+): StoredPieceAddress | undefined => {
+  if (!text.startsWith("pattern:")) return undefined;
+  const rest = text.slice("pattern:".length);
+  const slash = rest.indexOf("/");
+  if (slash <= 0) return undefined;
+  const segment = rest.slice(slash + 1);
+  const id = segment.startsWith("of:") ? segment.slice("of:".length) : segment;
+  return PIECE_ID_PATTERN.test(id)
+    ? { space: rest.slice(0, slash), id }
+    : undefined;
+};
 
 /**
  * Reads `ref` as a {@link NamedPieceAddress}, or answers `undefined` when it is
@@ -230,14 +267,30 @@ export const checkInputCellSpec = (
   }
 };
 
-/** Refuses a new attachment name already associated with a held handle. */
+/**
+ * Refuses an attachment whose name is already held for another cell. A held
+ * name stays available to the cell it names, so a host may attach on a later
+ * turn what it attached on an earlier one, under the same name.
+ *
+ * The references are compared as written, by
+ * {@link handleRefsShareAddress}, since this runs before a session exists to
+ * resolve one. A named piece address under a held name is therefore refused
+ * rather than resolved, as is any attachment under a name held without a
+ * reference.
+ *
+ * @throws Error naming the attachment.
+ */
 export const assertInputCellNamesAvailable = (
   specs: readonly HarnessInputCellSpec[],
-  heldNames: Iterable<string>,
+  held: Iterable<HarnessHeldInput>,
 ): void => {
-  const names = new Set(heldNames);
+  const holds = [...held];
   for (const spec of specs) {
-    if (names.has(spec.name)) {
+    const refused = holds.some((hold) =>
+      hold.name === spec.name &&
+      (hold.ref === undefined || !handleRefsShareAddress(spec.ref, hold.ref))
+    );
+    if (refused) {
       throw new Error(
         `--input-cell name \`${spec.name}\` is already held by this run`,
       );

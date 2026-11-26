@@ -2,8 +2,8 @@ import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema"
 import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { createClientInfo } from "@commonfabric/memory/v2/client-info";
 import { getDocumentInterests, Server } from "@commonfabric/memory/v2/server";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import createApp from "@/lib/create-app.ts";
 import router from "@/routes/health/health.index.ts";

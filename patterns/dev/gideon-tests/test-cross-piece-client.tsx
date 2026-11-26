@@ -3,19 +3,15 @@
 /**
  * Test Pattern: Cross-Piece Stream Client
  *
- * VERIFIED CLAIMS:
+ * CLAIMS:
  *
- * 1. Cross-Piece Stream Invocation via wish() - WORKS (with corrections to blessed doc)
- *    - Streams from wished pieces appear as Cells wrapping { $stream: true } marker
- *    - Call .send(eventData) on the Cell itself (NOT on an "unwrapped" stream)
- *    - The blessed doc's "auto-unwrap via Stream<T> signature" explanation is WRONG
- *    - Event must be an object (runtime calls preventDefault), can have data props but NO functions
+ * 1. Cross-Piece Stream Invocation via wish()
+ *    - A stream on a wished piece is reached as a plain projection of the
+ *      wish result, and a handler sends to it with .send().
  *
- * 2. <cf-render> Forces Piece Execution - VERIFIED
- *    - Just wishing for a piece doesn't make it run
- *    - Use <cf-render $cell={...} /> to force execution
+ * 2. <cf-render> renders the wished piece inside this one.
  *
- * PREREQUISITES DISCOVERED:
+ * PREREQUISITES:
  *    - Wish tags must be in JSDoc on Output type (not file-level comments)
  *    - wish({ query: "#tag" }) searches FAVORITES only - piece must be favorited first
  *
@@ -26,7 +22,7 @@
  *    4. Click "Invoke Server Stream" - server counter should increment
  */
 import {
-  debugStr,
+  computed,
   Default,
   handler,
   NAME,
@@ -34,6 +30,7 @@ import {
   Stream,
   toIndentedDebugString,
   UI,
+  type VNode,
   wish,
   Writable,
 } from "commonfabric";
@@ -50,44 +47,39 @@ interface Input {
 }
 
 export interface Output {
+  [NAME]: string;
+  [UI]: VNode;
   useCfRender: boolean;
   lastInvocationStatus: string;
   invocationCount: number;
 }
 
+// The part of the server piece's output this client uses
+interface ServerPiece {
+  counter: number;
+  invocationLog: string[];
+  incrementCounter: Stream<void>;
+}
+
 // Handler that invokes a stream from the wished piece
-// KEY FINDING: Despite blessed doc claims, Stream<T> in signature does NOT auto-unwrap.
-// The stream comes through as a Cell wrapping { $stream: true }. Call .send({}) on the Cell.
 const invokeServerStream = handler<
   unknown,
   {
-    stream: Stream<void>;
+    server: ServerPiece | undefined;
     lastInvocationStatus: Writable<string>;
     invocationCount: Writable<number>;
   }
->((_event, state) => {
-  try {
-    // Stream arrives as a Cell, not an unwrapped callable stream
-    const streamCell = state.stream as any;
-    const innerValue = streamCell.get ? streamCell.get() : streamCell;
-
-    if (innerValue && innerValue.$stream) {
-      // Cell contains { $stream: true } marker - call .send() on the Cell itself
-      // Event must be object (runtime calls preventDefault), can have data props, NO functions
-      streamCell.send({}); // Could also be { someData: "value" }
-      const count = state.invocationCount.get() + 1;
-      state.invocationCount.set(count);
-      state.lastInvocationStatus.set(
-        `Success! Server counter should increment (invoked ${count} times)`,
-      );
-    } else {
-      state.lastInvocationStatus.set(
-        debugStr`Stream not found or invalid: $quote,long${innerValue}`,
-      );
-    }
-  } catch (error) {
-    state.lastInvocationStatus.set(`Failed: ${error}`);
+>((_event, { server, lastInvocationStatus, invocationCount }) => {
+  if (!server) {
+    lastInvocationStatus.set(
+      "Stream not found: no favorite is tagged #crossPieceTestServer",
+    );
+    return;
   }
+  server.incrementCounter.send();
+  const count = invocationCount.get() + 1;
+  invocationCount.set(count);
+  lastInvocationStatus.set(`Success! Invoked the server stream ${count} times`);
 });
 
 // Handler for toggling the render mode
@@ -100,19 +92,12 @@ const toggleMode = handler<unknown, { useCfRender: Writable<boolean> }>(
 export default pattern<Input, Output>(
   ({ useCfRender, lastInvocationStatus, invocationCount }) => {
     // Wish for the server piece by tag
-    const wishResult = wish<{
-      counter: number;
-      invocationLog: string[];
-      incrementCounter: Stream<void>;
-    }>({
+    const wishResult = wish<ServerPiece>({
       query: "#crossPieceTestServer",
     });
 
     // Access the result from the wish (WishState has a result property)
     const serverPiece = wishResult.result;
-
-    // Extract the stream via a plain projection (auto-wraps reactively)
-    const serverStream = serverPiece?.incrementCounter;
 
     return {
       [NAME]: "Cross-Piece Test Client",
@@ -209,7 +194,7 @@ export default pattern<Input, Output>(
             </div>
             <cf-button
               onClick={invokeServerStream({
-                stream: serverStream!,
+                server: serverPiece,
                 lastInvocationStatus,
                 invocationCount,
               })}
@@ -237,15 +222,14 @@ export default pattern<Input, Output>(
                 Debug Info
               </summary>
               <pre style={{ fontSize: "10px", overflow: "auto" }}>
-              {toIndentedDebugString(
-                {
-                  useCfRender,
-                  invocationCount,
-                  lastInvocationStatus,
-                  serverPieceExists: serverPiece !== undefined && serverPiece !== null,
-                  serverStreamExists: serverStream !== undefined && serverStream !== null,
-                },
-              )}
+                {computed(() =>
+                  toIndentedDebugString({
+                    useCfRender,
+                    invocationCount,
+                    lastInvocationStatus,
+                    serverFound: serverPiece !== undefined,
+                  })
+                )}
               </pre>
             </details>
           </div>

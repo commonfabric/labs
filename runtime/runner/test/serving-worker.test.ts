@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 
 import { defer } from "@commonfabric/async/defer";
@@ -17,21 +16,36 @@ import { SERVER_EXECUTION_EFFECTS_DOC_ID } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 
 import type { JSONSchema } from "../src/builder/types.ts";
-import { type Cell, sendEvent } from "../src/cell.ts";
+import { type Cell, EventDeliveryError, sendEvent } from "../src/cell.ts";
 import { exposeGarbageCollector } from "../src/collected-memory.ts";
 import {
   ServingWorkerPool,
   type ServingWorkerPoolOptions,
 } from "../src/executor/serving-worker-host.ts";
 import type { ServingLoopStats } from "../src/executor/stats.ts";
+import { ModuleCompilerPool } from "../src/harness/module-compiler-pool.ts";
+import { setCompileCacheRuntimeVersionForTesting } from "../src/compilation-cache/cell-cache.ts";
 import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import { Runtime, type RuntimeOptions } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { ArrivalLog, awaitAdmitted } from "./support/serving-waits.ts";
+
+// This file runs on the real clock because it runs the serving loop in a real
+// Worker, whose heartbeat timer ticks on the real clock. Auto-advance would run
+// the watchdog's timer at once, and it would kill a healthy worker for the
+// silence.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("serving worker space");
 const space = spaceSigner.did() as MemorySpace;
@@ -86,6 +100,24 @@ export default pattern<
   { value: Writable<number> },
   { value: number; go: Stream<unknown> }
 >(({ value }) => ({ value, go: go({ value }) }));
+`;
+
+const SPIN_PATTERN = `
+import { handler, pattern, Stream, Writable } from "commonfabric";
+const spin = handler<unknown, { value: Writable<number> }>(
+  (_event, _state) => {
+    for (;;) {
+      // Holds the serving worker's thread for good.
+    }
+  },
+);
+const bump = handler<unknown, { value: Writable<number> }>(
+  (_event, { value }) => { value.set((value.get() ?? 0) + 1); },
+);
+export default pattern<
+  { value: Writable<number> },
+  { value: number; spin: Stream<unknown>; bump: Stream<unknown> }
+>(({ value }) => ({ value, spin: spin({ value }), bump: bump({ value }) }));
 `;
 
 describe("serving-worker", () => {
@@ -413,6 +445,26 @@ describe("serving-worker", () => {
     expect(held.length).toBe(size);
   });
 
+  it("writes the sampling heap profile of each worker's isolate with the spaces placed on it", async () => {
+    await start();
+    await startParent(space, 1);
+    await readTotal(space, 2);
+
+    const profiles = await worker.heapProfiles(directory);
+    expect(profiles.map((each) => each.spaces)).toEqual([[space]]);
+    const [{ outcome }] = profiles;
+    if (!("path" in outcome)) throw new Error(outcome.error);
+    expect(outcome.path.startsWith(`${directory}/heap-`)).toBe(true);
+    expect(outcome.path.endsWith(".heapprofile")).toBe(true);
+    const profile = JSON.parse(await Deno.readTextFile(outcome.path));
+    // The worker has sampled since it started, so its profile holds samples
+    // of what serving the space allocated.
+    expect(profile.samples.length).toBeGreaterThan(0);
+    expect(profile.head.children.length).toBeGreaterThan(0);
+    expect(closures.entries).toEqual([]);
+    expect(worker.stats().workers).toMatchObject({ serving: 1, failed: 0 });
+  });
+
   it("serves two spaces from a worker each, which commit under a lease holder each", async () => {
     await start();
     await startParent(space, 1);
@@ -435,6 +487,173 @@ describe("serving-worker", () => {
     expect(placed.map((each) => each.spaces).sort()).toEqual(
       [[space], [otherSpace]].sort(),
     );
+  });
+
+  it("ends a worker whose heap reaches its limit while it serves, alone, and leaves its space unplaced until a commit names it", async () => {
+    const workerModule = new URL(
+      "./fixtures/serving-worker-that-grows.ts",
+      import.meta.url,
+    );
+    workerModule.searchParams.set("marker", `${directory}/grew`);
+    await start({ workerModule, heapLimitMb: 160, watchdogIntervalMs: 200 });
+
+    // The first worker's heap grows as soon as it is told of the space, before
+    // it derives anything, and stops at its limit with the worker's timers
+    // still posting heartbeats.
+    await startParent(space, 1);
+    await closures.matching((entry) =>
+      entry.cause === "failed" && entry.spaces.includes(space)
+    );
+
+    // A session on the space does not place it again, during the wait that
+    // follows a failed worker or after it.
+    const writer = newClient();
+    const argument = writer.getCell<{ n: number }>(space, "worker-arg");
+    await argument.sync();
+    await worker.accessForTestingOnly.waiting.get(space)?.resumed;
+    expect(worker.stats().workers).toMatchObject({
+      serving: 0,
+      started: 1,
+      failed: 1,
+      heapLimited: 1,
+      heapStopped: 1,
+    });
+
+    // A commit does, and the total the reader reads is the fresh worker's.
+    const tx = writer.edit();
+    argument.withTx(tx).set({ n: 2 });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await readTotal(space, 3);
+    expect(worker.stats().workers).toMatchObject({
+      serving: 1,
+      started: 2,
+      failed: 1,
+      heapStopped: 0,
+    });
+  });
+
+  it("writes the error as the consequence of the event whose handler ran past the watchdog, runs that handler on no later worker, and runs the space's next event", async () => {
+    // The handler never returns, so its worker sends nothing more until the
+    // watchdog ends it, six one-second intervals after its last message. The
+    // space's next worker is placed for the events still pending in its
+    // store: that one, and one for another handler sent after it. The sender
+    // sends without an echo, as `cf piece call` does, so the handlers run in a
+    // worker and nowhere else, and the sender's commit callbacks report what
+    // each served handling came to.
+    await start({
+      watchdogIntervalMs: 1_000,
+      policy: {
+        flushDeadlineMs: 5_000,
+        idleParkMs: 600_000,
+        failureParkBackoffBaseMs: 0,
+      },
+    });
+    const writer = newClient();
+    const compiled = await writer.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: SPIN_PATTERN }],
+    }, { space });
+    await writer.patternManager.flushCompileCacheWrites();
+    const setup = writer.edit();
+    const argument = writer.getCell<{ value: number }>(space, "spin-arg");
+    argument.withTx(setup).set({ value: 0 });
+    writer.run(
+      setup,
+      compiled,
+      argument,
+      writer.getCell<Record<string, unknown>>(space, "spin-result"),
+    );
+    expect((await setup.commit().settled).error).toBeUndefined();
+    await closeClient(writer, space);
+
+    const sender = newClient();
+    const result = sender.getCell<Record<string, unknown>>(
+      space,
+      "spin-result",
+      compiled.resultSchema,
+    );
+    await result.sync();
+    const failures = () =>
+      closures.count((entry) =>
+        entry.cause === "failed" && entry.spaces.includes(space)
+      );
+    const endedAgain = new Promise<"ended again">((resolve) => {
+      const stop = closures.edge(() => {
+        if (failures() < 2) return;
+        stop();
+        resolve("ended again");
+      });
+    });
+    /** Sends to `stream`, and resolves with what its handling came to. */
+    const send = (stream: string): Promise<unknown> => {
+      const handled = defer<unknown>();
+      sendEvent(result.key(stream), {}, (tx) => {
+        const status = tx.status();
+        handled.resolve(
+          status.status === "error" ? status.error : status.status,
+        );
+      }, { echo: false });
+      return handled.promise;
+    };
+    const spun = send("spin");
+    const bumped = send("bump");
+
+    const outcome = await withStuckNet(
+      Promise.race([Promise.all([spun, bumped]), endedAgain]),
+      "the events' handling, or a second worker ended",
+    );
+    expect(outcome).not.toBe("ended again");
+    const [spin, bump] = outcome as unknown[];
+    expect(spin).toBeInstanceOf(EventDeliveryError);
+    expect((spin as EventDeliveryError).kind).toBe("errored");
+    expect((spin as EventDeliveryError).reason).toContain("watchdog");
+    expect(bump).toBe("done");
+    expect(failures()).toBe(1);
+  });
+
+  it("compiles a program two spaces' workers recompile after a runtime version change once, in the process's compile workers", async () => {
+    let compiles = 0;
+    let compileWorkersStarted = 0;
+    class CountedPool extends ModuleCompilerPool {
+      override compile(request: Parameters<ModuleCompilerPool["compile"]>[0]) {
+        compiles += 1;
+        return super.compile(request);
+      }
+    }
+    const compiler = new CountedPool(1, () => {
+      compileWorkersStarted += 1;
+      return new Worker(
+        new URL("../src/harness/compile-worker.ts", import.meta.url),
+        { type: "module" },
+      );
+    });
+    try {
+      await start({
+        moduleCompiler: compiler,
+        compileCacheDir: `${directory}/compiled`,
+      });
+      // The writers store the closure compiled under an earlier release's
+      // version, so each space's worker recompiles its stored source, as
+      // every space does once after a deploy.
+      const restore = setCompileCacheRuntimeVersionForTesting(
+        "an-earlier-release",
+      );
+      try {
+        await startParent(space, 1);
+        await startParent(otherSpace, 10);
+      } finally {
+        restore();
+      }
+      await readTotal(space, 2);
+      await readTotal(otherSpace, 11);
+
+      const stats = await worker.requestStats();
+      expect(stats.workers).toMatchObject({ serving: 2, shared: 0 });
+      expect(compiles).toBe(1);
+      expect(compileWorkersStarted).toBe(1);
+    } finally {
+      compiler.close();
+    }
   });
 
   it("serves two spaces from one worker under `maxWorkers: 1`", async () => {

@@ -4,9 +4,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { toCell } from "../src/back-to-cell.ts";
 import type { JSONSchema } from "../src/builder/types.ts";

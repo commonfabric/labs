@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import * as path from "@std/path";
 import { COVERAGE_SUGGESTION_MARKER } from "./ci-check-lib.ts";
 import { gateComment } from "./coverage-gate.ts";
 import { postCoverageComment } from "./post-coverage-comment.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The head commit the run that wrote a payload tested. */
 const TESTED = "a".repeat(40);
@@ -23,25 +23,45 @@ interface Run {
   warnings: string[];
 }
 
-/**
- * Runs the poster against a payload file holding `contents`, with GitHub
- * answering the comment listing with `existing` (or with `listingStatus`
- * where that is not 200) and recording every write into `writes`, which a
- * caller passes to read them from a run that throws.
- */
+/** How GitHub and the environment answer one run of the poster. */
+interface RunOptions {
+  /** The bodies of the comments already on the pull request. */
+  existing?: readonly string[];
+
+  /** The status the comment listing answers with. */
+  listingStatus?: number;
+
+  /** The head commit the pull request reports. */
+  head?: string;
+
+  /** `HEAD_SHA`, or `null` to leave it unset. */
+  tested?: string | null;
+
+  /** Where the run records its writes, for a caller reading a run that throws. */
+  writes?: Write[];
+}
+
+/** Runs the poster against a payload file holding `contents`. */
 async function run(
   contents: string | undefined,
-  existing: readonly string[] = [],
-  listingStatus = 200,
-  head = TESTED,
-  tested: string | null = TESTED,
-  writes: Write[] = [],
+  {
+    existing = [],
+    listingStatus = 200,
+    head = TESTED,
+    tested = TESTED,
+    writes = [],
+  }: RunOptions = {},
 ): Promise<Run> {
   const dir = await Deno.makeTempDir({ prefix: "coverage-comment-test-" });
   const file = path.join(dir, "coverage-comment.json");
   if (contents !== undefined) await Deno.writeTextFile(file, contents);
 
-  const result: Run = { writes, logged: [], errors: [], warnings: [] };
+  const result: Run = {
+    writes,
+    logged: [],
+    errors: [],
+    warnings: [],
+  };
   const originals = {
     fetch: globalThis.fetch,
     log: console.log,
@@ -104,9 +124,9 @@ const resolved = gateComment(4211, true, ["| runtime/bakery | no rise |"]);
 
 describe("postCoverageComment()", () => {
   it("posts the comment when no marked comment exists", async () => {
-    const { writes } = await run(JSON.stringify(regressed), [
-      "a review comment",
-    ]);
+    const { writes } = await run(JSON.stringify(regressed), {
+      existing: ["a review comment"],
+    });
     expect(writes).toEqual([
       { method: "POST", url: COMMENTS_URL, body: regressed.body },
     ]);
@@ -116,12 +136,9 @@ describe("postCoverageComment()", () => {
     // The payload comes from the pull request's own code, and this posts
     // with a write token, so a payload naming another pull request's
     // number, or an issue's, posts nothing there.
-    const { writes, errors } = await run(
-      JSON.stringify(regressed),
-      [],
-      200,
-      "b".repeat(40),
-    );
+    const { writes, errors } = await run(JSON.stringify(regressed), {
+      head: "b".repeat(40),
+    });
     expect(writes).toEqual([]);
     expect(errors.join("\n")).toContain("nothing is posted");
   });
@@ -129,22 +146,24 @@ describe("postCoverageComment()", () => {
   it("throws, posting nothing, when it is not told which commit the run tested", async () => {
     const writes: Write[] = [];
     await expect(
-      run(JSON.stringify(regressed), [], 200, TESTED, null, writes),
+      run(JSON.stringify(regressed), { tested: null, writes }),
     ).rejects.toThrow("`HEAD_SHA` is required");
     expect(writes).toEqual([]);
   });
 
   it("throws on an empty `HEAD_SHA` even with no payload to post", async () => {
-    await expect(run(undefined, [], 200, TESTED, "")).rejects.toThrow(
+    await expect(run(undefined, { tested: "" })).rejects.toThrow(
       "`HEAD_SHA` is required",
     );
   });
 
   it("updates the marked comment in place", async () => {
-    const { writes } = await run(JSON.stringify(regressed), [
-      "a review comment",
-      `${COVERAGE_SUGGESTION_MARKER}\nwhat an earlier run found`,
-    ]);
+    const { writes } = await run(JSON.stringify(regressed), {
+      existing: [
+        "a review comment",
+        `${COVERAGE_SUGGESTION_MARKER}\nwhat an earlier run found`,
+      ],
+    });
     expect(writes).toEqual([{
       method: "PATCH",
       url: "https://api.github.com/repos/commonfabric/labs/issues/comments/2",
@@ -153,9 +172,9 @@ describe("postCoverageComment()", () => {
   });
 
   it("leaves a marked comment that already says the same untouched", async () => {
-    const { writes, logged } = await run(JSON.stringify(regressed), [
-      regressed.body,
-    ]);
+    const { writes, logged } = await run(JSON.stringify(regressed), {
+      existing: [regressed.body],
+    });
     expect(writes).toEqual([]);
     expect(logged).toEqual([
       "Coverage comment on PR #4211 already up to date.",
@@ -163,7 +182,9 @@ describe("postCoverageComment()", () => {
   });
 
   it("replaces the marked comment's body with a resolved one", async () => {
-    const { writes } = await run(JSON.stringify(resolved), [regressed.body]);
+    const { writes } = await run(JSON.stringify(resolved), {
+      existing: [regressed.body],
+    });
     expect(writes).toEqual([
       { method: "PATCH", url: FIRST_COMMENT_URL, body: resolved.body },
     ]);
@@ -172,9 +193,9 @@ describe("postCoverageComment()", () => {
   });
 
   it("posts nothing for a resolved gate when no marked comment exists", async () => {
-    const { writes, logged } = await run(JSON.stringify(resolved), [
-      "a review comment",
-    ]);
+    const { writes, logged } = await run(JSON.stringify(resolved), {
+      existing: ["a review comment"],
+    });
     expect(writes).toEqual([]);
     expect(logged).toEqual([
       "No coverage comment on PR #4211; nothing to resolve.",
@@ -182,12 +203,16 @@ describe("postCoverageComment()", () => {
   });
 
   it("leaves an already-resolved comment untouched", async () => {
-    const { writes } = await run(JSON.stringify(resolved), [resolved.body]);
+    const { writes } = await run(JSON.stringify(resolved), {
+      existing: [resolved.body],
+    });
     expect(writes).toEqual([]);
   });
 
   it("logs a failed comment lookup rather than throwing", async () => {
-    const { writes, warnings } = await run(JSON.stringify(regressed), [], 404);
+    const { writes, warnings } = await run(JSON.stringify(regressed), {
+      listingStatus: 404,
+    });
     expect(writes).toEqual([]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(

@@ -10,6 +10,7 @@ import { entityIdFrom, Runtime } from "@commonfabric/runner";
 import { StorageManager as WorkerStorageManager } from "@commonfabric/runner/storage/cache";
 import { startServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 import { resetProcessDeployment } from "../lib/process-deployment.ts";
 import {
   type CompletionLine,
@@ -91,7 +92,7 @@ async function captureStdout(body: () => Promise<void>): Promise<string> {
   return chunks.join("\n");
 }
 
-Deno.test("space context: line options beat the environment", async () => {
+test("space context: line options beat the environment", async () => {
   // This is what makes `-s other-space --piece <TAB>` list the other space
   // rather than whatever the shell's environment points at.
   await withEnv({ identity: "/env.key", apiUrl: "http://env:9999" }, () => {
@@ -105,7 +106,7 @@ Deno.test("space context: line options beat the environment", async () => {
   });
 });
 
-Deno.test("space context: falls back to the environment", async () => {
+test("space context: falls back to the environment", async () => {
   await withEnv({ identity: "/env.key", apiUrl: "http://env:9999" }, () => {
     const config = resolveSpaceContext(lineFor("cf piece ls -s team "));
     assert(config);
@@ -114,7 +115,7 @@ Deno.test("space context: falls back to the environment", async () => {
   });
 });
 
-Deno.test("space context: --url supplies api-url and space together", async () => {
+test("space context: --url supplies api-url and space together", async () => {
   await withEnv({ identity: "/env.key" }, () => {
     const config = resolveSpaceContext(
       lineFor("cf piece ls -u http://host:8000/myspace/fid1:abc "),
@@ -125,7 +126,7 @@ Deno.test("space context: --url supplies api-url and space together", async () =
   });
 });
 
-Deno.test("space context: reserves stdout for candidates", async () => {
+test("space context: reserves stdout for candidates", async () => {
   // `jsonOutput` routes runtime status lines to stderr. Without it a stray
   // console.log from the runtime would be offered to the user as a candidate.
   await withEnv({ identity: "/env.key", apiUrl: "http://env:9999" }, () => {
@@ -136,7 +137,7 @@ Deno.test("space context: reserves stdout for candidates", async () => {
   });
 });
 
-Deno.test("space context: an incomplete line resolves to nothing", async () => {
+test("space context: an incomplete line resolves to nothing", async () => {
   await withEnv({}, () => {
     // No identity anywhere.
     assertEquals(resolveSpaceContext(lineFor("cf piece ls -s team ")), null);
@@ -152,7 +153,7 @@ Deno.test("space context: an incomplete line resolves to nothing", async () => {
   });
 });
 
-Deno.test("space context: a malformed --url resolves to nothing, not a throw", async () => {
+test("space context: a malformed --url resolves to nothing, not a throw", async () => {
   await withEnv({ identity: "/env.key" }, () => {
     assertEquals(
       resolveSpaceContext(lineFor("cf piece ls -u not-a-url ")),
@@ -161,7 +162,7 @@ Deno.test("space context: a malformed --url resolves to nothing, not a throw", a
   });
 });
 
-Deno.test("space context: an embedded space supplies one the line did not name", async () => {
+test("space context: an embedded space supplies one the line did not name", async () => {
   // A canonical reference carries the space DID, which is the one spelling a
   // line can name a space with and never write `--space`.
   await withEnv({ identity: "/env.key", apiUrl: "http://env:9999" }, () => {
@@ -174,7 +175,7 @@ Deno.test("space context: an embedded space supplies one the line did not name",
   });
 });
 
-Deno.test("space context: the line's own --space wins over an embedded one", async () => {
+test("space context: the line's own --space wins over an embedded one", async () => {
   // Which of the two is right is the command's judgment to make; completion
   // offers candidates and defers, so it reads the space the caller wrote.
   await withEnv({ identity: "/env.key", apiUrl: "http://env:9999" }, () => {
@@ -188,7 +189,7 @@ Deno.test("space context: the line's own --space wins over an embedded one", asy
   });
 });
 
-Deno.test("piece context: #argument reads the same on both spellings of a target", async () => {
+test("piece context: #argument reads the same on both spellings of a target", async () => {
   // Completion reads the target through the grammar the command's own intake
   // reads it with, so a suffix the command honors is a suffix the keys
   // offered behind it come from the arguments cell for.
@@ -231,7 +232,7 @@ Deno.test("piece context: #argument reads the same on both spellings of a target
   });
 });
 
-Deno.test("live candidates: a listing that raises completes to nothing", async () => {
+test("live candidates: a listing that raises completes to nothing", async () => {
   // The two halves of one split. `listCellKeys` raises, because `cf`'s
   // callers have to tell a leaf from a read that never happened; the provider
   // dispatch turns that into an empty answer, because a stack trace pasted
@@ -255,7 +256,7 @@ Deno.test("live candidates: a listing that raises completes to nothing", async (
   assertEquals(result.directives, []);
 });
 
-Deno.test("live candidates: unmapped slots ask for nothing", async () => {
+test("live candidates: unmapped slots ask for nothing", async () => {
   // A subcommand or option-name slot is answered statically; reaching for live
   // data there would spend a fabric round trip per keystroke for no reason.
   for (const text of ["cf ", "cf piece ls --", "cf piece "]) {
@@ -278,10 +279,15 @@ Deno.test("live candidates: unmapped slots ask for nothing", async () => {
 const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf piece ls -i ", "files", "*.key"],
   ["cf id did ", "files", "*.key"],
+  ["cf id pair https://example.test ", "files", "*.key"],
   // A delegation chain file, wherever the identity holds one and where
   // `cf delegation show` reads one.
   ["cf piece ls --delegations ", "files", "*.json"],
   ["cf delegation show ", "files", "*.json"],
+  // An index chain file, as `cf delegation issue --index` writes one, and the
+  // root-move delegation the same command writes with `--index-root`.
+  ["cf index join --chain ", "files", "*.json"],
+  ["cf index move-root ", "files", "*.json"],
   // Every command whose `--root` is the directory its sources resolve
   // against. The set is hand-maintained, so it is asserted whole.
   ["cf piece new --root ", "dirs", undefined],
@@ -291,10 +297,22 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf test --root ", "dirs", undefined],
   ["cf piece new --test ", "files", "*.tsx"],
   ["cf piece new ", "files", "*.tsx"],
+  ["cf pattern publish ", "files", "*.tsx"],
+  ["cf pattern publish --root ", "dirs", undefined],
+  ["cf pattern share ", "files", "*.tsx"],
+  ["cf pattern share --root ", "dirs", undefined],
+  ["cf pattern checkpoint ", "files", "*.tsx"],
+  ["cf pattern history ", "files", "*.tsx"],
+  ["cf pattern rollback ", "files", "*.tsx"],
+  ["cf pattern unpublish ", "files", "*.tsx"],
+  ["cf pattern stable ", "files", "*.tsx"],
+  ["cf pattern link ", "files", "*.tsx"],
+  ["cf pattern unshare ", "files", "*.tsx"],
   ["cf piece setsrc ", "files", "*.tsx"],
   ["cf check ", "files", "*.tsx"],
   ["cf test ", "files", "*.tsx"],
   ["cf piece new --datafile ", "files", undefined],
+  ["cf piece new --version-entry ", "files", "*.tsx"],
   ["cf piece new --input-file ", "files", undefined],
   ["cf view ", "files", undefined],
   ["cf exec ", "files", undefined],
@@ -425,7 +443,7 @@ function handoffLabel(directive: Directive): string {
   return glob ? `${directive.kind} ${glob}` : directive.kind;
 }
 
-Deno.test("live candidates: every path-shaped slot hands the shell its own directive", async () => {
+test("live candidates: every path-shaped slot hands the shell its own directive", async () => {
   // These read no state, so this is where they belong — the integration
   // walkthrough covers the providers that reach a fabric and deliberately does
   // not re-check these.
@@ -438,7 +456,7 @@ Deno.test("live candidates: every path-shaped slot hands the shell its own direc
   }
 });
 
-Deno.test("provider keys report which commands each option provider answers on", () => {
+test("provider keys report which commands each option provider answers on", () => {
   // What the slot gate subtracts from the command tree. An option keyed here
   // with no commands answers wherever it is declared; one keyed with commands
   // answers on those and is silent everywhere else, which is the difference
@@ -459,6 +477,8 @@ Deno.test("provider keys report which commands each option provider answers on",
   assertEquals(options.get("schema"), ["cell get"]);
   assertEquals(options.get("root"), [
     "check",
+    "pattern publish",
+    "pattern share",
     "piece new",
     "piece setsrc",
     "piece survey",
@@ -477,7 +497,7 @@ Deno.test("provider keys report which commands each option provider answers on",
   assertFalse(positionals.has("callable"));
 });
 
-Deno.test("live candidates: every probe reaches the slot it was built for", () => {
+test("live candidates: every probe reaches the slot it was built for", () => {
   // What both nets below rest on. A probe that lands on a neighbouring slot
   // tests that neighbour and reports nothing about the slot it named, so the
   // net would pass over a whole class of options while looking exhaustive —
@@ -509,7 +529,7 @@ Deno.test("live candidates: every probe reaches the slot it was built for", () =
   assertEquals(wrong, []);
 });
 
-Deno.test("live candidates: no slot hands the shell a directive the cases miss", async () => {
+test("live candidates: no slot hands the shell a directive the cases miss", async () => {
   // The case table above is hand-maintained, and a hand-maintained table falls
   // behind the thing it describes without saying so — which is what it did
   // when four providers were added with no case. So the set is asked of the
@@ -537,7 +557,7 @@ Deno.test("live candidates: no slot hands the shell a directive the cases miss",
   assertEquals(missing, []);
 });
 
-Deno.test("live candidates: an unscoped option provider answers the same everywhere", async () => {
+test("live candidates: an unscoped option provider answers the same everywhere", async () => {
   // What makes one case cover every command declaring the option. A provider
   // that names no commands is a function of the line rather than of the path,
   // so a different answer on two commands means it is scoped in fact and not
@@ -576,7 +596,7 @@ Deno.test("live candidates: an unscoped option provider answers the same everywh
   );
 });
 
-Deno.test("live candidates: an option that means two things is completed per command", async () => {
+test("live candidates: an option that means two things is completed per command", async () => {
   // The option table is keyed by long name alone, so a slot answering by name
   // would hand the shell directory completion for a sequence number and for an
   // entity id. Offering the wrong set teaches the caller a word the command
@@ -602,7 +622,7 @@ Deno.test("live candidates: an option that means two things is completed per com
   }
 });
 
-Deno.test("an inspect entity slot reads the view its command will read", () => {
+test("an inspect entity slot reads the view its command will read", () => {
   // `--branch` and `--scope` choose which records the command resolves. A
   // listing taken from the space's default view would offer entities that read
   // is not going to find.
@@ -682,7 +702,7 @@ INSERT INTO branch (name, head_seq, status) VALUES ('', 0, 'active');`);
   db.close();
 }
 
-Deno.test("live candidates: an entity slot lists the scope the line named", async () => {
+test("live candidates: an entity slot lists the scope the line named", async () => {
   // The read the command will run is scoped, so the candidates have to be:
   // an id offered from the default scope is one that read cannot reach.
   const dir = await Deno.makeTempDir();
@@ -713,7 +733,7 @@ Deno.test("live candidates: an entity slot lists the scope the line named", asyn
   }
 });
 
-Deno.test("live candidates: the every-scope entity slot enumerates rows in one pass", async () => {
+test("live candidates: the every-scope entity slot enumerates rows in one pass", async () => {
   // A row query filtered on one scope cannot seek (the revision index leads
   // with `id`), so it walks the whole branch; one per scope made completing
   // `inspect overlay` on a store of thousands of scopes take over an hour.
@@ -749,7 +769,7 @@ Deno.test("live candidates: the every-scope entity slot enumerates rows in one p
   }
 });
 
-Deno.test("live candidates: an entity in several scopes is offered once, with its space-scope label", async () => {
+test("live candidates: an entity in several scopes is offered once, with its space-scope label", async () => {
   // `inspect overlay` reads every scope, and one id can hold a value in each.
   // The id is offered once, labeled from the space scope, which is read first.
   const dir = await Deno.makeTempDir();
@@ -777,7 +797,7 @@ Deno.test("live candidates: an entity in several scopes is offered once, with it
   }
 });
 
-Deno.test("live candidates: a saturated space scope does not hide later scopes", async () => {
+test("live candidates: a saturated space scope does not hide later scopes", async () => {
   // The scan cap bounds reconstruction, which only labels a candidate. A space
   // scope holding more than the cap spends all of it, and the per-user and
   // per-session entities after it — the ones `inspect overlay` exists to show
@@ -819,7 +839,7 @@ Deno.test("live candidates: a saturated space scope does not hide later scopes",
   }
 });
 
-Deno.test("live candidates: an inspect line naming --remote offers nothing local", async () => {
+test("live candidates: an inspect line naming --remote offers nothing local", async () => {
   // `--remote` is global on `inspect` and decides where the space comes from:
   // `openByToken` resolves the token through the REMOTE's own listing and
   // opens the snapshot it fetches, so a locally discovered DID and the
@@ -871,7 +891,7 @@ Deno.test("live candidates: an inspect line naming --remote offers nothing local
   }
 });
 
-Deno.test("live candidates: a remote-only space positional offers nothing local", async () => {
+test("live candidates: a remote-only space positional offers nothing local", async () => {
   // `inspect pull` names a space on the REMOTE and resolves it through the
   // remote's own listing, so a locally discovered DID is a candidate the
   // command rejects — while every sibling that opens a local space takes one.
@@ -896,7 +916,7 @@ Deno.test("live candidates: a remote-only space positional offers nothing local"
   }
 });
 
-Deno.test("live candidates: a fabric slot without context degrades to empty", async () => {
+test("live candidates: a fabric slot without context degrades to empty", async () => {
   // Mid-keystroke with nothing configured: silence, not an error.
   await withEnv({}, async () => {
     for (
@@ -926,7 +946,7 @@ Deno.test("live candidates: a fabric slot without context degrades to empty", as
   });
 });
 
-Deno.test("command: bash and zsh subcommands emit their scripts", async () => {
+test("command: bash and zsh subcommands emit their scripts", async () => {
   const bash = await captureStdout(async () => {
     await main.parse(["completion", "bash"]);
   });
@@ -938,7 +958,7 @@ Deno.test("command: bash and zsh subcommands emit their scripts", async () => {
   assert(zsh.includes("#compdef cf"));
 });
 
-Deno.test("command: --no-deno-task reaches the script generator", async () => {
+test("command: --no-deno-task reaches the script generator", async () => {
   const bash = await captureStdout(async () => {
     await main.parse(["completion", "bash", "--no-deno-task"]);
   });
@@ -946,7 +966,7 @@ Deno.test("command: --no-deno-task reaches the script generator", async () => {
   assert(!bash.includes("complete -F _cf_complete deno"));
 });
 
-Deno.test("command: complete accepts bash's raw line form", async () => {
+test("command: complete accepts bash's raw line form", async () => {
   const out = await captureStdout(async () => {
     await main.parse([
       "completion",
@@ -962,7 +982,7 @@ Deno.test("command: complete accepts bash's raw line form", async () => {
   assertEquals(out.split("\n").sort(), ["link", "ls"]);
 });
 
-Deno.test("command: complete accepts zsh's pre-tokenized form", async () => {
+test("command: complete accepts zsh's pre-tokenized form", async () => {
   const out = await captureStdout(async () => {
     await main.parse([
       "completion",
@@ -982,7 +1002,7 @@ Deno.test("command: complete accepts zsh's pre-tokenized form", async () => {
   assertEquals(values, ["link", "ls"]);
 });
 
-Deno.test("command: complete prints nothing when there is nothing to offer", async () => {
+test("command: complete prints nothing when there is nothing to offer", async () => {
   const out = await captureStdout(async () => {
     await main.parse([
       "completion",
@@ -998,7 +1018,7 @@ Deno.test("command: complete prints nothing when there is nothing to offer", asy
   assertEquals(out, "");
 });
 
-Deno.test("command: malformed input never puts usage text on stdout", async () => {
+test("command: malformed input never puts usage text on stdout", async () => {
   // Regression guard. stdout here is a data channel the shell reads on every
   // keystroke; Cliffy answers a malformed invocation by printing usage to
   // stdout, which the shell would then offer as candidates ("Usage:",
@@ -1028,7 +1048,7 @@ Deno.test("command: malformed input never puts usage text on stdout", async () =
   }
 });
 
-Deno.test("command: a deno line that is not ours is reported as such", async () => {
+test("command: a deno line that is not ours is reported as such", async () => {
   const out = await captureStdout(async () => {
     await main.parse([
       "completion",
@@ -1044,7 +1064,7 @@ Deno.test("command: a deno line that is not ours is reported as such", async () 
   assertEquals(out, ":cf:notmine");
 });
 
-Deno.test("shaping: equal document IDs preserve their distinct full target references", () => {
+test("shaping: equal document IDs preserve their distinct full target references", () => {
   const pieces = [
     { id: "fid1:same", reference: "//did:key:alpha/fid1:same@user/nested" },
     { id: "fid1:same", reference: "//did:key:beta/fid1:same" },
@@ -1055,7 +1075,7 @@ Deno.test("shaping: equal document IDs preserve their distinct full target refer
   );
 });
 
-Deno.test("endpoint prefixes retain qualified scope and parent path", () => {
+test("endpoint prefixes retain qualified scope and parent path", () => {
   const id = `fid1:${"a".repeat(43)}`;
   for (
     const root of [
@@ -1083,7 +1103,7 @@ Deno.test("endpoint prefixes retain qualified scope and parent path", () => {
   }
 });
 
-Deno.test("shaping: only default root references in the resolved listing space shorten", () => {
+test("shaping: only default root references in the resolved listing space shorten", () => {
   const local = "did:key:local";
   const id = `fid1:${"a".repeat(43)}`;
   const pieces = [
@@ -1098,7 +1118,7 @@ Deno.test("shaping: only default root references in the resolved listing space s
   ]);
 });
 
-Deno.test("shaping: a piece is labeled by name, falling back to its pattern", () => {
+test("shaping: a piece is labeled by name, falling back to its pattern", () => {
   assertEquals(
     shapePieceCandidates([
       { id: "fid1:a", name: "Todo List" },
@@ -1117,7 +1137,7 @@ Deno.test("shaping: a piece is labeled by name, falling back to its pattern", ()
   );
 });
 
-Deno.test("shaping: a callable is annotated with what the author said it is for", () => {
+test("shaping: a callable is annotated with what the author said it is for", () => {
   // The doc comment is the sentence the verb's help page opens with, and the
   // kind is a two-value fact that rarely decides anything at the prompt. The
   // kind is the fallback where the author documented nothing, so a candidate
@@ -1136,7 +1156,7 @@ Deno.test("shaping: a callable is annotated with what the author said it is for"
   );
 });
 
-Deno.test("shaping: a callable takes the first line of a multi-line comment", () => {
+test("shaping: a callable takes the first line of a multi-line comment", () => {
   // The annotation is one column of one row; the rest of the comment is what
   // the verb's own help page is for.
   assertEquals(
@@ -1151,7 +1171,7 @@ Deno.test("shaping: a callable takes the first line of a multi-line comment", ()
   );
 });
 
-Deno.test("shaping: a verb carrying both marks is offered with both", () => {
+test("shaping: a verb carrying both marks is offered with both", () => {
   // The marks can coexist, and `cf piece verbs` renders them joined — so
   // picking one would put the two surfaces back into the silent disagreement
   // this mark exists to end.
@@ -1169,7 +1189,7 @@ Deno.test("shaping: a verb carrying both marks is offered with both", () => {
   );
 });
 
-Deno.test("shaping: a verb the listing holds back is offered marked", () => {
+test("shaping: a verb the listing holds back is offered marked", () => {
   // `cf piece verbs` hides both unless --all. Both are callable, so hiding
   // them here would put a working name out of reach; the mark is what keeps
   // the two surfaces from disagreeing silently.
@@ -1192,7 +1212,7 @@ Deno.test("shaping: a verb the listing holds back is offered marked", () => {
   );
 });
 
-Deno.test("shaping: a slug is labeled apart from the ids beside it", () => {
+test("shaping: a slug is labeled apart from the ids beside it", () => {
   // Both are `--piece` values, so a candidate list mixing them has to say
   // which is which — and where the slug resolves to a piece the listing named,
   // what it points at is the question a caller is actually asking.
@@ -1213,7 +1233,7 @@ Deno.test("shaping: a slug is labeled apart from the ids beside it", () => {
   );
 });
 
-Deno.test("shaping: a projection word splits into the part carried back and the path", () => {
+test("shaping: a projection word splits into the part carried back and the path", () => {
   // The shell replaces the whole word, so a candidate has to carry every
   // element already closed and every segment already typed in this one.
   assertEquals(splitSelectPrefix(""), {
@@ -1242,7 +1262,7 @@ Deno.test("shaping: a projection word splits into the part carried back and the 
   });
 });
 
-Deno.test("shaping: a projection path reads through however many array layers it meets", () => {
+test("shaping: a projection path reads through however many array layers it meets", () => {
   // `--select matrix.nested.leaf` is valid over `[[{nested: {leaf}}]]`, so a
   // walk that unwrapped one layer would offer `nested` and then nothing.
   const nested = { matrix: [[{ nested: { leaf: 1 } }]] };
@@ -1255,7 +1275,7 @@ Deno.test("shaping: a projection path reads through however many array layers it
   );
 });
 
-Deno.test("shaping: the bare address suffix is offered at any element of the list", () => {
+test("shaping: the bare address suffix is offered at any element of the list", () => {
   // `revision,@` parses: a path that is only the suffix is legal wherever an
   // element begins, not only at the first.
   assertEquals(
@@ -1264,7 +1284,7 @@ Deno.test("shaping: the bare address suffix is offered at any element of the lis
   );
 });
 
-Deno.test("shaping: a projection path reads an array element-wise", () => {
+test("shaping: a projection path reads an array element-wise", () => {
   // `--select items.title` projects each element; `--select items.0.title` is
   // refused. Offering an index would name a path the command rejects.
   assertEquals(
@@ -1281,7 +1301,7 @@ Deno.test("shaping: a projection path reads an array element-wise", () => {
   }
 });
 
-Deno.test("shaping: both spellings of a position are offered, each carrying the prefix", () => {
+test("shaping: both spellings of a position are offered, each carrying the prefix", () => {
   assertEquals(
     shapeProjectionCandidates({ theme: "dark" }, "settings."),
     [
@@ -1291,7 +1311,7 @@ Deno.test("shaping: both spellings of a position are offered, each carrying the 
   );
 });
 
-Deno.test("shaping: the bare address suffix is offered only where it is asked for", () => {
+test("shaping: the bare address suffix is offered only where it is asked for", () => {
   const withSelf = shapeProjectionCandidates({ a: 1 }, "", { self: true });
   assertEquals(withSelf[0].value, "@");
   assertEquals(
@@ -1300,7 +1320,7 @@ Deno.test("shaping: the bare address suffix is offered only where it is asked fo
   );
 });
 
-Deno.test("shaping: an address-marked segment keeps completing below it", () => {
+test("shaping: an address-marked segment keeps completing below it", () => {
   // `topic@.title` marks `topic` and projects `title`, so the walk reads the
   // field the segment NAMES while the candidate carries the marker back.
   assertEquals(splitSelectPrefix("topic@.").path, ["topic"]);
@@ -1313,7 +1333,7 @@ Deno.test("shaping: an address-marked segment keeps completing below it", () => 
   assertEquals(splitSelectPrefix("a\\@.").path, ["a@"]);
 });
 
-Deno.test("acceptedProjections keeps what the flag's own parser reads as a field list", async () => {
+test("acceptedProjections keeps what the flag's own parser reads as a field list", async () => {
   // The filter itself, driven directly: a spelling each flag refuses, one it
   // reads as something other than a field list, and one it takes.
   const shape = (values: string[]) => values.map((value) => ({ value }));
@@ -1335,7 +1355,7 @@ Deno.test("acceptedProjections keeps what the flag's own parser reads as a field
   );
 });
 
-Deno.test("the projection grammar decides which candidates a flag can take", async () => {
+test("the projection grammar decides which candidates a flag can take", async () => {
   // The boundary cases, each settled by the flag's own parser rather than by
   // a rule restated here. A candidate that parses but comes back as something
   // other than a field list — `--schema true` is the boolean JSON Schema — is
@@ -1374,7 +1394,7 @@ Deno.test("the projection grammar decides which candidates a flag can take", asy
   assert((await accepted("schema", "revision,")).includes("revision,true"));
 });
 
-Deno.test("shaping: a key the concise grammar cannot carry is not offered", () => {
+test("shaping: a key the concise grammar cannot carry is not offered", () => {
   // `parseConciseSegment` holds a segment to an identifier grammar, and a
   // trailing `@` in a name reads as the address suffix. Offering either would
   // name a path the command refuses.
@@ -1385,7 +1405,7 @@ Deno.test("shaping: a key the concise grammar cannot carry is not offered", () =
   );
 });
 
-Deno.test("shaping: an entity is labeled by what was reconstructed for it", () => {
+test("shaping: an entity is labeled by what was reconstructed for it", () => {
   // The id is what the next positional takes; the label is what makes it
   // readable. `(piece)` is what the reconstruction says when it found no name,
   // which is the kind's job rather than the label's.
@@ -1403,7 +1423,7 @@ Deno.test("shaping: an entity is labeled by what was reconstructed for it", () =
   );
 });
 
-Deno.test("every wish target offered is one the command's help enumerates", () => {
+test("every wish target offered is one the command's help enumerates", () => {
   // The vocabulary is the wish builtin's rather than the command tree's, so it
   // is carried here by hand. The help text is where it is documented, and a
   // target in one and not the other is the drift this catches.
@@ -1420,7 +1440,7 @@ Deno.test("every wish target offered is one the command's help enumerates", () =
   }
 });
 
-Deno.test("shaping: a typed path splits into parent and replacement prefix", () => {
+test("shaping: a typed path splits into parent and replacement prefix", () => {
   // The prefix is what stops a completed deep path collapsing to its last
   // segment — the shell replaces the whole word.
   assertEquals(splitPathPrefix("items"), { parentPath: "", prefix: "" });
@@ -1434,14 +1454,14 @@ Deno.test("shaping: a typed path splits into parent and replacement prefix", () 
   });
 });
 
-Deno.test("shaping: a piece-and-path prefix never doubles the separator", () => {
+test("shaping: a piece-and-path prefix never doubles the separator", () => {
   // `id//key` would be a different, invalid reference.
   assertEquals(pieceWithPathPrefix("fid1:a", ""), "fid1:a/");
   assertEquals(pieceWithPathPrefix("fid1:a", "items"), "fid1:a/items/");
   assertEquals(pieceWithPathPrefix("fid1:a", "items/0"), "fid1:a/items/0/");
 });
 
-Deno.test("live candidates preserve qualified space, user scope, and nested paths", async () => {
+test("live candidates preserve qualified space, user scope, and nested paths", async () => {
   const identity = await Identity.fromPassphrase(
     "completion qualified viewer",
     { implementation: "noble" },
@@ -1544,7 +1564,7 @@ Deno.test("live candidates preserve qualified space, user scope, and nested path
   }
 });
 
-Deno.test("space compact: --scope and --documents offer the store's vocabulary", async () => {
+test("space compact: --scope and --documents offer the store's vocabulary", async () => {
   // `--scope` means a scope KIND here and a search scope on `wish`; the same
   // option name answers differently by command, which is what the provider's
   // command scoping is for. `--documents` offers the four id namespaces a

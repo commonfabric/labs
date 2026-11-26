@@ -12,6 +12,7 @@ import {
   resolvePrincipalSessionKey,
   resolveScopeKey,
 } from "@commonfabric/memory/v2";
+import { test } from "@commonfabric/test-support/test";
 import {
   admitDerived,
   applicableSet,
@@ -88,7 +89,7 @@ const C1_MENU: Step[] = [
   { kind: "ack", session: S1, space: "A" },
 ];
 
-Deno.test("C1: cascade inherits the root actor; intents reach the clicking session; LT1 carriage in one wave", () => {
+test("C1: cascade inherits the root actor; intents reach the clicking session; LT1 carriage in one wave", () => {
   const w0 = apply(c1World(), C1_MENU[0]);
   const { finals, all } = explore(w0, C1_MENU.slice(1), { maxSteps: 6 });
   noViolations(all);
@@ -139,7 +140,7 @@ Deno.test("C1: cascade inherits the root actor; intents reach the clicking sessi
   }
 });
 
-Deno.test("C1-split: every split commit repeats the FULL consequenceOf (serving-loop §3)", () => {
+test("C1-split: every split commit repeats the FULL consequenceOf (serving-loop §3)", () => {
   const w0 = apply(c1World(true), C1_MENU[0]);
   const { finals } = explore(w0, [{ kind: "wave", space: "A" }], {
     maxSteps: 3,
@@ -177,7 +178,7 @@ Deno.test("C1-split: every split commit repeats the FULL consequenceOf (serving-
   assert(sawSplit, "the split configuration actually split a wave");
 });
 
-Deno.test("C1-LT8: a reload between enact and ack can re-enact — bounded, and accepted", () => {
+test("C1-LT8: a reload between enact and ack can re-enact — bounded, and accepted", () => {
   const w0 = apply(c1World(), C1_MENU[0]);
   const menu: Step[] = [...C1_MENU.slice(1), { kind: "reload", session: S1 }];
   const { all } = explore(w0, menu, { maxSteps: 8 });
@@ -218,7 +219,7 @@ function c2World() {
   });
 }
 
-Deno.test("C2: identity crosses the boundary (LT2); session write lands in B under (U1,S1); navigateTo in B errors (LT3)", () => {
+test("C2: identity crosses the boundary (LT2); session write lands in B under (U1,S1); navigateTo in B errors (LT3)", () => {
   const w0 = apply(c2World(), {
     kind: "fire",
     session: S1,
@@ -254,7 +255,7 @@ Deno.test("C2: identity crosses the boundary (LT2); session write lands in B und
   }
 });
 
-Deno.test("C2-FP1 (CLOSED — ruled 2026-08-03): durable append rows survive every crash; no schedule loses an append; delivery stays exactly-once", () => {
+test("C2-FP1 (CLOSED — ruled 2026-08-03): durable append rows survive every crash; no schedule loses an append; delivery stays exactly-once", () => {
   const w0 = apply(c2World(), {
     kind: "fire",
     session: S1,
@@ -309,7 +310,7 @@ Deno.test("C2-FP1 (CLOSED — ruled 2026-08-03): durable append rows survive eve
   );
 });
 
-Deno.test("C2-dedupe: at-least-once redelivery is idempotent at the target (events §4)", () => {
+test("C2-dedupe: at-least-once redelivery is idempotent at the target (events §4)", () => {
   // Deliver twice by re-enqueueing the same entry manually.
   let w = apply(c2World(), {
     kind: "fire",
@@ -361,7 +362,7 @@ Deno.test("C2-dedupe: at-least-once redelivery is idempotent at the target (even
 // C3: sessionless chains and uniform inheritance (LT6)
 //
 
-Deno.test("C3: derivation-emitted events carry the demand identity uniformly (LT6); sessionless writes error", () => {
+test("C3: derivation-emitted events carry the demand identity uniformly (LT6); sessionless writes error", () => {
   const base = makeWorld({
     spaces: {
       A: { streams: { s: { writes: ["session", "user"], navigate: true } } },
@@ -432,7 +433,7 @@ Deno.test("C3: derivation-emitted events carry the demand identity uniformly (LT
 // C4: push privacy and settledness
 //
 
-Deno.test("C4: a subscriber receives only its applicable set (protocol §3); settledness is sound (protocol §4)", () => {
+test("C4: a subscriber receives only its applicable set (protocol §3); settledness is sound (protocol §4)", () => {
   const w0 = makeWorld({
     spaces: {
       A: { streams: { s: { writes: ["space", "user", "session"] } } },
@@ -467,7 +468,7 @@ Deno.test("C4: a subscriber receives only its applicable set (protocol §3); set
 // C6: admission negatives
 //
 
-Deno.test("C6: derived admission is the lease equality check — forgeries and non-holders rejected (protocol §2, serving-loop §2)", () => {
+test("C6: derived admission is the lease equality check — forgeries and non-holders rejected (protocol §2, serving-loop §2)", () => {
   const w = makeWorld({
     spaces: { A: { streams: {} } },
     clients: [{ user: U1, session: S1, connected: ["A"] }],
@@ -507,7 +508,7 @@ function c7World(leaseDiscipline: boolean) {
   });
 }
 
-Deno.test("C7: a restarted process reacquires with nothing released before it, and the old reign's in-flight probe is still fenced (serving-loop §2)", () => {
+test("C7: a restarted process reacquires with nothing released before it, and the old reign's in-flight probe is still fenced (serving-loop §2)", () => {
   let w = c7World(true);
   w = apply(w, { kind: "sealProbe", space: "A" });
   w = apply(w, { kind: "restartProcess", space: "A" });
@@ -518,7 +519,7 @@ Deno.test("C7: a restarted process reacquires with nothing released before it, a
   assertEquals(w.spaces.A.commits.length, head);
 });
 
-Deno.test("C7: a restart drops the old process's in-memory wave, so the new holder commits none of it (serving-loop §2)", () => {
+test("C7: a restart drops the old process's in-memory wave, so the new holder commits none of it (serving-loop §2)", () => {
   let w = makeWorld({
     spaces: { A: { streams: { s: { writes: ["space"] } } } },
     clients: [{ user: U1, session: S1, connected: ["A"] }],
@@ -534,7 +535,7 @@ Deno.test("C7: a restart drops the old process's in-memory wave, so the new hold
   );
 });
 
-Deno.test("C7a: DR1 verified — per-process holder + in-process discipline admits NO stale-tenure commit on any schedule", () => {
+test("C7a: DR1 verified — per-process holder + in-process discipline admits NO stale-tenure commit on any schedule", () => {
   const { all } = explore(c7World(true), C7_MENU, { maxSteps: 9 });
   for (const w of all) {
     assertEquals(
@@ -551,7 +552,7 @@ Deno.test("C7a: DR1 verified — per-process holder + in-process discipline admi
   );
 });
 
-Deno.test("C7b: the residue the MUST exists for — discipline OFF makes a same-process stale admission reachable; cross-process stays fenced regardless", () => {
+test("C7b: the residue the MUST exists for — discipline OFF makes a same-process stale admission reachable; cross-process stays fenced regardless", () => {
   const { all } = explore(c7World(false), C7_MENU, { maxSteps: 9 });
   const stale = all.filter((w) => w.staleAdmissions > 0);
   assert(
@@ -590,7 +591,7 @@ function c8World() {
   });
 }
 
-Deno.test("C8a: a superseded PURE derived write is DROPPED — the intruding authored write survives, the next wave recomputes over it (serving-loop §3d; protocol §1 threat model)", () => {
+test("C8a: a superseded PURE derived write is DROPPED — the intruding authored write survives, the next wave recomputes over it (serving-loop §3d; protocol §1 threat model)", () => {
   let w = c8World();
   w = apply(w, { kind: "clientWrite", session: S1, space: "A", doc: "d-in" });
   w = apply(w, { kind: "waveCompute", space: "A" });
@@ -613,7 +614,7 @@ Deno.test("C8a: a superseded PURE derived write is DROPPED — the intruding aut
   );
 });
 
-Deno.test("C8b: a raced handler CONSEQUENCE is REQUEUED — never lost, never doubled, watermark holds until it lands (serving-loop §3d; events §4)", () => {
+test("C8b: a raced handler CONSEQUENCE is REQUEUED — never lost, never doubled, watermark holds until it lands (serving-loop §3d; events §4)", () => {
   let w = c8World();
   w = apply(w, { kind: "fire", session: S1, space: "A", stream: "s" });
   const eventId = w.spaces.A.streams.s.entries[0].eventId;
@@ -638,7 +639,7 @@ Deno.test("C8b: a raced handler CONSEQUENCE is REQUEUED — never lost, never do
   assertEquals(w.spaces.A.streams.s.entries[0].consequenced, true);
 });
 
-Deno.test("C8c: exactly-once under exhaustive racing — no event's consequences ever commit twice, and W never passes an unconsequenced event", () => {
+test("C8c: exactly-once under exhaustive racing — no event's consequences ever commit twice, and W never passes an unconsequenced event", () => {
   const w0 = apply(c8World(), {
     kind: "fire",
     session: S1,
@@ -679,7 +680,7 @@ Deno.test("C8c: exactly-once under exhaustive racing — no event's consequences
 // C9: DROP vs REQUEUE — the T3 distinction
 //
 
-Deno.test("C9: an UNRUNNABLE event DROPS (notice + watermark advance, non-wedging); a RACED event never does (events §5; serving-loop §3d)", () => {
+test("C9: an UNRUNNABLE event DROPS (notice + watermark advance, non-wedging); a RACED event never does (events §5; serving-loop §3d)", () => {
   const base = makeWorld({
     spaces: {
       A: { streams: { t: { writes: ["space"], requiresDoc: "pre" } } },
@@ -720,7 +721,7 @@ Deno.test("C9: an UNRUNNABLE event DROPS (notice + watermark advance, non-wedgin
 // C10: budget exhaustion — W pinned, continuation
 //
 
-Deno.test("C10: an exhausted wave commits WITHOUT advancing W; continuation waves finish; W jumps only at true quiescence (serving-loop §3)", () => {
+test("C10: an exhausted wave commits WITHOUT advancing W; continuation waves finish; W jumps only at true quiescence (serving-loop §3)", () => {
   let w = makeWorld({
     spaces: { A: { streams: { s: { writes: ["space"] } } } },
     clients: [{ user: U1, session: S1, connected: ["A"] }],
@@ -757,7 +758,7 @@ Deno.test("C10: an exhausted wave commits WITHOUT advancing W; continuation wave
 // C8d + C0: rollback closure and the guard rails
 //
 
-Deno.test("C8d: a requeued parent's same-wave cascade NEVER escapes — rollback closes over descendants (events §4; serving-loop §3d)", () => {
+test("C8d: a requeued parent's same-wave cascade NEVER escapes — rollback closes over descendants (events §4; serving-loop §3d)", () => {
   const w0 = makeWorld({
     spaces: {
       A: {
@@ -788,7 +789,7 @@ Deno.test("C8d: a requeued parent's same-wave cascade NEVER escapes — rollback
   assert(w.spaces.A.streams.s2.entries[0].consequenced);
 });
 
-Deno.test("C0-guards: connection guards; no-actor space writes carry no attribution; mid-wave lease loss aborts; sessionless delegated stamping", () => {
+test("C0-guards: connection guards; no-actor space writes carry no attribution; mid-wave lease loss aborts; sessionless delegated stamping", () => {
   const w0 = makeWorld({
     spaces: {
       A: { streams: { s: { writes: ["space"] } } },
@@ -879,7 +880,7 @@ Deno.test("C0-guards: connection guards; no-actor space writes carry no attribut
 // conformance bridge: model keys === the wire vocabulary
 //
 
-Deno.test("bridge: model scope-key constructors byte-agree with the real wire vocabulary (LD3, key-vocabulary §3)", () => {
+test("bridge: model scope-key constructors byte-agree with the real wire vocabulary (LD3, key-vocabulary §3)", () => {
   // The model RESTATES the constructors (model.ts stays import-free);
   // this bridge is what keeps the restatement honest. Corpus includes
   // `:`-bearing principals (DIDs contain `:`), `/`-bearing components,
@@ -928,6 +929,8 @@ Deno.test("bridge: model scope-key constructors byte-agree with the real wire vo
       assert(isCanonicalKey(key), `model validator rejects constructed ${key}`);
     }
   }
+  assert(isScopeKey(SPACE_KEY), "real validator rejects the space key");
+  assert(isCanonicalKey(SPACE_KEY), "model validator rejects the space key");
   const rejectionCorpus = [
     "",
     "user",
@@ -1016,7 +1019,7 @@ function exploreFanout(
   return all;
 }
 
-Deno.test("C11a: instance sets are CLEAN PRODUCTS over principals — never ragged, on every reachable schedule (scopes §2)", () => {
+test("C11a: instance sets are CLEAN PRODUCTS over principals — never ragged, on every reachable schedule (scopes §2)", () => {
   const all = exploreFanout(makeFanout([U1, U2]), 7);
   assert(all.length > 50, `state space too small (${all.length})`);
   const legalInstanceKeys = new Set([userKey(U1), userKey(U2)]);
@@ -1041,7 +1044,7 @@ Deno.test("C11a: instance sets are CLEAN PRODUCTS over principals — never ragg
   }
 });
 
-Deno.test("C11d: a step naming a principal outside the configured set is REJECTED — the menu cannot smuggle instances past the clean-product invariant (r3739139513)", () => {
+test("C11d: a step naming a principal outside the configured set is REJECTED — the menu cannot smuggle instances past the clean-product invariant (r3739139513)", () => {
   const s0 = makeFanout([U1]);
   // Pre-fix, fanNarrow/fanDemand minted the foreign user's instance:
   // the clean-product check quantifies over `principals`, so the
@@ -1057,7 +1060,7 @@ Deno.test("C11d: a step naming a principal outside the configured set is REJECTE
   );
 });
 
-Deno.test("C11b: the fan-out unit is the RUN — `action × instance`, one principal's writes per run, never merged (serving-loop §3c)", () => {
+test("C11b: the fan-out unit is the RUN — `action × instance`, one principal's writes per run, never merged (serving-loop §3c)", () => {
   const all = exploreFanout(makeFanout([U1, U2]), 7);
   for (const s of all) {
     for (const run of s.runs) {
@@ -1077,7 +1080,7 @@ Deno.test("C11b: the fan-out unit is the RUN — `action × instance`, one princ
   );
 });
 
-Deno.test("C11c: W never forks — one integer, waiting on DEMANDED siblings only; undemanded instances never hold it back (scopes §2, §9)", () => {
+test("C11c: W never forks — one integer, waiting on DEMANDED siblings only; undemanded instances never hold it back (scopes §2, §9)", () => {
   const all = exploreFanout(makeFanout([U1, U2]), 7);
   for (const s of all) {
     // Type-level: FanoutState.W is a single number (a per-instance

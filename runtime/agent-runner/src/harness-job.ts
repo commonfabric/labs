@@ -25,6 +25,7 @@ import {
   type RunCfHarnessCliDependencies,
   selectCfHarnessCliSandboxRuntime,
 } from "@commonfabric/cf-harness/cli";
+import type { HarnessModelProviderId } from "@commonfabric/cf-harness/config";
 import type { HarnessBrowserHost } from "@commonfabric/cf-harness/contracts/browser-host";
 import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
@@ -57,13 +58,36 @@ import type {
 } from "@commonfabric/cf-harness/task-classification";
 import {
   type AgentRunErrorCode,
+  CFC_REFUSED,
   INVALID_RESULT,
   LIMIT_REACHED,
   PROVIDER_FAILURE,
 } from "@commonfabric/runner/agent-run";
-import type { CfcObservationMaxConfidentiality } from "@commonfabric/runner/cfc";
+import {
+  type CfcObservationMaxConfidentiality,
+  CfcReadCeilingError,
+} from "@commonfabric/runner/cfc";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import type { AgentRunReport } from "./agent-runner.ts";
+
+/**
+ * Whether `error`, or an error it was thrown for (its `cause`, at any depth),
+ * is the read ceiling withholding a value: a run the information-flow rules
+ * stopped, rather than one that failed.
+ */
+const isReadCeilingRefusal = (error: unknown): boolean => {
+  const seen = new Set<unknown>();
+  for (
+    let current = error;
+    current instanceof Error && !seen.has(current);
+    current = current.cause
+  ) {
+    if (current instanceof CfcReadCeilingError) return true;
+    seen.add(current);
+  }
+  return false;
+};
 
 /** The host command endpoint a job's command tools call. */
 export interface HarnessJobCommands {
@@ -145,6 +169,13 @@ export interface HarnessJobSpec extends HarnessModelLimits {
   /** Model name passed to `cf-harness`. */
   model?: string;
 
+  /**
+   * The model provider passed to `cf-harness`; absent, the harness resolves
+   * its own. A follow-up naming one other than its predecessor's recorded
+   * provider is refused before any model call.
+   */
+  modelProvider?: HarnessModelProviderId;
+
   /** The job's system prompt: framing the task's author supplies. */
   instructions?: string;
 
@@ -165,6 +196,13 @@ export interface HarnessJobSpec extends HarnessModelLimits {
 
   /** The provider reasoning effort; the provider's default when absent. */
   reasoningEffort?: string;
+
+  /**
+   * The provider prompt-cache key the job's model calls carry, shared with
+   * every other run that names it; the run's own id when absent, so a run
+   * then reuses the cache only within itself.
+   */
+  cacheAffinityKey?: string;
 
   /** The host-owned file backing the read-only Loom tools. */
   loomRetrievalConfigPath?: string;
@@ -190,7 +228,20 @@ export interface HarnessJobSpec extends HarnessModelLimits {
    * harness publishes unless this is `false`.
    */
   patternIndexPublish?: boolean;
+
+  /** `"agent"`: the job is a person's own agent making patterns for them (`--pattern-index-origin`). */
+  patternIndexOrigin?: "agent";
 }
+
+/**
+ * The gateway's settings in the runner's environment, which a job pinned to
+ * `openai-codex` runs without: the harness refuses a gateway URL or auth mode
+ * beside that provider.
+ */
+export const HARNESS_GATEWAY_ENV_KEYS = [
+  "CF_HARNESS_GATEWAY_BASE_URL",
+  "CF_HARNESS_GATEWAY_AUTH_MODE",
+] as const;
 
 /**
  * The harness settings a job never takes from its environment: each grants
@@ -297,7 +348,10 @@ export type HarnessJobResult =
 
       /**
        * Why, where the harness said: for `INVALID_RESULT`, that no result
-       * was submitted, or the field the schema refused and the reason.
+       * was submitted, or the field the schema refused and the reason; for a
+       * run that ended on a thrown error, that error described. That text
+       * is unlabelled and may carry host detail: it is for the job's owner
+       * and operator, never for a model or a share.
        */
       errorDetail?: string;
     }
@@ -390,6 +444,9 @@ const argvOf = (
     ? ["--pattern-index-url", spec.patternIndexUrl]
     : []),
   ...(spec.patternIndexPublish === false ? ["--no-pattern-index-publish"] : []),
+  ...(spec.patternIndexOrigin === "agent"
+    ? ["--pattern-index-origin", "agent"]
+    : []),
   ...(spec.loomRetrievalConfigPath !== undefined
     ? ["--loom-retrieval-config", spec.loomRetrievalConfigPath]
     : []),
@@ -443,6 +500,9 @@ const argvOf = (
     (profile) => ["--allow-subagent-profile", profile],
   ),
   ...(spec.model !== undefined ? ["--model", spec.model] : []),
+  ...(spec.modelProvider !== undefined
+    ? ["--model-provider", spec.modelProvider]
+    : []),
 ];
 
 /**
@@ -463,6 +523,23 @@ const SANDBOX_SELECTION = { sandboxSelectionFlags: false };
 export const selectHarnessJobSandboxRuntime = (
   harnessDeps: RunCfHarnessCliDependencies = {},
 ) => selectCfHarnessCliSandboxRuntime({ ...harnessDeps, ...SANDBOX_SELECTION });
+
+/**
+ * Whether the run recorded at `runRoot` holds a checkpoint it can continue
+ * from. A run root that is not there recorded nothing to continue.
+ *
+ * @throws Error when the run's artifacts are there but cannot be read.
+ */
+export const canContinueRecordedRun = async (
+  runRoot: string,
+): Promise<boolean> => {
+  try {
+    return canContinueHarnessRun(await readHarnessRunArtifacts(runRoot));
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
+  }
+};
 
 /**
  * Runs one job. It ends `completed` with the submitted value or final text and
@@ -542,6 +619,11 @@ export const runHarnessJob = async (
       new CfHarnessPromptLoop(loopOptions));
   const env = { ...(options.harnessDeps?.env ?? processCfHarnessCliEnv()) };
   for (const key of HARNESS_JOB_GRANT_ENV_KEYS) delete env[key];
+  if (spec.modelProvider === "openai-codex") {
+    // A runner serving gateway profiles too may carry the gateway's settings;
+    // the harness refuses them beside `--model-provider openai-codex`.
+    for (const key of HARNESS_GATEWAY_ENV_KEYS) delete env[key];
+  }
   const deps: RunCfHarnessCliDependencies = {
     ...options.harnessDeps,
     ...SANDBOX_SELECTION,
@@ -576,6 +658,9 @@ export const runHarnessJob = async (
           : {}),
         ...(spec.maxOutputTokens !== undefined
           ? { maxOutputTokens: spec.maxOutputTokens }
+          : {}),
+        ...(spec.cacheAffinityKey !== undefined
+          ? { cacheAffinityKey: spec.cacheAffinityKey }
           : {}),
       });
       const run = async <
@@ -655,16 +740,8 @@ export const runHarnessJob = async (
       }
       : undefined;
   const runRef = loopResult?.runState.artifactRoot ?? failedState?.artifactRoot;
-  let recordedRun = false;
-  if (runRef !== undefined) {
-    try {
-      recordedRun = canContinueHarnessRun(
-        await readHarnessRunArtifacts(runRef),
-      );
-    } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
-    }
-  }
+  const recordedRun = runRef !== undefined &&
+    await canContinueRecordedRun(runRef);
   const report = loopResult !== undefined
     ? reportOf(loopResult)
     : failedReport ??
@@ -677,15 +754,24 @@ export const runHarnessJob = async (
     };
   }
   if (loopResult === undefined) {
+    // A run that ended on a thrown error says which, so the job's owner can
+    // tell a model that failed from a read the runtime withheld.
     const limit = loopError instanceof Error &&
       loopError.message.includes("exceeded max model turns");
+    const errorDetail = loopError !== undefined
+      ? describeFailure(loopError)
+      : refusalDetail;
     return {
       outcome: "failed",
       recordedRun,
-      errorCode: limit ? LIMIT_REACHED : PROVIDER_FAILURE,
-      ...(loopError === undefined && refusalDetail !== undefined
-        ? { errorDetail: refusalDetail }
-        : {}),
+      // The ceiling's refusal is decided first: the turn limit is told
+      // apart by its message alone, which a wrapping error could repeat.
+      errorCode: isReadCeilingRefusal(loopError)
+        ? CFC_REFUSED
+        : limit
+        ? LIMIT_REACHED
+        : PROVIDER_FAILURE,
+      ...(errorDetail !== undefined ? { errorDetail } : {}),
       ...(report !== undefined ? { report } : {}),
     };
   }

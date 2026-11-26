@@ -28,9 +28,12 @@ import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
   ApplyOpOperation,
   ApplyOpResolution,
+  BranchInfo,
+  BranchName,
   ClientCommit,
   CommitClass,
   CommitPrecondition,
+  CommitSummary,
   DeliveryFailureClass,
   DocumentPath,
   EntityDocument,
@@ -89,6 +92,7 @@ import type {
   CfcGrantWriteInput,
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
+  CfcMetadata,
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcRefusalDetail,
@@ -289,6 +293,19 @@ export type StoredDocumentAddress = {
   id: URI;
   scope?: CellScope;
   scopeKey?: ScopeKey;
+};
+
+/** How a release pass (`IStorageManager.releaseUnreadDocuments()`) runs. */
+export type ReleaseOptions = {
+  /**
+   * Whether the pass completes a release something asked for, such as a
+   * stop: each hold token live as the pass begins, once collected, then asks
+   * for a pass of its own (`IStorageManager.subscribeHoldsCollected()`), which
+   * releases what the token alone kept. Absent, a token's collection asks
+   * for nothing on this pass's account. Closing the manager forgets every
+   * follow-up.
+   */
+  followUpOnCollection?: boolean;
 };
 
 export interface IStorageManager extends IStorageSubscriptionCapability {
@@ -779,6 +796,24 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     context?: () => PendingCommitContext,
   ): void;
 
+  /**
+   * Register a multi-space commit whose later spaces' writes are not yet in
+   * those spaces' replicas. The transaction layer commits such a transaction
+   * one space at a time and hands a space's writes to its replica only once
+   * the server has answered for the spaces before it, so until then a read
+   * of a later space does not see them. `applied` settles once the commit
+   * has handed its last space's writes to that space's replica, or has
+   * stopped short of it. Called synchronously as the commit is issued.
+   */
+  trackMultiSpaceCommitApplying?(applied: Promise<void>): void;
+
+  /**
+   * Settles once every multi-space commit registered with
+   * `trackMultiSpaceCommitApplying()` so far has handed its writes to its
+   * replicas, or stopped; `undefined` when none is still handing them over.
+   */
+  multiSpaceCommitsApplied?(): Promise<void> | undefined;
+
   /** Snapshot pending work without waiting for durability or starting I/O. */
   getDiagnostics?(): StorageDiagnostics;
 
@@ -871,6 +906,17 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): object;
 
   /**
+   * Calls `observer` when a document's hold token (`holdDocument()`) has been
+   * collected that a pass asked to follow up found live
+   * (`ReleaseOptions.followUpOnCollection`), while it was still that
+   * document's token and its space was open, so that the next
+   * `releaseUnreadDocuments()` can release a document nothing holds any
+   * more. One collection can call it once for each of many tokens. Returns a
+   * cancel that removes it.
+   */
+  subscribeHoldsCollected?(observer: () => void): Cancel;
+
+  /**
    * Adds a way for the manager to learn whether something reads a document;
    * a document any of them reads keeps its watches through
    * `releaseUnreadDocuments()` and stays loaded when its watches go. Returns
@@ -891,9 +937,16 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * advertise `watchRemoveV1` keeps every watch. Resolves once every space's
    * session has answered, to whether some root was kept only for having been
    * loaded or read since the previous call began, which a later call may
-   * release.
+   * release. Then, unless a commit spanning several spaces is still
+   * applying, it releases each space nothing uses any more, as "Releasing a
+   * space's session" in `docs/features/document-release.md` says: it closes
+   * the space's session and forgets the space, which the next use opens
+   * again.
    */
-  releaseUnreadDocuments?(): Promise<boolean>;
+  releaseUnreadDocuments?(options?: ReleaseOptions): Promise<boolean>;
+
+  /** Calls `observer` with each space a release pass releases. */
+  subscribeSpacesReleased?(observer: (space: MemorySpace) => void): Cancel;
 
   /**
    * How many documents this manager has dropped. A cell loaded before the
@@ -1230,6 +1283,15 @@ export interface IStorageProvider {
   presentCount?(absences: readonly UnexaminedAbsence[]): number;
 
   /**
+   * Those of `absences`, addresses {@link unexaminedAbsences} returned, this
+   * replica still holds no record of. Optional alongside
+   * {@link unexaminedAbsences}.
+   */
+  stillUnexamined?(
+    absences: readonly UnexaminedAbsence[],
+  ): readonly UnexaminedAbsence[];
+
+  /**
    * Whether the store read-through, asked for the instance `address` names
    * under `identity`, reported holding nothing there, with no write to it
    * reported since. Such an absence stays unexamined for commit to
@@ -1329,6 +1391,53 @@ export interface IStorageProvider {
 
   /** Test one live space-scoped entity identifier without loading its value. */
   entityIdExists?(id: string): Promise<boolean | undefined>;
+
+  /**
+   * Returns the commits of a branch's history, newest first: those of
+   * `options.branch` (absent, the branch this provider's session is of),
+   * then those it inherits from each ancestor up to its fork point, below
+   * `options.before`. At most `options.limit` are returned, and 500 at the
+   * most, which is also the limit when none is given. Rejects when the
+   * server serves no history.
+   */
+  listHistory?(
+    options?: { branch?: BranchName; before?: number; limit?: number },
+  ): Promise<CommitSummary[]>;
+
+  /**
+   * Observes the newest seq of the space this provider has learned of
+   * moving forward: a commit of its own being accepted, or the server
+   * pushing a commit to a document it watches. Returns the function that
+   * stops observing.
+   */
+  subscribeServerSeq?(observer: (serverSeq: number) => void): () => void;
+
+  /** Returns the space's branches, deleted ones included. */
+  listBranches?(): Promise<BranchInfo[]>;
+
+  /**
+   * Forks the branch `name` from `options.parentBranch` (absent, the
+   * default branch) as of `options.forkSeq` (absent, the parent's head).
+   */
+  createBranch?(
+    name: BranchName,
+    options?: { parentBranch?: BranchName; forkSeq?: number },
+  ): Promise<BranchInfo>;
+
+  /** Deletes the branch `name`, which then takes no further commit. */
+  deleteBranch?(name: BranchName): Promise<void>;
+
+  /**
+   * Restores the space's default branch to the state `options.source`
+   * (absent, the default branch) held as of `options.sourceSeq` (absent,
+   * its head). The space's access list, session-scoped documents, the
+   * serving loop's records and SQLite databases are left as they are.
+   * Returns the restoring commit's seq, or `undefined` when the default
+   * branch already held that state.
+   */
+  restoreBranch?(
+    options?: { source?: BranchName; sourceSeq?: number },
+  ): Promise<number | undefined>;
 
   /** Run a server-side read-only SQLite query against a cell-derived db. */
   sqliteQuery?(
@@ -1821,10 +1930,11 @@ export interface IStorageTransaction {
   /**
    * The first user- or session-scoped instance, as `<space>/<scope>/<id>`,
    * that this transaction read through a link while the instance was missing
-   * and another derivation registered in the same runtime writes the
-   * document. Set by link resolution on a serving runtime only, where such an
-   * instance is one the serving loop has not produced yet, and read by the
-   * reactive action's commit, which a run that read one does not make.
+   * and another derivation registered in the same runtime writes the document
+   * and has not yet run for that instance. Set by link resolution on a serving
+   * runtime only, where such an instance is one the serving loop has not
+   * produced yet, and read by the reactive action's commit, which a run that
+   * read one does not make.
    */
   unproducedScopedInstance?: string;
 
@@ -1896,12 +2006,9 @@ export interface IStorageTransaction {
   readonly journal: ITransactionJournal;
 
   /**
-   * Optional lightweight dependency summary.
-   *
-   * V2 transactions can provide this directly instead of requiring callers to
-   * reconstruct it from journal activity.
+   * The transaction's dependency summary: the addresses it read and wrote.
    */
-  getReactivityLog?(): TransactionReactivityLog;
+  getReactivityLog(): TransactionReactivityLog;
 
   /**
    * Optional scheduler observation payload to persist alongside the native
@@ -2105,6 +2212,17 @@ export interface IStorageTransaction {
   getPotentiallyExternalReadActivities?(): Iterable<IReadActivity> | undefined;
 
   /**
+   * Optional. Freezes every record that
+   * `getPotentiallyExternalReadActivities` lists, so that each keeps the
+   * metadata object it carries; that object stays as open to change as it
+   * was. Returns a count that advances whenever that list gains a record or
+   * is emptied, so two calls that return the same count frame a list of the
+   * same records, each with the same metadata object. Returns `undefined`
+   * where the transaction froze nothing.
+   */
+  freezeReadActivityRecords?(): number | undefined;
+
+  /**
    * Optional ordered log of every applied write attempt, in transaction
    * order, stamped on the same per-transaction activity clock as read
    * activities. Unlike `getWriteDetails` (per-path, last-value upserts,
@@ -2274,10 +2392,25 @@ export interface IStorageTransaction {
    * unspecified. The writes it does apply are applied consistently: the
    * transaction's reads, its write details and its commit all include them. A
    * caller that must not land part of a batch aborts the transaction.
+   *
+   * `options` carries nothing but the extended transaction's write-chokepoint
+   * mark, which covers every write of the batch.
    */
   writeBatch?(
     writes: Iterable<ITransactionWriteRequest>,
+    options?: IWriteOptions,
   ): Result<Unit, WriterError | WriteError>;
+
+  /**
+   * Optional: report each write `write()` or `writeBatch()` takes without the
+   * extended transaction's write-chokepoint mark (`write-chokepoint.ts`) to
+   * `sink`, before applying it. Such a write came from code holding this
+   * transaction directly, so nothing judged who made it. Each extended
+   * transaction wrapping this one adds a sink as it is built, and counts each
+   * such write as made under no identity. A sink stays for the life of the
+   * transaction: nothing removes one.
+   */
+  reportUnmarkedWrites?(sink: (address: IMemorySpaceAddress) => void): void;
 
   /**
    * Transaction can be cancelled which causes storage provider to stop keeping
@@ -2458,6 +2591,12 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   stageSchemaDocClosure(space: MemorySpace, rootHash: string): void;
 
   /**
+   * Record a folded SQLite write onto this transaction. See
+   * {@link IStorageTransaction.recordSqliteWrite}.
+   */
+  recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void;
+
+  /**
    * Stages the content-addressed document holding `value` into this
    * transaction and returns its id: `cid:` plus the general content hash
    * of the value. The document is the value and nothing else, so no
@@ -2472,12 +2611,11 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   /**
    * Mints the runtime secret called `name` in `space` when no trusted value
    * is stored: a random value, written under the secret's label and writer
-   * claim (`runtime-secret.ts`), replacing any untrusted value. Returns
-   * nothing; the runtime reads a secret back with `readRuntimeSecret()`. The
-   * one writer of the reserved namespace, which refuses every unprivileged
-   * write, and callable only with the runtime's authorization, since code
-   * that minted a secret in its own transaction could read it back there
-   * before its label is stored.
+   * claim (`runtime-secret.ts`), replacing any untrusted value. Returns the
+   * secret, the trusted stored value or the one minted. The one writer of the
+   * reserved namespace, which refuses every unprivileged write, and callable
+   * only with the runtime's authorization, since code that minted a secret in
+   * its own transaction could read it back there before its label is stored.
    *
    * @throws Error without the runtime's authorization, or when the stored
    * value's schema cannot be resolved.
@@ -2486,7 +2624,7 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
     space: MemorySpace,
     name: string,
     authorization: RuntimeWritePolicyAuthorization,
-  ): void;
+  ): string;
 
   tx: IStorageTransaction;
 
@@ -2589,7 +2727,7 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * underlying transaction after resolving the link to a memory address. See
    * {@link IStorageTransaction.recordTextChanges}.
    */
-  recordTextChanges?(
+  recordTextChanges(
     link: NormalizedFullLink,
     changes: readonly TextChange[],
   ): string;
@@ -2687,6 +2825,14 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * threading metadata through intermediate APIs.
    */
   runWithAmbientReadMeta<T>(meta: Metadata, fn: () => T): T;
+
+  /**
+   * Merge `meta` into every read issued until the returned scope is disposed
+   * (explicit per-read meta wins), as `runWithAmbientReadMeta()` does for the
+   * reads its function issues. Scopes nest: each is disposed before the scope
+   * it was entered within.
+   */
+  enterAmbientReadMeta(meta: Metadata): Disposable;
 
   markCfcRelevant(reason?: string): void;
 
@@ -3018,7 +3164,10 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    *
    * This transaction alone, with no enrollment beside it: the measurement runs
    * over documents the asking transaction wrote, so a marker recorded beside
-   * the write always covers the question.
+   * the write always covers the question. A value write on the document made
+   * under any identity but a builtin's (`CfcTxState.nonBuiltinWrites`) is
+   * not the runtime's to vouch for, whatever a builtin writes there after
+   * it, so this then returns `false`.
    *
    * Takes the runtime's mark for the same reason {@link isRuntimeOwnedStore}
    * does: the gate acts on the claim rather than measuring it.
@@ -3116,6 +3265,23 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   writeCfcGrant(input: CfcGrantWriteInput): { space: MemorySpace; id: string };
 
   /**
+   * The repair of a compile-cache record a flow stamp labeled: writes
+   * `replacement`'s value and label envelope over the document a compile-cache
+   * record's key `target.key` names, or deletes the document when
+   * `replacement` is absent, inside the privileged system-write scope.
+   * Requires the transaction's current implementation identity to be the
+   * `compile-cache-repair` builtin, and the key to be a compile-cache record's.
+   * The caller, `repairCompileCacheStamps()`, computes the replacement from
+   * the verified closure; this method trusts it.
+   *
+   * @throws When the identity is not the repair's, or the key not a record's.
+   */
+  writeRepairedCompileCacheRecord(
+    target: { space: MemorySpace; key: string },
+    replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
+  ): void;
+
+  /**
    * The trusted writer path for an owner's release of the confidentiality
    * stored at one path of a document (`cfc/confidentiality-release-plan.ts`).
    * Requires the transaction's current implementation identity to be the
@@ -3200,6 +3366,20 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * is in flight.
    */
   postCommitEffectsSettled(): Promise<void>;
+
+  /**
+   * How this transaction settled: `committed`, or `failed` for a commit that
+   * was rejected and for an abort, from the moment its commit callbacks start
+   * to run, the outcome being final by then, so a callback reads it too; and
+   * `undefined` before that. It answers for this transaction wherever its
+   * commit went. {@link status} reports the storage transaction this one
+   * wraps, which a commit sealed into a destination, a serving wave or the
+   * client's speculation overlay, leaves uncommitted, so that it still reads
+   * `ready` once this transaction has settled. A callback
+   * {@link addCommitCallback} adds once they have all run never runs, so code
+   * that may register one late asks this first.
+   */
+  settledOutcome(): "committed" | "failed" | undefined;
 
   /**
    * Add a callback to be called when the transaction settles. The callback
@@ -3356,7 +3536,11 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * identical. These two methods let `Cell.get()` cache its result keyed by the
    * stable value of the cell view; the implementation clears the entire cache
    * on any write, so a cached entry is only ever returned when no write has
-   * intervened.
+   * intervened. A transaction that is no longer ready, whose CFC state is
+   * prepared, that is marked for a UI-input blind write, or that is reading at
+   * an earlier epoch neither returns nor stores an entry at the time it is
+   * asked, so such a read takes the full pipeline. A read made while CFC is
+   * prepared invalidates that preparation, so its result is then stored.
    *
    * Optional: transactions that must not cache (e.g. the non-reactive `sample()`
    * wrapper) leave these undefined and callers fall back to recomputing.
@@ -3756,6 +3940,16 @@ export interface ISpaceReplica extends ISpace {
   /** Existing session progress without starting I/O or awaiting commits. */
   getDiagnostics?(): SpaceStorageDiagnostic;
 
+  /**
+   * Whether the server this replica is connected to advertised
+   * `markedSplicesV1`, so that a transaction may send a change to an array
+   * as marked splices (`V2StorageTransaction.#arraySpliceGate()`). `false`
+   * until a session exists and for a server that predates marked splices,
+   * and then the change goes index by index. Optional: a replica without it
+   * reads as `false`.
+   */
+  markedSplices?(): boolean;
+
   /** The sizes of the structures this replica holds. */
   getSizes?(): SpaceStorageSizes;
 
@@ -3807,6 +4001,21 @@ export interface ISpaceReplica extends ISpace {
   /** Whether the server this replica's session is on reports the links
    * its walks follow out of the space (`syncCrossingsV1`). */
   crossingsReported?(): boolean;
+
+  /**
+   * Whether a watch through this replica on the space's invitation ledger
+   * revision document (`SPACE_INVITES_REVISION_DOC_ID`) sees it move with
+   * every change to the ledger: the session is on the space's default branch,
+   * where the invitation service moves it, and its server advertises
+   * `spaceInvitesRevision`, as the session's latest handshake said. A session
+   * on another branch sees the document as it stood at the fork, and one that
+   * asked to fork a branch is taken to be of it, even where the server opened
+   * it on the default branch, since `session.open` does not say. A session
+   * replaced on reconnect (`IStorageManager.subscribeSpaceSessionReplaced()`)
+   * is on a server that may answer otherwise, so a reader whose watch rests on
+   * the answer asks again then.
+   */
+  invitesRevisionWatchable?(): boolean;
 
   /** Waits for session restoration before issuing fallback subscriptions. */
   whenSessionRestored?(): Promise<void>;
@@ -4083,6 +4292,13 @@ export interface ISpaceReplica extends ISpace {
    * entry's floor witnesses arrival only when derived-class). Undefined
    * — an OFF-arm or pre-predicate frame, or a fake in tests — reads as
    * "class unknown", which never witnesses arrival at the floor.
+   *
+   * `envelopeDocuments` is the `cid:` ids of the documents the confirmed
+   * version's CFC envelope names: its schema document and, on a version-2
+   * envelope, its label documents. An entry that wrote a `cid:` document the
+   * store has not served is held while an arrived document it wrote names
+   * that document (speculation.md §4). Undefined — a fake in tests — reads
+   * as "names unknown", which holds the entry as a name would.
    */
   speculationRetirementView?(
     id: URI,
@@ -4091,6 +4307,7 @@ export interface ISpaceReplica extends ISpace {
     confirmedSeq: number;
     coverClass?: CommitClass;
     pendingLocalSeqs: number[];
+    envelopeDocuments?: readonly URI[];
   };
 
   /**

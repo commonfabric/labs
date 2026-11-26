@@ -1,7 +1,6 @@
 import { expect } from "@std/expect";
 import { parse as parseJsonc } from "@std/jsonc";
 import * as path from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import {
   capabilitiesBySuite,
   claimsFor,
@@ -14,6 +13,7 @@ import {
   parseSkipList,
   SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import { CAPABILITIES } from "./ci-capabilities.ts";
 import { commandsWrittenIn } from "./check-test-shuffle.ts";
 import { collectMeasuredSetDebt } from "./coverage-metrics.ts";
@@ -103,12 +103,14 @@ describe("the test topology", () => {
 
     // A run that read nothing satisfies the check above, and so does one
     // that stopped at the recorder instead of reaching what the recorder
-    // was handed. Every gate whose name begins `check-` runs a task of
-    // that name, so the two counts agree only where each of them was
-    // reached and read past the recorder.
+    // was handed. Every gate whose name begins `check-` runs the task its
+    // first word names, once for each part where it is split into parts,
+    // so the two counts agree only where each of them was reached and read
+    // past the recorder.
     const gates = ["repo-gates", "repo-history-gates"]
       .flatMap((id) => suiteById(suites, id)!.units)
-      .filter((unit) => unit.startsWith("check-"));
+      .filter((unit) => unit.startsWith("check-"))
+      .map((unit) => unit.split(" ")[0]!);
     expect(named.filter((task) => task.startsWith("check-")).toSorted())
       .toEqual(gates.toSorted());
   });
@@ -129,8 +131,8 @@ describe("the test topology", () => {
 
   it("gives every unit a lane may subset a file the skip list keys on", async () => {
     // A lane running part of a unit registers the rest as ignored. The
-    // registration preload looks each ignored name up under the
-    // repository-relative file that registered the test. A unit that is not
+    // test module looks each ignored name up under the repository-relative
+    // file that registered the test. A unit that is not
     // such a file therefore cannot be handed a subset, and has to be listed in
     // `whole`. An unlisted unit of that kind would get a skip list that matches
     // nothing, and its lane would run every test while being charged for one.

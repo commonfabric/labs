@@ -20,15 +20,7 @@ let success = false;
 try {
   await buildTestDir(manifest);
 
-  server.start(manifest.requestedPort);
-  const port = server.port();
-
-  if (!port) {
-    throw new Error(
-      `Server could not listen on requested port ${manifest.requestedPort}.`,
-    );
-  }
-
+  const port = server.start(manifest.requestedPort);
   const runner = new Runner(manifest, port);
   success = await runner.run();
 } finally {

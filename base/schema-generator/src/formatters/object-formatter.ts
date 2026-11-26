@@ -19,13 +19,11 @@ import type {
 } from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import {
-  cloneSchemaDefinition,
-  getNativeTypeSchema,
   getPropertyNameText,
   instantiatedPropertyType,
   instantiatedValueType,
   isFunctionLike,
-  safeGetPropertyType,
+  resolvePropertyType,
 } from "../type-utils.ts";
 import { getCellWrapperInfo } from "../typescript/cell-brand.ts";
 import {
@@ -108,7 +106,8 @@ export function classifyCallableProperty(
 
 /**
  * Attach a property's JSDoc description to the schema about to be emitted
- * for it. Both emission paths go through this — the
+ * for it, noting docs that conflict across declarations in a `$comment`
+ * unless the schema carries one. Both emission paths go through this — the
  * ordinary delegated path and the callable-wrapper early return — so a doc
  * written on a factory-typed verb property survives exactly like one on a
  * data property.
@@ -124,12 +123,7 @@ function attachPropertyDoc(
   const conflicts = all.filter((s) => s && s !== text);
   schema.description = text;
   if (conflicts.length > 0) {
-    const comment = typeof schema.$comment === "string"
-      ? (schema.$comment as string)
-      : undefined;
-    schema.$comment = comment
-      ? comment
-      : "Conflicting docs across declarations; using first";
+    schema.$comment ??= "Conflicting docs across declarations; using first";
     // Warning only
     logger.warn(
       "schema-gen",
@@ -138,64 +132,27 @@ function attachPropertyDoc(
   }
 }
 
-function typeNodeExplicitlyDeclaresProperty(
+/**
+ * The member named `propName` that `typeNode` declares, as a type literal or
+ * a union of nodes one of which declares it, read through parentheses.
+ */
+function getExplicitProperty(
   typeNode: ts.TypeNode | undefined,
   propName: string,
   checker?: ts.TypeChecker,
-): boolean {
-  if (!typeNode) return false;
-  const node = unwrapTypeParentheses(typeNode);
-
-  if (ts.isUnionTypeNode(node)) {
-    return node.types.some((member) =>
-      typeNodeExplicitlyDeclaresProperty(member, propName, checker)
-    );
-  }
-
-  if (!ts.isTypeLiteralNode(node)) {
-    return false;
-  }
-
-  return node.members.some((member) =>
-    (ts.isPropertySignature(member) || ts.isPropertyDeclaration(member)) &&
-    !!member.name &&
-    getPropertyNameText(member.name, checker) === propName
-  );
-}
-
-function getExplicitPropertyTypeNode(
-  typeNode: ts.TypeNode | undefined,
-  propName: string,
-  checker?: ts.TypeChecker,
-): ts.TypeNode | undefined {
+): ts.PropertySignature | undefined {
   if (!typeNode) return undefined;
   const node = unwrapTypeParentheses(typeNode);
-
   if (ts.isUnionTypeNode(node)) {
-    for (const member of node.types) {
-      const nested = getExplicitPropertyTypeNode(member, propName, checker);
-      if (nested) {
-        return nested;
-      }
-    }
-    return undefined;
+    return node.types
+      .map((member) => getExplicitProperty(member, propName, checker))
+      .find((member) => member !== undefined);
   }
-
-  if (!ts.isTypeLiteralNode(node)) {
-    return undefined;
-  }
-
-  for (const member of node.members) {
-    if (
-      (ts.isPropertySignature(member) || ts.isPropertyDeclaration(member)) &&
-      !!member.name &&
-      getPropertyNameText(member.name, checker) === propName
-    ) {
-      return member.type;
-    }
-  }
-
-  return undefined;
+  if (!ts.isTypeLiteralNode(node)) return undefined;
+  return node.members.find((member): member is ts.PropertySignature =>
+    ts.isPropertySignature(member) &&
+    getPropertyNameText(member.name, checker) === propName
+  );
 }
 
 function isExplicitPropertyShapeTypeNode(
@@ -209,30 +166,6 @@ function isExplicitPropertyShapeTypeNode(
   }
 
   return ts.isTypeLiteralNode(node);
-}
-
-function shouldSkipInternalProperty(
-  propName: string,
-  propDecl: ts.Declaration | undefined,
-  context: GenerationContext,
-): boolean {
-  if (isInternalMemberName(propName)) {
-    return true;
-  }
-
-  if (!propName.startsWith("__")) {
-    return false;
-  }
-
-  if (propDecl) {
-    return false;
-  }
-
-  return !typeNodeExplicitlyDeclaresProperty(
-    context.typeNode,
-    propName,
-    context.typeChecker,
-  );
 }
 
 /**
@@ -267,9 +200,6 @@ export class ObjectFormatter implements TypeFormatter {
       return { type: "object", additionalProperties: true };
     }
 
-    const builtin = this.#lookupBuiltInSchema(type, checker);
-    if (builtin) return builtin;
-
     // Do not early-return for empty object types. Instead, try to enumerate
     // properties via the checker to allow type literals to surface members.
 
@@ -295,11 +225,11 @@ export class ObjectFormatter implements TypeFormatter {
         continue;
       }
 
-      let propTypeNode = getExplicitPropertyTypeNode(
+      let propTypeNode = getExplicitProperty(
         context.typeNode,
         propName,
         checker,
-      );
+      )?.type;
       const propDecl = prop.valueDeclaration ??
         (prop.declarations?.[0] as ts.Declaration | undefined);
 
@@ -346,18 +276,16 @@ export class ObjectFormatter implements TypeFormatter {
         }
       }
 
-      if (shouldSkipInternalProperty(propName, propDecl, context)) {
-        continue;
-      }
+      // The escaped name tells a symbol's `__@` name from a string key that
+      // starts the same way, which escaping gives a third underscore.
+      if (isInternalMemberName(String(prop.escapedName))) continue;
 
       if (
         shouldRespectExplicitPropertyShape &&
-        !typeNodeExplicitlyDeclaresProperty(context.typeNode, propName, checker)
+        !getExplicitProperty(context.typeNode, propName, checker)
       ) {
         continue;
       }
-
-      if ((prop.flags & ts.SymbolFlags.Method) !== 0) continue;
 
       const instantiatedPropType = instantiatedPropertyType(
         context.instantiatedAs,
@@ -374,7 +302,7 @@ export class ObjectFormatter implements TypeFormatter {
         !usesParameterUnreachably(propTypeNode, checker);
       const resolvedPropType = readsBoundNode && propTypeNode
         ? checker.getTypeFromTypeNode(propTypeNode)
-        : safeGetPropertyType(prop, type, checker, propTypeNode);
+        : resolvePropertyType(prop, type, checker, propTypeNode);
 
       const callable = classifyCallableProperty(
         instantiatedPropType ?? resolvedPropType,
@@ -493,14 +421,10 @@ export class ObjectFormatter implements TypeFormatter {
         }
       }
       if (foundDocs.length > 0 && isObjectOrArray(apSchema)) {
-        (apSchema as Record<string, unknown>).description = foundDocs[0]!;
+        apSchema.description = foundDocs[0]!;
         if (foundDocs.length > 1) {
-          const comment = typeof apSchema.$comment === "string"
-            ? (apSchema.$comment as string)
-            : undefined;
-          (apSchema as Record<string, unknown>).$comment = comment
-            ? comment
-            : "Conflicting docs for index signatures; using first";
+          apSchema.$comment ??=
+            "Conflicting docs for index signatures; using first";
           logger.warn(
             "schema-gen",
             () => "JSDoc conflict for index signatures; using first doc",
@@ -548,14 +472,6 @@ export class ObjectFormatter implements TypeFormatter {
         context,
       )
       : schema;
-  }
-
-  #lookupBuiltInSchema(
-    type: ts.Type,
-    checker: ts.TypeChecker,
-  ): MutableJSONSchema | undefined {
-    const builtin = getNativeTypeSchema(type, checker);
-    return builtin === undefined ? undefined : cloneSchemaDefinition(builtin);
   }
 }
 

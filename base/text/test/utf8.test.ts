@@ -9,13 +9,13 @@
  * process boundary needs this one to agree with itself on both sides.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   utf8ByteLength,
   utf8Compare,
   utf8SortedKeysOf,
 } from "@commonfabric/text/utf8";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("utf8Compare()", () => {
   it("returns `0` for two equal UTF-8 strings", () => {
@@ -26,7 +26,7 @@ describe("utf8Compare()", () => {
     expect(utf8Compare("abc", "def")).toBeLessThan(0);
   });
 
-  it("returns a positive number if `first > second`", () => {
+  it("returns a positive number if `first` sorts after `second`", () => {
     expect(utf8Compare("def", "abc")).toBeGreaterThan(0);
   });
 
@@ -38,6 +38,14 @@ describe("utf8Compare()", () => {
     expect(utf8Compare("abcd", "abc")).toBeGreaterThan(0);
   });
 
+  it("orders long strings without surrogates by their first difference, in either direction", () => {
+    const base = "abcdefghijklmnopqrstuvwxyz";
+
+    expect(utf8Compare(`${base}a`, `${base}b`)).toBeLessThan(0);
+    expect(utf8Compare(`${base}b`, `${base}a`)).toBeGreaterThan(0);
+    expect(utf8Compare(base, `${base}a`)).toBeLessThan(0);
+  });
+
   describe("strings with astral-plane characters", () => {
     it("returns `0` for two equal astral-plane characters", () => {
       expect(utf8Compare("😊", "😊")).toBe(0);
@@ -47,7 +55,7 @@ describe("utf8Compare()", () => {
       expect(utf8Compare("😊", "😎")).toBeLessThan(0);
     });
 
-    it("returns a positive number if `first > second`", () => {
+    it("returns a positive number if `first` sorts after `second`", () => {
       expect(utf8Compare("😎", "😊")).toBeGreaterThan(0);
     });
 
@@ -60,7 +68,7 @@ describe("utf8Compare()", () => {
         .toBeLessThan(0);
     });
 
-    it("returns a positive number if `first > second` for multi-character strings with _same_ astral-plane characters", () => {
+    it("returns a positive number if `first` sorts after `second` for multi-character strings with _same_ astral-plane characters", () => {
       expect(utf8Compare("What 😊 is a muffin?", "What 😊 is a biscuit?"))
         .toBeGreaterThan(0);
     });
@@ -137,15 +145,21 @@ describe("utf8SortedKeysOf()", () => {
     expect(utf8SortedKeysOf(obj)).toEqual(["￿", "\u{10000}"]);
   });
 
-  it("returns a frozen value", () => {
-    const obj = { beep: "x", bop: "y", awOOOOga: "z" };
-    const sorted = utf8SortedKeysOf(obj);
+  it("returns a frozen value when it returns that value again on later calls", () => {
+    const sorted = utf8SortedKeysOf(
+      Object.freeze({ beep: "x", bop: "y", awOOOOga: "z" }),
+    );
+    expect(sorted).toEqual(["awOOOOga", "beep", "bop"]);
     expect(Object.isFrozen(sorted)).toBe(true);
   });
 
-  it("returns a frozen value for keys that arrive already in order", () => {
-    const sorted = utf8SortedKeysOf({ awOOOOga: "z", beep: "x", bop: "y" });
-    expect(Object.isFrozen(sorted)).toBe(true);
+  it("returns a new value on each call, given an object that is not frozen", () => {
+    const obj = { beep: "x", bop: "y", awOOOOga: "z" };
+    const sorted1 = utf8SortedKeysOf(obj);
+    const sorted2 = utf8SortedKeysOf(obj);
+    expect(sorted1).toEqual(["awOOOOga", "beep", "bop"]);
+    expect(sorted2).toEqual(sorted1);
+    expect(sorted2).not.toBe(sorted1);
   });
 
   it("returns the same (`===`) value on two different calls, given the same frozen object", () => {

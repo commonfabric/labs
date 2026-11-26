@@ -1,5 +1,5 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("deferred compiler stack", () => {
   // The deferred compiler stack's contract has two halves: flows that parse or

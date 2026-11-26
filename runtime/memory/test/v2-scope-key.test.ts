@@ -15,13 +15,14 @@ import {
   scopeOfScopeKey,
 } from "../v2.ts";
 import * as Engine from "../v2/engine.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const identity = {
   principal: "did:key:z6MkAlice",
   sessionId: "session-1",
 };
 
-Deno.test("scope_key format: space, user:<principal>, session:<principal>:<sessionId>", () => {
+test("scope_key format: space, user:<principal>, session:<principal>:<sessionId>", () => {
   assertEquals(resolveScopeKey("space", {}), "space");
   assertEquals(resolveScopeKey(undefined, {}), "space");
   // Space needs no identity; supplying one changes nothing.
@@ -36,7 +37,7 @@ Deno.test("scope_key format: space, user:<principal>, session:<principal>:<sessi
   );
 });
 
-Deno.test("scope_key segments are encodeURIComponent-encoded — ':' splits exactly, no '/' survives", () => {
+test("scope_key segments are encodeURIComponent-encoded — ':' splits exactly, no '/' survives", () => {
   const tricky = resolveScopeKey("session", {
     principal: "did:web:example.com:alice",
     sessionId: "a/b:c",
@@ -52,7 +53,7 @@ Deno.test("scope_key segments are encodeURIComponent-encoded — ':' splits exac
   );
 });
 
-Deno.test("scope_key construction throws ProtocolError on missing identity components — never invents one", () => {
+test("scope_key construction throws ProtocolError on missing identity components — never invents one", () => {
   assertThrows(
     () => resolveScopeKey("user", {}),
     ProtocolError,
@@ -70,7 +71,7 @@ Deno.test("scope_key construction throws ProtocolError on missing identity compo
   );
 });
 
-Deno.test("canResolveScopeKey is the predicate twin of the constructor's throws", () => {
+test("canResolveScopeKey is the predicate twin of the constructor's throws", () => {
   for (
     const [scope, id] of [
       ["space", {}],
@@ -96,7 +97,7 @@ Deno.test("canResolveScopeKey is the predicate twin of the constructor's throws"
   }
 });
 
-Deno.test("scopeOfScopeKey inverts the constructor's scope; isScopeKey validates", () => {
+test("scopeOfScopeKey inverts the constructor's scope; isScopeKey validates", () => {
   for (const scope of ["space", "user", "session"] as const) {
     const key = resolveScopeKey(scope, identity);
     assertEquals(scopeOfScopeKey(key), scope);
@@ -113,7 +114,7 @@ Deno.test("scopeOfScopeKey inverts the constructor's scope; isScopeKey validates
   assert(!isScopeKey("something-else"));
 });
 
-Deno.test("isScopeKey accepts ONLY the constructor's image — canonical escape casing pinned to what the encoder emits", () => {
+test("isScopeKey accepts ONLY the constructor's image — canonical escape casing pinned to what the encoder emits", () => {
   // Canon pin: the encoder is encodeURIComponent, whose escapes use
   // UPPERCASE hex — "/" encodes as "%2F", ":" as "%3A". The rejection
   // set below is stated relative to THIS casing; if the encoder ever
@@ -143,7 +144,7 @@ Deno.test("isScopeKey accepts ONLY the constructor's image — canonical escape 
   }
 });
 
-Deno.test("isScopeKey rejects non-canonical keys — raw delimiters, malformed escapes, non-canonical escapes; refusal, never a throw", () => {
+test("isScopeKey rejects non-canonical keys — raw delimiters, malformed escapes, non-canonical escapes; refusal, never a throw", () => {
   const rejected = [
     // Raw "/" in a segment: a "/"-delimited composite key built from an
     // admitted key would split at the wrong boundary.
@@ -179,7 +180,7 @@ Deno.test("isScopeKey rejects non-canonical keys — raw delimiters, malformed e
   }
 });
 
-Deno.test("canonical keys round-trip decode→encode byte-identically, and construction is injective over identities", () => {
+test("canonical keys round-trip decode→encode byte-identically, and construction is injective over identities", () => {
   const principals = ["did:key:z6MkAlice", "a/b", "a%2Fb", "a:b", "ü ∆+x"];
   const sessionIds = ["s-1", "b:c", "s/1", "s%2F1"];
   const seen = new Map<string, string>();
@@ -216,7 +217,7 @@ Deno.test("canonical keys round-trip decode→encode byte-identically, and const
   );
 });
 
-Deno.test("principalOfSessionKey decodes the session key's principal; non-session keys yield undefined", () => {
+test("principalOfSessionKey decodes the session key's principal; non-session keys yield undefined", () => {
   assertEquals(
     principalOfSessionKey(
       resolvePrincipalSessionKey("did:key:z6MkBob", "s-9"),
@@ -228,7 +229,7 @@ Deno.test("principalOfSessionKey decodes the session key's principal; non-sessio
   assertEquals(principalOfSessionKey("bare-session-id"), undefined);
 });
 
-Deno.test("single definition: the engine re-exports the SAME constructor and error class (LD3)", () => {
+test("single definition: the engine re-exports the SAME constructor and error class (LD3)", () => {
   // Not equal behavior — the same object. A second definition of the
   // format is the key-vocabulary.md §4 tripwire.
   assert(Engine.resolveScopeKey === resolveScopeKey);
@@ -236,7 +237,7 @@ Deno.test("single definition: the engine re-exports the SAME constructor and err
   assert(Engine.principalOfSessionKey === principalOfSessionKey);
 });
 
-Deno.test("commit session keys share the session-key constructor", () => {
+test("commit session keys share the session-key constructor", () => {
   assertEquals(
     Engine.resolveCommitSessionKey("s-1", "did:key:z6MkCara"),
     resolvePrincipalSessionKey("did:key:z6MkCara", "s-1"),

@@ -12,7 +12,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   FabricInstance,
@@ -26,6 +25,7 @@ import {
   ProblematicValue,
 } from "@/codec-common";
 import { FabricDurationNsec, FabricEpochNsec } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("FabricDurationNsec", () => {
   // Pure type-identity / supertype checks: cross-cutting carve-out per the

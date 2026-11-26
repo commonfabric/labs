@@ -291,15 +291,9 @@ function createPatternCallWithParams(
   );
 
   const args: ts.Expression[] = [patternCall, paramsObject];
-  if (methodCall.arguments.length > 1) {
-    const thisArg = ts.visitNode(
-      methodCall.arguments[1],
-      visitor,
-      ts.isExpression,
-    );
-    if (thisArg) {
-      args.push(thisArg);
-    }
+  const thisArg = methodCall.arguments[1];
+  if (thisArg) {
+    args.push(ts.visitNode(thisArg, visitor, ts.isExpression) ?? thisArg);
   }
 
   const mapWithPatternCall = preserveLineage(

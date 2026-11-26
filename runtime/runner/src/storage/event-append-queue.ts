@@ -306,6 +306,16 @@ export class EventAppendQueue {
     });
   }
 
+  /** The token buckets of the streams pacing holds, by stream. */
+  get accessForTestingOnly(): {
+    readonly buckets: ReadonlyMap<
+      string,
+      { readonly tokens: number; readonly refilledAt: number }
+    >;
+  } {
+    return { buckets: this.#buckets };
+  }
+
   /** Live entries (pending discharge), fired order. */
   get pending(): readonly QueuedEventAppend[] {
     return this.#queue;
@@ -475,8 +485,11 @@ export class EventAppendQueue {
           // Housekeeping: a quiet stream's bucket refills to full and
           // can be forgotten (a fresh bucket starts full).
           if (this.#buckets.size > 64) {
-            for (const [key, other] of this.#buckets) {
-              if (key !== streamKey && other.tokens >= pacing.burst) {
+            for (const key of this.#buckets.keys()) {
+              if (
+                key !== streamKey &&
+                this.#refilledTokens(pacing, key, at).tokens >= pacing.burst
+              ) {
                 this.#buckets.delete(key);
               }
             }

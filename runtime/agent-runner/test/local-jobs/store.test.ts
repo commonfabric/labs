@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 import { Database } from "@db/sqlite";
 import { fromFileUrl, join } from "@std/path";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   type LocalJob,
@@ -25,6 +25,7 @@ const added = (
   result: ReturnType<LocalJobStore["enqueue"]>,
 ): { job: LocalJob; created: boolean } => {
   if ("conflict" in result) throw new Error(result.conflict);
+  if ("refusal" in result) throw new Error(result.refusal.error);
   return result;
 };
 
@@ -632,6 +633,76 @@ describe("local-jobs/store", () => {
       expect(store.events("job-1", 1).map((event) => event.body)).toEqual([
         { state: "running" },
       ]);
+    });
+  });
+
+  describe("conversation()", () => {
+    it("returns the first and current jobs from either end of a conversation", () => {
+      const store = openStore();
+      try {
+        store.enqueue("cfs:weaver", "ask", "initial", request());
+        store.claimNext();
+        const accepted = store.acceptMessage("job-1", {
+          caller: "cfs:weaver",
+          idempotencyKey: "follow-up",
+          message: "And another?",
+        });
+        if ("code" in accepted) throw new Error(accepted.code);
+        store.finish("job-1", { state: "completed", recordedRun: true });
+
+        for (const id of ["job-1", "job-2"]) {
+          const conversation = store.conversation(id);
+          expect(conversation?.root.id).toBe("job-1");
+          expect(conversation?.head.id).toBe("job-2");
+        }
+      } finally {
+        store.close();
+      }
+    });
+
+    it("returns `undefined` for a job it does not hold", () => {
+      const store = openStore();
+      try {
+        expect(store.conversation("job-404")).toBeUndefined();
+      } finally {
+        store.close();
+      }
+    });
+
+    it("throws for a conversation whose predecessor job is missing", async () => {
+      // Foreign keys keep a predecessor in place, so only a file written
+      // without them holds such a conversation.
+      const dir = await Deno.makeTempDir({ prefix: "local-jobs-orphan-" });
+      const path = join(dir, "jobs.sqlite");
+      try {
+        const writer = LocalJobStore.open(path);
+        let id: string;
+        try {
+          id = added(writer.enqueue("c", "ask", "k", request())).job.id;
+        } finally {
+          writer.close();
+        }
+        const db = new Database(path);
+        try {
+          db.exec("PRAGMA foreign_keys = OFF");
+          db.prepare("UPDATE jobs SET continues = ? WHERE id = ?").run(
+            "job-gone",
+            id,
+          );
+        } finally {
+          db.close();
+        }
+        const store = LocalJobStore.open(path);
+        try {
+          expect(() => store.conversation(id)).toThrow(
+            "Cannot find the conversation's predecessor job.",
+          );
+        } finally {
+          store.close();
+        }
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
     });
   });
 

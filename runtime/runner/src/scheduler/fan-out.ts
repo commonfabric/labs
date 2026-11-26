@@ -29,7 +29,9 @@ import {
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
+  toDirtyKey,
 } from "@commonfabric/memory/v2";
+import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-keys";
 import { scopeRank } from "../scope.ts";
 import type { IMemorySpaceAddress } from "../storage/interface.ts";
 import type { ReactivityLog } from "./types.ts";
@@ -51,11 +53,35 @@ export interface FanOutInstance {
 interface InstanceRecord {
   /** Whether this instance has an accepted result to retain while gated. */
   hasCommittedResult?: boolean;
+  /** Whether a run of this instance has finished without being withdrawn
+   * for a read it could not take as state: its output, absent or not, is
+   * what it produced. */
+  produced?: boolean;
   /** The latest sealed publication; write-free reruns retain its obligation. */
   pendingWaveRun?: object;
 
   identity: ScopeKeyIdentity;
   log?: ReactivityLog;
+
+  /**
+   * The node's count of changes (`FanOutNodeState.changes`) as the
+   * instance's latest run left it: at the handing over of its writes, and
+   * again once the replica applied them.
+   */
+  settledAt?: number;
+}
+
+/** The latest change to one instance of a document a fanned-out node writes. */
+interface SlotChange {
+  /** The scope key of the instance. */
+  scopeKey: string;
+
+  /** The node's count of changes once it was counted. */
+  at: number;
+
+  /** The key of the instance whose run made it, absent where no run of the
+   * node did. */
+  by?: ScopeKey;
 }
 
 export interface FanOutNodeState {
@@ -83,6 +109,26 @@ export interface FanOutNodeState {
    * only if no cause dirtied it since the run started (a change that
    * lands mid-run must not be absorbed by the run that predates it). */
   readonly dirtyGen: Map<ScopeKey, number>;
+
+  /** How many changes to instances of the documents the node writes it
+   * was told of. */
+  changes: number;
+
+  /**
+   * The latest change to each instance of a document the node writes, by
+   * the instance's key (`toDirtyKey()`). What an instance holds is what a
+   * run left there for as long as no other run, and nothing else, has
+   * changed it since (`fanOutHoldsSlot()`).
+   */
+  readonly slotChanges: Map<string, SlotChange>;
+
+  /**
+   * The run each transaction a run of the node opened writes for: its
+   * instance, and once the run handed its writes over, the key it was
+   * recorded under then. A change that arrives later is that key's,
+   * whatever the ratchet gives the run's identity by then.
+   */
+  readonly runs: WeakMap<object, { instance: FanOutInstance; key?: ScopeKey }>;
 }
 
 export function newFanOutNodeState(): FanOutNodeState {
@@ -92,8 +138,15 @@ export function newFanOutNodeState(): FanOutNodeState {
     instances: new Map(),
     clean: new Set(),
     dirtyGen: new Map(),
+    changes: 0,
+    slotChanges: new Map(),
+    runs: new WeakMap(),
   };
 }
+
+/** The key `FanOutNodeState.slotChanges` holds an instance under. */
+const slotOf = (scopeKey: string, id: string): string =>
+  toDirtyKey(id, scopeKey as ScopeKey);
 
 const pairOrder = (a: ScopeKeyIdentity, b: ScopeKeyIdentity): number => {
   const p = String(a.principal).localeCompare(String(b.principal));
@@ -274,12 +327,24 @@ export function pruneFanOutInstances(
   current: readonly FanOutInstance[],
 ): void {
   const live = new Set(current.map((instance) => instance.key));
+  let departed = false;
   for (const key of [...state.instances.keys()]) {
     if (!live.has(key)) {
       state.instances.delete(key);
       state.clean.delete(key);
       state.dirtyGen.delete(key);
+      departed = true;
     }
+  }
+  if (!departed) return;
+  // A change to an instance no remaining run can reach is asked about by
+  // none of them. A viewer who returns runs again before it is asked.
+  const reachable = new Set<string>([ANY_INSTANCE]);
+  for (const instance of current) {
+    for (const key of keysOnChain(instance.identity)) reachable.add(key);
+  }
+  for (const [slot, { scopeKey }] of [...state.slotChanges]) {
+    if (!reachable.has(scopeKey)) state.slotChanges.delete(slot);
   }
 }
 
@@ -293,6 +358,77 @@ export function fanOutRunStarted(
     state.instances.set(instance.key, { identity: instance.identity });
   }
   return state.dirtyGen.get(instance.key) ?? 0;
+}
+
+/**
+ * Records that `transaction` is the one a run of `instance` writes
+ * through, so that a change the replica reports with it as the source is
+ * known for that run's.
+ */
+export function fanOutRunOpened(
+  state: FanOutNodeState,
+  instance: FanOutInstance,
+  transaction: object,
+): void {
+  state.runs.set(transaction, { instance });
+}
+
+/**
+ * Records a change to the instance of the document `id` at `scopeKey`,
+ * one of those the node writes. `source` is the transaction whose commit
+ * changed it, absent for a change that is no commit of this runtime.
+ */
+export function fanOutSlotChanged(
+  state: FanOutNodeState,
+  scopeKey: string,
+  id: string,
+  source: object | undefined,
+): void {
+  const by = source === undefined ? undefined : state.runs.get(source)?.key;
+  state.slotChanges.set(slotOf(scopeKey, id), {
+    scopeKey,
+    at: ++state.changes,
+    ...(by !== undefined && { by }),
+  });
+}
+
+/**
+ * Records that the replica applied the writes of the run that wrote
+ * through `source`: every instance its writes reach holds, from here,
+ * what that run left there.
+ */
+export function fanOutRunApplied(
+  state: FanOutNodeState,
+  source: object,
+): void {
+  const key = state.runs.get(source)?.key;
+  const record = key === undefined ? undefined : state.instances.get(key);
+  if (record !== undefined) record.settledAt = state.changes;
+}
+
+/**
+ * Whether the instance of the document `id` at `scopeKey` holds what the
+ * latest run of the instance `key` left there: that run made the latest
+ * change to it, or nothing has changed it since that run handed its writes
+ * over. A run that hands over a write equal to what the instance held, or
+ * no write of it at all, changes nothing, and the instance is then as much
+ * that run's as the one's that changed it last. A run whose reads the
+ * replica no longer bore out when it took the writes is refused and runs
+ * again, so a run that stands read the instance as it holds it.
+ */
+export function fanOutHoldsSlot(
+  state: Pick<FanOutNodeState, "instances" | "slotChanges">,
+  key: ScopeKey,
+  scopeKey: string,
+  id: string,
+): boolean {
+  const settledAt = state.instances.get(key)?.settledAt;
+  for (const slot of [slotOf(scopeKey, id), slotOf(ANY_INSTANCE, id)]) {
+    const change = state.slotChanges.get(slot);
+    if (change === undefined || change.by === key) continue;
+    if (settledAt === undefined || change.at > settledAt) return false;
+  }
+  return true;
 }
 
 /**
@@ -313,6 +449,9 @@ export function fanOutRunFinished(
     discovered: CellScope;
     startGen: number;
     log: ReactivityLog | undefined;
+
+    /** The transaction the run wrote through (`fanOutRunOpened()`). */
+    transaction?: object;
   },
 ): boolean {
   const moved = ratchetDiscovered(state, instance.identity, outcome.discovered);
@@ -328,6 +467,11 @@ export function fanOutRunFinished(
   const record = state.instances.get(key) ?? { identity: instance.identity };
   record.identity = instance.identity;
   if (outcome.log !== undefined) record.log = outcome.log;
+  record.settledAt = state.changes;
+  const run = outcome.transaction === undefined
+    ? undefined
+    : state.runs.get(outcome.transaction);
+  if (run !== undefined) run.key = key;
   state.instances.set(key, record);
   if (!dirtiedMeanwhile) {
     state.clean.add(key);

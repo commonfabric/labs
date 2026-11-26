@@ -86,6 +86,19 @@ export const cfcSchemaGivesNoShape = (
       : schema,
   );
 
+/**
+ * Whether `schema` declares an array: by type, or by describing items. A
+ * reference is taken as written; a caller that wants the shape it names
+ * resolves it first.
+ */
+export const cfcSchemaDeclaresArray = (
+  schema: JSONSchema | undefined,
+): boolean =>
+  isObjectOrArray(schema) &&
+  (schema.type === "array" ||
+    (Array.isArray(schema.type) && schema.type.includes("array")) ||
+    schema.items !== undefined || schema.prefixItems !== undefined);
+
 /** Whether `schema` admits no value: `false`, or the negation of a true one. */
 export const cfcSchemaIsFalse = (schema: JSONSchema): boolean =>
   schema === false ||

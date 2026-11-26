@@ -13,10 +13,7 @@ import {
   TILE_BOX_RULE,
   tileContentRules,
 } from "./chart-layout.ts";
-import {
-  escapeHtml,
-  SPARKLINE_HEIGHT,
-} from "./lib.ts";
+import { SPARKLINE_HEIGHT } from "./lib.ts";
 import {
   STATUS_EDGE,
   STATUS_WASH,
@@ -26,9 +23,12 @@ import {
 import { faviconHref, faviconLink, type FaviconStatus } from "./favicon.ts";
 import { GREEN_STAR_RULES } from "./green-star.ts";
 import { paintStatusFavicon } from "./favicon-client.ts";
+import { RUNNERS_PATH } from "./runners-paths.ts";
 import { followUpdates, liveUpdateStream } from "./stream-client.ts";
 import { paintDashboardMessageInput } from "./dashboard-message-client.ts";
 import { reconcileTiles } from "./tiles-client.ts";
+import { receivedText } from "./sent-text.ts";
+import { DASHBOARD_HEADER_RULES, dashboardHeader } from "./dashboard-header.ts";
 import {
   DASHBOARD_MESSAGE_FADE_MS,
   DASHBOARD_MESSAGE_MAX_LENGTH,
@@ -56,6 +56,7 @@ const FOLLOW_UPDATES = followUpdates.toString();
 const DASHBOARD_MESSAGE_OPACITY = dashboardMessageOpacity.toString();
 const PAINT_DASHBOARD_MESSAGE_INPUT = paintDashboardMessageInput.toString();
 const RECONCILE_TILES = reconcileTiles.toString();
+const RECEIVED_TEXT = receivedText.toString();
 
 // How long past the refresh interval the freshness indicator stays orange before
 // it turns red. The page treats the same span of silence from the server as a
@@ -213,20 +214,7 @@ ${faviconLink(status)}
 <style>
 ${DASHBOARD_THEME_STYLES}
   body{margin:0;background:var(--page);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:18px 20px 26px;max-width:1100px;margin:0 auto}
-  .top{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;align-items:center;gap:18px;margin-bottom:14px}
-  .brand{display:flex;align-items:center;gap:8px}.shortcut{font-size:12px;color:var(--text-faint)}
-  .badge{font-size:11px;color:var(--status-good-text);border:1px solid ${
-    statusLayer("good", 0.4)
-  };border-radius:6px;padding:2px 8px}
-  .top-actions{display:flex;align-items:center;gap:12px}.live{font-size:12px;color:var(--text-muted)}
-  .message-form{position:relative;width:min(100%,480px);min-width:0;margin:0;justify-self:center;border-radius:8px}
-  .message-form:focus-within{background:var(--surface);box-shadow:0 0 0 1px var(--border-hover)}
-  .message-input{box-sizing:border-box;width:100%;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--text);font:500 16px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;padding:4px 9px;text-align:center;transition:border-color .12s,background-color .12s}
-  .message-input::placeholder{color:var(--text-faint);font-weight:400}
-  .message-input:hover{border-color:var(--border)}
-  .message-input:focus{outline:none}
-  .message-input[aria-invalid="true"]{border-color:var(--status-bad)}
-  .message-status{position:absolute;top:100%;left:9px;right:9px;color:var(--status-bad-text);font-size:11px;text-align:center}
+  ${DASHBOARD_HEADER_RULES}
   ${DASHBOARD_GRID_RULE}
   ${TILE_BOX_RULE}
   ${BOTTOM_CHART_RULES}
@@ -265,21 +253,14 @@ ${TILE_RULES}
   .evarrow:hover{color:var(--text-subtle)}
   .note{font-size:11px;color:var(--text-faint);margin-top:14px}
   code{background:var(--surface-code);padding:1px 5px;border-radius:4px}
-  /* The way to the repository pages sits at the foot of the page, across from
-     the theme switch. */
+  /* The ways to the repository pages and the runners page sit at the foot of
+     the page, across from the theme switch. */
   .foot{display:flex;align-items:flex-end;gap:12px}
-  @media(max-width:560px){.top{grid-template-columns:minmax(0,1fr) max-content;gap:8px 12px}.top-actions{gap:8px}.message-form{grid-column:1/-1;grid-row:2;width:100%}.message-input{font-size:14px;padding-inline:5px}}
 </style></head><body>
-  <div class="top">
-    <div class="brand"><span class="badge" id="livebadge">● LIVE</span><span class="shortcut">go/fabricwall</span></div>
-    <form class="message-form" id="dashboard-message-form"><input class="message-input" id="dashboard-message" aria-label="Shared dashboard message" aria-describedby="dashboard-message-status" maxlength="${DASHBOARD_MESSAGE_MAX_LENGTH}" value="${
-      escapeHtml(message.text)
-    }"><span class="message-status" id="dashboard-message-status" role="status" aria-live="polite"></span></form>
-    <div class="top-actions"><div class="live"><span class="dot green" id="freshdot"></span> <span id="agotext">updated ${ago}s ago</span></div></div>
-  </div>
+  ${dashboardHeader(message.text, DASHBOARD_MESSAGE_MAX_LENGTH, ago)}
   <div class="grid" id="dashboard-grid">${gridHtml}</div>
   <div id="dashboard-wide">${wideHtml}</div>
-  <div class="foot"><a class="pill" href="${REPOS_PATH}">▤ Repositories</a>${dashboardThemeToggle()}</div>
+  <div class="foot"><a class="pill" href="${REPOS_PATH}">▤ Repositories</a><a class="pill" href="${RUNNERS_PATH}">● Runners</a>${dashboardThemeToggle()}</div>
 ${DASHBOARD_THEME_CLIENT}
 <script>
   const REFRESH = ${refreshMs};
@@ -305,9 +286,11 @@ ${DASHBOARD_THEME_CLIENT}
   const dashboardMessageOpacity = ${DASHBOARD_MESSAGE_OPACITY};
   const paintDashboardMessageInput = ${PAINT_DASHBOARD_MESSAGE_INPUT};
   const reconcileTiles = ${RECONCILE_TILES};
+  const receivedText = ${RECEIVED_TEXT};
   const liveUpdateStream = ${LIVE_UPDATE_STREAM};
   const followUpdates = ${FOLLOW_UPDATES};
   const badge = document.getElementById('livebadge');
+  const badgeText = document.getElementById('livetext');
   const dot = document.getElementById('freshdot');
   const agotext = document.getElementById('agotext');
   const messageForm = document.getElementById('dashboard-message-form');
@@ -404,7 +387,7 @@ ${DASHBOARD_THEME_CLIENT}
     agotext.style.color = COL[state];
     // The badge says which of the two the stale data means: the server is there
     // and has nothing new, or the page cannot hear it.
-    badge.textContent = updates.check(now) ? '● LIVE' : '● OFFLINE';
+    badgeText.textContent = updates.check(now) ? '● LIVE' : '● OFFLINE';
     // LIVE badge: green only when fresh AND no tile is gray; gray if a tile is gray;
     // when stale, the border takes the orange/red and the contents go gray.
     const anyGray = document.querySelector('.tile.unknown') !== null;
@@ -420,6 +403,9 @@ ${DASHBOARD_THEME_CLIENT}
     );
     paintDashboardMessage(now);
   }
+  // The markup of each of the two lists of tiles as the stream last sent it,
+  // which each update's edits apply to.
+  let markup = { grid: '', wide: '' };
   function updateTiles(container, html) {
     const template = document.createElement('template');
     template.innerHTML = html;
@@ -430,8 +416,13 @@ ${DASHBOARD_THEME_CLIENT}
     update: (data) => {
       const update = JSON.parse(data);
       if (update.shellVersion !== SHELL_VERSION) { location.reload(); return; }
-      updateTiles(grid, update.gridHtml);
-      updateTiles(wide, update.wideHtml);
+      // Edits that cannot be applied to either list leave both as they were.
+      markup = {
+        grid: receivedText(markup.grid, update.gridHtml),
+        wide: receivedText(markup.wide, update.wideHtml),
+      };
+      updateTiles(grid, markup.grid);
+      updateTiles(wide, markup.wide);
       base = update.ageSeconds;
       t0 = Date.now();
       faviconServerRedSince = update.faviconRedSince;

@@ -4,8 +4,9 @@ import {
   recentSessionMessages,
   sessionIndexBuckets,
 } from "../src/fabric.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("agent connector Fabric causes are stable", () => {
+test("agent connector Fabric causes are stable", () => {
   assertEquals(agentFabricCauses("did:key:test", "did:key:owner"), {
     index: {
       spaceDid: "did:key:test",
@@ -35,7 +36,7 @@ Deno.test("agent connector Fabric causes are stable", () => {
   });
 });
 
-Deno.test("session indexes keep recent sessions and all sessions", () => {
+test("session indexes keep recent sessions and all sessions", () => {
   const generatedAt = "2026-07-10T12:00:00.000Z";
   const entries = [
     { id: "new", updatedAt: "2026-07-10T11:59:00.000Z" },
@@ -59,7 +60,7 @@ Deno.test("session indexes keep recent sessions and all sessions", () => {
   assertEquals(buckets.olderCount, 2);
 });
 
-Deno.test("session index keeps only the newest normalized message previews", () => {
+test("session index keeps only the newest normalized message previews", () => {
   const messages = Array.from({ length: 15 }, (_, index) => ({
     id: `message-${index}`,
     role: "assistant" as const,

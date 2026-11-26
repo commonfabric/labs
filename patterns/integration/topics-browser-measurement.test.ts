@@ -5,12 +5,17 @@
  * plain `deno test` runs.
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { DID, Identity } from "@commonfabric/identity";
 import { env, type Page } from "@commonfabric/integration";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   seedIdentity,
@@ -268,7 +273,8 @@ describe("topics-browser-measurement", () => {
           ]),
         ).toEqual([
           ["crossrefTable", "({ sources })"],
-          ["backlinksOf", "({ table, self })"],
+          ["crossrefIndexOf", "({ rows })"],
+          ["backlinksOf", "({ table, index, self, shortName })"],
         ]);
         expect(
           sample.lifts.filter((lift) =>
@@ -324,7 +330,9 @@ describe("topics-browser-measurement", () => {
 
       checkSample(sample, () => {
         expect(sample.mayRunNothing).toBe(true);
-        expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0]);
+        expect(sample.lifts.map((lift) => lift.runs)).toEqual(
+          program.lifts.map(() => 0),
+        );
         expect(sample.remaining.runs).toBe(sample.runsWithoutSource);
         expect(sample.graph.after.nodes).toBeGreaterThan(0);
       });
@@ -418,7 +426,9 @@ describe("topics-browser-measurement", () => {
           // Counted apart for reporting, and still part of `remaining`, which
           // is every run the sample could not place against a named lift.
           expect(sample.remaining.runs).toBe(1);
-          expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0]);
+          expect(sample.lifts.map((lift) => lift.runs)).toEqual(
+            program.lifts.map(() => 0),
+          );
         });
       }
 
@@ -584,7 +594,7 @@ describe("topics-browser-measurement", () => {
 
       const fresh = await openFreshSession();
       try {
-        await fresh.page.evaluate(async (served: boolean) => {
+        const setupRuns = await fresh.page.evaluate(async (served: boolean) => {
           const scope = globalThis as typeof globalThis & {
             commonfabric?: { rt?: RuntimeClient };
             __cfLeftOnRuns?: { count: number; stop: () => void };
@@ -602,11 +612,27 @@ describe("topics-browser-measurement", () => {
           await rt.setTelemetryEnabled(true);
           await rt.setReadStatsEnabled(true);
           if (served) await rt.setActionRunTraceEnabled(true);
+          // Exercise telemetry delivered before the timed interval.
+          rt.emit("telemetry", {
+            type: "scheduler.run.complete",
+            actionId: "setup",
+            durationMs: 1,
+            timeStamp: 0,
+          });
+          return counter.count;
         }, { args: [servedViews] });
+        expect(setupRuns).toBeGreaterThan(0);
         const sample = await timeTopicsOperation(fresh.page, {
           label: "open topic and return, timed",
           posture,
           operation: async () => {
+            // The sampler has disabled telemetry before the operation starts.
+            await fresh.page.evaluate(() => {
+              const scope = globalThis as typeof globalThis & {
+                __cfLeftOnRuns?: { count: number };
+              };
+              scope.__cfLeftOnRuns!.count = 0;
+            });
             await openNewestTopic(fresh);
             await returnToBoard(fresh);
           },
@@ -646,7 +672,7 @@ describe("topics-browser-measurement", () => {
       }
     });
 
-    it("throws for an operation that runs nothing in the worker", async () => {
+    it("returns a zero-run sample only when the operation declares it may run nothing", async () => {
       // The counts are held still, so the operation reads as running nothing.
       // A worker whose views the server serves may have timed no run yet in
       // this session, which would leave its timing without the key the
@@ -700,6 +726,16 @@ describe("topics-browser-measurement", () => {
           "idle: the timed operation ran nothing in the worker",
         );
         expect(await samplesLeftInPage()).toEqual([]);
+
+        const sample = await timeTopicsOperation(session.page, {
+          label: "idle, declared",
+          posture,
+          operation: () => Promise.resolve(),
+          mayRunNothing: true,
+        });
+        expect(sample.mayRunNothing).toBe(true);
+        expect(sample.workerRuns).toBe(0);
+        expect(await samplesLeftInPage()).toEqual([]);
       } finally {
         await session.page.evaluate(() => {
           const scope: ReplacementGlobal = globalThis;
@@ -740,17 +776,6 @@ describe("topics-browser-measurement", () => {
         await restoreRuntimeClient();
       }
       expect(await samplesLeftInPage()).toEqual([]);
-    });
-
-    it("returns a sample recording the declaration for an operation declared to run nothing", async () => {
-      const sample = await timeTopicsOperation(session.page, {
-        label: "idle, declared",
-        posture,
-        operation: () => Promise.resolve(),
-        mayRunNothing: true,
-      });
-
-      expect(sample.mayRunNothing).toBe(true);
     });
   });
 });

@@ -25,8 +25,10 @@ import {
   type Stream,
   TESTS,
   type TrustedActionWrite,
+  UI,
   Writable,
 } from "commonfabric";
+import { findNode, isButton } from "../../tools/test-support/vnode-helpers.ts";
 import type { SharedSpaceCatalogStorage } from "../shared-space/shared-space-catalog.ts";
 import PrivateInbox, {
   type OfferEvent,
@@ -262,6 +264,16 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         },
         trustedUi: startGesture,
       },
+      // His people hold no one until the session asks for them, as opening
+      // the group control's picker does, so that nothing reading them reads
+      // the rooms' rosters before then.
+      {
+        assertion: assert(() =>
+          Object.keys(manager.people).length === 0 &&
+          Object.keys(manager.askedPeople).length === 0
+        ),
+      },
+      { action: manager.askForPeople, event: {} },
       // The direct room's roster holds Bob and Alice; his people hold only
       // her, by the principal her profile attests, through her profile.
       {
@@ -297,7 +309,14 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         trustedUi: startGesture,
       },
       // A pick kept offers her the group, so no notice is queued for her.
+      // The picker marks her as added until the group is created.
       pick,
+      {
+        assertion: assert(() =>
+          findNode(manager[UI], isButton("Added")) !== undefined &&
+          findNode(manager[UI], isButton("Add")) === undefined
+        ),
+      },
       {
         action: manager.createDraftedGroup,
         event: { requestId: "g-picked", title: "g-picked", members: [] },
@@ -320,7 +339,14 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
             roster.some((known) => equals(known, profile));
         }),
       },
-      // Creating the group emptied the draft, so the next offers her nothing.
+      // Creating the group emptied the draft, so the next offers her nothing,
+      // and the picker offers to add her again.
+      {
+        assertion: assert(() =>
+          findNode(manager[UI], isButton("Add")) !== undefined &&
+          findNode(manager[UI], isButton("Added")) === undefined
+        ),
+      },
       {
         action: manager.createDraftedGroup,
         event: { requestId: "g-after", title: "g-after", members: [] },

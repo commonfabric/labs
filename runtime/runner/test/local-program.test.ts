@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import type { ProgramResolver } from "@commonfabric/js-compiler";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import {
   attachDataFiles,
@@ -237,6 +237,27 @@ describe("attachDataFiles", () => {
         attached.files.find((file) => file.name === "/data/cities.json")
           ?.contents,
         '["Oslo"]\n',
+      );
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("stores a binary media file's bytes as its `data:` URL", async () => {
+    const root = await tree({});
+    try {
+      await Deno.writeFile(
+        join(root, "glaze.png"),
+        new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      );
+      const attached = attachDataFiles(
+        program,
+        [join(root, "glaze.png")],
+        root,
+      );
+      assertEquals(
+        attached.files.find((file) => file.name === "/glaze.png")?.contents,
+        "data:image/png;base64,iVBORw==",
       );
     } finally {
       await Deno.remove(root, { recursive: true });

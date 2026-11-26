@@ -1,4 +1,12 @@
-import { computed, Default, NAME, pattern, UI, Writable } from "commonfabric";
+import {
+  computed,
+  Default,
+  NAME,
+  pattern,
+  UI,
+  type VNode,
+  Writable,
+} from "commonfabric";
 
 /** Raw data shape - use in collection patterns */
 export interface Contact {
@@ -17,6 +25,8 @@ interface ContactDetailInput {
 
 /** #contact #person */
 export interface ContactDetailOutput {
+  [NAME]: string;
+  [UI]: VNode;
   contact: Contact;
   summary: string;
 }

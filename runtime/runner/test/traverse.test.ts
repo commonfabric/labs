@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { type CellScope, resolveScopeKey } from "@commonfabric/memory/v2";
-import { describe, it } from "@std/testing/bdd";
 
 import type { SchemaPathSelector } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -8,6 +7,7 @@ import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import {
   internPathSelector,
+  internSchema,
   isInternedSchema,
 } from "@commonfabric/data-model-schema";
 import type {
@@ -17,8 +17,13 @@ import type {
   URI,
 } from "@commonfabric/memory/interface";
 import { maxOf } from "@commonfabric/collections/math";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
+import {
+  acquireSchemaRegistryLease,
+  registerSchemaDocument,
+} from "../src/schema-registry.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import { StoreObjectManager } from "../src/storage/query.ts";
@@ -4456,6 +4461,7 @@ describe("SchemaObjectTraverser slow-traverse reporting", () => {
     expect(report).toContain("trackerVals=2");
     expect(report).toContain("traverseSchema=1");
     expect(report).toContain("maxDepth=1");
+    expect(report).toContain("nativeDepthHandoffs=0");
     // docVisits is populated only under CF_TRAVERSE_DIAGNOSTICS=1.
     expect(report).toContain("topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)");
   });
@@ -4691,6 +4697,45 @@ describe("schemaAcceptsType()", () => {
     expect(schemaAcceptsType({
       anyOf: [{ $ref: "#/$defs/Name", $defs: { Name: { type: "string" } } }],
     }, "string")).toBe(true);
+  });
+
+  it("answers each value type of one interned schema for itself", () => {
+    const schema = internSchema({
+      anyOf: [{ type: "string" }, { type: "null" }],
+      title: "one verdict per value type",
+    });
+
+    expect(schemaAcceptsType(schema, "string")).toBe(true);
+    expect(schemaAcceptsType(schema, "number")).toBe(false);
+    expect(schemaAcceptsType(schema, "string")).toBe(true);
+    expect(schemaAcceptsType(schema, "number")).toBe(false);
+  });
+
+  it("returns `true` once the document a `$ref` names arrives after a first ask", () => {
+    const leaf = { type: "string", title: "a late type verdict" } as const;
+    const hash = internSchema(leaf, true).taggedHashString;
+    const schema = internSchema({ $ref: `cid:${hash}` });
+    const release = acquireSchemaRegistryLease();
+
+    // The first ask resolves nothing, so it must not be remembered.
+    expect(schemaAcceptsType(schema, "string")).toBe(false);
+    registerSchemaDocument(hash, leaf);
+    expect(schemaAcceptsType(schema, "string")).toBe(true);
+    release();
+  });
+
+  it("returns `false` once the registry clears the document a remembered answer read", () => {
+    const leaf = { type: "string", title: "a cleared type verdict" } as const;
+    const hash = internSchema(leaf, true).taggedHashString;
+    const schema = internSchema({ $ref: `cid:${hash}` });
+    const release = acquireSchemaRegistryLease();
+    registerSchemaDocument(hash, leaf);
+    expect(schemaAcceptsType(schema, "string")).toBe(true);
+
+    // The last lease out clears the registry, and with it the document.
+    release();
+
+    expect(schemaAcceptsType(schema, "string")).toBe(false);
   });
 });
 

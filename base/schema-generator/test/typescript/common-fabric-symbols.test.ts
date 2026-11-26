@@ -7,7 +7,7 @@
  */
 
 import { assert, assertEquals, assertFalse } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 
 import ts from "typescript";
 
@@ -16,8 +16,10 @@ import {
   isCommonFabricDeclaration,
   isCommonFabricModuleName,
   isCommonFabricSymbol,
+  isImportedFromCommonFabric,
   symbolDeclaresCommonFabricDefault,
 } from "../../src/typescript/common-fabric-symbols.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 //
 // Test infrastructure
@@ -148,6 +150,53 @@ describe("getImportTypeModuleName", () => {
 
     assert(typeNode);
     assertEquals(getImportTypeModuleName(typeNode), "@commonfabric/api");
+  });
+
+  it("returns `undefined` for an import type whose argument is no string literal", () => {
+    // The parser reads any type between the parentheses, and reports one
+    // that is no string literal.
+    const sourceFile = ts.createSourceFile(
+      "/test.ts",
+      `type Ref = import(api).Cell<number>;`,
+      ts.ScriptTarget.ES2020,
+      true,
+      ts.ScriptKind.TS,
+    );
+
+    const typeNode = findFirstNode(sourceFile, ts.isImportTypeNode);
+
+    expect(typeNode).toBeDefined();
+    expect(getImportTypeModuleName(typeNode!)).toBeUndefined();
+  });
+});
+
+describe("isImportedFromCommonFabric", () => {
+  /** The symbol `/test.ts` imports `Thing` as, through `/types.d.ts`. */
+  function importedThing() {
+    const { program, checker } = createProgram({
+      "/thing.ts": `export interface Thing { value: number }`,
+      "/types.d.ts": `export { Thing } from "./thing";`,
+      "/test.ts": `import { Thing } from "./types";\nexport let x: Thing;`,
+    });
+    const specifier = findFirstNode(
+      program.getSourceFile("/test.ts")!,
+      ts.isImportSpecifier,
+    )!;
+    return { checker, symbol: checker.getSymbolAtLocation(specifier.name) };
+  }
+
+  it("returns `true` for an import a declaration file re-exports", () => {
+    const { checker, symbol } = importedThing();
+
+    expect(isImportedFromCommonFabric(symbol, checker)).toBe(true);
+  });
+
+  it("returns `false` for an import a declaration file re-exports when declaration files do not count", () => {
+    const { checker, symbol } = importedThing();
+
+    expect(
+      isImportedFromCommonFabric(symbol, checker, { declarationFiles: false }),
+    ).toBe(false);
   });
 });
 
@@ -399,6 +448,38 @@ describe("symbolDeclaresCommonFabricDefault", () => {
         symbolDeclaresCommonFabricDefault(titleSymbol, checker),
         "Property typed with Common Fabric Default (from commonfabric.d.ts) must return true",
       );
+    });
+
+    it("returns true for a property typed with an alias of an alias of Common Fabric Default", () => {
+      const { program, checker } = createProgram({
+        "commonfabric.d.ts": `
+          declare const DEFAULT_MARKER: unique symbol;
+          declare type Default<T, V = T> = T | (T & { readonly [DEFAULT_MARKER]: T });
+        `,
+        "/test.ts": `
+          type Titled<T> = Default<T, "Untitled">;
+          type Title = Titled<string>;
+          interface MyArgs {
+            title: Title;
+            plain: string;
+          }
+        `,
+      });
+
+      const sf = program.getSourceFile("/test.ts")!;
+
+      expect(
+        symbolDeclaresCommonFabricDefault(
+          getPropertySymbol(checker, sf, "MyArgs", "title"),
+          checker,
+        ),
+      ).toBe(true);
+      expect(
+        symbolDeclaresCommonFabricDefault(
+          getPropertySymbol(checker, sf, "MyArgs", "plain"),
+          checker,
+        ),
+      ).toBe(false);
     });
 
     it("returns true for an optional property typed with Common Fabric Default", () => {

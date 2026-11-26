@@ -1,7 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import type { URI } from "@commonfabric/memory/interface";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -32,6 +39,8 @@ describe("memory-v2-pending-splice-intended-array", () => {
   const sessions: Session[] = [];
 
   beforeEach(() => {
+    // The server advertises `markedSplicesV1`, so each head insertion goes as
+    // a marked splice, the shape these races are about.
     server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
     verdicts = [];
     heldIds = new Set();
@@ -91,6 +100,13 @@ describe("memory-v2-pending-splice-intended-array", () => {
     const tx = session.runtime.edit();
     const cell = session.runtime.getCell(space, doc, listSchema, tx);
     cell.set([...(cell.get() as string[]), item]);
+    return tx.commit({ holdSyncedUntilCovered: false }).verdict;
+  };
+
+  const prepend = (session: Session, doc: string, item: string) => {
+    const tx = session.runtime.edit();
+    const cell = session.runtime.getCell(space, doc, listSchema, tx);
+    cell.set([item, ...(cell.get() as string[])]);
     return tx.commit({ holdSyncedUntilCovered: false }).verdict;
   };
 
@@ -170,6 +186,70 @@ describe("memory-v2-pending-splice-intended-array", () => {
     expect(
       seen.filter((value) =>
         Array.isArray(value) && value.includes("x") && value.includes("e3")
+      ),
+    ).toEqual([]);
+  });
+
+  it("shows the list as it is while the other session's identical head lands first, and the store accepts the splice as an identity", async () => {
+    // Replayed over the stored list, the splice at index 0 would land its
+    // element a second time; the layer promotes to the list its transaction
+    // computed instead, which is the stored list.
+    const doc = "intended-identical-head";
+    const a = connect();
+    const b = connect();
+    await seed(a, doc, ["e1", "e2"]);
+    const { list, seen, cancel } = await watched(b, doc);
+
+    heldIds.add(list.getAsNormalizedFullLink().id);
+    const bVerdict = prepend(b, doc, "h");
+    await held.promise;
+
+    heldIds.clear();
+    expect((await prepend(a, doc, "h")).error).toBeUndefined();
+    await flush();
+    expect(list.get()).toEqual(["h", "e1", "e2"]);
+
+    release.resolve();
+    expect((await bVerdict).error).toBeUndefined();
+    await flush();
+    await b.runtime.idle();
+    cancel();
+
+    expect(list.get()).toEqual(["h", "e1", "e2"]);
+    expect(seen.filter((value) => Array.isArray(value) && value.length > 3))
+      .toEqual([]);
+    expect(verdicts).toEqual(["ok", "ok", "ok"]);
+  });
+
+  it("shows the list it computed, then the store's, when both sessions insert at the head", async () => {
+    // Each insertion is a splice at index 0. Replayed over the other's, it
+    // would show a list with both heads, which no writer wrote.
+    const doc = "intended-head";
+    const a = connect();
+    const b = connect();
+    await seed(a, doc, ["e1", "e2"]);
+    const { list, seen, cancel } = await watched(b, doc);
+
+    heldIds.add(list.getAsNormalizedFullLink().id);
+    const bVerdict = prepend(b, doc, "b0");
+    await held.promise;
+    expect(list.get()).toEqual(["b0", "e1", "e2"]);
+
+    heldIds.clear();
+    expect((await prepend(a, doc, "a0")).error).toBeUndefined();
+    await flush();
+    expect(list.get()).toEqual(["b0", "e1", "e2"]);
+
+    release.resolve();
+    expect(errorNameOf(await bVerdict)).toBe("ConflictError");
+    await flush();
+    await b.runtime.idle();
+    cancel();
+
+    expect(list.get()).toEqual(["a0", "e1", "e2"]);
+    expect(
+      seen.filter((value) =>
+        Array.isArray(value) && value.includes("a0") && value.includes("b0")
       ),
     ).toEqual([]);
   });
@@ -312,6 +392,67 @@ describe("memory-v2-pending-splice-intended-array", () => {
       },
     );
     expect(joined).toBe("e1|x|e3");
+  });
+
+  it("serves the same document through a stack of splices when the first one's verdict lands over a list nothing moved", async () => {
+    // The accepted splice replays to the list the view already showed, so
+    // the layers stacked on it are not replayed again: the replica serves
+    // the very document it served before the verdict. This session holds
+    // no watch, so each accept promotes at its verdict rather than waiting
+    // on a frame.
+    const { storage } = connect();
+    const replica = storage.open(space).replica;
+    const id = "of:intended-unmoved-stack" as URI;
+    const document = { space, id, type: "application/json" } as const;
+    const list = { ...document, path: ["value", "list"] };
+
+    const seeding = storage.edit();
+    seeding.write({ ...document, path: [] }, { value: { list: ["e1", "e2"] } });
+    expect((await seeding.commit().settled).error).toBeUndefined();
+    const seeded = replica.confirmedDocumentSeq(id);
+
+    // Each commit waits at the server's door until its own gate opens. The
+    // session sends a commit only once the one before it has its verdict,
+    // so all three are pending while the first is at the door.
+    const arrived = Promise.withResolvers<void>();
+    const gates = [0, 1, 2].map(() => Promise.withResolvers<void>());
+    let arrivals = 0;
+    const transact = server.transact.bind(server);
+    server.transact = async (...args: Parameters<typeof transact>) => {
+      const index = arrivals++;
+      arrived.resolve();
+      await gates[index]?.promise;
+      return await transact(...args);
+    };
+
+    const settled = ["e3", "e4", "e5"].map((item) => {
+      const tx = storage.edit();
+      const current = tx.read(list).ok?.value;
+      if (!Array.isArray(current)) throw new Error("The list is not shown");
+      tx.write({ ...list, path: [...list.path, `${current.length}`] }, item);
+      return tx.commit().settled;
+    });
+    await arrived.promise;
+    const shown = replica.getDocument(id);
+    expect(shown?.value).toEqual({ list: ["e1", "e2", "e3", "e4", "e5"] });
+
+    // What the first verdict leaves is read before the other gates open, and
+    // judged after, so a failed expectation leaves no commit at the door.
+    gates[0].resolve();
+    const first = await settled[0];
+    const promotedSeq = replica.confirmedDocumentSeq(id);
+    const served = replica.getDocument(id);
+    gates[1].resolve();
+    gates[2].resolve();
+    const rest = await Promise.all(settled.slice(1));
+
+    expect(first.error).toBeUndefined();
+    expect(promotedSeq).toBeGreaterThan(seeded);
+    expect(served).toBe(shown);
+    expect(rest.map((result) => result.error)).toEqual([undefined, undefined]);
+    expect(replica.getDocument(id)?.value).toEqual({
+      list: ["e1", "e2", "e3", "e4", "e5"],
+    });
   });
 
   it("shows a stacked pair as the second computed it, then the store's list", async () => {

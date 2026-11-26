@@ -1,4 +1,4 @@
-import { assertEquals, assertNotEquals } from "@std/assert";
+import { assertEquals, assertNotEquals, assertRejects } from "@std/assert";
 
 import {
   linkRefFrom,
@@ -11,6 +11,7 @@ import {
   UnknownValue,
 } from "@commonfabric/data-model/codec-common";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
+import { test } from "@commonfabric/test-support/test";
 import {
   hashStableArrayValue,
   materializeStableArrayCells,
@@ -18,14 +19,14 @@ import {
 } from "../src/array-cell-identity.ts";
 import { canonicalJson } from "../src/canonical-json.ts";
 
-Deno.test("canonical JSON sorts object keys inside arrays", () => {
+test("canonical JSON sorts object keys inside arrays", () => {
   assertEquals(
     canonicalJson([{ z: 1, a: 2 }, "tail"]),
     '[{"a":2,"z":1},"tail"]',
   );
 });
 
-Deno.test("connector hashes distinguish `FabricValue`s that JSON conflates", async () => {
+test("connector hashes distinguish `FabricValue`s that JSON conflates", async () => {
   assertNotEquals(
     await hashStableArrayValue([{ id: "event", detail: undefined }]),
     await hashStableArrayValue([{ id: "event" }]),
@@ -47,14 +48,14 @@ Deno.test("connector hashes distinguish `FabricValue`s that JSON conflates", asy
   );
 });
 
-Deno.test("connector hashes ignore object key insertion order", async () => {
+test("connector hashes ignore object key insertion order", async () => {
   assertEquals(
     await hashStableArrayValue({ second: 2, first: 1 }),
     await hashStableArrayValue({ first: 1, second: 2 }),
   );
 });
 
-Deno.test("connector hashes match independently stored array children", async () => {
+test("connector hashes match independently stored array children", async () => {
   const shared = { value: 1 };
   assertEquals(
     await hashStableArrayValue([shared, shared]),
@@ -69,14 +70,10 @@ Deno.test("connector hashes match independently stored array children", async ()
   );
 });
 
-Deno.test("connector hashes preserve native `FabricValue`s", async () => {
+test("connector hashes preserve native `FabricValue`s", async () => {
   assertNotEquals(
     await hashStableArrayValue(new Date(0)),
     await hashStableArrayValue(new Date(1)),
-  );
-  assertNotEquals(
-    await hashStableArrayValue(/first/gi),
-    await hashStableArrayValue(/second/gi),
   );
   assertNotEquals(
     await hashStableArrayValue(new Uint8Array([1])),
@@ -84,7 +81,15 @@ Deno.test("connector hashes preserve native `FabricValue`s", async () => {
   );
 });
 
-Deno.test("deeply nested arrays are hashed without repeated planning", async () => {
+test("connector hashes refuse a `RegExp`, which is no `FabricValue`", async () => {
+  await assertRejects(
+    () => hashStableArrayValue(/first/gi),
+    Error,
+    "not a recognized fabric type",
+  );
+});
+
+test("deeply nested arrays are hashed without repeated planning", async () => {
   let value: unknown = "leaf";
   for (let depth = 0; depth < 16; depth++) value = [value];
   assertEquals(
@@ -93,7 +98,7 @@ Deno.test("deeply nested arrays are hashed without repeated planning", async () 
   );
 });
 
-Deno.test("stable plans freeze modern `FabricLink`s", async () => {
+test("stable plans freeze modern `FabricLink`s", async () => {
   setModernCellRepConfig(true);
   try {
     const payload = { path: ["before"] };
@@ -124,7 +129,7 @@ Deno.test("stable plans freeze modern `FabricLink`s", async () => {
   }
 });
 
-Deno.test("stable plans privately capture mutable `FabricInstance`s", async () => {
+test("stable plans privately capture mutable `FabricInstance`s", async () => {
   setModernCellRepConfig(true);
   try {
     const linkPayload = { path: ["before"] };

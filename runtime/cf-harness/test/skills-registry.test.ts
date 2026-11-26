@@ -2,11 +2,20 @@ import { assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
 import { dirname, join } from "@std/path";
 import {
+  DEFAULT_SKILL_SCAN_LIMITS,
   discoverHarnessSkills,
   loadHarnessSkillContext,
   loadHarnessSkillContextFromText,
   parseHarnessSkillFile,
 } from "../src/skills/registry.ts";
+import { readsDespiteMode } from "./support/reads-despite-mode.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
 
 const writeSkill = async (
   root: string,
@@ -33,7 +42,7 @@ const writeSkillResource = async (
   }
 };
 
-Deno.test("parseHarnessSkillFile handles simple frontmatter and continued descriptions", () => {
+test("parseHarnessSkillFile handles simple frontmatter and continued descriptions", () => {
   const parsed = parseHarnessSkillFile([
     "---",
     "name: cf",
@@ -56,7 +65,7 @@ Deno.test("parseHarnessSkillFile handles simple frontmatter and continued descri
   assertEquals(parsed.body.trim(), "# CF CLI");
 });
 
-Deno.test({
+test({
   name:
     "discoverHarnessSkills scans skills, records diagnostics, and builds sandbox paths",
   permissions: { read: true, write: true },
@@ -262,7 +271,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "discoverHarnessSkills rejects symlinked skills that resolve outside the root",
   permissions: { read: true, write: true },
@@ -305,7 +314,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "discoverHarnessSkills skips resources that resolve outside the skill directory",
   permissions: { read: true, write: true },
@@ -351,7 +360,7 @@ Deno.test({
   },
 });
 
-Deno.test("loadHarnessSkillContextFromText wraps handle-delivered text with token provenance", async () => {
+test("loadHarnessSkillContextFromText wraps handle-delivered text with token provenance", async () => {
   const result = await loadHarnessSkillContextFromText({
     text: "# Trip skill\n\nList flights before hotels.\n",
     handleToken: "cfh:a:3kk78",
@@ -388,7 +397,7 @@ Deno.test("loadHarnessSkillContextFromText wraps handle-delivered text with toke
   assertEquals(result.activation.sandboxSkillDir, undefined);
 });
 
-Deno.test("loadHarnessSkillContextFromText digests the exact text it wrapped", async () => {
+test("loadHarnessSkillContextFromText digests the exact text it wrapped", async () => {
   const first = await loadHarnessSkillContextFromText({
     text: "same text",
     handleToken: "cfh:a:3kk78",
@@ -420,7 +429,7 @@ Deno.test("loadHarnessSkillContextFromText digests the exact text it wrapped", a
   expect(first.activation.digest).not.toBe(changed.activation.digest);
 });
 
-Deno.test({
+test({
   name:
     "loadHarnessSkillContext returns structured context and activation artifacts",
   permissions: { read: true, write: true },
@@ -514,7 +523,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "loadHarnessSkillContext rejects missing skill names with available choices",
   permissions: { read: true, write: true },
@@ -550,4 +559,484 @@ Deno.test({
       await Deno.remove(root, { recursive: true });
     }
   },
+});
+
+const skillText = (name: string, description = `The ${name} skill`) =>
+  ["---", `name: ${name}`, `description: ${description}`, "---", ""].join(
+    "\n",
+  );
+
+describe("registry", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await Deno.realPath(
+      await Deno.makeTempDir({ prefix: "cf-harness-skills-" }),
+    );
+  });
+
+  afterEach(async () => {
+    await Deno.remove(root, { recursive: true });
+  });
+
+  const codesOf = (diagnostics: readonly { code: string }[]): string[] =>
+    diagnostics.map((diagnostic) => diagnostic.code);
+
+  describe("parseHarnessSkillFile()", () => {
+    it("returns the whole text as the body when there is no frontmatter", () => {
+      expect(parseHarnessSkillFile("# Title\n")).toEqual({
+        frontmatter: {},
+        body: "# Title\n",
+      });
+    });
+
+    it("returns the whole text as the body when the frontmatter never closes", () => {
+      expect(parseHarnessSkillFile("---\nname: a\n# Title\n")).toEqual({
+        frontmatter: {},
+        body: "---\nname: a\n# Title\n",
+      });
+    });
+
+    it("returns an empty body when the closing marker ends the text", () => {
+      expect(parseHarnessSkillFile("---\nname: a\n---")).toEqual({
+        frontmatter: { name: "a" },
+        body: "",
+      });
+    });
+
+    it("returns true and false for boolean values", () => {
+      expect(
+        parseHarnessSkillFile("---\non: true\noff: false\n---\n").frontmatter,
+      ).toEqual({ on: true, off: false });
+    });
+
+    it("drops a line without a key and the indented lines after it", () => {
+      // A continuation line belongs to the key above it, so once a line
+      // without a key ends that key, what follows has nothing to continue.
+
+      expect(
+        parseHarnessSkillFile(
+          ["---", "name: a", "loose words", "  continued", "---", ""].join(
+            "\n",
+          ),
+        ).frontmatter,
+      ).toEqual({ name: "a" });
+    });
+  });
+
+  describe("discoverHarnessSkills()", () => {
+    it("throws for a skills root that is a file", async () => {
+      const file = join(root, "skills.txt");
+      await Deno.writeTextFile(file, "");
+      await expect(discoverHarnessSkills({ skillsRoot: file })).rejects
+        .toThrow(`skills root must be a directory: ${file}`);
+    });
+
+    it("records the directory name for a skill without a frontmatter name", async () => {
+      await writeSkill(
+        root,
+        "unnamed",
+        "---\ndescription: No name here\n---\n",
+      );
+      const registry = await discoverHarnessSkills({ skillsRoot: root });
+      expect(registry.skills.map((skill) => skill.name)).toEqual(["unnamed"]);
+      expect(codesOf(registry.skills[0].diagnostics)).toEqual([
+        "missing-name",
+      ]);
+    });
+
+    it("records an invalid and mismatched name, and keeps the skill", async () => {
+      await writeSkill(root, "proper", skillText("Not_Proper"));
+      const registry = await discoverHarnessSkills({ skillsRoot: root });
+      expect(registry.skills.map((skill) => skill.name)).toEqual([
+        "Not_Proper",
+      ]);
+      expect(codesOf(registry.skills[0].diagnostics)).toEqual([
+        "invalid-name",
+        "name-directory-mismatch",
+      ]);
+    });
+
+    it("records no name diagnostics for a well-named skill", async () => {
+      await writeSkill(root, "proper", skillText("proper"));
+      const registry = await discoverHarnessSkills({ skillsRoot: root });
+      expect(registry.skills[0].diagnostics).toEqual([]);
+    });
+
+    it("returns the first body line that is not a heading as a missing description", async () => {
+      await writeSkill(
+        root,
+        "described",
+        "---\nname: described\n---\n\n# Described\n\nDoes a thing.\n",
+      );
+      const registry = await discoverHarnessSkills({ skillsRoot: root });
+      expect(registry.skills[0].description).toBe("Does a thing.");
+    });
+
+    it("skips directories the scan excludes", async () => {
+      await writeSkill(
+        join(root, "node_modules"),
+        "hidden",
+        skillText("hidden"),
+      );
+      await writeSkill(join(root, ".git"), "also-hidden", skillText("also"));
+      await writeSkill(root, "visible", skillText("visible"));
+      const registry = await discoverHarnessSkills({ skillsRoot: root });
+      expect(registry.skills.map((skill) => skill.name)).toEqual(["visible"]);
+      expect(registry.diagnostics).toEqual([]);
+    });
+
+    it("skips an entry it cannot stat, such as a dangling symlink", async () => {
+      await Deno.symlink(join(root, "nowhere"), join(root, "dangling"));
+      await writeSkill(root, "visible", skillText("visible"));
+      const registry = await discoverHarnessSkills({ skillsRoot: root });
+      expect(registry.skills.map((skill) => skill.name)).toEqual(["visible"]);
+      expect(registry.diagnostics).toEqual([]);
+    });
+
+    it("records a diagnostic for a skills tree nested past the scan depth", async () => {
+      const deep = join(root, "a", "b", "c", "d", "e", "f", "g");
+      await writeSkill(deep, "deep", skillText("deep"));
+      await writeSkill(join(root, "a", "b"), "shallow", skillText("shallow"));
+      const registry = await discoverHarnessSkills({ skillsRoot: root });
+      expect(registry.skills.map((skill) => skill.name)).toEqual(["shallow"]);
+      expect(codesOf(registry.diagnostics)).toEqual(["max-depth-exceeded"]);
+    });
+
+    it("stops scanning after its directory limit", async () => {
+      // The root is the first directory scanned.
+
+      await writeSkill(root, "a-first", skillText("a-first"));
+      await writeSkill(root, "b-second", skillText("b-second"));
+      const registry = await discoverHarnessSkills({
+        skillsRoot: root,
+        scanLimits: { ...DEFAULT_SKILL_SCAN_LIMITS, skillDirectories: 2 },
+      });
+      expect(registry.skills.map((skill) => skill.name)).toEqual(["a-first"]);
+      expect(codesOf(registry.diagnostics)).toEqual(["scan-limit-exceeded"]);
+      expect(registry.diagnostics[0].path).toBe(join(root, "b-second"));
+    });
+
+    it("throws for a scan limit that is not a positive integer", async () => {
+      await writeSkill(root, "a-first", skillText("a-first"));
+      for (
+        const [override, message] of [
+          [
+            { skillDepth: 0 },
+            "skill scan limit skillDepth must be a positive integer, not 0",
+          ],
+          [
+            { resourceFiles: 1.5 },
+            "skill scan limit resourceFiles must be a positive integer, not 1.5",
+          ],
+          [
+            { resourceDepth: Infinity },
+            "skill scan limit resourceDepth must be a positive integer, not Infinity",
+          ],
+        ] as const
+      ) {
+        await expect(
+          discoverHarnessSkills({
+            skillsRoot: root,
+            scanLimits: { ...DEFAULT_SKILL_SCAN_LIMITS, ...override },
+          }),
+        ).rejects.toThrow(message);
+      }
+    });
+
+    it("throws for a scan limits object missing a limit", async () => {
+      // A caller reaching this through an untyped path, such as parsed
+      // configuration, may leave out a bound that would then bound nothing.
+
+      await writeSkill(root, "a-first", skillText("a-first"));
+      const partial = JSON.parse('{"skillDepth": 6, "resourceDepth": 8}');
+      await expect(
+        discoverHarnessSkills({ skillsRoot: root, scanLimits: partial }),
+      ).rejects.toThrow(
+        "skill scan limit skillDirectories must be a positive integer, not undefined",
+      );
+    });
+
+    it("accepts a scan limit of one", async () => {
+      await writeSkill(root, "a-first", skillText("a-first"));
+      const registry = await discoverHarnessSkills({
+        skillsRoot: root,
+        scanLimits: { ...DEFAULT_SKILL_SCAN_LIMITS, skillDirectories: 1 },
+      });
+      expect(registry.skills).toEqual([]);
+      expect(codesOf(registry.diagnostics)).toEqual(["scan-limit-exceeded"]);
+    });
+
+    it("records a SKILL.md that resolves outside the root and skips it", async () => {
+      const outside = await Deno.realPath(
+        await Deno.makeTempDir({ prefix: "cf-harness-outside-skill-" }),
+      );
+      try {
+        await Deno.writeTextFile(join(outside, "SKILL.md"), skillText("away"));
+        await Deno.mkdir(join(root, "away"));
+        await Deno.symlink(
+          join(outside, "SKILL.md"),
+          join(root, "away", "SKILL.md"),
+        );
+        const registry = await discoverHarnessSkills({ skillsRoot: root });
+        expect(registry.skills).toEqual([]);
+        expect(codesOf(registry.diagnostics)).toEqual(["skill-outside-root"]);
+      } finally {
+        await Deno.remove(outside, { recursive: true });
+      }
+    });
+
+    it("records a SKILL.md symlink that resolves nowhere and skips it", async () => {
+      await Deno.mkdir(join(root, "broken"));
+      await Deno.symlink(
+        join(root, "nowhere.md"),
+        join(root, "broken", "SKILL.md"),
+      );
+      const registry = await discoverHarnessSkills({ skillsRoot: root });
+      expect(registry.skills).toEqual([]);
+      expect(codesOf(registry.diagnostics)).toEqual([
+        "unresolvable-skill-path",
+      ]);
+    });
+
+    it("records a SKILL.md that cannot be read as text and skips it", async () => {
+      await Deno.mkdir(join(root, "folder", "SKILL.md"), { recursive: true });
+      const registry = await discoverHarnessSkills({ skillsRoot: root });
+      expect(registry.skills).toEqual([]);
+      expect(codesOf(registry.diagnostics)).toEqual(["unreadable-skill"]);
+    });
+
+    it({
+      name: "records a directory it cannot list and goes on scanning",
+      ignore: readsDespiteMode(),
+      fn: async () => {
+        // Neither a directory it may enter but not list nor one it may not
+        // enter at all ends the scan of the skills beside it.
+
+        await Deno.mkdir(join(root, "enter-only"));
+        await Deno.mkdir(join(root, "locked"));
+        await writeSkill(root, "visible", skillText("visible"));
+        await Deno.chmod(join(root, "enter-only"), 0o100);
+        await Deno.chmod(join(root, "locked"), 0o000);
+        try {
+          const registry = await discoverHarnessSkills({ skillsRoot: root });
+          expect(registry.skills.map((skill) => skill.name)).toEqual([
+            "visible",
+          ]);
+          expect(codesOf(registry.diagnostics)).toEqual([
+            "unreadable-directory",
+            "unreadable-directory",
+          ]);
+          expect(registry.diagnostics.map((diagnostic) => diagnostic.path))
+            .toEqual([join(root, "enter-only"), join(root, "locked")]);
+        } finally {
+          await Deno.chmod(join(root, "enter-only"), 0o700);
+          await Deno.chmod(join(root, "locked"), 0o700);
+        }
+      },
+    });
+
+    it({
+      name: "finds a skill in a directory it may enter but not list",
+      ignore: readsDespiteMode(),
+      fn: async () => {
+        await writeSkill(root, "hidden", skillText("hidden"));
+        await writeSkill(root, "visible", skillText("visible"));
+        await Deno.chmod(join(root, "hidden"), 0o111);
+        try {
+          const registry = await discoverHarnessSkills({ skillsRoot: root });
+          expect(registry.skills.map((skill) => skill.name)).toEqual([
+            "hidden",
+            "visible",
+          ]);
+          expect(registry.diagnostics).toEqual([]);
+        } finally {
+          await Deno.chmod(join(root, "hidden"), 0o700);
+        }
+      },
+    });
+
+    describe("resource indexing", () => {
+      const resourcesOf = async () => {
+        const registry = await discoverHarnessSkills({ skillsRoot: root });
+        const skill = registry.skills[0];
+        return {
+          paths: skill.resources.map((resource) => resource.path),
+          codes: codesOf(skill.diagnostics),
+          skill,
+        };
+      };
+
+      beforeEach(async () => {
+        await writeSkill(root, "kit", skillText("kit"));
+      });
+
+      it("records invalid UTF-8 as binary and gives a binary script no shebang", async () => {
+        await writeSkillResource(
+          root,
+          "kit",
+          "scripts/tool",
+          new Uint8Array([0x23, 0x21, 0xff, 0xfe]),
+        );
+        const { skill } = await resourcesOf();
+        const tool = skill.resources.find((resource) =>
+          resource.path === "scripts/tool"
+        );
+        expect(tool?.contentKind).toBe("binary");
+        expect(tool?.script).toEqual({ executable: false, runtime: "unknown" });
+      });
+
+      it("skips directories the scan excludes", async () => {
+        await writeSkillResource(root, "kit", ".git/HEAD", "ref\n");
+        await writeSkillResource(root, "kit", "node_modules/x.js", "1\n");
+        const { paths, codes } = await resourcesOf();
+        expect(paths).toEqual(["SKILL.md"]);
+        expect(codes).toEqual([]);
+      });
+
+      it("records a dangling symlink as a resource it cannot stat", async () => {
+        await Deno.symlink(
+          join(root, "kit", "nowhere"),
+          join(root, "kit", "dangling"),
+        );
+        const { paths, codes } = await resourcesOf();
+        expect(paths).toEqual(["SKILL.md"]);
+        expect(codes).toEqual(["unstatable-skill-resource"]);
+      });
+
+      it("indexes a directory reached twice through a symlink only once", async () => {
+        await writeSkillResource(root, "kit", "references/guide.md", "# G\n");
+        await Deno.symlink(
+          join(root, "kit", "references"),
+          join(root, "kit", "zz-alias"),
+        );
+        const { paths, codes } = await resourcesOf();
+        expect(paths).toEqual(["references/guide.md", "SKILL.md"]);
+        expect(codes).toEqual([]);
+      });
+
+      it("records a subdirectory that resolves outside the skill and skips it", async () => {
+        await writeSkill(root, "other", skillText("other"));
+        await Deno.symlink(join(root, "other"), join(root, "kit", "borrowed"));
+        const { paths, codes } = await resourcesOf();
+        expect(paths).toEqual(["SKILL.md"]);
+        expect(codes).toEqual(["skill-resource-scan-outside-root"]);
+      });
+
+      it("skips an entry that is neither a file nor a directory", async () => {
+        const socketPath = join(root, "kit", "sock");
+        const listener = Deno.listen({ transport: "unix", path: socketPath });
+        try {
+          const { paths, codes } = await resourcesOf();
+          expect(paths).toEqual(["SKILL.md"]);
+          expect(codes).toEqual([]);
+        } finally {
+          listener.close();
+        }
+      });
+
+      it("records a resource tree nested past the scan depth", async () => {
+        await writeSkillResource(
+          root,
+          "kit",
+          "a/b/c/d/e/f/g/h/i/deep.md",
+          "deep\n",
+        );
+        await writeSkillResource(root, "kit", "a/b/c/d/e/f/g/h/ok.md", "ok\n");
+        const { paths, codes } = await resourcesOf();
+        expect(paths).toEqual(["a/b/c/d/e/f/g/h/ok.md", "SKILL.md"]);
+        expect(codes).toEqual(["resource-max-depth-exceeded"]);
+      });
+
+      it("stops indexing after its directory limit", async () => {
+        // The skill directory is the first directory scanned.
+
+        await writeSkillResource(root, "kit", "a/one.md", "1\n");
+        await writeSkillResource(root, "kit", "b/two.md", "2\n");
+        const registry = await discoverHarnessSkills({
+          skillsRoot: root,
+          scanLimits: { ...DEFAULT_SKILL_SCAN_LIMITS, resourceDirectories: 2 },
+        });
+        const skill = registry.skills[0];
+        expect(skill.resources.map((resource) => resource.path)).toEqual([
+          "a/one.md",
+          "SKILL.md",
+        ]);
+        expect(codesOf(skill.diagnostics)).toEqual([
+          "resource-scan-limit-exceeded",
+        ]);
+      });
+
+      it("stops indexing after its file limit", async () => {
+        // SKILL.md is the first file indexed.
+
+        await writeSkillResource(root, "kit", "a.md", "a\n");
+        await writeSkillResource(root, "kit", "b.md", "b\n");
+        const registry = await discoverHarnessSkills({
+          skillsRoot: root,
+          scanLimits: { ...DEFAULT_SKILL_SCAN_LIMITS, resourceFiles: 2 },
+        });
+        const skill = registry.skills[0];
+        expect(skill.resources.map((resource) => resource.path)).toEqual([
+          "a.md",
+          "SKILL.md",
+        ]);
+        expect(codesOf(skill.diagnostics)).toEqual([
+          "resource-file-limit-exceeded",
+        ]);
+      });
+
+      it({
+        name: "records resources it cannot read and indexes the rest",
+        ignore: readsDespiteMode(),
+        fn: async () => {
+          await writeSkillResource(root, "kit", "locked.md", "secret\n");
+          await writeSkillResource(root, "kit", "shut/inner.md", "inner\n");
+          await Deno.chmod(join(root, "kit", "locked.md"), 0o000);
+          await Deno.chmod(join(root, "kit", "shut"), 0o100);
+          try {
+            const { paths, codes } = await resourcesOf();
+            expect(paths).toEqual(["SKILL.md"]);
+            expect(codes).toEqual([
+              "unreadable-skill-resource",
+              "unreadable-skill-resource-directory",
+            ]);
+          } finally {
+            await Deno.chmod(join(root, "kit", "locked.md"), 0o600);
+            await Deno.chmod(join(root, "kit", "shut"), 0o700);
+          }
+        },
+      });
+    });
+  });
+
+  describe("loadHarnessSkillContext()", () => {
+    it("says a skill with no indexed resources has none", async () => {
+      await writeSkill(root, "bare", skillText("bare"));
+      const registry = await discoverHarnessSkills({ skillsRoot: root });
+      const context = await loadHarnessSkillContext({
+        registry: {
+          ...registry,
+          skills: registry.skills.map((skill) => ({ ...skill, resources: [] })),
+        },
+        skillNames: ["bare"],
+        source: "cli-preload",
+        runId: "run-bare",
+      });
+      expect(context.contextText).toContain("Indexed skill resources: none.");
+      expect(context.contextText).not.toContain("read_skill_resource with");
+    });
+
+    it("throws naming no alternatives when the registry is empty", async () => {
+      const registry = await discoverHarnessSkills({ skillsRoot: root });
+      await expect(
+        loadHarnessSkillContext({
+          registry,
+          skillNames: ["absent", " "],
+          source: "cli-preload",
+          runId: "run-empty",
+        }),
+      ).rejects.toThrow(/^skill not found: absent$/);
+    });
+  });
 });

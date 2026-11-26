@@ -1,5 +1,4 @@
-import { debounce } from "@std/async/debounce";
-import { blue, dim, green, red, yellow } from "@std/fmt/colors";
+import { blue, dim, red, yellow } from "@std/fmt/colors";
 import {
   isAbsolute as isAbsolutePath,
   join as joinPath,
@@ -12,19 +11,6 @@ import * as esbuild from "esbuild";
 
 import { ResolvedConfig, ResolvedEntryPoint } from "./interface.ts";
 
-function formatFileSize(bytes: number): string {
-  const units = ["B", "KB", "MB", "GB"];
-  let size = bytes;
-  let unitIndex = 0;
-
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex++;
-  }
-
-  return `${size.toFixed(1)} ${units[unitIndex]}`;
-}
-
 export class Builder extends EventTarget {
   #splitPassAuxiliaryOutputGenerations: Set<string>[] = [];
 
@@ -32,21 +18,33 @@ export class Builder extends EventTarget {
     super();
   }
 
-  async watch(watchRoot: string, debounceTimeout: number = 200) {
-    const fn = debounce(async () => {
-      try {
-        await this.build();
-      } catch (e: unknown) {
-        const message = e && typeof e === "object" && "message" in e
-          ? e.message
-          : e;
-        console.error(`   ${red("✗")} ${red("Error:")} ${message}`);
+  /**
+   * Rebuilds on each change `changes` reports, until it ends. A change that
+   * arrives while a build is running causes one more build once that build
+   * finishes, however many such changes arrive. A failed build is reported and
+   * does not stop the watch. Resolves once `changes` has ended and the builds
+   * it caused have finished.
+   */
+  async watch(changes: AsyncIterable<unknown>): Promise<void> {
+    let stale = false;
+    let building: Promise<void> | undefined;
+    const rebuild = async () => {
+      while (stale) {
+        stale = false;
+        try {
+          await this.build();
+        } catch (e: unknown) {
+          const message = e instanceof Error ? e.message : e;
+          console.error(`   ${red("✗")} ${red("Error:")} ${message}`);
+        }
       }
-    }, debounceTimeout);
-    const watcher = Deno.watchFs(watchRoot);
-    for await (const _ of watcher) {
-      await fn();
+      building = undefined;
+    };
+    for await (const _ of changes) {
+      stale = true;
+      building ??= rebuild();
     }
+    await building;
   }
 
   async build() {
@@ -135,6 +133,9 @@ export class Builder extends EventTarget {
       supported: this.manifest.esbuild.supported,
       tsconfigRaw: this.manifest.esbuild.tsconfigRaw,
       logOverride: this.manifest.esbuild.logOverride,
+      // The build manifest, the combined metafile, and the pruning of
+      // superseded split chunks all read the pass's outputs from here.
+      metafile: true,
     };
 
     if (splitting) {
@@ -144,25 +145,7 @@ export class Builder extends EventTarget {
       }
     }
 
-    // Split passes always capture metadata so repeated builds can remove
-    // superseded content-hashed chunks. Plain passes need it only when the
-    // caller requested a combined metafile.
-    if (splitting || this.manifest.esbuild.metafile) {
-      config.metafile = true;
-    }
-
     const result = await build(config, { stop: false });
-
-    for (const output of result.outputFiles ?? []) {
-      const fileInfo = await Deno.stat(output.path);
-      const fileSize = formatFileSize(fileInfo.size);
-
-      console.log(
-        `   ${green("✓")} ${dim("Built")} ${blue(output.path)} ${
-          dim(`(${fileSize})`)
-        }`,
-      );
-    }
     return result.metafile;
   }
 
@@ -230,27 +213,16 @@ export class Builder extends EventTarget {
    */
   async #writeBuildManifest(metafile: esbuild.Metafile): Promise<void> {
     const manifest: Record<string, string> = {};
-    const outputs = new Set(
-      this.manifest.entries.map((entry) => `${entry.out}.js`),
-    );
-    for (const output of Object.keys(metafile.outputs)) {
-      if (output.endsWith(".js")) outputs.add(resolvePath(output));
-    }
+    const outputs = Object.keys(metafile.outputs)
+      .filter((output) => output.endsWith(".js"))
+      .map((output) => resolvePath(output));
     for (const outPath of outputs) {
-      try {
-        const content = await Deno.readFile(outPath);
-        const hash = await crypto.subtle.digest("SHA-256", content);
-        const hex = Array.from(new Uint8Array(hash))
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join("");
-        // Store with path relative to outDir
-        const relPath = outPath.slice(this.manifest.outDir.length + 1);
-        manifest[relPath] = hex;
-      } catch (error) {
-        if (!(error instanceof Deno.errors.NotFound)) {
-          throw error;
-        }
-      }
+      const content = await Deno.readFile(outPath);
+      const hash = await crypto.subtle.digest("SHA-256", content);
+      const hex = Array.from(new Uint8Array(hash))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+      manifest[relativePath(this.manifest.outDir, outPath)] = hex;
     }
 
     const manifestPath = `${this.manifest.outDir}/build-manifest.json`;
@@ -295,7 +267,6 @@ function textLoaderPlugin(): esbuild.Plugin {
       build.onLoad({ filter: /.*/ }, async (args) => {
         if (args.with.type !== "text") return undefined;
         const contents = await Deno.readTextFile(args.path);
-        if (!contents) return undefined;
         return { contents, loader: "text" };
       });
     },
@@ -311,27 +282,41 @@ function textLoaderPlugin(): esbuild.Plugin {
 // `deno compile` of binaries that embed them. Reproduce exactly that file
 // mapping here, scoped to @opentelemetry packages.
 function otelBrowserPlatformPlugin(): esbuild.Plugin {
-  const OTEL_PKG = /[/\\]@opentelemetry[/\\][^/\\]+[/\\]/;
   return {
     name: "otel-browser-platform",
     setup(build) {
-      build.onResolve({ filter: /^\.\.?[/\\]platform$/ }, (args) => {
-        if (!OTEL_PKG.test(args.importer)) return undefined;
-        const platformDir = resolvePath(args.resolveDir, args.path);
-        const browserIndex = joinPath(platformDir, "browser", "index.js");
-        try {
-          Deno.statSync(browserIndex);
-        } catch (error) {
-          // Only "file doesn't exist" means "no browser split in this
-          // package"; a real I/O error must fail the build, not silently
-          // fall back to bundling the node platform path.
-          if (error instanceof Deno.errors.NotFound) return undefined;
-          throw error;
-        }
-        return { path: browserIndex };
-      });
+      build.onResolve(
+        { filter: /^\.\.?[/\\]platform$/ },
+        resolveOtelBrowserPlatform,
+      );
     },
   };
+}
+
+const OTEL_PKG = /[/\\]@opentelemetry[/\\][^/\\]+[/\\]/;
+
+/**
+ * Resolves an `@opentelemetry` package's `./platform` import to the package's
+ * `platform/browser/index.js`, or returns `undefined` to leave the import to
+ * the other resolvers when the importer is not in such a package or the
+ * package has no browser platform.
+ */
+export function resolveOtelBrowserPlatform(
+  args: Pick<esbuild.OnResolveArgs, "importer" | "resolveDir" | "path">,
+): esbuild.OnResolveResult | undefined {
+  if (!OTEL_PKG.test(args.importer)) return undefined;
+  const platformDir = resolvePath(args.resolveDir, args.path);
+  const browserIndex = joinPath(platformDir, "browser", "index.js");
+  try {
+    Deno.statSync(browserIndex);
+  } catch (error) {
+    // Only "file doesn't exist" means "no browser split in this
+    // package"; a real I/O error must fail the build, not silently
+    // fall back to bundling the node platform path.
+    if (error instanceof Deno.errors.NotFound) return undefined;
+    throw error;
+  }
+  return { path: browserIndex };
 }
 
 // Exposes `esbuild`'s build functionality, applying

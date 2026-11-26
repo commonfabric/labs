@@ -4,7 +4,14 @@
  * Simple pattern with two text labels and a swap button between them.
  * Click on either label to rename it via modal.
  */
-import { Default, handler, pattern, UI, Writable } from "commonfabric";
+import {
+  Default,
+  handler,
+  pattern,
+  UI,
+  type VNode,
+  Writable,
+} from "commonfabric";
 
 // ============ TYPES ============
 
@@ -16,6 +23,7 @@ interface Input {
 }
 
 export interface Output {
+  [UI]: VNode;
   leftText: string;
   rightText: string;
 }

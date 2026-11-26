@@ -1,7 +1,7 @@
 import { ChangeSet, Text } from "@codemirror/state";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { TextChange } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   applyTextChanges,
   codeMirrorTextChangesPayload,
@@ -54,6 +54,15 @@ describe("text-changes", () => {
     it("throws `RangeError` for a position that is not an integer", () => {
       expect(() => applyTextChanges("ab", [{ from: 0.5 }])).toThrow(
         RangeError,
+      );
+    });
+
+    it("throws `TypeError` for an `insert` that is not a string", () => {
+      // Pattern code is untyped, so its changes arrive as parsed values.
+
+      const changes = JSON.parse(`[{ "from": 1, "insert": 5 }]`);
+      expect(() => applyTextChanges("ab", changes)).toThrow(
+        new TypeError("a text change's `insert` must be a string"),
       );
     });
   });

@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   DERIVED_COMMITS_BY_SPACE_MAX,
   emptyServingLoopStats,
+  type ServingActionCost,
   type ServingLoopStats,
   SETTLE_SERIES_MAX,
 } from "../../src/executor/stats.ts";
@@ -10,11 +10,28 @@ import {
   closedHostServingLoopStats,
   mergeServingLoopStats,
 } from "../../src/executor/stats-merge.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The counters of a host with nothing counted, with `over` laid over them. */
 const statsWith = (over: Partial<ServingLoopStats>): ServingLoopStats => ({
   ...emptyServingLoopStats(),
   ...over,
+});
+
+/** The cost of `runs` runs of `action` of `space` that took `ms` in all. */
+const actionCost = (
+  space: string,
+  action: string,
+  ms: number,
+  runs = 1,
+): ServingActionCost => ({
+  space,
+  action,
+  runs,
+  inputRuns: 0,
+  totalMs: ms,
+  longestMs: ms,
+  lastMs: ms,
 });
 
 /** A settle-advance row of `space` that advanced to `to`. */
@@ -174,6 +191,37 @@ describe("stats-merge", () => {
       expect(merged.settleAdvances.dropped).toBe(10);
     });
 
+    it("takes the action costs of every host together, one row per action of a space, most expensive first", () => {
+      const merged = mergeServingLoopStats([
+        statsWith({
+          actions: {
+            entries: [actionCost("did:a", "sum", 3)],
+            dropped: 1,
+            droppedMs: 2,
+          },
+        }),
+        statsWith({
+          actions: {
+            entries: [
+              actionCost("did:a", "sum", 4),
+              actionCost("did:b", "sum", 9),
+            ],
+            dropped: 0,
+            droppedMs: 0,
+          },
+        }),
+      ]);
+      expect(
+        merged.actions.entries.map(({ space, totalMs, runs }) => [
+          space,
+          totalMs,
+          runs,
+        ]),
+      ).toEqual([["did:b", 9, 1], ["did:a", 7, 2]]);
+      expect(merged.actions.dropped).toBe(1);
+      expect(merged.actions.droppedMs).toBe(2);
+    });
+
     it("returns counters that share nothing a part's holder writes to", () => {
       const part = statsWith({
         derivedCommitsBySpace: { a: 1 },
@@ -199,7 +247,9 @@ describe("stats-merge", () => {
           dropped: 0,
         },
       });
+      part.actions.entries.push(actionCost("a", "sum", 5));
       const merged = mergeServingLoopStats([part]);
+      part.actions.entries[0].totalMs = 99;
       part.derivedCommitsBySpace.a = 99;
       part.settleAdvances.series[0].to = 99;
       part.settle.series[0].ms = 99;
@@ -208,6 +258,7 @@ describe("stats-merge", () => {
       expect(merged.settleAdvances.series[0].to).toBe(1);
       expect(merged.settle.series[0].ms).toBe(2);
       expect(merged.lease.held).toBe(0);
+      expect(merged.actions.entries[0].totalMs).toBe(5);
     });
   });
 
@@ -256,10 +307,24 @@ describe("stats-merge", () => {
       open.workers.spare = 13;
       open.workers.parked = 14;
       open.workers.heapUsed = 15;
+      open.workers.heapStopped = 16;
 
       expect(closedHostServingLoopStats(open)).toEqual(
         emptyServingLoopStats(),
       );
+    });
+
+    it("keeps the action costs the host counted", () => {
+      const closed = closedHostServingLoopStats(
+        statsWith({
+          actions: {
+            entries: [actionCost("did:a", "sum", 3)],
+            dropped: 0,
+            droppedMs: 0,
+          },
+        }),
+      );
+      expect(closed.actions.entries).toEqual([actionCost("did:a", "sum", 3)]);
     });
 
     it("leaves the counters it was given as they were", () => {

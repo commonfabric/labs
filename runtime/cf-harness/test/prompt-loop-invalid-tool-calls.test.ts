@@ -5,7 +5,6 @@
  * failures the model cannot correct end the run.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -26,6 +25,7 @@ import type {
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
 import { responsesBodyFromChatFixture } from "./support/responses-fixture.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const directPromptSlotBinding: PromptSlotBinding = {
   type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
@@ -242,6 +242,20 @@ describe("prompt-loop invalid tool calls", () => {
           patternRefs: [{ patternId: "pattern-1", note: "x".repeat(501) }],
         },
         field: "patternRefs",
+      },
+      {
+        name: "non-boolean-without-skill-handle",
+        arguments: { goal: "Inspect", withoutSkillHandle: "yes" },
+        field: "withoutSkillHandle",
+      },
+      {
+        name: "skill-handle-and-without-skill-handle",
+        arguments: {
+          goal: "Inspect",
+          skillHandle: "cfh:v:skill",
+          withoutSkillHandle: true,
+        },
+        field: "withoutSkillHandle",
       },
       {
         name: "unknown-profile",

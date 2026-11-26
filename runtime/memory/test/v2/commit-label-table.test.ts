@@ -1,6 +1,5 @@
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   cloneIfNecessary,
@@ -12,6 +11,7 @@ import {
 } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { isPlainObject } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   decodeTrustedMemoryBoundary,
@@ -982,6 +982,90 @@ describe("commit-label-table", () => {
       },
     };
     expect(() => expandClientMessageLabels(oversized)).toThrow("byte limit");
+  });
+
+  describe("envelopes of the wrong shape", () => {
+    it("returns a message that is not an object unchanged from both ACK transforms", () => {
+      for (const message of ["text", 7, null, ["response"]]) {
+        expect(compressServerMessageCommitLabels(message)).toBe(message);
+        expect(expandServerMessageCommitLabels(message)).toBe(message);
+      }
+    });
+
+    it("returns a revision that is not an object unchanged while resolving the revisions beside it", () => {
+      const tabled = {
+        ...ack([]),
+        ok: {
+          ...ack([]).ok,
+          labelTable: [label(4)],
+          revisions: [
+            "opaque",
+            revision({ cfc: { labelMap: { entries: [{ label: 0 }] } } }),
+          ],
+        },
+      };
+
+      const expanded = expandServerMessageCommitLabels(tabled);
+
+      assert(isPlainObject(expanded) && isPlainObject(expanded.ok));
+      const revisions = expanded.ok.revisions as unknown[];
+      expect(revisions[0]).toBe("opaque");
+      expect(revisions[1]).toEqual(
+        revision({ cfc: { labelMap: { entries: [{ label: label(4) }] } } }),
+      );
+    });
+
+    it("throws for an operation list, an operation, a patch, or a patch pointer of the wrong shape", () => {
+      const transact = (
+        operations: unknown,
+        tables: FabricPlainObject = {},
+      ) => ({
+        ...request([]),
+        commit: { ...request([]).commit, ...tables, operations },
+      });
+      const cases: [unknown, RegExp][] = [
+        ["operations", /^Invalid commit operation array$/],
+        [[7], /^Invalid commit operation$/],
+        [
+          [{ op: "patch", id: "of:wire", patches: ["patch"] }],
+          /^Invalid commit patch$/,
+        ],
+        [
+          [{
+            op: "patch",
+            id: "of:wire",
+            patches: [{ op: "replace", path: ["cfc"], value: 0 }],
+          }],
+          /^Invalid patch pointer$/,
+        ],
+      ];
+      for (const [operations, error] of cases) {
+        expect(() => compressClientMessageLabels(transact(operations)))
+          .toThrow(error);
+        expect(() =>
+          expandClientMessageLabels(
+            transact(operations, { labelTable: [label()] }),
+          )
+        ).toThrow(error);
+      }
+    });
+
+    it("returns a patch whose operation carries no value unchanged, whatever its pointer", () => {
+      const source = request([{
+        op: "patch",
+        id: "of:wire",
+        patches: [{ op: "remove", path: "/cfc/labelMap/entries/0" }],
+      }]);
+      const tabled = {
+        ...source,
+        commit: { ...source.commit, labelTable: [label()] },
+      };
+
+      const expanded = expandClientMessageLabels(tabled);
+
+      expect(commitOf(expanded).operations).toBe(source.commit.operations);
+      expect(commitOf(expanded).labelTable).toBeUndefined();
+    });
   });
 });
 

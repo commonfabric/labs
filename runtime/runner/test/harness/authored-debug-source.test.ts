@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -11,6 +10,7 @@ import { noteDerivedCopy } from "../../src/builder/pattern-metadata.ts";
 import { resolvePolicyFacingImplementationIdentity } from "../../src/cfc/implementation-identity.ts";
 import type { Module } from "../../src/builder/types.ts";
 import type { HarnessedFunction } from "../../src/harness/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("authored-debug-source", () => {
   describe("recordAuthoredDebugSource()", () => {

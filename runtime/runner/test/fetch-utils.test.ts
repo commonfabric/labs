@@ -11,9 +11,9 @@
  * real content still changes the hash.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { computeInputHashFromValue } from "../src/builtins/fetch-utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("computeInputHashFromValue", () => {
   it("drops the top-level `result` type-hint field", () => {

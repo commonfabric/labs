@@ -1,15 +1,17 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchemaObj } from "@commonfabric/api";
+import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { containsExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 import { anySchema } from "@commonfabric/data-model-schema/schema-walk";
 import { decomposeSchema, type JSONSchema } from "@commonfabric/runner";
 import type { IfcKey } from "@commonfabric/runner/cfc";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { schemaForSelection } from "../lib/cell-selection.ts";
 import { externalizeSchema } from "../../runner/src/link-utils.ts";
+import { registerSchemaDocument } from "../../runner/src/schema-registry.ts";
 
 /** A value of the shape the runtime reads each `ifc` key as. */
 const SAMPLES = {
@@ -212,6 +214,23 @@ describe("schemaForSelection()", () => {
       const schema: JSONSchema = {
         type: "object",
         properties: { name: { $ref: rootRef } },
+      };
+      expect(schemaForSelection(schema)).toBe(schema);
+    });
+
+    it("returns a schema naming a document that does not fit the reference to it as written", () => {
+      // The document's local ref names a definition it does not have, so it
+      // decomposes and cannot be recomposed.
+      const dangling: JSONSchemaObj = {
+        type: "object",
+        description: "dangling local ref",
+        properties: { broken: { $ref: "#/$defs/MissingMember" } },
+      };
+      const hash = internSchemaAsTaggedHashString(dangling);
+      registerSchemaDocument(hash, dangling);
+      const schema: JSONSchema = {
+        type: "object",
+        properties: { name: { $ref: `cid:${hash}` } },
       };
       expect(schemaForSelection(schema)).toBe(schema);
     });

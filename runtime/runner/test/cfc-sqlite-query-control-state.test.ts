@@ -8,9 +8,9 @@
  * the requesting run's own commit, so there is no transaction in which such a
  * parameter is untainted, and an author cannot know which atoms a given
  * transaction will carry. The runtime-owned control paths carry the
- * transaction's join in their derived component. The builtin refuses a
- * request carrying confidentiality bound for a database in another space
- * before it is staged, and declares the membership of a shared result.
+ * transaction's join in their derived component. A database in another space
+ * answers a labeled request as one in this space does, and the builtin
+ * declares the membership of a shared result.
  *
  * The fixture labels the column a parameter is read OUT of differently from
  * the column the second query projects, so an implementation that widened the
@@ -24,7 +24,6 @@
  * where a writer-fit misfit rejects rather than flags.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
@@ -32,10 +31,13 @@ import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
 import { defer } from "@commonfabric/async/defer";
-
 import {
-  SQLITE_FOREIGN_SPACE_REFUSAL,
-} from "../src/builtins/sqlite-builtins.ts";
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+
 import type { Cell } from "../src/cell.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
@@ -1046,10 +1048,11 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
   });
 
   describe("a database in another space", () => {
-    it("refuses a query whose transaction carries confidentiality", async () => {
-      // The refusal the store's own empty ceiling was carrying by accident:
-      // the parameter would otherwise leave for a space whose replica holders
-      // are not the audience this document's residency names.
+    it("settles a query whose parameter came out of a labeled row", async () => {
+      // A database in another space answers a labeled request as one in this
+      // space does. Its server is an attested runtime applying the same
+      // access rules, and each reader's runtime still applies the rows'
+      // labels to what it shows.
 
       const db = labeledDb();
       await seedMessages(db, elsewhere);
@@ -1095,229 +1098,33 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
 
-      // The first query's parameter is a literal, so its transaction carries
-      // nothing and the request goes: the refusal below is about the label,
-      // not about the space alone.
-      // deno-lint-ignore no-explicit-any -- the builtin's state
-      const keys = result.key("keys") as Cell<any>;
-      const settledKeys = await waitForCellValue<QueryState<KeyRow>>(
-        runtime,
-        keys,
-        (value) => (value?.result ?? []).length === 3,
-      );
-      expect(settledKeys.error).toBeUndefined();
-
       // deno-lint-ignore no-explicit-any -- the builtin's state
       const bodies = result.key("bodies") as Cell<any>;
-      const refused = await waitForCellValue<QueryState<BodyRow>>(
+      const state = await waitForCellValue<QueryState<BodyRow>>(
         runtime,
         bodies,
-        (value) => typeof value?.error === "string",
-      );
-      expect(refused.error).toBe(SQLITE_FOREIGN_SPACE_REFUSAL);
-      expect(refused.pending).toBe(false);
-      expect(refused.result ?? []).toEqual([]);
-      // The refusal is written by the issuing transaction, which carries the
-      // clause it is refusing over. The paths it writes carry that derived
-      // label, which a pattern rendering "this query was refused" inherits.
-      expect(hasClause(derivedAt(bodies, ["error"]), KEY_CLAUSE)).toBe(true);
-      expect(hasClause(derivedAt(bodies, ["pending"]), KEY_CLAUSE)).toBe(true);
-      // No request hash goes with the refusal, so an evaluation whose reads
-      // carry nothing asks again rather than finding a memo hit. A refusal
-      // folded into the ordinary settled shape would be permanent.
-      expect(refused.requestHash).toBeUndefined();
-    });
-
-    it("refuses a request that gained a label without moving its hash", async () => {
-      // The memo decision returns before anything is staged, so a hit sends
-      // nothing — and that is why the gate has to run ahead of it. A request
-      // whose label arrives without changing the statement, the parameters
-      // or the reader matches the hash an UNLABELED request left behind, and
-      // answering it out of those rows is a reading nobody argued for.
-      //
-      // The label arrives on an input the request hash does not cover, which
-      // is what makes the two runs a memo hit rather than a re-issue.
-
-      const db = labeledDb();
-      await seedMessages(db, elsewhere);
-
-      const handleTx = runtime.edit();
-      const handle = runtime.getCell<SqliteDbRef>(
-        elsewhere,
-        "foreign handle for memo hit",
-        undefined,
-        handleTx,
-      );
-      handle.set(db);
-      expect((await handleTx.commit().settled).error).toBeUndefined();
-
-      const setup = runtime.edit();
-      const plain = runtime.getCell<string>(space, "plain note", {
-        type: "string",
-      }, setup);
-      plain.set("nothing to see");
-      const labeled = runtime.getCell<string>(space, "labeled note", {
-        type: "string",
-        ifc: { confidentiality: KEY_CLAUSE },
-        // deno-lint-ignore no-explicit-any -- a schema literal with `ifc`
-      } as any, setup);
-      labeled.set("something to see");
-      expect((await setup.commit().settled).error).toBeUndefined();
-
-      const { commonfabric: cf } = createTrustedBuilder(runtime);
-      const testPattern = cf.pattern<{ db: unknown; note: unknown }>((
-        { db: handleInput, note },
-      ) =>
-        cf.sqliteQuery(
-          {
-            db: handleInput,
-            sql: "SELECT container_id FROM messages WHERE container_id = ?1",
-            params: ["c-alpha"],
-            // An input the builtin READS and the request hash does not
-            // cover, which is the whole of what this case needs: reading it
-            // moves the transaction's label and leaves the hash alone.
-            // `rowSchema` is the one the builtin has; any other would do.
-            rowSchema: note,
-            // deno-lint-ignore no-explicit-any -- the input is untyped
-          } as any,
-        )
-      );
-
-      const tx = runtime.edit();
-      const resultCell = runtime.getCell(
-        space,
-        "foreign-memo-hit",
-        testPattern.resultSchema,
-        tx,
-      );
-      const result = runtime.run(
-        tx,
-        testPattern,
-        // deno-lint-ignore no-explicit-any -- cells stand in for the arguments
-        { db: handle, note: plain as any },
-        resultCell,
-      );
-      runtime.prepareTxForCommit(tx);
-      expect((await tx.commit().settled).error).toBeUndefined();
-
-      // deno-lint-ignore no-explicit-any -- the builtin's state
-      const rows = result as Cell<any>;
-      const first = await waitForCellValue<QueryState<KeyRow>>(
-        runtime,
-        rows,
         (value) => (value?.result ?? []).length === 2,
       );
-      expect(first.error).toBeUndefined();
-
-      const relabel = runtime.edit();
-      // deno-lint-ignore no-explicit-any -- the argument holds a cell
-      result.getArgumentCell()!.withTx(relabel).key("note").set(labeled as any);
-      expect((await relabel.commit().settled).error).toBeUndefined();
-
-      const refused = await waitForCellValue<QueryState<KeyRow>>(
-        runtime,
-        rows,
-        (value) => typeof value?.error === "string",
-      );
-      expect(refused.error).toBe(SQLITE_FOREIGN_SPACE_REFUSAL);
-      expect(refused.requestHash).toBeUndefined();
-      expect(refused.result ?? []).toEqual([]);
-    });
-
-    it("refuses a statically labeled parameter with the flow dial off", async () => {
-      // The gate asks what the request carries, and a value's label does not
-      // depend on whether the runtime propagates a join onto writes. Keying
-      // the derivation on the flow dial rather than on the enforcement dial
-      // hands a labeled parameter to a foreign space's provider as though it
-      // carried nothing — and `off` is the DEFAULT flow mode, so that is the
-      // ordinary case rather than an exotic one.
-
-      const own = runtime;
-      const flowless = new Runtime({
-        apiUrl: new URL(import.meta.url),
-        storageManager,
-        // Enforcement on, flow labels off: a conforming pair, and the one
-        // the mistake was invisible at.
-        cfcEnforcementMode: "enforce-explicit",
-        cfcFlowLabels: "off",
-      });
-      try {
-        const db = labeledDb();
-        await seedMessages(db, elsewhere);
-
-        const handleTx = flowless.edit();
-        const handle = flowless.getCell<SqliteDbRef>(
-          elsewhere,
-          "foreign handle for flowless",
-          undefined,
-          handleTx,
-        );
-        handle.set(db);
-        expect((await handleTx.commit().settled).error).toBeUndefined();
-
-        const paramTx = flowless.edit();
-        const container = flowless.getCell<string>(space, "flowless choice", {
-          type: "string",
-          ifc: { confidentiality: KEY_CLAUSE },
-          // deno-lint-ignore no-explicit-any -- a schema literal with `ifc`
-        } as any, paramTx);
-        container.set("c-alpha");
-        expect((await paramTx.commit().settled).error).toBeUndefined();
-
-        const { commonfabric: cf } = createTrustedBuilder(flowless);
-        const testPattern = cf.pattern<{ db: unknown; container: string }>((
-          { db: handleInput, container: chosen },
-        ) =>
-          cf.sqliteQuery(
-            {
-              db: handleInput,
-              sql: "SELECT container_id FROM messages WHERE container_id = ?1",
-              params: [chosen],
-              // deno-lint-ignore no-explicit-any -- the input is untyped
-            } as any,
-          )
-        );
-
-        const tx = flowless.edit();
-        const resultCell = flowless.getCell(
-          space,
-          "flowless-foreign",
-          testPattern.resultSchema,
-          tx,
-        );
-        const result = flowless.run(
-          tx,
-          testPattern,
-          // deno-lint-ignore no-explicit-any -- cells stand in for arguments
-          { db: handle, container: container as any },
-          resultCell,
-        );
-        flowless.prepareTxForCommit(tx);
-        expect((await tx.commit().settled).error).toBeUndefined();
-
-        const refused = await waitForCellValue<QueryState<KeyRow>>(
-          flowless,
-          // deno-lint-ignore no-explicit-any -- the builtin's state
-          result as Cell<any>,
-          (value) => typeof value?.error === "string",
-        );
-        expect(refused.error).toBe(SQLITE_FOREIGN_SPACE_REFUSAL);
-        expect(refused.result ?? []).toEqual([]);
-      } finally {
-        await flowless.dispose({ closeStorage: false });
-        runtime = own;
-      }
+      expect(state.error).toBeUndefined();
+      expect(state.pending).toBe(false);
+      expect(state.result).toEqual([{ body: "first" }, { body: "second" }]);
+      // The parameter's clause still lands on the request hash, as it does
+      // for a database in this space.
+      expect(hasClause(derivedAt(bodies, ["requestHash"]), KEY_CLAUSE))
+        .toBe(true);
+      // And each row keeps its own column's label: what a reader is shown is
+      // still decided by the rows' labels, not by where the database lives.
+      const row = bodies.key("result").key(0) as Cell<unknown>;
+      const declared = declaredAt(row, ["body"]);
+      expect(hasClause(declared, BODY_CLAUSE)).toBe(true);
+      expect(hasClause(declared, KEY_CLAUSE)).toBe(false);
     });
 
     it("issues again once its own result has carried a label", async () => {
-      // What the refusal must measure is the label THIS request's inputs
-      // carry, not everything the transaction has touched. A cross-space
-      // query's own settled result carries the labels of the columns it
-      // projected, and the next issue reads that result to decide whether
-      // its writeback is stale — so a check over the transaction's whole
-      // consumed set refuses every issue after the first, whatever the
-      // parameters are, and the node is dead with a message about a label
-      // that is not in its request.
+      // A cross-space query's own settled result carries the labels of the
+      // columns it projected, and the next issue reads that result to decide
+      // whether its writeback is stale. At enforce-strict that read must not
+      // turn into a writer-fit refusal of the next issue.
 
       const db = labeledDb();
       await seedMessages(db, elsewhere);

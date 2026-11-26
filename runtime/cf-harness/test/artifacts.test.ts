@@ -1,11 +1,19 @@
 import { checkoutDocsCorpusRoots } from "../src/docs-corpus/corpus.ts";
 import { resolveHarnessSkillsRoot } from "../src/skills/root.ts";
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
 
 import type { CfcSandboxResult } from "@commonfabric/runner/cfc";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
 
 import {
   createFileSystemHarnessArtifactStore,
@@ -173,7 +181,7 @@ const cfcInputLabelContains = (
     labelHasConfidentialityValue(entry.label, value);
 };
 
-Deno.test({
+test({
   name:
     "CfHarnessEngine persists run state and tool output artifacts when artifactRoot is configured",
   permissions: { read: true, write: true },
@@ -357,7 +365,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "CfHarnessEngine persists Loom run manifest artifacts",
   permissions: { read: true, write: true },
   async fn() {
@@ -412,7 +420,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "CfHarnessPromptLoop persists the transcript when artifactRoot is configured",
   permissions: { read: true, write: true },
@@ -798,7 +806,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "CfHarnessPromptLoop persists CFC model-context continuity across run artifacts",
   permissions: { read: true, write: true },
@@ -1043,7 +1051,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "CfHarnessPromptLoop persists subagent refs, child artifacts, and report timeline",
   permissions: { read: true, write: true },
@@ -1316,7 +1324,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "CfHarnessPromptLoop keeps raw child failure fields out of parent delegate output",
   permissions: { read: true, write: true },
@@ -1525,7 +1533,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "CfHarnessEngine persists prompt slot binding in run state artifacts",
   permissions: { read: true, write: true },
   async fn() {
@@ -1561,7 +1569,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "CfHarnessPromptLoop persists denied tool activity in the run report",
   permissions: { read: true, write: true },
   async fn() {
@@ -1762,7 +1770,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "CfHarnessPromptLoop records output mediation denials in persisted tool activity",
   permissions: { read: true, write: true },
@@ -1881,7 +1889,7 @@ Deno.test({
   },
 });
 
-Deno.test("createFileSystemHarnessArtifactStore rejects path-traversal run ids", () => {
+test("createFileSystemHarnessArtifactStore rejects path-traversal run ids", () => {
   assertThrows(
     () =>
       createFileSystemHarnessArtifactStore({
@@ -1893,7 +1901,7 @@ Deno.test("createFileSystemHarnessArtifactStore rejects path-traversal run ids",
   );
 });
 
-Deno.test({
+test({
   name: "readHarnessRunArtifacts confines transcript loading to the run root",
   permissions: { read: true, write: true },
   async fn() {
@@ -1943,7 +1951,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "filesystem artifact store advertises an image-attachment snapshot dir under its run root",
   permissions: { read: true, write: true },
@@ -1964,4 +1972,227 @@ Deno.test({
       await Deno.remove(artifactRoot, { recursive: true });
     }
   },
+});
+
+describe("artifacts", () => {
+  let artifactRoot: string;
+
+  beforeEach(async () => {
+    artifactRoot = await Deno.makeTempDir({ prefix: "cf-harness-artifacts-" });
+  });
+
+  afterEach(async () => {
+    await Deno.remove(artifactRoot, { recursive: true });
+  });
+
+  const namesIn = async (directory: string): Promise<string[]> => {
+    const names: string[] = [];
+    for await (const entry of Deno.readDir(directory)) names.push(entry.name);
+    return names.sort();
+  };
+
+  describe("FileSystemHarnessArtifactStore", () => {
+    describe("instance members", () => {
+      describe("persistRunManifest()", () => {
+        const manifest = {
+          type: "cf-harness.loom-run-manifest" as const,
+          version: 1 as const,
+          source: "loom" as const,
+          wishId: "W-1",
+        };
+
+        it("returns the path of the manifest it wrote, leaving no temporary file behind", async () => {
+          const store = createFileSystemHarnessArtifactStore({
+            artifactRoot,
+            runId: "run-1",
+          });
+
+          const path = await store.persistRunManifest(manifest);
+
+          expect(path).toBe(join(store.runRoot, "run-manifest.json"));
+          expect(JSON.parse(await Deno.readTextFile(path))).toEqual(manifest);
+          expect(await namesIn(store.runRoot)).toEqual(["run-manifest.json"]);
+        });
+
+        it("throws the write failure and leaves no temporary file behind", async () => {
+          // A directory where the manifest goes makes the final rename fail
+          // after the temporary file was written.
+          const store = createFileSystemHarnessArtifactStore({
+            artifactRoot,
+            runId: "run-1",
+          });
+          await Deno.mkdir(join(store.runRoot, "run-manifest.json"), {
+            recursive: true,
+          });
+
+          await expect(store.persistRunManifest(manifest)).rejects.toThrow();
+          expect(await namesIn(store.runRoot)).toEqual(["run-manifest.json"]);
+        });
+      });
+
+      describe("persistEmptyReply()", () => {
+        it("returns the path of a file under the run root holding the artifact", async () => {
+          const store = createFileSystemHarnessArtifactStore({
+            artifactRoot,
+            runId: "run-1",
+          });
+          const artifact = {
+            modelTurn: 3,
+            modelAttemptSequence: 2,
+            diagnostic: {
+              responseBodyBytes: 2,
+              responseBodyExcerpt: "{}",
+              responseBodyTruncated: false,
+              decision: {
+                decoder: "responses" as const,
+                reason: "no-non-whitespace-text-or-tool-calls" as const,
+                contentCharacters: 0,
+                trimmedContentCharacters: 0,
+                toolCallCount: 0,
+              },
+            },
+          };
+
+          const first = await store.persistEmptyReply(artifact);
+          const second = await store.persistEmptyReply(artifact);
+
+          expect(first.startsWith(join(store.runRoot, "model-turn-3-")))
+            .toBe(true);
+          expect(first.endsWith("-empty-reply.json")).toBe(true);
+          expect(second).not.toBe(first);
+          expect(JSON.parse(await Deno.readTextFile(first))).toEqual(artifact);
+        });
+      });
+
+      describe("persistSkillResourceReads()", () => {
+        const readsOf = (...paths: string[]) => ({
+          type: "cf-harness.skill-resource-reads" as const,
+          version: 1 as const,
+          generatedAt: "2026-05-01T17:00:01.000Z",
+          reads: paths.map((path, index) => ({
+            type: "cf-harness.skill-resource-read" as const,
+            outputId: `run-1:read_skill_resource:${index + 1}`,
+            runId: "run-1",
+            skillName: "pattern-dev",
+            path,
+            status: "read" as const,
+            readAt: "2026-05-01T17:00:01.000Z",
+            cfcPromptRole: "context" as const,
+            diagnostics: [],
+          })),
+        });
+
+        it("returns the path of the record it wrote under the run root", async () => {
+          const store = createFileSystemHarnessArtifactStore({
+            artifactRoot,
+            runId: "run-1",
+          });
+          const reads = readsOf("references/guide.md");
+
+          const path = await store.persistSkillResourceReads(reads);
+
+          expect(path).toBe(join(store.runRoot, "skill-resource-reads.json"));
+          expect(JSON.parse(await Deno.readTextFile(path))).toEqual(reads);
+          expect(await namesIn(store.runRoot)).toEqual([
+            "skill-resource-reads.json",
+          ]);
+        });
+
+        it("replaces the earlier record rather than appending to it", async () => {
+          const store = createFileSystemHarnessArtifactStore({
+            artifactRoot,
+            runId: "run-1",
+          });
+          await store.persistSkillResourceReads(readsOf("references/old.md"));
+          const latest = readsOf("references/old.md", "references/new.md");
+
+          const path = await store.persistSkillResourceReads(latest);
+
+          expect(JSON.parse(await Deno.readTextFile(path))).toEqual(latest);
+          expect(JSON.parse(await Deno.readTextFile(path))).not.toEqual(
+            readsOf("references/old.md"),
+          );
+        });
+      });
+
+      describe("writeAcquiredSkillScript()", () => {
+        it("returns the path under the acquired-skills directory it wrote the bytes to", async () => {
+          const store = createFileSystemHarnessArtifactStore({
+            artifactRoot,
+            runId: "run-1",
+          });
+          const bytes = new TextEncoder().encode("echo hi\n");
+
+          const path = await store.writeAcquiredSkillScript(
+            "skill-a",
+            "scripts/run.sh",
+            bytes,
+          );
+
+          expect(path).toBe(
+            join(store.acquiredSkillsDir, "skill-a", "scripts", "run.sh"),
+          );
+          expect(await Deno.readFile(path)).toEqual(bytes);
+        });
+
+        it("throws for a script path escaping the acquired-skills directory and writes nothing", async () => {
+          const store = createFileSystemHarnessArtifactStore({
+            artifactRoot,
+            runId: "run-1",
+          });
+
+          await expect(
+            store.writeAcquiredSkillScript(
+              "skill-a",
+              "../../../escape.sh",
+              new Uint8Array([1]),
+            ),
+          ).rejects.toThrow(
+            "acquired script path escapes the acquired-skills directory: ../../../escape.sh",
+          );
+          expect(await namesIn(artifactRoot)).toEqual([]);
+        });
+      });
+    });
+  });
+
+  describe("readHarnessRunArtifacts()", () => {
+    const writeRunState = async (runRoot: string): Promise<void> => {
+      await Deno.mkdir(runRoot, { recursive: true });
+      await Deno.writeTextFile(
+        join(runRoot, "run-state.json"),
+        JSON.stringify({
+          runId: "run-1",
+          status: "completed",
+          createdAt: "2026-04-17T20:00:00.000Z",
+          updatedAt: "2026-04-17T20:00:01.000Z",
+          cfcEnforcementMode: "observe",
+          policyEvents: [],
+          toolOutputs: [],
+          failureRecords: [],
+        }),
+      );
+    };
+
+    it("returns no transcript for a run whose transcript was never written", async () => {
+      const runRoot = join(artifactRoot, "run-1");
+      await writeRunState(runRoot);
+
+      const artifacts = await readHarnessRunArtifacts(runRoot);
+
+      expect(artifacts.runState.runId).toBe("run-1");
+      expect(artifacts.transcript).toBe(undefined);
+      expect(artifacts.transcriptPath).toBe(undefined);
+    });
+
+    it("throws for a transcript that is present but not JSON", async () => {
+      const runRoot = join(artifactRoot, "run-1");
+      await writeRunState(runRoot);
+      await Deno.writeTextFile(join(runRoot, "transcript.json"), "[{");
+
+      await expect(readHarnessRunArtifacts(runRoot)).rejects.toThrow(
+        SyntaxError,
+      );
+    });
+  });
 });

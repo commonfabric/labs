@@ -22,9 +22,9 @@ export const figmaMapping = {
     },
     "menu.item (command row)": {
       props: {
-        label: { figmaProp: "Label", type: "string" },
-        description: {
-          figmaProp: "Description",
+        Label: { codeProp: "label", type: "string" },
+        Description: {
+          codeProp: "description",
           note: "Shown when showDescription=true in Figma",
         },
         State: {

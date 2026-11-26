@@ -228,7 +228,7 @@ export function decodeCompileWorkerRequest(
   if (!isPlainObject(data) || typeof data.id !== "number") {
     throw new Error("A compile worker received a message with no request id");
   }
-  return { id: data.id, request: decodeRequest(data.request) };
+  return { id: data.id, request: decodeModuleCompileRequest(data.request) };
 }
 
 /**
@@ -368,7 +368,14 @@ function decodeCDFPoint(value: unknown): CDFPoint {
   return { x: numberField(value, "x"), y: numberField(value, "y") };
 }
 
-function decodeRequest(value: unknown): ModuleCompileRequest {
+/**
+ * Decodes a {@link ModuleCompileRequest} that crossed a structured clone.
+ *
+ * @throws Error when `value` is not one.
+ */
+export function decodeModuleCompileRequest(
+  value: unknown,
+): ModuleCompileRequest {
   if (!isPlainObject(value)) {
     throw protocolError("a request that is not a record");
   }

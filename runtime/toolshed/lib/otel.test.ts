@@ -1,4 +1,8 @@
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
+import { ROOT_CONTEXT } from "@opentelemetry/api";
+import { AsyncHooksContextManager } from "@opentelemetry/context-async-hooks";
 import {
   BasicTracerProvider,
   BatchSpanProcessor,
@@ -7,13 +11,16 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { OpenInferenceBatchSpanProcessor } from "@arizeai/openinference-vercel";
 import {
+  chooseContextManager,
   getTracerProvider,
   initOpenTelemetry,
+  otelSettings,
   provider,
   shutdownOpenTelemetry,
 } from "@/lib/otel.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("spans carry both the service attributes and the SDK defaults", () => {
+test("spans carry both the service attributes and the SDK defaults", () => {
   // The provider takes the configured resource as given, so the service
   // attributes and the SDK's own defaults have to be merged before it is handed
   // over. Both halves are read off a span the real provider produced, since a
@@ -38,6 +45,67 @@ Deno.test("spans carry both the service attributes and the SDK defaults", () => 
   );
 });
 
+describe("otel", () => {
+  describe("otelSettings()", () => {
+    it("derives the traces URL from the endpoint, without a doubled slash", () => {
+      expect(
+        otelSettings({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4318/",
+          OTEL_SERVICE_NAME: "toolshed",
+          ENV: "production",
+        }),
+      ).toEqual({
+        tracesUrl: "http://collector:4318/v1/traces",
+        serviceName: "toolshed",
+        environment: "production",
+      });
+    });
+
+    it("falls back for each empty variable", () => {
+      expect(
+        otelSettings({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "",
+          OTEL_SERVICE_NAME: "",
+          ENV: "",
+        }),
+      ).toEqual({
+        tracesUrl: "http://localhost:4318/v1/traces",
+        serviceName: "toolshed-dev",
+        environment: "development",
+      });
+    });
+  });
+
+  describe("chooseContextManager()", () => {
+    it("returns the runtime's own manager when there is one", () => {
+      const builtIn = new AsyncHooksContextManager();
+      expect(
+        chooseContextManager({ telemetry: { contextManager: builtIn } }),
+      ).toBe(builtIn);
+    });
+
+    it("returns an async-hooks manager when the runtime has none", () => {
+      const manager = chooseContextManager({});
+      expect(manager).toBeInstanceOf(AsyncHooksContextManager);
+      expect(manager.active()).toBe(ROOT_CONTEXT);
+    });
+  });
+
+  describe("initOpenTelemetry()", () => {
+    it("logs that telemetry is disabled and registers nothing when not enabled", () => {
+      using log = stub(console, "log");
+      const before = getTracerProvider();
+
+      initOpenTelemetry(false);
+
+      expect(log.calls.map((call) => call.args)).toEqual([[
+        "OpenTelemetry is disabled via OTEL_ENABLED env var",
+      ]]);
+      expect(getTracerProvider()).toBe(before);
+    });
+  });
+});
+
 //
 // Which copy of the tracer SDK is in use
 //
@@ -50,7 +118,7 @@ Deno.test("spans carry both the service attributes and the SDK defaults", () => 
 // the answer.
 //
 
-Deno.test("the OpenInference processor extends the tracer SDK in use", () => {
+test("the OpenInference processor extends the tracer SDK in use", () => {
   assert(
     OpenInferenceBatchSpanProcessor.prototype instanceof BatchSpanProcessor,
     "OpenInferenceBatchSpanProcessor resolved a different copy of " +
@@ -58,7 +126,7 @@ Deno.test("the OpenInference processor extends the tracer SDK in use", () => {
   );
 });
 
-Deno.test("spans pass through the OpenInference processor to the exporter", async () => {
+test("spans pass through the OpenInference processor to the exporter", async () => {
   const exporter = new InMemorySpanExporter();
   const spanProcessor = new OpenInferenceBatchSpanProcessor({
     exporter,
@@ -87,7 +155,7 @@ Deno.test("spans pass through the OpenInference processor to the exporter", asyn
 // has run and after.
 //
 
-Deno.test("importing the module registers an AI SDK telemetry integration", () => {
+test("importing the module registers an AI SDK telemetry integration", () => {
   // The `ai` package collects no spans until a telemetry integration is
   // registered, and it reports nothing when none is: the LLM spans simply stop
   // being produced. Importing this module is what registers ours.
@@ -98,20 +166,32 @@ Deno.test("importing the module registers an AI SDK telemetry integration", () =
   );
 });
 
-Deno.test("shutdownOpenTelemetry is a no-op before init", async () => {
+test("shutdownOpenTelemetry is a no-op before init", async () => {
   assertEquals(getTracerProvider(), undefined);
   await shutdownOpenTelemetry();
   assertEquals(getTracerProvider(), undefined);
 });
 
-Deno.test(
+test(
   "registers a provider when enabled, then flushes and tears it down on shutdown",
   // The batch processor keeps a flush timer until shutdown; we tear it down
   // below via shutdownOpenTelemetry(), so disable the leak sanitizer here.
   { sanitizeOps: false, sanitizeResources: false },
   async () => {
     initOpenTelemetry(true);
-    assert(getTracerProvider() !== undefined, "provider should be registered");
+    const registered = getTracerProvider();
+    assert(registered !== undefined, "provider should be registered");
+
+    // A second initialization is a logged no-op. Registration happens at
+    // most once per module instance, which is why this case holds both.
+    {
+      using log = stub(console, "log");
+      initOpenTelemetry(true);
+      assertEquals(log.calls.map((call) => call.args), [[
+        "OpenTelemetry already initialized, skipping",
+      ]]);
+    }
+    assertEquals(getTracerProvider(), registered);
 
     // No span was emitted, so forceFlush makes no network call to the collector.
     await shutdownOpenTelemetry();

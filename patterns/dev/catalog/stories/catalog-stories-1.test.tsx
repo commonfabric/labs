@@ -11,12 +11,19 @@
  * a chain of every story in the file. The assertion reads the name and the
  * rendered example. It leaves `controls` alone: that value is a composed
  * fragment of control components, which does not resolve to a plain non-null
- * inside an assertion, and instantiation has already run its JSX.
+ * inside an assertion, and instantiation has already run its JSX. Where a
+ * story derives text or style from its state, the assertion reads that too,
+ * and the cf-button story's click counter is clicked.
  *
  * The other half of the stories is covered by catalog-stories-2.test.tsx;
- * cf-calendar and cf-submit-input have test files of their own.
+ * cf-calendar and cf-submit-input have test files of their own instead, and
+ * cf-chat and cf-toast have test files of their own as well.
  */
-import { assert, NAME, pattern, TESTS, UI } from "commonfabric";
+import { action, assert, NAME, pattern, TESTS, UI } from "commonfabric";
+import {
+  clickButton,
+  hasText,
+} from "../../../tools/test-support/vnode-helpers.ts";
 
 import AlertStory from "./cf-alert-story.tsx";
 import AutocompleteStory from "./cf-autocomplete-story.tsx";
@@ -85,8 +92,10 @@ export default pattern(() => {
   const pickerStory = PickerStory({});
   const profileBadgeStory = ProfileBadgeStory({});
 
+  // The icon shows by default, ahead of the title and description.
   const assert_cf_alert_story = assert(() =>
-    alertStory[NAME] === "cf-alert Story" && alertStory[UI] != null
+    alertStory[NAME] === "cf-alert Story" &&
+    hasText(alertStory[UI], "iAlert titleThis is alert description text.")
   );
   const assert_cf_autocomplete_story = assert(() =>
     autocompleteStory[NAME] === "cf-autocomplete Story" &&
@@ -99,7 +108,15 @@ export default pattern(() => {
     badgeStory[NAME] === "cf-badge Story" && badgeStory[UI] != null
   );
   const assert_cf_button_story = assert(() =>
-    buttonStory[NAME] === "cf-button Story" && buttonStory[UI] != null
+    buttonStory[NAME] === "cf-button Story" &&
+    hasText(buttonStory[UI], "Clicked 0 times")
+  );
+  const action_click_story_button = action(() =>
+    clickButton(buttonStory[UI], "Click me")
+  );
+  const assert_cf_button_story_counts_clicks = assert(() =>
+    hasText(buttonStory[UI], "Clicked 1 times") &&
+    !hasText(buttonStory[UI], "Clicked 0 times")
   );
   const assert_cf_card_story = assert(() =>
     cardStory[NAME] === "cf-card Story" && cardStory[UI] != null
@@ -184,7 +201,8 @@ export default pattern(() => {
     modalStory[NAME] === "cf-modal Story" && modalStory[UI] != null
   );
   const assert_cf_picker_story = assert(() =>
-    pickerStory[NAME] === "cf-picker Story" && pickerStory[UI] != null
+    pickerStory[NAME] === "cf-picker Story" &&
+    hasText(pickerStory[UI], "Selected: Sunrise (index 0)")
   );
   const assert_cf_profile_badge_story = assert(() =>
     profileBadgeStory[NAME] === "cf-profile-badge Story" &&
@@ -225,6 +243,9 @@ export default pattern(() => {
       { assertion: assert_cf_modal_story },
       { assertion: assert_cf_picker_story },
       { assertion: assert_cf_profile_badge_story },
+
+      { action: action_click_story_button },
+      { assertion: assert_cf_button_story_counts_clicks },
     ],
   };
 });

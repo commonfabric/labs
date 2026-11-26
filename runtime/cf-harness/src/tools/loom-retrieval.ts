@@ -751,15 +751,3 @@ export const loomProfileTool: HarnessToolDefinition<
   },
   invoke: (context, input) => invoke(context, "profile", input),
 };
-
-/** The eight retrieval tools, in registration order. */
-export const LOOM_RETRIEVAL_TOOLS = [
-  loomSearchTool,
-  loomPageDiscoverTool,
-  loomPageInspectTool,
-  loomPageReadTool,
-  loomPeopleTool,
-  loomCalendarListTool,
-  loomContextTool,
-  loomProfileTool,
-] as const;

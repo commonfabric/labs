@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   assertOpenAIReasoningEffortSupported,
   supportedOpenAIReasoningEfforts,
 } from "../../src/model/openai-reasoning.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("openai-reasoning", () => {
   it("retains `none` for GPT-5.6 models", () => {

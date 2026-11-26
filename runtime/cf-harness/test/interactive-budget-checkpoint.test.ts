@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { join, toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
 import {
   annotateHarnessUserResultOmissions,
@@ -12,6 +11,7 @@ import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.t
 import { faultingToolLoop } from "./support/chat-fault-fixture.ts";
 import { makeResult } from "./support/session-store-fixtures.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("Interactive budget checkpoints", () => {
   for (const completed of [1, 2]) {

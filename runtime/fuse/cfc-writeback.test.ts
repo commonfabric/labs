@@ -5,6 +5,7 @@ import {
   assertThrows,
 } from "@std/assert";
 import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
+import { test } from "@commonfabric/test-support/test";
 
 import { FsTree } from "./tree.ts";
 import {
@@ -110,7 +111,7 @@ function prepareJson(
   });
 }
 
-Deno.test("CFC mode resolution and annotation defaults match runner modes", () => {
+test("CFC mode resolution and annotation defaults match runner modes", () => {
   for (const mode of CFC_ENFORCEMENT_MODES) {
     assertEquals(resolveCfcMode({ cliMode: mode }), mode);
     assertEquals(resolveCfcMode({ envMode: mode }), mode);
@@ -156,7 +157,7 @@ Deno.test("CFC mode resolution and annotation defaults match runner modes", () =
   );
 });
 
-Deno.test("an off-ladder CFC mode is reported rather than coerced", () => {
+test("an off-ladder CFC mode is reported rather than coerced", () => {
   // A misspelled enforcing mode is refused, not resolved onto the weakest
   // rung.
   for (
@@ -181,7 +182,7 @@ Deno.test("an off-ladder CFC mode is reported rather than coerced", () => {
   );
 });
 
-Deno.test("safe writeback reconciliation records diagnostics without throwing", () => {
+test("safe writeback reconciliation records diagnostics without throwing", () => {
   const diagnostics: string[] = [];
   const ok = safeReconcileCfcWritebacks({
     context: "unit test",
@@ -199,7 +200,7 @@ Deno.test("safe writeback reconciliation records diagnostics without throwing", 
   ]);
 });
 
-Deno.test("safe writeback reconciliation preserves normal diagnostics", () => {
+test("safe writeback reconciliation preserves normal diagnostics", () => {
   const diagnostics: string[] = [];
   const ok = safeReconcileCfcWritebacks({
     context: "unit test",
@@ -220,7 +221,7 @@ Deno.test("safe writeback reconciliation preserves normal diagnostics", () => {
   assertEquals(diagnostics, ["existing diagnostic"]);
 });
 
-Deno.test("FUSE setattr flag constants and metadata field mapping match low-level ABI", () => {
+test("FUSE setattr flag constants and metadata field mapping match low-level ABI", () => {
   assertEquals(FUSE_SET_ATTR_MODE, 1 << 0);
   assertEquals(FUSE_SET_ATTR_UID, 1 << 1);
   assertEquals(FUSE_SET_ATTR_GID, 1 << 2);
@@ -256,7 +257,7 @@ Deno.test("FUSE setattr flag constants and metadata field mapping match low-leve
   );
 });
 
-Deno.test("writeback prepare parsing accepts namespace operations only by exact name", () => {
+test("writeback prepare parsing accepts namespace operations only by exact name", () => {
   const { parentIno, ref } = makeAnnotatedTree();
   const store = new CfcWritebackStore();
 
@@ -294,7 +295,7 @@ Deno.test("writeback prepare parsing accepts namespace operations only by exact 
   );
 });
 
-Deno.test("writeback prepare parsing accepts metadata operation only by exact name", () => {
+test("writeback prepare parsing accepts metadata operation only by exact name", () => {
   const { fileIno, ref } = makeAnnotatedTree();
   const store = new CfcWritebackStore();
 
@@ -320,7 +321,7 @@ Deno.test("writeback prepare parsing accepts metadata operation only by exact na
   );
 });
 
-Deno.test("observe mode logs and allows missing metadata prepare", () => {
+test("observe mode logs and allows missing metadata prepare", () => {
   const { tree, fileIno } = makeAnnotatedTree();
   const diagnostics: string[] = [];
 
@@ -339,7 +340,7 @@ Deno.test("observe mode logs and allows missing metadata prepare", () => {
   );
 });
 
-Deno.test("enforce-explicit requires metadata prepare for annotated nodes only", () => {
+test("enforce-explicit requires metadata prepare for annotated nodes only", () => {
   const { tree, fileIno } = makeAnnotatedTree();
 
   assertEquals(
@@ -362,7 +363,7 @@ Deno.test("enforce-explicit requires metadata prepare for annotated nodes only",
   );
 });
 
-Deno.test("enforce-strict rejects missing annotation stale annotation missing prepare and stale metadata prepare", () => {
+test("enforce-strict rejects missing annotation stale annotation missing prepare and stale metadata prepare", () => {
   const { tree, fileIno, ref } = makeAnnotatedTree();
   const annotation = tree.getCfcAnnotation(fileIno);
   assertExists(annotation);
@@ -414,7 +415,7 @@ Deno.test("enforce-strict rejects missing annotation stale annotation missing pr
   );
 });
 
-Deno.test("metadata prepare must cover requested metadata fields", () => {
+test("metadata prepare must cover requested metadata fields", () => {
   const { tree, fileIno, ref } = makeAnnotatedTree();
   const annotation = tree.getCfcAnnotation(fileIno);
   assertExists(annotation);
@@ -451,7 +452,7 @@ Deno.test("metadata prepare must cover requested metadata fields", () => {
   );
 });
 
-Deno.test("prepared metadata mutation preserves node data annotations and fail-closes unspecified metadata labels", () => {
+test("prepared metadata mutation preserves node data annotations and fail-closes unspecified metadata labels", () => {
   const { tree, fileIno, ref } = makeAnnotatedTree();
   const before = tree.getCfcAnnotation(fileIno);
   assertExists(before);
@@ -484,7 +485,7 @@ Deno.test("prepared metadata mutation preserves node data annotations and fail-c
   assertStringIncludes(annotation.incomplete?.reason ?? "", "prepared");
 });
 
-Deno.test("mixed size and metadata setattr requires truncate and metadata prepare", () => {
+test("mixed size and metadata setattr requires truncate and metadata prepare", () => {
   const { tree, fileIno, ref } = makeAnnotatedTree();
   const annotation = tree.getCfcAnnotation(fileIno);
   assertExists(annotation);
@@ -532,7 +533,7 @@ Deno.test("mixed size and metadata setattr requires truncate and metadata prepar
   );
 });
 
-Deno.test("symlink writeback authorization binds target name generation and identity", () => {
+test("symlink writeback authorization binds target name generation and identity", () => {
   const { tree, parentIno } = makeAnnotatedTree();
   const parentAnnotation = tree.getCfcAnnotation(parentIno);
   assertExists(parentAnnotation);
@@ -599,7 +600,7 @@ Deno.test("symlink writeback authorization binds target name generation and iden
   );
 });
 
-Deno.test("observe mode logs and allows missing symlink prepare", () => {
+test("observe mode logs and allows missing symlink prepare", () => {
   const { tree, parentIno } = makeAnnotatedTree();
   const diagnostics: string[] = [];
 
@@ -619,7 +620,7 @@ Deno.test("observe mode logs and allows missing symlink prepare", () => {
   );
 });
 
-Deno.test("enforce-explicit requires symlink prepare only for annotated parents", () => {
+test("enforce-explicit requires symlink prepare only for annotated parents", () => {
   const { tree, parentIno } = makeAnnotatedTree();
 
   assertEquals(
@@ -644,7 +645,7 @@ Deno.test("enforce-explicit requires symlink prepare only for annotated parents"
   );
 });
 
-Deno.test("enforce-strict rejects missing malformed and stale symlink prepare", () => {
+test("enforce-strict rejects missing malformed and stale symlink prepare", () => {
   const { tree, parentIno } = makeAnnotatedTree();
   const parentAnnotation = tree.getCfcAnnotation(parentIno);
   assertExists(parentAnnotation);
@@ -701,7 +702,7 @@ Deno.test("enforce-strict rejects missing malformed and stale symlink prepare", 
   );
 });
 
-Deno.test("prepared symlink annotation is conservative and incomplete", () => {
+test("prepared symlink annotation is conservative and incomplete", () => {
   const { tree, parentIno } = makeAnnotatedTree();
   const parentAnnotation = tree.getCfcAnnotation(parentIno);
   assertExists(parentAnnotation);
@@ -749,7 +750,7 @@ Deno.test("prepared symlink annotation is conservative and incomplete", () => {
   );
 });
 
-Deno.test("observe mode logs and allows missing prepared writeback metadata", () => {
+test("observe mode logs and allows missing prepared writeback metadata", () => {
   const { tree, fileIno } = makeAnnotatedTree();
   const diagnostics: string[] = [];
 
@@ -769,7 +770,7 @@ Deno.test("observe mode logs and allows missing prepared writeback metadata", ()
   );
 });
 
-Deno.test("enforce-explicit blocks annotated writes but allows unannotated paths", () => {
+test("enforce-explicit blocks annotated writes but allows unannotated paths", () => {
   const { tree, fileIno } = makeAnnotatedTree();
 
   assertEquals(
@@ -792,7 +793,7 @@ Deno.test("enforce-explicit blocks annotated writes but allows unannotated paths
   );
 });
 
-Deno.test("enforce-strict blocks missing, malformed, and stale writeback state", () => {
+test("enforce-strict blocks missing, malformed, and stale writeback state", () => {
   const { tree, fileIno, ref } = makeAnnotatedTree();
   const annotation = tree.getCfcAnnotation(fileIno);
 
@@ -839,7 +840,7 @@ Deno.test("enforce-strict blocks missing, malformed, and stale writeback state",
   );
 });
 
-Deno.test("prepared existing-file write applies conservative labels and can remain after failure", () => {
+test("prepared existing-file write applies conservative labels and can remain after failure", () => {
   const { tree, fileIno, ref } = makeAnnotatedTree();
   const store = new CfcWritebackStore();
   const prepared = store.setPreparedXattr(
@@ -870,7 +871,7 @@ Deno.test("prepared existing-file write applies conservative labels and can rema
   assertStringIncludes(tree.getCfcAnnotation(fileIno)!.generation, "prepared:");
 });
 
-Deno.test("parent-prepared create and mkdir gate occupancy-sensitive paths", () => {
+test("parent-prepared create and mkdir gate occupancy-sensitive paths", () => {
   const { tree, parentIno } = makeAnnotatedTree();
   const parentAnnotation = tree.getCfcAnnotation(parentIno);
   assertExists(parentAnnotation);
@@ -938,7 +939,7 @@ Deno.test("parent-prepared create and mkdir gate occupancy-sensitive paths", () 
   );
 });
 
-Deno.test("observe mode logs and allows missing namespace mutation prepare", () => {
+test("observe mode logs and allows missing namespace mutation prepare", () => {
   const { tree, parentIno } = makeAnnotatedTree();
   const diagnostics: string[] = [];
 
@@ -971,7 +972,7 @@ Deno.test("observe mode logs and allows missing namespace mutation prepare", () 
   );
 });
 
-Deno.test("enforce-explicit requires namespace prepare only for annotated parents", () => {
+test("enforce-explicit requires namespace prepare only for annotated parents", () => {
   const { tree, parentIno } = makeAnnotatedTree();
 
   assertEquals(
@@ -996,7 +997,7 @@ Deno.test("enforce-explicit requires namespace prepare only for annotated parent
   );
 });
 
-Deno.test("enforce-strict rejects missing malformed and stale namespace prepare", () => {
+test("enforce-strict rejects missing malformed and stale namespace prepare", () => {
   const { tree, parentIno } = makeAnnotatedTree();
   const parentAnnotation = tree.getCfcAnnotation(parentIno);
   assertExists(parentAnnotation);
@@ -1061,7 +1062,7 @@ Deno.test("enforce-strict rejects missing malformed and stale namespace prepare"
   );
 });
 
-Deno.test("namespace prepare gates before occupancy-sensitive lookup", () => {
+test("namespace prepare gates before occupancy-sensitive lookup", () => {
   const { tree, parentIno } = makeAnnotatedTree();
   const parentAnnotation = tree.getCfcAnnotation(parentIno);
   assertExists(parentAnnotation);
@@ -1079,7 +1080,7 @@ Deno.test("namespace prepare gates before occupancy-sensitive lookup", () => {
   assertStringIncludes(result.reason, "prepared CFC writeback metadata");
 });
 
-Deno.test("rename prepare validation binds source and destination parent generations and names", () => {
+test("rename prepare validation binds source and destination parent generations and names", () => {
   const { tree, parentIno } = makeAnnotatedTree();
   const destinationParentIno = tree.addDir(tree.rootIno, "other", "object");
   const parentAnnotation = tree.getCfcAnnotation(parentIno);
@@ -1186,7 +1187,7 @@ Deno.test("rename prepare validation binds source and destination parent generat
   );
 });
 
-Deno.test("same-parent rename can use one prepare record covering both names", () => {
+test("same-parent rename can use one prepare record covering both names", () => {
   const { tree, parentIno } = makeAnnotatedTree();
   const parentAnnotation = tree.getCfcAnnotation(parentIno);
   assertExists(parentAnnotation);
@@ -1228,7 +1229,7 @@ Deno.test("same-parent rename can use one prepare record covering both names", (
   );
 });
 
-Deno.test("writeback xattrs accept trusted names and compat transport names", () => {
+test("writeback xattrs accept trusted names and compat transport names", () => {
   assertEquals(
     normalizeCfcWritebackXattrName(CFC_COMPAT_WRITEBACK_PREPARE_XATTR),
     CFC_WRITEBACK_PREPARE_XATTR,
@@ -1303,7 +1304,7 @@ Deno.test("writeback xattrs accept trusted names and compat transport names", ()
   assertEquals(store.getPrepared(parentIno, "create", "fresh"), undefined);
 });
 
-Deno.test("writeback recovery store persists crash-point states", async () => {
+test("writeback recovery store persists crash-point states", async () => {
   const path = await Deno.makeTempFile();
   try {
     const { fileIno, ref } = makeAnnotatedTree();
@@ -1348,7 +1349,7 @@ Deno.test("writeback recovery store persists crash-point states", async () => {
   }
 });
 
-Deno.test("writeback recovery records malformed and unsupported prepare metadata", () => {
+test("writeback recovery records malformed and unsupported prepare metadata", () => {
   const { fileIno } = makeAnnotatedTree();
   const store = new CfcWritebackStore();
 
@@ -1376,7 +1377,7 @@ Deno.test("writeback recovery records malformed and unsupported prepare metadata
   );
 });
 
-Deno.test("writeback reconciliation reapplies prepared labels after inode rebuild", async () => {
+test("writeback reconciliation reapplies prepared labels after inode rebuild", async () => {
   const path = await Deno.makeTempFile();
   try {
     const { fileIno, ref } = makeAnnotatedTree();
@@ -1410,7 +1411,7 @@ Deno.test("writeback reconciliation reapplies prepared labels after inode rebuil
   }
 });
 
-Deno.test("writeback reconciliation finalizes exact annotations when ready for recomputation", () => {
+test("writeback reconciliation finalizes exact annotations when ready for recomputation", () => {
   const { tree, fileIno, ref } = makeAnnotatedTree();
   const store = new CfcWritebackStore();
   assertEquals(
@@ -1438,7 +1439,7 @@ Deno.test("writeback reconciliation finalizes exact annotations when ready for r
   assertEquals(tree.getCfcAnnotation(fileIno)!.generation, "generation-2");
 });
 
-Deno.test("writeback reconciliation cleans finalize-before-cleanup records after exact rebuild", () => {
+test("writeback reconciliation cleans finalize-before-cleanup records after exact rebuild", () => {
   const { tree, fileIno, ref } = makeAnnotatedTree();
   const store = new CfcWritebackStore();
   assertEquals(
@@ -1468,7 +1469,7 @@ Deno.test("writeback reconciliation cleans finalize-before-cleanup records after
   assertEquals(tree.getCfcAnnotation(fileIno)!.generation, "generation-2");
 });
 
-Deno.test("writeback reconciliation marks stale generations without lowering labels", () => {
+test("writeback reconciliation marks stale generations without lowering labels", () => {
   const { tree, fileIno, ref } = makeAnnotatedTree();
   const store = new CfcWritebackStore();
   assertEquals(

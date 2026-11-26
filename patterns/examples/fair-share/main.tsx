@@ -30,10 +30,12 @@ import {
   pattern,
   type PerUser,
   UI,
+  type VNode,
   wish,
   Writable,
 } from "commonfabric";
 import {
+  type PictureBlob,
   type ProfileFace,
   profileFace,
   type ProfileFaceFields,
@@ -44,8 +46,10 @@ import {
 interface Person {
   name: string;
   // Optional picture snapshot, sourced from the person's shared profile when
-  // they "join with your profile". Display-only — `name` stays the natural
-  // key, so the money/balance logic is unaffected.
+  // they "join with your profile": a blob in `pictureBlob`, or bytes in
+  // `picture`, never both. Display-only — `name` stays the natural key, so the
+  // money/balance logic is unaffected.
+  pictureBlob?: PictureBlob;
   picture?: FabricBytes;
   // Avatar text (an image URL, `data:` URL or glyph), copied instead when the
   // person's profile has no picture, and shown when there is no picture.
@@ -62,6 +66,7 @@ interface Expense {
 
 interface Balance {
   name: string;
+  pictureBlob?: PictureBlob;
   picture?: FabricBytes;
   avatar?: string;
   paid: number;
@@ -79,6 +84,17 @@ interface State {
   people: Writable<Person[] | Default<[]>>;
   expenses: Writable<Expense[] | Default<[]>>;
   myName: PerUser<string | Default<"">>;
+}
+
+export interface Output {
+  [NAME]: "Fair Share";
+  [UI]: VNode;
+  people: Writable<Person[] | Default<[]>>;
+  expenses: Writable<Expense[] | Default<[]>>;
+  myName: PerUser<string | Default<"">>;
+  balances: Balance[];
+  settlements: Settlement[];
+  total: number;
 }
 
 // ============ HELPERS ============
@@ -150,16 +166,20 @@ export const joinWithProfile = handler<
   const look = face ?? {};
   const cur = people.get();
   const idx = cur.findIndex((p) => p.name === n);
+  const hasPicture = idx >= 0 &&
+    (cur[idx].pictureBlob !== undefined || cur[idx].picture !== undefined);
   if (idx < 0) {
     people.push({ name: n, ...look });
-  } else if (look.picture && !cur[idx].picture) {
+  } else if (look.pictureBlob && !hasPicture) {
     // Backfill the picture snapshot if this name was added by hand earlier.
     // Write through the element's cell — replacing the array slot with a
     // fresh object literal would re-mint the person's entity identity and
     // orphan previously-held references (selection cells, expense rows read
     // earlier). See patterns/product/primitives/editable-list.tsx.
+    people.key(idx).key("pictureBlob").set(look.pictureBlob);
+  } else if (look.picture && !hasPicture) {
     people.key(idx).key("picture").set(look.picture);
-  } else if (look.avatar && !cur[idx].picture && !cur[idx].avatar) {
+  } else if (look.avatar && !hasPicture && !cur[idx].avatar) {
     people.key(idx).key("avatar").set(look.avatar);
   }
   myName.set(n);
@@ -167,7 +187,7 @@ export const joinWithProfile = handler<
 
 // ============ PATTERN ============
 
-export default pattern<State>(({ people, expenses, myName }) => {
+export default pattern<State, Output>(({ people, expenses, myName }) => {
   // --- Per-session form drafts (local to each viewer) ---
   const personDraft = Writable.perSession.of<string>("");
   const descDraft = Writable.perSession.of<string>("");
@@ -232,6 +252,7 @@ export default pattern<State>(({ people, expenses, myName }) => {
       const share = (shareCents.get(p.name) ?? 0) / 100;
       return {
         name: p.name,
+        ...(p.pictureBlob !== undefined && { pictureBlob: p.pictureBlob }),
         ...(p.picture !== undefined && { picture: p.picture }),
         avatar: p.avatar ?? "",
         paid,
@@ -339,6 +360,7 @@ export default pattern<State>(({ people, expenses, myName }) => {
               {people.map((person) => (
                 <cf-hstack gap="1" align="center">
                   <cf-avatar
+                    blob={person.pictureBlob}
                     bytes={person.picture}
                     src={person.avatar}
                     name={person.name}
@@ -362,9 +384,13 @@ export default pattern<State>(({ people, expenses, myName }) => {
                       // (not `{ ...e }` clones) and split changes are written
                       // through the element's cell — fresh literals would
                       // re-mint every kept expense's entity identity and
-                      // orphan previously-held references.
+                      // orphan previously-held references. The splits are
+                      // written once the kept list is in place: written
+                      // first, an expense held inline in the list would have
+                      // its old split restored by that list.
                       const allExpenses = expenses.get();
                       const cleaned: Expense[] = [];
+                      const splits: { at: number; sharedBy: string[] }[] = [];
                       for (let i = 0; i < allExpenses.length; i++) {
                         const e = allExpenses[i];
                         if (e.paidBy === name) continue;
@@ -379,12 +405,18 @@ export default pattern<State>(({ people, expenses, myName }) => {
                         // An explicit split emptied by this removal is dropped.
                         if (shared.length === 0) continue;
                         if (shared.length !== had.length) {
-                          expenses.key(i).key("sharedBy").set(shared);
+                          splits.push({
+                            at: cleaned.length,
+                            sharedBy: shared,
+                          });
                         }
                         cleaned.push(e);
                       }
                       people.set(cur.toSpliced(idx, 1));
                       expenses.set(cleaned);
+                      for (const { at, sharedBy } of splits) {
+                        expenses.key(at).key("sharedBy").set(sharedBy);
+                      }
                     }}
                   />
                 </cf-hstack>
@@ -539,7 +571,9 @@ export default pattern<State>(({ people, expenses, myName }) => {
                   </span>
                   <cf-text variant="caption" tone="muted">
                     {computed(() => {
-                      const n = expense.sharedBy?.length || 0;
+                      // An empty split is shared by everyone in the ledger.
+                      const n = expense.sharedBy?.length ||
+                        people.get().length;
                       return `${expense.paidBy} paid · split ${n} way${
                         n === 1 ? "" : "s"
                       } · ${expense.date}`;
@@ -591,6 +625,7 @@ export default pattern<State>(({ people, expenses, myName }) => {
                 >
                   <cf-hstack gap="2" align="center">
                     <cf-avatar
+                      blob={b.pictureBlob}
                       bytes={b.picture}
                       src={b.avatar}
                       name={b.name}

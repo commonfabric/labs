@@ -4,9 +4,10 @@
 // references, ATTACH/DETACH/PRAGMA, multiple statements, and references to core
 // engine table names.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
+
+import { Database } from "@db/sqlite";
 
 import {
   assertReadOnly,
@@ -16,6 +17,7 @@ import {
   GuardError,
 } from "../v2/sqlite/guard.ts";
 import { open } from "../v2/engine.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("CORE_TABLE_NAMES vs the engine schema", () => {
   // S4: the guard's core-table denylist is hand-maintained, but unqualified
@@ -84,6 +86,58 @@ describe("classifyStatement", () => {
       false,
     );
   });
+
+  describe("comments, string literals, and quoted identifiers", () => {
+    it("returns no finding for a `;` or core table name inside a line comment", () => {
+      expect(classifyStatement("SELECT 1 -- ; DELETE FROM commit")).toEqual({
+        kind: "select",
+        multiple: false,
+        qualified: false,
+        forbidden: false,
+        coreRef: false,
+      });
+    });
+
+    it("returns `multiple` for a `;` on the line after a line comment", () => {
+      expect(classifyStatement("SELECT 1 -- note\n; SELECT 2").multiple)
+        .toBe(true);
+    });
+
+    it("returns no finding for a `;` or core table name inside a literal with an `''` escape", () => {
+      const c = classifyStatement("SELECT 'it''s; commit' AS x");
+      expect(c.multiple).toBe(false);
+      expect(c.coreRef).toBe(false);
+      expect(classifyStatement("SELECT 'it''s' AS x; SELECT 2").multiple)
+        .toBe(true);
+    });
+
+    it("returns no finding for text after an unterminated string literal, which SQLite refuses to parse", () => {
+      // The guard reads the rest of the statement as the literal. SQLite
+      // reports the literal as unterminated and runs nothing.
+
+      const sql = "SELECT 'open; DELETE FROM commit";
+      const c = classifyStatement(sql);
+      expect(c.multiple).toBe(false);
+      expect(c.coreRef).toBe(false);
+      const db = new Database(":memory:");
+      try {
+        expect(() => db.prepare(sql)).toThrow("unrecognized token");
+      } finally {
+        db.close();
+      }
+    });
+
+    it("returns no core reference for a quoted identifier whose doubled quote joins a core table name", () => {
+      // `"my""commit"` is the one identifier `my"commit`, not `my` and
+      // `commit`.
+      expect(classifyStatement('SELECT "my""commit" FROM messages').coreRef)
+        .toBe(false);
+      expect(classifyStatement("SELECT `my``commit` FROM messages").coreRef)
+        .toBe(false);
+      expect(classifyStatement('SELECT "my" "commit" FROM messages').coreRef)
+        .toBe(true);
+    });
+  });
 });
 
 describe("assertReadOnly", () => {
@@ -139,6 +193,23 @@ describe("assertReadOnly", () => {
     expect(() => assertReadOnly("SELECT * FROM main.x")).toThrow(GuardError);
     expect(() => assertReadOnly("SELECT * FROM commit")).toThrow(GuardError);
     expect(() => assertReadOnly("SELECT * FROM revision")).toThrow(GuardError);
+  });
+
+  it("throws an error naming the check a `SELECT` fails", () => {
+    expect(() => assertReadOnly("SELECT 1; SELECT 2")).toThrow(
+      "SQLite statement rejected: multiple statements are not allowed",
+    );
+    expect(() => assertReadOnly("SELECT detach FROM messages")).toThrow(
+      "SQLite statement rejected: PRAGMA/ATTACH/DETACH are not allowed",
+    );
+    expect(() => assertReadOnly("SELECT * FROM other.messages")).toThrow(
+      "SQLite statement rejected: schema-qualified table references are " +
+        "not allowed",
+    );
+    expect(() => assertReadOnly("SELECT * FROM head")).toThrow(
+      "SQLite statement rejected: references a reserved core table name",
+    );
+    expect(() => assertReadOnly("SELECT * FROM messages")).not.toThrow();
   });
 });
 

@@ -1,5 +1,5 @@
-// Flat `Deno.test` cases: this package's tests also run in a browser through
-// `deno-web-test`, which does not support `@std/testing/bdd`.
+// Flat `test()` cases: this package's tests also run in a browser through
+// `deno-web-test`, where `describe()` is not available.
 
 import { expect } from "@std/expect";
 
@@ -15,6 +15,7 @@ import {
   verifyDelegation,
 } from "../src/delegation.ts";
 import { Identity } from "../src/identity.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const profile = await Identity.fromString(
   "MCl6B1cu1ZOP0I3BBovjAqo57VImrMVyfLiSmNKoddXs=",
@@ -80,20 +81,20 @@ const fields = (
   ...extra,
 });
 
-Deno.test("issueDelegation() returns the pinned bytes and CID for the pinned key and nonce", async () => {
+test("issueDelegation() returns the pinned bytes and CID for the pinned key and nonce", async () => {
   const delegation = await issue();
   expect(delegation.bytes).toEqual(VECTOR.bytes);
   expect(delegation.cid).toBe(VECTOR.cid);
   expect(delegation.payload.iss).toBe(profile.did());
 });
 
-Deno.test("issueDelegation() returns a CID in the form UCAN requires, which begins `zdpu`", async () => {
+test("issueDelegation() returns a CID in the form UCAN requires, which begins `zdpu`", async () => {
   const delegation = await issue();
   expect(delegation.cid.startsWith("zdpu")).toBe(true);
   expect(await delegationCid(delegation.bytes)).toBe(delegation.cid);
 });
 
-Deno.test("issueDelegation() returns different bytes for two delegations that differ only in nonce", async () => {
+test("issueDelegation() returns different bytes for two delegations that differ only in nonce", async () => {
   const first = await issueDelegation(profile, {
     aud: core.did(),
     sub: profile.did(),
@@ -109,7 +110,7 @@ Deno.test("issueDelegation() returns different bytes for two delegations that di
   expect(first.cid).not.toBe(second.cid);
 });
 
-Deno.test("issueDelegation() throws for a command that is not a path", async () => {
+test("issueDelegation() throws for a command that is not a path", async () => {
   await expect(
     issueDelegation(profile, {
       aud: core.did(),
@@ -120,7 +121,97 @@ Deno.test("issueDelegation() throws for a command that is not a path", async () 
   ).rejects.toThrow(DelegationError);
 });
 
-Deno.test("decodeDelegation() returns the signed fields of the pinned bytes", async () => {
+test("issueDelegation() throws a `DelegationError` naming a field that is not an ed25519 did:key", async () => {
+  const issueWith = (extra: object) =>
+    issueDelegation(profile, {
+      aud: core.did(),
+      sub: profile.did(),
+      cmd: "/memory",
+      pol: [],
+      ...extra,
+    });
+  const notEd25519 =
+    "did:key:z6DtMrg4Kv51UMAM8vJcCLcRywJfEB4dpHVxPCR6qm6hSV3N" as const;
+
+  await expect(issueWith({ aud: notEd25519 })).rejects.toThrow(
+    "aud is not an ed25519 did:key",
+  );
+  await expect(issueWith({ sub: notEd25519 })).rejects.toThrow(
+    "sub is not an ed25519 did:key or null",
+  );
+});
+
+test("issueDelegation() throws a `DelegationError` for an empty nonce or a non-empty policy", async () => {
+  const issueWith = (extra: object) =>
+    issueDelegation(profile, {
+      aud: core.did(),
+      sub: profile.did(),
+      cmd: "/memory",
+      pol: [],
+      ...extra,
+    });
+
+  await expect(issueWith({ nonce: new Uint8Array() })).rejects.toThrow(
+    "nonce is empty",
+  );
+  await expect(issueWith({ pol: [["==", ".x", 1]] })).rejects.toThrow(
+    "pol is not empty",
+  );
+});
+
+test("issueDelegation() throws the error its signer fails with", async () => {
+  const failure = new Error("the signer is gone");
+  const failing = {
+    did: () => profile.did(),
+    verifier: profile.verifier,
+    keyPair: profile.keyPair,
+    sign: () => Promise.resolve({ error: failure }),
+  };
+
+  await expect(
+    issueDelegation(failing, {
+      aud: core.did(),
+      sub: profile.did(),
+      cmd: "/memory",
+      pol: [],
+    }),
+  ).rejects.toBe(failure);
+});
+
+test("decodeDelegation() throws for an envelope that is not a signature and a payload", async () => {
+  const signed = { h: ED25519_DAG_CBOR_VARSIG, [DELEGATION_TAG]: fields() };
+  for (
+    const value of [
+      {},
+      [VECTOR.bytes.slice(3, 67)],
+      [VECTOR.bytes.slice(3, 67), signed, null],
+    ]
+  ) {
+    await expect(decodeDelegation(encodeDagCbor(value))).rejects.toThrow(
+      "envelope is not a two-element array",
+    );
+  }
+  await expect(decodeDelegation(encodeDagCbor(["signature", signed])))
+    .rejects.toThrow("envelope signature is not bytes");
+});
+
+test("decodeDelegation() throws for a field of the wrong kind", async () => {
+  const wrongKinds: { [key: string]: DagCborValue }[] = [
+    { iss: 7 },
+    { sub: 7 },
+    { pol: {} },
+    { nonce: "nonce" },
+    { exp: "never" },
+    { nbf: "now" },
+  ];
+  for (const extra of wrongKinds) {
+    await expect(decodeDelegation(envelope(fields(extra)))).rejects.toThrow(
+      "delegation payload has a field of the wrong kind",
+    );
+  }
+});
+
+test("decodeDelegation() returns the signed fields of the pinned bytes", async () => {
   const delegation = await decodeDelegation(VECTOR.bytes);
   expect(delegation.payload).toEqual({
     iss: profile.did(),
@@ -135,7 +226,7 @@ Deno.test("decodeDelegation() returns the signed fields of the pinned bytes", as
   expect(delegation.signature).toEqual(VECTOR.bytes.slice(3, 67));
 });
 
-Deno.test("decodeDelegation() returns the fields of a delegation with an expiry and a start", async () => {
+test("decodeDelegation() returns the fields of a delegation with an expiry and a start", async () => {
   const issued = await issueDelegation(core, {
     aud: profile.did(),
     sub: profile.did(),
@@ -149,28 +240,28 @@ Deno.test("decodeDelegation() returns the fields of a delegation with an expiry 
   expect(decoded.payload.nbf).toBe(1_000_000);
 });
 
-Deno.test("decodeDelegation() throws for bytes that are not DAG-CBOR", async () => {
+test("decodeDelegation() throws for bytes that are not DAG-CBOR", async () => {
   await expect(decodeDelegation(new Uint8Array([0xff]))).rejects.toThrow(
     DelegationError,
   );
 });
 
-Deno.test("decodeDelegation() throws for a non-empty policy", async () => {
+test("decodeDelegation() throws for a non-empty policy", async () => {
   await expect(decodeDelegation(envelope(fields({ pol: [["==", ".x", 1]] }))))
     .rejects.toThrow(DelegationError);
 });
 
-Deno.test("decodeDelegation() throws for a field the shape does not have", async () => {
+test("decodeDelegation() throws for a field the shape does not have", async () => {
   await expect(decodeDelegation(envelope(fields({ meta: {} }))))
     .rejects.toThrow(DelegationError);
 });
 
-Deno.test("decodeDelegation() returns a `null` subject, which UCAN allows", async () => {
+test("decodeDelegation() returns a `null` subject, which UCAN allows", async () => {
   const decoded = await decodeDelegation(envelope(fields({ sub: null })));
   expect(decoded.payload.sub).toBeNull();
 });
 
-Deno.test("decodeDelegation() throws for an envelope with another tag or another varsig header", async () => {
+test("decodeDelegation() throws for an envelope with another tag or another varsig header", async () => {
   await expect(
     decodeDelegation(envelope(fields(), undefined, "ucan/inv@1.0.0")),
   ).rejects.toThrow(DelegationError);
@@ -179,17 +270,17 @@ Deno.test("decodeDelegation() throws for an envelope with another tag or another
   ).rejects.toThrow(DelegationError);
 });
 
-Deno.test("verifyDelegation() resolves for a delegation its issuer signed", async () => {
+test("verifyDelegation() resolves for a delegation its issuer signed", async () => {
   await expect(verifyDelegation(await decodeDelegation(VECTOR.bytes)))
     .resolves.toBeUndefined();
 });
 
-Deno.test("verifyDelegation() throws for a delegation whose payload was changed after signing", async () => {
+test("verifyDelegation() throws for a delegation whose payload was changed after signing", async () => {
   const forged = await decodeDelegation(envelope(fields({ cmd: "/" })));
   await expect(verifyDelegation(forged)).rejects.toThrow(DelegationError);
 });
 
-Deno.test("verifyDelegation() throws for a delegation signed by a key other than its issuer", async () => {
+test("verifyDelegation() throws for a delegation signed by a key other than its issuer", async () => {
   const issued = await issueDelegation(core, {
     aud: core.did(),
     sub: profile.did(),
@@ -206,13 +297,13 @@ Deno.test("verifyDelegation() throws for a delegation signed by a key other than
   await expect(verifyDelegation(claimed)).rejects.toThrow(DelegationError);
 });
 
-Deno.test("delegationCovers() returns `true` for an equal command or one under the delegated path", () => {
+test("delegationCovers() returns `true` for an equal command or one under the delegated path", () => {
   expect(delegationCovers("/memory", "/memory")).toBe(true);
   expect(delegationCovers("/memory", "/memory/session.open")).toBe(true);
   expect(delegationCovers("/", "/memory/session.open")).toBe(true);
 });
 
-Deno.test("decodeDelegation() keeps a leading U+FEFF in a text field, so a changed command is refused rather than read as the original", async () => {
+test("decodeDelegation() keeps a leading U+FEFF in a text field, so a changed command is refused rather than read as the original", async () => {
   // The vector's signature covers `/memory`. The same envelope with the
   // command re-encoded as `\ufeff/memory` carries a different text, which
   // is not a command path, so decoding refuses it; a decoder that dropped
@@ -221,7 +312,7 @@ Deno.test("decodeDelegation() keeps a leading U+FEFF in a text field, so a chang
     .rejects.toThrow("cmd is not a command path");
 });
 
-Deno.test("issueDelegation() throws a `DelegationError` for a negative expiry or start", async () => {
+test("issueDelegation() throws a `DelegationError` for a negative expiry or start", async () => {
   await expect(
     issueDelegation(profile, {
       aud: core.did(),
@@ -242,7 +333,7 @@ Deno.test("issueDelegation() throws a `DelegationError` for a negative expiry or
   ).rejects.toThrow(DelegationError);
 });
 
-Deno.test("delegationCovers() returns `false` for a command beside or above the delegated path", () => {
+test("delegationCovers() returns `false` for a command beside or above the delegated path", () => {
   expect(delegationCovers("/memory/session.open", "/memory")).toBe(false);
   expect(delegationCovers("/memory", "/memorydb")).toBe(false);
   expect(delegationCovers("/memory", "/")).toBe(false);

@@ -51,7 +51,7 @@ import {
   FragmentWriter,
   loadAliasResolver,
   NAME_SEPARATOR,
-  readRegistrations,
+  readRegistered,
   readWholeRuns,
   recordsDir,
   type TestIdentity,
@@ -139,11 +139,10 @@ import {
   RERUN_BUDGET_SECONDS,
   RERUN_EXECUTIONS,
 } from "./test-selection/policy.ts";
-import { appendSummary, say } from "./step-summary.ts";
+import { appendSummary, say, setStepOutput } from "./step-summary.ts";
 import {
   errorExcerpt,
   type FailedCommand,
-  passed,
   printSummary,
   type RunSummary,
   summaryLines,
@@ -526,7 +525,11 @@ export function pathsOf(listing: string): Set<string> {
   return new Set(listing.split("\0").filter((path) => path.length > 0));
 }
 
-/** The files this change touched, as the repository names them. */
+/**
+ * The files this change touched, as the repository names them. A file the
+ * change moved is both of its paths, since what reaches the path it left
+ * is as touched as what reaches the path it came to.
+ */
 export async function changedFiles(
   root: string,
   base: string | undefined,
@@ -539,7 +542,7 @@ export async function changedFiles(
   return pathsOf(
     await gitOutput(
       root,
-      ["diff", "-z", "--name-only", `${base}...HEAD`],
+      ["diff", "-z", "--name-only", "--no-renames", `${base}...HEAD`],
       `cannot diff against ${base}`,
     ),
   );
@@ -802,14 +805,8 @@ export function batchesOf(
     // A `describe` that fails as a whole is recorded under its own title,
     // and the outermost `describe` registers one test under its title, so
     // skipping that title skips every leaf inside it. A title enclosing a
-    // chosen name therefore stays off the list, and its hooks run, so its
-    // own cost is part of what the unit takes.
+    // chosen name therefore stays off the list, and its hooks run.
     const around = new Set([...names].flatMap(enclosingNames));
-    const runs = whole
-      ? all
-      : all.filter((entry) =>
-        names.has(entry.test.n) || around.has(entry.test.n)
-      );
     const request: UnitRequest = {
       unit,
       skip: whole ? [] : all
@@ -817,7 +814,6 @@ export function batchesOf(
           !names.has(entry.test.n) && !around.has(entry.test.n)
         )
         .map((entry) => entry.test.n),
-      cost: runs.reduce((total, entry) => total + entry.cost, 0),
     };
     const suiteKnows = known.get(suiteId) ?? new Set();
     known.set(suiteId, suiteKnows);
@@ -915,10 +911,6 @@ export function batchesOf(
 /** What running one invocation came to. */
 interface Outcome {
   ok: boolean;
-
-  /** Whether the lane passed a signal on to the invocation. */
-  interrupted: boolean;
-
   seconds: number;
 }
 
@@ -929,14 +921,12 @@ interface Outcome {
  * A job stops a step that reaches its bound by sending it SIGINT, and
  * SIGTERM if it is still running a few seconds later. The lane passes
  * each signal on to the commands it is running and starts nothing more.
- * A test runner told to stop names the tests it was in the middle of and
- * writes its report before it exits, so a lane cut off by its bound keeps
- * the records of what it finished and says what held it up.
+ * A test writes its result as it finishes, so a lane cut off by its bound
+ * keeps the records of what it finished.
  */
 export class LaneStop {
   #signal: Deno.Signal | undefined;
   #running = new Set<Deno.ChildProcess>();
-  #signalled = new WeakSet<Deno.ChildProcess>();
 
   /** The first signal the lane was sent, or undefined if none was. */
   get signal(): Deno.Signal | undefined {
@@ -951,18 +941,14 @@ export class LaneStop {
 
   /**
    * Waits for `child` to exit, passing on whatever the lane is sent
-   * meanwhile, and says whether it passed anything on. A child that
-   * starts after the lane was told to stop is sent the first signal the
-   * lane was sent.
+   * meanwhile. A child that starts after the lane was told to stop is sent
+   * the first signal the lane was sent.
    */
-  async wait(
-    child: Deno.ChildProcess,
-  ): Promise<{ status: Deno.CommandStatus; interrupted: boolean }> {
+  async wait(child: Deno.ChildProcess): Promise<Deno.CommandStatus> {
     if (this.#signal !== undefined) this.#passOn(child, this.#signal);
     this.#running.add(child);
     try {
-      const status = await child.status;
-      return { status, interrupted: this.#signalled.has(child) };
+      return await child.status;
     } finally {
       this.#running.delete(child);
     }
@@ -972,7 +958,6 @@ export class LaneStop {
   #passOn(child: Deno.ChildProcess, signal: Deno.Signal): void {
     try {
       child.kill(signal);
-      this.#signalled.add(child);
     } catch {
       // Deno refuses to signal a child that has exited, and one that has
       // exited has nothing left to stop.
@@ -988,7 +973,7 @@ export async function runInvocation(
 ): Promise<Outcome> {
   const [command, ...args] = invocation.command;
   const startedAt = performance.now();
-  const { status, interrupted } = await stop.wait(
+  const status = await stop.wait(
     new Deno.Command(command!, {
       args,
       cwd: invocation.cwd,
@@ -1000,7 +985,6 @@ export async function runInvocation(
   );
   return {
     ok: status.success,
-    interrupted,
     seconds: (performance.now() - startedAt) / 1000,
   };
 }
@@ -1253,7 +1237,7 @@ export interface Execution {
 
   /**
    * The names the pass's test processes registered, by unit. A unit that
-   * is one file is here by the names `readRegistrations()` reads for that
+   * is one file is here by the names `readRegistered()` reads for that
    * file. A unit of several files that one process runs, such as a
    * package's browser tests, is here by the mark its runner leaves on
    * running every test of every file. A unit whose processes said neither
@@ -1347,13 +1331,13 @@ export async function runBatch(
     const batchSpool = path.join(outputDir, "spool");
     await Deno.mkdir(batchSpool, { recursive: true });
     opened += requests.length;
-    // The tests a unit's skip list named, by unit and name. Each is a test
-    // the plan gave another lane, or none, or one the manifest does not hold
-    // that the first pass ran already, so the skip its process registers is
-    // a fact about this lane's share rather than about the test, and it
-    // ships no record. A skip the test registers itself is not on this list
-    // and ships.
-    const skipped = new Set(
+    // The tests a unit's skip list named for the plan, by unit and name.
+    // Each is a test the plan gave another lane, or none, or one the
+    // manifest does not hold that the first pass ran already, so the skip
+    // its process registers is a fact about this lane's share rather than
+    // about the test. The list's other entries are the leaves a
+    // configuration declares unavailable, whose skips this lane records.
+    const shared = new Set(
       requests.flatMap((request) =>
         request.skip.map((name) => `${request.unit}\t${name}`)
       ),
@@ -1401,15 +1385,9 @@ export async function runBatch(
       if (!outcome.ok) ok = false;
       const collected = await collectRecords({
         spoolDir: batchSpool,
-        interrupted: outcome.interrupted,
-        junit: (invocation.junit ?? []).map((output) => ({
-          kind: output.kind,
-          scope: output.scope,
-          glob: output.path,
-          ...(output.filePrefix === undefined
-            ? {}
-            : { prefix: output.filePrefix }),
-        })),
+        ...(invocation.results === undefined
+          ? {}
+          : { results: invocation.results }),
         surfaces: batch.suite.recordSurfaces,
         ...(batch.suite.variant === undefined
           ? {}
@@ -1431,14 +1409,21 @@ export async function runBatch(
       ) {
         unexplained += 1;
       }
-      for (const record of collected.records) {
+      // A skip of the plan's ships no record, and says only that the file
+      // reached the test. A skip the test registers itself ships, and so
+      // does one a configuration declares.
+      for (const record of collected.listed) {
         execution.records.push(record);
         const location = batch.suite.locate(record);
-        if (location?.level === "unit") {
-          if (
-            record.outcome === "skip" &&
-            skipped.has(`${location.unit}\t${record.test.n}`)
-          ) continue;
+        const planned = location?.level === "unit" &&
+          [record.test.n, ...enclosingNames(record.test.n)].some((name) =>
+            shared.has(`${location.unit}\t${name}`)
+          );
+        if (!planned) records.push(record);
+      }
+      for (const record of collected.records) {
+        execution.records.push(record);
+        if (batch.suite.locate(record)?.level === "unit") {
           ran += record.durationMs / 1000;
         }
         records.push(record);
@@ -1447,7 +1432,7 @@ export async function runBatch(
       for (const [record, message] of collected.failures) {
         failures.set(record, message);
       }
-      for (const [file, names] of await readRegistrations(batchSpool)) {
+      for (const [file, names] of await readRegistered(batchSpool)) {
         register(file, names);
       }
       for (const marked of await readWholeRuns(batchSpool)) {
@@ -1701,14 +1686,15 @@ export interface Missed {
  * An identity that went unaccounted for while its unit recorded costs an
  * excusal rather than the run, unless what the pass registered shows the
  * tree holds no such test. A manifest is hours old by construction, and it
- * holds every identity the default branch recorded in a file the tree
- * still holds, so it names tests renamed since. No run of this tree can
- * record one of those, and its missing record says
- * nothing about whether an invocation stopped, so it is set apart as
- * absent and an excusal stands beside it. Where the pass's registrations
- * say nothing about a unit, as for a suite whose processes leave no name
- * map or a process that stopped before leaving one, the identity stays
- * unaccounted for.
+ * holds every identity the default branch was still recording in a file the
+ * tree held then, so it can name tests the tree under test does not hold,
+ * such as one renamed since. Only that tree's registrations show which those
+ * are. No run of the tree can record an identity they show absent, and its
+ * missing record says nothing about whether an invocation stopped, so it is
+ * set apart as absent and an excusal stands beside it. Where the pass's
+ * registrations say nothing about a unit, as for a suite whose processes
+ * write no results or a process whose module never loaded, the
+ * identity stays unaccounted for.
  */
 export function accountFor(
   batch: Batch,
@@ -1788,18 +1774,14 @@ export function accountFor(
  * holds no test named `name`. No registration at all shows nothing.
  *
  * A name is held where it was registered, and where it encloses a name
- * that was: the bdd re-export records each leaf's whole chain and not the
- * `describe` blocks along it, so a nested `describe` is known by the
- * leaves inside it.
+ * that was.
  *
  * A name is shown absent only where everything registered that encloses
  * it is a `describe`, which a registered name is where another
  * registered name lies inside it. A registered test holds more than its
  * registration says: the steps its body names as it runs are recorded
- * beneath it and registered nowhere. And a `describe` registered with
- * nothing inside it reads as such a test, which is right, since that is
- * what a process whose bdd re-export recorded no leaves leaves behind,
- * and a leaf missing from it says nothing.
+ * beneath it and registered nowhere. A `describe` registered with nothing
+ * inside it reads as such a test, and a name missing from it says nothing.
  */
 function registersNoSuchTest(
   registered: ReadonlySet<string> | undefined,
@@ -2999,20 +2981,20 @@ export async function runLane(
   const workDir = await Deno.makeTempDir({
     prefix: "ci-lane-",
     // Under the job's own temporary directory where there is one, which
-    // is where a workflow step can upload what a failing lane left
-    // behind.
+    // is where a workflow step can upload what a lane kept.
     ...(temp === undefined ? {} : { dir: temp }),
   });
-  // A lane that passed leaves nothing behind. A lane that failed in a job
-  // keeps what its capabilities wrote, because a server's log is what
-  // says why a suite could not reach it, and a workflow step can upload
+  // A lane that passed with no failure excused leaves nothing behind. A
+  // lane in a job that failed, or that excused a failure, keeps what its
+  // capabilities wrote, because a server's log is what says why a suite
+  // could not reach it or why a test failed, and a workflow step uploads
   // the directory from the job's temporary directory. Anywhere else
   // nothing would collect it, and one directory would accumulate per
   // failed run.
   // A removal that fails is reported rather than thrown, so that it never
   // replaces the error a failing lane is ending with.
-  const leaveWorkDir = async (passed: boolean) => {
-    if (passed || temp === undefined) {
+  const leaveWorkDir = async (keep: boolean) => {
+    if (!keep || temp === undefined) {
       await Deno.remove(workDir, { recursive: true }).catch((error) =>
         console.log(
           `ci-lane: could not remove ${workDir}: ${describeFailure(error)}`,
@@ -3042,7 +3024,7 @@ export async function runLane(
       { partial: true },
     );
   } catch (error) {
-    await leaveWorkDir(false);
+    await leaveWorkDir(true);
     throw error;
   }
   if (spool !== undefined) {
@@ -3088,6 +3070,9 @@ export async function runLane(
   const notes: string[] = [];
   // Repeats a unit did not need, which the lane names without failing for.
   const omitted: string[] = [];
+  // The identities that failed and did not fail the run, once every batch
+  // has run.
+  let excusedFailures: string[] = [];
   // The batches the lane has not begun, and where it heard it was to stop.
   let notStarted = [...batches];
   let stoppedIn: string | undefined;
@@ -3211,10 +3196,12 @@ export async function runLane(
     // excusal is heard before any is recorded, and a report of this run
     // says what it did not fail for from what it did rather than from
     // what the manifest would have it do.
+    excusedFailures = [...excused].filter((key) => !unexcused.has(key))
+      .sort();
     if (spool !== undefined) {
       spoolRecords(
         spool,
-        [...excused].filter((key) => !unexcused.has(key)).sort().map((key) =>
+        excusedFailures.map((key) =>
           measurementRecord(excusedMeasurementName(key), 0, true)
         ),
       );
@@ -3253,28 +3240,24 @@ export async function runLane(
     // whole and nothing writes into the work directory. A capability that
     // failed to close fails the lane without displacing whatever the loop
     // threw.
-    try {
-      await opened.close();
-    } catch (error) {
+    await opened.close().catch((error) => {
       ok = false;
       notes.push(describeFailure(error));
       console.log(`ci-lane: ${describeFailure(error)}`);
-    }
+    });
     // On every path, a lane that stops or throws included, since the job
     // uploads what the lane leaves however it ends. A rewrite that fails
     // fails the lane without displacing whatever the loop threw.
-    try {
-      await relativizePatternCoverage(options);
-    } catch (error) {
+    await relativizePatternCoverage(options).catch((error) => {
       ok = false;
       notes.push(describeFailure(error));
       console.log(`ci-lane: ${describeFailure(error)}`);
-    }
+    });
     // Only for a lane that failed -- a green run has nothing to explain,
     // and the logs are large.
     if (!ok) {
       await describeCapabilityLogs(opened.logs);
-      await leaveWorkDir(false);
+      await leaveWorkDir(true);
     }
   }
   // A lane that has passed so far keeps its directory until its coverage
@@ -3296,10 +3279,20 @@ export async function runLane(
     ok = false;
     notes.push("Converting a coverage profile lost a tracked file.");
   }
-  // A signal can arrive while the conversion runs, and a lane told to stop
-  // has failed whenever it was told.
-  if (stop.signal !== undefined) ok = false;
-  if (undecided) await leaveWorkDir(ok);
+  // A signal can arrive once every batch has run, while the capabilities
+  // close or the conversion runs, and a lane told to stop has failed
+  // whenever it was told. One that had failed already says why.
+  if (stop.signal !== undefined && ok) {
+    ok = false;
+    notes.push(`Stopped by ${stop.signal} after every batch had run.`);
+  }
+  // A failure that did not fail the run is one a later run can only
+  // explain from what the servers wrote, so its directory is kept too.
+  const kept = !ok || excusedFailures.length > 0;
+  if (undecided) await leaveWorkDir(kept);
+  // What the job's upload step reads, which a lane that passed would
+  // otherwise not reach.
+  if (kept && temp !== undefined) setStepOutput("kept", "true");
   const marked = await markMeasuredFailures(options, suites, failedUnits);
   if (compileCacheState !== undefined) {
     await writeCompileCacheState(options, compileCacheState);
@@ -3341,14 +3334,11 @@ export async function runLane(
     notes,
     omitted,
     logs: "the output above" +
-      (!ok && temp !== undefined
-        ? `, and ${workDir}, which the job uploads as its lane-failure artifact`
+      (kept && temp !== undefined
+        ? `, and ${workDir}, which the job uploads as its lane-kept artifact`
         : ""),
     seconds: (performance.now() - startedAt) / 1000,
   };
-  if (!ok && passed(summary)) {
-    notes.push("The lane failed for a reason the output above gives.");
-  }
   reportLane(summary, Deno.env.get, annotated);
   return ok;
 }
@@ -3640,20 +3630,20 @@ const store: LaneDeps = { manifest: fetchManifest, stop: stopOnSignals };
 
 /**
  * A stop that receives SIGINT and SIGTERM: what a job stops a step with,
- * and what an interrupt at a terminal sends.
+ * and what an interrupt at a terminal sends. `listen` is where it asks to
+ * hear each signal.
  */
-export function stopOnSignals(): LaneStop {
+export function stopOnSignals(
+  listen: (signal: Deno.Signal, handler: () => void) => void =
+    Deno.addSignalListener,
+): LaneStop {
   const stop = new LaneStop();
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    Deno.addSignalListener(signal, () => stop.receive(signal));
+    listen(signal, () => stop.receive(signal));
   }
   return stop;
 }
 
-// `Deno.exitCode` rather than `Deno.exit`, which would end the process
-// before the unload handlers run — and one of those is what writes a
-// test run's name map into its spool.
-//
 // The seed is settled before any invocation is built, so that every
 // command this lane builds and every task it starts shuffles the same
 // way.

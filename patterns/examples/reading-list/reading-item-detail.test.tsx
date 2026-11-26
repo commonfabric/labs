@@ -76,9 +76,9 @@ export default pattern(() => {
   const assert_initial_title = assert(() => item.title === "Test Book");
   const assert_initial_author = assert(() => item.author === "Test Author");
   const assert_initial_type = assert(() => item.type === "book");
-  const assert_initial_status = assert(() => item.status === "want");
-  const assert_initial_rating = assert(() => item.rating === null);
-  const assert_initial_notes = assert(() => item.notes === "");
+  const assert_status_want = assert(() => item.status === "want");
+  const assert_rating_null = assert(() => item.rating === null);
+  const assert_notes_empty = assert(() => item.notes === "");
 
   // ==========================================================================
   // Assertions - Status Changes
@@ -87,7 +87,6 @@ export default pattern(() => {
   const assert_status_reading = assert(() => item.status === "reading");
   const assert_status_finished = assert(() => item.status === "finished");
   const assert_status_abandoned = assert(() => item.status === "abandoned");
-  const assert_status_want = assert(() => item.status === "want");
 
   // ==========================================================================
   // Assertions - Rating Changes
@@ -95,7 +94,6 @@ export default pattern(() => {
 
   const assert_rating_5 = assert(() => item.rating === 5);
   const assert_rating_3 = assert(() => item.rating === 3);
-  const assert_rating_null = assert(() => item.rating === null);
 
   // ==========================================================================
   // Assertions - Notes Changes
@@ -107,7 +105,6 @@ export default pattern(() => {
   const assert_notes_updated = assert(
     () => item.notes === "Updated: Even better on second read.",
   );
-  const assert_notes_cleared = assert(() => item.notes === "");
 
   // ==========================================================================
   // Test Sequence
@@ -118,9 +115,9 @@ export default pattern(() => {
       { assertion: assert_initial_title },
       { assertion: assert_initial_author },
       { assertion: assert_initial_type },
-      { assertion: assert_initial_status },
-      { assertion: assert_initial_rating },
-      { assertion: assert_initial_notes },
+      { assertion: assert_status_want },
+      { assertion: assert_rating_null },
+      { assertion: assert_notes_empty },
 
       // === Status workflow: want -> reading -> finished ===
       { action: action_set_reading },
@@ -147,7 +144,7 @@ export default pattern(() => {
       { assertion: assert_notes_updated },
 
       { action: action_clear_notes },
-      { assertion: assert_notes_cleared },
+      { assertion: assert_notes_empty },
 
       // === Status: can go back to want ===
       { action: action_set_want },

@@ -70,6 +70,7 @@ import {
   getPatternIdentityRef,
   getPatternSource,
   getPieceReconciliation,
+  getPieceSourceRecord,
   getPieceSourceSnapshot,
   keepLaterConfirmation,
   knownPieceReleasedAt,
@@ -725,11 +726,13 @@ export class SourceReconciler {
     }
   }
 
-  /** Re-enter after the current pass, for a followed source that moved. */
+  /**
+   * Re-enter after the current pass, for a followed source that moved. Only a
+   * live follower gets here: `unwatch()` and `dispose()` cancel its sinks and
+   * forget it as a system follower, and a pass they abort follows nothing.
+   */
   #reconcileFromSourceEvent(resultCell: Cell<unknown>): void {
-    const key = this.#followerKey(resultCell);
-    if (this.#disposed || this.#stoppedFabricFollowers.has(key)) return;
-    const pending = this.#pending.get(key);
+    const pending = this.#pending.get(this.#followerKey(resultCell));
     if (pending !== undefined) {
       pending.reschedule = true;
       return;
@@ -847,7 +850,7 @@ export class SourceReconciler {
     signal: AbortSignal,
   ): Promise<ReconcileOutcome> {
     const host = this.#runtime.hostForSpace(state.space).href;
-    let origin = classifyPieceOriginString(state.storedSource, host);
+    const origin = classifyPieceOriginString(state.storedSource, host);
 
     if (origin.kind === "legacy-path") {
       // A rooted path predates the `system:` scheme. A `system:` ref can name a
@@ -871,13 +874,7 @@ export class SourceReconciler {
       if (migrated !== "migrated") return migrated;
       state.storedSource = origin.ref;
       state.snapshot = getPieceSourceSnapshot(resultCell)!;
-      origin = classifyPieceOriginString(origin.ref, host);
-      const followed = await this.#follow(
-        resultCell,
-        state,
-        origin,
-        signal,
-      );
+      const followed = await this.#dispatch(resultCell, state, signal);
       return followed === "current" ? "migrated" : followed;
     }
 
@@ -887,7 +884,7 @@ export class SourceReconciler {
   #follow(
     resultCell: Cell<unknown>,
     state: FollowedPieceState,
-    origin: PieceOriginKind,
+    origin: Exclude<PieceOriginKind, { kind: "legacy-path" }>,
     signal: AbortSignal,
   ): Promise<ReconcileOutcome> {
     const key = this.#followerKey(resultCell);
@@ -917,9 +914,6 @@ export class SourceReconciler {
           origin,
           signal,
         );
-      case "legacy-path":
-        // Rewritten before dispatch.
-        return Promise.resolve("unusable");
     }
   }
 
@@ -1217,6 +1211,15 @@ export class SourceReconciler {
         ]);
         return undefined;
       }
+      // A piece created from this source records a creation revision, which
+      // reads the closure in the creating transaction: a wish's, which cannot
+      // wait. So the closure is repaired here, ahead of it, when an earlier
+      // runtime left a flow stamp on it.
+      await this.#runtime.patternManager.prepareSourceClosureVerification(
+        space,
+        [advertised],
+      );
+      signal.throwIfAborted();
       // A pattern compiled across a registry clear carries references the
       // clear retired, so it is answered but not kept.
       if (schemaRegistryEpoch() === epoch) {
@@ -1551,6 +1554,7 @@ export class SourceReconciler {
         state.space,
         state.running.identity,
         candidateRef.identity,
+        getPieceSourceRecord(resultCell, state.running.identity),
       )
       : undefined;
     const transition: PieceSourceTransition = {
@@ -1639,30 +1643,25 @@ export class SourceReconciler {
           return false;
         }
       }
-      if (sourceUpdate !== undefined) {
-        runtime.patternManager.stageSourceUpdate(
-          sourceUpdate,
-          state.space,
-          state.running.identity,
-          candidateRef.identity,
-          tx,
-        );
-      }
       applyPieceSourceTransition(
         runtime,
         resultCell,
         tx,
         candidateRef,
         transition,
+        { sourceUpdate },
       );
       // Staging the candidate belongs to this transaction whether or not the
       // piece is running, so a refusal costs nothing either way: setup that
       // cannot take the piece's data fails the transaction and the piece keeps
       // what it has. A running piece is then re-instantiated by the pattern
       // watcher, which sees its own completion marker and does not stage it a
-      // second time.
+      // second time. The runtime adopts the release on its own, with none of
+      // the reads that chose it in this transaction, so the setup leaves the
+      // value of a result it finds unchanged as stored (`runtimeStarted`).
       void runtime.setup(tx, candidate, undefined, resultCell.withTx(tx), {
         prepareForResume: true,
+        runtimeStarted: true,
       });
       return true;
     };

@@ -5,6 +5,7 @@ import {
   assertRejects,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import {
@@ -27,6 +28,7 @@ import {
 } from "../src/sandbox/runsc.ts";
 import { SandboxPathEscapeError } from "../src/sandbox/errors.ts";
 import { ProcessTimeoutError } from "../src/sandbox/process-runner.ts";
+import { writesDespiteMode } from "./support/runsc-privilege.ts";
 import { SandboxSessionUnavailableError } from "../src/sandbox/types.ts";
 import { createHarnessCfcInvocationContext } from "../src/contracts/cfc-invocation-context.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
@@ -37,6 +39,7 @@ import type {
   ProcessRunResult,
   ProcessSpawnRequest,
 } from "../src/sandbox/process-runner.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 /**
  * A runner that answers `runsc` the way runsc answers, without a sandbox:
@@ -209,7 +212,7 @@ const context = (
     command: "echo hi",
   });
 
-Deno.test("resolveRunscSandboxConfig defaults to the cfc-vm image on macOS", async () => {
+test("resolveRunscSandboxConfig defaults to the cfc-vm image on macOS", async () => {
   // The default binary is a name to find on `PATH`, so the case gives `PATH`
   // one directory holding it.
   const bin = await Deno.realPath(
@@ -245,7 +248,7 @@ Deno.test("resolveRunscSandboxConfig defaults to the cfc-vm image on macOS", asy
   assertEquals(c.cfcPolicyPath, undefined);
 });
 
-Deno.test("resolveRunscSandboxConfig keeps the macOS store out of every writable mount", async () => {
+test("resolveRunscSandboxConfig keeps the macOS store out of every writable mount", async () => {
   // The macOS `runsc` runs from the store whatever binary, rootfs and policy
   // are named: its config, VM image and daemon socket are there. So the store
   // is refused inside a writable mount, and a writable mount inside the
@@ -314,7 +317,7 @@ Deno.test("resolveRunscSandboxConfig keeps the macOS store out of every writable
   }
 });
 
-Deno.test("resolveRunscSandboxConfig refuses a macOS store that is not an absolute path", () => {
+test("resolveRunscSandboxConfig refuses a macOS store that is not an absolute path", () => {
   // The macOS `runsc` resolves `CFC_VM_HOME` against its own working
   // directory, so a relative store names one place here and another there.
   for (const cfcVmHome of ["cfc-vm", "~/cfc-vm", "./cfc-vm"]) {
@@ -337,7 +340,7 @@ Deno.test("resolveRunscSandboxConfig refuses a macOS store that is not an absolu
   }
 });
 
-Deno.test("resolveRunscSandboxConfig on Linux given a home keeps the runsc-cfc store under it out of every writable mount, and every writable mount out of it", async () => {
+test("resolveRunscSandboxConfig on Linux given a home keeps the runsc-cfc store under it out of every writable mount, and every writable mount out of it", async () => {
   const home = await Deno.realPath(
     await Deno.makeTempDir({ prefix: "runsc-linux-home-" }),
   );
@@ -383,7 +386,7 @@ Deno.test("resolveRunscSandboxConfig on Linux given a home keeps the runsc-cfc s
   }
 });
 
-Deno.test("resolveRunscSandboxConfig refuses a writable mount inside the rootfs, and takes a read-only one", async () => {
+test("resolveRunscSandboxConfig refuses a writable mount inside the rootfs, and takes a read-only one", async () => {
   const rootfs = await Deno.realPath(
     await Deno.makeTempDir({ prefix: "runsc-rootfs-" }),
   );
@@ -414,7 +417,7 @@ Deno.test("resolveRunscSandboxConfig refuses a writable mount inside the rootfs,
   }
 });
 
-Deno.test("resolveRunscSandboxConfig refuses an empty runsc binary, which names none", () => {
+test("resolveRunscSandboxConfig refuses an empty runsc binary, which names none", () => {
   assertThrows(
     () => config({ runscBinary: "" }),
     Error,
@@ -422,7 +425,7 @@ Deno.test("resolveRunscSandboxConfig refuses an empty runsc binary, which names 
   );
 });
 
-Deno.test("resolveRunscSandboxConfig refuses a Linux config with no rootfs", () => {
+test("resolveRunscSandboxConfig refuses a Linux config with no rootfs", () => {
   assertThrows(
     () =>
       resolveRunscSandboxConfig({
@@ -435,7 +438,7 @@ Deno.test("resolveRunscSandboxConfig refuses a Linux config with no rootfs", () 
   );
 });
 
-Deno.test("RunscSandboxRuntime runs a call as one container with the CFC transport on fds 3 and 4", async () => {
+test("RunscSandboxRuntime runs a call as one container with the CFC transport on fds 3 and 4", async () => {
   const runner = new FakeRunscRunner();
   const c = config();
   const runtime = new RunscSandboxRuntime(c, runner);
@@ -478,7 +481,7 @@ Deno.test("RunscSandboxRuntime runs a call as one container with the CFC transpo
   await assertRejects(() => Deno.stat(join(c.scratchDir, "bundles", cid)));
 });
 
-Deno.test("RunscSandboxRuntime writes a bundle whose spec names the rootfs and every mount", async () => {
+test("RunscSandboxRuntime writes a bundle whose spec names the rootfs and every mount", async () => {
   const runner = new FakeRunscRunner();
   let captured: Record<string, unknown> | undefined;
   runner.run = async function (this: FakeRunscRunner, request) {
@@ -530,7 +533,7 @@ Deno.test("RunscSandboxRuntime writes a bundle whose spec names the rootfs and e
   assertEquals(binds["/fabric"].source, "/mnt/fabric");
 });
 
-Deno.test("RunscSandboxRuntime omits the CFC flags and reports no result without a policy", async () => {
+test("RunscSandboxRuntime omits the CFC flags and reports no result without a policy", async () => {
   const runner = new FakeRunscRunner();
   const runtime = new RunscSandboxRuntime(
     config({ cfcPolicyPath: undefined }),
@@ -552,7 +555,7 @@ Deno.test("RunscSandboxRuntime omits the CFC flags and reports no result without
   assertEquals(result.cfcResult, undefined);
 });
 
-Deno.test("RunscSandboxRuntime denies the call's CFC result when runsc delivered none on fd 4", async () => {
+test("RunscSandboxRuntime denies the call's CFC result when runsc delivered none on fd 4", async () => {
   const runner = new FakeRunscRunner();
   runner.run = function (this: FakeRunscRunner, request) {
     this.requests.push(request);
@@ -568,7 +571,7 @@ Deno.test("RunscSandboxRuntime denies the call's CFC result when runsc delivered
   );
 });
 
-Deno.test("RunscSandboxRuntime keeps one container per session and execs into it", async () => {
+test("RunscSandboxRuntime keeps one container per session and execs into it", async () => {
   const runner = new FakeRunscRunner();
   const runtime = new RunscSandboxRuntime(config(), runner);
   const first = await runtime.runShell({
@@ -642,7 +645,7 @@ Deno.test("RunscSandboxRuntime keeps one container per session and execs into it
   }
 });
 
-Deno.test("RunscSandboxRuntime gives different sessions and different runs different containers", async () => {
+test("RunscSandboxRuntime gives different sessions and different runs different containers", async () => {
   const runner = new FakeRunscRunner();
   const a = new RunscSandboxRuntime(config({ runId: "run-a" }), runner);
   const b = new RunscSandboxRuntime(config({ runId: "run-b" }), runner);
@@ -658,7 +661,7 @@ Deno.test("RunscSandboxRuntime gives different sessions and different runs diffe
   await b.close();
 });
 
-Deno.test("RunscSandboxRuntime rejects a session name that is not an identifier", async () => {
+test("RunscSandboxRuntime rejects a session name that is not an identifier", async () => {
   const runner = new FakeRunscRunner();
   const runtime = new RunscSandboxRuntime(config(), runner);
   // Each fixture breaks the pattern in one way only: first character, body,
@@ -689,7 +692,7 @@ Deno.test("RunscSandboxRuntime rejects a session name that is not an identifier"
   await runtime.close();
 });
 
-Deno.test("a session is refused in an enforcing mode, before anything runs", async () => {
+test("a session is refused in an enforcing mode, before anything runs", async () => {
   // A session's CFC result is a snapshot at the exec's exit, while output
   // keeps draining and the session's other processes keep running, and
   // calls in one container can read each other's data through metadata:
@@ -720,7 +723,7 @@ Deno.test("a session is refused in an enforcing mode, before anything runs", asy
   }
 });
 
-Deno.test("an observing session call carries its own CFC context in and result out", async () => {
+test("an observing session call carries its own CFC context in and result out", async () => {
   const runner = new FakeRunscRunner();
   runner.resultTaint = {
     string: "{conf: User(did:key:alice), integ: ∅}",
@@ -768,7 +771,7 @@ Deno.test("an observing session call carries its own CFC context in and result o
   assertEquals(calls, []);
 });
 
-Deno.test("resolveRunscSandboxConfig refuses relative paths, empty bind names and overlapping roots", () => {
+test("resolveRunscSandboxConfig refuses relative paths, empty bind names and overlapping roots", () => {
   assertThrows(
     () =>
       resolveRunscSandboxConfig({
@@ -838,7 +841,7 @@ Deno.test("resolveRunscSandboxConfig refuses relative paths, empty bind names an
   assertEquals(c.sessionStartTimeoutMs, 5);
 });
 
-Deno.test("RunscSandboxRuntime describes itself with its mounts and session support", () => {
+test("RunscSandboxRuntime describes itself with its mounts and session support", () => {
   const runtime = new RunscSandboxRuntime(
     config({
       additionalMounts: [
@@ -873,7 +876,7 @@ Deno.test("RunscSandboxRuntime describes itself with its mounts and session supp
   assertEquals(mounts[2].kind, "fabric-fuse");
 });
 
-Deno.test("RunscSandboxRuntime resolves paths inside its roots and refuses escapes", () => {
+test("RunscSandboxRuntime resolves paths inside its roots and refuses escapes", () => {
   const runtime = new RunscSandboxRuntime(
     config({
       additionalMounts: [{
@@ -903,7 +906,7 @@ Deno.test("RunscSandboxRuntime resolves paths inside its roots and refuses escap
   );
 });
 
-Deno.test("RunscSandboxRuntime passes env and user to a session exec and to the spec", async () => {
+test("RunscSandboxRuntime passes env and user to a session exec and to the spec", async () => {
   const runner = new FakeRunscRunner();
   let spec: { process: { user: { uid: number; gid: number } } } | undefined;
   runner.spawn = function (this: FakeRunscRunner, request) {
@@ -928,7 +931,7 @@ Deno.test("RunscSandboxRuntime passes env and user to a session exec and to the 
   await runtime.close();
 });
 
-Deno.test("RunscSandboxRuntime gives up on a session whose container never reports running", async () => {
+test("RunscSandboxRuntime gives up on a session whose container never reports running", async () => {
   const runner = new FakeRunscRunner();
   const base = FakeRunscRunner.prototype.run;
   runner.run = function (this: FakeRunscRunner, request) {
@@ -974,7 +977,7 @@ Deno.test("RunscSandboxRuntime gives up on a session whose container never repor
   await runtime.close();
 });
 
-Deno.test("RunscSandboxRuntime needs a runner that can spawn for sessions, and refuses new sessions once closed", async () => {
+test("RunscSandboxRuntime needs a runner that can spawn for sessions, and refuses new sessions once closed", async () => {
   const noSpawn: ProcessRunner = { run: (r) => new FakeRunscRunner().run(r) };
   const runtime = new RunscSandboxRuntime(config(), noSpawn);
   await assertRejects(
@@ -1018,7 +1021,7 @@ class ThrowingRunscRunner extends FakeRunscRunner {
   }
 }
 
-Deno.test("RunscSandboxRuntime removes the bundle when the run itself throws", async () => {
+test("RunscSandboxRuntime removes the bundle when the run itself throws", async () => {
   const cfg = config();
   const runtime = new RunscSandboxRuntime(cfg, new ThrowingRunscRunner());
   await assertRejects(
@@ -1040,7 +1043,7 @@ Deno.test("RunscSandboxRuntime removes the bundle when the run itself throws", a
   assertEquals(left, []);
 });
 
-Deno.test("an enforcing mode requires the runsc runtime to run with a CFC policy", () => {
+test("an enforcing mode requires the runsc runtime to run with a CFC policy", () => {
   assertThrows(
     () =>
       assertRunscCfcPolicyForMode("enforce-explicit", {
@@ -1055,7 +1058,7 @@ Deno.test("an enforcing mode requires the runsc runtime to run with a CFC policy
   });
 });
 
-Deno.test("a resolved runsc configuration is frozen, mounts included", () => {
+test("a resolved runsc configuration is frozen, mounts included", () => {
   const cfg = config();
   assertThrows(() => {
     (cfg.additionalMounts as unknown as unknown[]).push({});
@@ -1065,7 +1068,7 @@ Deno.test("a resolved runsc configuration is frozen, mounts included", () => {
   }, TypeError);
 });
 
-Deno.test("the scratch directory defaults outside every sandbox mount and refuses to sit inside one", () => {
+test("the scratch directory defaults outside every sandbox mount and refuses to sit inside one", () => {
   // The result and context files live in scratch; a sandbox that can reach
   // them can forge its own CFC result (review, verified live).
   const cfg = resolveRunscSandboxConfig({
@@ -1110,7 +1113,7 @@ Deno.test("the scratch directory defaults outside every sandbox mount and refuse
   );
 });
 
-Deno.test("two runs with a shared id prefix never share a session container", async () => {
+test("two runs with a shared id prefix never share a session container", async () => {
   const a = new FakeRunscRunner();
   const b = new FakeRunscRunner();
   const first = new RunscSandboxRuntime(
@@ -1135,7 +1138,7 @@ Deno.test("two runs with a shared id prefix never share a session container", as
   await second.close();
 });
 
-Deno.test("a closed runtime refuses fresh calls as well as sessions", async () => {
+test("a closed runtime refuses fresh calls as well as sessions", async () => {
   const runtime = new RunscSandboxRuntime(config(), new FakeRunscRunner());
   await runtime.close();
   await assertRejects(
@@ -1145,7 +1148,7 @@ Deno.test("a closed runtime refuses fresh calls as well as sessions", async () =
   );
 });
 
-Deno.test("sibling subagent runs never share a scratch directory", () => {
+test("sibling subagent runs never share a scratch directory", () => {
   // `<uuid>.subagent.1` and `<uuid>.subagent.2` agree on their first 40
   // characters, which is all the sanitizer keeps.
   const parent = "0f9b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d";
@@ -1166,7 +1169,7 @@ Deno.test("sibling subagent runs never share a scratch directory", () => {
   assert(one.scratchDir !== two.scratchDir, one.scratchDir);
 });
 
-Deno.test("the scratch containment check sees through symlinks", async () => {
+test("the scratch containment check sees through symlinks", async () => {
   const base = await Deno.makeTempDir();
   try {
     await Deno.mkdir(join(base, "workspace"));
@@ -1212,7 +1215,7 @@ Deno.test("the scratch containment check sees through symlinks", async () => {
 // Adversarial review, 2026-09-28. Each test names the defect it was found by.
 // ---------------------------------------------------------------------------
 
-Deno.test("no session container id is a prefix of another, whatever the names", async () => {
+test("no session container id is a prefix of another, whatever the names", async () => {
   // runsc resolves abbreviated ids. With the name in the id, a first call
   // to `build` ran inside `build2`'s container and read its files, and `a`
   // became ambiguous for the rest of the run once `ab` existed.
@@ -1236,7 +1239,7 @@ Deno.test("no session container id is a prefix of another, whatever the names", 
   await runtime.close();
 });
 
-Deno.test("a run holds a bounded number of sessions", async () => {
+test("a run holds a bounded number of sessions", async () => {
   // Every session is a long-lived container in memory the whole machine
   // shares. The refusal is one the model can act on.
   const runner = new FakeRunscRunner();
@@ -1255,7 +1258,7 @@ Deno.test("a run holds a bounded number of sessions", async () => {
   await runtime.close();
 });
 
-Deno.test("a session whose container died is reported lost once, then starts empty", async () => {
+test("a session whose container died is reported lost once, then starts empty", async () => {
   // `kill -9 1` inside a session used to leave the name unusable for the
   // rest of the run, each call failing as if the command had.
   const runner = new FakeRunscRunner();
@@ -1282,7 +1285,7 @@ Deno.test("a session whose container died is reported lost once, then starts emp
   await runtime.close();
 });
 
-Deno.test("a session start that fails at once does not wait out the start timeout", async () => {
+test("a session start that fails at once does not wait out the start timeout", async () => {
   // With a bad rootfs a fresh call failed in 73 ms while a session waited
   // its whole 30 s budget.
   const runner = new FakeRunscRunner();
@@ -1314,7 +1317,7 @@ Deno.test("a session start that fails at once does not wait out the start timeou
   await runtime.close();
 });
 
-Deno.test("a session call that times out takes the session down with it", async () => {
+test("a session call that times out takes the session down with it", async () => {
   // The timeout stopped the host side of the exec only: `ps` in the next
   // call showed the command still running, with the workspace and network.
   const runner = new FakeRunscRunner();
@@ -1342,7 +1345,7 @@ Deno.test("a session call that times out takes the session down with it", async 
   await runtime.close();
 });
 
-Deno.test("a session call's missing CFC result is denied, as a fresh call's is", async () => {
+test("a session call's missing CFC result is denied, as a fresh call's is", async () => {
   const runner = new FakeRunscRunner();
   runner.execWritesResult = false;
   const runtime = new RunscSandboxRuntime(config(), runner);
@@ -1355,7 +1358,7 @@ Deno.test("a session call's missing CFC result is denied, as a fresh call's is",
   await runtime.close();
 });
 
-Deno.test("a session call without a policy asks for no result and reports none", async () => {
+test("a session call without a policy asks for no result and reports none", async () => {
   const runner = new FakeRunscRunner();
   const runtime = new RunscSandboxRuntime(
     config({ cfcPolicyPath: undefined }),
@@ -1377,7 +1380,7 @@ Deno.test("a session call without a policy asks for no result and reports none",
   await runtime.close();
 });
 
-Deno.test("a fresh call hands runsc its context as a file and no context flag without one", async () => {
+test("a fresh call hands runsc its context as a file and no context flag without one", async () => {
   const runner = new FakeRunscRunner();
   const seen: string[] = [];
   const base = FakeRunscRunner.prototype.run;
@@ -1400,7 +1403,7 @@ Deno.test("a fresh call hands runsc its context as a file and no context flag wi
   assertEquals(bare.args[3], "/dev/null");
 });
 
-Deno.test("an enforcing call is refused by a runtime that has no policy, engine or no engine", async () => {
+test("an enforcing call is refused by a runtime that has no policy, engine or no engine", async () => {
   // The engine refuses such a run at its start, but a runtime constructed
   // or injected directly ran an enforce-strict call with its labels dropped
   // and no result; the docker runtime refuses per call.
@@ -1429,7 +1432,7 @@ Deno.test("an enforcing call is refused by a runtime that has no policy, engine 
   assertEquals(observed.exitCode, 0);
 });
 
-Deno.test("the floor holds for every enforcing mode", () => {
+test("the floor holds for every enforcing mode", () => {
   for (const mode of ["enforce-explicit", "enforce-strict"] as const) {
     assertThrows(
       () => assertRunscCfcPolicyForMode(mode, { cfcPolicyPath: undefined }),
@@ -1439,7 +1442,7 @@ Deno.test("the floor holds for every enforcing mode", () => {
   }
 });
 
-Deno.test("what decides the sandbox's labels and contents is refused inside a writable mount", async () => {
+test("what decides the sandbox's labels and contents is refused inside a writable mount", async () => {
   // A policy in the workspace was rewritten from inside one container, and
   // the next container read a labelled file as public.
   // By its real path, which is how an accepted path is returned.
@@ -1521,7 +1524,7 @@ Deno.test("what decides the sandbox's labels and contents is refused inside a wr
   }
 });
 
-Deno.test("the scratch check covers the mount root itself and, on macOS, its other spellings", async () => {
+test("the scratch check covers the mount root itself and, on macOS, its other spellings", async () => {
   const root = await Deno.makeTempDir({ prefix: "runsc-scratch-case-" });
   try {
     // Neither directory exists yet, so nothing on disk resolves their case.
@@ -1565,7 +1568,7 @@ Deno.test("the scratch check covers the mount root itself and, on macOS, its oth
   }
 });
 
-Deno.test("mount, root and user validation matches what the docker runtime refuses", () => {
+test("mount, root and user validation matches what the docker runtime refuses", () => {
   const bind = (sandboxPath: string, name = "b") => ({
     kind: "host-bind" as const,
     name,
@@ -1618,7 +1621,7 @@ Deno.test("mount, root and user validation matches what the docker runtime refus
   }, TypeError);
 });
 
-Deno.test("the spec isolates every namespace and bounds the tmpfs it gives the call", async () => {
+test("the spec isolates every namespace and bounds the tmpfs it gives the call", async () => {
   const runner = new FakeRunscRunner();
   let specText = "";
   const base = FakeRunscRunner.prototype.run;
@@ -1642,7 +1645,7 @@ Deno.test("the spec isolates every namespace and bounds the tmpfs it gives the c
   assert(tmp.options.some((o: string) => /^size=\d+[km]$/.test(o)));
 });
 
-Deno.test("the spec gives a container on the host's network no network namespace of its own", async () => {
+test("the spec gives a container on the host's network no network namespace of its own", async () => {
   // With one, runsc makes it empty and the container has its loopback alone,
   // whatever `--network=host` asked for.
   const specs: string[] = [];
@@ -1669,7 +1672,7 @@ Deno.test("the spec gives a container on the host's network no network namespace
   );
 });
 
-Deno.test("a rootless runtime runs every runsc command, control commands included, with `--rootless`", async () => {
+test("a rootless runtime runs every runsc command, control commands included, with `--rootless`", async () => {
   for (const rootless of [true, false]) {
     const runner = new FakeRunscRunner();
     const runtime = new RunscSandboxRuntime(config({ rootless }), runner);
@@ -1795,7 +1798,7 @@ class UnderPasta implements ProcessRunner {
 const rootOf = (args: readonly string[]): string =>
   args[args.indexOf("--root") + 1];
 
-Deno.test("under pasta, a call starts its container in pasta's namespace, on that namespace as runsc's host network, with a hosts file naming the host", async () => {
+test("under pasta, a call starts its container in pasta's namespace, on that namespace as runsc's host network, with a hosts file naming the host", async () => {
   const runner = new UnderPasta();
   const c = pastaConfig({ unshare: UNSHARE });
   const runtime = new RunscSandboxRuntime(c, runner);
@@ -1839,7 +1842,7 @@ Deno.test("under pasta, a call starts its container in pasta's namespace, on tha
   assertEquals(await Deno.readTextFile(resolv.source), "nameserver 10.0.2.2\n");
 });
 
-Deno.test("under pasta, a call's stderr is given from after the line its shell writes before runsc starts", async () => {
+test("under pasta, a call's stderr is given from after the line its shell writes before runsc starts", async () => {
   const pastaSays = "Couldn't get any nameserver address\n";
   /**
    * A runner under pasta whose pasta writes a warning, then whose shell
@@ -1892,7 +1895,7 @@ Deno.test("under pasta, a call's stderr is given from after the line its shell w
   ]);
 });
 
-Deno.test("under pasta, a call that forwards host ports gives pasta those ports alone, takes the host off the gateway, and names the container's loopback as the host", async () => {
+test("under pasta, a call that forwards host ports gives pasta those ports alone, takes the host off the gateway, and names the container's loopback as the host", async () => {
   const forwarding = [
     "--config-net",
     "--quiet",
@@ -1941,14 +1944,14 @@ Deno.test("under pasta, a call that forwards host ports gives pasta those ports 
   assert(!PASTA_FORWARDING_HOSTS_FILE.includes("10.0.2.2"));
 });
 
-Deno.test("under pasta, a call that forwards an empty list of host ports reaches no port of the host's loopback", () => {
+test("under pasta, a call that forwards an empty list of host ports reaches no port of the host's loopback", () => {
   const args = pastaArgs([]);
 
   assertEquals(args[args.indexOf("-T") + 1], "none");
   assert(args.includes("--no-map-gw"));
 });
 
-Deno.test("a configuration refuses forwarded host ports where no pasta would forward them, and a port that is not a port number", () => {
+test("a configuration refuses forwarded host ports where no pasta would forward them, and a port that is not a port number", () => {
   for (
     const overrides of [
       { forwardedHostPorts: [8000] },
@@ -1976,7 +1979,7 @@ Deno.test("a configuration refuses forwarded host ports where no pasta would for
   }
 });
 
-Deno.test("under pasta, root keeps root in a network namespace alone and a mount namespace of unshare's, and a user that is not root gets pasta's user namespace", async () => {
+test("under pasta, root keeps root in a network namespace alone and a mount namespace of unshare's, and a user that is not root gets pasta's user namespace", async () => {
   for (
     const [unshare, rootless] of [
       [UNSHARE, false],
@@ -1998,7 +2001,7 @@ Deno.test("under pasta, root keeps root in a network namespace alone and a mount
   }
 });
 
-Deno.test("under pasta, a call is refused, starting nothing, where no setpriv was given", async () => {
+test("under pasta, a call is refused, starting nothing, where no setpriv was given", async () => {
   const runner = new UnderPasta();
   const runtime = new RunscSandboxRuntime(
     config({ networkHelper: PASTA, unshare: UNSHARE }),
@@ -2013,7 +2016,7 @@ Deno.test("under pasta, a call is refused, starting nothing, where no setpriv wa
   assertEquals(runner.given, []);
 });
 
-Deno.test("under pasta, each call keeps its container's state in a root of its own, which goes when the call does, however it ends", async () => {
+test("under pasta, each call keeps its container's state in a root of its own, which goes when the call does, however it ends", async () => {
   for (const ending of ["exits", "times out"] as const) {
     const runner = new UnderPasta();
     const c = pastaConfig({ rootless: true });
@@ -2057,7 +2060,7 @@ Deno.test("under pasta, each call keeps its container's state in a root of its o
   }
 });
 
-Deno.test("under pasta, closing the runtime stops a call in flight through pasta, and waits for it to end before taking its scratch directory down", async () => {
+test("under pasta, closing the runtime stops a call in flight through pasta, and waits for it to end before taking its scratch directory down", async () => {
   const runner = new UnderPasta();
   const c = pastaConfig({ rootless: true });
   const runtime = new RunscSandboxRuntime(c, runner);
@@ -2105,7 +2108,7 @@ Deno.test("under pasta, closing the runtime stops a call in flight through pasta
   await assertRejects(() => Deno.stat(c.scratchDir), Deno.errors.NotFound);
 });
 
-Deno.test("under pasta, closing the runtime takes its scratch directory down, hosts file and pasta's log included", async () => {
+test("under pasta, closing the runtime takes its scratch directory down, hosts file and pasta's log included", async () => {
   const runner = new UnderPasta();
   const c = pastaConfig({ rootless: true });
   const runtime = new RunscSandboxRuntime(c, runner);
@@ -2118,7 +2121,7 @@ Deno.test("under pasta, closing the runtime takes its scratch directory down, ho
   await assertRejects(() => Deno.stat(c.scratchDir), Deno.errors.NotFound);
 });
 
-Deno.test("under pasta, no session is offered, and one asked for is refused, starting nothing", async () => {
+test("under pasta, no session is offered, and one asked for is refused, starting nothing", async () => {
   const runner = new UnderPasta();
   const runtime = new RunscSandboxRuntime(
     pastaConfig({ rootless: true }),
@@ -2143,7 +2146,7 @@ Deno.test("under pasta, no session is offered, and one asked for is refused, sta
   );
 });
 
-Deno.test("a network other than runsc's own takes no pasta, whatever is configured", async () => {
+test("a network other than runsc's own takes no pasta, whatever is configured", async () => {
   for (const networkMode of ["none", "host"] as const) {
     const runner = new UnderPasta();
     await new RunscSandboxRuntime(
@@ -2157,7 +2160,7 @@ Deno.test("a network other than runsc's own takes no pasta, whatever is configur
   }
 });
 
-Deno.test("under pasta, a mount that covers the hosts file or the resolver configuration, or sits in either, is refused", () => {
+test("under pasta, a mount that covers the hosts file or the resolver configuration, or sits in either, is refused", () => {
   for (const sandboxPath of ["/etc/hosts", "/etc/resolv.conf", "/etc"]) {
     assertThrows(
       () =>
@@ -2189,7 +2192,7 @@ Deno.test("under pasta, a mount that covers the hosts file or the resolver confi
   });
 });
 
-Deno.test("executableOnPath finds an executable file in the first entry holding one, and nothing elsewhere", async () => {
+test("executableOnPath finds an executable file in the first entry holding one, and nothing elsewhere", async () => {
   const dir = await Deno.realPath(
     await Deno.makeTempDir({ prefix: "runsc-path-" }),
   );
@@ -2212,7 +2215,7 @@ Deno.test("executableOnPath finds an executable file in the first entry holding 
   }
 });
 
-Deno.test("a working directory outside the mounts is refused for fresh and session calls", async () => {
+test("a working directory outside the mounts is refused for fresh and session calls", async () => {
   const runner = new FakeRunscRunner();
   const runtime = new RunscSandboxRuntime(config(), runner);
   for (const session of [undefined, "build"]) {
@@ -2231,7 +2234,7 @@ Deno.test("a working directory outside the mounts is refused for fresh and sessi
   await runtime.close();
 });
 
-Deno.test("a run that throws still has its container deleted", async () => {
+test("a run that throws still has its container deleted", async () => {
   const cfg = config();
   const runner = new ThrowingRunscRunner();
   const runtime = new RunscSandboxRuntime(cfg, runner);
@@ -2244,7 +2247,7 @@ Deno.test("a run that throws still has its container deleted", async () => {
   );
 });
 
-Deno.test("a call that close() catches writing its bundle starts no container, with pasta's network or without", async () => {
+test("a call that close() catches writing its bundle starts no container, with pasta's network or without", async () => {
   for (const c of [config(), pastaConfig({ rootless: true })]) {
     const runner = new UnderPasta();
     const runtime = new RunscSandboxRuntime(c, runner);
@@ -2267,7 +2270,7 @@ Deno.test("a call that close() catches writing its bundle starts no container, w
   }
 });
 
-Deno.test("close takes down a fresh call that is still in flight", async () => {
+test("close takes down a fresh call that is still in flight", async () => {
   // A call racing the close, or one whose run was interrupted, kept running
   // and writing to the workspace after close() had returned.
   const runner = new FakeRunscRunner();
@@ -2297,7 +2300,7 @@ Deno.test("close takes down a fresh call that is still in flight", async () => {
   await call;
 });
 
-Deno.test("the default scratch parent must be this user's private directory", async () => {
+test("the default scratch parent must be this user's private directory", async () => {
   // With TMPDIR unset the parent is a fixed name under /tmp: whoever owns it
   // can swap a bundle or a result under the run.
   const root = await Deno.makeTempDir({ prefix: "runsc-parent-" });
@@ -2369,7 +2372,7 @@ Deno.test("the default scratch parent must be this user's private directory", as
   assert(byDefault.scratchDir.startsWith(byDefault.scratchParentToVerify!));
 });
 
-Deno.test("a call that finds its session's container gone says so, rather than failing as a command", async () => {
+test("a call that finds its session's container gone says so, rather than failing as a command", async () => {
   // Seen live: after `kill -9 1` in a session, the next call reached runsc
   // before the session's child had been reaped, and came back as exit 128
   // with runsc's own error, as if the model's command had failed.
@@ -2418,4 +2421,82 @@ Deno.test("a call that finds its session's container gone says so, rather than f
   );
   assertEquals(runtime.sessionContainerIds(), [third]);
   await runtime.close();
+});
+
+describe("runsc", () => {
+  describe("RunscSandboxRuntime", () => {
+    it("refuses a session call whose session finished starting after the runtime closed, running nothing in it", async () => {
+      const runner = new FakeRunscRunner();
+      const runtime = new RunscSandboxRuntime(config(), runner);
+      const call = runtime.run({ argv: ["/bin/true"], session: "late" });
+      const closing = runtime.close();
+      await expect(call).rejects.toThrow("sandbox runtime is closed");
+      await closing;
+      // The session's container started, and the close took it down.
+      expect(runner.spawns.length).toBe(1);
+      expect(runner.killed).toEqual([
+        expect.stringMatching(/^s-run-abc-[0-9a-f]{8}-0001:SIGKILL$/),
+      ]);
+      expect(runner.execIds).toEqual([]);
+    });
+
+    it("keeps the result of a session call that failed as its container exited, asking runsc nothing, and reports the session lost on the next call", async () => {
+      const runner = new FakeRunscRunner();
+      const runtime = new RunscSandboxRuntime(config(), runner);
+      await runtime.run({ argv: ["/bin/true"], session: "k" });
+      const [cid] = runtime.sessionContainerIds();
+      const base = runner.run.bind(runner);
+      runner.run = async (request) => {
+        const result = await base(request);
+        // The command takes the container down with it before it returns.
+        if (request.args.includes("exec")) runner.exits.get(cid!)!(137);
+        return result;
+      };
+      runner.runResult = { stdout: "partial\n", stderr: "", exitCode: 1 };
+      const before = runner.requests.length;
+
+      const result = await runtime.run({ argv: ["false"], session: "k" });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("partial\n");
+      // The call, then straight to taking the container down: no `state`
+      // asked of runsc whether the container still runs.
+      const subcommands = runner.requests.slice(before).map((r) =>
+        r.args.find((a) => ["exec", "state", "delete", "kill"].includes(a))
+      );
+      expect(subcommands.slice(0, 2)).toEqual(["exec", "delete"]);
+      expect(runtime.sessionContainerIds()).toEqual([]);
+      runner.runResult = {};
+      await expect(runtime.run({ argv: ["/bin/true"], session: "k" })).rejects
+        .toThrow('sandbox session "k" ended (its container exited)');
+      await runtime.close();
+    });
+
+    it({
+      name:
+        "under pasta, fails a call with the error itself where its container's state cannot be removed",
+      ignore: writesDespiteMode(),
+      fn: async () => {
+        const runner = new UnderPasta();
+        const c = pastaConfig({ rootless: true });
+        const runtime = new RunscSandboxRuntime(c, runner);
+        const base = runner.fake.run.bind(runner.fake);
+        runner.fake.run = async (request) => {
+          const root = rootOf(request.args);
+          await Deno.mkdir(root, { recursive: true });
+          await Deno.writeTextFile(join(root, "container.state"), "{}");
+          // Nothing may now be taken out of the directory the root is in.
+          await Deno.chmod(join(root, ".."), 0o500);
+          return await base(request);
+        };
+        try {
+          await expect(runtime.runShell({ command: "echo one" })).rejects
+            .toThrow(Deno.errors.PermissionDenied);
+        } finally {
+          await Deno.chmod(join(c.scratchDir, "state"), 0o700);
+          await runtime.close();
+        }
+      },
+    });
+  });
 });

@@ -22,13 +22,13 @@ import type {
   IExtendedStorageTransaction,
   SchedulerTestStorageManager,
 } from "./scheduler-test-utils.ts";
-import { getDirectTransactionReactivityLog } from "../src/storage/transaction-inspection.ts";
 import { PASS_RUN_BUDGET } from "../src/scheduler/constants.ts";
 import { entityKey } from "../src/scheduler/keys.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 // Seed stored CFC metadata with a path-[] full-document write, reading the
@@ -1210,7 +1210,7 @@ describe("scheduler", () => {
     const setTx = runtime.edit();
     testCell.withTx(setTx).key("nested").set({ a: 1, b: "world" });
 
-    const storageLog = getDirectTransactionReactivityLog(setTx)!;
+    const storageLog = setTx.getReactivityLog();
     const schedulerLog = txToReactivityLog(setTx);
 
     // key("nested").set() reads the nested object to compare.
@@ -1263,7 +1263,7 @@ describe("scheduler", () => {
     const setTx = runtime.edit();
     testCell.withTx(setTx).key("data").set({ unchanged: 42, changed: 999 });
 
-    const storageLog = getDirectTransactionReactivityLog(setTx)!;
+    const storageLog = setTx.getReactivityLog();
     const schedulerLog = txToReactivityLog(setTx);
 
     // The "data" path should be in attemptedWrites because diffAndUpdate
@@ -1314,7 +1314,7 @@ describe("scheduler", () => {
     const readTx = runtime.edit();
     testCell.withTx(readTx).key("value").getRaw();
 
-    const storageLog = getDirectTransactionReactivityLog(readTx)!;
+    const storageLog = readTx.getReactivityLog();
     const schedulerLog = txToReactivityLog(readTx);
 
     // Should have reads but no attemptedWrites

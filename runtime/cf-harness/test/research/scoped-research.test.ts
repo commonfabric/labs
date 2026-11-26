@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   computeEntryIdentity,
   ensureCompilerStack,
 } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { operatorProvisionedReferenceAtom } from "../../src/contracts/docs-corpus.ts";
 import {

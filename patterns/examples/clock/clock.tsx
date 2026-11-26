@@ -1,3 +1,9 @@
+/**
+ * A live wall clock showing the time and date, driven by the reactive
+ * `#now` wish. It demonstrates how a pattern gets a ticking time through
+ * `wish` when `Date.now()` is unavailable in reactive code, and how to guard
+ * for the moment before the wish resolves.
+ */
 import { computed, NAME, pattern, UI, type VNode, wish } from "commonfabric";
 
 // A live wall clock, driven by the reactive `#now` wish.

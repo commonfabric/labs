@@ -105,6 +105,28 @@ export const CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE =
 export const CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE =
   "runtime.undeclarable-store";
 
+// A served event's processed claim: the mark the serving loop writes on a
+// stream's entries document, in the transaction that runs the event's
+// handler, to record that the event has been handled. `target` is the mark's
+// own path on that document, one entry's field.
+//
+// §6.2.2 claims an event's processed cell before its handler runs, in an
+// operation of its own, so the claim reads nothing the handler reads and
+// carries none of the handler's labels. The serving loop claims it in the
+// handler's own transaction instead, so that the claim and the consequences
+// commit together, and that placement leaves the claim what §6.2.2 makes it:
+// the prepare gate neither stamps the attempt's join on a marked path nor
+// measures it there under §8.12.4. The clarification that states this is
+// https://github.com/commonfabric/specs/pull/94. Every other write the
+// transaction makes, an entry it appends to the same document included, is
+// stamped and measured as any write is.
+//
+// The gate takes it only where the input was recorded under
+// {@link runtimeWritePolicyAuthorization} and names a stream's entries
+// document, so no pattern can mark a path of its own this way.
+export const CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM =
+  "runtime.processed-claim";
+
 /**
  * Marks a write-policy input as one the runtime itself recorded.
  *
@@ -702,12 +724,17 @@ export type WritePolicyInput =
      * chosen by that and the piece's identity fixed every reference the
      * wiring places. A read the journal holds no position for counts as read
      * before it, so a transaction with no activity clock stamps from all of
-     * its reads, which over-taints. Authority is the runtime's mark.
+     * its reads, which over-taints. `runtimeStarted` is whether the runtime
+     * started the setup on its own, to repair a piece or to carry on with a
+     * pattern an earlier transaction chose: such a setup leaves the value of
+     * an unchanged result holding data as stored. Authority is the runtime's
+     * mark.
      */
     readonly kind: "result-wiring";
     readonly target: CfcAddress;
     readonly buildDecided: boolean;
     readonly setupBegan: number;
+    readonly runtimeStarted: boolean;
   }
   | {
     /**
@@ -903,6 +930,15 @@ export type PreparedDigestInput = {
    * (`CfcTxState.structureContainers`). Absent when empty, like the roots.
    */
   readonly structureContainers?: readonly CfcAddress[];
+
+  /**
+   * The value writes made under an identity other than a builtin's
+   * (`CfcTxState.nonBuiltinWrites`). They decide where preparation keeps
+   * runtime-minted evidence and which documents writer-fit measures, so a
+   * transaction whose set changes must not keep its digest. Absent when
+   * empty, like the roots.
+   */
+  readonly nonBuiltinWrites?: readonly CfcAddress[];
 };
 
 /**
@@ -1053,10 +1089,10 @@ export const DEFAULT_CFC_DECOMPOSED_ENVELOPES: CfcDecomposedEnvelopes = false;
  * Whether the envelope persist path stores version-2 envelopes, whose
  * labels above the inline limit are references to content-addressed label
  * documents (`docs/specs/content-addressed-cfc-labels.md`). Off stores
- * version 1, every label inline. Reading resolves either version. Ships
- * behind a flag because a reader that predates version 2 fails closed on
- * it, which is correct and also unusable: every deployed reader must
- * interpret version 2 before any space sees one.
+ * version 1, every label inline. Reading resolves either version. A
+ * `Runtime` writes version 2 unless told otherwise
+ * (`RUNTIME_CFC_DIAL_DEFAULTS`); the constant below is the floor of a
+ * transaction no runtime configured, which keeps version 1.
  */
 export type CfcContentAddressedLabels = boolean;
 
@@ -1208,12 +1244,24 @@ export type CfcTxState = {
   // as `writePolicyInputIdentities` above: attribution must not borrow an
   // identity a later run in the same transaction happens to set. The
   // runtime's own privileged persistence writes are excluded — bookkeeping,
-  // not authorship.
+  // not authorship — and so is a served event's processed claim, which §6.2.2
+  // makes the runtime's write, apart from the handler's: only the claim's own
+  // value, under no identity, at a path the runtime named a claim, which is
+  // the write the join's stamp leaves out too.
   writeIdentity: {
     sawWrite: boolean;
     multiple: boolean;
     identity?: ImplementationIdentity;
   };
+  // Every value write made under an identity other than a builtin's, the
+  // unattributed and the verified alike, at the payload path it wrote, each
+  // address once, in the order first made; privileged persistence writes are
+  // not among them. A builtin's write stamps runtime-minted evidence and its
+  // documents carry the runtime's undeclarable-store claim, and both stand
+  // only for what a builtin wrote: preparation drops the evidence at a path
+  // one of these overlaps, and writer-fit measures a document one of these
+  // reached, whatever a builtin writes there after it.
+  nonBuiltinWrites: CfcAddress[];
   trustSnapshot?: TrustSnapshot;
   // Whether every value the runtime initializes in this transaction — a
   // constructed cell's seed, the reference exposing it, a new field's

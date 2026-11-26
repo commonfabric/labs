@@ -1,8 +1,17 @@
+/**
+ * The assistant that answers a request with a piece. Given a situation, it
+ * searches the space and past suggestions, may ask you a clarifying question,
+ * and then presents an existing piece or one it creates from the pattern index,
+ * with an option to refine the result.
+ *
+ * When handed several ready-made candidates, it instead shows a picker to
+ * choose one.
+ */
+
 import {
   type BuiltInLLMMessage,
   computed,
   type Default,
-  fetchText,
   handler,
   ifElse,
   llmDialog,
@@ -21,6 +30,7 @@ import {
   bash,
   fetchAndRunPattern,
   listMentionable,
+  listPatternIndex,
 } from "../common-fabric/common-fabric.tsx";
 import {
   searchPattern as summarySearchPattern,
@@ -67,7 +77,7 @@ const showRefineInput = handler<unknown, { showRefine: Writable<boolean> }>(
   },
 );
 
-const setQuestion = handler<
+export const setQuestion = handler<
   { question: string; options?: string[] },
   { pendingQuestion: Writable<{ question: string; options: string[] } | null> }
 >(({ question, options }, { pendingQuestion }) => {
@@ -124,23 +134,7 @@ export default pattern<
 
   const suggestionHistory = SuggestionHistory({});
 
-  const patternIndexUrl = wish<{ url: Writable<string> }>({
-    query: "#patternIndex",
-  });
-  const resolvedPatternUrl = new Writable<string>("/api/patterns/index.md");
-  computed(() => {
-    const urlRef = patternIndexUrl?.result?.url;
-    const urlValue = typeof urlRef?.get === "function"
-      ? urlRef.get()
-      : (typeof urlRef === "string" ? urlRef : undefined);
-    if (typeof urlValue === "string" && urlValue.length > 0) {
-      resolvedPatternUrl.set(urlValue);
-    }
-  });
-
-  const { result: patternIndex } = fetchText({
-    url: resolvedPatternUrl,
-  });
+  const patternIndex = listPatternIndex({});
 
   const profileContext = computed(() => {
     const profileText = profile.result;
@@ -149,8 +143,8 @@ export default pattern<
 
   const systemPrompt = computed(() => {
     const profileCtx = profileContext;
-    const indexText = patternIndex
-      ? `\n\n--- Available Patterns ---\n${patternIndex}\n---`
+    const indexText = patternIndex?.result
+      ? `\n\n--- Available Patterns ---\n${patternIndex.result}\n---`
       : "";
     return `You help users by finding relevant content and patterns.${profileCtx}${indexText}
 
@@ -245,7 +239,7 @@ Use the user context above to personalize your suggestions when relevant.`;
       <cf-question
         question={computed(() => pendingQuestion.get()?.question ?? "")}
         options={computed(() => pendingQuestion.get()?.options ?? [])}
-        allow-custom
+        allowCustom
         style={computed(() => (hasPendingQuestion ? "" : "display:none"))}
         oncf-answer={onQuestionAnswer({ addMessage, pendingQuestion })}
       />

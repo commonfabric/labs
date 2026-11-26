@@ -1,13 +1,19 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
+import type { GitHubDelivery } from "@commonfabric/github-webhooks/relay";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
+  mergedPullRequest,
   openedPullRequest,
   type PullRequestHead,
   pushedHead,
   watchForPullRequest,
 } from "../lib/view/pullrequest.ts";
-import { fakeRelay, pullRequestPayload } from "./view-helpers.ts";
+import {
+  fakeRelay,
+  mergedPayload,
+  pullRequestPayload,
+} from "./view-helpers.ts";
 
 const HEAD: PullRequestHead = {
   repository: "https://github.com/fork/repo",
@@ -16,6 +22,10 @@ const HEAD: PullRequestHead = {
 };
 
 const URL = "https://github.com/commonfabric/labs/pull/7";
+
+/** Returns the address of the pull request opened with {@link HEAD} that a
+ * delivery reports. */
+const OPENED = (delivery: GitHubDelivery) => openedPullRequest(delivery, HEAD);
 
 /** Git's answers for a checkout at `c0ffee`, pushing to `origin` on
  * GitHub. */
@@ -127,12 +137,79 @@ describe("pullrequest", () => {
     });
   });
 
+  describe("mergedPullRequest()", () => {
+    it("returns the address of the pull request that merged, comparing its repository without regard to letter case", () => {
+      for (const repository of ["commonfabric/labs", "CommonFabric/Labs"]) {
+        expect(
+          mergedPullRequest(
+            { event: "pull_request", payload: mergedPayload() },
+            repository,
+            7,
+          ),
+        ).toBe(URL);
+      }
+    });
+
+    it("returns null for a pull request closed without merging, another pull request, another repository, or an address that is not a GitHub pull request's", () => {
+      const merged = mergedPayload();
+      for (
+        const payload of [
+          mergedPayload({ merged: false }),
+          mergedPayload({ action: "opened" }),
+          mergedPayload({ number: 8 }),
+          mergedPayload({ repository: "other/labs" }),
+          {
+            ...merged,
+            pull_request: {
+              ...merged.pull_request,
+              html_url: "https://github.com/x/y/pull/7\x1b[2J",
+            },
+          },
+        ]
+      ) {
+        expect(
+          mergedPullRequest(
+            { event: "pull_request", payload },
+            "commonfabric/labs",
+            7,
+          ),
+        ).toBeNull();
+      }
+    });
+
+    it("returns null for another event, or a payload missing what it reads", () => {
+      for (
+        const [event, payload] of [
+          ["issues", mergedPayload()],
+          ["pull_request", []],
+          ["pull_request", { action: "closed" }],
+          ["pull_request", {
+            action: "closed",
+            pull_request: { merged: true, number: 7, html_url: URL },
+          }],
+          ["pull_request", {
+            action: "closed",
+            pull_request: {
+              merged: true,
+              number: 7,
+              html_url: URL,
+              base: { repo: "commonfabric/labs" },
+            },
+          }],
+        ] as const
+      ) {
+        expect(mergedPullRequest({ event, payload }, "commonfabric/labs", 7))
+          .toBeNull();
+      }
+    });
+  });
+
   describe("watchForPullRequest()", () => {
     it("resolves with the address once the pull request opens, passing over other deliveries, and closes the connection", async () => {
       const relay = fakeRelay();
       const watch = watchForPullRequest(
         relay.connect,
-        HEAD,
+        OPENED,
         new AbortController().signal,
       );
       await relay.connected;
@@ -155,7 +232,7 @@ describe("pullrequest", () => {
           said.push("connecting");
           return relay.connect();
         },
-        HEAD,
+        OPENED,
         new AbortController().signal,
         () => said.push("connected"),
       );
@@ -173,7 +250,7 @@ describe("pullrequest", () => {
       const relay = fakeRelay();
       const watch = watchForPullRequest(
         relay.connect,
-        HEAD,
+        OPENED,
         new AbortController().signal,
       );
       await relay.connected;
@@ -188,7 +265,7 @@ describe("pullrequest", () => {
       const relay = fakeRelay();
       const watch = watchForPullRequest(
         relay.connect,
-        HEAD,
+        OPENED,
         new AbortController().signal,
       );
       await relay.connected;
@@ -205,7 +282,7 @@ describe("pullrequest", () => {
       await expect(
         watchForPullRequest(
           () => Promise.reject(new Error("connection refused")),
-          HEAD,
+          OPENED,
           new AbortController().signal,
         ),
       ).rejects.toThrow("connection refused");
@@ -214,7 +291,11 @@ describe("pullrequest", () => {
     it("rejects, closing the connection, when its signal aborts", async () => {
       const relay = fakeRelay();
       const controller = new AbortController();
-      const watch = watchForPullRequest(relay.connect, HEAD, controller.signal);
+      const watch = watchForPullRequest(
+        relay.connect,
+        OPENED,
+        controller.signal,
+      );
       await relay.connected;
 
       controller.abort(new Error("the dialog closed"));
@@ -232,7 +313,7 @@ describe("pullrequest", () => {
           await connecting.promise;
           return relay.connect();
         },
-        HEAD,
+        OPENED,
         controller.signal,
       );
 
@@ -248,7 +329,7 @@ describe("pullrequest", () => {
       const writer = writable.getWriter();
       const watch = watchForPullRequest(
         () => Promise.resolve({ readable, close: () => {} }),
-        HEAD,
+        OPENED,
         new AbortController().signal,
       );
 
@@ -266,7 +347,7 @@ describe("pullrequest", () => {
           signals.push(signal);
           return relay.connect();
         },
-        HEAD,
+        OPENED,
         controller.signal,
       );
       await relay.connected;
@@ -280,7 +361,7 @@ describe("pullrequest", () => {
       const relay = fakeRelay();
 
       await expect(
-        watchForPullRequest(relay.connect, HEAD, AbortSignal.abort()),
+        watchForPullRequest(relay.connect, OPENED, AbortSignal.abort()),
       ).rejects.toThrow();
       expect(relay.connections).toBe(0);
     });
@@ -298,7 +379,7 @@ describe("pullrequest", () => {
             },
           };
         },
-        HEAD,
+        OPENED,
         new AbortController().signal,
       );
       await relay.connected;

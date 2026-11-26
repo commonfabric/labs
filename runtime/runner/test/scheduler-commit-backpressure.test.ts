@@ -20,6 +20,7 @@
 
 import { defer } from "@commonfabric/async/defer";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { resolveLink } from "../src/link-resolution.ts";
 import {

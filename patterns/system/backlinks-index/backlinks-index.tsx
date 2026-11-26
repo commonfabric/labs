@@ -38,6 +38,8 @@ type Input = {
 };
 
 export type Output = {
+  [NAME]: string;
+  [UI]: VNode;
   mentionable: MentionableCell[];
 };
 

@@ -137,7 +137,6 @@ const DIRS = [
   "patterns/system/home",
   "patterns/system/journal",
   "patterns/system/knowledge-graph",
-  "patterns/system/link-tool",
   "patterns/system/mentionables-inspector",
   "patterns/system/notes",
   "patterns/system/omnibox-fab",
@@ -886,7 +885,4 @@ export async function main(
   return passed ? 0 : 1;
 }
 
-// `Deno.exitCode` rather than `Deno.exit`, which would end the process
-// before the unload handlers run — and one of those is what writes a
-// test run's name map into its spool.
 if (import.meta.main) Deno.exitCode = await main();

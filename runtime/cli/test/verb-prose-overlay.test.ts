@@ -17,10 +17,10 @@
  * there as well, against output the compiler actually emitted.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { decomposeSchema } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import { registerSchemaDocument } from "../../runner/src/schema-registry.ts";
 import { externalRefTo } from "../../runner/test/schema-ref-helpers.ts";
 
@@ -382,6 +382,8 @@ describe("verb prose", () => {
         // declaration that documents them. The name map must bridge that
         // gap, or the definitions an author documented best are exactly the
         // ones renamed def_XXXX.
+        // The boolean `additionalProperties` is a subschema the prose-free
+        // walk passes over.
         const declared = object({ pet: { $ref: "#/$defs/Pet" } }, {
           $defs: {
             Pet: {
@@ -390,6 +392,7 @@ describe("verb prose", () => {
               properties: {
                 name: { type: "string", description: "The pet's name." },
               },
+              additionalProperties: true,
             },
           },
         });
@@ -398,13 +401,17 @@ describe("verb prose", () => {
             Pet: {
               type: "object",
               properties: { name: { type: "string" } },
+              additionalProperties: true,
             },
           },
         });
         const rootRef = registeredRefTo(servedSource);
         const result = fold({ $ref: rootRef } as JSONSchema, declared);
         expect(Object.keys(result.$defs)).toEqual(["Pet"]);
-        expect(result.properties.pet.$ref).toBe("#/$defs/Pet");
+        expect(result.properties.pet).toEqual({
+          $ref: "#/$defs/Pet",
+          description: "A household pet.",
+        });
       });
 
       it("strips schema prose without rewriting application data", () => {

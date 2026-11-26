@@ -60,17 +60,16 @@ import {
   type StoredReport,
 } from "@commonfabric/test-support/records";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
-import {
-  ciSubmissionsPrefix,
-  storeBucket,
-  storePrefix,
-} from "./test-records-config.ts";
+import { storeBucket, storePrefix } from "./test-records-config.ts";
 
 const ENCODER = new TextEncoder();
 
-/** The folder holding one day's rollup shards and its manifest. */
-export function rollupPrefix(day: string): string {
-  return `${storePrefix()}/aggregated/ci/v${RECORD_SCHEMA_VERSION}/${day}/`;
+/**
+ * The folder holding one day's rollup shards and its manifest, under the
+ * dataset `prefix`.
+ */
+export function rollupPrefix(day: string, prefix = storePrefix()): string {
+  return `${prefix}/aggregated/ci/v${RECORD_SCHEMA_VERSION}/${day}/`;
 }
 
 /**
@@ -79,8 +78,11 @@ export function rollupPrefix(day: string): string {
  * whose rollup is complete, and a day without one has no rollup a reader
  * may use.
  */
-export function rollupManifestName(day: string): string {
-  return `${rollupPrefix(day)}rollup.json`;
+export function rollupManifestName(
+  day: string,
+  prefix = storePrefix(),
+): string {
+  return `${rollupPrefix(day, prefix)}rollup.json`;
 }
 
 /**
@@ -137,8 +139,11 @@ export interface RollupManifest {
 const SHARD_NAME = /^(\d{4,})-of-(\d{4,})\.ndjson$/;
 
 /** The object fixing how many shards a day is divided into. */
-export function rollupPartitionName(day: string): string {
-  return `${rollupPrefix(day)}partition.json`;
+export function rollupPartitionName(
+  day: string,
+  prefix = storePrefix(),
+): string {
+  return `${rollupPrefix(day, prefix)}partition.json`;
 }
 
 /**
@@ -283,7 +288,12 @@ export interface CompactOptions {
   days: number;
   plan: boolean;
   bucket: string;
-  rawPrefix: string;
+
+  /**
+   * The dataset prefix: the raw objects are read from its submissions/ci/
+   * area and the rollups written to its aggregated/ci/ area.
+   */
+  prefix: string;
 
   /** Required unless plan is set. */
   token?: string;
@@ -347,7 +357,7 @@ async function* reportBodies(
 
 /** Compacts every closed day that has records and no rollup yet. */
 export async function compactDays(options: CompactOptions): Promise<void> {
-  const { bucket, rawPrefix, plan } = options;
+  const { bucket, prefix, plan } = options;
   const list = (prefix: string): Promise<ListedObject[]> => {
     const listOptions: Parameters<typeof listObjectSizes>[0] = {
       bucket,
@@ -397,7 +407,7 @@ export async function compactDays(options: CompactOptions): Promise<void> {
     day: string,
     count: number,
   ): Promise<number | undefined> => {
-    const name = rollupPartitionName(day);
+    const name = rollupPartitionName(day, prefix);
     const claim: RollupPartition = {
       schema: RECORD_SCHEMA_VERSION,
       day,
@@ -416,11 +426,15 @@ export async function compactDays(options: CompactOptions): Promise<void> {
   };
 
   for (const day of closedDays(options.days, options.now)) {
-    const present = await list(rollupPrefix(day));
-    if (present.some((object) => object.name === rollupManifestName(day))) {
+    const present = await list(rollupPrefix(day, prefix));
+    if (
+      present.some((object) => object.name === rollupManifestName(day, prefix))
+    ) {
       continue;
     }
-    const raw = await list(`${rawPrefix}/v${RECORD_SCHEMA_VERSION}/${day}/`);
+    const raw = await list(
+      `${prefix}/submissions/ci/v${RECORD_SCHEMA_VERSION}/${day}/`,
+    );
     if (raw.length === 0) continue;
     const stored = raw.reduce((total, object) => total + object.size, 0);
     // The shard count comes from the listing's sizes, and a rollup cannot
@@ -433,7 +447,7 @@ export async function compactDays(options: CompactOptions): Promise<void> {
       );
       continue;
     }
-    const partitionName = rollupPartitionName(day);
+    const partitionName = rollupPartitionName(day, prefix);
     const partitioned = present.some((object) => object.name === partitionName);
     // Every shard of a day is written after the partition naming it, so a
     // folder holding objects without one holds a partition this run cannot
@@ -468,7 +482,7 @@ export async function compactDays(options: CompactOptions): Promise<void> {
         `would compact ${day}: ${raw.length} object(s), ` +
           `${(stored / 1e6).toFixed(1)} MB -> ` +
           `${claimed ?? shardCount(stored)} shard(s) under ` +
-          rollupPrefix(day) +
+          rollupPrefix(day, prefix) +
           (partitioned ? ", resuming the partition claimed for it" : ""),
       );
       continue;
@@ -492,7 +506,7 @@ export async function compactDays(options: CompactOptions): Promise<void> {
     let written = 0;
     for (let index = 0; index < count; index++) {
       const shard = rollupShardName(index, count);
-      const name = `${rollupPrefix(day)}${shard}`;
+      const name = `${rollupPrefix(day, prefix)}${shard}`;
       if (existing.has(name)) {
         shards.push(shard);
         continue;
@@ -524,7 +538,7 @@ export async function compactDays(options: CompactOptions): Promise<void> {
       shards,
     };
     const result = await create(
-      rollupManifestName(day),
+      rollupManifestName(day, prefix),
       ENCODER.encode(JSON.stringify(manifest)),
       "application/json",
     );
@@ -534,7 +548,9 @@ export async function compactDays(options: CompactOptions): Promise<void> {
     }
     console.log(
       `${day}: ${raw.length} object(s) compacted to ${shards.length} ` +
-        `shard(s) under ${rollupPrefix(day)}; ${written} written now, ` +
+        `shard(s) under ${
+          rollupPrefix(day, prefix)
+        }; ${written} written now, ` +
         `holding ${total.records} record(s) in ${total.reports} report(s)`,
     );
   }
@@ -570,11 +586,15 @@ export function parseCompactArgs(
 }
 
 /**
- * The access token for writing shards, when one is reachable. Only the
- * compaction workflow has one, and there is no fallback to offer: the
- * compactor's identity exists as no key, and a person's own reporting key
- * is scoped to their submissions/local/<username>/ folder and cannot write
- * a rollup. --plan is how a person sees what a run would do.
+ * The access token for writing to the store, when one is reachable: the
+ * compactor writes shards with it, and the publisher in
+ * `test-selection-publish.ts` creates manifests with it. Only the workflow
+ * running each has one, and there is no fallback to offer: each identity is
+ * federated and pinned to its workflow file and exists as no key, and a
+ * person's own reporting key is scoped to their
+ * submissions/local/<username>/ folder and can write neither. --plan here,
+ * and --dry-run --out for the publisher, is how a person sees what a run
+ * would do.
  */
 export function writeToken(
   env: Environment = Deno.env.get,
@@ -585,33 +605,38 @@ export function writeToken(
     : undefined;
 }
 
-async function main(): Promise<void> {
-  const parsed = parseCompactArgs(Deno.args);
-  if (parsed === undefined) Deno.exit(2);
-  const { days, plan } = parsed;
-
+/**
+ * Runs the compaction a command line asks for over the store `env` names,
+ * and returns the exit status: 2 for a malformed command line, and for a
+ * run that would write with no token to write with.
+ */
+export async function runCompactCommand(
+  args: readonly string[],
+  env: Environment = Deno.env.get,
+  overrides: Pick<CompactOptions, "fetchImpl" | "now"> = {},
+): Promise<number> {
+  const parsed = parseCompactArgs(args);
+  if (parsed === undefined) return 2;
   const options: CompactOptions = {
-    days,
-    plan,
-    bucket: storeBucket(),
-    rawPrefix: ciSubmissionsPrefix(),
+    ...parsed,
+    bucket: storeBucket(env),
+    prefix: storePrefix(env),
+    ...overrides,
   };
-  if (!plan) {
-    const token = writeToken();
+  if (!parsed.plan) {
+    const token = writeToken(env);
     if (token === undefined) {
       console.error(
         "TEST_RECORDS_GCS_TOKEN is not set. The compactor's identity is " +
           "held by the compaction workflow alone; run with --plan to see " +
           "what would be compacted.",
       );
-      Deno.exit(2);
+      return 2;
     }
     options.token = token;
   }
-
   await compactDays(options);
+  return 0;
 }
 
-if (import.meta.main) {
-  await main();
-}
+if (import.meta.main) Deno.exit(await runCompactCommand(Deno.args));

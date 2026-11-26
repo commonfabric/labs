@@ -1,10 +1,10 @@
 import { booleanSchema } from "@commonfabric/runner/schemas";
 import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
-import { ifDefined } from "lit/directives/if-defined.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createBooleanCellController } from "../../core/cell-controller.ts";
+import { HostActivationController } from "../../core/host-activation-controller.ts";
 
 /**
  * CFSwitch - Toggle switch component for binary on/off states
@@ -13,8 +13,6 @@ import { createBooleanCellController } from "../../core/cell-controller.ts";
  *
  * @attr {boolean|CellHandle<boolean>} checked - Whether the switch is checked/on (supports both plain boolean and CellHandle<boolean>)
  * @attr {boolean} disabled - Whether the switch is disabled
- * @attr {string} name - Name attribute for form submission
- * @attr {string} value - Value attribute for form submission (default: "on")
  *
  * @fires cf-change - Fired when switch state changes with detail: { checked }
  *
@@ -118,19 +116,6 @@ export class CFSwitch extends BaseElement {
       transform: translateX(var(--cf-switch-thumb-travel));
     }
 
-    /* Hidden native input for form compatibility */
-    .sr-only {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      white-space: nowrap;
-      border-width: 0;
-    }
-
     /* Hover state */
     :host(:not([disabled]):hover) .switch:not(.checked) {
       background-color: var(--cf-switch-color-border, #e2e8f0);
@@ -154,14 +139,10 @@ export class CFSwitch extends BaseElement {
   static override properties = {
     checked: { type: Boolean, reflect: true },
     disabled: { type: Boolean, reflect: true },
-    name: { type: String },
-    value: { type: String },
   };
 
   declare checked: CellHandle<boolean> | boolean;
   declare disabled: boolean;
-  declare name: string;
-  declare value: string;
 
   private _checkedCellController = createBooleanCellController(this, {
     timing: {
@@ -173,12 +154,17 @@ export class CFSwitch extends BaseElement {
     },
   });
 
+  #activation = new HostActivationController(this, {
+    role: "switch",
+    keys: ["Enter", " "],
+    isDisabled: () => this.disabled,
+    activate: () => this._toggle(),
+  });
+
   constructor() {
     super();
     this.checked = false;
     this.disabled = false;
-    this.name = "";
-    this.value = "on";
   }
 
   private getChecked(): boolean {
@@ -186,9 +172,6 @@ export class CFSwitch extends BaseElement {
   }
 
   override connectedCallback() {
-    if (!this.hasAttribute("role")) {
-      this.setAttribute("role", "switch");
-    }
     if (!this.hasAttribute("exportparts")) {
       this.setAttribute("exportparts", "switch,thumb");
     }
@@ -196,15 +179,6 @@ export class CFSwitch extends BaseElement {
     this._updateAriaAttributes();
     // Bind initial checked value
     this._checkedCellController.bind(this.checked, booleanSchema);
-    // Add event listeners to the host element
-    this.addEventListener("click", this._handleClick);
-    this.addEventListener("keydown", this._handleKeydown);
-  }
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    this.removeEventListener("click", this._handleClick);
-    this.removeEventListener("keydown", this._handleKeydown);
   }
 
   override willUpdate(
@@ -221,13 +195,9 @@ export class CFSwitch extends BaseElement {
     changedProperties: Map<string | number | symbol, unknown>,
   ) {
     super.updated(changedProperties);
-
-    if (
-      changedProperties.has("checked") ||
-      changedProperties.has("disabled")
-    ) {
-      this._updateAriaAttributes();
-    }
+    // A bound cell's value arrives without any property changing, so ARIA
+    // state follows every update rather than named ones.
+    this._updateAriaAttributes();
   }
 
   override render() {
@@ -250,33 +220,15 @@ export class CFSwitch extends BaseElement {
       >
         <span class="thumb" part="thumb"></span>
       </div>
-      <input
-        type="checkbox"
-        class="sr-only"
-        ?checked="${isChecked}"
-        ?disabled="${this.disabled}"
-        name="${ifDefined(this.name || undefined)}"
-        value="${this.value}"
-        tabindex="-1"
-        aria-hidden="true"
-      />
     `;
   }
 
   private _updateAriaAttributes() {
     const isChecked = this.getChecked();
     this.setAttribute("aria-checked", String(isChecked));
-    this.setAttribute("aria-disabled", String(this.disabled));
-    this.tabIndex = this.disabled ? -1 : 0;
   }
 
-  private _handleClick(event: Event) {
-    if (this.disabled) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-
+  private _toggle() {
     // Toggle checked state via cell controller, which computes it from what
     // the cell holds, asking the worker first where it has read nothing.
     if (this._checkedCellController.hasCell()) {
@@ -287,34 +239,5 @@ export class CFSwitch extends BaseElement {
     // For plain boolean usage (no Cell), update the property directly
     this.checked = !this.getChecked();
     this.emit("cf-change", { checked: this.checked });
-  }
-
-  private _handleKeydown(event: KeyboardEvent) {
-    if (this.disabled) {
-      return;
-    }
-
-    // Handle Space and Enter keys
-    if (
-      event.key === " " || event.key === "Spacebar" ||
-      event.key === "Enter"
-    ) {
-      event.preventDefault();
-      this._handleClick(event);
-    }
-  }
-
-  /**
-   * Focus the switch programmatically
-   */
-  override focus(): void {
-    super.focus();
-  }
-
-  /**
-   * Blur the switch programmatically
-   */
-  override blur(): void {
-    super.blur();
   }
 }

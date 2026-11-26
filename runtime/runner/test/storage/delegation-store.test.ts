@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type Delegation,
@@ -9,6 +8,7 @@ import {
   issueDelegation,
 } from "@commonfabric/identity";
 import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { DelegationStore } from "../../src/storage/delegation-store.ts";
 

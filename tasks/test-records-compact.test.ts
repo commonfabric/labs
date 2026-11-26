@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -13,6 +12,7 @@ import {
   rollupPrefix,
   rollupShardName,
   rollupShards,
+  runCompactCommand,
   SHARD_TARGET_BYTES,
   shardCount,
   shardOf,
@@ -25,6 +25,7 @@ import {
   type RunContext,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const NOW = Date.parse("2026-08-18T12:00:00Z");
 const DAY = "2026/08/11";
@@ -149,6 +150,35 @@ function storeFetch(store: Store): typeof fetch {
   }) as typeof fetch;
 }
 
+/**
+ * Runs `body` with `console.log` and `console.error` captured, returning
+ * the lines each received alongside the body's result.
+ */
+async function captureConsole<T>(
+  body: () => Promise<T>,
+): Promise<{ result: T; out: string[]; err: string[] }> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const log = console.log;
+  const error = console.error;
+  console.log = (line: string) => out.push(line);
+  console.error = (line: string) => err.push(line);
+  try {
+    return { result: await body(), out, err };
+  } finally {
+    console.log = log;
+    console.error = error;
+  }
+}
+
+/** The name a create's multipart body gives the object, if it is a create. */
+function createdName(init?: RequestInit): string | undefined {
+  if (init?.method !== "POST") return undefined;
+  return new TextDecoder("utf-8", { fatal: false })
+    .decode((init.body as Uint8Array).subarray(0, 512))
+    .match(/"name":"([^"]+)"/)?.[1];
+}
+
 /** The shards a run created, by name. */
 function createdShards(store: Store): string[] {
   return Object.keys(store.created)
@@ -179,7 +209,7 @@ async function compactedNames(store: Store): Promise<string[]> {
 const OPTIONS = {
   days: COMPACTION_LAG_DAYS,
   bucket: "cf-ci-metadata",
-  rawPrefix: "labs/test-records/submissions/ci",
+  prefix: "labs/test-records",
   token: "t",
   now: NOW,
   plan: false,
@@ -587,6 +617,87 @@ describe("test-records-compact", () => {
       );
     });
 
+    it("leaves a day open where another run claimed a partition that cannot be read", async () => {
+      const store = storeOf(DAY, [buildObjectBody(contextOn(DAY), [RECORD])]);
+      const inner = storeFetch(store);
+      // The claim loses its race, and what won will not read.
+      const raced = ((input: URL | RequestInfo, init?: RequestInit) => {
+        if (createdName(init) === rollupPartitionName(DAY)) {
+          return Promise.resolve(new Response("taken", { status: 412 }));
+        }
+        if (String(input).endsWith("/partition.json")) {
+          return Promise.resolve(new Response("gone", { status: 404 }));
+        }
+        return inner(input, init);
+      }) as typeof fetch;
+      const { err } = await captureConsole(() =>
+        compactDays({ ...OPTIONS, fetchImpl: raced })
+      );
+      expect(Object.keys(store.created)).toEqual([]);
+      expect(err).toEqual([
+        `${DAY}: another run claimed a partition this one cannot read; ` +
+        "leaving the day open",
+      ]);
+    });
+
+    it("leaves the manifest of a run that got there first in place", async () => {
+      const store = storeOf(DAY, [buildObjectBody(contextOn(DAY), [RECORD])]);
+      const inner = storeFetch(store);
+      const raced = ((input: URL | RequestInfo, init?: RequestInit) => {
+        if (createdName(init) === rollupManifestName(DAY)) {
+          return Promise.resolve(new Response("taken", { status: 412 }));
+        }
+        return inner(input, init);
+      }) as typeof fetch;
+      const { out } = await captureConsole(() =>
+        compactDays({ ...OPTIONS, fetchImpl: raced })
+      );
+      expect(store.created[rollupManifestName(DAY)]).toBeUndefined();
+      expect(createdShards(store).length).toBe(1);
+      expect(out).toEqual([`${DAY}: another run's manifest got there first`]);
+    });
+
+    it("throws for an object it cannot read, and writes no manifest", async () => {
+      const store = storeOf(DAY, [buildObjectBody(contextOn(DAY), [RECORD])]);
+      const inner = storeFetch(store);
+      const failing = ((input: URL | RequestInfo, init?: RequestInit) => {
+        const url = String(input);
+        if (!url.includes("/storage/v1/") && url.includes("run-0-Test")) {
+          return Promise.resolve(new Response("unavailable", { status: 503 }));
+        }
+        return inner(input, init);
+      }) as typeof fetch;
+      await expect(compactDays({ ...OPTIONS, fetchImpl: failing })).rejects
+        .toThrow(
+          `reading labs/test-records/submissions/ci/v1/${DAY}/run-0-Test.ndjson ` +
+            "failed: HTTP 503",
+        );
+      expect(createdShards(store)).toEqual([]);
+      expect(store.created[rollupManifestName(DAY)]).toBeUndefined();
+    });
+
+    it("leaves out records that no context line heads", async () => {
+      const headless = JSON.stringify({
+        ...RECORD,
+        test: { ...RECORD.test, n: "headless" },
+      }) + "\n";
+      const store = storeOf(DAY, [
+        headless + buildObjectBody(contextOn(DAY), [RECORD]),
+      ]);
+      await compactDays({ ...OPTIONS, fetchImpl: storeFetch(store) });
+      expect(await compactedNames(store)).toEqual([RECORD.test.n]);
+    });
+
+    it("claims nothing for a day with no objects, and says nothing about it", async () => {
+      const store = storeOf(DAY, []);
+      const { out, err } = await captureConsole(() =>
+        compactDays({ ...OPTIONS, fetchImpl: storeFetch(store) })
+      );
+      expect(Object.keys(store.created)).toEqual([]);
+      expect(out).toEqual([]);
+      expect(err).toEqual([]);
+    });
+
     it("leaves a day whose partition cannot be read open", async () => {
       const store = storeOf(DAY, [buildObjectBody(contextOn(DAY), [RECORD])]);
       store.objects[rollupPartitionName(DAY)] = "not a partition";
@@ -665,6 +776,115 @@ describe("test-records-compact", () => {
       await compactDays({ ...OPTIONS, plan: true, fetchImpl: watched });
       expect(Object.keys(store.created)).toEqual([]);
       expect(reads).toEqual([]);
+    });
+  });
+
+  describe("runCompactCommand()", () => {
+    it("plans over the store the environment names, writing nothing", async () => {
+      const store = storeOf(DAY, [buildObjectBody(contextOn(DAY), [RECORD])]);
+      const inner = storeFetch(store);
+      const listed: string[] = [];
+      const watched = ((input: URL | RequestInfo, init?: RequestInit) => {
+        listed.push(String(input));
+        return inner(input, init);
+      }) as typeof fetch;
+      const { result: code, out } = await captureConsole(() =>
+        runCompactCommand(
+          ["--plan", "--days", String(COMPACTION_LAG_DAYS)],
+          (name) => name === "TEST_RECORDS_BUCKET" ? "probe-bucket" : undefined,
+          { fetchImpl: watched, now: NOW },
+        )
+      );
+      expect(code).toBe(0);
+      expect(Object.keys(store.created)).toEqual([]);
+      expect(listed.every((url) => url.includes("/b/probe-bucket/"))).toBe(
+        true,
+      );
+      expect(out).toEqual([
+        `would compact ${DAY}: 1 object(s), 0.0 MB -> 1 shard(s) under ` +
+        rollupPrefix(DAY),
+      ]);
+    });
+
+    it("reads and writes under the dataset prefix the environment names", async () => {
+      const store: Store = {
+        objects: {
+          [`probe/records/submissions/ci/v1/${DAY}/run-0-Test.ndjson`]:
+            buildObjectBody(contextOn(DAY), [RECORD]),
+          // The default dataset holds a day of its own, which a run over
+          // the probe dataset must leave alone.
+          ...storeOf(DAY, [buildObjectBody(contextOn(DAY), [RECORD])]).objects,
+        },
+        created: {},
+        size: 1000,
+      };
+      const { result: code } = await captureConsole(() =>
+        runCompactCommand(
+          ["--days", String(COMPACTION_LAG_DAYS)],
+          (name) =>
+            ({
+              TEST_RECORDS_GCS_TOKEN: "federated",
+              TEST_RECORDS_PREFIX: "probe/records",
+            })[name],
+          { fetchImpl: storeFetch(store), now: NOW },
+        )
+      );
+      expect(code).toBe(0);
+      expect(Object.keys(store.created).sort()).toEqual([
+        "probe/records/aggregated/ci/v1/2026/08/11/0000-of-0001.ndjson",
+        "probe/records/aggregated/ci/v1/2026/08/11/partition.json",
+        "probe/records/aggregated/ci/v1/2026/08/11/rollup.json",
+      ]);
+      expect(await compactedNames(store)).toEqual([RECORD.test.n]);
+    });
+
+    it("compacts with the token the environment supplies", async () => {
+      const store = storeOf(DAY, [buildObjectBody(contextOn(DAY), [RECORD])]);
+      const inner = storeFetch(store);
+      const tokens = new Set<string | null>();
+      const watched = ((input: URL | RequestInfo, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          tokens.add(new Headers(init.headers).get("authorization"));
+        }
+        return inner(input, init);
+      }) as typeof fetch;
+      const { result: code } = await captureConsole(() =>
+        runCompactCommand(
+          ["--days", String(COMPACTION_LAG_DAYS)],
+          (name) => name === "TEST_RECORDS_GCS_TOKEN" ? "federated" : undefined,
+          { fetchImpl: watched, now: NOW },
+        )
+      );
+      expect(code).toBe(0);
+      expect(createdManifest(store, DAY)?.shards).toEqual([
+        "0000-of-0001.ndjson",
+      ]);
+      expect([...tokens]).toEqual(["Bearer federated"]);
+    });
+
+    it("returns 2 and writes nothing without a token outside plan mode", async () => {
+      const store = storeOf(DAY, [buildObjectBody(contextOn(DAY), [RECORD])]);
+      const { result: code, err } = await captureConsole(() =>
+        runCompactCommand([], () => undefined, {
+          fetchImpl: storeFetch(store),
+          now: NOW,
+        })
+      );
+      expect(code).toBe(2);
+      expect(Object.keys(store.created)).toEqual([]);
+      expect(err).toEqual([
+        "TEST_RECORDS_GCS_TOKEN is not set. The compactor's identity is " +
+        "held by the compaction workflow alone; run with --plan to see " +
+        "what would be compacted.",
+      ]);
+    });
+
+    it("returns 2 for a malformed command line", async () => {
+      const { result: code, err } = await captureConsole(() =>
+        runCompactCommand(["--mystery"], () => "token")
+      );
+      expect(code).toBe(2);
+      expect(err).toEqual(["unknown flag --mystery"]);
     });
   });
 

@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { walk } from "@std/fs";
+import { test } from "@commonfabric/test-support/test";
 
 // Invariant: no transformed output (golden) may reference a commonfabric export
 // via an inline import type: `import("commonfabric").X`, or the
@@ -20,7 +21,7 @@ import { walk } from "@std/fs";
 const FIXTURES_ROOT = new URL("./fixtures/", import.meta.url);
 const FORBIDDEN = /import\("(?:\.\.?\/)*commonfabric"\)/;
 
-Deno.test("no golden output contains an inline import type of commonfabric", async () => {
+test("no golden output contains an inline import type of commonfabric", async () => {
   const offenders: string[] = [];
 
   for await (

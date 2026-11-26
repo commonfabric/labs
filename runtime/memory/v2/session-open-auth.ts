@@ -24,6 +24,7 @@
  */
 
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
+import { isPlainObject } from "@commonfabric/js-values/types";
 import {
   hashOf,
   isFabricPlainObject,
@@ -73,6 +74,7 @@ const sameSessionDescriptor = (
     genesisRoot?: FabricValue;
     spaceKind?: string;
     instanceNames?: true;
+    demand?: false;
     invite?: { inviteId: string; code: string };
   },
 ): boolean =>
@@ -105,6 +107,9 @@ const sameSessionDescriptor = (
   // declaration cannot be attached or stripped in transit either. Compared
   // as signed, like the kind.
   left.instanceNames === right.instanceNames &&
+  // Whether the session is demand decides whether its space is served, so
+  // the declaration cannot be attached or stripped in transit either.
+  left.demand === right.demand &&
   // An invitation redeems as the signer, so one cannot be attached to or
   // taken off a signed open in transit.
   valueEqual(left.invite, right.invite);
@@ -121,6 +126,7 @@ export type SessionOpenMessage = {
     genesisRoot?: FabricValue;
     spaceKind?: string;
     instanceNames?: true;
+    demand?: false;
     invite?: { inviteId: string; code: string };
   };
   invocation?: FabricPlainObject;
@@ -310,6 +316,29 @@ export const SESSION_OPEN_COMMAND = "/memory/session.open";
  */
 export const MAX_PROOF_CHAIN_LENGTH = 8;
 
+/**
+ * Whether `message` is a `session.open` naming a connection-authenticated
+ * `principal` whose `authorization` presents a proof chain and nothing else:
+ * `proofs`, a non-empty list of at most {@link MAX_PROOF_CHAIN_LENGTH}
+ * entries. This is the one `authorization` a routed open may carry. A signed
+ * open's `authorization` would authenticate the principal itself, which a
+ * routed open leaves to the router's connection authentication; a chain only
+ * names whose grant the session's capability resolves from, and
+ * {@link verifySessionOpenProofs} checks that it ends at the principal.
+ */
+export const carriesOnlySessionOpenProofs = (
+  message: Record<string, unknown>,
+): boolean => {
+  const { authorization } = message;
+  return message.type === "session.open" &&
+    typeof message.principal === "string" &&
+    isPlainObject(authorization) &&
+    Object.keys(authorization).length === 1 &&
+    Array.isArray(authorization.proofs) &&
+    authorization.proofs.length >= 1 &&
+    authorization.proofs.length <= MAX_PROOF_CHAIN_LENGTH;
+};
+
 export type VerifySessionOpenProofsOptions = {
   /** The space the open names. */
   space: string;
@@ -328,6 +357,9 @@ export type VerifiedProofChain = {
    * session's capability resolves from.
    */
   rootIssuer: string;
+
+  /** The chain's issuers, root first. */
+  issuers: string[];
 
   /**
    * The unix second the chain stops holding, the earliest `exp` among its
@@ -389,8 +421,6 @@ export const verifySessionOpenProofs = async (
       throw proofError("`prf` does not name one CID per proof");
     }
     cids = prf as string[];
-  } else if (prf !== undefined) {
-    throw proofError("`prf` without a signed invocation");
   }
   const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
   const chain: Delegation[] = [];
@@ -453,6 +483,7 @@ export const verifySessionOpenProofs = async (
   }
   return {
     rootIssuer: chain[0].payload.iss,
+    issuers: chain.map(({ payload }) => payload.iss),
     ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 };

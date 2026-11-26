@@ -6,7 +6,6 @@
  * own, and the address returned names it.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
@@ -24,6 +23,12 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 
 import { PiecesController } from "@commonfabric/piece/ops";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { SpaceConfig } from "../lib/piece.ts";
 import {
@@ -254,6 +259,33 @@ describe("createProfile()", () => {
       /more than one carries that name/,
     );
     expect(await createdByThisCall([], "Ada Lovelace")).toBeUndefined();
+  });
+
+  it("returns the named profile, skipping a candidate that is no pattern's result, when two appeared at once", async () => {
+    const alan = await createProfile({ ...CONFIG, name: "Alan Turing" }, {
+      loadPieces,
+    });
+    const links: Cell<unknown>[] = host.key("profiles").asSchema({
+      type: "array",
+      items: { type: "unknown", asCell: ["cell"] },
+    }).get();
+    const tx = runtime.edit();
+    const plain = runtime.getCell<unknown>(
+      space,
+      "a document no pattern made",
+      undefined,
+      tx,
+    );
+    plain.set({ name: "Alan Turing", initialName: "Alan Turing" });
+    expect((await tx.commit().settled).error).toBeUndefined();
+
+    const picked = await createdByThisCall(
+      [[space, plain.withTx()], [alan.space, links[0]]],
+      "Alan Turing",
+    );
+
+    expect(picked?.[0]).toBe(alan.space);
+    expect(picked?.[1].getAsNormalizedFullLink().id).toBe(alan.id);
   });
 
   it("trims the name and refuses a blank one before connecting", async () => {

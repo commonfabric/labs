@@ -100,13 +100,18 @@ const saveName = handler<
 });
 
 /** Amend the picture with the image `<cf-avatar-input>` hands on. */
-const savePicture = handler<
+export const savePicture = handler<
   SetProfilePictureEvent,
   { setPicture?: Stream<SetProfilePictureEvent> }
 >((event, state) => {
+  // Both forms are sent: the profile keeps the blob, and a profile whose
+  // `setPicture` predates blobs keeps the bytes.
   const picture = event.detail?.bytes;
   if (!picture?.length) return;
-  state.setPicture?.send({ picture });
+  const pictureBlob = event.detail?.blob;
+  state.setPicture?.send(
+    pictureBlob === undefined ? { picture } : { picture, pictureBlob },
+  );
 });
 
 const saveBio = handler<

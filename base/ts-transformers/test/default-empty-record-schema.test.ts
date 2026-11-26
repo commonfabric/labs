@@ -1,7 +1,6 @@
 /** Pins empty-record defaults in schemas emitted for pattern arguments. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type TransformationDiagnostic,
@@ -10,6 +9,7 @@ import {
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { parseModule, patternSchemas } from "./transformed-ast.ts";
 import { transformFiles, transformSource } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("default-empty-record-schema", () => {
   for (const form of ["union member", "two arguments"]) {

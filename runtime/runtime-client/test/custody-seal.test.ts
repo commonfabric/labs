@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CellHandle } from "@/cell-handle.ts";
 import { type CellRef, NotificationType, RequestType } from "@/protocol/mod.ts";
 import { RuntimeClient } from "@/runtime-client.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ref = (id: string, space = "did:key:home"): CellRef => ({
   id: `of:fid1:${id}` as CellRef["id"],

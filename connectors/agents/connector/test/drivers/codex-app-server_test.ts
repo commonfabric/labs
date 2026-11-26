@@ -6,8 +6,9 @@ import {
   resolveCodexAppServerLaunch,
 } from "../../src/drivers/codex-app-server.ts";
 import type { AgentDriver } from "../../src/types.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("Codex unrestricted turn policy requires explicit opt-in", () => {
+test("Codex unrestricted turn policy requires explicit opt-in", () => {
   const source = {
     id: "codex:default",
     driver: "codex-app-server" as const,
@@ -26,7 +27,7 @@ Deno.test("Codex unrestricted turn policy requires explicit opt-in", () => {
   );
 });
 
-Deno.test("Codex server approval requests fail closed without a user surface", () => {
+test("Codex server approval requests fail closed without a user surface", () => {
   assertEquals(
     codexServerRequestPolicy("item/commandExecution/requestApproval"),
     { decision: "decline" },
@@ -161,8 +162,10 @@ for line in sys.stdin:
     if method == "initialize":
         result = {}
     elif method == "thread/list":
-        if params.get("archived"):
-            result = {"threads": [{"id": "archived", "title": "Archived", "status": {"type": "notLoaded"}}]}
+        if params.get("archived") and params.get("cursor") == "older":
+            result = {"threads": [{"id": "archived-older", "status": {"type": "notLoaded"}}]}
+        elif params.get("archived"):
+            result = {"threads": [{"id": "archived", "title": "Archived", "status": {"type": "notLoaded"}}], "nextCursor": "older"}
         elif params.get("cursor"):
             result = {"threads": [{"id": "second", "title": "Second", "created_at": 1, "updated_at": 10000000000, "status": {"type": "systemError"}}]}
         else:
@@ -184,6 +187,7 @@ for line in sys.stdin:
             if text == "cancel me":
                 pending_prompt = (params["threadId"], turn_id)
             else:
+                print(json.dumps({"method": "turn/started", "params": {"threadId": params["threadId"], "turn": {"id": turn_id, "status": "inProgress"}}}), flush=True)
                 completion = {"method": "turn/completed", "params": {"threadId": params["threadId"], "turn": {"id": turn_id, "status": "failed" if text == "fail" else "completed"}}}
     elif method == "turn/interrupt":
         result = {}
@@ -195,7 +199,7 @@ for line in sys.stdin:
         print(json.dumps(completion), flush=True)
 `;
 
-Deno.test("Codex launch modes distinguish private stdio and shared proxies", () => {
+test("Codex launch modes distinguish private stdio and shared proxies", () => {
   const source = {
     id: "codex:default",
     driver: "codex-app-server" as const,
@@ -263,7 +267,7 @@ Deno.test("Codex launch modes distinguish private stdio and shared proxies", () 
   );
 });
 
-Deno.test("managed Codex mode starts the daemon before opening its proxy", async () => {
+test("managed Codex mode starts the daemon before opening its proxy", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/fake-codex`;
   const log = `${dir}/launch.log`;
@@ -287,7 +291,7 @@ Deno.test("managed Codex mode starts the daemon before opening its proxy", async
   }
 });
 
-Deno.test("managed Codex bootstrap observes owner abort", async () => {
+test("managed Codex bootstrap observes owner abort", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/blocked-codex`;
   const readyFifo = `${dir}/bootstrap-ready`;
@@ -425,7 +429,7 @@ Deno.test("managed Codex bootstrap observes owner abort", async () => {
   }
 });
 
-Deno.test("Codex sources keep child environments isolated", async () => {
+test("Codex sources keep child environments isolated", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/fake-codex`;
   const firstLog = `${dir}/first-env.json`;
@@ -476,7 +480,7 @@ Deno.test("Codex sources keep child environments isolated", async () => {
   }
 });
 
-Deno.test("Codex driver enumerates persisted active and archived threads", async () => {
+test("Codex driver enumerates persisted active and archived threads", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/fake-codex`;
   await Deno.writeTextFile(server, FAKE_SERVER);
@@ -525,7 +529,7 @@ Deno.test("Codex driver enumerates persisted active and archived threads", async
   }
 });
 
-Deno.test("Codex driver declines colliding numeric approval requests without hanging", async () => {
+test("Codex driver declines colliding numeric approval requests without hanging", async () => {
   const dir = await Deno.makeTempDir();
   const server = `${dir}/fake-codex`;
   const log = `${dir}/approval.log`;
@@ -566,7 +570,7 @@ Deno.test("Codex driver declines colliding numeric approval requests without han
   }
 });
 
-Deno.test("Codex reserves a session while a turn is starting", async () => {
+test("Codex reserves a session while a turn is starting", async () => {
   const directory = await Deno.makeTempDir();
   const server = `${directory}/blocked-prompt-server`;
   const readyPath = `${directory}/ready`;
@@ -607,7 +611,7 @@ Deno.test("Codex reserves a session while a turn is starting", async () => {
   }
 });
 
-Deno.test("Codex driver handles provider edge cases and cancellation", async () => {
+test("Codex driver handles provider edge cases and cancellation", async () => {
   const directory = await Deno.makeTempDir();
   const server = `${directory}/edge-server`;
   await Deno.writeTextFile(server, EDGE_CASE_SERVER);
@@ -635,7 +639,13 @@ Deno.test("Codex driver handles provider edge cases and cancellation", async () 
     assertEquals(second.nextCursor, "archived:");
     const archived = await driver.listSessions(second.nextCursor);
     assertEquals(archived.sessions[0].archived, true);
-    assertEquals(archived.nextCursor, undefined);
+    assertEquals(archived.nextCursor, "archived:older");
+    const older = await driver.listSessions(archived.nextCursor);
+    assertEquals(older.sessions.map((session) => session.nativeSessionId), [
+      "archived-older",
+    ]);
+    assertEquals(older.sessions[0].archived, true);
+    assertEquals(older.nextCursor, undefined);
 
     await assertRejects(
       () => driver.readSession("missing"),
@@ -666,6 +676,12 @@ Deno.test("Codex driver handles provider edge cases and cancellation", async () 
       (await driver.prompt("edge", { text: "missing turn" })).error?.code,
       "missing-turn-id",
     );
+    // The provider announces each turn before completing it; only the
+    // completion decides the outcome.
+    assertEquals(
+      (await driver.prompt("edge", { text: "succeed" })).status,
+      "succeeded",
+    );
     assertEquals(
       (await driver.prompt("edge", { text: "fail" })).error?.code,
       "turn-failed",
@@ -695,7 +711,7 @@ Deno.test("Codex driver handles provider edge cases and cancellation", async () 
   }
 });
 
-Deno.test("managed Codex mode reports bootstrap stderr", async () => {
+test("managed Codex mode reports bootstrap stderr", async () => {
   const directory = await Deno.makeTempDir();
   const server = `${directory}/failed-server`;
   await Deno.writeTextFile(

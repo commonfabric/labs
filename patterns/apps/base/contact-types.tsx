@@ -4,7 +4,7 @@
  * Extracted to break circular dependencies between contacts.tsx,
  * person.tsx, and family-member.tsx.
  */
-import { type Default, NAME, UI, type VNode } from "commonfabric";
+import type { Default, NAME, UI, VNode } from "commonfabric";
 
 // ============================================================================
 // PersonLike - Schelling point for person data (structural type)
@@ -114,6 +114,3 @@ export interface ContactGroup {
   name: string;
   contactIndices: number[] | Default<[]>; // indices into contacts[]
 }
-
-// Default export required by cf check infrastructure
-export default undefined;

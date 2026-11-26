@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { toDocumentPath } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { Runtime } from "../../src/runtime.ts";
 import { txToReactivityLog } from "../../src/scheduler.ts";
@@ -16,7 +16,6 @@ import {
   markReadAsAttemptedWrite,
   reactivityLogFromActivities,
 } from "../../src/storage/reactivity-log.ts";
-import { getDirectTransactionReactivityLog } from "../../src/storage/transaction-inspection.ts";
 
 const signer = await Identity.fromPassphrase("ignored-attempted-writes");
 const space = signer.did();
@@ -70,7 +69,7 @@ describe("reactivity-log", () => {
         ignoreReadForScheduling,
         () => cell.withTx(tx).key("slot").set(1),
       );
-      const log = getDirectTransactionReactivityLog(tx)!;
+      const log = tx.getReactivityLog();
       expect(log.attemptedWrites).toContainEqual({
         space,
         scope: "space",

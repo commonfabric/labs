@@ -12,6 +12,7 @@
  * whether the helper is detected.
  */
 
+import { expect } from "@std/expect";
 import { assert, assertEquals, assertFalse, assertThrows } from "@std/assert";
 
 import ts from "typescript";
@@ -22,6 +23,7 @@ import {
   injectCfHelpers,
   transformCfDirective,
 } from "../../src/core/cf-helpers.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 function sourceFileFor(source: string): ts.SourceFile {
   return ts.createSourceFile(
@@ -52,14 +54,14 @@ function printExpr(node: ts.Node, sourceFile: ts.SourceFile): string {
 // Constructor scanning: getCFHelpersIdentifier
 //
 
-Deno.test("CFHelpers detects the __cfHelpers named import from commonfabric", () => {
+test("CFHelpers detects the __cfHelpers named import from commonfabric", () => {
   const helpers = helpersFor(
     `import { __cfHelpers } from "commonfabric";`,
   );
   assert(helpers.sourceHasHelpers());
 });
 
-Deno.test("CFHelpers detects a renamed __cfHelpers import via its property name", () => {
+test("CFHelpers detects a renamed __cfHelpers import via its property name", () => {
   // `element.propertyName` is `__cfHelpers`; the local binding is `h`. The
   // scanner keys on the imported (property) name, so it still resolves the
   // helper and stores the local alias identifier.
@@ -75,23 +77,27 @@ Deno.test("CFHelpers detects a renamed __cfHelpers import via its property name"
   assertEquals(printExpr(expr, sf), "h.lift");
 });
 
-Deno.test("CFHelpers ignores __cfHelpers imported from a non-commonfabric module", () => {
+test("CFHelpers ignores __cfHelpers imported from a non-commonfabric module", () => {
   const helpers = helpersFor(
     `import { __cfHelpers } from "other-module";`,
   );
   assertFalse(helpers.sourceHasHelpers());
 });
 
-Deno.test("CFHelpers ignores an import whose specifier is not a string literal", () => {
-  // A bare `import mod = require(...)` has no StringLiteral module specifier, so
-  // the `ts.isStringLiteral(moduleSpecifier)` guard rejects it.
-  const helpers = helpersFor(
-    `import __cfHelpers = require("commonfabric");`,
+test("CFHelpers ignores an import whose specifier is not a string literal", () => {
+  // A template literal parses as the module specifier, with the right text,
+  // but it is not a string literal.
+  assertFalse(
+    helpersFor("import { __cfHelpers } from `commonfabric`;")
+      .sourceHasHelpers(),
   );
-  assertFalse(helpers.sourceHasHelpers());
+  assert(
+    helpersFor('import { __cfHelpers } from "commonfabric";')
+      .sourceHasHelpers(),
+  );
 });
 
-Deno.test("CFHelpers ignores a default (non-named) import from commonfabric", () => {
+test("CFHelpers ignores a default (non-named) import from commonfabric", () => {
   // `import __cfHelpers from "commonfabric"` has an import clause but no
   // NamedImports binding, so the `ts.isNamedImports(namedBindings)` guard fails.
   const helpers = helpersFor(
@@ -100,7 +106,7 @@ Deno.test("CFHelpers ignores a default (non-named) import from commonfabric", ()
   assertFalse(helpers.sourceHasHelpers());
 });
 
-Deno.test("CFHelpers ignores a namespace import from commonfabric", () => {
+test("CFHelpers ignores a namespace import from commonfabric", () => {
   // `import * as __cfHelpers` produces a NamespaceImport binding, not
   // NamedImports.
   const helpers = helpersFor(
@@ -109,14 +115,14 @@ Deno.test("CFHelpers ignores a namespace import from commonfabric", () => {
   assertFalse(helpers.sourceHasHelpers());
 });
 
-Deno.test("CFHelpers ignores commonfabric named imports that are not __cfHelpers", () => {
+test("CFHelpers ignores commonfabric named imports that are not __cfHelpers", () => {
   const helpers = helpersFor(
     `import { pattern, Cell } from "commonfabric";`,
   );
   assertFalse(helpers.sourceHasHelpers());
 });
 
-Deno.test("CFHelpers ignores a bare import declaration with no import clause", () => {
+test("CFHelpers ignores a bare import declaration with no import clause", () => {
   // `import "commonfabric"` has `importClause === undefined`.
   const helpers = helpersFor(`import "commonfabric";`);
   assertFalse(helpers.sourceHasHelpers());
@@ -126,7 +132,7 @@ Deno.test("CFHelpers ignores a bare import declaration with no import clause", (
 // getHelperExpr / getHelperQualified
 //
 
-Deno.test("getHelperExpr throws when the source has no helpers import", () => {
+test("getHelperExpr throws when the source has no helpers import", () => {
   const helpers = helpersFor(`const x = 1;`);
   assertThrows(
     () => helpers.getHelperExpr("lift"),
@@ -135,7 +141,7 @@ Deno.test("getHelperExpr throws when the source has no helpers import", () => {
   );
 });
 
-Deno.test("getHelperExpr without an original node builds a plain property access", () => {
+test("getHelperExpr without an original node builds a plain property access", () => {
   const source = `import { __cfHelpers } from "commonfabric";`;
   const sf = sourceFileFor(source);
   const helpers = new CFHelpers({ sourceFile: sf, factory: ts.factory });
@@ -144,7 +150,7 @@ Deno.test("getHelperExpr without an original node builds a plain property access
   assertEquals(printExpr(expr, sf), "__cfHelpers.lift");
 });
 
-Deno.test("getHelperExpr with an original node preserves source map ranges and identity", () => {
+test("getHelperExpr with an original node preserves source map ranges and identity", () => {
   const source =
     `import { __cfHelpers } from "commonfabric";\nconst marker = 1;`;
   const sf = sourceFileFor(source);
@@ -177,7 +183,7 @@ Deno.test("getHelperExpr with an original node preserves source map ranges and i
   assertEquals(printExpr(expr, sf), "__cfHelpers.lift");
 });
 
-Deno.test("getHelperQualified throws when the source has no helpers import", () => {
+test("getHelperQualified throws when the source has no helpers import", () => {
   const helpers = helpersFor(`const x = 1;`);
   assertThrows(
     () => helpers.getHelperQualified("JSONSchema"),
@@ -186,7 +192,7 @@ Deno.test("getHelperQualified throws when the source has no helpers import", () 
   );
 });
 
-Deno.test("getHelperQualified builds a qualified name against the helper identifier", () => {
+test("getHelperQualified builds a qualified name against the helper identifier", () => {
   const source = `import { __cfHelpers } from "commonfabric";`;
   const sf = sourceFileFor(source);
   const helpers = new CFHelpers({ sourceFile: sf, factory: ts.factory });
@@ -200,14 +206,14 @@ Deno.test("getHelperQualified builds a qualified name against the helper identif
 // transformCfDirective / injectCfHelpers (string passes)
 //
 
-Deno.test("transformCfDirective returns an all-blank source unchanged", () => {
+test("transformCfDirective returns an all-blank source unchanged", () => {
   // With no content line, `findFirstContentLineIndex` returns null and the
   // source is returned verbatim before any injection.
   const source = "\n   \n\t\n";
   assertEquals(transformCfDirective(source), source);
 });
 
-Deno.test("transformCfDirective injects the helpers import for an ordinary source", () => {
+test("transformCfDirective injects the helpers import for an ordinary source", () => {
   const source = `const answer = 42;`;
   const out = transformCfDirective(source);
   // Prepends the `__cfHelpers` import prelude and appends the used-helper
@@ -217,13 +223,13 @@ Deno.test("transformCfDirective injects the helpers import for an ordinary sourc
   assert(out.includes(`${CF_HELPERS_IDENTIFIER}.h.apply`));
 });
 
-Deno.test("injectCfHelpers uses TypeScript helper-shim syntax by default", () => {
+test("injectCfHelpers uses TypeScript helper-shim syntax by default", () => {
   const out = injectCfHelpers(`const x = 1;`);
   // The TS variant carries the `: any[]` rest annotation.
   assert(out.includes("function h(...args: any[])"));
 });
 
-Deno.test("injectCfHelpers uses JS-only helper-shim syntax for JavaScript file names", () => {
+test("injectCfHelpers uses JS-only helper-shim syntax for JavaScript file names", () => {
   const out = injectCfHelpers(`const x = 1;`, "authored.jsx");
   // The JS variant drops the type annotation to stay parseable in .jsx.
   assert(out.includes("function h(...args)"));
@@ -235,7 +241,7 @@ const FALLBACK_TRAILER_TS = "// @ts-ignore: Internals\n" +
 const FALLBACK_TRAILER_JS = "// @ts-ignore: Internals\n" +
   "function __cfHelpersShim(...args) { return __cfHelpers.h.apply(null, args); }\n";
 
-Deno.test("injectCfHelpers renames the shim to `__cfHelpersShim` when the source binds `h` at top level", () => {
+test("injectCfHelpers renames the shim to `__cfHelpersShim` when the source binds `h` at top level", () => {
   // A second module-scope `h` would be a duplicate identifier (TS2300, or
   // TS2440 against an import) at the authored declaration. Keeping the helper
   // import live is all the shim contributes once JSX dispatches through
@@ -292,7 +298,7 @@ Deno.test("injectCfHelpers renames the shim to `__cfHelpersShim` when the source
   }
 });
 
-Deno.test("injectCfHelpers parses `.ts` sources as TypeScript, so a `<T>` assertion cannot hide a later `h`", () => {
+test("injectCfHelpers parses `.ts` sources as TypeScript, so a `<T>` assertion cannot hide a later `h`", () => {
   // Parsed as TSX, `<number>1` opens a JSX element that swallows the rest of
   // the file, and the scan would miss `h`.
   const sources = [
@@ -305,7 +311,7 @@ Deno.test("injectCfHelpers parses `.ts` sources as TypeScript, so a `<T>` assert
   }
 });
 
-Deno.test("injectCfHelpers rejects the reserved fallback shim name in authored source", () => {
+test("injectCfHelpers rejects the reserved fallback shim name in authored source", () => {
   assertThrows(
     () => injectCfHelpers("const __cfHelpersShim = 1;\nconst h = 2;"),
     Error,
@@ -313,7 +319,7 @@ Deno.test("injectCfHelpers rejects the reserved fallback shim name in authored s
   );
 });
 
-Deno.test("injectCfHelpers keeps the `h` shim when `h` is only nested, type-only, or not a local binding", () => {
+test("injectCfHelpers keeps the `h` shim when `h` is only nested, type-only, or not a local binding", () => {
   const sources: Record<string, string> = {
     "local inside a function":
       "export function render() { const h = [1]; return <div>{h}</div>; }",
@@ -341,10 +347,49 @@ Deno.test("injectCfHelpers keeps the `h` shim when `h` is only nested, type-only
   }
 });
 
-Deno.test("injectCfHelpers throws when the source already uses the reserved helper symbol", () => {
+test("injectCfHelpers throws when the source already uses the reserved helper symbol", () => {
   assertThrows(
     () => injectCfHelpers(`const ${CF_HELPERS_IDENTIFIER} = {};`),
     Error,
     `reserved helper symbol '${CF_HELPERS_IDENTIFIER}'`,
   );
+});
+
+describe("cf-helpers", () => {
+  describe("injectCfHelpers()", () => {
+    it("parses the source as JavaScript, TypeScript or JSX by its file name", () => {
+      const parseOf = (fileName?: string) => {
+        let parsed: ts.SourceFile | undefined;
+        injectCfHelpers("const x = 1;", fileName, (source, sourceFile) => {
+          parsed = sourceFile;
+          return source;
+        });
+        if (!parsed) throw new Error("The rewrite did not run.");
+        return {
+          javascript: (parsed.flags & ts.NodeFlags.JavaScriptFile) !== 0,
+          jsx: parsed.languageVariant === ts.LanguageVariant.JSX,
+        };
+      };
+      const js = { javascript: true, jsx: true };
+      const typescript = { javascript: false, jsx: false };
+      const tsx = { javascript: false, jsx: true };
+
+      expect(parseOf("/main.js")).toEqual(js);
+      expect(parseOf("/main.mjs")).toEqual(js);
+      expect(parseOf("/main.cjs")).toEqual(js);
+      expect(parseOf("/main.jsx")).toEqual(js);
+      expect(parseOf("/main.mts")).toEqual(typescript);
+      expect(parseOf("/main.tsx")).toEqual(tsx);
+      expect(parseOf("/main.json")).toEqual(tsx);
+      expect(parseOf()).toEqual(tsx);
+    });
+
+    it("keeps the `h` shim when a hoisted `var` in a block binds only other names", () => {
+      const keepsShim = (source: string): boolean =>
+        injectCfHelpers(source).includes("function h(...args: any[])");
+
+      expect(keepsShim("{ var other = 1; }")).toBe(true);
+      expect(keepsShim("{ var other = 1, h = 2; }")).toBe(false);
+    });
+  });
 });

@@ -1,6 +1,12 @@
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { dirname, fromFileUrl, join, toFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { test } from "@commonfabric/test-support/test";
 import {
   collectCoverageProfileFiles,
   isTrackedFile,
@@ -14,7 +20,7 @@ import { isTrackedSourcePath } from "./coverage-metrics.ts";
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 const SCRIPT = join(REPO_ROOT, "tasks/write-coverage-lcov.ts");
 
-Deno.test("normalizeLcovInstancePaths strips a per-instance query from SF lines", () => {
+test("normalizeLcovInstancePaths strips a per-instance query from SF lines", () => {
   assertEquals(
     normalizeLcovInstancePaths(
       "SF:/a/b/foo.ts?testRun=abc-123\nDA:1,1\nend_of_record",
@@ -23,12 +29,12 @@ Deno.test("normalizeLcovInstancePaths strips a per-instance query from SF lines"
   );
 });
 
-Deno.test("normalizeLcovInstancePaths leaves a plain path and non-SF lines unchanged", () => {
+test("normalizeLcovInstancePaths leaves a plain path and non-SF lines unchanged", () => {
   const input = "SF:/a/b/foo.ts\nDA:1,1\nFN:2,x\nend_of_record";
   assertEquals(normalizeLcovInstancePaths(input), input);
 });
 
-Deno.test("relativeLcovSourcePaths makes a path inside the root relative to it", () => {
+test("relativeLcovSourcePaths makes a path inside the root relative to it", () => {
   assertEquals(
     relativeLcovSourcePaths(
       [
@@ -55,7 +61,7 @@ Deno.test("relativeLcovSourcePaths makes a path inside the root relative to it",
 // suffix is what lets a downstream consumer accumulate them as one file.
 //
 
-Deno.test("normalizeLcovInstancePaths maps two instances of one file to the same path", () => {
+test("normalizeLcovInstancePaths maps two instances of one file to the same path", () => {
   const out = normalizeLcovInstancePaths(
     [
       "SF:/a/foo.ts?testRun=1",
@@ -72,7 +78,7 @@ Deno.test("normalizeLcovInstancePaths maps two instances of one file to the same
   );
 });
 
-Deno.test("normalizeLcovInstancePaths handles CRLF input", () => {
+test("normalizeLcovInstancePaths handles CRLF input", () => {
   assertEquals(
     normalizeLcovInstancePaths(
       "SF:/a/foo.ts?testRun=1\r\nDA:1,1\r\nend_of_record",
@@ -107,13 +113,13 @@ async function runScript(
   };
 }
 
-Deno.test("write-coverage-lcov prints usage and exits 2 without arguments", async () => {
+test("write-coverage-lcov prints usage and exits 2 without arguments", async () => {
   const result = await runScript([]);
   assertEquals(result.code, 2);
   assertStringIncludes(result.stderr, "Usage:");
 });
 
-Deno.test("write-coverage-lcov writes an empty report when the profile dir is absent", async () => {
+test("write-coverage-lcov writes an empty report when the profile dir is absent", async () => {
   const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
   try {
     const output = join(root, "out.lcov");
@@ -125,7 +131,7 @@ Deno.test("write-coverage-lcov writes an empty report when the profile dir is ab
   }
 });
 
-Deno.test("write-coverage-lcov drops empty profiles and reports none remain", async () => {
+test("write-coverage-lcov drops empty profiles and reports none remain", async () => {
   // An empty profile file is dropped, and with nothing left the script writes
   // an empty report rather than invoking `deno coverage` on it.
   const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
@@ -203,7 +209,7 @@ async function writeProfileForSource(
   );
 }
 
-Deno.test("write-coverage-lcov converts real profiles to a normalized LCOV report", async () => {
+test("write-coverage-lcov converts real profiles to a normalized LCOV report", async () => {
   // The happy path: a real V8 coverage profile is generated from a standalone
   // test, then converted to an LCOV report with the instance-path suffix
   // stripped.
@@ -246,7 +252,7 @@ async function writeUncompiledTrackedFile(): Promise<string> {
   return filePath;
 }
 
-Deno.test("write-coverage-lcov fails when a tracked file is left out", async () => {
+test("write-coverage-lcov fails when a tracked file is left out", async () => {
   // The dangerous case, because `deno coverage` exits zero and writes a report
   // that simply lacks the file: the report looks healthy, and every line of the
   // dropped file reads as uncovered downstream.
@@ -282,7 +288,7 @@ Deno.test("write-coverage-lcov fails when a tracked file is left out", async () 
   }
 });
 
-Deno.test("write-coverage-lcov fails when every file left out is a tracked file", async () => {
+test("write-coverage-lcov fails when every file left out is a tracked file", async () => {
   // Same loss, but with nothing left to report, so `deno coverage` calls it an
   // error too. The exit status must still say the conversion broke rather than
   // let the empty report stand as a measurement.
@@ -308,7 +314,7 @@ Deno.test("write-coverage-lcov fails when every file left out is a tracked file"
   }
 });
 
-Deno.test("write-coverage-lcov succeeds when the profiles cover only test files", async () => {
+test("write-coverage-lcov succeeds when the profiles cover only test files", async () => {
   // `deno coverage` leaves test files out of a report by design, so a profile
   // set covering nothing else converts to nothing and it calls that an error.
   // No file was lost and nothing downstream tracks a test file, so the empty
@@ -347,7 +353,7 @@ Deno.test("write-coverage-lcov succeeds when the profiles cover only test files"
   }
 });
 
-Deno.test("write-coverage-lcov warns without failing when a dropped source is gone", async () => {
+test("write-coverage-lcov warns without failing when a dropped source is gone", async () => {
   // A source that is genuinely gone is a different message from a source that
   // is present with no transpiled form, and it is not a failure: no report
   // could name the file and nothing downstream tracks it.
@@ -369,7 +375,7 @@ Deno.test("write-coverage-lcov warns without failing when a dropped source is go
   }
 });
 
-Deno.test("write-coverage-lcov succeeds when the file left out is outside the repository", async () => {
+test("write-coverage-lcov succeeds when the file left out is outside the repository", async () => {
   // A test that copies a fixture project into a temporary directory and runs
   // Deno there gets its modules compiled under a different Deno configuration
   // than the conversion runs under, so `deno coverage` cannot find their
@@ -420,7 +426,7 @@ Deno.test("write-coverage-lcov succeeds when the file left out is outside the re
 // drifting: every path below goes to both, and they must agree.
 //
 
-Deno.test("isTrackedFile gives the same answer as the coverage metric", () => {
+test("isTrackedFile gives the same answer as the coverage metric", () => {
   const paths = [
     "runtime/a/mod.ts",
     "runtime/a/mod.tsx",
@@ -460,7 +466,7 @@ Deno.test("isTrackedFile gives the same answer as the coverage metric", () => {
   }
 });
 
-Deno.test("isTrackedFile agrees with what the coverage metric charges for", () => {
+test("isTrackedFile agrees with what the coverage metric charges for", () => {
   assert(isTrackedFile("file:///repo/runtime/a/mod.ts", "/repo"));
   assert(isTrackedFile("file:///repo/tasks/a.ts", "/repo"));
   assert(!isTrackedFile("file:///elsewhere/mod.ts", "/repo"));
@@ -480,7 +486,7 @@ Deno.test("isTrackedFile agrees with what the coverage metric charges for", () =
   assert(!isTrackedFile("file:///repo/runtime/a/README.md", "/repo"));
 });
 
-Deno.test("parseFilesMissingTranspiledSource reads every dropped file out of the warnings", () => {
+test("parseFilesMissingTranspiledSource reads every dropped file out of the warnings", () => {
   const stderr = [
     'Missing transpiled source code for: "file:///a/one.ts" (was it deleted after coverage was collected?). Skipping.',
     "Check file:///a/two.ts",
@@ -494,7 +500,7 @@ Deno.test("parseFilesMissingTranspiledSource reads every dropped file out of the
   assertEquals(parseFilesWithNoSource(stderr), ["file:///a/gone.ts"]);
 });
 
-Deno.test("the dropped-file parsers find nothing in output that reports no drop", () => {
+test("the dropped-file parsers find nothing in output that reports no drop", () => {
   const stderr = "Lcov coverage report has been generated at x\n";
   assertEquals(parseFilesMissingTranspiledSource(stderr), []);
   assertEquals(parseFilesWithNoSource(stderr), []);
@@ -513,7 +519,7 @@ function dirEntry(name: string, isDirectory: boolean): Deno.DirEntry {
 // walk that appends into one shared array does not, whatever the stack size.
 //
 
-Deno.test("collectCoverageProfileFiles gathers a directory larger than the argument limit", async () => {
+test("collectCoverageProfileFiles gathers a directory larger than the argument limit", async () => {
   const COUNT = 200_000;
   const root = "/coverage-root";
   const sub = join(root, "sub");
@@ -535,7 +541,7 @@ Deno.test("collectCoverageProfileFiles gathers a directory larger than the argum
   assertEquals(files.at(-1), join(sub, `p${COUNT - 1}.json`));
 });
 
-Deno.test("collectCoverageProfileFiles walks nested directories and keeps only .json", async () => {
+test("collectCoverageProfileFiles walks nested directories and keeps only .json", async () => {
   const root = await Deno.makeTempDir({ prefix: "write-lcov-collect-" });
   try {
     await Deno.writeTextFile(join(root, "top.json"), "{}");
@@ -556,11 +562,27 @@ Deno.test("collectCoverageProfileFiles walks nested directories and keeps only .
   }
 });
 
-Deno.test("collectCoverageProfileFiles returns empty for a missing directory", async () => {
+test("collectCoverageProfileFiles returns empty for a missing directory", async () => {
   const root = await Deno.makeTempDir({ prefix: "write-lcov-collect-" });
   try {
     assertEquals(await collectCoverageProfileFiles(join(root, "missing")), []);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
+});
+
+test("collectCoverageProfileFiles surfaces a directory that cannot be read", async () => {
+  // Only a directory that is not there reads as empty. One that is there and
+  // refuses to be read would otherwise drop its profiles from the report.
+  const readDir = (): AsyncIterable<Deno.DirEntry> => ({
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.reject(new Deno.errors.PermissionDenied("refused")),
+    }),
+  });
+
+  await assertRejects(
+    () => collectCoverageProfileFiles("/coverage-root", readDir),
+    Deno.errors.PermissionDenied,
+    "refused",
+  );
 });

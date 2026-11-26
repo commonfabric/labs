@@ -3,7 +3,6 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessToolDefinition } from "./types.ts";
-import type { HarnessFetch } from "../contracts/http-fetch.ts";
 import {
   interfaceNetworks,
   isOpenInternetAddress,
@@ -78,21 +77,104 @@ export type WebFetchModelFacingOutput =
   | Omit<WebFetchToolSuccessOutput, "rawContent">
   | WebFetchToolErrorOutput;
 
-export type ResolveHostAddresses = (
-  hostname: string,
-  signal?: AbortSignal,
-) => Promise<readonly string[]>;
+type WebFetchBytes = Uint8Array;
+
+type WebFetchReader = ReadableStreamDefaultReader<WebFetchBytes>;
+
+/** A connection web_fetch speaks HTTP/1.1 over. */
+export interface WebFetchConnection {
+  readonly readable: ReadableStream<WebFetchBytes>;
+  readonly writable: WritableStream<Uint8Array>;
+  close(): void;
+}
+
+export interface WebFetchTlsOptions {
+  /** The host name or IP address the server's certificate must name. */
+  hostname: string;
+  /**
+   * PEM certificates of authorities to trust beside the default roots. Only
+   * tests pass this, to trust a local test authority.
+   */
+  caCerts?: string[];
+}
 
 /**
- * Where web_fetch learns the addresses a host name resolves to, and the
+ * The network operations web_fetch performs: looking up a host name's
+ * addresses, opening a TCP connection to an address it validated, and
+ * completing a TLS handshake over a connection `connect` opened, for an
+ * `https:` URL. Each is a property, so that a network whose `startTls` takes
+ * only its own `Conn` is not one for any other kind of connection.
+ *
+ * `startTls` owns `conn` from the moment it is called: the connection it
+ * returns closes `conn` when it closes, and if it fails, it closes `conn`
+ * itself. web_fetch never closes a `conn` it has handed to `startTls`.
+ */
+export interface WebFetchNetwork<Conn extends WebFetchConnection> {
+  readonly resolveDns: (
+    query: string,
+    recordType: "A" | "AAAA",
+    options: { signal: AbortSignal },
+  ) => Promise<string[]>;
+  readonly connect: (options: Deno.ConnectOptions) => Promise<Conn>;
+  readonly startTls: (
+    conn: Conn,
+    options: WebFetchTlsOptions,
+  ) => Promise<WebFetchConnection>;
+}
+
+/**
+ * `Deno`'s DNS, TCP and TLS. `startTls` offers only HTTP/1.1, and settles
+ * once the handshake has completed, so that a certificate the server presents
+ * is checked before web_fetch sends a request. A handshake the server never answers keeps the socket open until
+ * the server closes it, after web_fetch has given up: closing a `Deno.TlsConn`
+ * whose handshake is pending does not close its socket.
+ */
+export const defaultWebFetchNetwork: WebFetchNetwork<Deno.TcpConn> = {
+  resolveDns: Deno.resolveDns,
+  connect: Deno.connect,
+  startTls: async (conn, { hostname, caCerts }) => {
+    let tls: Deno.TlsConn | undefined;
+    try {
+      tls = await Deno.startTls(conn, {
+        hostname,
+        caCerts,
+        alpnProtocols: ["http/1.1"],
+      });
+      await tls.handshake();
+      return tls;
+    } catch (error) {
+      // Before `Deno.startTls` settles, it may or may not have taken `conn`.
+      closeConnection(tls ?? conn);
+      throw error;
+    }
+  },
+};
+
+/**
+ * How web_fetch resolves names and connects, over one network, and the
  * networks this device's interfaces are on, read for each check.
  */
-interface AddressSources {
-  resolveHostAddresses: ResolveHostAddresses;
+interface WebFetchEnvironment {
+  resolveDns: WebFetchNetwork<WebFetchConnection>["resolveDns"];
+  /** A connection to `address`, with TLS for an `https:` `url`. */
+  openConnection: (
+    url: URL,
+    address: string,
+    port: number,
+    signal: AbortSignal,
+  ) => Promise<WebFetchConnection>;
   localNetworks: () => readonly LocalNetwork[];
 }
 
-type WebFetchBytes = Uint8Array<ArrayBuffer>;
+const webFetchEnvironment = <Conn extends WebFetchConnection>(
+  network: WebFetchNetwork<Conn>,
+  localNetworks: () => readonly LocalNetwork[],
+): WebFetchEnvironment => ({
+  resolveDns: network.resolveDns,
+  openConnection: (url, address, port, signal) =>
+    openPinnedConnection(url, address, port, network, signal),
+  localNetworks,
+});
 
 const DEFAULT_MAX_BYTES = 200_000;
 const MAX_MAX_BYTES = 1_000_000;
@@ -228,22 +310,22 @@ export const webFetchToolDescriptor: HarnessToolDescriptor = {
   tags: ["web", "fetch", "read"],
 };
 
-export interface CreateWebFetchToolOptions {
-  fetchFn?: HarnessFetch;
-  resolveHostAddresses?: ResolveHostAddresses;
+export interface CreateWebFetchToolOptions<Conn extends WebFetchConnection> {
   /** By default, the networks Deno reports (`interfaceNetworks`). */
   localNetworks?: () => readonly LocalNetwork[];
+  /** By default, {@link defaultWebFetchNetwork}. */
+  network?: WebFetchNetwork<Conn>;
 }
 
-export const createWebFetchTool = (
-  options: CreateWebFetchToolOptions = {},
+export const createWebFetchTool = <
+  Conn extends WebFetchConnection = Deno.TcpConn,
+>(
+  options: CreateWebFetchToolOptions<Conn> = {},
 ): HarnessToolDefinition<WebFetchToolInput, WebFetchToolOutput> => {
-  const sources: AddressSources = {
-    resolveHostAddresses: options.resolveHostAddresses ??
-      defaultResolveHostAddresses,
-    localNetworks: options.localNetworks ?? interfaceNetworks,
-  };
-  const fetchFn = options.fetchFn ?? createPinnedPublicFetch(sources);
+  const localNetworks = options.localNetworks ?? interfaceNetworks;
+  const environment = options.network === undefined
+    ? webFetchEnvironment(defaultWebFetchNetwork, localNetworks)
+    : webFetchEnvironment(options.network, localNetworks);
   return {
     descriptor: webFetchToolDescriptor,
     async invoke(context, input) {
@@ -275,7 +357,7 @@ export const createWebFetchTool = (
       try {
         const initialUrl = await validatePublicHttpUrl(
           input.url,
-          sources,
+          environment,
           controller.signal,
         );
         if (!initialUrl.ok) {
@@ -290,8 +372,7 @@ export const createWebFetchTool = (
         resultUrl = initialUrl.url;
         const fetchResult = await fetchWithRedirects({
           url: initialUrl.url,
-          fetchFn,
-          sources,
+          environment,
           signal: controller.signal,
         });
 
@@ -309,7 +390,7 @@ export const createWebFetchTool = (
         const response = fetchResult.response;
         const contentType = response.headers.get("content-type") ?? undefined;
         if (!isSupportedContentType(contentType)) {
-          await cancelResponseBody(response);
+          await response.body?.cancel();
           return webFetchError({
             outputId,
             url: initialUrl.url,
@@ -456,8 +537,8 @@ class WebFetchBlockedUrlError extends Error {
 
 const validatePublicHttpUrl = async (
   input: string,
-  sources: AddressSources,
-  signal?: AbortSignal,
+  environment: WebFetchEnvironment,
+  signal: AbortSignal,
 ): Promise<PublicHttpUrlResult> => {
   let url: URL;
   try {
@@ -483,7 +564,7 @@ const validatePublicHttpUrl = async (
       message: "web_fetch URLs may not include credentials",
     };
   }
-  const hostBlockReason = blockedHostReason(url.hostname, sources);
+  const hostBlockReason = blockedHostReason(url.hostname, environment);
   if (hostBlockReason !== undefined) {
     return {
       ok: false,
@@ -493,7 +574,7 @@ const validatePublicHttpUrl = async (
   }
   const resolution = await resolveValidatedPublicAddresses(
     url.hostname,
-    sources,
+    environment,
     signal,
   );
   if (!resolution.ok) {
@@ -508,7 +589,7 @@ const validatePublicHttpUrl = async (
 
 const blockedHostReason = (
   hostname: string,
-  sources: AddressSources,
+  environment: WebFetchEnvironment,
 ): string | undefined => {
   const normalized = normalizeHostname(hostname);
   if (
@@ -522,7 +603,7 @@ const blockedHostReason = (
   const address = parseIpAddress(normalized);
   if (
     address !== undefined &&
-    !isOpenInternetAddress(address, sources.localNetworks())
+    !isOpenInternetAddress(address, environment.localNetworks())
   ) {
     return `web_fetch host ${hostname} is not on the open internet and is not allowed`;
   }
@@ -531,20 +612,21 @@ const blockedHostReason = (
 
 const resolveValidatedPublicAddresses = async (
   hostname: string,
-  sources: AddressSources,
-  signal?: AbortSignal,
+  environment: WebFetchEnvironment,
+  signal: AbortSignal,
 ): Promise<
   | { ok: true; addresses: readonly string[] }
   | { ok: false; message: string }
 > => {
   let addresses: readonly string[];
   try {
-    throwIfWebFetchAborted(signal);
-    addresses = await withWebFetchAbort(
-      sources.resolveHostAddresses(hostname, signal),
+    signal.throwIfAborted();
+    addresses = await resolveHostAddresses(
+      hostname,
+      environment.resolveDns,
       signal,
     );
-    throwIfWebFetchAborted(signal);
+    signal.throwIfAborted();
   } catch (error) {
     if (isAbortError(error)) {
       throw error;
@@ -564,7 +646,7 @@ const resolveValidatedPublicAddresses = async (
         `web_fetch host ${hostname} could not be resolved to a public address`,
     };
   }
-  const networks = sources.localNetworks();
+  const networks = environment.localNetworks();
   for (const address of addresses) {
     const addressBlockReason = blockedResolvedAddressReason(
       hostname,
@@ -578,18 +660,19 @@ const resolveValidatedPublicAddresses = async (
   return { ok: true, addresses };
 };
 
-const defaultResolveHostAddresses: ResolveHostAddresses = async (
-  hostname,
-  signal,
-) => {
+const resolveHostAddresses = async (
+  hostname: string,
+  resolveDns: WebFetchEnvironment["resolveDns"],
+  signal: AbortSignal,
+): Promise<readonly string[]> => {
   const normalized = normalizeHostname(hostname);
   if (parseIpAddress(normalized) !== undefined || normalized.includes(":")) {
     return [normalized];
   }
   const results = await withWebFetchAbort(
     Promise.allSettled([
-      Deno.resolveDns(normalized, "A"),
-      Deno.resolveDns(normalized, "AAAA"),
+      resolveDns(normalized, "A", { signal }),
+      resolveDns(normalized, "AAAA", { signal }),
     ]),
     signal,
   );
@@ -622,26 +705,24 @@ const blockedResolvedAddressReason = (
   return undefined;
 };
 
-const createPinnedPublicFetch = (
-  sources: AddressSources,
-): HarnessFetch =>
-async (input, init = {}) => {
-  const url = new URL(input instanceof Request ? input.url : String(input));
-  const signal = init.signal ?? undefined;
-  throwIfWebFetchAborted(signal);
+const fetchPinnedPublic = async (
+  input: string,
+  environment: WebFetchEnvironment,
+  signal: AbortSignal,
+): Promise<Response> => {
+  const url = new URL(input);
   const resolution = await resolveValidatedPublicAddresses(
     url.hostname,
-    sources,
+    environment,
     signal,
   );
   if (!resolution.ok) {
     throw new WebFetchBlockedUrlError(resolution.message);
   }
-  throwIfWebFetchAborted(signal);
   const errors: string[] = [];
   for (const address of resolution.addresses) {
     try {
-      return await fetchPinnedToAddress(url, address, init, signal);
+      return await fetchPinnedToAddress(url, address, environment, signal);
     } catch (error) {
       if (isAbortError(error)) {
         throw error;
@@ -656,11 +737,14 @@ async (input, init = {}) => {
   );
 };
 
+/** The statuses whose response has no body, and cannot be given one. */
+const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([204, 205, 304]);
+
 const fetchPinnedToAddress = async (
   url: URL,
   address: string,
-  init: RequestInit,
-  signal?: AbortSignal,
+  environment: WebFetchEnvironment,
+  signal: AbortSignal,
 ): Promise<Response> => {
   const port = url.port === ""
     ? (url.protocol === "https:" ? 443 : 80)
@@ -668,23 +752,29 @@ const fetchPinnedToAddress = async (
   if (!Number.isSafeInteger(port) || port <= 0 || port > 65_535) {
     throw new Error(`web_fetch URL port is not valid: ${url.port}`);
   }
-  const conn = await openPinnedConnection(url, address, port, signal);
-  const abortHandler = signal === undefined
-    ? undefined
-    : () => closeConnection(conn);
-  if (signal !== undefined && abortHandler !== undefined) {
-    signal.addEventListener("abort", abortHandler, { once: true });
-  }
+  const conn = await environment.openConnection(url, address, port, signal);
+  const abortHandler = () => closeConnection(conn);
+  signal.addEventListener("abort", abortHandler, { once: true });
   try {
-    await writeAll(
-      conn,
-      new TextEncoder().encode(serializeHttpRequest(url, init)),
+    await withWebFetchAbort(
+      conn.writable.getWriter().write(
+        new TextEncoder().encode(serializeHttpRequest(url)),
+      ),
       signal,
     );
-    const response = await readHttpResponseHead(conn, signal);
+    const reader = conn.readable.getReader();
+    const response = await readHttpResponseHead(reader, signal);
+    if (NULL_BODY_STATUSES.has(response.status)) {
+      closeConnection(conn);
+      return new Response(null, {
+        status: response.status,
+        headers: response.headers,
+      });
+    }
     return new Response(
       createHttpResponseBodyStream(
         conn,
+        reader,
         response.bodyPrefix,
         response.headers,
         signal,
@@ -698,65 +788,33 @@ const fetchPinnedToAddress = async (
     closeConnection(conn);
     throw error;
   } finally {
-    if (signal !== undefined && abortHandler !== undefined) {
-      signal.removeEventListener("abort", abortHandler);
-    }
+    signal.removeEventListener("abort", abortHandler);
   }
 };
 
-const openPinnedConnection = async (
+const openPinnedConnection = async <Conn extends WebFetchConnection>(
   url: URL,
   address: string,
   port: number,
-  signal?: AbortSignal,
-): Promise<Deno.Conn> => {
-  throwIfWebFetchAborted(signal);
-  const tcpConn = await withWebFetchAbort(
-    Deno.connect({ hostname: address, port, signal }),
+  network: WebFetchNetwork<Conn>,
+  signal: AbortSignal,
+): Promise<WebFetchConnection> => {
+  const conn = await withWebFetchAbort(
+    network.connect({ hostname: address, port, signal }),
     signal,
+    closeConnection,
   );
   if (url.protocol === "http:") {
-    if (signal?.aborted) {
-      closeConnection(tcpConn);
-      throw webFetchAbortReason(signal);
-    }
-    return tcpConn;
+    return conn;
   }
-  let abortHandler: (() => void) | undefined;
-  if (signal !== undefined) {
-    abortHandler = () => closeConnection(tcpConn);
-    signal.addEventListener("abort", abortHandler, { once: true });
-  }
-  try {
-    throwIfWebFetchAborted(signal);
-    const tlsConn = await withWebFetchAbort(
-      Deno.startTls(tcpConn, {
-        hostname: normalizeHostname(url.hostname),
-        alpnProtocols: ["http/1.1"],
-      }),
-      signal,
-    );
-    throwIfWebFetchAborted(signal);
-    return tlsConn;
-  } catch (error) {
-    closeConnection(tcpConn);
-    if (signal?.aborted) {
-      throw webFetchAbortReason(signal);
-    }
-    throw error;
-  } finally {
-    if (signal !== undefined && abortHandler !== undefined) {
-      signal.removeEventListener("abort", abortHandler);
-    }
-  }
+  return await withWebFetchAbort(
+    network.startTls(conn, { hostname: normalizeHostname(url.hostname) }),
+    signal,
+    closeConnection,
+  );
 };
 
-const serializeHttpRequest = (url: URL, init: RequestInit): string => {
-  const method = init.method ?? "GET";
-  if (method.toUpperCase() !== "GET") {
-    throw new Error(`web_fetch only supports GET requests`);
-  }
-  const headers = new Headers(init.headers);
+const serializeHttpRequest = (url: URL): string => {
   const requestTarget = `${
     url.pathname === "" ? "/" : url.pathname
   }${url.search}`;
@@ -765,19 +823,9 @@ const serializeHttpRequest = (url: URL, init: RequestInit): string => {
     `Host: ${url.host}`,
     "Connection: close",
     "Accept-Encoding: identity",
+    "Accept: text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.1",
+    `User-Agent: ${USER_AGENT}`,
   ];
-  for (const [name, value] of headers) {
-    const normalized = name.toLowerCase();
-    if (
-      normalized === "host" ||
-      normalized === "connection" ||
-      normalized === "content-length" ||
-      normalized === "transfer-encoding"
-    ) {
-      continue;
-    }
-    lines.push(`${name}: ${value}`);
-  }
   return `${lines.join("\r\n")}\r\n\r\n`;
 };
 
@@ -790,21 +838,35 @@ interface HttpResponseHead {
 const MAX_RESPONSE_HEADER_BYTES = 64 * 1024;
 
 const readHttpResponseHead = async (
-  conn: Deno.Conn,
-  signal?: AbortSignal,
+  reader: WebFetchReader,
+  signal: AbortSignal,
 ): Promise<HttpResponseHead> => {
   let buffered: WebFetchBytes = new Uint8Array();
-  while (buffered.byteLength <= MAX_RESPONSE_HEADER_BYTES) {
+  // The bytes of interim heads already discarded, so that the size limit
+  // covers every head the server sends before its final one.
+  let discarded = 0;
+  while (discarded + buffered.byteLength <= MAX_RESPONSE_HEADER_BYTES) {
     const headerEnd = findHeaderEnd(buffered);
     if (headerEnd !== -1) {
-      const headerBytes = buffered.slice(0, headerEnd);
-      const bodyPrefix = buffered.slice(headerEnd + 4);
-      return {
-        ...parseHttpResponseHead(headerBytes),
-        bodyPrefix,
-      };
+      const head = parseHttpResponseHead(buffered.slice(0, headerEnd));
+      buffered = buffered.slice(headerEnd + 4);
+      discarded += headerEnd + 4;
+      if (head.status === 101) {
+        // A 101 switches the connection to another protocol, which only a
+        // request carrying `Upgrade` can ask for, and web_fetch never sends
+        // one.
+        throw new Error(
+          "web_fetch received 101 Switching Protocols, which it did not ask for",
+        );
+      }
+      if (head.status < 100 || head.status >= 200) {
+        return { ...head, bodyPrefix: buffered };
+      }
+      // RFC 9110 §15.2: a client discards an interim (1xx) response and
+      // reads the next head.
+      continue;
     }
-    const chunk = await readConnChunk(conn, signal);
+    const chunk = await readChunk(reader, signal);
     if (chunk === undefined) {
       break;
     }
@@ -829,9 +891,6 @@ const parseHttpResponseHead = (
   const headers = new Headers();
   let lastHeaderName: string | undefined;
   for (const line of lines) {
-    if (line === "") {
-      continue;
-    }
     if (/^[ \t]/.test(line) && lastHeaderName !== undefined) {
       headers.set(
         lastHeaderName,
@@ -866,50 +925,46 @@ const findHeaderEnd = (bytes: WebFetchBytes): number => {
 };
 
 const createHttpResponseBodyStream = (
-  conn: Deno.Conn,
+  conn: WebFetchConnection,
+  reader: WebFetchReader,
   bodyPrefix: WebFetchBytes,
   headers: Headers,
-  signal?: AbortSignal,
+  signal: AbortSignal,
 ): ReadableStream<Uint8Array> => {
   let buffered = bodyPrefix;
   let contentLengthRemaining = parseContentLength(headers);
   let chunkBytesRemaining = 0;
   let closed = false;
-  let abortHandler: (() => void) | undefined;
   const isChunked = (headers.get("transfer-encoding") ?? "")
     .toLowerCase()
     .split(",")
     .map((value) => value.trim())
     .includes("chunked");
 
+  let abortHandler = () => {};
   const close = () => {
     if (closed) {
       return;
     }
     closed = true;
-    if (signal !== undefined && abortHandler !== undefined) {
-      signal.removeEventListener("abort", abortHandler);
-    }
+    signal.removeEventListener("abort", abortHandler);
     closeConnection(conn);
   };
 
   return new ReadableStream<Uint8Array>({
     start(controller) {
-      if (signal === undefined) {
-        return;
-      }
       abortHandler = () => {
         close();
-        controller.error(webFetchAbortReason(signal));
+        controller.error(signal.reason);
       };
       signal.addEventListener("abort", abortHandler, { once: true });
     },
     async pull(controller) {
       try {
-        throwIfWebFetchAborted(signal);
+        signal.throwIfAborted();
         if (isChunked) {
           await pullChunkedBodyChunk({
-            conn,
+            reader,
             signal,
             controller,
             close,
@@ -935,11 +990,11 @@ const createHttpResponseBodyStream = (
             return;
           }
           if (buffered.byteLength === 0) {
-            const chunk = await readConnChunk(conn, signal);
+            const chunk = await readChunk(reader, signal);
             if (chunk === undefined) {
-              close();
-              controller.close();
-              return;
+              throw new Error(
+                "web_fetch response ended before its Content-Length",
+              );
             }
             buffered = chunk;
           }
@@ -957,7 +1012,7 @@ const createHttpResponseBodyStream = (
           buffered = new Uint8Array();
           return;
         }
-        const chunk = await readConnChunk(conn, signal);
+        const chunk = await readChunk(reader, signal);
         if (chunk === undefined) {
           close();
           controller.close();
@@ -972,12 +1027,16 @@ const createHttpResponseBodyStream = (
     cancel() {
       close();
     },
+  }, {
+    // Read only when web_fetch asks, so a body it discards is never read
+    // and cannot fail before it is canceled.
+    highWaterMark: 0,
   });
 };
 
 interface ChunkedBodyState {
-  conn: Deno.Conn;
-  signal?: AbortSignal;
+  reader: WebFetchReader;
+  signal: AbortSignal;
   controller: ReadableStreamDefaultController<Uint8Array>;
   close: () => void;
   buffered: WebFetchBytes;
@@ -1070,7 +1129,7 @@ const fillBodyBuffer = async (
   minBytes: number,
 ): Promise<void> => {
   while (state.buffered.byteLength < minBytes) {
-    const chunk = await readConnChunk(state.conn, state.signal);
+    const chunk = await readChunk(state.reader, state.signal);
     if (chunk === undefined) {
       throw new Error("web_fetch response ended unexpectedly");
     }
@@ -1096,44 +1155,12 @@ const parseContentLength = (headers: Headers): number | undefined => {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
 };
 
-const readConnChunk = async (
-  conn: Deno.Conn,
-  signal?: AbortSignal,
+const readChunk = async (
+  reader: WebFetchReader,
+  signal: AbortSignal,
 ): Promise<WebFetchBytes | undefined> => {
-  throwIfWebFetchAborted(signal);
-  const buffer = new Uint8Array(16 * 1024);
-  try {
-    const bytesRead = await conn.read(buffer);
-    throwIfWebFetchAborted(signal);
-    return bytesRead === null ? undefined : buffer.slice(0, bytesRead);
-  } catch (error) {
-    if (signal?.aborted) {
-      throw webFetchAbortReason(signal);
-    }
-    throw error;
-  }
-};
-
-const writeAll = async (
-  conn: Deno.Conn,
-  bytes: WebFetchBytes,
-  signal?: AbortSignal,
-): Promise<void> => {
-  let offset = 0;
-  while (offset < bytes.byteLength) {
-    throwIfWebFetchAborted(signal);
-    try {
-      offset += await withWebFetchAbort(
-        conn.write(bytes.slice(offset)),
-        signal,
-      );
-    } catch (error) {
-      if (signal?.aborted) {
-        throw webFetchAbortReason(signal);
-      }
-      throw error;
-    }
-  }
+  const { done, value } = await withWebFetchAbort(reader.read(), signal);
+  return done ? undefined : value;
 };
 
 const concatBytes = (
@@ -1146,7 +1173,7 @@ const concatBytes = (
   return combined;
 };
 
-const closeConnection = (conn: Deno.Conn): void => {
+const closeConnection = (conn: WebFetchConnection): void => {
   try {
     conn.close();
   } catch {
@@ -1156,8 +1183,7 @@ const closeConnection = (conn: Deno.Conn): void => {
 
 interface FetchWithRedirectsOptions {
   url: string;
-  fetchFn: HarnessFetch;
-  sources: AddressSources;
+  environment: WebFetchEnvironment;
   signal: AbortSignal;
 }
 
@@ -1180,24 +1206,15 @@ const fetchWithRedirects = async (
 ): Promise<FetchWithRedirectsResult> => {
   let currentUrl = options.url;
   const redirects: WebFetchRedirect[] = [];
-  for (
-    let redirectCount = 0;
-    redirectCount <= MAX_REDIRECTS;
-    redirectCount += 1
-  ) {
-    throwIfWebFetchAborted(options.signal);
+  for (let redirectCount = 0;; redirectCount += 1) {
+    options.signal.throwIfAborted();
     let response: Response;
     try {
-      response = await options.fetchFn(currentUrl, {
-        method: "GET",
-        redirect: "manual",
-        signal: options.signal,
-        headers: {
-          Accept:
-            "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.1",
-          "User-Agent": USER_AGENT,
-        },
-      });
+      response = await fetchPinnedPublic(
+        currentUrl,
+        options.environment,
+        options.signal,
+      );
     } catch (error) {
       if (error instanceof WebFetchBlockedUrlError) {
         return {
@@ -1223,7 +1240,7 @@ const fetchWithRedirects = async (
       };
     }
     if (redirectCount === MAX_REDIRECTS) {
-      await cancelResponseBody(response);
+      await response.body?.cancel();
       return {
         ok: false,
         code: "too_many_redirects",
@@ -1231,11 +1248,11 @@ const fetchWithRedirects = async (
         finalUrl: currentUrl,
       };
     }
+    await response.body?.cancel();
     const nextUrl = new URL(location, currentUrl).toString();
-    await cancelResponseBody(response);
     const validation = await validatePublicHttpUrl(
       nextUrl,
-      options.sources,
+      options.environment,
       options.signal,
     );
     if (!validation.ok) {
@@ -1255,86 +1272,38 @@ const fetchWithRedirects = async (
     });
     currentUrl = validation.url;
   }
-  return {
-    ok: false,
-    code: "too_many_redirects",
-    message: `web_fetch exceeded ${MAX_REDIRECTS} redirects`,
-    finalUrl: currentUrl,
-  };
 };
 
 const createWebFetchAbortError = (): DOMException =>
   new DOMException("web_fetch timed out", "AbortError");
 
-const webFetchAbortReason = (signal?: AbortSignal): unknown =>
-  signal?.reason ?? createWebFetchAbortError();
-
-const throwIfWebFetchAborted = (signal?: AbortSignal): void => {
-  if (signal?.aborted) {
-    throw webFetchAbortReason(signal);
-  }
-};
-
-const withWebFetchAbort = async <T>(
+/**
+ * What `promise` settles to, unless `signal` aborts first, in which case its
+ * reason. A value `promise` settles to after the abort reaches no caller, so
+ * it goes to `discard`, which releases whatever it holds.
+ */
+const withWebFetchAbort = <T>(
   promise: Promise<T>,
-  signal?: AbortSignal,
-): Promise<T> => {
-  if (signal === undefined) {
-    return await promise;
-  }
-  throwIfWebFetchAborted(signal);
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      cleanup();
-      reject(webFetchAbortReason(signal));
-    };
-    const cleanup = () => {
-      signal.removeEventListener("abort", onAbort);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then(
-      (value) => {
-        cleanup();
-        if (signal.aborted) {
-          reject(webFetchAbortReason(signal));
-          return;
-        }
-        resolve(value);
-      },
-      (error) => {
-        cleanup();
-        reject(signal.aborted ? webFetchAbortReason(signal) : error);
-      },
-    );
-  });
-};
-
-const readChunkWithAbort = async (
-  reader: ReadableStreamDefaultReader<Uint8Array>,
   signal: AbortSignal,
-): Promise<ReadableStreamReadResult<Uint8Array>> => {
-  throwIfWebFetchAborted(signal);
-  return await new Promise((resolve, reject) => {
-    const onAbort = () => {
-      cleanup();
-      reject(webFetchAbortReason(signal));
-    };
-    const cleanup = () => {
-      signal.removeEventListener("abort", onAbort);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    reader.read().then(
-      (value) => {
-        cleanup();
+  discard?: (value: T) => void,
+): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    // Handled before the abort check, so that the promise rejecting after an
+    // abort, even one that came before this call, is not left unhandled.
+    promise.then((value) => {
+      if (signal.aborted) {
+        discard?.(value);
+      } else {
         resolve(value);
-      },
-      (error) => {
-        cleanup();
-        reject(error);
-      },
-    );
+      }
+    }, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
   });
-};
 
 const cancelReaderAfterAbort = async (
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -1344,17 +1313,9 @@ const cancelReaderAfterAbort = async (
     return;
   }
   try {
-    await reader.cancel(webFetchAbortReason(signal));
+    await reader.cancel(signal.reason);
   } catch {
     // Ignore cancellation cleanup failures; the timeout itself is the result.
-  }
-};
-
-const cancelResponseBody = async (response: Response): Promise<void> => {
-  try {
-    await response.body?.cancel();
-  } catch {
-    // Ignore cancellation cleanup failures; the tool is already returning.
   }
 };
 
@@ -1376,7 +1337,7 @@ const isSupportedContentType = (contentType: string | undefined): boolean => {
 export const webFetchTool = createWebFetchTool();
 
 interface ReadBodyResult {
-  bytes: Uint8Array;
+  bytes: Uint8Array<ArrayBuffer>;
   truncated: boolean;
 }
 
@@ -1394,12 +1355,9 @@ const readResponseBody = async (
   let truncated = false;
   try {
     while (true) {
-      const { done, value } = await readChunkWithAbort(reader, signal);
+      const { done, value } = await withWebFetchAbort(reader.read(), signal);
       if (done) {
         break;
-      }
-      if (value === undefined || value.byteLength === 0) {
-        continue;
       }
       const remaining = maxBytes - total;
       if (value.byteLength > remaining) {
@@ -1572,12 +1530,8 @@ const truncateString = (
     ? { value: value.slice(0, maxChars), truncated: true }
     : { value, truncated: false };
 
-const digestBytes = async (bytes: Uint8Array): Promise<string> => {
-  const digestInput = bytes.buffer.slice(
-    bytes.byteOffset,
-    bytes.byteOffset + bytes.byteLength,
-  ) as ArrayBuffer;
-  const digest = await crypto.subtle.digest("SHA-256", digestInput);
+const digestBytes = async (bytes: Uint8Array<ArrayBuffer>): Promise<string> => {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
   return `sha256:${
     [...new Uint8Array(digest)]
       .map((byte) => byte.toString(16).padStart(2, "0"))

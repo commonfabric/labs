@@ -1,8 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { join } from "@std/path";
 
-import { findViolations } from "./check-dependency-direction.ts";
+import { findViolations, main } from "./check-dependency-direction.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A workspace holding a `base/low` package, a `runtime/high` package, and the
@@ -92,6 +93,14 @@ describe("check-dependency-direction", () => {
       ).toEqual([]);
     });
 
+    it("returns nothing for a pattern's import by a bare specifier", async () => {
+      expect(
+        await violationsIn({
+          "patterns/system/home/home.tsx": 'import "commonfabric";\n',
+        }),
+      ).toEqual([]);
+    });
+
     it("returns nothing for a test that imports from anywhere", async () => {
       expect(
         await violationsIn({
@@ -102,6 +111,72 @@ describe("check-dependency-direction", () => {
           "patterns/apps/topics/topic.tsx": "export {};\n",
         }),
       ).toEqual([]);
+    });
+  });
+
+  describe("main()", () => {
+    /** Runs `main()` over a tree holding `files`, with console output captured. */
+    async function check(
+      files: Record<string, string>,
+    ): Promise<{ code: number; out: string; err: string }> {
+      const root = await fixtureTree(files);
+      const out: string[] = [];
+      const err: string[] = [];
+      try {
+        using _log = stub(console, "log", (...args) => {
+          out.push(args.join(" "));
+        });
+        using _error = stub(console, "error", (...args) => {
+          err.push(args.join(" "));
+        });
+        const code = await main(root);
+        return { code, out: out.join("\n"), err: err.join("\n") };
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    }
+
+    it("returns 0 and says so for imports that run in order", async () => {
+      expect(
+        await check({ "runtime/high/mod.ts": 'import "@commonfabric/low";\n' }),
+      ).toEqual({
+        code: 0,
+        out: "Production imports run in the layout's order.",
+        err: "",
+      });
+    });
+
+    it("returns 1 and names the one import that runs against the order", async () => {
+      const { code, out, err } = await check({
+        "base/low/mod.ts": 'import "@commonfabric/high";\n',
+      });
+
+      expect(code).toBe(1);
+      expect(out).toBe("");
+      expect(err).toContain(
+        "\n1 production import runs against the layout's order:\n",
+      );
+      expect(err).toContain(
+        "  low -> high: base/low/mod.ts  <-  @commonfabric/high",
+      );
+      expect(err).toContain("LAYOUT.md says what each place holds.");
+    });
+
+    it("returns 1 and counts several imports in the plural", async () => {
+      const { code, err } = await check({
+        "base/low/mod.ts": 'import "@commonfabric/high";\n',
+        "patterns/system/home/home.tsx":
+          'import "../../apps/topics/topic.tsx";\n',
+      });
+
+      expect(code).toBe(1);
+      expect(err).toContain(
+        "\n2 production imports run against the layout's order:\n",
+      );
+      expect(err).toContain(
+        "  patterns/system -> patterns/apps: patterns/system/home/home.tsx" +
+          "  <-  ../../apps/topics/topic.tsx",
+      );
     });
   });
 });

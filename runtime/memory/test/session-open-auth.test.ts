@@ -1,6 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { hashOf } from "@commonfabric/data-model";
@@ -10,6 +9,7 @@ import {
   delegationCid,
   issueDelegation,
 } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { MEMORY_PROTOCOL } from "../v2.ts";
 import { type ClientInfo, createClientInfo } from "../v2/client-info.ts";
@@ -18,6 +18,7 @@ import {
   MAX_PROOF_CHAIN_LENGTH,
   verifySessionOpenAuthorization,
   verifySessionOpenProofs,
+  verifySignedInvocation,
   wireAuthorizationOf,
 } from "../v2/session-open-auth.ts";
 import { alice, bob, mallory, space } from "./principal.ts";
@@ -63,6 +64,7 @@ const buildOpen = async (
     genesisRoot?: FabricValue;
     spaceKind?: string;
     instanceNames?: true;
+    demand?: false;
     invite?: { inviteId: string; code: string };
   } = {},
 ) => {
@@ -111,7 +113,30 @@ describe("wireAuthorizationOf", () => {
   });
 });
 
+describe("verifySignedInvocation", () => {
+  it("throws naming the request for an invocation with no issuer", async () => {
+    await expect(
+      verifySignedInvocation(
+        "memory connection.auth",
+        signedFields(),
+        new Uint8Array(64),
+        verifyOptions(),
+      ),
+    ).rejects.toThrow("memory connection.auth authorization mismatch");
+  });
+});
+
 describe("verifySessionOpenAuthorization", () => {
+  it("throws for an issuer that is not a DID", async () => {
+    const message = await buildOpen(signedFields());
+    await expect(
+      verifySessionOpenAuthorization(
+        { ...message, invocation: { ...message.invocation, iss: "not-a-did" } },
+        verifyOptions(),
+      ),
+    ).rejects.toThrow('Invalid DID "not-a-did"');
+  });
+
   it("binds client identity to the signed session descriptor", async () => {
     const client = createClientInfo({
       application: "cf",
@@ -268,6 +293,26 @@ describe("verifySessionOpenAuthorization", () => {
       Error,
       "authorization mismatch",
     );
+  });
+
+  it("binds a declaration that the session is not demand to the signed descriptor", async () => {
+    const message = await buildOpen(signedFields(), alice, { demand: false });
+    expect(await verifySessionOpenAuthorization(message, verifyOptions())).toBe(
+      alice.did(),
+    );
+    await expect(
+      verifySessionOpenAuthorization(
+        { ...message, session: {} },
+        verifyOptions(),
+      ),
+    ).rejects.toThrow("authorization mismatch");
+    const unsigned = await buildOpen(signedFields());
+    await expect(
+      verifySessionOpenAuthorization(
+        { ...unsigned, session: { demand: false } },
+        verifyOptions(),
+      ),
+    ).rejects.toThrow("authorization mismatch");
   });
 
   it("binds an invitation to the signed descriptor", async () => {
@@ -733,7 +778,7 @@ describe("verifySessionOpenProofs", () => {
     const root = await rootDelegation();
     expect(
       await verifySessionOpenProofs(signedOpen([root]), proofOptions()),
-    ).toEqual({ rootIssuer: space.did() });
+    ).toEqual({ rootIssuer: space.did(), issuers: [space.did()] });
   });
 
   it("returns the root issuer for a chain of two ending at the opener", async () => {
@@ -743,7 +788,7 @@ describe("verifySessionOpenProofs", () => {
         signedOpen(chain, bob),
         proofOptions(bob.did()),
       ),
-    ).toEqual({ rootIssuer: space.did() });
+    ).toEqual({ rootIssuer: space.did(), issuers: [space.did(), alice.did()] });
   });
 
   it("returns the root issuer for an open naming an authenticated principal and carrying proofs alone", async () => {
@@ -757,7 +802,22 @@ describe("verifySessionOpenProofs", () => {
         },
         proofOptions(),
       ),
-    ).toEqual({ rootIssuer: space.did() });
+    ).toEqual({ rootIssuer: space.did(), issuers: [space.did()] });
+  });
+
+  it("throws naming the proof for a proof that does not decode", async () => {
+    await expect(
+      verifySessionOpenProofs(
+        {
+          space: space.did(),
+          session: {},
+          authorization: {
+            proofs: [new FabricBytes(new Uint8Array([0xff, 0x00]))],
+          },
+        },
+        proofOptions(),
+      ),
+    ).rejects.toThrow("memory session.open proofs refused: proof 0");
   });
 
   it("throws when the open authenticates no principal", async () => {
@@ -860,7 +920,11 @@ describe("verifySessionOpenProofs", () => {
     const atExpiry = await rootDelegation({ exp: now });
     expect(
       await verifySessionOpenProofs(signedOpen([atExpiry]), proofOptions()),
-    ).toEqual({ rootIssuer: space.did(), expiresAt: now });
+    ).toEqual({
+      rootIssuer: space.did(),
+      issuers: [space.did()],
+      expiresAt: now,
+    });
   });
 
   it("throws for a proof that is not yet valid", async () => {
@@ -916,6 +980,10 @@ describe("verifySessionOpenProofs", () => {
         signedOpen(chain, bob),
         proofOptions(bob.did()),
       ),
-    ).toEqual({ rootIssuer: space.did(), expiresAt: now + 200 });
+    ).toEqual({
+      rootIssuer: space.did(),
+      issuers: [space.did(), alice.did()],
+      expiresAt: now + 200,
+    });
   });
 });

@@ -25,7 +25,6 @@
 //   cell ops; a sink without the hook, a batch without per-op scope
 //   keys, and a FOREIGN batch with sqlite ops are all refused loudly.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -41,6 +40,12 @@ import {
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import { runQuery } from "@commonfabric/memory/sqlite/exec";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type {
@@ -48,7 +53,10 @@ import type {
   MemorySpace,
   TransactionSealDestination,
 } from "../src/storage/interface.ts";
-import type { PostCommitSideEffect } from "../src/cfc/types.ts";
+import {
+  POST_COMMIT_RELEASE_REJECTED,
+  type PostCommitSideEffect,
+} from "../src/cfc/types.ts";
 import {
   stampWaveRunContext,
   WaveAccumulator,
@@ -299,6 +307,63 @@ describe("stage G outbox + sqlite discharge", () => {
     // Carriage retires with the work (a late straggler falls back to
     // the wave identity, which is the same identity in Phase 1).
     expect(outbox.carriageFor("fetchTest:key-A")).toBeUndefined();
+  });
+
+  it("reports a dispatched carriage only while a request that passed its release check runs", async () => {
+    // An abandoned request's ending commits as a completion only under a
+    // carriage that outlives its commit. A request whose release check
+    // refuses it never goes out, and its carriage retires as soon as the
+    // refusing flush returns, so the outbox reports none, even from inside
+    // that flush, where the carriage is still held.
+
+    const { outbox } = newOutbox();
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const seen: Array<{ carriage: boolean; dispatched: boolean }> = [];
+    const look = (key: string) =>
+      seen.push({
+        carriage: outbox.carriageFor(key) !== undefined,
+        dispatched: outbox.hasDispatchedCarriage(key),
+      });
+    const context = {
+      actionId: "fetch-node",
+      kind: "derivation" as const,
+      acting: { user: "user:alice", session: "sess-1" },
+    };
+    const tx = {} as IExtendedStorageTransaction;
+    outbox.admitSealedEffects([{
+      tx,
+      effects: [{
+        id: "fetchTest:refused",
+        kind: "fetchTest-start",
+        flush: () => {
+          look("fetchTest:refused");
+          return POST_COMMIT_RELEASE_REJECTED;
+        },
+      }, {
+        id: "fetchTest:sent",
+        kind: "fetchTest-start",
+        flush: () => {
+          look("fetchTest:sent");
+          outbox.observeAsyncWork(gate.then(() => look("fetchTest:sent")));
+        },
+      }],
+      context,
+    }]);
+    look("fetchTest:refused");
+
+    release!();
+    await outbox.settle();
+
+    expect(seen).toEqual([
+      { carriage: true, dispatched: false },
+      { carriage: true, dispatched: false },
+      { carriage: false, dispatched: false },
+      { carriage: true, dispatched: true },
+    ]);
+    expect(outbox.hasDispatchedCarriage("fetchTest:sent")).toBe(false);
   });
 
   it("holds an effect's in-flight entry until every completion is READABLE: a stale re-admit across the absorption window dedupes; retirement follows the barrier (serving-loop.md §4, the B-1 read-consistency gate)", async () => {

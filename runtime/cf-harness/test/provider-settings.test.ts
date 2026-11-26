@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import {
   FileHarnessProviderSettingsStore,
   resolveHarnessModelProviderPreference,
 } from "../src/auth/provider-settings.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("provider-settings", () => {
   describe("FileHarnessProviderSettingsStore", () => {
@@ -215,6 +215,97 @@ file.close();`,
       await stdin.close();
       expect((await holder.status).success).toBe(true);
       expect((await store.inspect()).state).toBe("missing");
+    });
+
+    it("refuses to write into a home with public permissions", async () => {
+      if (Deno.build.os === "windows") return;
+      const root = await Deno.makeTempDir();
+      const home = join(root, "public");
+      await Deno.mkdir(home, { mode: 0o755 });
+      const store = new FileHarnessProviderSettingsStore({
+        path: join(home, "config.json"),
+      });
+
+      await expect(store.set("openai-codex")).rejects.toThrow(
+        "provider settings directory must have private permissions",
+      );
+      expect([...Deno.readDirSync(home)]).toEqual([]);
+    });
+
+    it("reports a settings file with public permissions as unreadable", async () => {
+      if (Deno.build.os === "windows") return;
+      const root = await Deno.makeTempDir();
+      const path = join(root, "config.json");
+      await Deno.writeTextFile(
+        path,
+        '{"version":1,"modelProvider":"openai-codex"}',
+        { mode: 0o644 },
+      );
+
+      expect(await new FileHarnessProviderSettingsStore({ path }).inspect())
+        .toEqual({
+          state: "unreadable",
+          detail: "provider settings file must have private permissions",
+        });
+    });
+
+    it("refuses to initialize over an invalid document", async () => {
+      const root = await Deno.makeTempDir();
+      const path = join(root, "config.json");
+      const document = '{"version":1,"modelProvider":"invalid"}';
+      await Deno.writeTextFile(path, document, { mode: 0o600 });
+
+      await expect(
+        new FileHarnessProviderSettingsStore({ path }).initialize(
+          "openai-codex",
+        ),
+      ).rejects.toMatchObject({
+        code: "provider-configuration-required",
+        message: "Provider settings are invalid",
+      });
+      expect(await Deno.readTextFile(path)).toBe(document);
+    });
+
+    it("throws the open failure of a lock file that cannot be created", async () => {
+      // The lock file's name is the settings file's plus ".lock", so a name
+      // at the file-name limit leaves the lock name over it.
+      const root = await Deno.makeTempDir();
+      const store = new FileHarnessProviderSettingsStore({
+        path: join(root, `${"a".repeat(250)}.json`),
+      });
+
+      await expect(store.set("openai-codex")).rejects.toThrow(
+        "File name too long",
+      );
+      expect([...Deno.readDirSync(root)]).toEqual([]);
+    });
+
+    it("throws a failed write and leaves the existing settings in place", async () => {
+      if (Deno.build.os === "windows") return;
+      const root = await Deno.makeTempDir();
+      const home = join(root, "home");
+      const path = join(home, "config.json");
+      const store = new FileHarnessProviderSettingsStore({ path });
+      await store.set("openai-compatible-gateway");
+      const original = await Deno.readTextFile(path);
+      await Deno.chmod(home, 0o500);
+      try {
+        // Permission bits do not bind the superuser, for whom the home stays
+        // writable and there is no failure to observe.
+        const probe = join(home, "probe");
+        if (await Deno.writeTextFile(probe, "").then(() => true, () => false)) {
+          await Deno.remove(probe);
+          return;
+        }
+        await expect(store.set("openai-codex")).rejects.toBeInstanceOf(
+          Deno.errors.PermissionDenied,
+        );
+      } finally {
+        await Deno.chmod(home, 0o700);
+      }
+      expect(await Deno.readTextFile(path)).toBe(original);
+      expect([...Deno.readDirSync(home)].map((entry) => entry.name).sort())
+        .toEqual(["config.json", "config.json.lock"]);
     });
   });
 

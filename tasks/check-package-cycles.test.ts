@@ -1,6 +1,5 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { dirname, fromFileUrl, join } from "@std/path";
 
 import {
   type AllowedCycle,
@@ -14,11 +13,13 @@ import {
   isStronglyConnected,
   main,
   packageOfPath,
+  productionPaths,
   readWorkspace,
   resolveRelative,
   scan,
   targetPackage,
 } from "./check-package-cycles.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const edge = (from: string, to: string): Edge => ({
   from,
@@ -496,6 +497,33 @@ describe("check-package-cycles", () => {
       });
       expect(await buildEdges(root)).toEqual([]);
     });
+
+    it("returns the edges of the sources it can read, past one it cannot", async () => {
+      const root = await tree({
+        alpha: { "src/mod.ts": `import "@commonfabric/beta";` },
+        beta: { "src/mod.ts": "" },
+      });
+      await Deno.symlink(
+        join(root, "runtime/alpha/src/missing.ts"),
+        join(root, "runtime/alpha/src/dangling.ts"),
+      );
+
+      expect((await buildEdges(root)).map((e) => e.file)).toEqual([
+        "runtime/alpha/src/mod.ts",
+      ]);
+    });
+  });
+
+  describe("productionPaths()", () => {
+    it("returns the production sources git tracks in a checkout", async () => {
+      // This test's own repository, whose files git lists.
+      const root = dirname(dirname(fromFileUrl(import.meta.url)));
+      const paths = await productionPaths(root, await readWorkspace(root));
+
+      expect(paths).toContain("runtime/runner/src/index.ts");
+      expect(paths).not.toContain("tasks/check-package-cycles.ts");
+      expect(paths.filter((path) => path.endsWith(".test.ts"))).toEqual([]);
+    });
   });
 
   describe("scan()", () => {
@@ -576,6 +604,22 @@ describe("check-package-cycles", () => {
       expect(err).toContain("runtime/alpha/src/mod.ts");
       expect(err).toContain("alpha -> beta, 1 import:");
       expect(err).toContain("Removing any one of these would break the cycle");
+    });
+
+    it("returns 1 naming only the imports inside the cycle", async () => {
+      const root = await tree({
+        alpha: { "src/mod.ts": `import "@commonfabric/beta";` },
+        beta: { "src/mod.ts": `import "@commonfabric/alpha";` },
+        gamma: { "src/mod.ts": `import "@commonfabric/alpha";` },
+      });
+      let code = -1;
+      const { err } = await captureConsole(async () => {
+        code = await main(root, []);
+      });
+      expect(code).toBe(1);
+      expect(err).toContain("alpha -> beta, 1 import:");
+      expect(err).toContain("beta -> alpha, 1 import:");
+      expect(err).not.toContain("gamma");
     });
 
     it("returns 1 without the shrink message when a cycle grows past its entry", async () => {

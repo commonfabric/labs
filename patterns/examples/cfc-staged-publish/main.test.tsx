@@ -1,4 +1,16 @@
-import { assert, handler, pattern, TESTS, Writable } from "commonfabric";
+import {
+  assert,
+  handler,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
+import {
+  findNodeById,
+  hasExactText,
+} from "../../tools/test-support/vnode-helpers.ts";
 import {
   PUBLISH_SNAPSHOT_ACTION,
   REVIEW_SNAPSHOT_ACTION,
@@ -56,7 +68,11 @@ export default pattern(() => {
     body: "Edited after save but before review.",
   });
 
-  const assert_initial_stage = assert(() => instance.stage === "drafting");
+  const assert_initial_stage = assert(() =>
+    instance.stage === "drafting" &&
+    instance[NAME] === "CFC Staged Publish (drafting)" &&
+    hasExactText(findNodeById(instance[UI], "stage-pill"), "drafting")
+  );
   const assert_saved_snapshot = assert(() =>
     savedTitle.get() === "Launch checklist" &&
     savedBody.get() === "Ship the staged publish demo with trusted UI gates." &&
@@ -76,7 +92,13 @@ export default pattern(() => {
     publishedTitle.get() === "Launch checklist" &&
     publishedBody.get() ===
       "Ship the staged publish demo with trusted UI gates." &&
-    instance.stage === "published"
+    instance.stage === "published" &&
+    instance[NAME] === "CFC Staged Publish (published)" &&
+    hasExactText(findNodeById(instance[UI], "stage-pill"), "published") &&
+    hasExactText(
+      findNodeById(instance[UI], "published-title"),
+      "Launch checklist",
+    )
   );
 
   return {

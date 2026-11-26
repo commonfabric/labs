@@ -8,15 +8,9 @@ export const emitElementAccessExpression = ({
   dataFlows,
   analysis,
   context,
-  inSafeContext,
   preferInputBoundWrappers,
 }: EmitterContext) => {
   if (!ts.isElementAccessExpression(expression)) return undefined;
-
-  // Skip lift-applied wrapping in safe contexts - they don't need it
-  if (inSafeContext) return undefined;
-
-  if (dataFlows.length === 0) return undefined;
 
   // Check if this is a static index access
   const argumentExpression = expression.argumentExpression;

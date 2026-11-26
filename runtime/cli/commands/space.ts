@@ -355,6 +355,61 @@ function parseDuration(value: string): number {
   return Number(match[1]) * unit;
 }
 
+/**
+ * Reaps `store` into `options.out`, or `<store>.reaped.sqlite` beside it,
+ * checks the result against the store, and reports both. A result that fails
+ * its check is discarded, and the run leaves `Deno.exitCode` at 1. A test
+ * passes the check as `verify`.
+ */
+export async function runReap(
+  store: string,
+  options: { out?: string; json?: boolean },
+  verify: typeof verifyReap = verifyReap,
+): Promise<void> {
+  const result = options.out ?? `${store}.reaped.sqlite`;
+  assertNotLiveStore(store, "store");
+  assertNotLiveStore(result, "result");
+  // The result is written to a file of the run's own and put at the
+  // result path only once it has passed its check, so a result that fails
+  // is never at the path, and nothing else there is removed.
+  let staged;
+  try {
+    staged = await stageReap({ store, out: result });
+  } catch (error) {
+    if (error instanceof ReapRefused) {
+      throw new ValidationError(error.message);
+    }
+    throw error;
+  }
+  let verification;
+  let run: ReapRun | undefined;
+  try {
+    verification = verify({ result: staged.staged, against: store });
+    if (verification.ok) run = publishReap(staged);
+  } catch (error) {
+    // `publishReap()` has removed what it staged; a check that threw has
+    // not.
+    discardReap(staged.staged);
+    if (error instanceof ReapRefused) {
+      throw new ValidationError(error.message);
+    }
+    throw error;
+  }
+  if (run === undefined) discardReap(staged.staged);
+  const { staged: _staged, ...planned } = staged;
+  // The check read the staged file, which is gone by now: the result it
+  // speaks for is the one at the result path.
+  const checked = { ...verification, result: staged.out };
+  out(!!options.json, { ...(run ?? planned), verification: checked }, () => {
+    console.log(
+      run === undefined ? formatReapPlan(planned) : formatReapRun(run),
+    );
+    console.log("");
+    console.log(formatCompactionVerification(verification));
+  });
+  if (run === undefined) Deno.exitCode = 1;
+}
+
 export const space = new Command()
   .name("space")
   .description(
@@ -888,48 +943,7 @@ export const space = new Command()
       }
       return;
     }
-    const result = options.out ?? `${store}.reaped.sqlite`;
-    assertNotLiveStore(store, "store");
-    assertNotLiveStore(result, "result");
-    // The result is written to a file of the run's own and put at the
-    // result path only once it has passed its check, so a result that fails
-    // is never at the path, and nothing else there is removed.
-    let staged;
-    try {
-      staged = await stageReap({ store, out: result });
-    } catch (error) {
-      if (error instanceof ReapRefused) {
-        throw new ValidationError(error.message);
-      }
-      throw error;
-    }
-    let verification;
-    let run: ReapRun | undefined;
-    try {
-      verification = verifyReap({ result: staged.staged, against: store });
-      if (verification.ok) run = publishReap(staged);
-    } catch (error) {
-      // `publishReap()` has removed what it staged; a check that threw has
-      // not.
-      discardReap(staged.staged);
-      if (error instanceof ReapRefused) {
-        throw new ValidationError(error.message);
-      }
-      throw error;
-    }
-    if (run === undefined) discardReap(staged.staged);
-    const { staged: _staged, ...planned } = staged;
-    // The check read the staged file, which is gone by now: the result it
-    // speaks for is the one at the result path.
-    const checked = { ...verification, result: staged.out };
-    out(!!options.json, { ...(run ?? planned), verification: checked }, () => {
-      console.log(
-        run === undefined ? formatReapPlan(planned) : formatReapRun(run),
-      );
-      console.log("");
-      console.log(formatCompactionVerification(verification));
-    });
-    if (run === undefined) Deno.exit(1);
+    return runReap(store, options);
   })
   /* space create */
   .command("create", buildCreateSpaceCommand("space create"))

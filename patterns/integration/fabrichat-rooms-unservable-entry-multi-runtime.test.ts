@@ -12,13 +12,13 @@
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
 } from "./multi-runtime-harness.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const PROGRAM_PATH = join(
   import.meta.dirname!,
@@ -152,6 +152,7 @@ describe("fabrichat rooms beside an unservable catalog entry across runtimes", (
         it(`lists each new group, and the people of the rooms listed, beside a ${kind} membership in a room this replica can't serve`, async () => {
           const ada = await start(serverExecution, undefined);
           await rememberUnservedRoom(ada, kind);
+          await ada.send("askForPeople", {});
           expect(await ada.read(["people"])).toEqual({});
           expect(await listedKinds(ada)).toEqual([kind]);
 

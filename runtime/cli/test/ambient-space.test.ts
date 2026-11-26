@@ -9,9 +9,9 @@
  * signal each of these reads.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { argv, cf, stripAnsi } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function errorText(stderr: string[]): string {
   return stderr.map(stripAnsi).join("\n");

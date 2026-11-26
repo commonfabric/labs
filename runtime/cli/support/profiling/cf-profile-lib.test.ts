@@ -1,20 +1,20 @@
 import { assert, assertEquals, assertMatch, assertThrows } from "@std/assert";
+import { CAPTURE_TARGET_FINISHED_MESSAGE } from "./capture-deno-inspector-profile-lib.ts";
 import {
-  createProfileOutputRelay,
-  DEBUGGER_WAITING_MESSAGE,
   escapeRegex,
   findInspectorWebSocketUrl,
   inspectWaitFlag,
-  type KillableProcess,
+  mirrorCaptureOutput,
   mirrorOutput,
   parseProfileArgs,
   pickInspectPort,
   profileTimestamp,
   profilingChildEnv,
   slugifyProfileName,
-  stopCaptureOnce,
   waitForCliStatusOrStopOnCaptureFailure,
+  watchOutput,
 } from "./cf-profile-lib.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -42,14 +42,14 @@ function createSink() {
   };
 }
 
-Deno.test("inspectWaitFlag pauses the profiled process until capture attaches", () => {
+test("inspectWaitFlag pauses the profiled process until capture attaches", () => {
   assertEquals(
     inspectWaitFlag("127.0.0.1", 9333),
     "--inspect-wait=127.0.0.1:9333",
   );
 });
 
-Deno.test("profilingChildEnv removes Deno coverage collection", () => {
+test("profilingChildEnv removes Deno coverage collection", () => {
   assertEquals(
     profilingChildEnv({
       DENO_COVERAGE_DIR: "coverage/raw/workspace",
@@ -59,7 +59,7 @@ Deno.test("profilingChildEnv removes Deno coverage collection", () => {
   );
 });
 
-Deno.test("parseProfileArgs separates profiler options from CLI arguments", () => {
+test("parseProfileArgs separates profiler options from CLI arguments", () => {
   const parsed = parseProfileArgs([
     "--profile-output=profile.cpuprofile",
     "--profile-summary-pattern=done",
@@ -82,14 +82,14 @@ Deno.test("parseProfileArgs separates profiler options from CLI arguments", () =
   });
 });
 
-Deno.test("parseProfileArgs accepts an output directory", () => {
+test("parseProfileArgs accepts an output directory", () => {
   const parsed = parseProfileArgs(["--profile-dir=profiles", "test"]);
 
   assertEquals(parsed.options.outputDir, "profiles");
   assertEquals(parsed.cliArgs, ["test"]);
 });
 
-Deno.test("parseProfileArgs rejects invalid profiler options", () => {
+test("parseProfileArgs rejects invalid profiler options", () => {
   const cases: Array<[string[], string]> = [
     [
       ["--profile-output=profile.cpuprofile", "--profile-dir=profiles"],
@@ -118,7 +118,7 @@ Deno.test("parseProfileArgs rejects invalid profiler options", () => {
   }
 });
 
-Deno.test("findInspectorWebSocketUrl reads the inspector URL from stderr text", () => {
+test("findInspectorWebSocketUrl reads the inspector URL from stderr text", () => {
   assertEquals(
     findInspectorWebSocketUrl(
       "Debugger listening on ws://127.0.0.1:9333/abc\n",
@@ -128,7 +128,7 @@ Deno.test("findInspectorWebSocketUrl reads the inspector URL from stderr text", 
   assertEquals(findInspectorWebSocketUrl("no inspector yet"), undefined);
 });
 
-Deno.test("slugifyProfileName makes stable output path names", () => {
+test("slugifyProfileName makes stable output path names", () => {
   assertEquals(
     slugifyProfileName(["test", "--filter=hello world", "a/b"]),
     "test-filter-hello-world-a-b",
@@ -137,26 +137,26 @@ Deno.test("slugifyProfileName makes stable output path names", () => {
   assertEquals(slugifyProfileName(["a".repeat(100)]), "a".repeat(80));
 });
 
-Deno.test("profileTimestamp uses filename-safe separators", () => {
+test("profileTimestamp uses filename-safe separators", () => {
   assertMatch(profileTimestamp(), /^\d{4}-\d{2}-\d{2}T[\d-]+Z$/);
 });
 
-Deno.test("escapeRegex escapes regex syntax", () => {
+test("escapeRegex escapes regex syntax", () => {
   assertEquals(
     escapeRegex("a+b*(c)[d]{e}|f?^$\\."),
     "a\\+b\\*\\(c\\)\\[d\\]\\{e\\}\\|f\\?\\^\\$\\\\\\.",
   );
 });
 
-Deno.test("pickInspectPort returns a requested port", () => {
+test("pickInspectPort returns a requested port", () => {
   assertEquals(pickInspectPort(9333), 9333);
 });
 
-Deno.test("pickInspectPort allocates a TCP port", () => {
+test("pickInspectPort allocates a TCP port", () => {
   assert(pickInspectPort() > 0);
 });
 
-Deno.test("pickInspectPort closes non-TCP listeners before throwing", () => {
+test("pickInspectPort closes non-TCP listeners before throwing", () => {
   let closed = false;
 
   assertThrows(
@@ -176,98 +176,69 @@ Deno.test("pickInspectPort closes non-TCP listeners before throwing", () => {
   assertEquals(closed, true);
 });
 
-Deno.test("stopCaptureOnce sends one signal", () => {
-  const state = { sent: false };
-  const signals: Deno.Signal[] = [];
-
-  stopCaptureOnce(state, {
-    kill: (signal) => {
-      signals.push(signal);
-    },
-  });
-  stopCaptureOnce(state, {
-    kill: (signal) => {
-      signals.push(signal);
-    },
-  });
-
-  assertEquals(state.sent, true);
-  assertEquals(signals, ["SIGINT"]);
-});
-
-Deno.test("stopCaptureOnce records a sent signal when kill fails", () => {
-  const state = { sent: false };
-
-  stopCaptureOnce(state, {
-    kill: () => {
-      throw new Error("already exited");
-    },
-  });
-
-  assertEquals(state.sent, true);
-});
-
-Deno.test("createProfileOutputRelay resolves the inspector URL exactly once", () => {
+test("watchOutput reports the first value found, exactly once", () => {
   const urls: string[] = [];
-  const { onCliOutput } = createProfileOutputRelay({
-    captureRef: {},
-    captureStopState: { sent: false },
-    captureStopSignal: "SIGTERM",
-    onInspectorUrl: (url) => urls.push(url),
-  });
+  const onText = watchOutput(
+    findInspectorWebSocketUrl,
+    (url) => urls.push(url),
+  );
 
-  onCliOutput("startup noise\n");
-  onCliOutput("Debugger listening on ws://127.0.0.1:9229/abc\n");
-  // A later inspector line does not resolve a second time.
-  onCliOutput("Debugger listening on ws://127.0.0.1:9229/def\n");
+  onText("startup noise\n");
+  assertEquals(urls, []);
+  // A line split across chunks is found once it is complete.
+  onText("Debugger listening on ws://127.0.0.1:9229/abc");
+  onText("\n");
+  // A later inspector line does not report a second time.
+  onText("Debugger listening on ws://127.0.0.1:9229/def\n");
 
   assertEquals(urls, ["ws://127.0.0.1:9229/abc"]);
 });
 
-Deno.test("createProfileOutputRelay stops the capture on the debugger-waiting message", () => {
-  const signals: Deno.Signal[] = [];
-  const captureStopState = { sent: false };
-  const captureRef: { current?: KillableProcess } = {
-    current: { kill: (signal) => signals.push(signal) },
-  };
-  const { onCliOutput } = createProfileOutputRelay({
-    captureRef,
-    captureStopState,
-    captureStopSignal: "SIGTERM",
-    onInspectorUrl: () => {},
+function streamOf(...chunks: string[]): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+    },
   });
+}
 
-  onCliOutput(`${DEBUGGER_WAITING_MESSAGE}\n`);
+test("mirrorCaptureOutput reports a target that finished", async () => {
+  const { chunks, sink } = createSink();
+  const half = CAPTURE_TARGET_FINISHED_MESSAGE.length / 2;
 
-  assertEquals(signals, ["SIGTERM"]);
-  assertEquals(captureStopState.sent, true);
+  const result = await mirrorCaptureOutput(
+    streamOf(
+      "profile: websocket open\n",
+      CAPTURE_TARGET_FINISHED_MESSAGE.slice(0, half),
+      `${CAPTURE_TARGET_FINISHED_MESSAGE.slice(half)}\n`,
+    ),
+    sink,
+  );
+
+  assertEquals(result, { targetFinished: true });
+  assertEquals(
+    chunks.map((chunk) => decoder.decode(chunk)).join(""),
+    `profile: websocket open\n${CAPTURE_TARGET_FINISHED_MESSAGE}\n`,
+  );
 });
 
-Deno.test("createProfileOutputRelay's stopCapture is inert before a capture starts", () => {
-  const captureStopState = { sent: false };
-  const { onCliOutput, stopCapture } = createProfileOutputRelay({
-    captureRef: {}, // the capture process has not spawned yet
-    captureStopState,
-    captureStopSignal: "SIGTERM",
-    onInspectorUrl: () => {},
-  });
+test("mirrorCaptureOutput reports a target that did not finish", async () => {
+  const { sink } = createSink();
 
-  // The debugger message can arrive before the capture exists; nothing to signal.
-  onCliOutput(`${DEBUGGER_WAITING_MESSAGE}\n`);
-  stopCapture();
-
-  assertEquals(captureStopState.sent, false);
+  assertEquals(
+    await mirrorCaptureOutput(streamOf("profile: websocket open\n"), sink),
+    { targetFinished: false },
+  );
 });
 
-Deno.test("waitForCliStatusOrStopOnCaptureFailure stops the CLI after capture failure", async () => {
+test("waitForCliStatusOrStopOnCaptureFailure stops the CLI after capture failure", async () => {
   const cliStatus = Promise.withResolvers<Deno.CommandStatus>();
-  const cliStopState = { sent: false };
   const signals: Deno.Signal[] = [];
 
   const result = waitForCliStatusOrStopOnCaptureFailure(
     cliStatus.promise,
-    Promise.resolve(failureStatus),
-    cliStopState,
+    Promise.resolve({ status: failureStatus, targetFinished: false }),
     {
       kill: (signal) => {
         signals.push(signal);
@@ -285,19 +256,33 @@ Deno.test("waitForCliStatusOrStopOnCaptureFailure stops the CLI after capture fa
     code: 143,
     signal: "SIGTERM",
   });
-  assertEquals(cliStopState.sent, true);
   assertEquals(signals, ["SIGTERM"]);
 });
 
-Deno.test("waitForCliStatusOrStopOnCaptureFailure leaves the CLI running after capture success", async () => {
+test("waitForCliStatusOrStopOnCaptureFailure tolerates a CLI that already exited", async () => {
   const cliStatus = Promise.withResolvers<Deno.CommandStatus>();
-  const cliStopState = { sent: false };
+
+  const result = waitForCliStatusOrStopOnCaptureFailure(
+    cliStatus.promise,
+    Promise.resolve({ status: failureStatus, targetFinished: false }),
+    {
+      kill: () => {
+        cliStatus.resolve(successStatus);
+        throw new TypeError("Child process has already terminated");
+      },
+    },
+  );
+
+  assertEquals(await result, successStatus);
+});
+
+test("waitForCliStatusOrStopOnCaptureFailure lets a finished CLI exit after capture failure", async () => {
+  const cliStatus = Promise.withResolvers<Deno.CommandStatus>();
   const signals: Deno.Signal[] = [];
 
   const result = waitForCliStatusOrStopOnCaptureFailure(
     cliStatus.promise,
-    Promise.resolve(successStatus),
-    cliStopState,
+    Promise.resolve({ status: failureStatus, targetFinished: true }),
     {
       kill: (signal) => {
         signals.push(signal);
@@ -309,18 +294,36 @@ Deno.test("waitForCliStatusOrStopOnCaptureFailure leaves the CLI running after c
   cliStatus.resolve(successStatus);
 
   assertEquals(await result, successStatus);
-  assertEquals(cliStopState.sent, false);
   assertEquals(signals, []);
 });
 
-Deno.test("waitForCliStatusOrStopOnCaptureFailure returns when the CLI exits first", async () => {
-  const cliStopState = { sent: false };
+test("waitForCliStatusOrStopOnCaptureFailure leaves the CLI running after capture success", async () => {
+  const cliStatus = Promise.withResolvers<Deno.CommandStatus>();
+  const signals: Deno.Signal[] = [];
+
+  const result = waitForCliStatusOrStopOnCaptureFailure(
+    cliStatus.promise,
+    Promise.resolve({ status: successStatus, targetFinished: false }),
+    {
+      kill: (signal) => {
+        signals.push(signal);
+      },
+    },
+  );
+
+  await Promise.resolve();
+  cliStatus.resolve(successStatus);
+
+  assertEquals(await result, successStatus);
+  assertEquals(signals, []);
+});
+
+test("waitForCliStatusOrStopOnCaptureFailure returns when the CLI exits first", async () => {
   const signals: Deno.Signal[] = [];
 
   const result = await waitForCliStatusOrStopOnCaptureFailure(
     Promise.resolve(successStatus),
     new Promise(() => {}),
-    cliStopState,
     {
       kill: (signal) => {
         signals.push(signal);
@@ -329,11 +332,10 @@ Deno.test("waitForCliStatusOrStopOnCaptureFailure returns when the CLI exits fir
   );
 
   assertEquals(result, successStatus);
-  assertEquals(cliStopState.sent, false);
   assertEquals(signals, []);
 });
 
-Deno.test("mirrorOutput ignores a missing stream", async () => {
+test("mirrorOutput ignores a missing stream", async () => {
   const { chunks, sink } = createSink();
 
   await mirrorOutput(null, sink);
@@ -341,7 +343,7 @@ Deno.test("mirrorOutput ignores a missing stream", async () => {
   assertEquals(chunks, []);
 });
 
-Deno.test("mirrorOutput forwards text and flushes decoder state", async () => {
+test("mirrorOutput forwards text and flushes decoder state", async () => {
   const { chunks, sink } = createSink();
   const seen: string[] = [];
   const stream = new ReadableStream<Uint8Array>({

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -9,9 +8,16 @@ import {
   relayArtifacts,
   runFactsOfPayload,
   runRelay,
+  runRelayCommand,
   shouldShipRun,
 } from "./test-records-relay.ts";
 import { gunzipToText } from "@commonfabric/test-support/records";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const PAYLOAD = {
   workflow_run: {
@@ -57,6 +63,18 @@ describe("test-records-relay", () => {
 
     it("throws for a payload with no run facts", () => {
       expect(() => runFactsOfPayload({})).toThrow();
+    });
+
+    it("throws for a payload that is not an object", () => {
+      expect(() => runFactsOfPayload("CI")).toThrow(
+        "the event payload is not an object",
+      );
+    });
+
+    it("throws for a workflow_run that is not an object", () => {
+      expect(() => runFactsOfPayload({ workflow_run: 987654 })).toThrow(
+        "the event payload has no workflow_run",
+      );
     });
   });
 
@@ -286,6 +304,47 @@ describe("test-records-relay", () => {
       ]);
     });
 
+    it("ships an artifact whose job facts are not an object, and skips stray files", async () => {
+      await Deno.writeTextFile(join(dir, "README"), "not an artifact");
+      await Deno.mkdir(join(dir, "test-records-check-a2"));
+      await Deno.writeTextFile(
+        join(dir, "test-records-check-a2", "job.json"),
+        "null",
+      );
+      await Deno.writeTextFile(
+        join(dir, "test-records-check-a2", "records.ndjson"),
+        "",
+      );
+      const names: string[] = [];
+      const warned: string[] = [];
+      const warn = console.warn;
+      console.warn = (line: string) => warned.push(line);
+      let failed: string[];
+      try {
+        failed = await relayArtifacts({
+          artifactsDir: dir,
+          run: runFactsOfPayload(PAYLOAD),
+          bucket: "b",
+          prefix: "p",
+          token: "t",
+          fetch: ((_input: URL | RequestInfo, init?: RequestInit) => {
+            const body = new TextDecoder("utf-8", { fatal: false }).decode(
+              init?.body as Uint8Array,
+            );
+            names.push(body.match(/"name":"([^"]+)"/)![1]!);
+            return Promise.resolve(new Response("{}", { status: 200 }));
+          }) as typeof fetch,
+        });
+      } finally {
+        console.warn = warn;
+      }
+      expect(failed).toEqual([]);
+      expect(names).toEqual([
+        "p/v1/2026/08/17/run-987654-test-records-check-a2.ndjson",
+      ]);
+      expect(warned).toEqual([]);
+    });
+
     it("fails an artifact whose name carries no attempt", async () => {
       await Deno.mkdir(join(dir, "test-records-check"));
       await Deno.writeTextFile(
@@ -473,6 +532,64 @@ describe("test-records-relay", () => {
         runJson: await writePayload(PAYLOAD),
         env: () => undefined,
       })).rejects.toThrow("TEST_RECORDS_GCS_TOKEN");
+    });
+  });
+
+  describe("runRelayCommand()", () => {
+    let dir: string;
+    let errors: string[];
+    const error = console.error;
+
+    beforeEach(async () => {
+      dir = await Deno.makeTempDir({ prefix: "test-records-relay-cli-" });
+      errors = [];
+      console.error = (line: string) => errors.push(line);
+    });
+
+    afterEach(async () => {
+      console.error = error;
+      await Deno.remove(dir, { recursive: true });
+    });
+
+    it("relays the artifacts the command line names for the payload it names", async () => {
+      const artifacts = join(dir, "artifacts");
+      await Deno.mkdir(join(artifacts, "test-records-check-a2"), {
+        recursive: true,
+      });
+      await Deno.writeTextFile(
+        join(artifacts, "test-records-check-a2", "records.ndjson"),
+        "",
+      );
+      const payload = join(dir, "payload.json");
+      await Deno.writeTextFile(payload, JSON.stringify(PAYLOAD));
+      const urls: string[] = [];
+      const code = await runRelayCommand(
+        ["--artifacts", artifacts, "--run-json", payload],
+        {
+          env: (name) =>
+            name === "TEST_RECORDS_GCS_TOKEN" ? "token-1" : undefined,
+          fetchImpl: ((input: URL | RequestInfo) => {
+            urls.push(String(input));
+            return Promise.resolve(new Response("{}", { status: 200 }));
+          }) as typeof fetch,
+        },
+      );
+      expect(code).toBe(0);
+      expect(urls.length).toBe(1);
+      expect(errors).toEqual([]);
+    });
+
+    it("returns 2 and prints the usage for a command line that names no artifacts", async () => {
+      const code = await runRelayCommand(["--run-json", "payload.json"], {
+        env: () => undefined,
+        fetchImpl: (() => {
+          throw new Error("nothing must ship");
+        }) as unknown as typeof fetch,
+      });
+      expect(code).toBe(2);
+      expect(errors).toEqual([
+        "usage: test-records-relay.ts --artifacts <dir> [--run-json <file>]",
+      ]);
     });
   });
 });

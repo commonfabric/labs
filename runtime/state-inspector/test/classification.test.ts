@@ -12,6 +12,7 @@ import {
   convergenceScanExact,
   openSpaces,
 } from "../multispace.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -51,7 +52,7 @@ function makeSpace(path: string, entries: { id: string; value: unknown }[]) {
 const DID_A = "did:key:zSpaceAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const DID_B = "did:key:zSpaceBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
-Deno.test("cross-space replica classification", async (t) => {
+test("cross-space replica classification", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-classify-" });
   try {
     // Space A links cross-space to X@B (real replica). Both X and Y are shared and

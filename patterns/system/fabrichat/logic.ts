@@ -1,7 +1,8 @@
 /**
  * FabriChat's rules that need no runtime: what counts as a single emoji, how
- * the two views of a conversation are derived from replies, and how a
- * thread's title reads when no member has set one. The room applies them to
+ * the two views of a conversation are derived from replies, where a window
+ * falls in a view, how a thread's title reads when no member has set one, and
+ * which of an attach event's files a run of it adds. The room applies them to
  * its records; `logic.test.ts` states them directly.
  */
 
@@ -99,6 +100,53 @@ export const viewPlaces = (
   );
 };
 
+/**
+ * Which end of its view a window holds: the newest messages, `before: "end"`,
+ * or the oldest, `after: "start"`.
+ */
+export type WindowAnchor = { before: "end" } | { after: "start" };
+
+/** A window's place in its view: indexes into it, and what lies beyond. */
+export interface WindowSlice {
+  /** The index of the window's first message in the view. */
+  start: number;
+
+  /** The index just past the window's last message. */
+  end: number;
+
+  /** Whether the view has messages before the window. */
+  hasOlder: boolean;
+
+  /** Whether the view has messages after the window. */
+  hasNewer: boolean;
+}
+
+/**
+ * How many messages a window asking for `requested` holds, at most `max`: a
+ * request for none, for a negative count, for a count that is not a finite
+ * number, or for no count at all holds none, and a fractional count is
+ * rounded down.
+ */
+export const windowCount = (requested: unknown, max: number): number =>
+  typeof requested === "number" && Number.isFinite(requested)
+    ? Math.min(Math.max(0, Math.floor(requested)), max)
+    : 0;
+
+/**
+ * Where a window of at most `count` messages, held at the end of its view
+ * `anchor` names, falls in a view of `length` messages, oldest first.
+ */
+export const windowSlice = (
+  length: number,
+  anchor: WindowAnchor,
+  count: number,
+): WindowSlice => {
+  const size = Math.min(Math.max(0, Math.floor(count)), length);
+  const start = "before" in anchor ? length - size : 0;
+  const end = start + size;
+  return { start, end, hasOlder: start > 0, hasNewer: end < length };
+};
+
 /** The most characters a thread's title has when no member has set one. */
 export const THREAD_EXCERPT_LENGTH = 50;
 
@@ -161,4 +209,33 @@ export const sameNameMarks = (
         : "",
     ]),
   );
+};
+
+/**
+ * The requests a run of an attach event adds to the composer, one for each of
+ * `files`, named by the event's `key` and the file's place in it, so that every
+ * run of one event names the same requests. A request `isHandled` reports an
+ * earlier run of the event made is left out, so a run of an event the composer
+ * has handled already adds none, and only the requests this run adds count
+ * toward `max` beside the `attached` the composer holds already, which include
+ * those an earlier run of the event attached.
+ *
+ * @throws If the requests this run adds would make more than `max`
+ *   attachments.
+ */
+export const attachRequests = <File>(
+  key: string,
+  files: readonly File[],
+  isHandled: (requestId: string) => boolean,
+  attached: number,
+  max: number,
+): { requestId: string; file: File }[] => {
+  const adding = files.flatMap((file, index) => {
+    const requestId = `attach-${key}-${index}`;
+    return isHandled(requestId) ? [] : [{ requestId, file }];
+  });
+  if (attached + adding.length > max) {
+    throw new Error(`A message can have at most ${max} attachments.`);
+  }
+  return adding;
 };

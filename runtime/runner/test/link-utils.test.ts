@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
 import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
@@ -27,6 +26,7 @@ import {
   isWriteRedirectLink,
   KeepAsCell,
   type NormalizedLink,
+  normalizedLinkKey,
   ownerStreamSchema,
   parseLink,
   parseLinkOrThrow,
@@ -41,6 +41,12 @@ import { areLinksSame } from "../src/link-equality.ts";
 import { externalRefTo, resolvedSchema } from "./schema-ref-helpers.ts";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
@@ -651,6 +657,37 @@ describe("link-utils", () => {
       );
       expect(() => areLinksSame(first, second, undefined, true, tx)).toThrow(
         "Provide runtime to resolve before comparing",
+      );
+    });
+  });
+
+  describe("normalizedLinkKey()", () => {
+    it("returns equal keys exactly where `areNormalizedLinksSame()` returns `true`", () => {
+      const base: NormalizedLink = { id: "of:test", path: ["a"], space };
+      const links: NormalizedLink[] = [
+        base,
+        { ...base, scope: "space" },
+        { ...base, scope: "user" },
+        { ...base, path: ["b"] },
+        { ...base, id: "of:other" },
+        { ...base, space: otherSpace },
+        { id: "of:test", path: ["a"] },
+      ];
+      for (const a of links) {
+        for (const b of links) {
+          expect({ a, b, same: normalizedLinkKey(a) === normalizedLinkKey(b) })
+            .toEqual({ a, b, same: areNormalizedLinksSame(a, b) });
+        }
+      }
+      expect(normalizedLinkKey(base)).toBe(
+        normalizedLinkKey({ ...base, scope: "space" }),
+      );
+    });
+
+    it("returns the key of the id it is given in place of the link's own", () => {
+      const link: NormalizedLink = { id: "of:test", path: [], space };
+      expect(normalizedLinkKey(link, "of:other")).toBe(
+        normalizedLinkKey({ ...link, id: "of:other" }),
       );
     });
   });

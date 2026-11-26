@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   assertNoTriggerDrift,
@@ -11,6 +10,7 @@ import {
 } from "../../src/scheduler/entity-triggers.ts";
 import { arraysOverlap } from "../../src/reactive-dependencies.ts";
 import type { Action } from "../../src/scheduler/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** An action that does nothing, named so a failure says which one it was. */
 function reader(name: string): Action {

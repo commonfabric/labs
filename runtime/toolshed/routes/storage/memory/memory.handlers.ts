@@ -2,11 +2,13 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
+  type ServerMessage,
 } from "@commonfabric/memory/v2";
 import {
   type EncodedMemoryMessage,
   encodeMemoryCompressionControlMessage,
   isMemoryMessageFrame,
+  MAX_DECOMPRESSED_MEMORY_MESSAGE_BYTES,
   MemoryMessageCompressionChannel,
   type MemoryMessageFrame,
   memoryMessageFrameBytes,
@@ -193,11 +195,12 @@ const frameSizeLogger = getLogger("memory-socket", {
   level: "warn",
 });
 
-// Deno's WebSocket client rejects a wire frame over 64 MiB ("Frame too large")
-// and closes the connection. Compression raises the logical message ceiling to
-// 256 MiB only when its actual binary frame remains below that transport cap.
-// Warning at a quarter of the cap surfaces uncompressed or poorly-compressing
-// payload growth while every client still loads (labs#6319).
+// Deno's own WebSocket client rejects a wire frame over 64 MiB ("Frame too
+// large") and closes the connection. The Deno memory client no longer uses it:
+// it opens its socket with `ws` and no frame cap (`maxPayload: 0`, in
+// `memory-socket.deno.ts`), but an older client still has the cap. Warning at a
+// quarter of it surfaces uncompressed or poorly-compressing payload growth
+// while every client still loads (labs#6319).
 const OUTBOUND_FRAME_WARN_BYTES = 16 * 1024 * 1024;
 
 export const warnOnOversizedOutboundFrame = (
@@ -225,10 +228,50 @@ export const warnOnOversizedOutboundFrame = (
   ]);
 };
 
+/** The bounds a memory server splits a sync to (`Server.connect()`). */
+type SyncPartLimits = NonNullable<
+  Parameters<MemoryServer.Server["connect"]>[1]
+>;
+
+/**
+ * The bounds a sync sent on a memory socket is split to, for a client that
+ * takes a sync in parts (`syncPartsV1`); a client that does not is sent every
+ * sync whole, as before.
+ *
+ * A sync goes whole up to `whole`, the largest message the compression
+ * encoder still compresses (`MAX_DECOMPRESSED_MEMORY_MESSAGE_BYTES`, in the
+ * same UTF-8 bytes): past that the encoder sends text, and the frame grows
+ * several times over at once. One longer is split into parts of at most `bytes`, each
+ * compressed on its own, and a sync too long for the engine to encode whole
+ * still goes, in parts. Splitting costs the server two more passes over the
+ * entries, one to measure them and one to prepare and encode each part, so a
+ * sync that would go compressed whole is never split.
+ */
+export const MEMORY_SOCKET_SYNC_PARTS: SyncPartLimits = {
+  bytes: 32 * 1024 * 1024,
+  values: null,
+  whole: MAX_DECOMPRESSED_MEMORY_MESSAGE_BYTES,
+};
+
+/** The part of a memory server that a socket's pipeline talks to. */
+export interface MemorySocketServer {
+  /** The server's options; the write trace reads its slot limit. */
+  readonly options?: { readonly untrustedMessageSlots?: number };
+  connect(
+    send: (message: ServerMessage, payload?: string) => void,
+    syncParts?: SyncPartLimits,
+  ): {
+    readonly id: string;
+    receive(payload: string): Promise<void>;
+    close(): void;
+  };
+}
+
 export const attachMemorySocketPipeline = (
   socket: WebSocket,
   negotiation: ReturnType<typeof bufferTextMessagesUntilNegotiated>,
   firstMessage: string,
+  server: MemorySocketServer = memoryServer,
 ): boolean => {
   const parsedFirstMessage = MemoryServer.parseClientMessage(firstMessage);
   if (parsedFirstMessage === null) {
@@ -270,8 +313,10 @@ export const attachMemorySocketPipeline = (
       closeConnection();
     },
   );
-  const connection = memoryServer.connect((message) => {
-    const encoded = encodeMemoryBoundary(message);
+  const connection = server.connect((message, payload) => {
+    // A message the server encoded to measure it against its bounds comes
+    // with that encoding, which is sent as it is rather than made again.
+    const encoded = payload ?? encodeMemoryBoundary(message);
     channel.send(
       encoded,
       (frame) => warnOnOversizedOutboundFrame(frame, message),
@@ -279,7 +324,7 @@ export const attachMemorySocketPipeline = (
     if (compressionNegotiated && message.type === "hello.ok") {
       channel.enable();
     }
-  });
+  }, MEMORY_SOCKET_SYNC_PARTS);
   function closeConnection(): void {
     if (closed) return;
     closed = true;
@@ -301,8 +346,11 @@ export const attachMemorySocketPipeline = (
     try {
       // Observation only: receive() owns capability admission. Expand metadata
       // here so compact and inline requests produce the same diagnostic.
+      // Under the server's own slot limit, so that a commit it admits under
+      // a raised one is traced as well.
       const parsed = MemoryServer.parseClientMessage(payload, {
         commitLabelTableV1: true,
+        slotLimit: server.options?.untrustedMessageSlots,
       });
       if (parsed?.type !== "transact") return;
       for (const op of parsed.commit.operations) {
@@ -321,7 +369,6 @@ export const attachMemorySocketPipeline = (
       logMemWrites(firstMessage);
       negotiation.handoff({
         onMessage(message) {
-          if (closed) return;
           if (!compressionNegotiated && typeof message !== "string") {
             safeSocketClose(
               1003,
@@ -392,9 +439,12 @@ export const attachMemorySocketPipeline = (
  * first frame among them, is logged with its cause and closes the socket with
  * 1011 if it is still open. A socket closed without an error before its first
  * frame is not a failure, and is not logged. The returned promise never
- * rejects.
+ * rejects. `server` is the memory server the pipeline connects to.
  */
-export const setUpMemorySocket = (socket: WebSocket): Promise<void> =>
+export const setUpMemorySocket = (
+  socket: WebSocket,
+  server: MemorySocketServer = memoryServer,
+): Promise<void> =>
   createSpan("memory.socket.setup", async (setupSpan) => {
     const negotiation = bufferTextMessagesUntilNegotiated(socket);
     const firstMessage = await negotiation.firstMessage;
@@ -404,7 +454,7 @@ export const setUpMemorySocket = (socket: WebSocket): Promise<void> =>
       return;
     }
 
-    if (attachMemorySocketPipeline(socket, negotiation, firstMessage)) {
+    if (attachMemorySocketPipeline(socket, negotiation, firstMessage, server)) {
       setupSpan.setAttribute("socket.setup", "memory");
       return;
     }

@@ -16,10 +16,15 @@
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import type { FabricValue } from "@commonfabric/data-model";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -173,6 +178,17 @@ describe("fabrichat spaces across runtimes", () => {
       title: "Counted next",
       members: [member.identity.did()],
     });
+    // And raw, through the room the member has read nothing of.
+    expect(
+      await member.readRaw([
+        "requests",
+        "g-count-next",
+        "entry",
+        "room",
+        "messages",
+        "count",
+      ]),
+    ).toBe(0);
   });
 
   it("lets anyone read a group room made joinable by its link", async () => {

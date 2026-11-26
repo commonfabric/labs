@@ -198,6 +198,26 @@ export function readsOverlapWrites(
 }
 
 /**
+ * Writers indexed by the entities they write, as
+ * {@link forEachOverlappingWriter} scans them.
+ */
+export type OverlappingWriterIndex<Writer> = {
+  readonly writersByEntity: ReadonlyMap<
+    SpaceScopeAndURI,
+    ReadonlySet<Writer>
+  >;
+  readonly getSchedulingWrites: (
+    action: Writer,
+  ) => readonly IMemorySpaceAddress[] | undefined;
+};
+
+/** The writer filter and candidate hook {@link forEachOverlappingWriter} takes. */
+export type OverlappingWriterHooks<Writer> = {
+  readonly filter?: (writer: Writer) => boolean;
+  readonly onCandidate?: (writer: Writer) => void;
+};
+
+/**
  * Visit every writer whose write surface overlaps one of `reads` /
  * `shallowReads`, via the writersByEntity index: the entity-pruned overlap
  * scan, testing each read alone against the writers indexed on its entity.
@@ -211,47 +231,65 @@ export function readsOverlapWrites(
  * true stops the whole scan.
  */
 export function forEachOverlappingWriter<Writer = Action>(
-  state: {
+  state: OverlappingWriterIndex<Writer> & {
     readonly scopeKeyIdentity?: () => ScopeKeyIdentity;
-    readonly writersByEntity: ReadonlyMap<
-      SpaceScopeAndURI,
-      ReadonlySet<Writer>
-    >;
-    readonly getSchedulingWrites: (
-      action: Writer,
-    ) => readonly IMemorySpaceAddress[] | undefined;
   },
   reads: readonly IMemorySpaceAddress[],
   shallowReads: readonly IMemorySpaceAddress[],
   visit: (writer: Writer) => boolean | void,
-  hooks: {
-    readonly filter?: (writer: Writer) => boolean;
-    readonly onCandidate?: (writer: Writer) => void;
-  } = {},
+  hooks: OverlappingWriterHooks<Writer> = {},
 ): void {
-  const scan = (
-    read: IMemorySpaceAddress,
-    shallow: boolean,
-  ): boolean => {
-    // Looked up by NAME (see writersByEntity): the read's instance is
-    // irrelevant to WHICH node writes the doc.
-    const writers = state.writersByEntity.get(entityNameKey(read));
-    if (!writers) return false;
-    for (const writer of writers) {
-      if (hooks.filter && !hooks.filter(writer)) continue;
-      hooks.onCandidate?.(writer);
-      const writes = state.getSchedulingWrites(writer) ?? [];
-      const overlaps = shallow
-        ? readsOverlapWrites([], [read], writes)
-        : readsOverlapWrites([read], [], writes);
-      if (overlaps && visit(writer) === true) return true;
-    }
-    return false;
-  };
   for (const read of reads) {
-    if (scan(read, false)) return;
+    if (
+      forEachWriterOverlappingRead(
+        state,
+        read,
+        entityNameKey(read),
+        false,
+        visit,
+        hooks,
+      )
+    ) return;
   }
   for (const read of shallowReads) {
-    if (scan(read, true)) return;
+    if (
+      forEachWriterOverlappingRead(
+        state,
+        read,
+        entityNameKey(read),
+        true,
+        visit,
+        hooks,
+      )
+    ) return;
   }
+}
+
+/**
+ * {@link forEachOverlappingWriter} for one read, whose
+ * {@link entityNameKey} is `key`, given so that a caller scanning several
+ * indexes builds it once. Returns true when `visit` stopped the scan.
+ */
+export function forEachWriterOverlappingRead<Writer>(
+  state: OverlappingWriterIndex<Writer>,
+  read: IMemorySpaceAddress,
+  key: SpaceScopeAndURI,
+  shallow: boolean,
+  visit: (writer: Writer) => boolean | void,
+  hooks: OverlappingWriterHooks<Writer> = {},
+): boolean {
+  // Looked up by NAME (see writersByEntity): the read's instance is
+  // irrelevant to WHICH node writes the doc.
+  const writers = state.writersByEntity.get(key);
+  if (!writers) return false;
+  for (const writer of writers) {
+    if (hooks.filter && !hooks.filter(writer)) continue;
+    hooks.onCandidate?.(writer);
+    const writes = state.getSchedulingWrites(writer) ?? [];
+    const overlaps = shallow
+      ? readsOverlapWrites([], [read], writes)
+      : readsOverlapWrites([read], [], writes);
+    if (overlaps && visit(writer) === true) return true;
+  }
+  return false;
 }

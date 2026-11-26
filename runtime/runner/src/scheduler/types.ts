@@ -28,7 +28,11 @@ export type TelemetryAnnotations = {
   /**
    * Concrete structural surface for a transformer-proven complete source lift.
    * This is runner-owned metadata; raw modules, handlers, and unresolved
-   * redirect surfaces leave it absent and therefore remain fail-closed.
+   * redirect surfaces leave it absent and therefore remain fail-closed. The
+   * reads that resolve it carry `schedulerDependencyRead`, so the flow join
+   * takes nothing of them. While that holds it must decide only whether and
+   * when the action runs, never anything the transaction that resolved it
+   * writes.
    */
   completeSchedulerScopeSummary?: {
     complete: true;
@@ -278,14 +282,24 @@ export const LT1_LATE_SEAL_REFUSED = "lt1-late-seal-refused";
  * when its transaction writes a space's ACL document (INV-12,
  * `docs/specs/memory-v2/09-invariants.md`). The refusal is deterministic, so
  * for a run delivering a durable entry the scheduler's event dispatch seals it
- * as the entry's error consequence, and the wave does not requeue the event
- * for it (`WaveAccumulator.noteSealFailure()`).
+ * as the entry's error consequence, or as the withheld one where the run's
+ * join is foreign to the stream's space (events.md §5), and the wave does not
+ * requeue the event for it (`WaveAccumulator.noteSealFailure()`).
  */
 export const ACL_DOCUMENT_WRITE_REFUSED = "acl-document-write-refused";
 
 export type ServedEventFailureOutcome =
   | {
-    kind: "error" | "dropped";
+    kind: "error";
+    message: string;
+
+    /** Whether the run's join carries a clause its stream's space doesn't
+     * admit, so that its consequence records the outcome withheld rather
+     * than `message` (`withholdProcessedClaimOutcome()`). */
+    withheld?: true;
+  }
+  | {
+    kind: "dropped";
     message: string;
   }
   | {
@@ -315,6 +329,16 @@ export type ServedEventFailureOutcome =
 
     cause: "handler-not-run";
     message: string;
+
+    /** The scoped instance the run read while the serving loop had not
+     * produced it, where a writer that owes it will still run
+     * (`Scheduler.comingOwedScopedInstance()`): its document and its
+     * instance's scope key. When the instance is in the stream's own space,
+     * the deferral is settlement: it spends none of the drain's deferral
+     * budget, and a commit writing that instance re-drains the entry
+     * (events.md §5). An instance in another space, whose commits the drain
+     * does not see, spends the budget as any other deferral does. */
+    waitsOn?: { space: MemorySpace; id: string; scopeKey: ScopeKey };
   }
   | {
     /** The piece the event addresses records an origin the serving loop
@@ -517,6 +541,15 @@ export type QueuedEvent = {
   presyncPending?: boolean;
 
   /**
+   * The FIFO slot is held while a multi-space commit issued before the head
+   * dispatched still has writes to hand to a later space's replica
+   * (`IStorageManager.multiSpaceCommitsApplied()`), so that the handler reads
+   * every write an earlier event committed. The hand-over clears the flag and
+   * queues an execution.
+   */
+  multiSpaceCommitPending?: boolean;
+
+  /**
    * The implementation and payload the head's presync covered. A head whose
    * selected implementation or payload differs is presynced again before it
    * dispatches.
@@ -581,3 +614,24 @@ export type QueuedEvent = {
    */
   notRunBackoffs?: number;
 };
+
+/**
+ * What a load park records of the run that put its event in it, when that run
+ * was withdrawn for reading documents still loading (`parkHeadEventForLoads`):
+ * the error the run threw, if it threw one. When every load of those
+ * documents that fails, fails with an authorization-class failure (for a
+ * served event, one carrying durable evidence of the refusal), the park
+ * releases, and the run that follows reads what the replica holds. Otherwise
+ * a failed load ends the event as it would at the preflight, and a client
+ * event's drop reports the error and abandons what the run staged.
+ */
+export interface LoadingReadWithdrawal {
+  /** The error the withdrawn run threw, if it threw one. */
+  readonly error?: Error;
+
+  /**
+   * Tells the work the withdrawn run's transaction staged that it will not
+   * happen, for a drop that leaves no run to follow.
+   */
+  readonly abandonStagedWork: () => void;
+}

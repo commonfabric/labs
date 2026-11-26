@@ -6,17 +6,23 @@
 // which is what keeps a read taken through `Cell.sample()` describing the same
 // moment as one taken directly.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import {
   createNonReactiveTransaction,
   type ExtendedStorageTransaction,
+  runBeforeAbort,
   TransactionWrapper,
 } from "../src/storage/extended-storage-transaction.ts";
 import type {
@@ -24,6 +30,10 @@ import type {
   TransactionWriteDetail,
 } from "../src/storage/interface.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
+import {
+  ignoreReadForScheduling,
+  markReadAsAttemptedWrite,
+} from "../src/storage/reactivity-log.ts";
 import { CFC_GRANT_ID_PREFIX } from "../src/cfc/grants.ts";
 import { RuntimeOwnedStores } from "../src/cfc/runtime-owned-stores.ts";
 import {
@@ -64,6 +74,28 @@ describe("extended-storage-transaction", () => {
     tx.markLazyMaterialize(true);
     return { tx, cell: runtime.getCell(space, cause, SCHEMA, tx) };
   };
+
+  describe("runBeforeAbort()", () => {
+    it("runs the callback first in an abort", () => {
+      const tx = runtime.edit();
+      const seen: string[] = [];
+      runBeforeAbort(tx, () => seen.push(tx.status().status));
+      tx.abort();
+      expect(seen).toEqual(["ready"]);
+    });
+
+    it("drops the callback once the transaction commits", async () => {
+      const tx = runtime.edit();
+      let calls = 0;
+      runBeforeAbort(tx, () => {
+        calls += 1;
+      });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      tx.abort();
+
+      expect(calls).toBe(0);
+    });
+  });
 
   describe("content-addressed document staging", () => {
     const code = "export const staged = 1;";
@@ -116,6 +148,109 @@ describe("extended-storage-transaction", () => {
       expect(wrapped.stageContentAddressedDocument(space, code)).toBe(codeId);
       expect(stagedIds(tx)).toContain(codeId);
       tx.abort?.();
+    });
+  });
+
+  describe("ambient read metadata", () => {
+    // A read carrying `ignoreReadForScheduling` stays out of the reactivity
+    // log's reads, and one also carrying `markReadAsAttemptedWrite` lands in
+    // its attempted writes, which is what shows the metadata a read carried.
+
+    const logged = async (
+      cause: string,
+      readWithin: (tx: IExtendedStorageTransaction, read: () => void) => void,
+    ) => {
+      const { tx, cell } = await seeded(cause);
+      try {
+        const link = cell.getAsNormalizedFullLink();
+        readWithin(tx, () => tx.readValueOrThrow(link));
+        const log = tx.getReactivityLog();
+        const named = ({ id }: { id: string }) => id === link.id;
+        return {
+          reads: log.reads.filter(named).length,
+          attemptedWrites: (log.attemptedWrites ?? []).filter(named).length,
+        };
+      } finally {
+        tx.abort("done");
+      }
+    };
+
+    it("applies to a read inside the function and not to one after it", async () => {
+      expect(
+        await logged("ambient-inside", (tx, read) => {
+          tx.runWithAmbientReadMeta(ignoreReadForScheduling, read);
+        }),
+      ).toEqual({ reads: 0, attemptedWrites: 0 });
+      expect(
+        await logged("ambient-after", (tx, read) => {
+          tx.runWithAmbientReadMeta(ignoreReadForScheduling, () => {});
+          read();
+        }),
+      ).toEqual({ reads: 1, attemptedWrites: 0 });
+    });
+
+    it("applies to no read after the function throws", async () => {
+      const failure = new Error("inside");
+      expect(
+        await logged("ambient-after-throw", (tx, read) => {
+          expect(() =>
+            tx.runWithAmbientReadMeta(ignoreReadForScheduling, () => {
+              throw failure;
+            })
+          ).toThrow(failure);
+          read();
+        }),
+      ).toEqual({ reads: 1, attemptedWrites: 0 });
+    });
+
+    it("gives a read in a nested scope the metadata of both scopes", async () => {
+      expect(
+        await logged("ambient-nested", (tx, read) => {
+          tx.runWithAmbientReadMeta(ignoreReadForScheduling, () => {
+            tx.runWithAmbientReadMeta(markReadAsAttemptedWrite, read);
+          });
+        }),
+      ).toEqual({ reads: 0, attemptedWrites: 1 });
+    });
+
+    it("gives a read after a nested scope the enclosing scope's metadata alone", async () => {
+      expect(
+        await logged("ambient-after-nested", (tx, read) => {
+          tx.runWithAmbientReadMeta(ignoreReadForScheduling, () => {
+            tx.runWithAmbientReadMeta(markReadAsAttemptedWrite, () => {});
+            read();
+          });
+        }),
+      ).toEqual({ reads: 0, attemptedWrites: 0 });
+    });
+
+    it("applies from `enterAmbientReadMeta()` until its scope is disposed", async () => {
+      expect(
+        await logged("ambient-entered", (tx, read) => {
+          const scope = tx.enterAmbientReadMeta(ignoreReadForScheduling);
+          read();
+          scope[Symbol.dispose]();
+        }),
+      ).toEqual({ reads: 0, attemptedWrites: 0 });
+      expect(
+        await logged("ambient-disposed", (tx, read) => {
+          tx.enterAmbientReadMeta(ignoreReadForScheduling)[Symbol.dispose]();
+          read();
+        }),
+      ).toEqual({ reads: 1, attemptedWrites: 0 });
+    });
+
+    it("gives a read in a nested `enterAmbientReadMeta()` scope the metadata of both scopes", async () => {
+      expect(
+        await logged("ambient-entered-nested", (tx, read) => {
+          const outer = tx.enterAmbientReadMeta(ignoreReadForScheduling);
+          const inner = tx.enterAmbientReadMeta(markReadAsAttemptedWrite);
+          read();
+          inner[Symbol.dispose]();
+          read();
+          outer[Symbol.dispose]();
+        }),
+      ).toEqual({ reads: 0, attemptedWrites: 1 });
     });
   });
 
@@ -428,6 +563,65 @@ describe("extended-storage-transaction", () => {
         expect(state.writePolicyInputs).toHaveLength(1);
         expect(state.dereferenceTraces).toHaveLength(1);
       });
+    });
+  });
+
+  describe("a recorded dereference trace", () => {
+    const address = (id: string, path: string[]) => ({
+      space,
+      id,
+      scope: "space" as const,
+      path,
+    });
+
+    it("is kept frozen where it stands, with its addresses and their paths", () => {
+      const tx = runtime.edit();
+      const trace = {
+        source: address("of:holder", ["value", "link"]),
+        target: address("of:held", []),
+        kind: "value" as const,
+      };
+
+      tx.recordCfcDereferenceTrace(trace);
+
+      expect(tx.getCfcState().dereferenceTraces[0]).toBe(trace);
+      for (
+        const object of [
+          trace,
+          trace.source,
+          trace.source.path,
+          trace.target,
+          trace.target.path,
+        ]
+      ) {
+        expect(Object.isFrozen(object)).toBe(true);
+      }
+      tx.abort("recorded");
+    });
+
+    it("freezes a member that is not a primitive, on the trace or an address", () => {
+      const tx = runtime.edit();
+      const onAddress = { type: "string" };
+      const onTrace = { note: "beside the trace" };
+
+      const withAddressMember = {
+        source: { ...address("of:holder", ["value"]), schema: onAddress },
+        target: address("of:held", []),
+        kind: "value" as const,
+      };
+      const withTraceMember = {
+        source: address("of:holder", ["value"]),
+        target: address("of:held", []),
+        kind: "value" as const,
+        detail: onTrace,
+      };
+
+      tx.recordCfcDereferenceTrace(withAddressMember);
+      tx.recordCfcDereferenceTrace(withTraceMember);
+
+      expect(Object.isFrozen(onAddress)).toBe(true);
+      expect(Object.isFrozen(onTrace)).toBe(true);
+      tx.abort("recorded");
     });
   });
 

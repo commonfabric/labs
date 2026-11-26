@@ -1,7 +1,9 @@
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { validateFiles, validateSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 /**
  * Exercises the branches of the WriteAuthorizedBy validation transformer that
@@ -23,7 +25,7 @@ async function cfcDiagnostics(
   );
 }
 
-Deno.test(
+test(
   "property-access toSchema call site is validated for WriteAuthorizedBy",
   async () => {
     const source = `/// <cts-enable />
@@ -48,7 +50,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "typeof of a qualified name reports the simple-identifier requirement",
   async () => {
     const source = `/// <cts-enable />
@@ -68,7 +70,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "index-signature members of a referenced interface are traversed for bindings",
   async () => {
     const source = `/// <cts-enable />
@@ -94,7 +96,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "self-referential type alias terminates and still reports the binding error",
   async () => {
     const source = `/// <cts-enable />
@@ -129,7 +131,7 @@ Deno.test(
 // afterward.
 //
 
-Deno.test(
+test(
   "generic alias substitutes schema through array element types",
   async () => {
     const source = `/// <cts-enable />
@@ -150,7 +152,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "generic alias substitutes schema through union and parenthesized types",
   async () => {
     const source = `/// <cts-enable />
@@ -171,7 +173,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "generic alias substitutes schema through intersection types",
   async () => {
     const source = `/// <cts-enable />
@@ -192,7 +194,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "generic alias substitutes schema through readonly type-operator types",
   async () => {
     const source = `/// <cts-enable />
@@ -213,7 +215,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "generic alias substitutes schema through index-signature member types",
   async () => {
     const source = `/// <cts-enable />
@@ -234,7 +236,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "generic alias substitutes schema literals with non-property members",
   async () => {
     const source = `/// <cts-enable />
@@ -262,7 +264,7 @@ Deno.test(
 // no substitution happens and the walker is not reached at all.
 //
 
-Deno.test(
+test(
   "supported binding wrapped in parentheses and assertions is accepted",
   async () => {
     const source = `/// <cts-enable />
@@ -283,7 +285,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a foreign constructor's type arguments are not writer claims",
   async () => {
     // `Map` generates no cell schema; its unresolved `Binding` is not a defect.
@@ -299,7 +301,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a cell constructor's type arguments are writer claims",
   async () => {
     const source = `/// <cts-enable />
@@ -316,7 +318,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a writer declared in a declaration file is refused",
   async () => {
     const { diagnostics } = await validateFiles({
@@ -340,7 +342,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a policy carried by a declaration file's alias is validated",
   async () => {
     // The generator resolves the alias and would emit its claim; the writer
@@ -366,7 +368,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a module-level writer is found when a local of the same name shadows it",
   async () => {
     // A name scan of the file would have found the module-level handler and
@@ -408,7 +410,7 @@ for (
   for (
     const [binding, refused] of [["arbitrary", true], ["saver", false]] as const
   ) {
-    Deno.test(
+    test(
       `a namespace-qualified policy ${spelling} ${
         refused ? "refuses" : "accepts"
       } ${binding}`,
@@ -436,7 +438,7 @@ for (
   }
 }
 
-Deno.test(
+test(
   "a builder-named member of an object that is not a Common Fabric namespace is not a writer",
   async () => {
     const source = `/// <cts-enable />
@@ -483,7 +485,7 @@ for (
     ],
   ] as const
 ) {
-  Deno.test(`a builder called through ${label} is not a writer`, async () => {
+  test(`a builder called through ${label} is not a writer`, async () => {
     const { diagnostics } = await validateFiles({
       "/main.tsx": `/// <cts-enable />
         import { toSchema, WriteAuthorizedBy } from "commonfabric";
@@ -507,7 +509,7 @@ for (
   });
 }
 
-Deno.test(
+test(
   "a builder called through a namespace an authored module re-exports from Common Fabric is a writer",
   async () => {
     const { diagnostics } = await validateFiles({
@@ -534,7 +536,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a WritePolicyAnyOf member's binding is validated like a lone one's",
   async () => {
     const source = `/// <cts-enable />
@@ -568,7 +570,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a WritePolicyAnyOf whose members all name handlers reports nothing",
   async () => {
     const source = `/// <cts-enable />
@@ -595,7 +597,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "an author's alias named CfcTag is walked like any other alias",
   async () => {
     const source = `/// <cts-enable />
@@ -620,7 +622,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a carrier whose payload only its tag holds has the payload's writer validated",
   async () => {
     // A `Cfc` that does not also intersect its payload with its tag holds
@@ -651,7 +653,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a carrier whose payload only its tag holds accepts a supported writer",
   async () => {
     const source = `/// <cts-enable />
@@ -675,7 +677,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a policy inside a CFC carrier's payload is reported once",
   async () => {
     const source = `/// <cts-enable />
@@ -697,7 +699,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a policy a type parameter's default names is validated where the reference leaves it out",
   async () => {
     const source = `/// <cts-enable />
@@ -719,3 +721,32 @@ Deno.test(
     );
   },
 );
+
+describe("write-authorized-by-validation", () => {
+  it("walks a carrier tag whose payload is not a bare type parameter", async () => {
+    // The tag's payload wraps the carrier's type parameter, so the tag holds a
+    // payload the intersection beside it does not, and the tag is walked
+    // whole: the writer is reached through the tag as well as beside it.
+
+    const diagnostics = await cfcDiagnostics(`/// <cts-enable />
+      import { toSchema, type WriteAuthorizedBy } from "commonfabric";
+
+      type CfcTag<T, M> = {
+        readonly __ct_cfc__?: { readonly meta?: M; readonly of?: T };
+      };
+      type Cfc<T, M> = T & CfcTag<{ value: T }, M>;
+
+      const arbitrary = 123;
+
+      const schema = toSchema<
+        Cfc<WriteAuthorizedBy<string, typeof arbitrary>, {}>
+      >();
+
+      export { schema };
+    `);
+    expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
+      "cfc-write-authorized-by",
+      "cfc-write-authorized-by",
+    ]);
+  });
+});

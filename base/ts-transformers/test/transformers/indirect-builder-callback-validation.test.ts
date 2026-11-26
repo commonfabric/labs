@@ -11,11 +11,11 @@
  * says about callback-ness here is what it says about a real pattern.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { validateFiles, validateSource } from "../utils.ts";
 import type { TransformationDiagnostic } from "../../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function indirectCallbackErrors(
   diagnostics: readonly TransformationDiagnostic[],
@@ -207,5 +207,36 @@ describe("indirect-builder-callback-validation", () => {
     expect(
       await errorsIn(`const inc = lift({ type: "object" } as never);`),
     ).toHaveLength(0);
+  });
+
+  describe("calls this stage does not judge", () => {
+    it("reports nothing for an indirect callback passed to a builder the verifier does not trust", async () => {
+      // `render()` is not a trusted builder, so its argument is not a callback
+      // the verifier checks; `lift()` beside it is.
+
+      const { diagnostics } = await validateSource(
+        `import { lift, pattern, render } from "commonfabric";
+const views = { main: () => null, bump: (n: number) => n + 1 };
+export const view = render(views.main);
+export const inc = lift(views.bump);
+export default pattern(() => ({}));
+`,
+        { types: COMMONFABRIC_TYPES },
+      );
+      expect(
+        indirectCallbackErrors(diagnostics).map((error) =>
+          error.message.includes("lift(")
+        ),
+      ).toEqual([true]);
+    });
+  });
+
+  it("reports a callback whose names resolve to each other in a cycle", async () => {
+    const errors = await errorsIn(`
+      const first: (n: number) => number = second;
+      const second: (n: number) => number = first;
+      const inc = lift(first);
+    `);
+    expect(errors).toHaveLength(1);
   });
 });

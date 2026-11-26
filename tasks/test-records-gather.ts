@@ -2,13 +2,12 @@
 
 /**
  * The credential-free shipping step every CI test job ends with: gather the
- * job's spooled record fragments and its JUnit files into one artifact
- * directory that the relay workflow later uploads to the store.
+ * job's spooled record fragments into one artifact directory that the relay
+ * workflow later uploads to the store.
  *
  *   deno run -A tasks/test-records-gather.ts --out <dir> --job <name>
  *     [--shard <label>]
  *     [--variant <name>]
- *     [--junit kind=<kind>,scope=<scope>[,prefix=<repo path>],glob=<glob>]...
  *
  * The output directory holds records.ndjson (one record line per test) and
  * job.json (the facts only the job knows: its display name, shard, the
@@ -18,13 +17,11 @@
  * and it never fails the job.
  */
 
-import { expandGlob } from "@std/fs";
 import { join } from "@std/path";
 import {
   type Environment,
   readEnv,
-  readJUnit,
-  readNameMaps,
+  readResults,
   readSpool,
   recordsDir,
   serializeRecordLine,
@@ -37,14 +34,6 @@ import {
   SHUFFLE_SEED_VARIABLE,
 } from "@commonfabric/test-support/shuffle";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
-
-/** One JUnit ingestion request from the command line. */
-export interface JUnitSpec {
-  kind: string;
-  scope: string;
-  prefix?: string;
-  glob: string;
-}
 
 /** Facts only the job itself knows, shipped beside its records. */
 export interface JobFacts {
@@ -61,26 +50,6 @@ export interface JobFacts {
   shuffleSeed: number;
 }
 
-/** Parses one `kind=...,scope=...[,prefix=...],glob=...` specification. */
-export function parseJUnitSpec(text: string): JUnitSpec {
-  const fields = new Map<string, string>();
-  for (const part of text.split(",")) {
-    const eq = part.indexOf("=");
-    if (eq < 0) throw new Error(`not a key=value pair in --junit: ${part}`);
-    fields.set(part.slice(0, eq).trim(), part.slice(eq + 1).trim());
-  }
-  const kind = fields.get("kind");
-  const scope = fields.get("scope");
-  const glob = fields.get("glob");
-  if (kind === undefined || scope === undefined || glob === undefined) {
-    throw new Error(`--junit needs kind, scope, and glob: ${text}`);
-  }
-  const spec: JUnitSpec = { kind, scope, glob };
-  const prefix = fields.get("prefix");
-  if (prefix !== undefined) spec.prefix = prefix;
-  return spec;
-}
-
 /** The head commit of the pull request the event describes, when any. */
 export function headCommitOfEvent(payload: unknown): string | undefined {
   if (!isObjectOrArray(payload)) return undefined;
@@ -94,17 +63,14 @@ export function headCommitOfEvent(payload: unknown): string | undefined {
 
 /** What reading one execution's records needs. */
 export interface CollectOptions {
-  /** The spool the producers wrote their fragments into. */
+  /** The spool the producers wrote their fragments and results into. */
   spoolDir?: string;
 
-  /** The JUnit reports to ingest, each with the surface it carries. */
-  junit: readonly JUnitSpec[];
-
   /**
-   * Whether the execution that wrote the reports was interrupted by a
-   * signal, which decides what a test they report as cancelled was.
+   * What the results the execution's tests wrote into the spool are
+   * recorded as. Absent where the execution ran no tests that write any.
    */
-  interrupted?: boolean;
+  results?: { kind: string; scope: string };
 
   /**
    * The configuration these records were produced in. Every record takes
@@ -146,20 +112,28 @@ export interface Collected {
   conflicts: TestRecord[];
 
   /**
-   * What each outermost test its JUnit reports name took beyond the
-   * records, one record each, as `readJUnit()` makes them, with the
-   * declared variant applied. They are not tests, so they are in neither
-   * list above and nothing ships them.
+   * What the hooks of each outermost group of tests took, one record each,
+   * as `readResults()` makes them, with the declared variant applied. They
+   * are not tests, so they are in neither list above and nothing ships
+   * them.
    */
   hooks: TestRecord[];
 
-  /** The message each failing record its JUnit reports name failed with. */
+  /** The message each failing record's test threw, where it threw one. */
   failures: Map<TestRecord, string>;
+
+  /**
+   * One record for each test the invocation's skip list skipped, with the
+   * declared variant applied. Kept apart from `records`, since a skip the
+   * invocation's share caused is a fact about that share rather than about
+   * the test; the caller ships the others.
+   */
+  listed: TestRecord[];
 }
 
 /**
  * The records one execution produced: what its producers spooled, and
- * what its JUnit reports name, with the declared variant applied.
+ * what its tests' results come to, with the declared variant applied.
  *
  * This is the whole of what the shipping step and the lane runner share.
  * The shipping step gathers one job's spool at the end; the lane runner
@@ -176,56 +150,27 @@ export async function collectRecords(
   const records: TestRecord[] = [];
   const hooks: TestRecord[] = [];
   const failures = new Map<TestRecord, string>();
-  // The registration preload leaves a name-to-file map in the spool.
-  // Where it installed, every class name names the wrapper it put in
-  // front of `Deno.test`, so the map is the only thing that can tell a
-  // bdd leaf its file; where it did not, the spool holds no map and
-  // ingestion reads the report's own class names.
-  const fileByName = options.spoolDir === undefined
-    ? new Map<string, string>()
-    : await readNameMaps(options.spoolDir);
+  const listed: TestRecord[] = [];
   if (options.spoolDir !== undefined) {
     const spooled = await readSpool(options.spoolDir);
     for (const warning of spooled.warnings) {
       console.warn(`test records: ${warning}`);
     }
     for (const record of spooled.records) records.push(record);
-  }
-  for (const spec of options.junit) {
-    let matched = 0;
-    try {
-      for await (const entry of expandGlob(spec.glob)) {
-        if (!entry.isFile) continue;
-        matched++;
-        // Caught per file: one unreadable or malformed report costs only
-        // itself, not the records of every later file the glob matched.
-        try {
-          const xml = await Deno.readTextFile(entry.path);
-          const ingestOptions: Parameters<typeof readJUnit>[1] = {
-            kind: spec.kind,
-            scope: spec.scope,
-            fileByName,
-            interrupted: options.interrupted ?? false,
-          };
-          if (spec.prefix !== undefined) ingestOptions.filePrefix = spec.prefix;
-          if (options.known !== undefined) ingestOptions.known = options.known;
-          const read = readJUnit(xml, ingestOptions);
-          for (const record of read.records) records.push(record);
-          for (const record of read.hooks) hooks.push(record);
-          for (const [record, message] of read.failures) {
-            failures.set(record, message);
-          }
-        } catch (error) {
-          console.warn(
-            `test records: ingesting ${entry.path} failed: ${error}`,
-          );
-        }
+    if (options.results !== undefined) {
+      const read = await readResults(options.spoolDir, {
+        ...options.results,
+        ...(options.known === undefined ? {} : { known: options.known }),
+      });
+      for (const warning of read.warnings) {
+        console.warn(`test records: ${warning}`);
       }
-    } catch (error) {
-      console.warn(`test records: expanding ${spec.glob} failed: ${error}`);
-    }
-    if (matched === 0) {
-      console.warn(`test records: no JUnit files matched ${spec.glob}`);
+      for (const record of read.records) records.push(record);
+      for (const record of read.hooks) hooks.push(record);
+      for (const record of read.listed) listed.push(record);
+      for (const [record, message] of read.failures) {
+        failures.set(record, message);
+      }
     }
   }
 
@@ -246,9 +191,11 @@ export async function collectRecords(
     if (options.variant !== undefined) record.test.v = options.variant;
   }
   if (options.variant !== undefined) {
-    for (const record of hooks) record.test.v = options.variant;
+    for (const record of [...hooks, ...listed]) {
+      record.test.v = options.variant;
+    }
   }
-  return { records, conflicts, hooks, failures };
+  return { records, conflicts, hooks, failures, listed };
 }
 
 export interface GatherOptions {
@@ -256,16 +203,14 @@ export interface GatherOptions {
   job: string;
   shard?: string;
   variant?: string;
-  junit: JUnitSpec[];
   spoolDir?: string;
   env?: Environment;
 }
 
-/** Gathers the spool and JUnit files into the artifact directory. */
+/** Gathers the spool into the artifact directory. */
 export async function gather(options: GatherOptions): Promise<void> {
   const { records } = await collectRecords({
     ...(options.spoolDir === undefined ? {} : { spoolDir: options.spoolDir }),
-    junit: options.junit,
     ...(options.variant === undefined ? {} : { variant: options.variant }),
   });
 
@@ -315,19 +260,12 @@ export async function gather(options: GatherOptions): Promise<void> {
   );
 }
 
-function usage(): never {
-  console.error(
-    "usage: test-records-gather.ts --out <dir> --job <name> " +
-      "[--shard <label>] [--variant <name>] [--junit <spec>]...",
-  );
-  Deno.exit(2);
-}
+const USAGE = "usage: test-records-gather.ts --out <dir> --job <name> " +
+  "[--shard <label>] [--variant <name>]";
 
 /**
  * Parses the command line into gather options, or returns undefined for a
- * malformed one. A malformed --junit specification skips itself with a
- * warning: the spool and the other specifications still gather, so one bad
- * flag does not cost the job's whole record set.
+ * malformed one.
  */
 export function parseGatherArgs(
   argsIn: readonly string[],
@@ -336,7 +274,6 @@ export function parseGatherArgs(
   let job: string | undefined;
   let shard: string | undefined;
   let variant: string | undefined;
-  const junit: JUnitSpec[] = [];
   const args = [...argsIn];
   while (args.length > 0) {
     const flag = args.shift()!;
@@ -356,37 +293,40 @@ export function parseGatherArgs(
         if (value.length === 0) return undefined;
         variant = value;
         break;
-      case "--junit":
-        try {
-          junit.push(parseJUnitSpec(value));
-        } catch (error) {
-          console.warn(`test records: ignoring --junit ${value}: ${error}`);
-        }
-        break;
       default:
         return undefined;
     }
   }
   if (out === undefined || job === undefined) return undefined;
-  const options: GatherOptions = { out, job, junit };
+  const options: GatherOptions = { out, job };
   if (shard !== undefined) options.shard = shard;
   if (variant !== undefined) options.variant = variant;
   return options;
 }
 
-async function main(): Promise<void> {
-  const options = parseGatherArgs(Deno.args);
-  if (options === undefined) usage();
-  const spoolDir = recordsDir();
+/**
+ * Gathers what a command line names, with `spoolDir` the enclosing run's
+ * spool if there is one, and returns the exit status: 2 for a malformed
+ * command line, and 0 otherwise, since telemetry never fails the job.
+ */
+export async function runGatherCommand(
+  args: readonly string[],
+  spoolDir: string | undefined,
+): Promise<number> {
+  const options = parseGatherArgs(args);
+  if (options === undefined) {
+    console.error(USAGE);
+    return 2;
+  }
   if (spoolDir !== undefined) options.spoolDir = spoolDir;
-  await gather(options);
+  try {
+    await gather(options);
+  } catch (error) {
+    console.warn(`test records: gathering failed: ${error}`);
+  }
+  return 0;
 }
 
 if (import.meta.main) {
-  try {
-    await main();
-  } catch (error) {
-    // Telemetry never fails the job; a usage error above still exits 2.
-    console.warn(`test records: gathering failed: ${error}`);
-  }
+  Deno.exit(await runGatherCommand(Deno.args, recordsDir()));
 }

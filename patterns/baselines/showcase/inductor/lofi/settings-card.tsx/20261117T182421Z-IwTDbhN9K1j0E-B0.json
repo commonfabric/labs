@@ -1,0 +1,84 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "heldOutPercent": {
+        "type": "number"
+      },
+      "hifiModel": {
+        "description": "The model, or \"\" for the deployment's default.",
+        "type": "string"
+      },
+      "rewriteAfter": {
+        "type": "number"
+      },
+      "setHeldOutPercent": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "percent": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "percent"
+        ],
+        "type": "object"
+      },
+      "setHifiModel": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "model": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "model"
+        ],
+        "type": "object"
+      },
+      "setRewriteAfter": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "count": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "hifiModel",
+      "rewriteAfter",
+      "heldOutPercent",
+      "setHifiModel",
+      "setRewriteAfter",
+      "setHeldOutPercent"
+    ],
+    "type": "object"
+  },
+  "pattern": "showcase/inductor/lofi/settings-card.tsx",
+  "resultSchema": {
+    "description": "The inductor's settings, with a button that applies the drafts.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

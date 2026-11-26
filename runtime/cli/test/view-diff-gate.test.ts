@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { parseDiff } from "../lib/view/diff.ts";
+import { test } from "@commonfabric/test-support/test";
 
 //
 // Coverage-gate tests for the C-style quoted-path decoder in lib/view/diff.ts.
@@ -10,7 +11,7 @@ import { parseDiff } from "../lib/view/diff.ts";
 // the path to the surrounding-quote strip so the name is never dropped.
 //
 
-Deno.test("diff: a quoted path whose final byte is a lone backslash falls back", () => {
+test("diff: a quoted path whose final byte is a lone backslash falls back", () => {
   // The path opens its quote, then ends on a backslash with nothing after it:
   // the escape has no following byte, so the decoder cannot interpret it and
   // returns the surrounding-quote strip (leading quote removed, no trailing one
@@ -27,7 +28,7 @@ Deno.test("diff: a quoted path whose final byte is a lone backslash falls back",
   assertEquals(model.files[0].newPath, "y\\");
 });
 
-Deno.test("diff: a quoted path with an unrecognized escape falls back verbatim", () => {
+test("diff: a quoted path with an unrecognized escape falls back verbatim", () => {
   // `\z` is neither an octal byte escape nor one of the single-character escapes
   // git emits (`\a \b \t \n \v \f \r \" \\`). The decoder gives up on the
   // unknown escape and returns the surrounding-quote strip, so the literal
@@ -48,7 +49,7 @@ Deno.test("diff: a quoted path with an unrecognized escape falls back verbatim",
   assertEquals(model.files[0].newPath, "y\\z.ts");
 });
 
-Deno.test("diff: a quoted path that never closes its quote falls back", () => {
+test("diff: a quoted path that never closes its quote falls back", () => {
   // The opening quote is present but there is no closing quote and no backslash
   // escape: the decode loop walks every byte without ever returning, then exits
   // and the no-closing-quote fallback strips the leading quote. The `a/` prefix

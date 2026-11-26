@@ -3,8 +3,9 @@ import { Resvg } from "@resvg/resvg-js";
 import { faviconPng } from "./favicon.ts";
 import { faviconSvg } from "./favicon-artwork.ts";
 import { FAVICON_FACES } from "./favicon-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("embedded favicon PNGs exactly match their SVG artwork", () => {
+test("embedded favicon PNGs exactly match their SVG artwork", () => {
   for (const status of FAVICON_FACES) {
     const rendered = new Uint8Array(
       new Resvg(faviconSvg(status), {

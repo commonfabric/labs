@@ -3,10 +3,12 @@
 // and quick stats. Side-effect free.
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import * as Path from "@std/path";
 import { Database } from "@db/sqlite";
 
 import { legacySpaceDid } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   candidateRoots,
@@ -51,7 +53,7 @@ function makeSpace(path: string, entityCount: number) {
 const DID_1 = "did:key:zAlphaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const DID_2 = "did:key:zBetaBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
-Deno.test("discovery + resolution", async (t) => {
+test("discovery + resolution", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-discover-" });
   try {
     // Mimic the doubled engine-v3 cache layout under a "cache/memory" base.
@@ -138,12 +140,59 @@ Deno.test("discovery + resolution", async (t) => {
         assert(byPrefix.endsWith(`${DID_1}.sqlite`));
       },
     );
+
+    await t.step(
+      "resolveSpacePath matches a path-shaped token that is no file against DIDs",
+      () => {
+        const found = discoverSpaceDbs({
+          dirs: [`${dir}/cache/memory`],
+          defaultRoots: false,
+        });
+        expect(() => resolveSpacePath(`${dir}/missing.sqlite`, found))
+          .toThrow(`no space matches "${dir}/missing.sqlite"`);
+        expect(resolveSpacePath(`${DID_1}.sqlite`, [{
+          did: `${DID_1}.sqlite`,
+          path: "/elsewhere",
+          sizeBytes: 0,
+          mtimeMs: 0,
+        }])).toBe("/elsewhere");
+      },
+    );
+
+    await t.step(
+      "resolveSpace reports a name or path that matches no DB",
+      async () => {
+        const found = discoverSpaceDbs({
+          dirs: [`${dir}/cache/memory`],
+          defaultRoots: false,
+        });
+        const did = await legacySpaceDid("no-such-space");
+        await expect(resolveSpace("no-such-space", found)).rejects.toThrow(
+          `as a name it derives to ${did}`,
+        );
+        await expect(resolveSpace(`${dir}/missing.sqlite`, found)).rejects
+          .toThrow(`no space matches "${dir}/missing.sqlite" (run:`);
+        await expect(resolveSpace("did:key:zNothing", found)).rejects.toThrow(
+          'no space matches "did:key:zNothing" (run:',
+        );
+      },
+    );
+
+    await t.step(
+      "quickStats returns null for what is not a space DB",
+      () => {
+        expect(quickStats(`${dir}/missing.sqlite`)).toBeNull();
+        const empty = `${dir}/empty.sqlite`;
+        new Database(empty, { create: true }).close();
+        expect(quickStats(empty)).toBeNull();
+      },
+    );
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
 });
 
-Deno.test("candidateRoots orders env overrides before caches and cwd walk", () => {
+test("candidateRoots orders env overrides before caches and cwd walk", () => {
   const saved = {
     MEMORY_DIR: Deno.env.get("MEMORY_DIR"),
     DB_PATH: Deno.env.get("DB_PATH"),
@@ -180,7 +229,7 @@ Deno.test("candidateRoots orders env overrides before caches and cwd walk", () =
   }
 });
 
-Deno.test("discovery finds a space under a MEMORY_DIR written as a file URL", async () => {
+test("discovery finds a space under a MEMORY_DIR written as a file URL", async () => {
   // The form a server's own configuration uses: `runtime/toolshed/env.ts`
   // defaults MEMORY_DIR to a `file:` URL, and the server hands it to `new URL()`.
   // Left as a URL it names no directory, so the walk finds nothing and every

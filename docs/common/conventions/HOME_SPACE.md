@@ -161,32 +161,32 @@ most-recently-used (MRU) ordering:
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with
-a random DID that owns itself (`selfOwned`) and declares the `profile` kind:
-its ACL grants its own DID OWNER and the wildcard `"*"` WRITE, and the
-creating user, who is not in the list, holds instead a delegation the space's
-key issued over it before being destroyed. The home space records that
-delegation beside the allocation, in the list under the cause
-`{ delegations: <space DID> }`, in the commit that appends the profile link;
-the record is a list so that a delegation issued later, with another
-command or policy, has a place beside it. A runtime loads every profile's
-delegations at startup
+a random DID that owns itself (`selfOwned`) and declares the `profile` kind: its
+ACL grants its own DID OWNER and the wildcard `"*"` WRITE, and the creating
+user, who is not in the list, holds instead a delegation the space's key issued
+over it before being destroyed. The home space records that delegation beside
+the allocation, in the list under the cause `{ delegations: <space DID> }`, in
+the commit that appends the profile link; the record is a list so that a
+delegation issued later, with another command or policy, has a place beside it.
+A runtime loads every profile's delegations at startup
 (`Runtime.loadProfileDelegations`) so its sessions on the profile space act
-under the profile's own grant ([profile delegation](../../specs/profile-delegation.md)).
-The creating runtime holds the delegation from the moment the key signs it, so
-the commit that places the profile and the copy of its pattern into the space
-are made under the profile's grant too, and creation needs nothing from the
-wildcard. A profile created before profiles owned themselves names its creator
-as owner and has no delegation; it keeps opening on the creator's grant. The
-wildcard WRITE is there because a runtime showing a profile writes into the
-profile's space, so a visitor needs more than READ. CFC owner-protects the
-profile's data fields that store an owner policy (all but `picture`, as below),
-and its view state is per session; nothing else in the space is protected from
-a visitor (a *named* `inSpace(name)` would put every
-profile created under one name in one space) —
-running `/api/patterns/system/profile-home/profile-home.tsx`; the link
-is appended to `profiles`. The home Profile tab renders the **profile picker**
-(`profile-picker.tsx`): it lists profiles, lets the user create more inline, pick
-the default, and stamp MRU. There is no `profileName` mirror field anymore.
+under the profile's own grant ([profile
+delegation](../../specs/profile-delegation.md)). The creating runtime holds the
+delegation from the moment the key signs it, so the commit that places the
+profile and the copy of its pattern into the space are made under the profile's
+grant too, and creation needs nothing from the wildcard. A profile created
+before profiles owned themselves names its creator as owner and has no
+delegation; it keeps opening on the creator's grant. The wildcard WRITE is there
+because a runtime showing a profile writes into the profile's space, so a
+visitor needs more than READ. CFC owner-protects the profile's data fields that
+store an owner policy, and `setPicture` takes a picture from the owner alone, as
+below; the edit form's drafts and view state are per session; nothing else in
+the space is protected from a visitor (a *named* `inSpace(name)` would put every
+profile created under one name in one space) — running
+`/api/patterns/system/profile-home/profile-home.tsx`; the link is appended to
+`profiles`. The home Profile tab renders the **profile picker**
+(`profile-picker.tsx`): it lists profiles, lets the user create more inline,
+pick the default, and stamp MRU. There is no `profileName` mirror field anymore.
 
 Each profile field holds a write redirect to an internal cell of the profile
 that holds the field's value, and the field's writer writes that cell. Two
@@ -204,22 +204,34 @@ reactive computation, since the call throws in a pattern body, with
 only: the memory server does not check a claim against the session that
 committed it ([`principal-of.md`](../../features/principal-of.md)).
 
-A profile's face is its `picture`, or else its legacy `avatar` text, when that
-value's own cell represents its owner. The runtime decides whom a value's own
-cell represents by one rule (`runtime/runner/src/cfc/written-principal.ts`):
-the one principal the label of the cell a write to the field lands in names,
-when the value is the whole of that cell and no link stored there leads
-elsewhere. That label says nothing of who pointed the field at the cell; a
-profile's owner-protected fields keep their write redirects from being
-repointed. A pattern asks
-with `writtenPrincipalOf()`, a host holding a runtime with
+A profile's face is its picture, the blob its `pictureBlob` names or else the
+bytes its `picture` holds, or else its legacy `avatar` text, the first of these
+whose value's own cell represents its owner. The runtime decides whom a value's own
+cell represents by one rule (`runtime/runner/src/cfc/written-principal.ts`): the
+one principal the label of the cell a write to the field lands in names, when
+the value is the whole of that cell, that cell is in the space of the document
+holding the field, and no link stored there leads elsewhere. That label says
+nothing of who pointed the field at the cell. A cell in another space is
+refused, since its label says who wrote the value there, not that anyone put it
+at this field. Within the profile's space, a client that ignores write
+policies, or any writer while the field stores no policy, can still point a
+face field at another cell the owner wrote there. A reader names the field
+through the profile, as `profile.key("picture")` does: a write redirect of its
+own to the field, stored in its own space, is refused like any other. A pattern
+asks with `writtenPrincipalOf()`, a host holding a runtime with
 `writtenPrincipalAt()`, and a host holding cell handles with
-`observeWrittenPrincipal()` from `@commonfabric/runtime-client`. Patterns read
+`observeWrittenPrincipal()` from `@commonfabric/runtime-client`, beside
+`observeRepresentedPrincipal()` for the owner. Each of those two observers
+passes every report a second argument, a `LabelReading`: `"current"` when the
+report was read from the label the worker delivered with the value, `"refused"`
+when the worker refuses the cell, and `"stale"` when the label the handle holds
+is not that label. Only a `"current"` report can name a principal. Patterns read
 a face with `profileFace()` from
 `patterns/system/profile-face/profile-face.ts`, which compares that principal
 with `profileOwnerOf()`; `cf-profile-badge` compares it with the principal its
-seal shows. So a picture a visitor set, or one stored before pictures were
-labeled, is not shown as the owner's face.
+seal shows. So a picture someone other than the owner set, which earlier
+releases allowed, or one stored without a label, is not shown as the owner's
+face.
 
 A field's writes are checked only once a write stores its policy in the value
 cell. A field with a default, such as `name` or `bio`, has its owner-protected
@@ -227,10 +239,27 @@ policy stored with the default when setup writes it. On a profile created with
 the field, its creator is then its owner, and anyone else's write is refused.
 On a profile that gains the field in a later release, setup stores the policy
 on nobody's behalf, and the first principal to write the field becomes its
-owner. `picture` has no default. Its writer, `setPicture`, declares only that
-the value represents whoever writes it, so each write labels the picture with
-its writer, and no write is refused. A new field takes one of these two forms.
-A field with neither a default nor such a writer stores no policy, and nothing
+owner. Where the profile stores a record of its creator, which only the
+experimental `pieceCreatorRecord` option writes and which awaits a ruling on
+the CFC specification, that creator is its owner instead
+([protected initialization](../../specs/cfc-protected-initialization.md)).
+
+`setPicture` refuses every writer but the person whose own profile it is, by
+the rule `profileOwnerOf()` applies, so no one can set the picture of a profile
+that is no one's own through it. It writes `pictureBlob` for a picture
+sent as a blob and `picture` for one sent as bytes, empties the other, and
+each of the two fields stores and declares its policy as this paragraph says
+of `picture`. A profile created under a release that gives
+`picture` its default, empty bytes, or that gains the field in such a release,
+stores the field's owner-protected policy as `name` does. A profile created
+while the field had no default stores no policy there until the first write
+through `setPicture` stores the one it declares, and until then any writer can
+store bytes there directly, with no label. The policy `setPicture` declares
+names it as the field's only writer and labels each picture with its writer,
+but binds no owner. A picture an earlier release let anyone set carries the
+label of whoever set it, and binding an owner from that label would give the
+field to them. A new field has a default, or a writer that declares
+`RepresentsCurrentUser`. A field with neither stores no policy, and nothing
 checks or labels its writes.
 
 The create passes `root: true`, so the profile is its space's root: the space's
@@ -283,9 +312,10 @@ nothing writes now; its contract names `setDefaultProfile`, so nothing else can
 replace it either, and Home says its space as `legacyDefaultProfileSpace`,
 which is what its handlers and the picker read, since a handle to a cell whose
 root holds a link denotes the linked profile. Any pattern that reaches Home's
-streams can retire or restore a profile by sending those handlers' events, as
-it can rename one or set its picture; what the contracts refuse is a write by
-anything else. A link written into an older Home's lists before its source
+streams can retire or restore a profile by sending those handlers' events. It
+can send a profile's `setName` and `setPicture` events too, but the profile
+takes a new name or picture only from its owner. What the contracts refuse is
+a write by anything else. A link written into an older Home's lists before its source
 updated stays there, and is subject to the rule below like any other.
 
 A profile a list links is the person's own when its `name`, followed through
@@ -364,17 +394,25 @@ delivered there stays readable. The host's share intake follows the offers in
 the inbox Home holds and in each one it retains, vets each as the user, and
 registers each one that passes in Home's shared-space catalog through Home's
 `registerSharedSpace` stream; it leaves every offer in its inbox. Home creates
-an inbox from `patterns/system/private-inbox/private-inbox.tsx` only when it
-holds none and no profile points at one. An inbox that fails vetting is neither
+an inbox from `patterns/system/private-inbox/private-inbox.tsx` once, in a step
+of its own that reads nothing labeled before it, and records it in
+`defaultPattern.ownPrivateInbox`. The host has Home take that step, through
+Home's `createOwnPrivateInbox` stream, before an ensure for which Home may need
+it, and waits for it, so a creation that fails fails the ensure. Home takes that
+inbox when it holds none and
+no profile points at one, and in place of an inbox it did not make, such as a
+loom daemon's, which it then retains. An inbox that fails vetting is neither
 adopted nor replaced, and Home keeps what it holds, or holds none. While Home
-holds an inbox, it points each profile that points at no inbox at it, through
-the profile's `inbox` field, which is how a sender finds it, and leaves a
-profile pointing at another inbox as it is. While it holds none, as after a
+holds an inbox, it points each profile that points at no inbox, or at an inbox
+Home gave up or replaced, at it, through the profile's `inbox` field, which is
+how a sender finds it, and leaves a profile pointing at any other inbox as it
+is. While it holds none, as after a
 failed vetting, a profile that points at no inbox stays unpointed. A failed
 vetting is recorded in `defaultPattern.privateInboxRefusal`, under `refusal`:
 the host's reason code, a link to the refused inbox, and when Home first
 recorded it. Each ensure, which is to say the next bring-up of Home in a runtime
-worker, clears it when Home adopts or creates an inbox, when the deciding
+worker, that records no refusal itself clears it when Home adopts an inbox or
+takes its own, when the deciding
 profile points at the inbox Home holds, or when no profile points at the refused
 inbox any longer. Nothing else clears it automatically in between, though the
 owner can clear it by replacing the refused inbox, as below, and the owner's own
@@ -383,19 +421,21 @@ stream. It is read from Home's root like any other field of Home, the root being
 the link the `#default` wish answers with, as "Custom Home Pattern" below says,
 and Home shows it as a notice above its tabs, by its code and time alone. The
 notice's "Use a new inbox" button, which a click on it sends, has Home clear the
-refusal, keep its inbox or create its own, and point the profiles that point at
+refusal, keep its inbox or take its own, and point the profiles that point at
 the refused inbox at it, and records that in
-`defaultPattern.privateInboxReplacement`. A profile created once Home holds the
-inbox is pointed at it as it is created; one created earlier is pointed by the
-next ensure. Home decides only when an ensure runs, so a pointer that moves is
+`defaultPattern.privateInboxReplacement`. The notice offers no button while Home
+holds no inbox and the refused inbox is Home's own, which the click never takes.
+A profile created once Home holds the inbox is pointed at it as it is created;
+one created earlier is pointed by the next ensure. Home decides only when an
+ensure runs, so a pointer that moves is
 decided at the first bring-up of Home in the next runtime worker to start, once
 the current worker's ensure has succeeded. A loom daemon does the same in the
 other direction, adopting the inbox a profile advertises and never replacing a
 pointer to a different one. A client that would otherwise create an inbox of its
 own, as a loom daemon does, asks Home for it through
 `defaultPattern.requestPrivateInbox`, naming the profile it finds the owner by:
-Home ensures its inbox with an event naming nothing, which keeps or creates
-Home's inbox and points the profiles that point at none but adopts nothing,
+Home ensures its inbox with an event naming nothing, which keeps Home's inbox or
+takes its own and points the profiles that point at none but adopts nothing,
 and its handling's receipt links to Home's answer for that profile, which
 reads `ensured` once the profile points at Home's inbox, or a final status
 saying why it never will.

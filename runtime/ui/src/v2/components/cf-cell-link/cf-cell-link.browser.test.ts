@@ -6,6 +6,7 @@
 
 import { expect } from "@std/expect";
 import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import type { CFCellLink } from "./index.ts";
 // The entrypoint registers cf-cell-link in the browser.
@@ -67,7 +68,7 @@ function retargetableLink(initialTarget: CellHandle) {
   };
 }
 
-Deno.test("cf-cell-link releases a link's subscription when detached and follows the link again when reattached", async () => {
+test("cf-cell-link releases a link's subscription when detached and follows the link again when reattached", async () => {
   const view = retargetableLink(roomCell("of:fid1:first"));
   const element = document.createElement("cf-cell-link") as CFCellLink;
   const container = document.createElement("div");

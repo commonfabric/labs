@@ -1,7 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { PATTERNS_ROUTE_PREFIX } from "../src/pattern-source-scheme.ts";

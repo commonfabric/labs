@@ -1,7 +1,12 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   collectionKeyBucket,
@@ -17,7 +22,6 @@ import {
 import { createNodeFactory, lift } from "../../src/builder/module.ts";
 import { type Cell, cellTx } from "../../src/cell.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { getDirectTransactionReactivityLog } from "../../src/storage/transaction-inspection.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import { createTrustedBuilder } from "../support/trusted-builder.ts";
 
@@ -83,7 +87,7 @@ describe("collection-index-membership", () => {
       resolveCollectionKey(runtime, tx, key),
       element,
     );
-    const log = getDirectTransactionReactivityLog(tx)!;
+    const log = tx.getReactivityLog();
     if (abort) tx.abort("membership rollback test");
     else expect((await tx.commit().settled).error).toBeUndefined();
     return log;

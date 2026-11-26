@@ -145,18 +145,14 @@ export class CastValidationTransformer extends HelpersOnlyTransformer {
 
   /**
    * Checks if this is a double-cast with angle bracket syntax: `<X><unknown>expr`
-   * Also handles mixed syntax: `<X>(expr as unknown)`
+   * Also handles mixed syntax: `<X>(expr as unknown)`. An `as` binds looser
+   * than `<X>`, so the mixed form only parses with its parentheses.
    */
   #isDoubleUnknownTypeAssertion(
     node: ts.TypeAssertion,
   ): boolean {
     // Check for angle bracket inner: `<X><unknown>expr`
     if (ts.isTypeAssertionExpression(node.expression)) {
-      const innerType = node.expression.type;
-      return this.#isUnknownType(innerType);
-    }
-    // Check for mixed syntax: `<X>(expr as unknown)`
-    if (ts.isAsExpression(node.expression)) {
       const innerType = node.expression.type;
       return this.#isUnknownType(innerType);
     }

@@ -1,6 +1,5 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type EntityRef,
@@ -8,8 +7,10 @@ import {
   resetModernCellRepConfig,
   setModernCellRepConfig,
 } from "@commonfabric/data-model/cell-rep";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
+  acquireServerExecutionEnabler,
   compatibleMemoryProtocolFlags,
   decodeMemoryBoundary,
   DEFAULT_BRANCH,
@@ -17,12 +18,15 @@ import {
   type EntityDocument,
   getEntityDocumentMetadata,
   getMemoryProtocolFlags,
+  identityOfScopeKey,
   MEMORY_PROTOCOL,
   parseMemoryProtocolFlags,
+  principalOfSessionKey,
   resetCommitPreconditionsConfig,
   resetMessageCompressionConfig,
   resetServerExecutionConfig,
   resetSyncSchemaTableConfig,
+  serverExecutionEnablerCount,
   setCommitPreconditionsConfig,
   setMessageCompressionConfig,
   setServerExecutionConfig,
@@ -102,6 +106,78 @@ describe("memory v2 documents", () => {
   });
 });
 
+describe("principalOfSessionKey()", () => {
+  it("returns the decoded principal of a session key", () => {
+    expect(principalOfSessionKey("session:did%3Akey%3Aalice:s%3A1")).toBe(
+      "did:key:alice",
+    );
+  });
+
+  it("returns `undefined` for a session key with too few or too many segments", () => {
+    expect(principalOfSessionKey("session:did%3Akey%3Aalice")).toBeUndefined();
+    expect(principalOfSessionKey("session:did%3Akey%3Aalice:s:1"))
+      .toBeUndefined();
+  });
+
+  it("returns `undefined` for a principal that does not decode", () => {
+    expect(principalOfSessionKey("session:%E0%A4%A:s1")).toBeUndefined();
+  });
+});
+
+describe("identityOfScopeKey()", () => {
+  it("returns the decoded principal and session of a session key", () => {
+    expect(identityOfScopeKey("session:did%3Akey%3Aalice:s%3A1")).toEqual({
+      principal: "did:key:alice",
+      sessionId: "s:1",
+    });
+  });
+
+  it("returns the decoded principal of a user key", () => {
+    expect(identityOfScopeKey("user:did%3Akey%3Aalice")).toEqual({
+      principal: "did:key:alice",
+    });
+  });
+
+  it("returns `undefined` for a session key with too few or too many segments", () => {
+    expect(identityOfScopeKey("session:did%3Akey%3Aalice")).toBeUndefined();
+    expect(identityOfScopeKey("session:did%3Akey%3Aalice:s:1"))
+      .toBeUndefined();
+  });
+
+  it("returns `undefined` for a session key whose principal or session does not decode", () => {
+    expect(identityOfScopeKey("session:%E0%A4%A:s1")).toBeUndefined();
+    expect(identityOfScopeKey("session:did%3Akey%3Aalice:%E0%A4%A"))
+      .toBeUndefined();
+  });
+
+  it("returns `undefined` for a user key with an empty or undecodable principal", () => {
+    expect(identityOfScopeKey("user:")).toBeUndefined();
+    expect(identityOfScopeKey("user:%E0%A4%A")).toBeUndefined();
+  });
+
+  it("returns `undefined` for the space key", () => {
+    expect(identityOfScopeKey("space")).toBeUndefined();
+  });
+});
+
+describe("acquireServerExecutionEnabler()", () => {
+  it("returns a release that gives up its own claim once however often it is called", () => {
+    const before = serverExecutionEnablerCount();
+    const first = acquireServerExecutionEnabler();
+    const second = acquireServerExecutionEnabler();
+    try {
+      expect(serverExecutionEnablerCount()).toBe(before + 2);
+      first();
+      first();
+      expect(serverExecutionEnablerCount()).toBe(before + 1);
+    } finally {
+      first();
+      second();
+    }
+    expect(serverExecutionEnablerCount()).toBe(before);
+  });
+});
+
 describe("memory v2 paths", () => {
   it("document paths are explicit full-document paths", () => {
     assertEquals([...toDocumentPath([])], []);
@@ -162,14 +238,17 @@ describe("memory v2 flags", () => {
       sessionHoldings: true,
       viewScopedReplicationV1: false,
       sessionReadCeiling: true,
+      markedSplicesV1: true,
       presenceV1: true,
       sessionReportV1: true,
       instanceNameMark: true,
+      branches: true,
       patternLifecycleOrigins: true,
       patternLifecycleScopes: true,
       patternLifecycle: false,
       servedRequests: false,
       spaceInvites: false,
+      spaceInvitesRevision: true,
       sessionClose: true,
       connectionAuth: true,
       sessionOpenProofs: true,
@@ -211,14 +290,17 @@ describe("memory v2 flags", () => {
       sessionHoldings: true,
       viewScopedReplicationV1: false,
       sessionReadCeiling: true,
+      markedSplicesV1: true,
       presenceV1: true,
       sessionReportV1: true,
       instanceNameMark: true,
+      branches: true,
       patternLifecycleOrigins: true,
       patternLifecycleScopes: true,
       patternLifecycle: false,
       servedRequests: false,
       spaceInvites: false,
+      spaceInvitesRevision: true,
       sessionClose: true,
       connectionAuth: true,
       sessionOpenProofs: true,
@@ -264,11 +346,13 @@ describe("memory v2 flags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: true,
         sessionReadCeiling: true,
+        markedSplicesV1: false,
         presenceV1: true,
         sessionReportV1: true,
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        spaceInvitesRevision: false,
         sessionClose: true,
         connectionAuth: true,
         sessionOpenProofs: true,
@@ -306,11 +390,13 @@ describe("memory v2 flags", () => {
         // Likewise: a client carrying a read ceiling refuses such a
         // server itself, and one carrying none connects as before.
         sessionReadCeiling: false,
+        markedSplicesV1: false,
         presenceV1: false,
         sessionReportV1: false,
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        spaceInvitesRevision: false,
         sessionClose: false,
         connectionAuth: false,
         sessionOpenProofs: false,
@@ -329,6 +415,30 @@ describe("memory v2 flags", () => {
 });
 
 describe("parseMemoryProtocolFlags", () => {
+  it("returns `null` for a boolean flag advertised as any other value", () => {
+    // Every flag an empty object parses to as `false`, and the one flag it
+    // leaves absent rather than false.
+
+    const booleanFlags = [
+      ...Object.entries(parseMemoryProtocolFlags({})!)
+        .filter(([, value]) => typeof value === "boolean")
+        .map(([name]) => name),
+      "serverExecution",
+    ];
+    expect(booleanFlags).toContain("watchSetPartsV1");
+    for (const name of booleanFlags) {
+      for (const advertised of [true, false]) {
+        const parsed: Readonly<Record<string, unknown>> | null =
+          parseMemoryProtocolFlags({ [name]: advertised });
+        expect(parsed?.[name]).toBe(advertised);
+      }
+      for (const invalid of [null, 1, "true", [], {}]) {
+        expect({ name, parsed: parseMemoryProtocolFlags({ [name]: invalid }) })
+          .toEqual({ name, parsed: null });
+      }
+    }
+  });
+
   it("requires an explicit boolean commit-label capability advertisement", () => {
     expect(getMemoryProtocolFlags().commitLabelTableV1).toBe(true);
     expect(parseMemoryProtocolFlags({})?.commitLabelTableV1).toBe(false);
@@ -455,12 +565,15 @@ describe("parseMemoryProtocolFlags", () => {
       sessionHoldings: false,
       viewScopedReplicationV1: false,
       sessionReadCeiling: false,
+      markedSplicesV1: false,
       presenceV1: false,
       sessionReportV1: false,
       patternLifecycle: false,
       servedRequests: false,
       spaceInvites: false,
+      spaceInvitesRevision: false,
       instanceNameMark: false,
+      branches: false,
       patternLifecycleOrigins: false,
       patternLifecycleScopes: false,
       sessionClose: false,
@@ -497,12 +610,15 @@ describe("parseMemoryProtocolFlags", () => {
       sessionHoldings: false,
       viewScopedReplicationV1: false,
       sessionReadCeiling: false,
+      markedSplicesV1: false,
       presenceV1: false,
       sessionReportV1: false,
       patternLifecycle: false,
       servedRequests: false,
       spaceInvites: false,
+      spaceInvitesRevision: false,
       instanceNameMark: false,
+      branches: false,
       patternLifecycleOrigins: false,
       patternLifecycleScopes: false,
       sessionClose: false,
@@ -546,12 +662,15 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        markedSplicesV1: false,
         presenceV1: false,
         sessionReportV1: false,
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        spaceInvitesRevision: false,
         instanceNameMark: false,
+        branches: false,
         patternLifecycleOrigins: false,
         patternLifecycleScopes: false,
         sessionClose: false,
@@ -660,12 +779,15 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        markedSplicesV1: false,
         presenceV1: false,
         sessionReportV1: false,
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        spaceInvitesRevision: false,
         instanceNameMark: false,
+        branches: false,
         patternLifecycleOrigins: false,
         patternLifecycleScopes: false,
         sessionClose: false,
@@ -715,12 +837,15 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        markedSplicesV1: false,
         presenceV1: false,
         sessionReportV1: false,
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        spaceInvitesRevision: false,
         instanceNameMark: false,
+        branches: false,
         patternLifecycleOrigins: false,
         patternLifecycleScopes: false,
         sessionClose: false,
@@ -765,12 +890,15 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        markedSplicesV1: false,
         presenceV1: false,
         sessionReportV1: false,
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        spaceInvitesRevision: false,
         instanceNameMark: false,
+        branches: false,
         patternLifecycleOrigins: false,
         patternLifecycleScopes: false,
         sessionClose: false,
@@ -823,12 +951,15 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        markedSplicesV1: false,
         presenceV1: false,
         sessionReportV1: false,
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        spaceInvitesRevision: false,
         instanceNameMark: false,
+        branches: false,
         patternLifecycleOrigins: false,
         patternLifecycleScopes: false,
         sessionClose: false,
@@ -874,12 +1005,15 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        markedSplicesV1: false,
         presenceV1: false,
         sessionReportV1: false,
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        spaceInvitesRevision: false,
         instanceNameMark: false,
+        branches: false,
         patternLifecycleOrigins: false,
         patternLifecycleScopes: false,
         sessionClose: false,
@@ -922,12 +1056,15 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        markedSplicesV1: false,
         presenceV1: false,
         sessionReportV1: false,
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        spaceInvitesRevision: false,
         instanceNameMark: false,
+        branches: false,
         patternLifecycleOrigins: false,
         patternLifecycleScopes: false,
         sessionClose: false,
@@ -954,12 +1091,15 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        markedSplicesV1: false,
         presenceV1: false,
         sessionReportV1: false,
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        spaceInvitesRevision: false,
         instanceNameMark: false,
+        branches: false,
         patternLifecycleOrigins: false,
         patternLifecycleScopes: false,
         sessionClose: false,
@@ -996,12 +1136,15 @@ describe("parseMemoryProtocolFlags", () => {
         sessionHoldings: false,
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
+        markedSplicesV1: false,
         presenceV1: false,
         sessionReportV1: false,
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        spaceInvitesRevision: false,
         instanceNameMark: false,
+        branches: false,
         patternLifecycleOrigins: false,
         patternLifecycleScopes: false,
         sessionClose: false,

@@ -1,0 +1,23 @@
+.vault_pass
+
+# OpenTofu / Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.*.log
+*_override.tf
+*_override.tf.json
+
+*.terraform.lock.hcl
+!tofu/github-org/.terraform.lock.hcl
+!tofu/iam/.terraform.lock.hcl
+!tofu/shell/.terraform.lock.hcl
+
+# Python bytecode from running the test harnesses
+__pycache__/
+*.py[co]
+
+# Rust router build and fuzz output
+memory-router/target/
+memory-router/fuzz/target/
+/memory-router/dist/

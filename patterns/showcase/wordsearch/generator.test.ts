@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   directionsFor,
@@ -12,6 +11,7 @@ import {
   type WordSearch,
   type WordSearchOptions,
 } from "./generator.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const WORDS = [
   "apple",

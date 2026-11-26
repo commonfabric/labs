@@ -1,10 +1,12 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import {
   BENCHMARK_HISTORY_CACHE_DAYS,
   BENCHMARK_HISTORY_SAMPLING_VERSION,
   BenchmarkHistoryStore,
   type BenchmarkStats,
 } from "./benchmark-history-cache.ts";
+import { afterEach, beforeEach, describe, it, test } from "@commonfabric/test-support/test";
 
 const DAY_MS = 86_400_000;
 
@@ -23,7 +25,7 @@ const stats = (p99: number): BenchmarkStats => ({
   p999: p99 * 1.1,
 });
 
-Deno.test("runtime benchmark history persists usable and empty artifacts", async () => {
+test("runtime benchmark history persists usable and empty artifacts", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -77,7 +79,7 @@ Deno.test("runtime benchmark history persists usable and empty artifacts", async
   }
 });
 
-Deno.test("runtime benchmark history replaces CPU-less data", async () => {
+test("runtime benchmark history replaces CPU-less data", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -116,7 +118,7 @@ Deno.test("runtime benchmark history replaces CPU-less data", async () => {
   }
 });
 
-Deno.test("runtime benchmark history preserves a definitive empty refresh", async () => {
+test("runtime benchmark history preserves a definitive empty refresh", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -142,7 +144,7 @@ Deno.test("runtime benchmark history preserves a definitive empty refresh", asyn
   }
 });
 
-Deno.test("runtime benchmark history retains the completed attempt while a rerun is incomplete", async () => {
+test("runtime benchmark history retains the completed attempt while a rerun is incomplete", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -180,7 +182,7 @@ Deno.test("runtime benchmark history retains the completed attempt while a rerun
   }
 });
 
-Deno.test("runtime benchmark history can replace an in-process future refresh", async () => {
+test("runtime benchmark history can replace an in-process future refresh", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -210,7 +212,7 @@ Deno.test("runtime benchmark history can replace an in-process future refresh", 
   }
 });
 
-Deno.test("runtime benchmark history drops freshness with a malformed run", async () => {
+test("runtime benchmark history drops freshness with a malformed run", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -243,7 +245,7 @@ Deno.test("runtime benchmark history drops freshness with a malformed run", asyn
   }
 });
 
-Deno.test("runtime benchmark history prunes entries outside its retention window", async () => {
+test("runtime benchmark history prunes entries outside its retention window", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -283,7 +285,7 @@ Deno.test("runtime benchmark history prunes entries outside its retention window
   }
 });
 
-Deno.test("runtime benchmark history merges writes from concurrent stores", async () => {
+test("runtime benchmark history merges writes from concurrent stores", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -320,7 +322,7 @@ Deno.test("runtime benchmark history merges writes from concurrent stores", asyn
   }
 });
 
-Deno.test("runtime benchmark history coalesces concurrent saves from one store", async () => {
+test("runtime benchmark history coalesces concurrent saves from one store", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   try {
@@ -339,7 +341,7 @@ Deno.test("runtime benchmark history coalesces concurrent saves from one store",
   }
 });
 
-Deno.test("runtime benchmark history replaces a state file that does not decode", async () => {
+test("runtime benchmark history replaces a state file that does not decode", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const now = Date.now();
   const states = [
@@ -370,7 +372,7 @@ Deno.test("runtime benchmark history replaces a state file that does not decode"
   }
 });
 
-Deno.test("runtime benchmark history keeps what checks out of a malformed legacy file", async () => {
+test("runtime benchmark history keeps what checks out of a malformed legacy file", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const now = Date.now();
   const valid = {
@@ -447,7 +449,7 @@ Deno.test("runtime benchmark history keeps what checks out of a malformed legacy
   }
 });
 
-Deno.test("runtime benchmark history refuses to save past an invalidation in the future", async () => {
+test("runtime benchmark history refuses to save past an invalidation in the future", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -470,7 +472,7 @@ Deno.test("runtime benchmark history refuses to save past an invalidation in the
   }
 });
 
-Deno.test("runtime benchmark history refreshes legacy manifests without dropping their runs", async () => {
+test("runtime benchmark history refreshes legacy manifests without dropping their runs", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -509,7 +511,7 @@ Deno.test("runtime benchmark history refreshes legacy manifests without dropping
   }
 });
 
-Deno.test("runtime benchmark history validates refresh state transitions", async () => {
+test("runtime benchmark history validates refresh state transitions", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -551,7 +553,7 @@ Deno.test("runtime benchmark history validates refresh state transitions", async
   }
 });
 
-Deno.test("runtime benchmark history drops a refresh whose retained run is pruned", async () => {
+test("runtime benchmark history drops a refresh whose retained run is pruned", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -573,7 +575,7 @@ Deno.test("runtime benchmark history drops a refresh whose retained run is prune
   }
 });
 
-Deno.test("runtime benchmark history removes a temporary file after rename fails", async () => {
+test("runtime benchmark history removes a temporary file after rename fails", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const rename = Deno.rename;
@@ -601,7 +603,7 @@ Deno.test("runtime benchmark history removes a temporary file after rename fails
   }
 });
 
-Deno.test("runtime benchmark history reads a series cached under `packages/` by its current path", async () => {
+test("runtime benchmark history reads a series cached under `packages/` by its current path", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -663,7 +665,7 @@ const localRun = (runId: number, at: number) => ({
   metrics: new Map([["local", stats(runId)]]),
 });
 
-Deno.test("runtime benchmark history moves a legacy JSON file into its directory", async () => {
+test("runtime benchmark history moves a legacy JSON file into its directory", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -746,7 +748,7 @@ Deno.test("runtime benchmark history moves a legacy JSON file into its directory
   }
 });
 
-Deno.test("runtime benchmark history merges a legacy JSON file found beside its directory", async () => {
+test("runtime benchmark history merges a legacy JSON file found beside its directory", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -793,7 +795,7 @@ Deno.test("runtime benchmark history merges a legacy JSON file found beside its 
   }
 });
 
-Deno.test("runtime benchmark history writes each run as a JSON header and little-endian floats", async () => {
+test("runtime benchmark history writes each run as a JSON header and little-endian floats", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -825,7 +827,7 @@ Deno.test("runtime benchmark history writes each run as a JSON header and little
   }
 });
 
-Deno.test("runtime benchmark history reads statistics by name and ignores what it does not know", async () => {
+test("runtime benchmark history reads statistics by name and ignores what it does not know", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -873,7 +875,7 @@ Deno.test("runtime benchmark history reads statistics by name and ignores what i
   }
 });
 
-Deno.test("runtime benchmark history removes run files that do not decode", async () => {
+test("runtime benchmark history removes run files that do not decode", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -900,6 +902,9 @@ Deno.test("runtime benchmark history removes run files that do not decode", asyn
       row(stats(1_000)),
     ),
     "941-7.run": new Uint8Array([255, 0, 0, 0, 123]),
+    // A header that is not UTF-8, and one that is JSON but not an object.
+    "941-8.run": new Uint8Array([2, 0, 0, 0, 0xff, 0xfe]),
+    "941-9.run": new Uint8Array([1, 0, 0, 0, "5".charCodeAt(0)]),
   };
   try {
     const writer = new BenchmarkHistoryStore(history);
@@ -946,7 +951,7 @@ Deno.test("runtime benchmark history removes run files that do not decode", asyn
   }
 });
 
-Deno.test("runtime benchmark history drops a refresh that names a missing run", async () => {
+test("runtime benchmark history drops a refresh that names a missing run", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -975,7 +980,7 @@ Deno.test("runtime benchmark history drops a refresh that names a missing run", 
   }
 });
 
-Deno.test("runtime benchmark history removes temporary files that interrupted writes left", async () => {
+test("runtime benchmark history removes temporary files that interrupted writes left", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   try {
@@ -1009,7 +1014,7 @@ Deno.test("runtime benchmark history removes temporary files that interrupted wr
   }
 });
 
-Deno.test("runtime benchmark history picks up a processor another store recorded", async () => {
+test("runtime benchmark history picks up a processor another store recorded", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -1050,7 +1055,7 @@ Deno.test("runtime benchmark history picks up a processor another store recorded
   }
 });
 
-Deno.test("runtime benchmark history reads a run's metrics like a map", async () => {
+test("runtime benchmark history reads a run's metrics like a map", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   try {
@@ -1101,7 +1106,7 @@ Deno.test("runtime benchmark history reads a run's metrics like a map", async ()
   }
 });
 
-Deno.test("runtime benchmark history saves only the runs missing from disk", async () => {
+test("runtime benchmark history saves only the runs missing from disk", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -1135,7 +1140,7 @@ Deno.test("runtime benchmark history saves only the runs missing from disk", asy
   }
 });
 
-Deno.test("runtime benchmark history leaves runs another store moved out of a legacy file", async () => {
+test("runtime benchmark history leaves runs another store moved out of a legacy file", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -1167,7 +1172,7 @@ Deno.test("runtime benchmark history leaves runs another store moved out of a le
   }
 });
 
-Deno.test("runtime benchmark history creates a missing cache directory", async () => {
+test("runtime benchmark history creates a missing cache directory", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/missing/cache/history`;
   const now = Date.now();
@@ -1185,7 +1190,7 @@ Deno.test("runtime benchmark history creates a missing cache directory", async (
   }
 });
 
-Deno.test("runtime benchmark history loads again after a load fails", async () => {
+test("runtime benchmark history loads again after a load fails", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const blocker = `${directory}/blocker`;
   try {
@@ -1200,7 +1205,7 @@ Deno.test("runtime benchmark history loads again after a load fails", async () =
   }
 });
 
-Deno.test("runtime benchmark history reads a legacy file's runs wherever they sit", async () => {
+test("runtime benchmark history reads a legacy file's runs wherever they sit", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -1247,7 +1252,7 @@ Deno.test("runtime benchmark history reads a legacy file's runs wherever they si
   }
 });
 
-Deno.test("runtime benchmark history writes run files before the state that names them", async () => {
+test("runtime benchmark history writes run files before the state that names them", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -1288,7 +1293,7 @@ Deno.test("runtime benchmark history writes run files before the state that name
   }
 });
 
-Deno.test("runtime benchmark history keeps measurements that are not finite", async () => {
+test("runtime benchmark history keeps measurements that are not finite", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -1317,7 +1322,7 @@ Deno.test("runtime benchmark history keeps measurements that are not finite", as
   }
 });
 
-Deno.test("runtime benchmark history shares benchmark names and releases unused ones", async () => {
+test("runtime benchmark history shares benchmark names and releases unused ones", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -1364,7 +1369,7 @@ Deno.test("runtime benchmark history shares benchmark names and releases unused 
   }
 });
 
-Deno.test("runtime benchmark history saves a run recorded while a save is in progress", async () => {
+test("runtime benchmark history saves a run recorded while a save is in progress", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -1401,7 +1406,7 @@ Deno.test("runtime benchmark history saves a run recorded while a save is in pro
   }
 });
 
-Deno.test("runtime benchmark history reads a legacy file that spans many reads", async () => {
+test("runtime benchmark history reads a legacy file that spans many reads", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -1457,7 +1462,7 @@ Deno.test("runtime benchmark history reads a legacy file that spans many reads",
   }
 });
 
-Deno.test("runtime benchmark history orders runs created together by run number", async () => {
+test("runtime benchmark history orders runs created together by run number", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const history = `${directory}/history`;
   const now = Date.now();
@@ -1475,4 +1480,45 @@ Deno.test("runtime benchmark history orders runs created together by run number"
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
+});
+
+describe("benchmark-history-cache", () => {
+  describe("BenchmarkHistoryStore", () => {
+    describe("instance members", () => {
+      describe("load()", () => {
+        let directory: string;
+        let history: string;
+
+        beforeEach(async () => {
+          directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
+          history = `${directory}/history`;
+        });
+
+        afterEach(async () => {
+          await Deno.remove(directory, { recursive: true });
+        });
+
+        it("rejects when its directory is a file", async () => {
+          await Deno.writeTextFile(history, "not a directory");
+
+          await expect(new BenchmarkHistoryStore(history).load()).rejects
+            .toThrow(Deno.errors.NotADirectory);
+        });
+
+        it("rejects when its legacy file cannot be read", async () => {
+          await Deno.mkdir(`${history}.json`);
+
+          await expect(new BenchmarkHistoryStore(history).load()).rejects
+            .toThrow(Deno.errors.IsADirectory);
+        });
+
+        it("rejects when a run file cannot be read", async () => {
+          await Deno.mkdir(`${history}/941-1.run`, { recursive: true });
+
+          await expect(new BenchmarkHistoryStore(history).load()).rejects
+            .toThrow(Deno.errors.IsADirectory);
+        });
+      });
+    });
+  });
 });

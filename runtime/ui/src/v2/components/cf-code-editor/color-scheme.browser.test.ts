@@ -13,6 +13,7 @@ import { assert, assertEquals } from "@std/assert";
 
 import { CFThemeProvider } from "../cf-theme/index.ts";
 import { CFCodeEditor } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 interface Mounted {
   theme: CFThemeProvider;
@@ -75,7 +76,7 @@ function isLight(color: string): boolean {
 }
 
 for (const mode of ["code", "prose"] as const) {
-  Deno.test(`a ${mode} editor in a dark theme draws a light caret and a dark selection`, async () => {
+  test(`a ${mode} editor in a dark theme draws a light caret and a dark selection`, async () => {
     const { editor, done } = await mount("dark", mode);
     try {
       await drawSelection(editor);
@@ -92,7 +93,7 @@ for (const mode of ["code", "prose"] as const) {
     }
   });
 
-  Deno.test(`a ${mode} editor in a light theme draws a dark caret and a light selection`, async () => {
+  test(`a ${mode} editor in a light theme draws a dark caret and a light selection`, async () => {
     const { editor, done } = await mount("light", mode);
     try {
       await drawSelection(editor);
@@ -110,7 +111,7 @@ for (const mode of ["code", "prose"] as const) {
   });
 }
 
-Deno.test("the caret follows the theme when its scheme changes", async () => {
+test("the caret follows the theme when its scheme changes", async () => {
   const { theme, editor, done } = await mount("light", "prose");
   try {
     await drawSelection(editor);
@@ -125,7 +126,7 @@ Deno.test("the caret follows the theme when its scheme changes", async () => {
   }
 });
 
-Deno.test("an editor asking for theme dark keeps oneDark's caret in a light theme", async () => {
+test("an editor asking for theme dark keeps oneDark's caret in a light theme", async () => {
   const { editor, done } = await mount("light", "code", "dark");
   try {
     await drawSelection(editor);
@@ -139,7 +140,7 @@ Deno.test("an editor asking for theme dark keeps oneDark's caret in a light them
   }
 });
 
-Deno.test("an editor with no theme around it draws the light base the tokens fall back to", async () => {
+test("an editor with no theme around it draws the light base the tokens fall back to", async () => {
   // A page-wide dark preference is what an "auto" scheme would follow; with
   // no <cf-theme> the tokens are their light fallbacks, so the base stays light.
   document.documentElement.setAttribute("data-theme", "dark");

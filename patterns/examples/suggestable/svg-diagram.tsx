@@ -1,3 +1,9 @@
+/**
+ * Asks a language model for an SVG diagram of a topic and draws it with
+ * `cf-svg`. It uses `generateText` and makes no request until a topic is
+ * given.
+ */
+
 import {
   computed,
   Default,
@@ -8,6 +14,7 @@ import {
   UI,
   type VNode,
 } from "commonfabric";
+import { promptAbout } from "./suggestion.ts";
 
 // ===== Types =====
 
@@ -37,10 +44,9 @@ const SvgDiagram = pattern<SvgDiagramInput, SvgDiagramOutput>(
     // state and makes no call until one arrives. A diagram with no topic has
     // nothing to draw, so the model is asked only once a caller names the
     // subject.
-    const prompt = computed(() => {
-      if (!topic) return "";
-      return `Create a clear SVG diagram illustrating: ${topic}`;
-    });
+    const prompt = computed(() =>
+      promptAbout(topic, "Create a clear SVG diagram illustrating: ")
+    );
 
     const response = generateText({
       system:
@@ -63,7 +69,7 @@ const SvgDiagram = pattern<SvgDiagramInput, SvgDiagramOutput>(
             {ifElse(
               response.pending,
               <div style="color: var(--cf-theme-color-text-secondary);">
-                <cf-loader show-elapsed /> Generating diagram...
+                <cf-loader showElapsed /> Generating diagram...
               </div>,
               <cf-svg content={response.result} />,
             )}

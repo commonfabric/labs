@@ -35,6 +35,7 @@ import {
   weaverActionTool,
 } from "../src/tools/weaver-action.ts";
 import type { HarnessToolContext } from "../src/tools/types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const LOOM = "loom-0123456789abcdef";
 const open = { kind: "open_loom", loomId: LOOM } as const;
@@ -42,7 +43,7 @@ const command = { kind: "command", line: "/weave notes" } as const;
 const url = { kind: "open_url", url: "https://example.com/a" } as const;
 const page = { kind: "open_url", url: "https://example.com/b" } as const;
 
-Deno.test("a command or url that spans lines is not a client action", () => {
+test("a command or url that spans lines is not a client action", () => {
   // The person approves the one line the client shows; a second line
   // hidden behind it must never reach their client's command router.
   for (
@@ -66,7 +67,7 @@ Deno.test("a command or url that spans lines is not a client action", () => {
   assertEquals(readHarnessClientAction(command), command);
 });
 
-Deno.test("a url with whitespace, a bad port, or no host is not a client action", () => {
+test("a url with whitespace, a bad port, or no host is not a client action", () => {
   // Loom's edge and the Weaver refuse the same set, so the three agree.
   for (
     const url of [
@@ -91,7 +92,7 @@ Deno.test("a url with whitespace, a bad port, or no host is not a client action"
   );
 });
 
-Deno.test("a url's authority must be well-formed, as Loom's final validator holds it", () => {
+test("a url's authority must be well-formed, as Loom's final validator holds it", () => {
   // Loom (loom#6768 fdf37da4) checks the raw authority: no `%`, an IPv6
   // literal in brackets, otherwise LDH labels with no empty label.
   for (
@@ -109,6 +110,8 @@ Deno.test("a url's authority must be well-formed, as Loom's final validator hold
       "https://bücher.example",
       "https://[::1",
       "https://[example.com]/",
+      "https://[::g]/",
+      "https://[12345::1]/",
       "https://[::1%25eth0]/",
       "https://[1:2:3:4:5:6:7:8:9]/",
       "https://[1::2::3]/",
@@ -162,7 +165,7 @@ Deno.test("a url's authority must be well-formed, as Loom's final validator hold
   }
 });
 
-Deno.test("a command's first character after the slash is not whitespace", () => {
+test("a command's first character after the slash is not whitespace", () => {
   // Python's whitespace set, as Loom's `str.isspace` reads it: it holds
   // U+001C..U+001F and U+0085, and not U+FEFF.
   for (
@@ -187,7 +190,7 @@ Deno.test("a command's first character after the slash is not whitespace", () =>
   }
 });
 
-Deno.test("a url holds no character Loom's final validator refuses, and brackets are read on the host", () => {
+test("a url holds no character Loom's final validator refuses, and brackets are read on the host", () => {
   for (
     const url of [
       "https://example.com/a\x1fb",
@@ -213,7 +216,7 @@ Deno.test("a url holds no character Loom's final validator refuses, and brackets
   }
 });
 
-Deno.test("a url longer than the client accepts is not a client action", () => {
+test("a url longer than the client accepts is not a client action", () => {
   // The Weaver refuses an address over HARNESS_CLIENT_URL_MAX_LENGTH; the
   // harness reads actions with the same limit so the two edges agree.
   const base = "https://example.com/";
@@ -368,7 +371,7 @@ const request =
   (actionId: string) => (event: HarnessChatEventEnvelope["event"]) =>
     event.kind === "client_action_requested" && event.actionId === actionId;
 
-Deno.test("weaver_action emits a request per action in order and returns outcomes in input order", async () => {
+test("weaver_action emits a request per action in order and returns outcomes in input order", async () => {
   const h = harness({ calls: [{ actions: [open, page, url] }] });
   await h.start();
   await h.delivered(request("id-3"));
@@ -414,7 +417,7 @@ Deno.test("weaver_action emits a request per action in order and returns outcome
   await h.service.waitForIdle();
 });
 
-Deno.test("resolve_client_action names unknown, repeated, and malformed answers", async () => {
+test("resolve_client_action names unknown, repeated, and malformed answers", async () => {
   const h = harness();
   await h.start();
   await h.delivered(request("id-1"));
@@ -464,7 +467,7 @@ Deno.test("resolve_client_action names unknown, repeated, and malformed answers"
   await h.service.waitForIdle();
 });
 
-Deno.test("an idle call fails every unsettled action as timeout, and each settlement resets the clock", async () => {
+test("an idle call fails every unsettled action as timeout, and each settlement resets the clock", async () => {
   using time = new FakeTime();
   const h = harness({ idleMs: 60, calls: [{ actions: [open, page] }] });
   await h.start();
@@ -508,7 +511,7 @@ Deno.test("an idle call fails every unsettled action as timeout, and each settle
   await h.service.waitForIdle();
 });
 
-Deno.test("canceling the turn declines every pending action as canceled, with a resolved event each", async () => {
+test("canceling the turn declines every pending action as canceled, with a resolved event each", async () => {
   const h = harness({ calls: [{ actions: [open, page] }] });
   await h.start();
   await h.delivered(request("id-2"));
@@ -541,7 +544,7 @@ Deno.test("canceling the turn declines every pending action as canceled, with a 
   await h.service.waitForIdle();
 });
 
-Deno.test("closing the session settles pending actions the same way", async () => {
+test("closing the session settles pending actions the same way", async () => {
   const h = harness();
   await h.start();
   await h.delivered(request("id-1"));
@@ -554,7 +557,7 @@ Deno.test("closing the session settles pending actions the same way", async () =
   await h.service.waitForIdle();
 });
 
-Deno.test("invalid input emits nothing and a session that did not opt in has no door", async () => {
+test("invalid input emits nothing and a session that did not opt in has no door", async () => {
   // A slash-command line is a final action only: mid-turn, a command is
   // invoked by id with typed args.
   const h = harness({
@@ -587,7 +590,7 @@ Deno.test("invalid input emits nothing and a session that did not opt in has no 
   await off.service.waitForIdle();
 });
 
-Deno.test("a turn can opt its session in, and the tool joins that turn's allowlist", async () => {
+test("a turn can opt its session in, and the tool joins that turn's allowlist", async () => {
   const h = harness({ calls: [] });
   await h.request("start_session", {
     sessionId: "s",
@@ -663,7 +666,7 @@ const offeredTools = async (
   return requests[0].tools.map((tool) => tool.toolId);
 };
 
-Deno.test("weaver_action is offered to a parent that opted in, never to one that did not or to a subagent", async () => {
+test("weaver_action is offered to a parent that opted in, never to one that did not or to a subagent", async () => {
   expect(await offeredTools({ optIn: true })).toContain("weaver_action");
   expect(await offeredTools({ optIn: false })).not.toContain("weaver_action");
   expect(await offeredTools({ optIn: true, subagent: true })).not.toContain(
@@ -671,7 +674,7 @@ Deno.test("weaver_action is offered to a parent that opted in, never to one that
   );
 });
 
-Deno.test("a session whose host opted in opens with the Weaver command guidance, and no other does", async () => {
+test("a session whose host opted in opens with the Weaver command guidance, and no other does", async () => {
   const contextOf = async (optIn: boolean) =>
     await establishHarnessSessionContext({
       engine: new CfHarnessEngine({
@@ -702,7 +705,7 @@ Deno.test("a session whose host opted in opens with the Weaver command guidance,
   expect(WEAVER_COMMAND_GUIDANCE).not.toContain("Call list_commands first");
 });
 
-Deno.test("weaver_action is gated by backing, absent from defaults, and nameable in a stdio policy", () => {
+test("weaver_action is gated by backing, absent from defaults, and nameable in a stdio policy", () => {
   const base = {
     fabricSessionAvailable: false,
     patternIndexAvailable: false,
@@ -719,7 +722,7 @@ Deno.test("weaver_action is gated by backing, absent from defaults, and nameable
   expect(SUPPORTED_POLICY_TOOL_IDS.has("weaver_action")).toBe(true);
 });
 
-Deno.test("a request left open by a restart is settled as interrupted, so a replay never offers it again", async () => {
+test("a request left open by a restart is settled as interrupted, so a replay never offers it again", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -833,7 +836,7 @@ Deno.test("a request left open by a restart is settled as interrupted, so a repl
   }
 });
 
-Deno.test("a call made after the turn was canceled declines at once and shows the person nothing", async () => {
+test("a call made after the turn was canceled declines at once and shows the person nothing", async () => {
   const h = harness({ calls: [] });
   await h.start();
   await h.callsDone;
@@ -853,7 +856,7 @@ const requestedIds = (h: ReturnType<typeof harness>) =>
 const resolvedIds = (h: ReturnType<typeof harness>) =>
   h.kinds("client_action_resolved").map((e) => [e.actionId, e.result]);
 
-Deno.test("a request that cannot be delivered settles the ones already written and drops the rest", async () => {
+test("a request that cannot be delivered settles the ones already written and drops the rest", async () => {
   // The second request's delivery fails (committed, then the client hook
   // throws); the third was never written.
   const h = harness({
@@ -890,7 +893,7 @@ Deno.test("a request that cannot be delivered settles the ones already written a
   await h.service.waitForIdle();
 });
 
-Deno.test("an idle timeout whose resolved event cannot be written fails the call", async () => {
+test("an idle timeout whose resolved event cannot be written fails the call", async () => {
   using time = new FakeTime();
   const h = harness({
     idleMs: 10,
@@ -908,7 +911,7 @@ Deno.test("an idle timeout whose resolved event cannot be written fails the call
   await h.service.waitForIdle();
 });
 
-Deno.test("a cancel while requests are being written stops writing and settles only the written", async () => {
+test("a cancel while requests are being written stops writing and settles only the written", async () => {
   const h: ReturnType<typeof harness> = harness({
     calls: [{ actions: [open, page, url] }],
     deliver: (e) => {
@@ -934,7 +937,7 @@ Deno.test("a cancel while requests are being written stops writing and settles o
   await h.service.waitForIdle();
 });
 
-Deno.test("an answer given while its request is still being delivered is kept, with one resolved event", async () => {
+test("an answer given while its request is still being delivered is kept, with one resolved event", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -995,7 +998,7 @@ Deno.test("an answer given while its request is still being delivered is kept, w
   }
 });
 
-Deno.test("an idle timeout while a request is being delivered settles the unwritten ones without ever showing them", async () => {
+test("an idle timeout while a request is being delivered settles the unwritten ones without ever showing them", async () => {
   using time = new FakeTime();
   const held = Promise.withResolvers<void>();
   // The first answer arms the idle clock while the requests are still being

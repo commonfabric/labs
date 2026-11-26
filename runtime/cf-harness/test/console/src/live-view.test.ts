@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { spy } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 import { nothing } from "lit";
 import { urlToAppView } from "@commonfabric/navigation";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   ConsoleLive,
   consoleLiveAddress,
@@ -35,7 +35,7 @@ import { CfHarnessEngine } from "../../../src/engine.ts";
 import { HarnessInteractiveChatService } from "../../../src/interactive-chat-service.ts";
 import { CfHarnessPromptLoop } from "../../../src/prompt-loop.ts";
 import { directPromptSlotBindingFor } from "../../support/prompt-slot-binding.ts";
-import { templateText } from "./template-text.ts";
+import { handlerOn, templateText } from "./lit-template.ts";
 
 describe("console/src/live-view", () => {
   /** The log a page reads, numbered in the order the events were emitted. */
@@ -1444,21 +1444,10 @@ describe("console/src/live-view", () => {
 
       /** Hands the reader's scrolling to the feed's own handler. */
       readerScrolled(feed: FakeFeed) {
-        this.#scrollHandler()({ target: feed } as unknown as Event);
-      }
-
-      /**
-       * The feed's `@scroll` binding, out of the template it is written in.
-       * The handler is private and reachable only from the markup, which is
-       * where the pane wires it, so the test takes the same route the browser
-       * does rather than a seam opened for it.
-       */
-      #scrollHandler(): (event: Event) => void {
-        const handlers = (this.view().values ?? []).filter((value) =>
-          typeof value === "function"
-        );
-        expect(handlers).toHaveLength(1);
-        return handlers[0] as (event: Event) => void;
+        // The handler is private and reachable only from the markup, which
+        // is where the pane wires it, so the test takes the same route the
+        // browser does rather than a seam opened for it.
+        handlerOn(this.view(), "@scroll", "", "div")({ target: feed });
       }
 
       /**

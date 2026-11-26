@@ -6,8 +6,10 @@
  *
  * The JSON language also claims the surveyed JSON-shaped names that no `.json`
  * suffix announces: web manifests, TLDraw documents, Deno lock files, editor
- * workspace files, Swift package resolutions, and the `.cfg` files whose
- * source shows a JSON object.
+ * workspace files, Swift package resolutions and their per-platform copies,
+ * Xcode string catalogs, CPU profiles, Firebase project aliases, and the
+ * `.cfg`, `.conf`, `.config`, and `.lock` files whose source shows a JSON
+ * object.
  *
  * JSON has no semantic layer (no types or cross-file definitions to resolve),
  * so it omits `createSemantics`/`createDiffSemantics`. A single JSON or JSONC
@@ -30,14 +32,20 @@ import {
 } from "./json.ts";
 
 /**
- * The evidence a `.cfg` file gives for JSON. TLC configuration opens with a
- * directive or a `\*` comment, and an INI section header opens with `[`, so
- * only an opening brace selects JSON.
+ * Whether `text` opens a JSON object, which is the evidence a `.cfg`, `.conf`,
+ * `.config`, or `.lock` file gives for JSON. TLC configuration opens with a
+ * directive or a `\*` comment, an INI section header opens with `[`, XML opens
+ * with `<`, and a lock record with no syntax of its own is often empty, so only
+ * an opening brace selects JSON.
  */
-const JSON_SHAPED_CONFIGURATION = /^\s*\{/;
+function opensWithObject(text: string): boolean {
+  return /^\s*\{/.test(text);
+}
 
 export const jsonLanguage: Language = {
   id: "json",
+
+  literalValues: true,
 
   input: { kind: "text", decoder: utf8Decoder },
 
@@ -48,14 +56,19 @@ export const jsonLanguage: Language = {
       ".webmanifest",
       ".tldr",
       ".code-workspace",
+      ".xcstrings",
+      ".cpuprofile",
     ],
-    filenames: ["deno.lock", "Package.resolved"],
-    filenamePatterns: [/\.jsonc?\.example$/i],
+    filenames: ["deno.lock", "Package.resolved", ".firebaserc"],
+    filenamePatterns: [/\.jsonc?\.example$/i, /^Package\.resolved\.[\w-]+$/],
     aliases: ["jsonc"],
     interpreters: [],
     signatures: [],
     sharedExtensions: [
-      { extension: ".cfg", content: JSON_SHAPED_CONFIGURATION },
+      { extension: ".cfg", content: opensWithObject },
+      { extension: ".config", content: opensWithObject },
+      { extension: ".conf", content: opensWithObject },
+      { extension: ".lock", content: opensWithObject },
     ],
   },
 
@@ -73,6 +86,8 @@ export const jsonLanguage: Language = {
 /** JSON Lines and NDJSON with lexical state isolated to each record. */
 export const jsonLinesLanguage: Language = {
   id: "json-lines",
+
+  literalValues: true,
 
   input: { kind: "text", decoder: utf8Decoder },
 

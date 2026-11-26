@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callsNamed, collect, parseModule } from "./transformed-ast.ts";
 import { transformSource } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("tagged enumeration branches", () => {
   it("preserves an authored symbol-less lowered-method callback", async () => {

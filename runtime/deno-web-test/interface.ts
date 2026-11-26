@@ -18,5 +18,5 @@ export type TestFileResults = {
 export type Summary = {
   passed: number;
   duration: number;
-  failed: TestResult[];
+  failed: { name: string; error: TestResultError }[];
 };

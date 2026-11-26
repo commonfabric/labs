@@ -4,11 +4,11 @@
  * reported, and the exit code each of those ends with.
  */
 
-import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   type ApplyRunProgress,

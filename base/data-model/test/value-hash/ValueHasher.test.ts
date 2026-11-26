@@ -15,10 +15,10 @@
  * rather than merely absent from it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { FabricValue } from "@";
 import { UnknownValue } from "@/codec-common";
@@ -31,7 +31,6 @@ import {
   FabricEpochNsec,
   FabricHash,
   FabricKeyPair,
-  FabricRegExp,
   FabricUnavailable,
   UNAVAILABLE_PENDING,
 } from "@/fabric-primitives";
@@ -631,97 +630,68 @@ describe("ValueHasher", () => {
           expect(hex(hashBytesOf(days))).not.toBe(hex(hashBytesOf(nsec)));
         });
       });
-      describe("FabricRegExp (dedicated TAG_REGEXP primitive tag)", () => {
-        it("matches a hand-computed byte stream for `FabricRegExp(/abc/gi)`", () => {
-          // TAG_REGEXP (0x2B), then source, flags, and flavor, each a direct
-          // string (TAG_STRING + length + UTF-8), fed positionally with no
-          // terminator. Mirrored in Section 7.12 of `2-hash-byte-format.md`,
-          // so the two have to be changed together.
-          const expected = sha256([
-            0x2b,
-            0x24,
-            0x03,
-            0x61,
-            0x62,
-            0x63,
-            0x24,
-            0x02,
-            0x67,
-            0x69,
-            0x24,
-            0x06,
-            0x65,
-            0x73,
-            0x32,
-            0x30,
-            0x32,
-            0x35,
-          ]);
-          expect(hashBytesOf(new FabricRegExp(/abc/gi))).toEqual(expected);
-        });
 
-        it("produces different hashes for different sources", () => {
-          const r1 = new FabricRegExp(/foo/);
-          const r2 = new FabricRegExp(/bar/);
-          expect(hex(hashBytesOf(r1))).not.toBe(hex(hashBytesOf(r2)));
-        });
+      describe("FabricUnavailable (hashed in the `FabricInstance` layout)", () => {
+        // `TAG_INSTANCE` (0x12), the wire tag `Unavailable@1` as a tagged
+        // string, then the state as a plain object: `TAG_OBJECT` (0x11),
+        // each key and value as a tagged string in key order, and `TAG_END`.
+        const enc = new TextEncoder();
+        const shortString = (value: string): number[] => {
+          const encoded = enc.encode(value);
+          return [0x24, encoded.length, ...encoded];
+        };
+        const instanceStream = (entries: [string, string][]): number[] => [
+          0x12,
+          ...shortString("Unavailable@1"),
+          0x11,
+          ...entries.flatMap(([key, value]) => [
+            ...shortString(key),
+            ...shortString(value),
+          ]),
+          0x00,
+        ];
 
-        it("produces different hashes for different flags", () => {
-          const r1 = new FabricRegExp(/foo/g);
-          const r2 = new FabricRegExp(/foo/i);
-          expect(hex(hashBytesOf(r1))).not.toBe(hex(hashBytesOf(r2)));
-        });
-      });
-
-      describe("FabricUnavailable (dedicated TAG_UNAVAILABLE primitive tag)", () => {
         it('matches a hand-computed byte stream for `FabricUnavailable("pending")`', () => {
-          // TAG_UNAVAILABLE (0x2D), the reason as a tagged string, then the
-          // absent kind and the absent message each as TAG_NULL (0x20).
-          const expected = sha256([
-            0x2d,
-            0x24,
-            0x07,
-            ...new TextEncoder().encode("pending"),
-            0x20,
-            0x20,
-          ]);
+          const expected = sha256(instanceStream([["reason", "pending"]]));
           expect(hashBytesOf(new FabricUnavailable("pending"))).toEqual(
             expected,
           );
         });
 
         it('matches a hand-computed byte stream for `FabricUnavailable("error", "network", "boom")`', () => {
-          // TAG_UNAVAILABLE (0x2D), then the reason, the kind, and the message
-          // each as a tagged string.
-          const expected = sha256([
-            0x2d,
-            0x24,
-            0x05,
-            ...new TextEncoder().encode("error"),
-            0x24,
-            0x07,
-            ...new TextEncoder().encode("network"),
-            0x24,
-            0x04,
-            ...new TextEncoder().encode("boom"),
-          ]);
+          const expected = sha256(instanceStream([
+            ["errorKind", "network"],
+            ["message", "boom"],
+            ["reason", "error"],
+          ]));
           expect(hashBytesOf(new FabricUnavailable("error", "network", "boom")))
             .toEqual(expected);
         });
 
-        it("feeds `TAG_NULL` for the message of an error given none", () => {
-          const expected = sha256([
-            0x2d,
-            0x24,
-            0x05,
-            ...new TextEncoder().encode("error"),
-            0x24,
-            0x07,
-            ...new TextEncoder().encode("network"),
-            0x20,
-          ]);
+        it("omits the `message` key for an error given none", () => {
+          const expected = sha256(instanceStream([
+            ["errorKind", "network"],
+            ["reason", "error"],
+          ]));
           expect(hashBytesOf(new FabricUnavailable("error", "network")))
             .toEqual(expected);
+        });
+
+        it("produces the same hash as an `UnknownValue` tagged `Unavailable@1` with the same state", () => {
+          const instances = [
+            new FabricUnavailable("syncing"),
+            new FabricUnavailable("error", "decode"),
+            new FabricUnavailable("error", "network", "boom"),
+          ];
+
+          for (const instance of instances) {
+            const unknown = new UnknownValue("Unavailable@1", {
+              ...instance.state,
+            });
+            expect(hex(hashBytesOf(unknown))).toBe(
+              hex(hashBytesOf(instance)),
+            );
+          }
         });
 
         it("produces the same hash for a prefab and a fresh instance with its reason", () => {
@@ -732,7 +702,7 @@ describe("ValueHasher", () => {
         it("produces the same hash for an error given its kind's default message and one given none", () => {
           const given = new FabricUnavailable("error", "network");
           expect(hex(hashBytesOf(
-            new FabricUnavailable("error", "network", given.errorMessage),
+            new FabricUnavailable("error", "network", given.message),
           ))).toBe(hex(hashBytesOf(given)));
         });
 
@@ -1303,48 +1273,54 @@ describe("ValueHasher", () => {
           expect(hex(hashBytesOf(a1))).not.toBe(hex(hashBytesOf(b)));
         });
       });
-      describe("FabricKeyPair hashing (TAG_KEY_PAIR = 0x2C)", () => {
+      describe("FabricKeyPair (hashed in the `FabricInstance` layout)", () => {
         it("matches a hand-computed byte stream for `FabricKeyPair`", () => {
-          // Algorithm "Ed25519" = 7 bytes UTF-8, under the 64-byte threshold, so
-          // the direct string form. Each key is a complete tagged `FabricBytes`
-          // value: TAG_BYTES, a LEB128 length, then the raw bytes.
+          // `TAG_INSTANCE` (0x12), the wire tag `KeyPair@1` as a tagged
+          // string, then the state as a plain object: `TAG_OBJECT` (0x11),
+          // each key as a tagged string in key order, each followed by its
+          // value -- the algorithm as a tagged string, and each key as a
+          // complete tagged `FabricBytes` value (`TAG_BYTES`, a LEB128 length,
+          // then the raw bytes) -- and `TAG_END`.
           //
           // A real algorithm name, unlike the placeholder the fixtures use: its
           // own bytes are spelled out below and mirrored in Section 7.13 of
           // `2-hash-byte-format.md`, so the two have to be changed together.
           // Nothing here depends on the algorithm being one this system uses.
+          const enc = new TextEncoder();
+          const shortString = (value: string): number[] => {
+            const encoded = enc.encode(value);
+            return [0x24, encoded.length, ...encoded];
+          };
           const pair = new FabricKeyPair(
             "Ed25519",
             new Uint8Array([0xDE, 0xAD]),
             new Uint8Array([0xBE, 0xEF, 0x01]),
           );
           const expected = sha256([
-            0x2C, // TAG_KEY_PAIR
-            0x24, // TAG_STRING
-            0x07, // length of "Ed25519"
-            0x45,
-            0x64,
-            0x32,
-            0x35,
-            0x35,
-            0x31,
-            0x39, // "Ed25519"
-            0x25, // TAG_BYTES
-            0x02, // public key length
-            0xDE,
-            0xAD,
+            0x12, // TAG_INSTANCE
+            ...shortString("KeyPair@1"),
+            0x11, // TAG_OBJECT
+            ...shortString("algorithm"),
+            ...shortString("Ed25519"),
+            ...shortString("privateKey"),
             0x25, // TAG_BYTES
             0x03, // private key length
             0xBE,
             0xEF,
             0x01,
+            ...shortString("publicKey"),
+            0x25, // TAG_BYTES
+            0x02, // public key length
+            0xDE,
+            0xAD,
+            0x00, // TAG_END
           ]);
 
           expect(hex(hashBytesOf(pair))).toBe(hex(expected));
         });
 
         it("hashes the two keys in a fixed order", () => {
-          // The layout above feeds the public key first. Swapping the two is a
+          // Each key is fed under its own name. Swapping the two is a
           // different value rather than the same one -- which the byte stream
           // decides and no distinctness test alone could show, the two keys
           // here being of different lengths only so that a swap is visible at
@@ -1361,6 +1337,17 @@ describe("ValueHasher", () => {
           );
 
           expect(hex(hashBytesOf(pair))).not.toBe(hex(hashBytesOf(swapped)));
+        });
+
+        it("produces the same hash as an `UnknownValue` tagged `KeyPair@1` with the same state", () => {
+          const pair = new FabricKeyPair(
+            "Ed25519",
+            new Uint8Array([0xDE, 0xAD]),
+            new Uint8Array([0xBE, 0xEF, 0x01]),
+          );
+          const unknown = new UnknownValue("KeyPair@1", { ...pair.state });
+
+          expect(hex(hashBytesOf(unknown))).toBe(hex(hashBytesOf(pair)));
         });
       });
 

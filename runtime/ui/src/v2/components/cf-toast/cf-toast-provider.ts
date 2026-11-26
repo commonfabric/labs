@@ -1,5 +1,6 @@
 import { css, html } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
+import type { CFToast } from "./cf-toast.ts";
 
 /**
  * CFToastProvider - Fixed-position container that manages a stack of cf-toast elements
@@ -151,21 +152,11 @@ export class CFToastProvider extends BaseElement {
   }
 
   private _updateStack(): void {
-    const openToasts = Array.from(
-      this.querySelectorAll<HTMLElement>("cf-toast[open]"),
-    );
-    if (openToasts.length > this.max) {
-      const toEvict = openToasts.slice(0, openToasts.length - this.max);
-      for (const toast of toEvict) {
-        toast.removeAttribute("open");
-        toast.dispatchEvent(
-          new CustomEvent("cf-toast-dismiss", {
-            detail: { reason: "timeout" },
-            bubbles: true,
-            composed: true,
-          }),
-        );
-      }
+    const openToasts: CFToast[] = Array.from(this.querySelectorAll("cf-toast"))
+      .filter((toast) => toast.open);
+    const excess = Math.max(0, openToasts.length - this.max);
+    for (const toast of openToasts.slice(0, excess)) {
+      toast.dismiss("timeout");
     }
   }
 

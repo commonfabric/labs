@@ -15,7 +15,6 @@
 // 3. FAN-OUT READINESS (M2's point): two IDENTITIES' instances of one
 //    scoped address are DISTINCT keys — the collapse that made scope-NAME
 //    keys unsound on a serving runtime is structurally gone.
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type CellScope,
@@ -24,6 +23,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { entityKey } from "../src/scheduler/keys.ts";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/v2.ts";
 import type { MemorySpace, URI } from "../src/storage/interface.ts";
 

@@ -41,15 +41,24 @@ const DEFAULT_REF: CellRef = {
   schema: { type: "object" },
 };
 
+/** A batch of VDOM operations, as the worker sends one to a session. */
+export type VDomBatch = Parameters<Parameters<VDomConnection["onBatch"]>[0]>[0];
+
 /**
  * Create a `CellHandle` backed by a connection that can host a render.
  *
- * Returns the handle and the log its session writes to.
+ * Returns the handle, the log its session writes to, and a function that
+ * delivers a batch to every renderer listening on the session, as the worker
+ * does.
  */
 export function createRenderableCellHandle<T>(
   value?: T,
   ref?: Partial<CellRef>,
-): { cell: CellHandle<T>; log: VDomSessionLog } {
+): {
+  cell: CellHandle<T>;
+  log: VDomSessionLog;
+  deliver: (batch: VDomBatch) => void;
+} {
   const log: VDomSessionLog = {
     mounted: [],
     unmounted: [],
@@ -57,7 +66,7 @@ export function createRenderableCellHandle<T>(
     attached: false,
   };
   const lifetime = new AbortController();
-  const batchHandlers = new Set<(notification: unknown) => void>();
+  const batchHandlers = new Set<(batch: VDomBatch) => void>();
 
   const session: VDomConnection = {
     signal: lifetime.signal,
@@ -73,10 +82,10 @@ export function createRenderableCellHandle<T>(
     sendEvent: () => {},
     ackBatch: () => {},
     onBatch: (handler) => {
-      batchHandlers.add(handler as (notification: unknown) => void);
+      batchHandlers.add(handler);
     },
     offBatch: (handler) => {
-      batchHandlers.delete(handler as (notification: unknown) => void);
+      batchHandlers.delete(handler);
     },
     detach: () => {
       log.detached = true;
@@ -97,12 +106,6 @@ export function createRenderableCellHandle<T>(
       log.attached = true;
       return session;
     },
-    on: () => ({}),
-    off: () => ({}),
-    once: () => ({}),
-    emit: () => false,
-    removeAllListeners: () => ({}),
-    listenerCount: () => 0,
   } as unknown as InitializedRuntimeConnection;
 
   // `getPiece` finds nothing: it is what `cf-render` opens a displayed piece
@@ -116,5 +119,8 @@ export function createRenderableCellHandle<T>(
     { ...DEFAULT_REF, ...ref },
     value === undefined ? { unread: true } : { value },
   );
-  return { cell, log };
+  const deliver = (batch: VDomBatch) => {
+    for (const handler of batchHandlers) handler(batch);
+  };
+  return { cell, log, deliver };
 }

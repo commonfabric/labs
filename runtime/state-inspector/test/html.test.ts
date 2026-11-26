@@ -4,11 +4,13 @@
 // parseable, `</script>`-safe embedded bundle.
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
 import { openSpace } from "../db.ts";
 import { buildInspectorBundle, renderInspectorHtml } from "../html.ts";
 import type { EntityDetail } from "../detail.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -200,7 +202,7 @@ function seed(path: string) {
   db.close();
 }
 
-Deno.test("html explorer: rich bundle + self-contained render", async (t) => {
+test("html explorer: rich bundle + self-contained render", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-html-" });
   const dbPath = `${dir}/space.sqlite`;
   try {
@@ -350,6 +352,77 @@ Deno.test("html explorer: rich bundle + self-contained render", async (t) => {
           assertStringIncludes(html, "&lt;img src=x onerror");
         },
       );
+
+      await t.step(
+        "an entity two identities wrote carries its stale-read analysis",
+        () => {
+          const writable = new Database(dbPath);
+          try {
+            const commit = writable.prepare(
+              `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+               VALUES (?, ?, 1, ?, '{}')`,
+            );
+            const rev = writable.prepare(
+              `INSERT INTO revision (id, seq, op_index, op, data, commit_seq)
+               VALUES ('of:contested', ?, 0, 'set', '{"value":1}', ?)`,
+            );
+            const read = (seq: number) =>
+              JSON.stringify({
+                reads: {
+                  confirmed: [{ id: "of:contested", path: [], seq }],
+                  pending: [],
+                },
+              });
+            commit.run(20, "session:did:key:zAlice:a", "{}");
+            rev.run(20, 20);
+            commit.run(21, "session:did:key:zAlice:a", "{}");
+            rev.run(21, 21);
+            // Bob read the entity at 20 and committed without seeing 21.
+            commit.run(22, "session:did:key:zBob:b", read(20));
+            rev.run(22, 22);
+          } finally {
+            writable.close();
+          }
+          const contested = buildInspectorBundle(space).conflicts.find((c) =>
+            c.id === "of:contested"
+          );
+          expect(contested).toMatchObject({
+            multiUser: true,
+            staleReadsAnalyzed: true,
+          });
+          expect(contested?.staleReads?.map((r) => r.missedWriteSeq)).toEqual(
+            [21],
+          );
+        },
+      );
+    } finally {
+      space.close();
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+test("html explorer: no pass over the log for stale reads when no cell is multi-user", async () => {
+  // The seed's writes all come from one session, so no cell gets a stale-read
+  // analysis and nothing needs the log's read coverage.
+  const dir = await Deno.makeTempDir({ prefix: "state-inspector-html-" });
+  const dbPath = `${dir}/space.sqlite`;
+  try {
+    seed(dbPath);
+    const space = openSpace(dbPath);
+    try {
+      let scans = 0;
+      const prepare = space.db.prepare.bind(space.db);
+      space.db.prepare = ((sql: string) => {
+        if (sql.includes(`'$.compaction'`)) scans++;
+        return prepare(sql);
+      }) as typeof space.db.prepare;
+
+      const bundle = buildInspectorBundle(space);
+
+      assert(bundle.conflicts.every((c) => !c.multiUser));
+      assertEquals(scans, 0);
     } finally {
       space.close();
     }

@@ -22,13 +22,14 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { isArrayWithOnlyIndexProperties } from "@commonfabric/js-values/arrays";
 import { isInertPlainObject } from "@commonfabric/js-values/objects";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { DummyLiveEnvironment } from "./fabric-instances/fixtures.ts";
 import {
+  assertAcyclicFabricValue,
   assertValidFabricValueLayer,
   convertibleJsFromFabricValue,
   deepFreeze,
@@ -37,6 +38,8 @@ import {
   FabricInstance,
   type FabricPrimitive,
   type FabricValue,
+  isDeepFrozen,
+  isValidDeepFrozenFabricValue,
   isValidFabricConvertibleJsValue,
   shallowCleanArray,
   shallowCleanPlainObject,
@@ -74,7 +77,6 @@ import {
   FabricEpochNsec,
   FabricHash,
   FabricKeyPair,
-  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
@@ -565,7 +567,6 @@ describe("convertible-js", () => {
       state: unknown;
     }
 
-    const badRegExp = { flavor: "es2025", source: "(", flags: "" };
     const badUnavailable = { reason: "error" };
     const cases: FallbackCase[] = [
       { name: "`BigInt@1`", codec: new BigIntCodec(), state: "" },
@@ -602,17 +603,11 @@ describe("convertible-js", () => {
       {
         name: "`FabricKeyPair` JSON",
         codec: FabricKeyPair[JSON_CODEC],
-        state: { algorithm: "Ed25519", publicKey: "!", privateKey: "!" },
-      },
-      {
-        name: "`FabricRegExp` JSON",
-        codec: FabricRegExp[JSON_CODEC],
-        state: badRegExp,
-      },
-      {
-        name: "`FabricRegExp` realm",
-        codec: FabricRegExp[REALM_CODEC],
-        state: badRegExp,
+        state: {
+          algorithm: "",
+          publicKey: new FabricBytes(new Uint8Array([1])),
+          privateKey: new FabricBytes(new Uint8Array([2])),
+        },
       },
       {
         name: "`FabricUnavailable` JSON",
@@ -722,7 +717,6 @@ describe("convertible-js", () => {
     const MINTED: ReadonlyArray<[string, unknown, FabricClass]> = [
       ["a `Date`", new Date(1234), FabricEpochNsec],
       ["a `Uint8Array`", new Uint8Array([1, 2, 3]), FabricBytes],
-      ["a `RegExp`", /abc/gi, FabricRegExp],
       ["an `Error`", new Error("boom"), FabricError],
       [
         "a custom `Error` subclass instance",
@@ -944,11 +938,6 @@ describe("convertible-js", () => {
         expect(result).toBeInstanceOf(FabricEpochNsec);
       });
 
-      it("converts a `RegExp` to a `FabricRegExp`", () => {
-        const result = shallowFabricFromConvertibleJsValue(/abc/gi);
-        expect(result).toBeInstanceOf(FabricRegExp);
-      });
-
       it("converts a `Uint8Array` to a `FabricBytes`", () => {
         const bytes = new Uint8Array([1, 2, 3]);
         const result = shallowFabricFromConvertibleJsValue(bytes);
@@ -1033,6 +1022,12 @@ describe("convertible-js", () => {
       it("throws for a class instance", () => {
         class Plain {}
         expect(() => shallowFabricFromConvertibleJsValue(new Plain())).toThrow(
+          "not a recognized fabric type",
+        );
+      });
+
+      it("throws for a `RegExp`", () => {
+        expect(() => shallowFabricFromConvertibleJsValue(/abc/gi)).toThrow(
           "not a recognized fabric type",
         );
       });
@@ -2147,6 +2142,37 @@ describe("convertible-js", () => {
         expect(() => fabricFromConvertibleJsValue(Symbol("bad"))).toThrow(
           "Not representable as a `FabricValue`: unique (uninterned) symbol",
         );
+      });
+    });
+
+    describe("the frozen and acyclic checks of its result", () => {
+      it("accept a result built from mutable input, sparse arrays, `null`, and `FabricPrimitive`s included", () => {
+        const sparse: unknown[] = [];
+        sparse[0] = { n: null };
+        sparse[2] = new Date(0);
+        const result = fabricFromConvertibleJsValue({
+          list: sparse,
+          nested: [[1, "two"], { three: 3n }],
+        });
+        expect(isValidDeepFrozenFabricValue(result)).toBe(true);
+        expect(() => assertAcyclicFabricValue(result)).not.toThrow();
+      });
+
+      it("refuse a result that shares a frozen cycle, from an object or an array", () => {
+        const cyclic: Record<string, FabricValue> = {};
+        cyclic.self = cyclic;
+        deepFreeze(cyclic);
+        for (const input of [{ cyclic }, [cyclic], { inner: [{ cyclic }] }]) {
+          const result = fabricFromConvertibleJsValue(input);
+          expect(() => assertAcyclicFabricValue(result)).toThrow(/cyclic/);
+        }
+      });
+
+      it("refuse a result that holds an unfrozen instance", () => {
+        const instance = new UnknownValue("Test@1", { n: 1 });
+        const result = fabricFromConvertibleJsValue([{ instance }]);
+        expect(isDeepFrozen(result)).toBe(false);
+        expect(isValidDeepFrozenFabricValue(result)).toBe(false);
       });
     });
 

@@ -4,10 +4,11 @@ import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 import { BASE58_ALPHABET } from "@commonfabric/memory/v2/routed-directory";
+import { test } from "@commonfabric/test-support/test";
 import { identity } from "@/lib/identity.ts";
 import { MemoryRouterPolicy } from "@/routes/storage/memory-router.ts";
 
-Deno.test("private Memory policy refuses public/wildcard addresses and unknown ownership", async () => {
+test("private Memory policy refuses public/wildcard addresses and unknown ownership", async () => {
   const router = await Identity.fromRaw(new Uint8Array(32).fill(17));
   const space = await Identity.fromRaw(new Uint8Array(32).fill(18));
   const root = Deno.makeTempDirSync();
@@ -84,6 +85,12 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
       ]
     ) {
       write({ ...config, hostname });
+      assertThrows(() => new MemoryRouterPolicy(path));
+    }
+    write({ ...config, port: 0 });
+    expect(new MemoryRouterPolicy(path).config.port).toBe(0);
+    for (const port of [-1, 65536, 8444.5]) {
+      write({ ...config, port });
       assertThrows(() => new MemoryRouterPolicy(path));
     }
     for (const peer of ["0.0.0.0", "8.8.8.8", "10.0.0.256", "10.00.0.1"]) {
@@ -191,7 +198,7 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
   }
 });
 
-Deno.test("private Memory policy places unlisted spaces by the directory's rule", async () => {
+test("private Memory policy places unlisted spaces by the directory's rule", async () => {
   const router = await Identity.fromRaw(new Uint8Array(32).fill(17));
   const peer = await Identity.fromRaw(new Uint8Array(32).fill(19));
   const dids = await Promise.all(

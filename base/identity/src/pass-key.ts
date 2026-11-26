@@ -1,10 +1,9 @@
 import { Identity } from "./identity.ts";
-import { bufferSourceToArrayBuffer, random } from "./utils.ts";
+import { bytesOfBufferSource, random } from "./utils.ts";
 
 const RP = "Common Fabric";
 const PRF_SALT = new TextEncoder().encode("PRF_SALT");
 const TIMEOUT = 60_000;
-const RP_ID = () => new URL(globalThis.location.href).host;
 
 // These are algorithms to use, in order of preference.
 // We prefer ED25519 for security and size, though support
@@ -16,6 +15,23 @@ const ALGS: PublicKeyCredentialParameters[] = [
   { type: "public-key", alg: -7 }, // es256
   { type: "public-key", alg: -257 }, // rs256
 ];
+
+/**
+ * What a passkey ceremony needs from the page running it: the WebAuthn
+ * credential store, and the relying party's ID, which is the page's host.
+ */
+export interface PassKeyHost {
+  credentials: Pick<CredentialsContainer, "create" | "get">;
+  rpId: string;
+}
+
+/** The page this runs in, as a passkey ceremony sees it. */
+function browserHost(): PassKeyHost {
+  return {
+    credentials: navigator.credentials,
+    rpId: new URL(globalThis.location.href).host,
+  };
+}
 
 export interface PassKeyGetOptions {
   mediation?: "conditional";
@@ -60,7 +76,7 @@ export class PassKey {
     const extResults = this.#getCredentials().getClientExtensionResults();
     const prf = extResults?.prf?.results?.first;
     if (prf) {
-      return new Uint8Array(bufferSourceToArrayBuffer(prf));
+      return bytesOfBufferSource(prf);
     } else {
       return null;
     }
@@ -77,8 +93,14 @@ export class PassKey {
    * Different data is available within `PublicKeyCredentials` depending on
    * whether it was created or retrieved. We need the PRF assertion only
    * available on `get` requests, so we don't return a `PassKey` here.
+   *
+   * `host` is the page running the ceremony, this one unless given.
    */
-  static async create(name: string, displayName: string): Promise<PassKey> {
+  static async create(
+    name: string,
+    displayName: string,
+    host: PassKeyHost = browserHost(),
+  ): Promise<PassKey> {
     const challenge = random(32);
     const userId = random(32);
     const user = {
@@ -89,7 +111,7 @@ export class PassKey {
 
     const publicKey: PublicKeyCredentialCreationOptions = {
       challenge: challenge as BufferSource,
-      rp: { id: RP_ID(), name: RP },
+      rp: { id: host.rpId, name: RP },
       user,
       attestation: "none", // default
       authenticatorSelection: {
@@ -109,7 +131,7 @@ export class PassKey {
       timeout: TIMEOUT,
     };
 
-    const result = (await navigator.credentials.create({ publicKey })) as
+    const result = (await host.credentials.create({ publicKey })) as
       | PublicKeyCredential
       | null;
     if (!result) {
@@ -125,19 +147,23 @@ export class PassKey {
 
   /**
    * Retrieves a `PassKey` from a WebAuthn authenticator. In browsers, this
-   * must be called via a user gesture.
+   * must be called via a user gesture. `host` is the page running the
+   * ceremony, this one unless given.
    */
-  static async get({
-    userVerification,
-    mediation,
-    allowCredentials = [],
-  }: PassKeyGetOptions = {}): Promise<PassKey> {
-    // Select any credential available with the same `RP_ID`.
-    const credential = (await navigator.credentials.get({
+  static async get(
+    {
+      userVerification,
+      mediation,
+      allowCredentials = [],
+    }: PassKeyGetOptions = {},
+    host: PassKeyHost = browserHost(),
+  ): Promise<PassKey> {
+    // Select any credential available with the same relying party ID.
+    const credential = (await host.credentials.get({
       publicKey: {
         allowCredentials,
         challenge: random(32) as BufferSource,
-        rpId: RP_ID(),
+        rpId: host.rpId,
         userVerification: userVerification ?? "preferred",
         extensions: { prf: { eval: { first: PRF_SALT } } },
         timeout: TIMEOUT,

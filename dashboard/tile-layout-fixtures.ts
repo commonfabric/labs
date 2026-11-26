@@ -55,7 +55,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       hint: "every job ↗",
       href: "/ci",
       extra: jobList([
-        ["bad", "loom · Benchmarks", "failure · 3h ago"],
+        ["bad", "cfs · Benchmarks", "failure · 3h ago"],
         ["bad", "labs · CFC properties audit", "failure · 6h ago"],
         ["bad", "infra · Terraform plan", "timed_out · 1d ago"],
         ["warn", "gvisor · workflows", "unreadable"],
@@ -76,15 +76,15 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    label: "loom ci trust",
+    label: "cfs ci trust",
     view: {
       status: "warn",
       value: "73.8%",
       sub: "first-try green · last 160 runs",
-      extra: trustStrip("loom-runs", 4),
+      extra: trustStrip("cfs-runs", 4),
       duration: 30 * DAY,
       alignChartBottom: true,
-      href: "/repos?name=loom",
+      href: "/repos?name=cfs",
       hint: "repository ↗",
     },
   },
@@ -97,7 +97,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       extra: trustStrip("weaver-runs", 20),
       duration: 30 * DAY,
       alignChartBottom: true,
-      href: "/repos?name=commonfabric-weaver",
+      href: "/repos?name=weaver",
       hint: "repository ↗",
     },
   },
@@ -128,7 +128,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    label: "loom ci duration",
+    label: "cfs ci duration",
     view: {
       status: "good",
       value: "6m",
@@ -136,7 +136,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       extra: history(),
       duration: 30 * DAY,
       hint: "jobs ↗",
-      href: "/bench?repo=loom",
+      href: "/bench?repo=cfs",
     },
   },
   {
@@ -153,8 +153,9 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     label: "test selection",
     view: {
       status: "good",
-      value: "2.9%",
-      sub: "16m 48s of 9h 29m test time",
+      value: "3.8%<small> tests · </small>0.5%<small> time</small>",
+      valueLabel: "3.8% of tests, 0.5% of test time",
+      sub: "2,833 of 74,547 · 7m of 24h",
       extra: history(),
       duration: 18 * DAY,
       aside: `<span class="running"><span class="rdot"></span>running</span><span class="hfacet" title="12h old">12h old</span>`,
@@ -195,7 +196,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       extra:
         `<div class="benchmark-count" style="font-size:13px;color:var(--text-muted);margin:5px 0 0">2 benchmarks · last 10 days</div>${twoLines()}`,
       duration: 30 * DAY,
-      hint: "metrics ↗",
+      hint: "metrics ↗ · as JSON at /bench/tiles.json",
       href: "/bench?view=runtime&repo=labs",
     },
   },

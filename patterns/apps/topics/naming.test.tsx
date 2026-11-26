@@ -74,7 +74,10 @@ import Topics, {
   type TopicCrossrefRow,
   type TopicDemand,
 } from "./main.tsx";
-import Topic, { TOPIC_STATE_VERSION } from "./topic.tsx";
+import Topic, {
+  TOPIC_STATE_VERSION,
+  type TopicCrossrefIndex,
+} from "./topic.tsx";
 
 /**
  * The number badge under `node`, if one is rendered. A topic's number rides in
@@ -454,11 +457,16 @@ export default pattern(() => {
   const composerNames = new Writable<NamesMap>({});
   const composerTopics = new Writable<TopicDemand[] | Default<[]>>([]);
   const composerCrossrefs = new Writable<TopicCrossrefRow[] | Default<[]>>([]);
+  const composerCrossrefIndex = new Writable<
+    // deno-lint-ignore ban-types
+    Default<TopicCrossrefIndex, { byName: {} }>
+  >({ byName: {} });
   const composerDraft = new Writable("Composed topic");
   const composerSubmit = submitProfileTopic({
     topics: composerTopics,
     mentionable: composerTopics,
     boardCrossrefs: composerCrossrefs,
+    boardCrossrefIndex: composerCrossrefIndex,
     names: composerNames,
     newTitle: composerDraft,
     profileName: "Ada",

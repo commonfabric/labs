@@ -58,6 +58,14 @@ export const TOP_LEVEL_COMMANDS: readonly TopLevelCommand[] = [
     load: async () => (await import("./ingest.ts")).ingest,
   },
   {
+    name: "pattern",
+    description:
+      "Keep, share and publish patterns in the pattern index: each deploy " +
+      "of your own pattern is kept as a private version, with history and " +
+      "rollback.",
+    load: async () => (await import("./pattern.ts")).pattern,
+  },
+  {
     name: "piece",
     description: "Interact with pieces running on a server.",
     load: async () => (await import("./piece.ts")).piece,
@@ -90,6 +98,21 @@ export const TOP_LEVEL_COMMANDS: readonly TopLevelCommand[] = [
     name: "deps",
     description: "Manage fabric import dependencies.",
     load: async () => (await import("./deps.ts")).deps,
+  },
+  {
+    name: "index",
+    description:
+      "Join the pattern index, where patterns are kept, shared and found.",
+    load: async () => (await import("./pattern-index.ts")).index,
+  },
+  {
+    name: "fetch",
+    description:
+      "Send one request to a first-party Common Fabric service, signed as " +
+      "your identity, and print what it answers. A body, as JSON, is read " +
+      "from stdin for any method but GET and HEAD.",
+    arguments: "<url:string>",
+    load: async () => (await import("./fetch.ts")).fetchCommand,
   },
   {
     name: "inspect",
@@ -208,7 +231,8 @@ function envStatus(): string {
     // here goes wrong without going missing.
     lines.push(
       `  CF_SPACE    = ${space} (set, no need to pass --space on cell, ` +
-        `piece, wish, acl, deps, space recreate-root)`,
+        `piece, pattern share, pattern publish, wish, acl, deps, space ` +
+        `recreate-root)`,
     );
   }
   return lines.join("\n");
@@ -226,9 +250,9 @@ FIRST TIME SETUP:
   cf id new > claude.key            # Create identity key
   export CF_IDENTITY=./claude.key   # Set default identity
   export CF_API_URL=http://localhost:${ports.toolshed}  # Set default API URL
-  export CF_SPACE=my-space          # Default space for cell, piece, wish, acl,
-                                    # deps and space recreate-root
-                                    # (--space overrides)
+  export CF_SPACE=my-space          # Default space for cell, piece, pattern
+                                    # share and publish, wish, acl, deps and
+                                    # space recreate-root (--space overrides)
 
 SHELL COMPLETION:
   source <(cf completion zsh)      # add to ~/.zshrc  (bash: completion bash)

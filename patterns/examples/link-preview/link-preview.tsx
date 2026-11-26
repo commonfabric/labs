@@ -1,10 +1,28 @@
-import { computed, type Default, NAME, pattern, UI } from "commonfabric";
+/**
+ * A URL input with a rich preview of the linked page beneath it, defaulting
+ * to a GitHub address. It demonstrates the `cf-link-preview` component bound
+ * to a cell alongside a `cf-input` using `$value`.
+ */
+import {
+  computed,
+  type Default,
+  NAME,
+  pattern,
+  UI,
+  type VNode,
+} from "commonfabric";
 
 export interface LinkPreviewInput {
-  url: string | Default<"https://github.com">;
+  url?: string | Default<"https://github.com">;
 }
 
-export const LinkPreview = pattern<LinkPreviewInput, LinkPreviewInput>(
+export interface LinkPreviewOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  url: string;
+}
+
+export const LinkPreview = pattern<LinkPreviewInput, LinkPreviewOutput>(
   ({ url }) => {
     return {
       [NAME]: computed(() => `Link Preview: ${url}`),

@@ -293,10 +293,13 @@ export interface ChatRoomPolicy {
   /** Stated for the policy's shape, and read by nothing: the room keeps no activity log. */
   recentActivityWindowNsec: FabricDurationNsec;
 
-  /** How many of the newest messages `messages.latest` holds. */
+  /**
+   * How many of the newest messages `messages.latest` holds, and the most a
+   * window onto the messages holds.
+   */
   maxWindowCount: number;
 
-  /** Stated for the policy's shape, and read by nothing: the room offers no windows. */
+  /** How many windows onto the messages a session can have open at once. */
   maxOpenWindows: number;
 
   /**
@@ -434,6 +437,23 @@ export const reactionTalliesOf = (
 //
 
 /**
+ * Where a conversation stands: how many messages the room holds, and when the
+ * newest was sent.
+ */
+export interface ChatRoomActivity {
+  /**
+   * How many messages the room holds, obliterated tombstones included. The
+   * room's own count leaves out any message its reader can't read; the count
+   * a message's join carries is the length of the room's message list, which
+   * counts every message.
+   */
+  count: number;
+
+  /** The newest message's `sentAt`; absent while there are none. */
+  newestAt?: FabricEpochNsec;
+}
+
+/**
  * A room as a manager reads it: only the part of `ChatRoomOutput` the manager
  * reads through a link to the room. The links the manager stores declare
  * nothing of the room (`ChatIndexEntry.room`); this is what an event naming a
@@ -464,13 +484,7 @@ export interface ChatRoomLink {
   about?: ChatRoomAbout;
 
   /** Where the conversation stands: what of `messages` every member shares. */
-  messages?: {
-    /** How many messages the room holds, obliterated tombstones included. */
-    count: number;
-
-    /** The newest message's `sentAt`; absent while there are none. */
-    newestAt?: FabricEpochNsec;
-  };
+  messages?: ChatRoomActivity;
 
   /**
    * The profiles of those who joined the room, in the order they joined, as a
@@ -526,6 +540,14 @@ export interface ChatIndexEntry {
    * empty or not.
    */
   title?: string;
+
+  /**
+   * Where the room's conversation stood as the manager last heard: when this
+   * user last visited or joined the room, or last sent a message in it.
+   * Absent until the manager first hears. Another member's message changes it
+   * only once this user next visits the room.
+   */
+  activity?: ChatRoomActivity;
 
   /**
    * The opaque revision supplied by `rooms` for its membership or discovery

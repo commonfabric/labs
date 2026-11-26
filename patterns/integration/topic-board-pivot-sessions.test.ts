@@ -7,12 +7,12 @@
  * other session reads it empty. Each case starts from a board whose pivot is
  * bound as `crossrefs` over a document holding such a link, the state a
  * deployed board is in, and whose topics bind their backlinks as
- * `referencedBy`.
+ * `referencedBy`. A deployed board computes no index of its pivot, so neither
+ * does that board, and its topics hold no link to one.
  */
 
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { pieceId } from "@commonfabric/piece";
@@ -33,6 +33,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const BOARD_PATH = fromFileUrl(
   new URL("../apps/topics/main.tsx", import.meta.url),
@@ -69,6 +75,27 @@ const BOARD_READ = {
   },
 } as const satisfies JSONSchema;
 
+/** The board's result, read for its index's buckets. */
+const INDEX_READ = {
+  type: "object",
+  properties: {
+    crossrefIndex: {
+      type: "object",
+      properties: {
+        byName: {
+          type: "object",
+          additionalProperties: {
+            type: "array",
+            items: { type: "object", properties: { topic: TITLED } },
+          },
+          default: {},
+        },
+      },
+      default: {},
+    },
+  },
+} as const satisfies JSONSchema;
+
 /** A topic's result, read for the topics that mention it. */
 const TOPIC_READ = {
   type: "object",
@@ -92,6 +119,10 @@ interface BoardRead {
 
 interface TopicRead {
   referencedBy: Titled[];
+}
+
+interface IndexRead {
+  crossrefIndex: { byName: Record<string, { topic?: Titled }[]> };
 }
 
 type Session = Awaited<ReturnType<typeof openSessionOn>>;
@@ -152,21 +183,51 @@ function storedAs(
   };
 }
 
+/** `program` with the one match of `wiring` in `file` taken out. */
+function unwired(
+  program: RuntimeProgram,
+  file: string,
+  wiring: RegExp,
+): RuntimeProgram {
+  return {
+    ...program,
+    files: program.files.map((each) => {
+      if (!file.endsWith(each.name)) return each;
+      if (each.contents.match(new RegExp(wiring, "g"))?.length !== 1) {
+        throw new Error(`${file} has no single match of ${wiring}`);
+      }
+      return { ...each, contents: each.contents.replace(wiring, "") };
+    }),
+  };
+}
+
 /**
  * The board's current source with its pivot bound as `crossrefs` and each
- * topic's backlinks bound as `referencedBy`.
+ * topic's backlinks bound as `referencedBy`, and with no index in use: the
+ * board stores its index in a document the current source does not name, and
+ * `addTopic` wires no topic to it. The current source's index is then, as on a
+ * deployed board, a document no earlier run has written.
  */
 async function deployedSource(runtime: Runtime): Promise<RuntimeProgram> {
-  return storedAs(
+  return unwired(
     storedAs(
-      await currentSource(runtime),
-      BOARD_PATH,
-      /const (\w+) = (crossrefTable\(\{ sources: topics \}\));/,
-      "crossrefs",
+      storedAs(
+        storedAs(
+          await currentSource(runtime),
+          BOARD_PATH,
+          /const (\w+) = (crossrefTable\(\{ sources: topics \}\));/,
+          "crossrefs",
+        ),
+        BOARD_PATH,
+        /const (\w+) = (crossrefIndexOf\(\{ rows: \w+ \}\));/,
+        "unusedCrossrefIndex",
+      ),
+      TOPIC_PATH,
+      /const (\w+) = (backlinksOf\(\{[^}]*\}\));/,
+      "referencedBy",
     ),
-    TOPIC_PATH,
-    /const (\w+) = (backlinksOf\(\{[^}]*\}\));/,
-    "referencedBy",
+    BOARD_PATH,
+    /\n\s*boardCrossrefIndex: crossrefIndex,(?=\n\s*\}\)\);)/,
   );
 }
 
@@ -293,7 +354,8 @@ describe("topic-board-pivot-sessions", () => {
 
   /**
    * The update in the rollout's order: the board takes the current source,
-   * then each topic is rebound to the board's `crossrefs` output and, when
+   * then each topic is rebound to the board's `crossrefs` output, and to its
+   * `crossrefIndex` output when `bindIndex` is set, and, when
    * `topicsTakeSource` is set, takes the current topic source, without being
    * started.
    */
@@ -301,7 +363,10 @@ describe("topic-board-pivot-sessions", () => {
     { writer, board, alpha, beta }: Awaited<
       ReturnType<typeof boardOverSessionRedirect>
     >,
-    topicsTakeSource: boolean,
+    { topicsTakeSource, bindIndex = false }: {
+      topicsTakeSource: boolean;
+      bindIndex?: boolean;
+    },
   ) => {
     await board.setPattern(await currentSource(writer.runtime));
     const topicSource = await currentSource(writer.runtime, TOPIC_PATH);
@@ -313,6 +378,15 @@ describe("topic-board-pivot-sessions", () => {
         ["boardCrossrefs"],
         { start: false },
       );
+      if (bindIndex) {
+        await writer.pieces.link(
+          board.id,
+          ["crossrefIndex"],
+          pieceId(topic)!,
+          ["boardCrossrefIndex"],
+          { start: false },
+        );
+      }
       if (topicsTakeSource) {
         const controller = await writer.pieces.get(pieceId(topic)!, false);
         await controller.setPattern(topicSource);
@@ -375,7 +449,7 @@ describe("topic-board-pivot-sessions", () => {
     // without being started. Alpha first runs after that rebinding.
 
     const setup = await boardOverSessionRedirect();
-    await update(setup, false);
+    await update(setup, { topicsTakeSource: false });
     await runTopic(setup.writer, setup.alpha);
 
     expect(await readInFreshSession(setup.board, setup.alpha)).toEqual({
@@ -390,7 +464,7 @@ describe("topic-board-pivot-sessions", () => {
     // the fresh session misses is there to be read.
 
     const setup = await topicOverSessionRedirect();
-    await update(setup, false);
+    await update(setup, { topicsTakeSource: false });
     await runTopic(setup.writer, setup.alpha);
 
     expect(
@@ -411,7 +485,7 @@ describe("topic-board-pivot-sessions", () => {
 
   it("gives a fresh session the inbound reference of a topic that ran over the redirect once the topic takes the current source", async () => {
     const setup = await topicOverSessionRedirect();
-    await update(setup, true);
+    await update(setup, { topicsTakeSource: true });
     await runTopic(setup.writer, setup.alpha);
 
     expect(await readInFreshSession(setup.board, setup.alpha)).toEqual({
@@ -419,5 +493,174 @@ describe("topic-board-pivot-sessions", () => {
       rows: ROWS,
       referencedBy: ["Beta"],
     });
+  });
+
+  it("gives a fresh session the board's index and the inbound reference of a topic that ran over the redirect once the topic takes the current source and is bound to the index", async () => {
+    // The lookup now reads the index as well as the pivot, and a run stores
+    // its result at the narrowest scope it read, so this holds only while the
+    // index is stored at space scope, where the fresh session reads it below.
+
+    const setup = await topicOverSessionRedirect();
+    await update(setup, { topicsTakeSource: true, bindIndex: true });
+    await runTopic(setup.writer, setup.alpha);
+
+    expect(await readInFreshSession(setup.board, setup.alpha)).toEqual({
+      topics: ["Alpha", "Beta"],
+      rows: ROWS,
+      referencedBy: ["Beta"],
+    });
+    const { runtime } = await openSession();
+    const indexRead = runtime.getCellFromLink<IndexRead>(
+      setup.board.getCell().getAsNormalizedFullLink(),
+      INDEX_READ,
+    );
+    await indexRead.sync();
+    await runtime.storageManager.synced();
+    const { byName } = indexRead.get().crossrefIndex;
+    expect(
+      Object.fromEntries(
+        Object.entries(byName).map((
+          [name, bucket],
+        ) => [name, bucket.map((row) => row.topic?.title)]),
+      ),
+    ).toEqual({ "1": ["Alpha"], "2": ["Beta"] });
+  });
+});
+
+/**
+ * What a session that reads a topic loads of the other topics. The pivot's
+ * rows reach every topic, so a read that followed a row's references would
+ * load every topic's piece. Two reads are held to it: a topic's input under
+ * the argument schema its piece links it with, which is how `cf piece call`
+ * and `cf piece step` read it, and the pivot under the schema the backlinks
+ * lookup declares, which is what loading the pivot for the lookup costs.
+ */
+describe("topic-board-pivot-reads", () => {
+  let server: ReturnType<typeof newLoopbackServer>;
+  let opened: Session[];
+
+  beforeEach(() => {
+    server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+    opened = [];
+  });
+  afterEach(async () => {
+    for (const { runtime, storage } of opened) {
+      await runtime.dispose();
+      await storage.close();
+    }
+    await server.close();
+  });
+
+  const openSession = async (): Promise<Session> => {
+    const session = await openSessionOn(server);
+    opened.push(session);
+    return session;
+  };
+
+  /**
+   * A board on the current source holding four topics, Beta mentioning Alpha
+   * and Delta mentioning Gamma, with its pivot and index computed.
+   */
+  const boardOfFour = async () => {
+    const writer = await openSession();
+    const board = await writer.pieces.create(
+      await currentSource(writer.runtime),
+      { input: {} },
+    );
+    await writer.runtime.idle();
+    const result = board.getCell() as Cell<Record<string, unknown>>;
+    for (const title of ["Alpha", "Beta", "Gamma", "Delta"]) {
+      await result.key("addTopic").pull();
+      result.key("addTopic").send({ title, agentName: "Fixture" });
+      await writer.runtime.idle();
+    }
+    const [alpha, beta, gamma, delta] = result.asSchema(TOPIC_CELLS).key(
+      "topics",
+    ).get() as unknown as Cell<Record<string, unknown>>[];
+    for (const [source, target] of [[beta, alpha], [delta, gamma]]) {
+      await source.key("mention").pull();
+      source.key("mention").send({ topic: target });
+      await writer.runtime.idle();
+    }
+    await result.key("crossrefs").pull();
+    await result.key("crossrefIndex").pull();
+    await writer.runtime.idle();
+    await writer.pieces.synced();
+    return { writer, alpha, beta, gamma, delta };
+  };
+
+  /** Which of `topics`' pieces `session` holds a document for. */
+  const piecesHeld = (session: Session, topics: Cell<unknown>[]) => {
+    // Without reading through to the server, as `getDocument` does on a miss.
+    const replica = session.runtime.storageManager.open(space)
+      .replica as unknown as { confirmedDocumentSeq(id: string): number };
+    return topics.filter((topic) =>
+      replica.confirmedDocumentSeq(`of:${pieceId(topic)!}`) > 0
+    ).map((topic) => (topic.get() as Titled).title);
+  };
+
+  /**
+   * The schema the backlinks lookup (`backlinksOf`) reads the pivot under,
+   * taken from the current topic source as compiled: the lift whose
+   * parameters are `table`, `index` and `self`.
+   */
+  const backlinksTableSchema = async (session: Session) => {
+    const topic = await session.runtime.patternManager.compilePattern(
+      await currentSource(session.runtime, TOPIC_PATH),
+      { space },
+    );
+    const lookups = topic.nodes.flatMap((node) => {
+      const schema = (node.module as { argumentSchema?: JSONSchema })
+        .argumentSchema;
+      const properties = typeof schema === "object"
+        ? schema.properties
+        : undefined;
+      return properties?.table !== undefined &&
+          properties.index !== undefined && properties.self !== undefined
+        ? [schema as Exclude<JSONSchema, boolean>]
+        : [];
+    });
+    if (lookups.length !== 1) {
+      throw new Error(`the topic has ${lookups.length} backlinks lookups`);
+    }
+    const [lookup] = lookups;
+    return {
+      ...(lookup.properties!.table as Exclude<JSONSchema, boolean>),
+      ...(lookup.$defs === undefined ? {} : { $defs: lookup.$defs }),
+    } as JSONSchema;
+  };
+
+  it("reads a topic's input without loading another topic's piece", async () => {
+    const { alpha, beta, gamma, delta } = await boardOfFour();
+    const argument = parseLink(alpha.getMetaRaw("argument"), alpha);
+    if (argument === undefined) throw new Error("Alpha has no argument link");
+
+    const reader = await openSession();
+    const input = reader.runtime.getCellFromLink<unknown>(argument);
+    await input.sync();
+    await reader.runtime.storageManager.synced();
+
+    expect(piecesHeld(reader, [beta, gamma, delta])).toEqual([]);
+  });
+
+  it("reads the pivot for a topic's backlinks without loading a topic's piece", async () => {
+    // What the lookup's declaration of the rows costs a session that loads
+    // the pivot for it. With the lift's `mentionedBy` reverted to `unknown[]`
+    // by hand, this read loaded Beta and Delta, the two topics that mention
+    // another.
+    const { alpha, beta, gamma, delta } = await boardOfFour();
+    const argument = parseLink(alpha.getMetaRaw("argument"), alpha);
+    if (argument === undefined) throw new Error("Alpha has no argument link");
+
+    const reader = await openSession();
+    const table = reader.runtime.getCellFromLink<unknown>({
+      ...argument,
+      path: [...argument.path, "boardCrossrefs"],
+      schema: await backlinksTableSchema(reader),
+    });
+    await table.sync();
+    await reader.runtime.storageManager.synced();
+
+    expect(piecesHeld(reader, [alpha, beta, gamma, delta])).toEqual([]);
   });
 });

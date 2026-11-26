@@ -16,8 +16,8 @@ import { responsesBodyFromChatFixture } from "../support/responses-fixture.ts";
 import { startCommandHost } from "../support/command-host.ts";
 import { openLegacySpace } from "../support/legacy-space.ts";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   parentToolIdsForBacking,

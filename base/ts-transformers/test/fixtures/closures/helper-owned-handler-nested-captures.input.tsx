@@ -1,16 +1,9 @@
 /**
  * TRANSFORM REPRO: helper-owned handler with nested callback captures
  *
- * Compare on main vs transformer branch:
- *   deno task cf check patterns/dev/gideon-tests/test-helper-owned-handler-nested-captures.tsx --show-transformed --no-run
- *
- * Expected main shape:
- * - generated handler state includes `fileId`, `content`, `savedContent`, and
- *   `onSaveFile`
- *
- * Current branch bug:
- * - generated handler state omits captures that the handler body still uses
- *   inside the nested `.then(...)` callback
+ * The generated handler state includes `fileId`, `content`, `savedContent`, and
+ * `onSaveFile`, which the handler body uses only inside the nested `.then(...)`
+ * callback.
  */
 
 import { action, Default, pattern, Stream, Writable } from "commonfabric";

@@ -1,11 +1,11 @@
 import { booleanSchema } from "@commonfabric/runner/schemas";
-import type { CellHandle } from "@commonfabric/runtime-client";
+import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
-import { ifDefined } from "lit/directives/if-defined.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createBooleanCellController } from "../../core/cell-controller.ts";
 import { createFormFieldController } from "../../core/form-field-controller.ts";
+import { HostActivationController } from "../../core/host-activation-controller.ts";
 
 /**
  * CFCheckbox - Binary selection input with support for indeterminate state
@@ -14,8 +14,6 @@ import { createFormFieldController } from "../../core/form-field-controller.ts";
  *
  * @attr {boolean|CellHandle<boolean>} checked - Whether the checkbox is checked (supports both plain boolean and CellHandle<boolean>)
  * @attr {boolean} disabled - Whether the checkbox is disabled
- * @attr {string} name - Name attribute for form submission
- * @attr {string} value - Value attribute for form submission
  * @attr {boolean} required - Whether the checkbox is required
  * @attr {boolean} indeterminate - Whether the checkbox is in indeterminate state
  *
@@ -24,7 +22,7 @@ import { createFormFieldController } from "../../core/form-field-controller.ts";
  * @fires cf-change - Fired on change with detail: { checked, indeterminate }
  *
  * @example
- * <cf-checkbox name="terms" checked>Accept terms</cf-checkbox>
+ * <cf-checkbox checked>Accept terms</cf-checkbox>
  *
  * @example
  * <!-- Reactive Cell binding -->
@@ -127,19 +125,6 @@ export class CFCheckbox extends BaseElement {
         display: none;
       }
 
-      /* Hidden native input for form compatibility */
-      .sr-only {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        margin: -1px;
-        overflow: hidden;
-        clip: rect(0, 0, 0, 0);
-        white-space: nowrap;
-        border-width: 0;
-      }
-
       /* Hover state */
       :host(:not([disabled]):hover) .checkbox:not(.checked):not(.indeterminate) {
         border-color: var(--primary, #0f172a);
@@ -165,16 +150,12 @@ export class CFCheckbox extends BaseElement {
       disabled: { type: Boolean, reflect: true },
       indeterminate: { type: Boolean, reflect: true },
       required: { type: Boolean, reflect: true },
-      name: { type: String },
-      value: { type: String },
     };
 
     declare checked: CellHandle<boolean> | boolean;
     declare disabled: boolean;
     declare indeterminate: boolean;
     declare required: boolean;
-    declare name: string;
-    declare value: string;
 
     private _checkedCellController = createBooleanCellController(this, {
       timing: {
@@ -208,14 +189,19 @@ export class CFCheckbox extends BaseElement {
       },
     });
 
+    #activation = new HostActivationController(this, {
+      role: "checkbox",
+      keys: [" "],
+      isDisabled: () => this.disabled,
+      activate: () => this._toggle(),
+    });
+
     constructor() {
       super();
       this.checked = false;
       this.disabled = false;
       this.indeterminate = false;
       this.required = false;
-      this.name = "";
-      this.value = "on";
     }
 
     private getChecked(): boolean {
@@ -233,9 +219,6 @@ export class CFCheckbox extends BaseElement {
       // Set host attributes before super.connectedCallback() triggers rendering.
       // Cannot be in the constructor — the custom element spec forbids
       // setAttribute during construction.
-      if (!this.hasAttribute("role")) {
-        this.setAttribute("role", "checkbox");
-      }
       if (!this.hasAttribute("exportparts")) {
         this.setAttribute("exportparts", "checkbox,checkmark");
       }
@@ -243,22 +226,11 @@ export class CFCheckbox extends BaseElement {
       this._updateAriaAttributes();
       // Bind initial checked value
       this._checkedCellController.bind(this.checked, booleanSchema);
-      // Add event listeners to the host element to make entire component clickable
-      this.addEventListener("click", this._handleClick);
-      this.addEventListener("keydown", this._handleKeydown);
     }
 
     override firstUpdated() {
       // Register with form after first render when context is available
-      this._formField.register(this.name);
-    }
-
-    override disconnectedCallback() {
-      super.disconnectedCallback();
-      // Clean up event listeners
-      this.removeEventListener("click", this._handleClick);
-      this.removeEventListener("keydown", this._handleKeydown);
-      // Controllers handle form cleanup automatically via ReactiveController
+      this._formField.register();
     }
 
     override willUpdate(
@@ -303,16 +275,6 @@ export class CFCheckbox extends BaseElement {
           <span class="checkmark" part="checkmark"></span>
         </div>
         <slot></slot>
-        <input
-          type="checkbox"
-          class="sr-only"
-          ?checked="${isChecked}"
-          ?disabled="${this.disabled}"
-          name="${ifDefined(this.name || undefined)}"
-          value="${this.value}"
-          tabindex="-1"
-          aria-hidden="true"
-        />
       `;
     }
 
@@ -322,46 +284,34 @@ export class CFCheckbox extends BaseElement {
         "aria-checked",
         this.indeterminate ? "mixed" : String(isChecked),
       );
-      this.setAttribute("aria-disabled", String(this.disabled));
-      this.tabIndex = this.disabled ? -1 : 0;
     }
 
-    private _handleClick(event: Event) {
-      if (this.disabled) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-
-      // Toggle checked state. Outside a form, the cell controller computes
-      // it from what the cell holds, asking the worker first where it has
-      // read nothing; in a form, the toggle is buffered until the form
-      // submits.
-      if (this._formField.inFormContext) {
-        this.setChecked(!this.getChecked());
-      } else {
-        void this._checkedCellController.toggle().then(() =>
-          this._updateAriaAttributes()
-        );
-      }
-
-      // Clear indeterminate state when clicked
+    private _toggle() {
+      // A click settles an indeterminate checkbox, so the change it makes
+      // reports `indeterminate: false`.
       if (this.indeterminate) {
         this.indeterminate = false;
       }
 
-      // Note: cf-change event is emitted by the cell controller's onChange callback
-    }
-
-    private _handleKeydown(event: KeyboardEvent) {
-      if (this.disabled) {
-        return;
-      }
-
-      // Handle Space key
-      if (event.key === " " || event.key === "Spacebar") {
-        event.preventDefault();
-        this._handleClick(event);
+      // In a form, the toggle is buffered until the form submits.
+      if (this._formField.inFormContext) {
+        this.setChecked(!this.getChecked());
+      } else if (isCellHandle(this.checked)) {
+        // A bound cell's toggle is computed from what the cell holds, asking
+        // the worker first where it has read nothing, and the controller's
+        // onChange fires cf-change.
+        void this._checkedCellController.toggle().then(() =>
+          this._updateAriaAttributes()
+        );
+      } else {
+        // A plain boolean is the checkbox's own property, which it flips
+        // itself. It is read from the property, not the controller, which
+        // catches up with it only on the next update.
+        this.checked = !this.checked;
+        this.emit("cf-change", {
+          checked: this.checked,
+          indeterminate: this.indeterminate,
+        });
       }
     }
   }

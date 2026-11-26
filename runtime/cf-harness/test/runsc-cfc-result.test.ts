@@ -1,5 +1,7 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 import {
   cfcResultFromRunscSidecar,
@@ -8,7 +10,7 @@ import {
 
 const command = { stdout: "out\n", stderr: "err\n", exitCode: 0 };
 
-Deno.test("cfcResultFromRunscSidecar denies an unsupported version", () => {
+test("cfcResultFromRunscSidecar denies an unsupported version", () => {
   const r = cfcResultFromRunscSidecar(
     { version: 2, containerId: "c1", cfcTaint: {} },
     "c1",
@@ -18,7 +20,7 @@ Deno.test("cfcResultFromRunscSidecar denies an unsupported version", () => {
   assertEquals(r.diagnostics?.[0]?.code, "runsc_cfc_sidecar_version");
 });
 
-Deno.test("cfcResultFromRunscSidecar denies a result for another container", () => {
+test("cfcResultFromRunscSidecar denies a result for another container", () => {
   const r = cfcResultFromRunscSidecar(
     { version: 1, containerId: "other", cfcTaint: {} },
     "c1",
@@ -32,7 +34,7 @@ Deno.test("cfcResultFromRunscSidecar denies a result for another container", () 
   assertEquals(r.diagnostics?.[0]?.details?.actualContainerId, "other");
 });
 
-Deno.test("cfcResultFromRunscSidecar denies a result with no taint", () => {
+test("cfcResultFromRunscSidecar denies a result with no taint", () => {
   const r = cfcResultFromRunscSidecar(
     { version: 1, containerId: "c1" },
     "c1",
@@ -41,7 +43,7 @@ Deno.test("cfcResultFromRunscSidecar denies a result with no taint", () => {
   assertEquals(r.diagnostics?.[0]?.code, "runsc_cfc_sidecar_missing_taint");
 });
 
-Deno.test("cfcResultFromRunscSidecar observes a public taint and withholds a confidential one", () => {
+test("cfcResultFromRunscSidecar observes a public taint and withholds a confidential one", () => {
   const pub = cfcResultFromRunscSidecar(
     {
       version: 1,
@@ -93,7 +95,7 @@ Deno.test("cfcResultFromRunscSidecar observes a public taint and withholds a con
   );
 });
 
-Deno.test("deniedCfcResult denies every channel with the reason", () => {
+test("deniedCfcResult denies every channel with the reason", () => {
   const r = deniedCfcResult("code_x", "why", { k: "v" });
   assertEquals(r.stdout.policy, "denied");
   assertEquals(r.stderr.policy, "denied");
@@ -101,7 +103,7 @@ Deno.test("deniedCfcResult denies every channel with the reason", () => {
   assertEquals(r.diagnostics?.[0]?.details?.k, "v");
 });
 
-Deno.test("cfcResultFromRunscSidecar denies a malformed taint rather than reading it as public", () => {
+test("cfcResultFromRunscSidecar denies a malformed taint rather than reading it as public", () => {
   for (
     const cfcTaint of [
       {},
@@ -280,7 +282,7 @@ const verdictOf = (cfcTaint: unknown): Verdict => {
   return r.stdout.policy;
 };
 
-Deno.test("cfcResultFromRunscSidecar verdict table, direct runsc driver", () => {
+test("cfcResultFromRunscSidecar verdict table, direct runsc driver", () => {
   for (const row of VERDICT_TABLE) {
     assertEquals(
       verdictOf(row.cfcTaint),
@@ -314,7 +316,7 @@ const mainIsPublicRunscTaint = (
   return stringValue.length === 0 || stringValue === "{}";
 };
 
-Deno.test("cfcResultFromRunscSidecar observes nothing main withheld", () => {
+test("cfcResultFromRunscSidecar observes nothing main withheld", () => {
   let observedRows = 0;
   let mainPublicRows = 0;
   for (const row of VERDICT_TABLE) {
@@ -340,7 +342,7 @@ Deno.test("cfcResultFromRunscSidecar observes nothing main withheld", () => {
   assertEquals(mainIsPublicRunscTaint({ string: EMPTY }), false);
 });
 
-Deno.test("cfcResultFromRunscSidecar names the container id in a mismatch", () => {
+test("cfcResultFromRunscSidecar names the container id in a mismatch", () => {
   assertEquals(
     cfcResultFromRunscSidecar(
       { version: 1, containerId: "other", cfcTaint: {} },
@@ -351,7 +353,7 @@ Deno.test("cfcResultFromRunscSidecar names the container id in a mismatch", () =
   );
 });
 
-Deno.test("cfcResultFromRunscSidecar carries the readable part of a withheld label", () => {
+test("cfcResultFromRunscSidecar carries the readable part of a withheld label", () => {
   const r = cfcResultFromRunscSidecar(
     {
       version: 1,
@@ -366,4 +368,26 @@ Deno.test("cfcResultFromRunscSidecar carries the readable part of a withheld lab
   );
   assertEquals(r.stdout.policy, "opaque");
   assertEquals(r.stdout.label, { integrity: [{ subject: "did:key:bob" }] });
+});
+
+describe("runsc-cfc-result", () => {
+  describe("cfcResultFromRunscSidecar()", () => {
+    it("denies a result whose container id is not a string, naming the actual id as empty", () => {
+      for (const containerId of [undefined, 42, ["c1"]]) {
+        const r = cfcResultFromRunscSidecar(
+          { version: 1, containerId, cfcTaint: {} },
+          "c1",
+          command,
+        );
+        expect(r.stdout.policy).toBe("denied");
+        expect(r.diagnostics?.[0]?.code).toBe(
+          "runsc_cfc_sidecar_container_mismatch",
+        );
+        expect(r.diagnostics?.[0]?.details).toEqual({
+          expectedContainerId: "c1",
+          actualContainerId: "",
+        });
+      }
+    });
+  });
 });

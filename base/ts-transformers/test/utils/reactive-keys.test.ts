@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { cloneKeyExpression } from "../../src/utils/reactive-keys.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("reactive-keys", () => {
   describe("cloneKeyExpression()", () => {

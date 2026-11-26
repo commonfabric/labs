@@ -7,13 +7,22 @@ import {
   assertThrows,
 } from "@std/assert";
 import { encodeBase64 } from "@std/encoding/base64";
+import { expect } from "@std/expect";
 import { join } from "@std/path";
 import {
   createHarnessImageAttachment,
   decodeHarnessInlineImage,
   isRelativePathWithinWorkspace,
   materializeImageAttachmentContentPart,
+  parseImageAttachmentPaths,
 } from "../src/image-attachments.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const pngBytes = (...payload: number[]): Uint8Array =>
@@ -22,7 +31,7 @@ const pngBytes = (...payload: number[]): Uint8Array =>
 const dataUrl = (bytes: Uint8Array): string =>
   `data:image/png;base64,${encodeBase64(bytes)}`;
 
-Deno.test("inline images reject noncanonical padding bits for the same bytes", () => {
+test("inline images reject noncanonical padding bits for the same bytes", () => {
   assertEquals(
     decodeHarnessInlineImage({
       mediaType: "image/png",
@@ -50,7 +59,7 @@ const makeWorkspaceImage = async (
   return { workspace, imagePath };
 };
 
-Deno.test("isRelativePathWithinWorkspace rejects escaped and absolute relative results", () => {
+test("isRelativePathWithinWorkspace rejects escaped and absolute relative results", () => {
   const cases: Array<[string, boolean]> = [
     ["", true],
     ["capture.png", true],
@@ -70,7 +79,7 @@ Deno.test("isRelativePathWithinWorkspace rejects escaped and absolute relative r
   }
 });
 
-Deno.test("snapshot attachment survives regeneration of the source image", async () => {
+test("snapshot attachment survives regeneration of the source image", async () => {
   const original = pngBytes(1, 2, 3);
   const { workspace, imagePath } = await makeWorkspaceImage(original);
   const snapshotDir = join(await Deno.makeTempDir(), "image-attachments");
@@ -95,7 +104,7 @@ Deno.test("snapshot attachment survives regeneration of the source image", async
   );
 });
 
-Deno.test("identical re-view reuses the content-addressed snapshot file", async () => {
+test("identical re-view reuses the content-addressed snapshot file", async () => {
   const bytes = pngBytes(4, 5, 6);
   const { workspace, imagePath } = await makeWorkspaceImage(bytes);
   const snapshotDir = join(await Deno.makeTempDir(), "image-attachments");
@@ -127,7 +136,7 @@ Deno.test("identical re-view reuses the content-addressed snapshot file", async 
   assertNotEquals(first.snapshotPath, changed.snapshotPath);
 });
 
-Deno.test("without a snapshot dir, source mutation still fails closed", async () => {
+test("without a snapshot dir, source mutation still fails closed", async () => {
   const { workspace, imagePath } = await makeWorkspaceImage(pngBytes(1));
 
   const attachment = await createHarnessImageAttachment({
@@ -146,7 +155,7 @@ Deno.test("without a snapshot dir, source mutation still fails closed", async ()
   );
 });
 
-Deno.test("tampered snapshot fails closed with a snapshot-specific error", async () => {
+test("tampered snapshot fails closed with a snapshot-specific error", async () => {
   const { workspace, imagePath } = await makeWorkspaceImage(pngBytes(3, 1));
   const snapshotDir = join(await Deno.makeTempDir(), "image-attachments");
 
@@ -168,7 +177,7 @@ Deno.test("tampered snapshot fails closed with a snapshot-specific error", async
   );
 });
 
-Deno.test("snapshot file extension follows the detected media type", async () => {
+test("snapshot file extension follows the detected media type", async () => {
   const cases: Array<{
     bytes: Uint8Array;
     mediaType: string;
@@ -227,7 +236,7 @@ Deno.test("snapshot file extension follows the detected media type", async () =>
   }
 });
 
-Deno.test("a snapshot dir blocked by a regular file surfaces the stat error itself", async () => {
+test("a snapshot dir blocked by a regular file surfaces the stat error itself", async () => {
   const { workspace, imagePath } = await makeWorkspaceImage(pngBytes(5));
   const snapshotDir = join(await Deno.makeTempDir(), "image-attachments");
   await Deno.writeTextFile(snapshotDir, "not a directory");
@@ -244,7 +253,7 @@ Deno.test("a snapshot dir blocked by a regular file surfaces the stat error itse
   );
 });
 
-Deno.test("a missing source without a snapshot surfaces the original NotFound", async () => {
+test("a missing source without a snapshot surfaces the original NotFound", async () => {
   const { workspace, imagePath } = await makeWorkspaceImage(pngBytes(8));
 
   const attachment = await createHarnessImageAttachment({
@@ -261,7 +270,7 @@ Deno.test("a missing source without a snapshot surfaces the original NotFound", 
   );
 });
 
-Deno.test("missing snapshot fails closed with a clear error", async () => {
+test("missing snapshot fails closed with a clear error", async () => {
   const { workspace, imagePath } = await makeWorkspaceImage(pngBytes(6));
   const snapshotDir = join(await Deno.makeTempDir(), "image-attachments");
 
@@ -279,4 +288,118 @@ Deno.test("missing snapshot fails closed with a clear error", async () => {
     Error,
     "image attachment snapshot missing",
   );
+});
+
+describe("image-attachments", () => {
+  describe("parseImageAttachmentPaths()", () => {
+    it("returns no paths where no `--image` was given", () => {
+      expect(parseImageAttachmentPaths(undefined)).toEqual([]);
+      expect(parseImageAttachmentPaths([])).toEqual([]);
+    });
+
+    it("returns every comma-separated path of every value, trimmed", () => {
+      expect(parseImageAttachmentPaths("a.png, b.jpg")).toEqual([
+        "a.png",
+        "b.jpg",
+      ]);
+      expect(parseImageAttachmentPaths(["a.png,", " c.gif "])).toEqual([
+        "a.png",
+        "c.gif",
+      ]);
+    });
+
+    it("throws where the values name no path at all", () => {
+      for (const input of ["", " , ", ["", ","]]) {
+        expect(() => parseImageAttachmentPaths(input)).toThrow(
+          "--image requires a non-empty path",
+        );
+      }
+    });
+  });
+
+  describe("createHarnessImageAttachment()", () => {
+    let workspace: string;
+
+    beforeEach(async () => {
+      workspace = await Deno.realPath(await Deno.makeTempDir());
+    });
+
+    afterEach(async () => {
+      await Deno.remove(workspace, { recursive: true });
+    });
+
+    const attach = (path: string) =>
+      createHarnessImageAttachment({
+        workspaceHostPath: workspace,
+        cwd: workspace,
+        path,
+      });
+
+    it("throws for an image outside the workspace", async () => {
+      const elsewhere = await Deno.makeTempDir();
+      try {
+        const imagePath = join(elsewhere, "render.png");
+        await Deno.writeFile(imagePath, pngBytes(1));
+        await expect(attach(imagePath)).rejects.toThrow(
+          "--image paths must stay within the workspace",
+        );
+      } finally {
+        await Deno.remove(elsewhere, { recursive: true });
+      }
+    });
+
+    it("throws for a directory", async () => {
+      await Deno.mkdir(join(workspace, "shots.png"));
+      await expect(attach("shots.png")).rejects.toThrow(
+        "--image path is not a file: shots.png",
+      );
+    });
+
+    it("throws for an empty file", async () => {
+      await Deno.writeFile(join(workspace, "empty.png"), new Uint8Array());
+      await expect(attach("empty.png")).rejects.toThrow(
+        "--image path is empty: empty.png",
+      );
+    });
+
+    it("throws for a file larger than an attachment may be, and not for one at the limit", async () => {
+      const limit = 20 * 1024 * 1024;
+      const bytes = new Uint8Array(limit + 1);
+      bytes.set(PNG_SIGNATURE);
+      await Deno.writeFile(join(workspace, "huge.png"), bytes);
+      await expect(attach("huge.png")).rejects.toThrow(
+        `--image path is too large (${
+          limit + 1
+        } bytes, max ${limit}): huge.png`,
+      );
+      await Deno.writeFile(
+        join(workspace, "max.png"),
+        bytes.subarray(0, limit),
+      );
+      expect((await attach("max.png")).bytes).toBe(limit);
+    });
+
+    it("throws for a file whose bytes and name are both no image's", async () => {
+      await Deno.writeTextFile(join(workspace, "notes.txt"), "hello");
+      await expect(attach("notes.txt")).rejects.toThrow(
+        "--image path is not a supported image type: notes.txt",
+      );
+    });
+
+    it("returns the media type an image's name gives where its bytes carry no known signature", async () => {
+      const unsigned = new TextEncoder().encode("not a known signature");
+      for (
+        const [name, mediaType] of [
+          ["a.gif", "image/gif"],
+          ["b.jpeg", "image/jpeg"],
+          ["c.JPG", "image/jpeg"],
+          ["d.png", "image/png"],
+          ["e.webp", "image/webp"],
+        ]
+      ) {
+        await Deno.writeFile(join(workspace, name), unsigned);
+        expect((await attach(name)).mediaType).toBe(mediaType);
+      }
+    });
+  });
 });

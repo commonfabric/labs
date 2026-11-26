@@ -285,10 +285,13 @@ export function findInternalTarget(
   return undefined;
 }
 
-function normalizeSource(contents: string): string {
-  // Identity is over authored source; the only normalization is line endings,
-  // so a CRLF/LF difference does not change a module's hash. Data files are
-  // excluded from this: their bytes are content, not source text.
+/**
+ * Returns `contents` as a module's identity hashes it. Identity is over
+ * authored source, and the only normalization is line endings, so a CRLF/LF
+ * difference does not change a module's hash. Data files are excluded from
+ * this: their bytes are content, not source text.
+ */
+export function normalizeSource(contents: string): string {
   return contents.replace(/\r\n/g, "\n");
 }
 

@@ -1,6 +1,7 @@
 import { Command } from "@cliffy/command";
 import { cliText } from "../lib/cli-name.ts";
 import { render } from "../lib/render.ts";
+import { pairWithService } from "../lib/pairing.ts";
 import {
   getDidFromFile,
   pkcs8FromEntropy,
@@ -26,6 +27,34 @@ export const identity = new Command()
     "Outputs the DID of ./my.key to stdout.",
   )
   .action(getDid)
+  /* id pair */
+  .command(
+    "pair <service:string> <keypath:string>",
+    "Become the identity a Common Fabric Service holds, as another of your " +
+      "devices does: redeem a pairing code from Weaver's Settings > Pair a " +
+      "device, read from stdin, and keep the key at <keypath>, readable by " +
+      "you only. A keyfile already holding another identity is never " +
+      "replaced.",
+  )
+  .example(
+    cliText(
+      "pbpaste | cf id pair https://cfs.example.ts.net ~/.config/commonfabric/identity.key",
+    ),
+    "Pair with the code on the clipboard, keeping it out of shell history.",
+  )
+  .action(async (_: void, service: string, keypath: string) => {
+    const code = await new Response(Deno.stdin.readable).text();
+    const paired = await pairWithService({
+      service,
+      code,
+      keyfile: keypath,
+    });
+    render(
+      paired.wrote
+        ? `Paired: ${keypath} now holds ${paired.did}`
+        : `${keypath} already holds ${paired.did}; nothing changed`,
+    );
+  })
   /* id derive */
   .command(
     "derive",
@@ -106,10 +135,12 @@ async function getDid(_: void, keypath: string) {
 // process argument list (which is visible to other local processes via `ps`).
 // File and stdin input have a single trailing newline stripped so that an
 // editor- or `echo`-produced value matches the equivalent inline argument.
-async function resolveSecret(
+// `stdin` is the standard input read, `Deno.stdin` by default.
+export async function resolveSecret(
   arg: string | undefined,
   literalArgs: string[],
   label: string,
+  stdin: Pick<typeof Deno.stdin, "isTerminal" | "readable"> = Deno.stdin,
 ): Promise<string> {
   if (literalArgs.length > 0) {
     if (arg !== undefined) {
@@ -128,11 +159,11 @@ async function resolveSecret(
     );
   }
   if (arg !== undefined && arg !== "-") return arg;
-  if (Deno.stdin.isTerminal()) {
+  if (stdin.isTerminal()) {
     console.error(`Reading ${label} from stdin; type it and press Ctrl-D...`);
   }
   return requireNonEmpty(
-    stripTrailingNewline(await new Response(Deno.stdin.readable).text()),
+    stripTrailingNewline(await new Response(stdin.readable).text()),
     label,
     "stdin",
   );

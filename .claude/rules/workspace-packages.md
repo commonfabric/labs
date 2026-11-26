@@ -53,13 +53,13 @@ run with `&&` in one string gives the topology no files to point at.
 `tasks/test-topology/unit.ts` refuses to load such a member unless `RUNS_WHOLE`
 lists it with its reason.
 
-This is not a tidiness rule. The root test runner (`tasks/test.ts`) walks every
-workspace member and runs `deno task test` in each. A member with no `test`
-task falls through to the root workspace's task, which is the whole suite —
-so the suite would re-enter itself once per such package, spawning processes
-exponentially. The runner reads every member's manifest before it runs any of
-their test tasks, and refuses to start when one has no `test` entry, naming it,
-so the symptom is that message rather than a hung job.
+This is not a tidiness rule. The root test runner (`tasks/workspace-tests.ts`)
+walks every workspace member and runs `deno task test` in each. A member with
+no `test` task falls through to the root workspace's task, which is the whole
+suite — so the suite would re-enter itself once per such package, spawning
+processes exponentially. The runner reads every member's manifest before it
+runs any of their test tasks, and refuses to start when one has no `test`
+entry, naming it, so the symptom is that message rather than a hung job.
 
 What the entry has to do is resolve in the package's own directory, and two
 things follow. A `test` task defined by its `"dependencies"` alone satisfies

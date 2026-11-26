@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { EditorState } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";
@@ -6,6 +5,7 @@ import { GFM } from "@lezer/markdown";
 import { ensureSyntaxTree } from "@codemirror/language";
 import { Decoration } from "@codemirror/view";
 import { buildProseDecorations } from "./prose-markdown.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 //
 // Helpers
@@ -238,7 +238,7 @@ describe("buildProseDecorations", () => {
   });
 
   describe("blockquotes", () => {
-    it("hides > marker when inactive but always applies line decoration", () => {
+    it("hides the `>` marker when inactive but always applies line decoration", () => {
       // Cursor elsewhere: marker hidden, line class present
       const far = createState("> quote\nnext", 10);
       const farDecos = buildProseDecorations(far, true);
@@ -329,6 +329,65 @@ describe("buildProseDecorations", () => {
       const state = createState(doc, 3);
       const decos = buildProseDecorations(state, true);
       expect(hasLineClass(decos, 0, "cm-prose-table-header")).toBe(false);
+    });
+  });
+
+  describe("line break tags", () => {
+    it("replaces each <br> spelling with a widget when the cursor is elsewhere", () => {
+      const doc = "a<br>b<br/>c<BR />d\n\nnext";
+      const state = createState(doc, doc.length);
+      const decos = buildProseDecorations(state, true);
+
+      expect(hasWidget(decos, 1, 5)).toBe(true);
+      expect(hasWidget(decos, 6, 11)).toBe(true);
+      expect(hasWidget(decos, 12, 18)).toBe(true);
+    });
+
+    it("replaces a <br> with a widget that reports one line break", () => {
+      const state = createState("a<br>b", 0);
+      const decos = buildProseDecorations(state, false);
+      const drawn = decos.find((d) => d.from === 1 && d.to === 5);
+
+      expect(drawn?.value.spec?.widget?.lineBreaks).toBe(1);
+    });
+
+    it("shows a <br> as written when the cursor is inside it", () => {
+      const state = createState("a<br>b", 3);
+      const decos = buildProseDecorations(state, true);
+
+      expect(hasWidget(decos, 1, 5)).toBe(false);
+    });
+
+    it("draws a <br> as a widget when the editor is unfocused", () => {
+      const state = createState("a<br>b", 3);
+      const decos = buildProseDecorations(state, false);
+
+      expect(hasWidget(decos, 1, 5)).toBe(true);
+    });
+
+    it("leaves other inline HTML tags as written", () => {
+      const state = createState("a <span>b</span>\n\nnext", 20);
+      const decos = buildProseDecorations(state, true);
+
+      expect(decos.some((d) => d.value.spec?.widget)).toBe(false);
+    });
+
+    it("replaces a <br> in a table cell when the cursor is outside the table", () => {
+      const doc = "| A | B |\n| --- | --- |\n| x<br>y | z |\n\nnext";
+      const state = createState(doc, doc.length);
+      const decos = buildProseDecorations(state, true);
+      const br = doc.indexOf("<br>");
+
+      expect(hasWidget(decos, br, br + 4)).toBe(true);
+    });
+
+    it("shows a <br> in a table cell as written when the cursor is elsewhere in the table", () => {
+      const doc = "| A | B |\n| --- | --- |\n| x<br>y | z |\n\nnext";
+      const state = createState(doc, 3);
+      const decos = buildProseDecorations(state, true);
+      const br = doc.indexOf("<br>");
+
+      expect(hasWidget(decos, br, br + 4)).toBe(false);
     });
   });
 });

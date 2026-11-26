@@ -1,7 +1,10 @@
 import { Command } from "@cliffy/command";
 import { type ColorWhen, ViewError, viewMain } from "../lib/view/mod.ts";
 import { cliText } from "../lib/cli-name.ts";
-import { languageNames } from "../lib/view/languages/language.ts";
+import {
+  languageNames,
+  TEMPLATE_LANGUAGE_NAMES,
+} from "../lib/view/languages/language.ts";
 
 const description = cliText(
   `Interactive, syntax-aware pager for transformed patterns, source files and diffs.
@@ -10,21 +13,36 @@ A less-like viewer for the dense output of '--show-transformed' and saved source
 files. Transformed TypeScript is parsed with the same parser the transformer
 uses, so blocks, closures, schemas, type positions and Common Fabric builders
 (pattern/lift/handler/…) are colored exactly as the compiler sees them.
-Markdown, JSON, JSONC, YAML, Python, Swift, Kotlin, TOML, HCL, shell, makefile,
-Java properties, INI, ProGuard and XML files use syntax highlighting selected
-from language metadata. Kotlin covers Gradle's '.gradle.kts' build scripts, HCL
-covers OpenTofu and Terraform configuration, shell covers Bash and POSIX shell,
-makefiles color their recipes as shell, INI covers Ansible configuration and
-inventories, and XML covers Android manifests and resources, SVG and Apple
-property lists. Python interpreter shebangs select Python, 'swift' and 'xcrun
-swift' shebangs select Swift, 'kotlin' shebangs select Kotlin, 'sh', 'bash',
-'dash' and 'ash' shebangs select shell, and 'make' and 'gmake' shebangs select
-the makefile language. Node, Deno and Bun shebangs select the TypeScript and
-JavaScript language family. For a name no language claims, source that starts
-with an XML declaration ('<?xml'), after any byte order mark, selects XML.
-Known binary filenames, NUL-containing input and invalid UTF-8 select the binary
-language. Its rendered view is a read-only hex dump with control pictures for
-bytes that have no printable ASCII character.
+Markdown, JSON, JSONC, YAML, Python, Go, Swift, Kotlin, Rust, TOML, HCL,
+Starlark, Bazel rc, Lean, C, C++, CUDA, CSS, HTML, shell, makefile, Dockerfile,
+Java properties, INI, dotenv, Graphviz DOT, ProGuard, Git attributes, Git
+configuration, GNU linker script, XML, CSV, TSV, assembly and SQL files use
+syntax highlighting selected from language metadata, as do Go's 'go.mod',
+'go.work', 'go.sum' and 'go.work.sum' files, Lean's 'lean-toolchain' files, Git,
+Docker and Bazel ignore files, and '.dat' files that hold a numeric table.
+Kotlin covers Gradle's '.gradle.kts' build scripts, HCL covers OpenTofu and
+Terraform configuration, HTML colors its scripts as JavaScript or JSON and its
+style sheets as CSS, Starlark covers Bazel's BUILD, '.bzl' and '.bazel' files,
+'.bazelrc' files use the Bazel rc language, a '.h' header is colored with the
+C++ grammar unless piped with '--language c', shell covers Bash and POSIX shell,
+makefiles color their recipes as shell, Dockerfiles color the shell form of
+their commands as shell, INI covers Ansible configuration and inventories,
+dotenv covers environment files such as '.env' and '.env.example', Git
+configuration covers '.gitmodules' and '.gitconfig', linker scripts cover '.ld'
+and '.lds' files and the '.lds.S' and '.ld.S' files that the C preprocessor
+reads first, XML covers Android manifests and resources, SVG and Apple property
+lists, and SQL covers PostgreSQL, SQLite and MySQL scripts. Python interpreter
+shebangs select Python, 'swift' and 'xcrun swift' shebangs select Swift,
+'kotlin' shebangs select Kotlin, 'sh', 'bash', 'dash' and 'ash' shebangs select
+shell, and 'make' and 'gmake' shebangs select the makefile language. Node, Deno
+and Bun shebangs select the TypeScript and JavaScript language family. For a
+name no language claims, source that starts with an XML declaration ('<?xml'),
+after any byte order mark, selects XML. A Jinja ('.j2', '.jinja', '.jinja2') or
+Terraform ('.tftpl') template is colored as the language the rest of its name
+selects, with the template's own syntax colored inside it. Known binary
+filenames, NUL-containing input and invalid UTF-8 select the binary language.
+Its rendered view is a read-only hex dump with control pictures for bytes that
+have no printable ASCII character.
 Filename-free compiler output keeps TypeScript highlighting when its
 transformed-module header identifies it. Other unnamed source and named files
 with unrecognized syntax remain plain text. Piped source can select syntax
@@ -33,10 +51,14 @@ option suppresses unified-diff auto-detection; use '--diff' instead for a diff.
 The Markdown language also has a rendered view that formats headings, lists,
 quotes, tables, links, emphasis and code while retaining source line positions.
 Source views remain verbatim and add color only.
+Directive configuration covers nginx, Apache httpd, nftables, Netdata health
+alerts and sysusers.d. Logs, checksums, version files, PID files and keys are
+plain text by name.
 
 Raw unified diffs are detected automatically when their structural header is the
 first nonblank line. Standard Git commit output is detected from its complete
-header. Binary detection examines bytes; beyond shebangs and XML declarations,
+header. Binary detection examines bytes; beyond shebangs, XML declarations and
+the opening of a file whose extension several syntaxes share, such as '.conf',
 source content is not used to guess a language. Piping 'git diff' in gives added
 and removed lines their tints, full syntax color, a structure tree of the code
 each hunk touches, and the semantic features (inferred types, go-to-definition)
@@ -60,7 +82,8 @@ KEYS (press ? in the viewer for the full list):
   Enter info card · in it: ↑/↓ pick a reference · Enter opens it · z reveals it
   v source/rendered · t look up a definition · # line numbers · \\ wrap mode
   b blame: when each line last changed, and who changed it · q quit
-  P push the checked-out branch to origin and open the pull request page
+  P push the checked-out branch to origin, then handle its pull request
+  L land the branch's pull request · O settings, such as how P and L work
 
 When stdout is not a terminal (piped/redirected) it prints the colorized text
 and exits, like less.`,
@@ -100,7 +123,9 @@ export const view = new Command()
   )
   .option(
     "--language <language:string>",
-    `Select piped source explicitly: ${languageNames().join(", ")}.`,
+    `Select piped source explicitly: ${
+      languageNames().join(", ")
+    }. ${TEMPLATE_LANGUAGE_NAMES}`,
   )
   .option(
     "--filename <filename:string>",

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type HarnessToolCall,
@@ -8,6 +7,7 @@ import {
   isResumableHarnessTranscript,
 } from "../../src/contracts/transcript.ts";
 import { toResponsesInput } from "../../src/model/responses-protocol.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const call = (id: string): HarnessToolCall => ({
   id,
@@ -202,7 +202,6 @@ describe("harness transcript pairing", () => {
       transcript.slice(0, safeBoundary),
       "gpt-5",
       "openai",
-      "gateway Responses",
     );
     const calls = input.filter((item) => item.type === "function_call").map((
       item,

@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { RuntimeClient, type RuntimeClientOptions } from "@/runtime-client.ts";
 import { EventEmitter } from "@/client/emitter.ts";
@@ -135,6 +135,7 @@ describe("initialize-init-data", () => {
         concurrentWatchRefresh: true,
         awaitHealth: true,
         iframeOuterFrameUrl: "/outer-frame",
+        branches: { "did:key:zSpace": "history:example" },
       } satisfies Required<RuntimeClientOptions>;
 
       const client = await RuntimeClient.initialize(transport, options);

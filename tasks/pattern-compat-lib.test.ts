@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import type { JSONSchema } from "@commonfabric/runner";
+import { type JSONSchema, patternKeyMovesIn } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   acceptedBreakKey,
   type Baseline,
@@ -21,6 +21,7 @@ import {
 } from "./pattern-compat-lib.ts";
 import type { AcceptedContractBreak } from "./pattern-compat-accepted-breaks.ts";
 import {
+  baselineKeysByPattern,
   collectBaselineKeys,
   collectCompatibilityPaths,
 } from "./pattern-files.ts";
@@ -49,6 +50,31 @@ const RESULT_WITHOUT_TITLE: JSONSchema = {
   type: "object",
   properties: {},
 };
+
+/**
+ * A result whose `title` only the handler at `path` may write, in the module
+ * whose content hash is `moduleIdentity`.
+ */
+const writerGuardedResult = (
+  moduleIdentity: string,
+  path = "setTitle",
+): JSONSchema => ({
+  type: "object",
+  properties: {
+    title: {
+      type: "string",
+      ifc: {
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: {
+            file: "/patterns/demo/main.tsx",
+            path: [path],
+            moduleIdentity,
+          },
+        },
+      },
+    },
+  },
+});
 
 describe("checkPattern", () => {
   it("rejects a result schema that drops a previously promised field", () => {
@@ -117,6 +143,25 @@ describe("checkPattern", () => {
       path: "result.foo: bar",
       detail: "result.foo: bar: existing result field was removed",
     }]);
+  });
+
+  it("reports nothing for a contract recorded apart from its writer's module hash", () => {
+    // An edit to the module that authorizes a write, a comment included,
+    // changes the module's content hash and so every contract that names the
+    // module as a writer. The proof gives such a contract the same verdict as
+    // the one recorded, so it needs no baseline of its own.
+
+    const current = contract(EMPTY_ARGUMENT, writerGuardedResult("after"));
+    expect(
+      checkPattern("system/home/home.tsx", current, [
+        baseline("v1", EMPTY_ARGUMENT, writerGuardedResult("before")),
+      ]),
+    ).toEqual([]);
+    expect(
+      checkPattern("system/home/home.tsx", current, [
+        baseline("v1", EMPTY_ARGUMENT, writerGuardedResult("before", "other")),
+      ]).map((finding) => finding.kind),
+    ).toEqual(["missing-baseline", "incompatible"]);
   });
 
   it("reports a missing baseline for a contract no file records", () => {
@@ -198,6 +243,18 @@ describe("contractHash", () => {
     });
 
     expect(contractHash(a)).toBe(contractHash(b));
+  });
+
+  it("is the same for contracts that differ only in a writer's volatile identity", () => {
+    const a = contract(EMPTY_ARGUMENT, writerGuardedResult("before"));
+    const b = contract(EMPTY_ARGUMENT, writerGuardedResult("after"));
+
+    expect(contractHash(a)).toBe(contractHash(b));
+    expect(contractHash(a)).not.toBe(
+      contractHash(
+        contract(EMPTY_ARGUMENT, writerGuardedResult("before", "other")),
+      ),
+    );
   });
 
   it("separates contracts that differ only in the argument schema", () => {
@@ -318,6 +375,18 @@ describe("baseline store", () => {
     }
   };
 
+  it("throws when a pattern's baseline directory cannot be read", async () => {
+    await withTree(async ({ baselines }) => {
+      // A file where the pattern's directory belongs is not an absent one.
+      await Deno.mkdir(`${baselines}/system`, { recursive: true });
+      await Deno.writeTextFile(`${baselines}/system/home.tsx`, "");
+
+      await expect(readBaselines(baselines, "system/home.tsx")).rejects
+        .toThrow(Deno.errors.NotADirectory);
+      expect(await readBaselines(baselines, "system/other.tsx")).toEqual([]);
+    });
+  });
+
   it("reads back what it writes, round-tripping through the codec", async () => {
     await withTree(async ({ baselines }) => {
       const name = await writeBaseline(
@@ -419,6 +488,61 @@ describe("baseline store", () => {
         "patterns/system/gone.tsx",
         "patterns/system/removed.tsx",
       ]);
+    });
+  });
+
+  it("reads a moved pattern's baselines under every key it had, and lists it once", async () => {
+    await withTree(async ({ baselines }) => {
+      // `a.tsx` moved to `apps/a/a.tsx`, then to `apps/a/main.tsx`, and its
+      // baselines stayed where each was recorded.
+      const moves = patternKeyMovesIn({
+        "a.tsx": "apps/a/a.tsx",
+        "apps/a/a.tsx": "apps/a/main.tsx",
+      });
+      for (
+        const [key, at] of [
+          ["a.tsx", "2026-01-01T00:00:00Z"],
+          ["apps/a/a.tsx", "2026-02-01T00:00:00Z"],
+          ["apps/a/main.tsx", "2026-03-01T00:00:00Z"],
+        ]
+      ) {
+        await writeBaseline(baselines, key, contractOf(), new Date(at));
+      }
+
+      const recorded = await baselineKeysByPattern(baselines, moves.current);
+      const labels = (await readBaselines(
+        baselines,
+        "apps/a/main.tsx",
+        recorded.get("apps/a/main.tsx"),
+      )).map((baseline) => baseline.label.slice(0, 8));
+      const files = ["patterns/apps/a/main.tsx"];
+      const paths = await collectCompatibilityPaths(
+        files,
+        baselines,
+        [],
+        moves.current,
+      );
+
+      expect(labels).toEqual(["20260101", "20260201", "20260301"]);
+      expect(paths).toEqual(["patterns/apps/a/main.tsx"]);
+    });
+  });
+
+  it("lists a pattern that moved and then went once, under the key it had last", async () => {
+    await withTree(async ({ baselines }) => {
+      // `a.tsx` moved to `apps/a/a.tsx` and was later deleted there.
+      const moves = patternKeyMovesIn({ "a.tsx": "apps/a/a.tsx" });
+      await writeBaseline(baselines, "a.tsx", contractOf(), new Date());
+      await writeBaseline(baselines, "apps/a/a.tsx", contractOf(), new Date());
+
+      const paths = await collectCompatibilityPaths(
+        [],
+        baselines,
+        [],
+        moves.current,
+      );
+
+      expect(paths).toEqual(["patterns/apps/a/a.tsx"]);
     });
   });
 
@@ -625,6 +749,24 @@ describe("unusedAcceptances", () => {
       forgivenAt("v1", "result.x"),
       forgivenAt("v2", "result.y"),
     ])).toEqual({ pairs: [], paths: [] });
+  });
+
+  it("credits nothing to an issue that blames no path", () => {
+    const entries = [entry(["v1"], ["result.x"])];
+    const atNoPath: Finding = {
+      kind: "incompatible",
+      pattern: "a.tsx",
+      baseline: "v1",
+      path: undefined,
+      detail: "the baseline schema is invalid on its own terms",
+    };
+
+    expect(unusedAcceptances(entries, examined, [atNoPath])).toEqual(
+      unusedAcceptances(entries, examined, []),
+    );
+    expect(unusedAcceptances(entries, examined, [atNoPath]).pairs).toHaveLength(
+      1,
+    );
   });
 
   it("returns a pair no issue was forgiven against", () => {

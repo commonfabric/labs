@@ -9,9 +9,9 @@
  * reactive read returns.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { PathKeyMap } from "../src/path-key-map.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("PathKeyMap", () => {
   describe("empty state", () => {
@@ -84,6 +84,17 @@ describe("PathKeyMap", () => {
       expect(m.delete(["a"])).toBe(true);
       expect(m.delete(["a"])).toBe(false);
       expect(m.delete(["nope"])).toBe(false);
+    });
+
+    it("leaves the map empty once every value is deleted, and not before", () => {
+      const m = new PathKeyMap<number>();
+      m.set(["a", "b"], 1);
+      m.set(["a", "c", "d"], 2);
+
+      m.delete(["a", "b"]);
+      expect(m.isEmpty()).toBe(false);
+      m.delete(["a", "c", "d"]);
+      expect(m.isEmpty()).toBe(true);
     });
   });
 

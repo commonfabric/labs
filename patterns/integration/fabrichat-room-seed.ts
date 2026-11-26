@@ -19,7 +19,6 @@
  */
 
 import { parseArgs } from "@std/cli/parse-args";
-import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { seedFabrichatRoom } from "./fabrichat-room-fixture.ts";
 
 const flags = parseArgs(Deno.args, {
@@ -54,7 +53,7 @@ function count(name: string): number {
 const output = required("out");
 const startedAt = performance.now();
 
-const seeding = seedFabrichatRoom({
+const fixture = await seedFabrichatRoom({
   apiUrl: new URL(required("api-url")),
   passphrase: required("passphrase"),
   memberCount: count("members"),
@@ -74,18 +73,5 @@ const seeding = seedFabrichatRoom({
     );
   },
 });
-
-// Once the members' runtimes have locked the realm down, a rejection escaping
-// the top level is reported as `SES_UNHANDLED_REJECTION` and the process still
-// exits with status 0, so a failure sets the status here, where it is caught.
-let fixture: Awaited<typeof seeding>;
-try {
-  fixture = await seeding;
-} catch (error) {
-  console.error(
-    `Seeding failed: ${describeFailure(error)}`,
-  );
-  Deno.exit(1);
-}
 
 await Deno.writeTextFile(output, JSON.stringify(fixture));

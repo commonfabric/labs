@@ -22,7 +22,9 @@
  * `FabriChatRoom.md` names them. `commitSetTitle` writes the title a member
  * last set, a record of its own beside the one the room's creator wrote, and
  * `commitSetThreadTitle` the title of one of its threads, a record of its own
- * for each thread, beside the thread's messages.
+ * for each thread, beside the thread's messages. `commitWindow` writes the
+ * sending session's windows onto the messages, which are no part of the
+ * room's record.
  *
  * A handler destructures its state and uses the cells inline, and a helper it
  * shares takes each cell as an argument of its own, never the state or an
@@ -47,6 +49,7 @@ import {
   type Stream,
   type TrustedActionWrite,
   Writable,
+  type WriteAuthorizedBy,
   type WritePolicyAnyOf,
 } from "commonfabric";
 import type {
@@ -57,10 +60,14 @@ import type {
 import { profileKeyOf } from "../private-inbox/private-inbox.tsx";
 import { isSharedSpaceCatalog } from "../shared-space/shared-space-catalog.ts";
 import {
+  attachRequests,
   isInMain,
   isSingleEmoji,
   type ShownIn,
   type ViewItem,
+  type WindowAnchor,
+  windowCount,
+  windowSlice,
 } from "./logic.ts";
 import type { commitStart } from "./manager.tsx";
 import {
@@ -84,6 +91,7 @@ import {
   type ChatContainer,
   type ChatDeletedBody,
   type ChatReaction,
+  type ChatRoomActivity,
   type ChatRoomKind,
   type ChatRoomLink,
   type ChatRoomPolicy,
@@ -111,7 +119,8 @@ const NSEC_PER_SEC = 1_000_000_000n;
  * The policy every room starts from, a group room's. `about.policy` states
  * it, and the handlers read `deletionIsObliteration` and `maxAttachments`
  * from it, so the two cannot disagree; `maxWindowCount` bounds
- * `messages.latest`. The other settings are stated for the policy's shape,
+ * `messages.latest` and each window, and `maxOpenWindows` how many windows a
+ * session has open. The other settings are stated for the policy's shape,
  * which a user's Home carries, and read by nothing. A room's
  * `ownersMayObliterate` is `ownersMayObliterateIn()`'s.
  */
@@ -322,6 +331,42 @@ export type MessagesCell = Writable<MessagesValue>;
 export type MessageCell = Cell<MessageRecord>;
 
 /**
+ * A run of consecutive messages from one view of the room's messages, as a
+ * session's `openWindow` last set it (`ChatMessageWindow.md`).
+ */
+export interface ChatMessageWindow {
+  /** The `openWindow` request that set the window as it is now. */
+  requestId: string;
+
+  /** For a thread's window, the thread's root; absent for the main one. */
+  root?: MessageCell;
+
+  /** The messages in the window, oldest first. */
+  messages: MessageCell[];
+
+  /** Whether the view has messages older than the window's first. */
+  hasOlder: boolean;
+
+  /** Whether the view has messages newer than the window's last. */
+  hasNewer: boolean;
+}
+
+/** A session's open windows, by the `windowId` its client chose. */
+export type ChatMessageWindows = Record<string, ChatMessageWindow>;
+
+/** A session's windows onto the messages, written only by `commitWindow`. */
+export type WindowsValue = WriteAuthorizedBy<
+  ChatMessageWindows,
+  typeof commitWindow
+>;
+
+/**
+ * The cell holding a session's windows, absent until the first opens: only
+ * `commitWindow` writes it, so it has no default for anything else to write.
+ */
+export type WindowsCell = Writable<WindowsValue>;
+
+/**
  * What a room created by a manager says about itself: written once, by the
  * manager's `commitStart` as it creates the room, from a reviewed `ChatStart`
  * on `ChatStartSurface`, and labeled `authored-by` the room's creator, which
@@ -366,8 +411,9 @@ export const TITLE_KEY = "title";
  * What a room keeps about one of its threads: written only by the handlers
  * that set a thread's title, a send that starts the thread from the send
  * surface and a retitle from `ChatRetitleSurface`, and labeled `authored-by`
- * whoever last set it. A later schema can neither add a writer to the policy
- * nor drop one, so it names every writer the record will have.
+ * whoever last set it. A stored policy keeps every writer it names, whether
+ * or not a later schema lists it, and gains one only where a release admits
+ * it.
  */
 export type StoredThreadInfo = AuthoredByCurrentUser<
   WritePolicyAnyOf<ThreadInfoRecord, [
@@ -526,10 +572,11 @@ const indexesOf = (
 /**
  * The value of `cell`, or `undefined` where it lacks a field its schema
  * requires or holds one of `fields` of a type the schema doesn't accept. A
- * field like that, read through a list holding the value or through the value
- * itself, refuses the whole computation reading it, so the value is read as
- * that of its own cell, and each of `fields` as the value of a cell of its
- * own, where it reads as `undefined` instead.
+ * field like that, read as part of the whole list holding the value or of the
+ * whole value, refuses the whole computation reading it. So the value is read
+ * as the value of `cell`, the cell for its element of the list, rather than
+ * off the list's value, and each of `fields` as the value of the cell for
+ * that field, where it reads as `undefined` instead.
  */
 const readableRecord = <T extends object>(
   cell: Cell<T>,
@@ -601,9 +648,14 @@ export const messageEntries = (
   let legacyReplies = 0;
   const entries = indexesOf(messages).flatMap(
     (index): MessageEntry[] => {
-      const cell = cellAt(messages, index).resolveAsCell();
-      const record = readableMessage(cell);
+      // The message is read at its place in the list, under the list's own
+      // element schema; the cell its link resolves to only names its
+      // document. That cell keeps the schema of the program that sent the
+      // message (see `messageInRoom()`).
+      const element = cellAt(messages, index);
+      const record = readableMessage(element);
       if (record === undefined) return [];
+      const cell = element.resolveAsCell();
       const key = entityKeyOf(cell);
       if (key === undefined) return [];
       records.set(key, record);
@@ -875,6 +927,12 @@ export interface JoinRoomRequest {
    * `JoinedEvent` says.
    */
   messageAct?: boolean;
+
+  /**
+   * Where the conversation stands after the viewer's message, as
+   * `JoinedEvent` says; absent for any other join.
+   */
+  activity?: ChatRoomActivity;
 }
 
 /** What a room's write tells `tellManagerJoined` of how the viewer joined. */
@@ -886,6 +944,14 @@ export interface JoinedEvent {
    * title up to the room's.
    */
   messageAct?: boolean;
+
+  /**
+   * Where the conversation stands once the viewer's message is recorded: how
+   * many messages the room holds, and the message's own `sentAt`. Only a
+   * message sends it, so the viewer's manager can note the room's activity
+   * without reading the room.
+   */
+  activity?: ChatRoomActivity;
 }
 
 /**
@@ -1057,10 +1123,13 @@ export interface ManagerJoinState {
  * Tells the viewer's manager the viewer has joined the room. The manager's
  * own event checks its private catalog, so catalog reads stay in the
  * manager's event. For an already listed room it changes no membership, and
- * brings the title its catalog lists the room under up to the room's, except
- * for a join marked `messageAct`, which leaves the title as it is. A room's
- * acts send it an event once they have recorded what the viewer wrote, saying
- * whether that was a message or a reaction, which it passes on.
+ * brings the title its catalog lists the room under, and where the
+ * conversation stands, up to the room's, except for a join marked
+ * `messageAct`, which leaves the title as it is, and notes where a message
+ * leaves the conversation. A room's acts send it an event once they have
+ * recorded what the viewer wrote, saying whether that was a message or a
+ * reaction, and for a message where it leaves the conversation, which it
+ * passes on.
  *
  * The manager is read here, as a value, rather than by what the room stores:
  * a stream bound to a manager that isn't there still reads as present, so
@@ -1078,6 +1147,7 @@ export const tellManagerJoined = handler<JoinedEvent, ManagerJoinState>(
       room: self,
       ...(container !== undefined && { container }),
       ...(event?.messageAct === true ? { messageAct: true } : {}),
+      ...(event?.activity !== undefined && { activity: event.activity }),
     });
   },
 );
@@ -1257,21 +1327,33 @@ const attachmentsIn = (
   });
 };
 
+/** A message as the target of an act, and what it holds. */
+interface MessageTarget {
+  /** The message's own document, which the act writes. */
+  target: MessageCell;
+
+  /** Its value, read through the link the act was given. */
+  current: MessageRecord | undefined;
+}
+
 /**
  * The message `link` names, as the target of an act: one of the room's
- * messages, by `isInRoomOf()`.
+ * messages, by `isInRoomOf()`. Its value is read through `link`, under the
+ * act's own schema for it: the document `link` resolves to keeps the schema
+ * its stored link carries, which is that of the program that sent the
+ * message, and a message a later program rewrote, such as its tombstone, may
+ * not fit it.
  *
  * @throws If `link` names no message, or one outside the room's space.
  */
 const messageInRoom = (
   room: Cell<unknown>,
   link: MessageCell | undefined,
-): MessageCell => {
-  const target = link?.resolveAsCell();
-  if (target === undefined || !isInRoomOf(room, target)) {
-    throw new Error(NOT_IN_ROOM);
-  }
-  return target;
+): MessageTarget => {
+  if (link === undefined) throw new Error(NOT_IN_ROOM);
+  const target = link.resolveAsCell();
+  if (!isInRoomOf(room, target)) throw new Error(NOT_IN_ROOM);
+  return { target, current: link.get() };
 };
 
 /**
@@ -1291,15 +1373,18 @@ const obliterationRefusal = (
     : "Messages in this chat can't be removed.";
 
 /**
- * Leaves a tombstone of the message at `target`: its time and what it replies
- * to stay, its body becomes the deleted marker, its attachments and reactions
- * go, and so does its author unless `keepsAuthor`. The whole message is
- * written, where an edit writes its text alone, since only a write of the
- * whole drops a key: a key written `undefined` is present, and an author's
- * link so written reads as a handle to nothing rather than as no author.
+ * Leaves a tombstone of the message at `target`, which holds `current`: its
+ * time and what it replies to stay, its body becomes the deleted marker, its
+ * attachments and reactions go, and so does its author unless `keepsAuthor`.
+ * The whole message is written, where an edit writes its text alone, since
+ * only a write of the whole drops a key: a key written `undefined` is present,
+ * and an author's link so written reads as a handle to nothing rather than as
+ * no author.
  */
-const leaveTombstone = (target: MessageCell, keepsAuthor: boolean): void => {
-  const current = target.get();
+const leaveTombstone = (
+  { target, current }: MessageTarget & { current: MessageRecord },
+  keepsAuthor: boolean,
+): void => {
   target.set({
     ...(keepsAuthor && current.authorProfile !== undefined
       ? { authorProfile: current.authorProfile }
@@ -1362,11 +1447,12 @@ const sendInto = (
   // A message may link only a list that exists, so the list is made before
   // the message links it.
   const reactions = new Writable<ReactionsValue>([] as ReactionsValue);
+  const sentAt = now();
   messages.push({
     authorProfile: profile,
     body,
     ...(attachments.length === 0 ? {} : { attachments }),
-    sentAt: now(),
+    sentAt,
     ...(stored === undefined ? {} : { replyTo: stored }),
     reactions,
   } as SentMessage);
@@ -1374,7 +1460,10 @@ const sendInto = (
     titled.record.set(titled.value);
     threadInfo?.addUnique(titled.record);
   }
-  joined?.send({ messageAct: true });
+  joined?.send({
+    messageAct: true,
+    activity: { count: (messages.get() ?? []).length, newestAt: sentAt },
+  });
 };
 
 /**
@@ -1642,8 +1731,8 @@ export const prepareAttach = handler<unknown, PrepareAttachState>(
  * store has answered, whose file was sent, taken out or refused since. Moves
  * the composer's files taken out on, as `settleTakenOut()` does.
  *
- * @throws If the space has no store, or the files would make more
- *   attachments than the room's policy allows.
+ * @throws If the space has no store, or the files this run adds would make
+ *   more attachments than the room's policy allows.
  */
 export const commitAttach = handler<UploadEvent, AttachState>(
   (event, { composer, store, hasStore }) => {
@@ -1655,21 +1744,20 @@ export const commitAttach = handler<UploadEvent, AttachState>(
       throw new Error(NOWHERE_FOR_FILES);
     }
     const attaching = composer.get()?.attaching ?? [];
-    const max = FABRICHAT_POLICY.maxAttachments;
-    if (attaching.length + files.length > max) {
-      throw new Error(`A message can have at most ${max} attachments.`);
-    }
-    const key = eventKey();
     const takenOut = composer.get()?.takenOut ?? [];
     const requests = target.key("requests");
     const held = new Set(
       [...attaching, ...takenOut].map((file) => file.requestId),
     );
-    const added = files.flatMap((file, index) => {
-      const requestId = `attach-${key}-${index}`;
-      if (held.has(requestId) || requests.key(requestId).get() !== undefined) {
-        return [];
-      }
+    const adding = attachRequests(
+      eventKey(),
+      files,
+      (requestId) =>
+        held.has(requestId) || requests.key(requestId).get() !== undefined,
+      attaching.length,
+      FABRICHAT_POLICY.maxAttachments,
+    );
+    const added = adding.map(({ requestId, file }) => {
       target.key("add").send({
         requestId,
         name: file.name,
@@ -1678,7 +1766,7 @@ export const commitAttach = handler<UploadEvent, AttachState>(
         size: file.size,
         onConflict: "rename",
       });
-      return [{ requestId, name: file.name }];
+      return { requestId, name: file.name };
     });
     composer.key("attaching").set([...attaching, ...added]);
     if (takenOut.length > 0) settleTakenOut(composer, store, takenOut);
@@ -1806,9 +1894,13 @@ export const commitEdit = handler<RoomStreamEvent, EditState>(
   (event, { myProfile, room, message, composer }) => {
     const profile = resolvedProfile(myProfile);
     if (profile === undefined) throw new Error(NO_PROFILE);
-    const target = messageInRoom(room, event?.message ?? message);
-    const current = target.get();
-    if (isDeleted(current)) throw new Error(DELETED);
+    const { target, current } = messageInRoom(
+      room,
+      event?.message ?? message,
+    );
+    if (current === undefined || isDeleted(current)) {
+      throw new Error(DELETED);
+    }
     if (!isActorAuthor(target)) {
       throw new Error("Only its author can edit a message.");
     }
@@ -1837,14 +1929,19 @@ export const commitDelete = handler<RoomStreamEvent, MessageActState>(
   (event, { myProfile, room, message }) => {
     const profile = resolvedProfile(myProfile);
     if (profile === undefined) throw new Error(NO_PROFILE);
-    const target = messageInRoom(room, event?.message ?? message);
-    const current = target.get();
+    const { target, current } = messageInRoom(
+      room,
+      event?.message ?? message,
+    );
     // Deleted already: there is nothing to delete.
-    if (isDeleted(current)) return;
+    if (current === undefined || isDeleted(current)) return;
     if (!isActorAuthor(target)) {
       throw new Error("Only its author can delete a message.");
     }
-    leaveTombstone(target, !FABRICHAT_POLICY.deletionIsObliteration);
+    leaveTombstone(
+      { target, current },
+      !FABRICHAT_POLICY.deletionIsObliteration,
+    );
   },
 );
 
@@ -1855,10 +1952,15 @@ export const commitDelete = handler<RoomStreamEvent, MessageActState>(
  */
 export const commitObliterate = handler<RoomStreamEvent, ObliterateState>(
   (event, { room, message, kind, ownersMayObliterate }) => {
-    const target = messageInRoom(room, event?.message ?? message);
-    const current = target.get();
+    const { target, current } = messageInRoom(
+      room,
+      event?.message ?? message,
+    );
     // Obliterated already, its author gone: there is nothing to remove.
-    if (isDeleted(current) && current?.authorProfile === undefined) return;
+    if (
+      current === undefined ||
+      (isDeleted(current) && current.authorProfile === undefined)
+    ) return;
     const rights = messageRightsOf(
       current,
       isActorAuthor(target),
@@ -1871,18 +1973,21 @@ export const commitObliterate = handler<RoomStreamEvent, ObliterateState>(
         obliterationRefusal(kind, ownersMayObliterate === true),
       );
     }
-    leaveTombstone(target, false);
+    leaveTombstone({ target, current }, false);
   },
 );
 
 /**
- * The reaction list of the message at `target`, as the cell the message
- * links, or `undefined` where the message links none. It is addressed as a
- * cell rather than read off the message's value: a client addresses a message
- * through the room's public type, where the reactions read as values.
+ * The reaction list of the message at `target`, which holds `current`, as the
+ * cell the message links, or `undefined` where the message links none. It is
+ * addressed as a cell rather than read off the message's value: a client
+ * addresses a message through the room's public type, where the reactions
+ * read as values.
  */
-const reactionsOf = (target: MessageCell): ReactionsCell | undefined =>
-  target.get()?.reactions === undefined
+const reactionsOf = (
+  { target, current }: MessageTarget,
+): ReactionsCell | undefined =>
+  current?.reactions === undefined
     ? undefined
     : target.key("reactions").resolveAsCell() as never;
 
@@ -1909,11 +2014,11 @@ export const commitSendReaction = handler<RoomStreamEvent, AddReactionState>(
     if (profile === undefined) throw new Error(NO_PROFILE);
     const emoji = emojiOf(event, bound);
     if (!isSingleEmoji(emoji)) throw new Error("A reaction is a single emoji.");
-    const target = messageInRoom(room, event?.message ?? message);
-    const list = reactionsOf(target);
+    const named = messageInRoom(room, event?.message ?? message);
+    const list = reactionsOf(named);
     // A send gives every message its reaction list, and a deletion takes it
     // away, so a message without one is a deleted one.
-    if (isDeleted(target.get()) || list === undefined) {
+    if (isDeleted(named.current) || list === undefined) {
       throw new Error(DELETED);
     }
     if (closesPicker === true) pickerOpen?.set(false);
@@ -1943,11 +2048,11 @@ export const commitDeleteReaction = handler<
   (event, { myProfile, room, message, reaction }) => {
     const profile = resolvedProfile(myProfile);
     if (profile === undefined) throw new Error(NO_PROFILE);
-    const target = messageInRoom(room, event?.message ?? message);
-    const list = reactionsOf(target);
+    const named = messageInRoom(room, event?.message ?? message);
+    const list = reactionsOf(named);
     // A send gives every message its reaction list, and a deletion takes it
     // away, so a message without one is a deleted one.
-    if (isDeleted(target.get()) || list === undefined) {
+    if (isDeleted(named.current) || list === undefined) {
       throw new Error(DELETED);
     }
     const removed = (event?.reaction ?? reaction)?.resolveAsCell();
@@ -2157,3 +2262,129 @@ export const commitSetThreadTitle = handler<
   outcomes.key(requestId).set({ status: "done" });
   refusal.set("");
 });
+
+/** A request that opens, moves, or closes one of a session's windows. */
+export interface RoomWindowEvent {
+  /** Chosen by the client; shown in the window once an open is fulfilled. */
+  requestId: string;
+
+  /** The window to set or close, chosen by the client. */
+  windowId: string;
+
+  /** The root of the thread to show; absent for the main conversation. */
+  root?: MessageCell;
+
+  /** Which end of its view the window holds; required to open one. */
+  from?: WindowAnchor;
+
+  /** The most messages to show, capped by the room's `maxWindowCount`. */
+  count?: number;
+}
+
+/** What `commitWindow` is bound to. */
+export interface WindowActState {
+  /** Whether the binding opens (or moves) a window, or closes one. */
+  op: "open" | "close";
+
+  /** The room's messages, which the binding reads and never writes. */
+  messages: Cell<MessagesValue>;
+
+  /** The session's windows. */
+  windows: WindowsCell;
+}
+
+/**
+ * The view of `messages` a window shows, oldest first: the main
+ * conversation's, or, where `root` names one, the thread it roots, the root's
+ * own cell first. `undefined` where `root` names no message of the room's main
+ * conversation, in the room's space, or one that is in a thread itself, which
+ * roots none.
+ */
+const windowView = (
+  messages: Cell<MessagesValue>,
+  root: MessageCell | undefined,
+): MessageCell[] | undefined => {
+  const { entries } = messageEntries(messages);
+  if (root === undefined) {
+    return entries.filter((entry) => entry.inMain).map((entry) => entry.cell);
+  }
+  const key = isInRoomOf(messages, root) ? viewKeyOf(root) : undefined;
+  const rootEntry = entries.find((entry) => entry.key === key);
+  if (
+    key === undefined || rootEntry === undefined || !rootEntry.inMain ||
+    rootEntry.replyTo?.thread !== undefined
+  ) {
+    return undefined;
+  }
+  return [
+    rootEntry.cell,
+    ...entries.filter((entry) => entry.replyTo?.thread === key).map((entry) =>
+      entry.cell
+    ),
+  ];
+};
+
+/** `from` as a `WindowAnchor`, or `undefined` for anything else. */
+const windowAnchorOf = (from: unknown): WindowAnchor | undefined => {
+  if (typeof from !== "object" || from === null) return undefined;
+  const anchor = from as Record<string, unknown>;
+  if (anchor.before === "end") return { before: "end" };
+  if (anchor.after === "start") return { after: "start" };
+  return undefined;
+};
+
+/**
+ * Opens, moves, or closes one of the sending session's windows onto the
+ * messages: sets it to the run of its view `from` and `count` name, or
+ * removes it. It changes nothing but that session's windows, so it keeps no
+ * request memory: repeating a request sets or removes the same window again. A
+ * request it can't fulfill (no window to close, no end to hold, a root that
+ * roots no thread, a session at `maxOpenWindows` opening another) changes
+ * nothing.
+ *
+ * A room's stored result can hold, at `messages/windows`, a writer claim
+ * naming this handler, and a release keeps every stored claim: a room set up
+ * with that claim can take no program whose result leaves the position
+ * without the session's windows, which only this handler writes.
+ */
+export const commitWindow = handler<RoomWindowEvent, WindowActState>(
+  (event, { op, messages, windows }) => {
+    const windowId = event?.windowId;
+    if (typeof windowId !== "string" || windowId === "") return;
+    const current = (windows.get() ?? {}) as ChatMessageWindows;
+    if (op === "close") {
+      if (!Object.hasOwn(current, windowId)) return;
+      windows.set(
+        Object.fromEntries(
+          Object.entries(current).filter(([id]) => id !== windowId),
+        ) as WindowsValue,
+      );
+      return;
+    }
+    const requestId = event?.requestId;
+    if (typeof requestId !== "string") return;
+    if (
+      !Object.hasOwn(current, windowId) &&
+      Object.keys(current).length >= FABRICHAT_POLICY.maxOpenWindows
+    ) {
+      return;
+    }
+    const anchor = windowAnchorOf(event?.from);
+    if (anchor === undefined) return;
+    const root = event?.root?.resolveAsCell();
+    const view = windowView(messages, root);
+    if (view === undefined) return;
+    const slice = windowSlice(
+      view.length,
+      anchor,
+      windowCount(event?.count, FABRICHAT_POLICY.maxWindowCount),
+    );
+    windows.key(windowId).set({
+      requestId,
+      ...(root === undefined ? {} : { root: view[0] }),
+      messages: view.slice(slice.start, slice.end),
+      hasOlder: slice.hasOlder,
+      hasNewer: slice.hasNewer,
+    });
+  },
+);

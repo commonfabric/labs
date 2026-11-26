@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Cell } from "../../src/cell.ts";
 import type { Action } from "../../src/scheduler/types.ts";
@@ -10,7 +9,13 @@ import {
   space,
   toMemorySpaceAddress,
 } from "../scheduler-test-utils.ts";
-import { captureLogs, type LogCapture } from "../support/log-capture.ts";
+import { type CapturedLogs, captureLogs } from "../support/captured-logs.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("run", () => {
   let env: SchedulerTestRuntime;
@@ -85,7 +90,7 @@ describe("run", () => {
   });
 
   describe("debug logging", () => {
-    let debug: LogCapture;
+    let debug: CapturedLogs;
 
     beforeEach(() => {
       debug = captureLogs("scheduler");
@@ -116,7 +121,7 @@ describe("run", () => {
       const actionId = env.runtime.scheduler.accessForTestingOnly.getActionId(
         computation,
       );
-      const violations = debug.messages("write-surface-violation");
+      const violations = debug.messagesOf("write-surface-violation");
       expect(violations.map(([message]) => message)).toEqual([
         `Action ${actionId} wrote outside its declared surface`,
       ]);

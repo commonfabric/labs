@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { fitColumns, prose } from "./prose.ts";
 import { columns } from "./text.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Where a Topic cited by its number links to. */
 const topicHref = (number: string) => `https://fabric.example/top/${number}`;
@@ -22,6 +22,16 @@ describe("prose", () => {
 
     it("returns what each needs and shares of the rest by how much more each wants", () => {
       expect(fitColumns([10, 30], [4, 4], [1, 1], 24)).toEqual([7, 17]);
+    });
+
+    it("returns what rounding the shares down left over to the columns that want the most more", () => {
+      expect(fitColumns([10, 30], [4, 4], [1, 1], 25)).toEqual([7, 18]);
+      // Shares of 1.75, 7.58, and 4.67 leave two over.
+      expect(fitColumns([10, 30, 20], [4, 4, 4], [1, 1, 1], 26)).toEqual([
+        5,
+        12,
+        9,
+      ]);
     });
 
     it("returns, when not even what each needs fits, all a column of short words needs, and the rest to the longer", () => {

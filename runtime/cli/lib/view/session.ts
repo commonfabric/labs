@@ -16,6 +16,16 @@ import type {
   ViewMode,
 } from "./model.ts";
 import type { Key, MouseButton } from "./keys.ts";
+import {
+  link,
+  plainText,
+  pullRequest,
+  say,
+  type StepKind,
+  TaskLog,
+  type TaskRow,
+  type TaskText,
+} from "./tasklog.ts";
 import { cpLen } from "./ansi.ts";
 import {
   blameKey,
@@ -28,6 +38,8 @@ import {
   type DialogButton,
   dialogControlAt,
   type DialogField,
+  dialogHeight,
+  type DialogRadioButton,
   type DialogState,
   DIFF_MARGIN_WIDTH,
   type DiffAnnotation,
@@ -37,11 +49,17 @@ import {
   diffTotalsWidth,
   inputLineColumns,
   inputLineIndexAt,
+  KEY_REACH,
+  KEY_ROWS,
   type KeyHint,
   labeledDiffMetadataLine,
   type Match,
   overlayBox,
+  overlayLineAt,
   type OverlayState,
+  radioButtonAt,
+  type SecurityKey,
+  sliderStopAt,
   type ViewState,
 } from "./render.ts";
 import {
@@ -69,6 +87,7 @@ import {
   type DisplayMode,
   displayModeLabel,
   displayWidth,
+  drawsAsPictures,
   hasNonPrintable,
   sourceColumnOf,
 } from "./display.ts";
@@ -110,7 +129,17 @@ import type {
 } from "./editsource.ts";
 import type { DirEntry, FileGateway } from "./filegateway.ts";
 import { LineEdit } from "./lineedit.ts";
-import type { ViewSettings } from "./settings.ts";
+import {
+  NO_QUIT_DELAY,
+  PULL_REQUEST_TOOLS,
+  QUIT_DELAYS,
+  type ViewSettings,
+} from "./settings.ts";
+import {
+  type MergeMethod,
+  type MergeRequest,
+  pullRequestUrl,
+} from "./github.ts";
 import {
   type ActiveWrapMode,
   buildWrapPlan,
@@ -134,14 +163,22 @@ export interface SessionOptions {
   now?: () => number;
 }
 
-/** A `git blame` the session asks its driver to run, which the driver hands
- * back with the result to {@link Session.finishBlameLoad}. */
+/** A frame that shows a prompt button pushed: the dialog with that button
+ * drawn mid-press. */
+export interface PushedFrame {
+  readonly doc: Document;
+  readonly view: ViewState;
+}
+
+/** The blame of a file or a commit that the session asks its driver to run,
+ * which the driver hands back with the result to
+ * {@link Session.finishBlameLoad}. */
 export interface BlameLoad {
   readonly request: BlameRequest;
 }
 
-/** A file's blame: the load that fetches it, and its lines once it has
- * finished. */
+/** A file's or a commit's blame: the load that fetches it, and its lines
+ * once it has finished. */
 interface BlameEntry {
   readonly load: BlameLoad;
   lines: readonly BlameLine[] | null;
@@ -163,16 +200,109 @@ interface InputLineState {
   readonly edit: LineEdit;
 }
 
+/** A set of radio buttons in a dialog that is up, and which is selected. */
+interface RadioButtonsState {
+  readonly kind: "radioButtons";
+  readonly label: string;
+  readonly hotkey: string;
+  readonly buttons: readonly DialogRadioButton[];
+  selected: number;
+}
+
+/** A slider in a dialog that is up, on a logarithmic scale, and the value
+ * it sets. */
+interface SliderState {
+  readonly kind: "slider";
+  readonly label: string;
+  readonly hotkey: string;
+
+  /** The values the slider stops at, all above zero, in ascending order. */
+  readonly stops: readonly number[];
+
+  /** Returns `value` as the dialog shows it. */
+  readonly text: (value: number) => string;
+
+  /** The value the slider sets, which need not be one of its stops until
+   * the slider moves. */
+  value: number;
+}
+
 /** A field of a dialog that is up. */
-type FieldState = CheckBoxState | InputLineState;
+type FieldState =
+  | CheckBoxState
+  | InputLineState
+  | RadioButtonsState
+  | SliderState;
 
 /** The settings dialog while it is up: the settings it opened showing, and
  * its fields. */
 interface SettingsDraft {
   readonly shown: ViewSettings;
+  readonly pullRequestTool: RadioButtonsState;
+  readonly touchGateToken: InputLineState;
   readonly quitOnPullRequest: CheckBoxState;
+  readonly quitDelay: SliderState;
   readonly webhookRelay: InputLineState;
 }
+
+/** Returns `ms` milliseconds as the settings dialog shows a delay: "none"
+ * for a delay that counts as none, in milliseconds under a second, and in
+ * seconds otherwise. */
+function delayText(ms: number): string {
+  return ms <= NO_QUIT_DELAY
+    ? "none"
+    : ms < 1000
+    ? `${ms} ms`
+    : `${ms / 1000} s`;
+}
+
+/** Returns the index of the stop of `slider` nearest its value on its
+ * logarithmic scale. */
+function nearestStop(slider: SliderState): number {
+  const distance = (i: number) =>
+    Math.abs(Math.log(slider.stops[i] / slider.value));
+  return slider.stops.reduce(
+    (best, _, i) => distance(i) < distance(best) ? i : best,
+    0,
+  );
+}
+
+/** Returns the dialog's view of `field`. */
+function dialogField(field: FieldState): DialogField {
+  switch (field.kind) {
+    case "inputLine":
+      return {
+        kind: "inputLine",
+        label: field.label,
+        hotkey: field.hotkey,
+        value: field.edit.value,
+        cursor: field.edit.cursor,
+        scroll: field.edit.scroll,
+        selected: field.edit.selected,
+      };
+    case "slider":
+      return {
+        kind: "slider",
+        label: field.label,
+        hotkey: field.hotkey,
+        stopCount: field.stops.length,
+        stop: nearestStop(field),
+        text: field.text(field.value),
+      };
+    case "checkBox":
+    case "radioButtons":
+      return { ...field };
+  }
+}
+
+/** The settings dialog's radio button for each way of handling pull
+ * requests, in the order of {@link PULL_REQUEST_TOOLS}. */
+const PULL_REQUEST_TOOL_BUTTONS: readonly DialogRadioButton[] = [
+  { label: "Just push, and link to them", hotkey: "l" },
+  { label: "Use the GitHub API", hotkey: "a" },
+  { label: "Show them in the browser", hotkey: "s" },
+  { label: "Use touch-gate and a security key", hotkey: "t" },
+];
 
 /** A prompt control the mouse went down on, by its prompt and shortcut letter. */
 interface HeldButton {
@@ -187,7 +317,7 @@ type Mode =
   | "savePrompt"
   | "amendPrompt"
   | "revertPrompt"
-  | "pushPrompt"
+  | "taskPrompt"
   | "settingsPrompt"
   | "filePicker"
   | "jumpList";
@@ -224,12 +354,21 @@ const HORIZONTAL_STEP = 8;
 const MOUSE_WHEEL_STEP = 3;
 
 /** The size of the push dialog's body, before it is shrunk to fit the screen:
- * the 13 lines that pushing a new branch to GitHub typically prints, then a
- * blank line and a summary whose pull request address wraps onto a row of its
- * own, in columns as wide as the widest that GitHub's line offering a pull
- * request needs. */
-const PUSH_ROWS = 16;
+ * the step that pushes, the 13 lines that pushing a new branch to GitHub
+ * typically prints, quoted, a summary whose pull request address wraps onto
+ * a row of its own, and the two steps of watching for the pull request, with
+ * a blank row between each of them, in columns as wide as the widest that
+ * GitHub's line offering a pull request needs, quoted. */
+const PUSH_ROWS = 22;
 const PUSH_COLUMNS = 80;
+
+/** How the task dialog names each merge method, as GitHub's merge button
+ * does. */
+const MERGE_VERBS: Readonly<Record<MergeMethod, TaskText>> = {
+  squash: say`Squash and merge`,
+  merge: say`Merge`,
+  rebase: say`Rebase and merge`,
+};
 
 /** Whether two search matches occupy the same displayed range. */
 function sameDisplayedMatch(a: Match, b: Match): boolean {
@@ -312,6 +451,18 @@ interface JumpEntry {
   readonly fileIndex?: number;
 }
 
+/**
+ * Returns whether `a` and `b` have the same text, and their lines the same
+ * texts.
+ */
+function sameText(a: Document, b: Document): boolean {
+  if (a.text !== b.text || a.lines.length !== b.lines.length) return false;
+  for (let i = 0; i < a.lines.length; i++) {
+    if (a.lines[i].text !== b.lines[i].text) return false;
+  }
+  return true;
+}
+
 export class Session {
   /** The parsed source document used for editing, offsets, and source cards. */
   #sourceDoc: Document;
@@ -324,7 +475,7 @@ export class Session {
   /** How long logical lines continue on later screen rows. */
   #wrapMode: WrapMode = "off";
 
-  /** How non-printable characters are shown; edit mode forces the first mode. */
+  /** How non-printable characters are shown; edit mode forces "pictures". */
   #displayMode: DisplayMode = DISPLAY_MODES[0];
 
   /** Whether the blame column is on. */
@@ -333,19 +484,21 @@ export class Session {
   /** The clock the blame column's ages are measured by. */
   #now: () => number;
 
-  /** Each file's blame, by {@link blameKey}. */
+  /** Each file's and commit's blame, by {@link blameKey}. */
   #blames = new Map<string, BlameEntry>();
 
   /** Loads the viewport needs that the driver has not yet taken. */
   #blameWanted: BlameLoad[] = [];
 
-  /** The {@link blameKey}s of files git could not blame. */
+  /** The {@link blameKey}s of files and commits git could not blame. */
   #blameFailures = new Set<string>();
 
-  /** The source's blame targets, and the source and text they are for. */
+  /** The source's blame targets, and the source, text, and baseline they are
+   * for. */
   #blameTargetCache?: {
     source: EditableSource;
     text: string;
+    baseline: string;
     targets: readonly (BlameTarget | null)[];
   };
 
@@ -357,10 +510,18 @@ export class Session {
   /** Bumped whenever `collapsed` changes, to invalidate the fold-plan cache. */
   #foldVersion = 0;
 
-  #foldFileCache?: { doc: Document; files: DiffFileRange[] };
+  /**
+   * Bumped whenever the current document's text, or the text of any of its
+   * lines, may have changed, so that what is derived from text alone is kept
+   * when a document only colors the same text differently.
+   */
+  #textVersion = 0;
+
+  #foldFileCache?: { textVersion: number; files: DiffFileRange[] };
   #foldPlanCache?: { doc: Document; version: number; plan: FoldPlan };
   #wrapPlanCache?: {
-    lines: readonly Line[];
+    textVersion: number;
+    foldVersion: number;
     mode: DisplayMode;
     wrapMode: ActiveWrapMode;
     width: number;
@@ -368,7 +529,8 @@ export class Session {
     plan: WrapPlan;
   };
   #baseWrapPlanCache?: {
-    lines: readonly Line[];
+    textVersion: number;
+    foldVersion: number;
     mode: DisplayMode;
     wrapMode: ActiveWrapMode;
     width: number;
@@ -378,7 +540,7 @@ export class Session {
   #wrapDecorations = new Map<number, WrapDecoration>();
   #wrapDecorationKey = "";
   #displayColumnCache?: {
-    doc: Document;
+    textVersion: number;
     mode: DisplayMode;
     columns: Map<number, Uint32Array>;
   };
@@ -391,15 +553,19 @@ export class Session {
     return this.#wrapMode === "word" ? "word" : "hard";
   }
   #maxDisplayWidthCache?: {
-    lines: readonly Line[];
+    textVersion: number;
+    foldVersion: number;
     mode: DisplayMode;
     width: number;
   };
-  #nonPrintCache?: { doc: Document; value: boolean };
-  #fileLineCache?: { doc: Document; value: (number | null)[] | null };
+  #nonPrintCache?: { textVersion: number; value: boolean };
+  #fileLineCache?: {
+    textVersion: number;
+    value: (number | null)[] | null;
+  };
 
-  /** Diff metadata lines, cached against the parsed document. */
-  #diffMetadataCache?: { doc: Document; lines: readonly number[] };
+  /** Diff metadata lines, cached against the text. */
+  #diffMetadataCache?: { textVersion: number; lines: readonly number[] };
 
   width: number;
   height: number;
@@ -445,7 +611,7 @@ export class Session {
    * the dialog with that button drawn mid-press — so the driver can play the
    * press for a moment before the action's result appears. The next key clears
    * it. */
-  pendingPush: { doc: Document; view: ViewState } | null = null;
+  pendingPush: PushedFrame | null = null;
 
   /** The last key asked for the checked-out branch to be pushed. The driver
    * starts the push, calls {@link beginBranchPush}, and clears this. */
@@ -454,6 +620,23 @@ export class Session {
   /** The last key asked for the settings dialog. The driver reads the
    * settings, calls {@link openSettings}, and clears this. */
   settingsRequested = false;
+
+  /** The last key asked to land the checked-out branch's pull request. The
+   * driver finds the pull request, does what the settings say, and clears
+   * this. */
+  landRequested = false;
+
+  /** The merge the task dialog asked for. The driver starts it, calls
+   * {@link continueTask}, and clears this. */
+  mergeRequested: MergeRequest | null = null;
+
+  /** The task dialog's Push button was pressed. The driver pushes without
+   * asking, continuing the dialog, and clears this. */
+  pushConfirmed = false;
+
+  /** The task dialog's retry button was pressed. The driver starts the task
+   * again and clears this. */
+  retryRequested = false;
 
   /** The settings the settings dialog's OK button asked to save, and those it
    * opened showing. The driver saves them and clears this. */
@@ -468,29 +651,70 @@ export class Session {
   transientMessage = false;
 
   /** How much context each hunk can reveal, cached against the document. */
-  #roomCache?: { doc: Document; room: ReadonlyMap<number, HunkRoom> };
+  #roomCache?: {
+    textVersion: number;
+    room: ReadonlyMap<number, HunkRoom>;
+  };
 
-  /** The push dialog's output, a line per entry, the last one still being
-   * written. After a carriage return, the next text starts that line over. */
-  #pushLines: string[] = [""];
-  #pushReturned = false;
+  /** The hunk nodes of a flat structure, cached against it. */
+  #hunkCache?: {
+    flat: readonly StructureNode[];
+    hunks: readonly StructureNode[];
+  };
 
-  /** Stops the push the dialog shows, or null once it has finished. */
-  #abortPush: (() => void) | null = null;
+  /** The task dialog's title. */
+  #taskTitle = "";
 
-  /** How the push ended, once it has. */
-  #pushSummary = "";
+  /** What the task dialog's tasks have said, and what the programs they ran
+   * wrote. */
+  #taskLog = new TaskLog();
 
-  /** What the push dialog says, under the push's output, about watching for
-   * the pushed branch's pull request to open, or "" when it says nothing. */
-  #pullRequestWatch = "";
+  /** The first of the task dialog's rows of output that it shows, or null
+   * while it shows the end of the output as the output grows. */
+  #taskTop: number | null = null;
+
+  /** Stops the task the dialog shows, or null once it has finished. */
+  #abortTask: (() => void) | null = null;
+
+  /** How the task ended, once it has. */
+  #taskSummary: TaskText = [];
+
+  /** The label of the button that tries the task again, once it has ended
+   * failing in a way that trying again can fix, or "" for none. */
+  #taskRetry = "";
+
+  /** What the task dialog says, under how the task ended, about watching
+   * for the pull request to open or merge and quitting once it has. */
+  #watchLog = new TaskLog();
+
+  /** How far the spinners of the task dialog's running steps, and of the
+   * status bar's highlighting progress, have turned. */
+  #spinnerFrame = 0;
+
+  /** The milliseconds since the last step that waits for the touch of a
+   * security key began, as far as the key beside the task dialog has been
+   * drawn. */
+  #keyTime = 0;
+
+  /** How much of the source left to color in the background has been
+   * parsed, from 0 to 1, or null when nothing is left, which opening another
+   * file makes so. */
+  #highlightProgress: number | null = null;
 
   /** The settings dialog's controls, while it is up. */
   #settingsDraft: SettingsDraft | null = null;
 
-  /** The address of the pushed branch's pull request, once it has opened
-   * while the push dialog was up, until a quit that it did not ask for. */
-  #pullRequestUrl: string | null = null;
+  /** The button that does what the task dialog asks whether to do, such as
+   * merging, and what pressing it does, while it asks. */
+  #confirmation:
+    | { readonly button: DialogButton; readonly confirm: () => void }
+    | null = null;
+
+  /** The address of the pull request that has opened or merged while the
+   * task dialog was up, and how many milliseconds the dialog gives it before
+   * the viewer quits for it, until a quit that it did not ask for. */
+  #pullRequestQuit: { readonly url: string; readonly delay: number } | null =
+    null;
 
   //
   // editing
@@ -565,7 +789,7 @@ export class Session {
    */
   #jumpByNetChange = false;
   #commitHeaderCache?: {
-    readonly doc: Document;
+    readonly textVersion: number;
     readonly headers: readonly CommitHeader[];
   };
 
@@ -573,6 +797,10 @@ export class Session {
     readonly doc: Document;
     readonly mode: DiffCountMode;
     readonly counts: DiffCounts;
+  };
+  #commentOnlyCache?: {
+    readonly doc: Document;
+    readonly files: readonly boolean[];
   };
 
   constructor(
@@ -674,11 +902,20 @@ export class Session {
     this.#sourceDoc = doc;
     if (this.#viewMode === "rendered" && this.#source?.render) {
       const rendered = this.#source.render(doc);
-      this.#currentDoc = { ...doc, lines: rendered.lines };
+      this.#showDocument({ ...doc, lines: rendered.lines });
     } else {
       this.#viewMode = "source";
-      this.#currentDoc = doc;
+      this.#showDocument(doc);
     }
+  }
+
+  /**
+   * Makes `doc` the current document, keeping what is derived from text alone
+   * when `doc` has the text and line texts of the one it replaces.
+   */
+  #showDocument(doc: Document): void {
+    if (!sameText(this.#currentDoc, doc)) this.#textVersion++;
+    this.#currentDoc = doc;
   }
 
   /** Change representation while keeping the same source line at the top. */
@@ -730,9 +967,9 @@ export class Session {
    * Cached against the current document. */
   #foldFiles(): DiffFileRange[] {
     if (!this.#source?.isDiff) return []; // only a diff has foldable files
-    if (this.#foldFileCache?.doc !== this.#currentDoc) {
+    if (this.#foldFileCache?.textVersion !== this.#textVersion) {
       this.#foldFileCache = {
-        doc: this.#currentDoc,
+        textVersion: this.#textVersion,
         files: diffFiles(this.#currentDoc.text, this.#source.declaredTests),
       };
     }
@@ -765,9 +1002,9 @@ export class Session {
   /** Whether the document holds any non-printable character, so cycling the
    * display mode would change what is shown. Cached against the document. */
   #hasNonPrintables(): boolean {
-    if (this.#nonPrintCache?.doc !== this.#currentDoc) {
+    if (this.#nonPrintCache?.textVersion !== this.#textVersion) {
       this.#nonPrintCache = {
-        doc: this.#currentDoc,
+        textVersion: this.#textVersion,
         value: this.#currentDoc.lines.some((l) => hasNonPrintable(l.text)),
       };
     }
@@ -807,14 +1044,16 @@ export class Session {
     const lines = this.#foldPlan().displayLines;
     const width = this.#contentWidth();
     if (
-      this.#wrapPlanCache?.lines !== lines ||
+      this.#wrapPlanCache?.textVersion !== this.#textVersion ||
+      this.#wrapPlanCache.foldVersion !== this.#foldVersion ||
       this.#wrapPlanCache.mode !== this.#displayMode ||
       this.#wrapPlanCache.wrapMode !== this.#activeWrapMode ||
       this.#wrapPlanCache.width !== width ||
       this.#wrapPlanCache.decorations !== this.#wrapDecorationKey
     ) {
       this.#wrapPlanCache = {
-        lines,
+        textVersion: this.#textVersion,
+        foldVersion: this.#foldVersion,
         mode: this.#displayMode,
         wrapMode: this.#activeWrapMode,
         width,
@@ -836,13 +1075,15 @@ export class Session {
     const lines = this.#foldPlan().displayLines;
     const width = this.#contentWidth();
     if (
-      this.#baseWrapPlanCache?.lines !== lines ||
+      this.#baseWrapPlanCache?.textVersion !== this.#textVersion ||
+      this.#baseWrapPlanCache.foldVersion !== this.#foldVersion ||
       this.#baseWrapPlanCache.mode !== this.#displayMode ||
       this.#baseWrapPlanCache.wrapMode !== this.#activeWrapMode ||
       this.#baseWrapPlanCache.width !== width
     ) {
       this.#baseWrapPlanCache = {
-        lines,
+        textVersion: this.#textVersion,
+        foldVersion: this.#foldVersion,
         mode: this.#displayMode,
         wrapMode: this.#activeWrapMode,
         width,
@@ -891,17 +1132,17 @@ export class Session {
     const sel = view.selected;
     const expandRow = view.expandRow;
     const diffAnnotations = view.diffAnnotations;
-    const projectedAnnotations = diffAnnotations?.flatMap(
-      (annotation): DiffAnnotation[] => {
-        if (annotation.line < from || annotation.line >= to) {
-          return [{ ...annotation, line: back(annotation.line) }];
-        }
-        if (annotation.kind === "diffMetadata") return [];
-        return [{
-          ...annotation,
-          line: rev.up ? from : Math.max(0, from - 1),
-        }];
-      },
+    // Diff metadata is never among the lines still to come, which are revealed
+    // context; only a triangle can sit there, and it waits at their edge.
+    const projectedAnnotations = diffAnnotations?.map(
+      (annotation): DiffAnnotation => ({
+        ...annotation,
+        line: annotation.line < from || annotation.line >= to
+          ? back(annotation.line)
+          : rev.up
+          ? from
+          : Math.max(0, from - 1),
+      }),
     );
     const projectedTriangle = projectedAnnotations?.find((annotation) =>
       annotation.kind !== "diffMetadata"
@@ -1264,6 +1505,10 @@ export class Session {
       hasNonPrintables: this.#hasNonPrintables(),
       notice: null,
       currentFile: this.#currentFile(),
+      highlighting: this.#highlightProgress === null ? null : {
+        fraction: this.#highlightProgress,
+        frame: this.#spinnerFrame,
+      },
     };
   }
 
@@ -1289,7 +1534,7 @@ export class Session {
     if (this.#mode === "savePrompt") dialog = this.#saveDialog();
     else if (this.#mode === "amendPrompt") dialog = this.#amendDialog();
     else if (this.#mode === "revertPrompt") dialog = this.#revertDialog();
-    else if (this.#mode === "pushPrompt") dialog = this.#pushDialog();
+    else if (this.#mode === "taskPrompt") dialog = this.#taskDialog();
     else if (this.#mode === "settingsPrompt") dialog = this.#settingsDialog();
     if (!dialog) return null;
     // The focus runs through the fields and then the buttons. -1 means no
@@ -1335,7 +1580,15 @@ export class Session {
   /** The fields of the prompt that is up, in the order it shows them. */
   #fieldStates(): FieldState[] {
     const draft = this.#mode === "settingsPrompt" ? this.#settingsDraft : null;
-    return draft ? [draft.quitOnPullRequest, draft.webhookRelay] : [];
+    return draft
+      ? [
+        draft.pullRequestTool,
+        draft.touchGateToken,
+        draft.quitOnPullRequest,
+        draft.quitDelay,
+        draft.webhookRelay,
+      ]
+      : [];
   }
 
   /** Move the prompt's focus to its control at `index`, counting its fields
@@ -1355,86 +1608,122 @@ export class Session {
   /** Whether a modal prompt is up. */
   #prompting(): boolean {
     return this.#mode === "savePrompt" || this.#mode === "amendPrompt" ||
-      this.#mode === "revertPrompt" || this.#mode === "pushPrompt" ||
+      this.#mode === "revertPrompt" || this.#mode === "taskPrompt" ||
       this.#mode === "settingsPrompt";
   }
 
-  /** Whether the push dialog is up. */
-  get pushDialogUp(): boolean {
-    return this.#mode === "pushPrompt";
+  /** Whether the task dialog is up. */
+  get taskDialogUp(): boolean {
+    return this.#mode === "taskPrompt";
   }
 
-  /** The push dialog: as much of the end of git's output as fits, then how the
-   * push ended, at a fixed size so that it holds still as the output grows,
-   * and under that what it says about watching for the pull request. Abort
-   * stops the push; once it ends, Close takes the dialog down and Quit closes
-   * the viewer. */
-  #pushDialog(): DialogState {
-    const lines = this.#pushLines.at(-1) === ""
-      ? this.#pushLines.slice(0, -1)
-      : this.#pushLines;
-    const output = this.#pushSummary === ""
-      ? lines
-      : [...lines, "", this.#pushSummary];
-    // A line wider than the box wraps after its last space that fits, so that
-    // an address no wider than the box stays on one row, and a word wider than
-    // the box is broken. Git pads the lines a server sends with spaces when its
-    // output is not a terminal, and those would wrap onto rows of their own.
-    const columns = Math.max(1, Math.min(PUSH_COLUMNS, this.width - 8));
-    const wrap = (line: string) => {
-      let chars = [...line.trimEnd()];
-      const rowsOfLine: string[] = [];
-      while (chars.length > columns) {
-        const space = chars.lastIndexOf(" ", columns);
-        const words = chars.slice(0, space + 1).join("").trimEnd();
-        rowsOfLine.push(words || chars.slice(0, columns).join(""));
-        chars = chars.slice(words ? space + 1 : columns);
-      }
-      rowsOfLine.push(chars.join(""));
-      return rowsOfLine;
-    };
-    // The output keeps at least one row, and what the dialog says about the
-    // watch takes as many of the rest as it needs.
-    const total = Math.max(1, Math.min(PUSH_ROWS, this.height - 7));
-    const watch =
-      (this.#pullRequestWatch === ""
-        ? []
-        : ["", ...wrap(this.#pullRequestWatch)]).slice(0, total - 1);
-    const rows = total - watch.length;
-    const body = output.flatMap(wrap).slice(-rows);
-    while (body.length < rows) body.push("");
+  /** The task dialog's rows: what the task said and what the programs it
+   * ran wrote, how it ended, and what it says about watching for the pull
+   * request; how many of them it shows at once; and how wide they are. */
+  #taskLayout(): { output: TaskRow[]; rows: number; columns: number } {
+    // A security key beside the dialog reaches past the two columns of the
+    // dialog's shadow.
+    const key = this.#securityKey() !== null;
+    const columns = Math.max(
+      1,
+      Math.min(PUSH_COLUMNS, this.width - 6 - (key ? KEY_REACH : 2)),
+    );
     return {
-      title: "Push",
-      body: [...body, ...watch],
+      output: TaskLog.rows(
+        [this.#taskLog, this.#watchLog],
+        columns,
+        this.#spinnerFrame,
+      ),
+      rows: this.#taskRows(),
+      columns,
+    };
+  }
+
+  /** How many of its rows of output the task dialog shows at once. */
+  #taskRows(): number {
+    return Math.max(1, Math.min(PUSH_ROWS, this.height - 7));
+  }
+
+  /** The security key beside the task dialog, or null when it shows none,
+   * as when no step waits for a touch or the dialog is too short to hold
+   * the key. */
+  #securityKey(): SecurityKey | null {
+    return dialogHeight(this, this.#taskRows()) >= KEY_ROWS
+      ? this.#taskLog.securityKey(this.#keyTime)
+      : null;
+  }
+
+  /** Scroll the task dialog's output by `delta` rows, or to its `edge`.
+   * Scrolled to its end, it follows the output as it grows. */
+  #scrollTask(delta: number, edge: "first" | "last" | null = null): void {
+    const last = this.#taskLastTop();
+    const top = edge === "first"
+      ? 0
+      : edge === "last"
+      ? last
+      : clamp((this.#taskTop ?? last) + delta, 0, last);
+    this.#taskTop = top < last ? top : null;
+  }
+
+  /** The first row of the task dialog's output that it shows at the end of
+   * the output. */
+  #taskLastTop(): number {
+    const { output, rows } = this.#taskLayout();
+    return Math.max(0, output.length - rows);
+  }
+
+  /** The task dialog: as much of what the task said and the output of the
+   * programs it ran, such as git's, as fits, then how the task ended and what
+   * it says about watching for the pull request, at a fixed size so that it
+   * holds still as the output grows. It shows the end of the output unless it
+   * is scrolled back, when it holds still as the output grows.
+   * Abort stops the task; once it ends, Close takes the dialog down and Quit
+   * closes the viewer. */
+  #taskDialog(): DialogState {
+    const { output, rows, columns } = this.#taskLayout();
+    const top = Math.min(
+      this.#taskTop ?? output.length,
+      Math.max(0, output.length - rows),
+    );
+    const body: TaskRow[] = output.slice(top, top + rows);
+    while (body.length < rows) body.push({ text: "", spans: [] });
+    return {
+      title: this.#taskTitle,
+      body: body.map((row) => row.text),
+      spans: body.map((row) => row.spans),
       output: true,
       width: columns,
-      buttons: this.#abortPush
+      securityKey: this.#securityKey(),
+      buttons: this.#abortTask
         ? [{ label: "Abort", hotkey: "a", kind: "cancel" }]
+        : this.#confirmation
+        ? [
+          this.#confirmation.button,
+          { label: "Cancel", hotkey: "c", kind: "cancel" },
+        ]
         : [
           { label: "Close", hotkey: "c", kind: "cancel" },
+          ...(this.#taskRetry === ""
+            ? []
+            : [{ label: this.#taskRetry, hotkey: "p" }]),
           { label: "Quit", hotkey: "Q" },
         ],
     };
   }
 
-  /** The settings dialog: a check box that turns on quitting when the pushed
-   * branch's pull request opens, the address of the webhook relay that says
-   * when it does, and OK and Cancel. */
+  /**
+   * The settings dialog: radio buttons that choose how the viewer handles
+   * the pushed branch's pull request, the name of the token touch-gate uses,
+   * a check box that turns on quitting when the pull request opens or
+   * merges, a slider that sets how long the viewer waits before it quits,
+   * the address of the webhook relay that says when the pull request opens
+   * or merges, and OK and Cancel.
+   */
   #settingsDialog(): DialogState {
     return {
       title: "Settings",
       body: [],
-      fields: this.#fieldStates().map((field): DialogField =>
-        field.kind === "checkBox" ? { ...field } : {
-          kind: "inputLine",
-          label: field.label,
-          hotkey: field.hotkey,
-          value: field.edit.value,
-          cursor: field.edit.cursor,
-          scroll: field.edit.scroll,
-          selected: field.edit.selected,
-        }
-      ),
+      fields: this.#fieldStates().map(dialogField),
       buttons: [
         { label: "OK", hotkey: "o", kind: "default" },
         { label: "Cancel", hotkey: "c", kind: "cancel" },
@@ -1522,7 +1811,10 @@ export class Session {
     return { title: "Revert", body: ["Revert which changes?"], buttons };
   }
 
-  handleKey(key: Key, beforeButtonAction?: () => void): void {
+  handleKey(
+    key: Key,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
+  ): void {
     // A reveal is animated by the driver over the frames after the key that
     // caused it, so the next key ends it whatever it was. A message that takes
     // itself away goes now rather than waiting out its moment, before this key
@@ -1541,6 +1833,17 @@ export class Session {
     if (key.name === "wheel-up" || key.name === "wheel-down") {
       this.#chord = null;
       this.#handleWheel(key.name === "wheel-up" ? -1 : 1);
+      return;
+    }
+    // Alt with a letter is the dialog's shortcut wherever the focus is, and
+    // otherwise types what it types into a focused input line.
+    const prompt = key.alt && [...key.name].length === 1
+      ? this.#promptDialog()
+      : null;
+    if (prompt) {
+      if (!this.#pressShortcut(prompt, key, beforeButtonAction)) {
+        this.#handleFieldKey(key);
+      }
       return;
     }
     if (this.#handleFieldKey(key)) return;
@@ -1663,6 +1966,12 @@ export class Session {
     } else if (jump) {
       this.#jumpSel = move(this.#jumpSel, this.#jumpEntries.length - 1);
       this.#scrollJumpToSelection(this.#jumpSel);
+    } else if (
+      this.#mode === "taskPrompt" && key.name !== "left" &&
+      key.name !== "right"
+    ) {
+      // The task dialog's output scrolls, and Left and Right move the focus.
+      this.#scrollTask(delta, edge);
     } else if (prompt) {
       const dialog = this.#promptDialog()!;
       this.#moveDialogFocus(move(
@@ -1690,6 +1999,10 @@ export class Session {
   #handleWheel(direction: -1 | 1): void {
     this.#message = "";
     const delta = direction * MOUSE_WHEEL_STEP;
+    if (this.#mode === "taskPrompt") {
+      this.#scrollTask(delta);
+      return;
+    }
     if (this.#prompting()) return;
     if (this.#mode === "filePicker") {
       const last = Math.max(0, this.#pickerEntries.length - 1);
@@ -2196,11 +2509,11 @@ export class Session {
     const l = this.doc.lines[line];
     if (!l || this.#displayMode === "pictures") return sourceCol;
     if (
-      this.#displayColumnCache?.doc !== this.#currentDoc ||
+      this.#displayColumnCache?.textVersion !== this.#textVersion ||
       this.#displayColumnCache.mode !== this.#displayMode
     ) {
       this.#displayColumnCache = {
-        doc: this.#currentDoc,
+        textVersion: this.#textVersion,
         mode: this.#displayMode,
         columns: new Map(),
       };
@@ -2209,7 +2522,7 @@ export class Session {
     if (!columns) {
       columns = Uint32Array.from(
         displayLine(l, this.#displayMode),
-        (cell) => cell.col,
+        (cell) => cell.sourceEnd,
       );
       this.#displayColumnCache.columns.set(line, columns);
     }
@@ -2217,7 +2530,7 @@ export class Session {
     let hi = columns.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (columns[mid] < sourceCol) lo = mid + 1;
+      if (columns[mid] <= sourceCol) lo = mid + 1;
       else hi = mid;
     }
     return lo;
@@ -2429,7 +2742,6 @@ export class Session {
           : clamp(this.left - this.#horizontalStep(), 0, this.#maxLeft());
         return;
       case "l":
-      case "L":
         this.left = this.#wrapLines
           ? 0
           : clamp(this.left + this.#horizontalStep(), 0, this.#maxLeft());
@@ -2554,6 +2866,9 @@ export class Session {
         return;
       case "O":
         this.settingsRequested = true;
+        return;
+      case "L":
+        this.landRequested = true;
         return;
       case "escape": {
         const anchor = this.#wrapLines ? this.#viewportAnchor() : null;
@@ -2754,15 +3069,24 @@ export class Session {
 
   /** Toggle the files whose changes touch only comments. */
   #toggleCommentOnlyFiles(): void {
-    let commentOnly: readonly boolean[] | undefined;
     this.#toggleFileCategory(
-      (file) =>
-        (commentOnly ??= commentOnlyFiles(
-          this.#sourceDoc.text,
-          this.#source?.diffCountContexts?.(this.#sourceDoc.text) ?? [],
-        ))[file.index],
+      (file) => this.#commentOnlyFiles()[file.index],
       "comment-only",
     );
+  }
+
+  /** Which files of the current source document change only comments. */
+  #commentOnlyFiles(): readonly boolean[] {
+    if (this.#commentOnlyCache?.doc !== this.#sourceDoc) {
+      this.#commentOnlyCache = {
+        doc: this.#sourceDoc,
+        files: commentOnlyFiles(
+          this.#sourceDoc.text,
+          this.#source?.diffCountContexts?.(this.#sourceDoc.text) ?? [],
+        ),
+      };
+    }
+    return this.#commentOnlyCache.files;
   }
 
   //
@@ -2804,10 +3128,17 @@ export class Session {
     this.#wrapMode = "off";
     this.#cursorOn = true;
     this.#selectedIndex = null;
-    // Editing relies on every source column mapping to one display column, which
-    // only the first mode guarantees (it hides nothing and collapses nothing).
-    this.#displayMode = DISPLAY_MODES[0];
-    if (anchor) this.left = cursorCol;
+    // Editing relies on every source column having a display column of its own
+    // or sharing one with the rest of its character, which only "pictures"
+    // guarantees (it hides nothing and collapses nothing).
+    const picturesAppear = this.#currentDoc.lines.some((line) =>
+      !drawsAsPictures(line.text, this.#displayMode)
+    );
+    this.#displayMode = "pictures";
+    const topLine = this.#currentDoc.lines[topDoc];
+    if (anchor && topLine) {
+      this.left = displayColumnOf(topLine, "pictures", cursorCol);
+    }
     // Editing works on the full text, so expand every folded file; the top
     // display row becomes its document line.
     this.#clearFolds();
@@ -2815,12 +3146,16 @@ export class Session {
     this.#buffer.place(topDoc, cursorCol);
     this.#seedHighlighter();
     this.#ensureCursorVisible();
-    if (leftRenderedView && wasWrapped) {
-      this.#message = "Source view; line wrapping turned off for editing.";
-    } else if (leftRenderedView) {
-      this.#message = "Source view for editing.";
-    } else if (wasWrapped) {
-      this.#message = "Line wrapping turned off for editing.";
+    const changes = [
+      leftRenderedView && "source view",
+      wasWrapped && "line wrapping turned off",
+      picturesAppear && "non-printables shown as control pictures",
+    ].filter((change) => change !== false);
+    if (changes.length > 0) {
+      const summary = changes.join("; ");
+      this.#message = `${summary[0].toUpperCase()}${
+        summary.slice(1)
+      } for editing.`;
     }
   }
 
@@ -3393,8 +3728,7 @@ export class Session {
 
   /** Keep source-owned transport outside the text cursor. */
   #clampToLogicalLine(): void {
-    const b = this.#buffer;
-    if (!b) return;
+    const b = this.#buffer!;
     const end = this.#logicalLineEnd();
     if (b.col > end) b.place(b.row, end);
   }
@@ -3536,10 +3870,9 @@ export class Session {
     markerLen: number,
     parsed: { model: DiffModel; hunk: DiffHunk } | null,
   ): void {
-    if (!this.#buffer || markerLen <= 1 || parsed === null) return;
-    const b = this.#buffer;
+    const b = this.#buffer!;
     const prefix = [...b.lines[b.row]].slice(1, markerLen).join("");
-    if (prefix.length === 0) return;
+    if (prefix === "" || parsed === null) return;
     const { model, hunk } = parsed;
     for (let row = b.row + 1; row <= hunk.endLine; row++) {
       const kind = model.lines[row]?.kind;
@@ -3639,7 +3972,7 @@ export class Session {
         // structure (navigation, cross-references) is refreshed on the deferred
         // re-parse.
         this.#sourceDoc = { ...this.#sourceDoc, text, lines };
-        this.#currentDoc = this.#sourceDoc;
+        this.#showDocument(this.#sourceDoc);
         this.needsReparse = true;
       } else {
         this.#setSourceDocument(
@@ -3659,68 +3992,157 @@ export class Session {
     this.transientMessage = false;
   }
 
-  /** Open the push dialog for a push that has started, which `abort` stops. */
-  beginBranchPush(abort: () => void): void {
+  /** Open the task dialog, titled `title`, for a task that has started, such
+   * as a push, which `abort` stops. */
+  beginTask(title: string, abort: () => void): void {
     this.#overlay = null;
     this.#overlayStack = [];
-    this.#mode = "pushPrompt";
-    this.#pushLines = [""];
-    this.#pushReturned = false;
-    this.#pushSummary = "";
-    this.#pullRequestWatch = "";
-    this.#pullRequestUrl = null;
-    this.#abortPush = abort;
+    this.#mode = "taskPrompt";
+    this.#taskTitle = title;
+    this.#taskLog = new TaskLog();
+    this.#taskSummary = [];
+    this.continueTask(abort);
+  }
+
+  /** Start another task, which `abort` stops, in the task dialog, such as
+   * trying again what the last one failed to do. The dialog keeps its output,
+   * which goes on from how the last task ended. */
+  continueTask(abort: () => void): void {
+    this.#taskTop = null;
+    this.#taskRetry = "";
+    this.#taskSummary = [];
+    this.#confirmation = null;
+    this.#watchLog = new TaskLog();
+    this.#pullRequestQuit = null;
+    this.#abortTask = abort;
     this.#dialogFocus = -1;
   }
 
-  /** Add git's output to the push dialog. A carriage return starts the line
-   * over, which is how git redraws a progress report in place. */
-  appendPushOutput(text: string): void {
-    for (const part of text.split(/(\r\n|\n|\r)/)) {
-      if (part === "\r") {
-        this.#pushReturned = true;
-      } else if (part === "\n" || part === "\r\n") {
-        this.#pushLines.push("");
-        this.#pushReturned = false;
-      } else if (part !== "") {
-        const last = this.#pushLines.length - 1;
-        this.#pushLines[last] =
-          (this.#pushReturned ? "" : this.#pushLines[last]) + part;
-        this.#pushReturned = false;
-      }
-    }
+  /** Add what a program the task runs, such as git, wrote to the task
+   * dialog, quoted. A carriage return starts the line over, which is how git
+   * redraws a progress report in place. */
+  appendTaskOutput(text: string): void {
+    this.#taskLog.quote(text);
   }
 
-  /** End the push with `summary`, which the dialog shows under the output and
-   * the status line shows once the dialog closes. */
-  finishBranchPush(summary: string): void {
-    this.#abortPush = null;
-    this.#pushSummary = summary;
-    this.#dialogFocus = 0;
-    if (this.#pullRequestUrl !== null) this.#quitForPullRequest();
+  /** Add `text` to the task dialog as a step of the task, which the function
+   * returned shows is done. A step still running when the task ends shows
+   * that it ended without being done. */
+  beginTaskStep(text: TaskText, kind?: StepKind): () => void {
+    if (kind === "touch") this.#keyTime = 0;
+    return this.#taskLog.step(text, kind);
   }
 
-  /** Have the push dialog say `text` about watching for the pushed branch's
-   * pull request, under the push's output. */
-  setPullRequestWatch(text: string): void {
-    this.#pullRequestWatch = text;
+  /** End the task with `summary`, which the dialog shows under the output
+   * and the status line shows once the dialog closes. A `retry` other than
+   * "" labels a button that tries the task again. */
+  finishTask(summary: TaskText, retry = ""): void {
+    this.#taskLog.stop();
+    this.#taskLog.say(summary);
+    this.#abortTask = null;
+    this.#taskSummary = summary;
+    this.#taskRetry = retry;
+    if (this.#mode === "taskPrompt") this.#dialogFocus = 0;
+    this.#beginPullRequestQuit();
+  }
+
+  /** Add `text` to the task dialog, under how the task ended, as a step of
+   * watching for the pull request, which the function returned shows is
+   * done. */
+  beginWatchStep(text: TaskText, kind?: StepKind): () => void {
+    return this.#watchLog.step(text, kind);
+  }
+
+  /** Have the task dialog say, under how the task ended, that it is not
+   * watching for the pull request, for `reason`, and show each step of
+   * watching still running as having ended without being done. */
+  stopPullRequestWatch(reason: TaskText): void {
+    this.#watchLog.stop();
+    this.#watchLog.say(say`Not watching for the pull request: ${reason}`);
+  }
+
+  /** Whether the task dialog is up with a step running, whose spinner
+   * {@link advanceSpinner} turns. */
+  get taskSpinning(): boolean {
+    return this.taskDialogUp &&
+      TaskLog.spinning([this.#taskLog, this.#watchLog]);
+  }
+
+  /** How long after the task dialog's security key last moved it next
+   * moves, which {@link advanceKey} makes it do, in milliseconds, or null
+   * while it holds still. */
+  get keyFrameDelay(): number | null {
+    return this.#securityKey() === null
+      ? null
+      : this.#taskLog.keyFrameDelay(this.#keyTime);
+  }
+
+  /** Whether the status bar shows highlighting progress, whose spinner
+   * {@link advanceSpinner} turns. Opening another file ends it. */
+  get highlighting(): boolean {
+    return this.#highlightProgress !== null;
+  }
+
+  /** Turn the spinners of the task dialog's running steps, and of the
+   * highlighting progress, a frame. */
+  advanceSpinner(): void {
+    this.#spinnerFrame++;
+  }
+
+  /** Move the task dialog's security key a frame on, plugging it in or
+   * blinking its light. */
+  advanceKey(): void {
+    this.#keyTime += this.keyFrameDelay ?? 0;
+  }
+
+  /** Show on the status bar that `fraction` of the source left to color in
+   * the background has been parsed, or, given null, that nothing is left. */
+  showHighlightProgress(fraction: number | null): void {
+    this.#highlightProgress = fraction;
   }
 
   /**
-   * The pushed branch's pull request has opened, at `url`. While the push
-   * dialog is up, close it and quit, as its Quit button does, once the push
-   * has ended; otherwise do nothing.
+   * The pull request at `url` has opened or merged. While the task dialog
+   * is up, show the watch's running steps done, and, once the task has
+   * ended, quit for it at once when `delay` counts as none, and otherwise
+   * have the dialog give the address, unless how the task ended already
+   * gives it, and say it is quitting, for `delay` milliseconds, after which
+   * {@link completePullRequestQuit} quits. While the dialog is not up, do
+   * nothing.
    */
-  quitForPullRequest(url: string): void {
-    if (this.#mode !== "pushPrompt") return;
-    this.#pullRequestUrl = url;
-    if (!this.#abortPush) this.#quitForPullRequest();
+  quitForPullRequest(url: string, delay: number): void {
+    if (this.#mode !== "taskPrompt") return;
+    this.#pullRequestQuit = { url, delay };
+    this.#watchLog.complete();
+    if (!this.#abortTask) this.#beginPullRequestQuit();
+  }
+
+  /** Whether the task dialog says it is quitting for the pull request, until
+   * {@link completePullRequestQuit} quits or a button takes the dialog down. */
+  get pullRequestQuitPending(): boolean {
+    return this.pullRequestQuitDelay !== null;
+  }
+
+  /** How many milliseconds the task dialog says it is quitting for the pull
+   * request before {@link completePullRequestQuit} quits, while it says so,
+   * or null. */
+  get pullRequestQuitDelay(): number | null {
+    const quit = this.#pullRequestQuit;
+    return this.#mode === "taskPrompt" && !this.#abortTask && quit !== null
+      ? quit.delay
+      : null;
+  }
+
+  /** Close the task dialog and quit, as its Quit button does, when it says
+   * it is quitting for the pull request; otherwise do nothing. */
+  completePullRequestQuit(): void {
+    if (this.pullRequestQuitPending) this.#quitForPullRequest();
   }
 
   /** What the driver prints once the viewer has closed: the address of the
    * pull request whose opening quit it, or null. */
   get exitMessage(): string | null {
-    return this.quit ? this.#pullRequestUrl : null;
+    return this.quit ? this.#pullRequestQuit?.url ?? null : null;
   }
 
   /** Open the settings dialog, showing `settings`. */
@@ -3731,11 +4153,32 @@ export class Session {
     this.#message = "";
     this.#settingsDraft = {
       shown: settings,
+      pullRequestTool: {
+        kind: "radioButtons",
+        label: "Pull requests",
+        hotkey: "p",
+        buttons: PULL_REQUEST_TOOL_BUTTONS,
+        selected: PULL_REQUEST_TOOLS.indexOf(settings.pullRequestTool),
+      },
+      touchGateToken: {
+        kind: "inputLine",
+        label: "Name of the touch-gate token",
+        hotkey: "n",
+        edit: new LineEdit(settings.touchGateToken),
+      },
       quitOnPullRequest: {
         kind: "checkBox",
-        label: "Quit when the pushed branch's pull request opens",
+        label: "Quit when the pull request opens or merges",
         hotkey: "q",
         checked: settings.quitOnPullRequest,
+      },
+      quitDelay: {
+        kind: "slider",
+        label: "Delay before quitting",
+        hotkey: "d",
+        stops: QUIT_DELAYS,
+        text: delayText,
+        value: settings.quitDelay,
       },
       webhookRelay: {
         kind: "inputLine",
@@ -3745,6 +4188,64 @@ export class Session {
       },
     };
     this.#dialogFocus = 0;
+  }
+
+  /**
+   * End the task the task dialog shows, which has found the pull request to
+   * land, by asking whether to merge as `request` describes, saying how and
+   * at which commit as GitHub's merge button does. Merge asks the driver to
+   * merge. Does nothing unless the task is running.
+   */
+  confirmLand(request: MergeRequest): void {
+    // The button's letter is not the `L` that opened the dialog, so that
+    // pressing `L` again does not merge.
+    const { repository, number, method, sha } = request;
+    const page = pullRequestUrl(repository, number);
+    this.#ask(
+      say`${MERGE_VERBS[method]} pull request ${
+        pullRequest(number, page)
+      } of ${repository},\nif its head is still ${sha.slice(0, 12)}?`,
+      { label: "Merge", hotkey: "m" },
+      () => {
+        this.mergeRequested = request;
+      },
+    );
+  }
+
+  /**
+   * End the task the task dialog shows, which has found that the branch to
+   * push is already pushed, by asking whether to push it again, saying
+   * `question` about it. Push asks the driver to push. Does nothing unless
+   * the task is running.
+   */
+  confirmPush(question: TaskText): void {
+    // The button's letter is not the `P` that opened the dialog, so that
+    // pressing `P` again does not push.
+    this.#ask(
+      question,
+      { label: "Push", hotkey: "u" },
+      () => {
+        this.pushConfirmed = true;
+      },
+    );
+  }
+
+  /** End the running task by asking `question`, offering `button`, which
+   * calls `confirm`, and Cancel. No button is the default, so Enter does
+   * nothing until a button has the focus. */
+  #ask(question: TaskText, button: DialogButton, confirm: () => void): void {
+    if (this.#mode !== "taskPrompt" || !this.#abortTask) return;
+    this.#abortTask = null;
+    this.#confirmation = { button, confirm };
+    this.#taskLog.stop();
+    this.#taskLog.say(question);
+    this.#dialogFocus = -1;
+  }
+
+  /** Have the task dialog show the end of its output, as it does until it is
+   * scrolled back. */
+  showTaskEnd(): void {
+    this.#taskTop = null;
   }
 
   /** Take away a message that was set to go away on its own, once the driver has
@@ -3777,25 +4278,32 @@ export class Session {
    * when no edit asked for it, as when a language's parser has just loaded. */
   reparse({ force = false }: { force?: boolean } = {}): void {
     if (!this.#source || !this.#buffer || !(this.needsReparse || force)) return;
+    // The text is unchanged, so the selected node keeps its lines, while the
+    // new structure tree can number it differently.
+    const selected = this.#selectedNode();
+    const text = this.#buffer.text();
     this.#setSourceDocument(
       this.#source.parse(
-        this.#buffer.text(),
+        // The document's own text when no edit changed it: the same string,
+        // which a comparison finds equal without reading it.
+        text === this.#sourceDoc.text ? this.#sourceDoc.text : text,
         this.#buffer.lineEndingProvenance(),
       ),
     );
+    this.#reselect(selected, (line) => line);
     this.needsReparse = false;
     // Re-baseline the live highlighter from this authoritative parse while still
     // editing; drop it when leaving edit mode.
     if (this.#cursorOn) this.#seedHighlighter();
     else this.#highlighter = undefined;
     this.#clampScroll();
-    this.#ensureCursorVisible();
+    if (this.#cursorOn) this.#ensureCursorVisible();
   }
 
   #cursorPage(dir: number): void {
     const b = this.#buffer!;
     const step = Math.max(1, this.#contentRows() - 1);
-    b.place(b.row + dir * step, b.col);
+    b.moveRows(dir * step);
     this.top = clamp(
       this.top + dir * step,
       0,
@@ -3812,8 +4320,18 @@ export class Session {
     else if (b.row >= this.top + rows) this.top = b.row - rows + 1;
     this.top = clamp(this.top, 0, maxTop(this.doc.lines.length, this.height));
     const cw = this.#contentWidth();
-    if (b.col < this.left) this.left = b.col;
-    else if (b.col >= this.left + cw) this.left = b.col - cw + 1;
+    // The cursor's whole character comes into view, both its columns when it
+    // is wide.
+    const line = this.#foldPlan().displayLines[this.#toFolded(b.row)];
+    const col = line ? displayColumnOf(line, this.#displayMode, b.col) : 0;
+    const last = line
+      ? Math.max(
+        col,
+        displayColumnOf(line, this.#displayMode, b.characterEnd) - 1,
+      )
+      : 0;
+    if (col < this.left) this.left = col;
+    else if (last >= this.left + cw) this.left = last - cw + 1;
     this.left = clamp(this.left, 0, this.#maxLeft());
   }
 
@@ -3846,14 +4364,20 @@ export class Session {
   #maxDisplayWidth(): number {
     const lines = this.#foldPlan().displayLines;
     if (
-      this.#maxDisplayWidthCache?.lines !== lines ||
+      this.#maxDisplayWidthCache?.textVersion !== this.#textVersion ||
+      this.#maxDisplayWidthCache.foldVersion !== this.#foldVersion ||
       this.#maxDisplayWidthCache.mode !== this.#displayMode
     ) {
       let width = 0;
       for (const line of lines) {
         width = Math.max(width, displayWidth(line, this.#displayMode));
       }
-      this.#maxDisplayWidthCache = { lines, mode: this.#displayMode, width };
+      this.#maxDisplayWidthCache = {
+        textVersion: this.#textVersion,
+        foldVersion: this.#foldVersion,
+        mode: this.#displayMode,
+        width,
+      };
     }
     return this.#maxDisplayWidthCache.width;
   }
@@ -3887,11 +4411,9 @@ export class Session {
     );
     if (this.#cornerTotalsWidth() > 0) constrained.add(0);
     for (const lineIdx of constrained) {
-      const line = lines[lineIdx];
-      if (!line) continue;
       width = Math.max(
         width,
-        displayWidth(line, this.#displayMode) -
+        displayWidth(lines[lineIdx], this.#displayMode) -
           this.#lineContentWidth(lineIdx, annotations, contentWidth),
       );
     }
@@ -3978,9 +4500,9 @@ export class Session {
    * the document, since every frame draws the gutter and the map costs a parse
    * of the whole diff. */
   #fileLineNumbers(): (number | null)[] | null {
-    if (this.#fileLineCache?.doc !== this.#currentDoc) {
+    if (this.#fileLineCache?.textVersion !== this.#textVersion) {
       this.#fileLineCache = {
-        doc: this.#currentDoc,
+        textVersion: this.#textVersion,
         value: this.#computeFileLineNumbers(),
       };
     }
@@ -4007,23 +4529,26 @@ export class Session {
   }
 
   /** Turn the blame column on or off, keeping the viewport's top line. It
-   * stays off when no line comes from a file git can blame. */
+   * stays off when no line can be blamed. */
   #toggleBlame(): void {
     const source = this.#source;
     if (
       !this.#blameOn &&
       !(source && this.#blameTargets(source).some((target) => target !== null))
     ) {
-      this.#message = "No line here comes from a file git can blame";
+      this.#message = "No line here can be blamed";
       return;
     }
     const anchor = this.#wrapLines ? this.#viewportAnchor() : null;
     this.#blameOn = !this.#blameOn;
     if (anchor) this.#restoreWrappedAnchor(anchor);
+    const shown = this.#blameSource();
     this.#message = !this.#blameOn
       ? "Blame off"
-      : this.#blameShown()
-      ? "Blame on"
+      : shown
+      ? this.#blameTargetsInView(shown).some((target) => target !== null)
+        ? "Blame on"
+        : "Blame on; no line in view can be blamed"
       : blameColumnWidth(this.width, true) === 0
       ? "Blame on; the screen is too narrow to show it"
       : "Blame on; it shows in the source view";
@@ -4047,13 +4572,23 @@ export class Session {
       : null;
   }
 
-  /** The source's blame targets for the current text, cached against both. */
+  /** The source's blame targets for the current text and the text as last
+   * loaded or saved, cached against all three. */
   #blameTargets(source: EditableSource): readonly (BlameTarget | null)[] {
     if (!source.blameTargets) return [];
     const text = this.#sourceDoc.text;
+    const baseline = this.#buffer?.baseline() ?? text;
     let cache = this.#blameTargetCache;
-    if (cache?.source !== source || cache.text !== text) {
-      cache = { source, text, targets: source.blameTargets(text) };
+    if (
+      cache?.source !== source || cache.text !== text ||
+      cache.baseline !== baseline
+    ) {
+      cache = {
+        source,
+        text,
+        baseline,
+        targets: source.blameTargets(text, baseline),
+      };
       this.#blameTargetCache = cache;
     }
     return cache.targets;
@@ -4061,28 +4596,38 @@ export class Session {
 
   /** The blame column: the attribution it shows on each display line in view,
    * or null where it shows none, and the current time; null when the column
-   * is hidden. Asks for the blame of any file in view that it does not have
-   * yet. */
+   * is hidden. Asks for the blame of any file or commit in view that it does
+   * not have yet. */
   #blameColumn(): ViewState["blame"] {
     const source = this.#blameSource();
     if (!source) return null;
+    return {
+      lines: this.#blameTargetsInView(source).map((target) =>
+        target && this.#blameFor(target)
+      ),
+      now: this.#now(),
+    };
+  }
+
+  /** The source's blame target for each display line, null outside the
+   * view. */
+  #blameTargetsInView(source: EditableSource): (BlameTarget | null)[] {
     const targets = this.#blameTargets(source);
     const plan = this.#foldPlan();
-    const column = new Array<BlameLine | null>(plan.displayLines.length)
-      .fill(null);
     const first = this.#toFolded(this.#toDoc(this.top));
     const last = this.#toFolded(
       this.#toDoc(this.top + this.#contentRows() - 1),
     );
-    for (let row = first; row <= last; row++) {
-      const target = targets[plan.displayToDoc(row)];
-      if (target) column[row] = this.#blameFor(target);
-    }
-    return { lines: column, now: this.#now() };
+    return plan.displayLines.map((_, row) =>
+      row >= first && row <= last
+        ? targets[plan.displayToDoc(row)] ?? null
+        : null
+    );
   }
 
   /** The attribution of `target`'s line, or null while it is unknown. Loads
-   * the blame of a file that has none, or has one taken of other text. */
+   * the blame of a file or commit that has none, or of a file that has one
+   * taken of other text. */
   #blameFor(target: BlameTarget): BlameLine | null {
     const key = blameKey(target.request);
     if (this.#blameFailures.has(key)) return null;
@@ -4118,8 +4663,8 @@ export class Session {
     if (entry?.load === load) entry.lines = lines;
   }
 
-  /** Record that git could not blame a load's file, which is not tried
-   * again, and say why. */
+  /** Record that git could not blame a load's file or commit, which is not
+   * tried again, and say why. */
   failBlameLoad(load: BlameLoad, reason: string): void {
     const key = blameKey(load.request);
     if (this.#blames.get(key)?.load !== load) return;
@@ -4181,8 +4726,9 @@ export class Session {
       ) ?? current;
       this.#buffer.setBaseline(savedBaseline);
       // The save rewrote files, and an amend replaced a commit, that blame
-      // attributed.
+      // attributed. The hunks now sit where the files it wrote put them.
       this.#blames.clear();
+      this.#roomCache = undefined;
       const refreshedLineEndings = this.#source.lineEndingProvenance?.(current);
       if (refreshedLineEndings) {
         const retainedLineEndings = this.#buffer.lineEndingProvenance();
@@ -4225,7 +4771,7 @@ export class Session {
 
   #requestQuit(): void {
     // A quit asked for afresh is not the pull request's.
-    this.#pullRequestUrl = null;
+    this.#pullRequestQuit = null;
     if (this.#buffer?.dirty()) {
       // A quit signal can arrive with a peek overlay still open; the modal save
       // prompt replaces it rather than drawing over it.
@@ -4258,16 +4804,22 @@ export class Session {
 
   /**
    * An interrupt (SIGINT) arrived. During a push, abort the push and return
-   * true so the driver keeps running and shows how it ended. With unsaved edits
-   * and no prompt already up, raise the save prompt and return true so the
-   * driver keeps running and lets the user answer it. Otherwise return false:
-   * nothing to save, or a second interrupt during the prompt, so the driver
-   * should terminate.
+   * true so the driver keeps running and shows how it ended. While the task
+   * dialog says it is quitting for a pull request, quit for it as Quit does,
+   * keeping its address to print, and return whether the save prompt rose
+   * instead. With unsaved edits and no prompt already up, raise the save
+   * prompt and return true so the driver keeps running and lets the user
+   * answer it. Otherwise return false: nothing to save, or a second interrupt
+   * during the prompt, so the driver should terminate.
    */
   requestQuitFromSignal(): boolean {
-    if (this.#mode === "pushPrompt" && this.#abortPush) {
-      this.#abortPush();
+    if (this.#mode === "taskPrompt" && this.#abortTask) {
+      this.#abortTask();
       return true;
+    }
+    if (this.pullRequestQuitPending) {
+      this.#quitForPullRequest();
+      return !this.quit;
     }
     if (this.#mode === "savePrompt") return false;
     const willPrompt = this.#buffer?.dirty() ?? false;
@@ -4283,7 +4835,7 @@ export class Session {
    * it, and a button's activates it. Any other key leaves the prompt up. */
   #handleDialogKey(
     key: Key,
-    beforeButtonAction?: () => void,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
   ): void {
     // Reached only from the prompt modes, each of which builds a dialog with at
     // least one button, so the dialog is present and its row is non-empty.
@@ -4315,15 +4867,8 @@ export class Session {
     } else if (key.name === "escape") {
       index = buttons.findIndex((b) => b.kind === "cancel");
     } else {
-      const k = key.char ?? key.name;
-      const answers = (hotkey: string) =>
-        hotkey === k || hotkey === k.toLowerCase();
-      const field = fields.findIndex((f) => answers(f.hotkey));
-      if (field >= 0) {
-        this.#pressField(field);
-        return;
-      }
-      index = buttons.findIndex((b) => answers(b.hotkey));
+      this.#pressShortcut(dialog, key, beforeButtonAction);
+      return;
     }
     // An unbound key leaves the prompt up.
     if (index < 0 || index >= buttons.length) return;
@@ -4331,17 +4876,91 @@ export class Session {
   }
 
   /**
+   * Presses the control of `dialog`, the prompt that is up, whose shortcut
+   * letter is `key`'s, and returns whether there was one: focuses a field,
+   * toggling a check box; selects a radio button and focuses its set; or
+   * activates a button. A lowercase shortcut answers its letter in either
+   * case, and an uppercase one only the uppercase letter.
+   */
+  #pressShortcut(
+    dialog: DialogState,
+    key: Key,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
+  ): boolean {
+    const answers = (hotkey: string) =>
+      hotkey === key.name || hotkey === key.name.toLowerCase();
+    const fields = this.#fieldStates();
+    const field = fields.findIndex((f) => answers(f.hotkey));
+    if (field >= 0) {
+      this.#pressField(field);
+      return true;
+    }
+    for (const [i, f] of fields.entries()) {
+      const button = f.kind === "radioButtons"
+        ? f.buttons.findIndex((b) => answers(b.hotkey))
+        : -1;
+      if (f.kind !== "radioButtons" || button < 0) continue;
+      this.#moveDialogFocus(i);
+      f.selected = button;
+      return true;
+    }
+    const index = dialog.buttons.findIndex((b) => answers(b.hotkey));
+    if (index < 0) return false;
+    this.#activateButton(dialog, index, beforeButtonAction);
+    return true;
+  }
+
+  /**
    * Applies `key` to the prompt's focused field when the field takes it, and
-   * returns whether it did. A check box takes Space, which toggles it. An
-   * input line takes every key but those that move the focus or close the
-   * dialog: Tab, Shift-Tab, Enter, Escape, and Alt with a letter.
+   * returns whether it did. A check box takes Space, which toggles it. A set
+   * of radio buttons takes the arrow keys, which select the button before or
+   * after the selected one, going round from either end, and Space, which
+   * does nothing, since the selected button is the focused one. A slider
+   * takes the arrow keys, which move it to the stop before or after the one
+   * its thumb is at, Home and End, which move it to its first or last stop,
+   * and Space, which does nothing. An input line takes every key but those
+   * that move the focus or close the dialog: Tab, Shift-Tab, Enter, Escape,
+   * and Alt with a key that types nothing.
    */
   #handleFieldKey(key: Key): boolean {
     const field = this.#fieldStates()[this.#dialogFocus];
+    if (field?.kind === "slider") {
+      const { stops } = field;
+      const step = (by: number) =>
+        stops[clamp(nearestStop(field) + by, 0, stops.length - 1)];
+      switch (key.name) {
+        case "left":
+        case "down":
+          field.value = step(-1);
+          return true;
+        case "right":
+        case "up":
+          field.value = step(1);
+          return true;
+        case "home":
+          field.value = stops[0];
+          return true;
+        case "end":
+          field.value = stops[stops.length - 1];
+          return true;
+        default:
+          return key.name === "space";
+      }
+    }
     if (field?.kind === "checkBox") {
       if (key.name !== "space") return false;
       field.checked = !field.checked;
       return true;
+    }
+    if (field?.kind === "radioButtons") {
+      const step = key.name === "up" || key.name === "left"
+        ? -1
+        : key.name === "down" || key.name === "right"
+        ? 1
+        : 0;
+      const n = field.buttons.length;
+      field.selected = (field.selected + step + n) % n;
+      return step !== 0 || key.name === "space";
     }
     if (field?.kind !== "inputLine") return false;
     if (field.edit.handleKey(key, this.#inputColumns())) return true;
@@ -4359,18 +4978,24 @@ export class Session {
 
   /**
    * Focuses a prompt's control and holds it when the mouse goes down on it,
-   * drawing a button pushed, and puts an input line's cursor where the mouse
-   * went down. The mouse coming up on the control it went down on toggles a
-   * check box and activates a button. The mouse going down or coming up
-   * anywhere else does nothing.
+   * drawing a button pushed, puts an input line's cursor where the mouse
+   * went down, and moves a slider to the stop nearest where the mouse went
+   * down on its track. The mouse coming up on the control it went down on
+   * toggles a check box, selects the radio button it comes up on, and
+   * activates a button. With no prompt up, the mouse going down on an entry
+   * of the file picker or the jump list selects that entry. The mouse going
+   * down or coming up anywhere else does nothing.
    */
   #handleClick(
     mouse: MouseButton,
     held: HeldButton | null,
-    beforeButtonAction?: () => void,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
   ): void {
     const dialog = this.#promptDialog();
-    if (!dialog) return;
+    if (!dialog) {
+      if (mouse.down) this.#selectListEntryAt(mouse.x, mouse.y);
+      return;
+    }
     const index = dialogControlAt(this, dialog, mouse.x, mouse.y);
     if (index < 0) return;
     const controls = [...(dialog.fields ?? []), ...dialog.buttons];
@@ -4385,14 +5010,36 @@ export class Session {
         const at = inputLineIndexAt(this, dialog, index, mouse.x, mouse.y);
         if (at === null) field.edit.selectAll(this.#inputColumns());
         else field.edit.moveTo(at, this.#inputColumns());
+      } else if (field?.kind === "slider") {
+        const stop = sliderStopAt(this, dialog, index, mouse.x, mouse.y);
+        if (stop !== null) field.value = field.stops[stop];
       }
     } else if (index !== this.#indexOfHeld(dialog, held)) {
       return;
     } else if (field?.kind === "checkBox") {
       this.#pressField(index);
+    } else if (field?.kind === "radioButtons") {
+      field.selected = radioButtonAt(this, dialog, index, mouse.x, mouse.y) ??
+        field.selected;
     } else if (index >= fields) {
       this.#activateButton(dialog, index - fields, beforeButtonAction);
     }
+  }
+
+  /** Selects the entry of the file picker or the jump list drawn at the screen
+   * cell `x`, `y`, when that list is up and shows an entry there. */
+  #selectListEntryAt(x: number, y: number): void {
+    const line = overlayLineAt(this, this.#overlayScroll, x, y);
+    if (line === null) return;
+    if (this.#mode === "filePicker" && line < this.#pickerEntries.length) {
+      this.#pickerSel = line;
+    } else if (this.#mode === "jumpList" && line < this.#jumpEntries.length) {
+      this.#jumpSel = line;
+      this.#scrollJumpToSelection(line);
+    } else {
+      return;
+    }
+    this.#message = "";
   }
 
   /**
@@ -4414,48 +5061,84 @@ export class Session {
   #activateButton(
     dialog: DialogState,
     index: number,
-    beforeButtonAction?: () => void,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
   ): void {
     this.#dialogFocus = (dialog.fields?.length ?? 0) + index;
-    this.pendingPush = {
+    const pushed = {
       doc: this.displayDoc(),
       view: {
         ...this.view(),
         dialog: { ...dialog, focus: index, fieldFocus: -1, pushed: index },
       },
     };
-    beforeButtonAction?.();
+    this.pendingPush = pushed;
+    beforeButtonAction?.(pushed);
     const button = dialog.buttons[index];
     if (this.#mode === "savePrompt") this.#applySaveButton(button);
     else if (this.#mode === "amendPrompt") this.#applyAmendButton(button);
     else if (this.#mode === "revertPrompt") this.#applyRevertButton(button);
     else if (this.#mode === "settingsPrompt") this.#applySettingsButton(button);
-    else this.#applyPushButton(button);
+    else this.#applyTaskButton(button);
   }
 
-  /** Abort stops the push, which then ends; Close takes the dialog down and
-   * leaves how the push ended in the status line; Quit takes it down and quits,
-   * by way of the save prompt when there are unsaved edits. */
-  #applyPushButton(button: DialogButton): void {
-    if (this.#abortPush) this.#abortPush();
-    else this.#closePushDialog(button.hotkey === "Q");
+  /** Abort stops the task, which then ends; the button that does what the
+   * dialog asked whether to do does it, and Cancel takes the dialog down;
+   * Close takes the dialog down and leaves how the task ended in the status
+   * line; the retry button asks the driver to try the task again; Quit takes
+   * the dialog down and quits, by way of the save prompt when there are
+   * unsaved edits, keeping the address of the pull request the dialog says it
+   * is quitting for. */
+  #applyTaskButton(button: DialogButton): void {
+    const confirmation = this.#confirmation;
+    this.#confirmation = null;
+    if (this.#abortTask) this.#abortTask();
+    else if (confirmation && button.kind !== "cancel") confirmation.confirm();
+    else if (confirmation) this.#closeTaskDialog(false);
+    else if (button.hotkey === "p") this.retryRequested = true;
+    else if (button.hotkey === "Q") this.#quitTaskDialog();
+    else this.#closeTaskDialog(false);
   }
 
-  /** Take the push dialog down, leaving how the push ended in the status
+  #quitTaskDialog(): void {
+    if (this.pullRequestQuitPending) this.#quitForPullRequest();
+    else this.#closeTaskDialog(true);
+  }
+
+  /** Take the task dialog down, leaving how the task ended in the status
    * line, and quit when `quit` says to, by way of the save prompt when there
    * are unsaved edits. */
-  #closePushDialog(quit: boolean): void {
+  #closeTaskDialog(quit: boolean): void {
     this.#mode = "normal";
-    this.#message = this.#pushSummary;
+    this.#message = plainText(this.#taskSummary);
     if (quit) this.#requestQuit();
   }
 
-  /** Close the push dialog and quit for the pull request that has opened,
-   * keeping its address for the driver to print once the viewer closes. */
+  /** When the pull request has opened or merged, quit for it at once if
+   * its delay counts as none, and otherwise have the task dialog give its
+   * address, unless how the task ended already gives it, and say it is
+   * quitting, scrolled to its end. */
+  #beginPullRequestQuit(): void {
+    const quit = this.#pullRequestQuit;
+    if (quit === null) return;
+    if (quit.delay <= NO_QUIT_DELAY) {
+      // Quits only while the task dialog is up, not once it has closed.
+      this.completePullRequestQuit();
+      return;
+    }
+    this.#taskTop = null;
+    if (!this.#taskSummary.some((span) => span.text === quit.url)) {
+      this.#watchLog.say(say`Pull request: ${link(quit.url)}`);
+    }
+    this.#watchLog.step(say`Quitting`);
+  }
+
+  /** Close the task dialog and quit for the pull request that has opened or
+   * merged, keeping its address for the driver to print once the viewer
+   * closes. */
   #quitForPullRequest(): void {
-    const url = this.#pullRequestUrl;
-    this.#closePushDialog(true);
-    this.#pullRequestUrl = url;
+    const quit = this.#pullRequestQuit;
+    this.#closeTaskDialog(true);
+    this.#pullRequestQuit = quit;
   }
 
   /** OK takes the settings dialog down and asks the driver to save what it
@@ -4468,7 +5151,10 @@ export class Session {
       this.settingsToSave = {
         shown: draft.shown,
         settings: {
+          pullRequestTool: PULL_REQUEST_TOOLS[draft.pullRequestTool.selected],
+          touchGateToken: draft.touchGateToken.edit.value.trim(),
           quitOnPullRequest: draft.quitOnPullRequest.checked,
+          quitDelay: draft.quitDelay.value,
           webhookRelay: draft.webhookRelay.edit.value.trim(),
         },
       };
@@ -4722,7 +5408,7 @@ export class Session {
     }
     // Pager mode: re-point the selection at the same node (its line moved), and
     // put the pinned line back on the row it was on.
-    this.#reselectAfterExpand(selected, moved);
+    this.#reselect(selected, moved);
     const movedPin = moved(pinDoc);
     if (this.#wrapLines) {
       const basePlan = this.#baseWrapPlan();
@@ -4803,14 +5489,14 @@ export class Session {
     this.transientMessage = true;
   }
 
-  /** After a pager-mode expand rebuilds the structure tree, point the selection
-   * back at the same node, at wherever `moved` puts its line. Cleared when the
-   * node can no longer be found — a join takes one of the two hunks away, and
-   * there is nothing to point at. A hunk is matched on its line alone: only one
+  /** After a re-parse or a pager-mode expand rebuilds the structure tree, point
+   * the selection back at the same node, at wherever `moved` puts its line.
+   * Cleared when the node can no longer be found — a join takes one of the two
+   * hunks away, and there is nothing to point at. A hunk is matched on its line alone: only one
    * hunk starts at a given header line, and its label (the `@@` counts) changes
    * as the hunk grows; other kinds keep the label, which is stable and tells
    * apart nodes sharing a start line. */
-  #reselectAfterExpand(
+  #reselect(
     node: StructureNode | null,
     moved: (line: number) => number,
   ): void {
@@ -4876,9 +5562,9 @@ export class Session {
   /** How much context each hunk can still reveal, keyed by its header line.
    * Cached against the document, which the source rebuilds on every expand. */
   #expandRoom(): ReadonlyMap<number, HunkRoom> {
-    if (this.#roomCache?.doc !== this.#currentDoc) {
+    if (this.#roomCache?.textVersion !== this.#textVersion) {
       this.#roomCache = {
-        doc: this.#currentDoc,
+        textVersion: this.#textVersion,
         room: this.#source?.expandRoom?.(this.#currentDoc.text) ?? new Map(),
       };
     }
@@ -4887,7 +5573,7 @@ export class Session {
 
   /** Lines classified as file or hunk metadata by the diff parser. */
   #diffMetadataLines(): readonly number[] {
-    if (this.#diffMetadataCache?.doc === this.#currentDoc) {
+    if (this.#diffMetadataCache?.textVersion === this.#textVersion) {
       return this.#diffMetadataCache.lines;
     }
     const lines: number[] = [];
@@ -4900,7 +5586,7 @@ export class Session {
         }
       }
     }
-    this.#diffMetadataCache = { doc: this.#currentDoc, lines };
+    this.#diffMetadataCache = { textVersion: this.#textVersion, lines };
     return lines;
   }
 
@@ -5079,6 +5765,18 @@ export class Session {
     return { decorations, key };
   }
 
+  /** Returns the current document's hunk nodes, in document order. */
+  #hunks(): readonly StructureNode[] {
+    const flat = this.doc.flatStructure;
+    if (this.#hunkCache?.flat !== flat) {
+      this.#hunkCache = {
+        flat,
+        hunks: flat.filter((node) => node.kind === "hunk"),
+      };
+    }
+    return this.#hunkCache.hunks;
+  }
+
   /** Every hunk boundary visible at its expansion row. `markerLine` names the
    * first or last body line and is null when the hunk has no body. */
   #visibleEdges(
@@ -5089,12 +5787,8 @@ export class Session {
     const rows = this.#contentRows();
     const onScreen = (row: number) => row >= top && row < top + rows;
     const out: ExpandEdge[] = [];
-    for (const h of this.doc.flatStructure) {
-      if (
-        h.kind !== "hunk" || !this.#nodeOnScreenWithLayout(h, plan, top)
-      ) {
-        continue;
-      }
+    for (const h of this.#hunks()) {
+      if (!this.#nodeOnScreenWithLayout(h, plan, top)) continue;
       const r = room.get(h.startLine);
       if (!r) continue;
       const firstBodyLine = h.startLine + 1;
@@ -5133,8 +5827,8 @@ export class Session {
     const sel = this.#selectedNode();
     const own = sel && this.#nodeOnScreenWithLayout(sel, plan, top)
       ? edges.filter((e) =>
-        this.doc.flatStructure.some((h) =>
-          h.kind === "hunk" && h.startLine <= e.line && e.line <= h.endLine &&
+        this.#hunks().some((h) =>
+          h.startLine <= e.line && e.line <= h.endLine &&
           sel.startLine >= h.startLine && sel.startLine <= h.endLine
         )
       )
@@ -5335,6 +6029,10 @@ export class Session {
       return;
     }
     this.#source = opened.source;
+    // What is derived from the text depends on the source too.
+    this.#textVersion++;
+    // What was left to color belongs to the source shown until now.
+    this.#highlightProgress = null;
     if (opened.source.defaultViewMode === "rendered") {
       this.#viewMode = "rendered";
     }
@@ -5351,7 +6049,8 @@ export class Session {
         this.#buffer.lineEndingProvenance(),
       ),
     );
-    this.#semantics = undefined; // the old service was for the previous file
+    this.#semantics?.dispose(); // the old service was for the previous file
+    this.#semantics = undefined;
     this.#mode = "normal";
     this.#cursorOn = false;
     this.#overlay = null;
@@ -5395,9 +6094,9 @@ export class Session {
   /** Commit headers in the current diff, cached against its document. */
   #commitHeaders(): readonly CommitHeader[] {
     if (!this.#source?.isDiff) return [];
-    if (this.#commitHeaderCache?.doc !== this.#currentDoc) {
+    if (this.#commitHeaderCache?.textVersion !== this.#textVersion) {
       this.#commitHeaderCache = {
-        doc: this.#currentDoc,
+        textVersion: this.#textVersion,
         headers: findCommitHeaders(
           this.#currentDoc.lines.map((line) => line.text),
         ),
@@ -5962,6 +6661,7 @@ export function helpOverlay(hasMultipleCommits: boolean): {
     ...commitRows,
     ["", ""],
     ["Diff index", ""],
+    ["  click", "select a file or commit"],
     ["  f", "hide / show a file or commit"],
     ["  /", "filter the list"],
     ["  D", "cycle its diff counts"],
@@ -5996,15 +6696,16 @@ export function helpOverlay(hasMultipleCommits: boolean): {
     ["  t", "look up a definition by name"],
     ["", ""],
     ["Branch", ""],
-    ["  P", "push the branch to origin, open the pull request page"],
-    ["  O", "settings: quit when the pushed branch's pull request opens"],
+    ["  P", "push the branch to origin, then create its pull request"],
+    ["  L", "land: link to, open, or merge the branch's pull request"],
+    ["  O", "settings: how P and L handle pull requests, and more"],
     ["", ""],
     ["View", ""],
     ["  V", "toggle source / rendered view when the language supports it"],
     ["  #", "line numbers: off / input position / file or message line"],
     ["  B", "blame: when each line last changed, and who changed it"],
     ["  \\", "line wrapping: off / hard / word"],
-    ["  c", "cycle non-printables: pictures / ANSI color / hidden"],
+    ["  c", "cycle non-printables: ANSI color / hidden / pictures"],
     ["  ?", "this help   ·   Q  quit"],
   ];
   const info: Line[] = rows.map(([k, v]) => {

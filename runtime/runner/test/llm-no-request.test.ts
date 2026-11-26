@@ -25,7 +25,6 @@
  * second copy. The queued cases hold that line.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -35,6 +34,12 @@ import {
   resetMockMode,
 } from "@commonfabric/llm/client";
 import { LLMClient, type LLMResponse } from "@commonfabric/llm";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { waitForLlmSettled } from "./support/llm-result.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -125,6 +130,36 @@ describe("LLM builtin no-request paths", () => {
       const resultCell = runtime.getCell(
         space,
         "no-request-generateText",
+        testPattern.resultSchema,
+        tx,
+      );
+      const result = runtime.run(tx, testPattern, {}, resultCell);
+      tx.commit();
+
+      const settled = await waitForLlmSettled(runtime, result);
+
+      expect(calls).toBe(0);
+      expect(settled.pending).toBe(false);
+      expect(result.key("result").get()).toBeUndefined();
+    } finally {
+      LLMClient.prototype.sendRequest = original;
+    }
+  });
+
+  it("`generateText` makes no request for an empty message list", async () => {
+    const original = LLMClient.prototype.sendRequest;
+    let calls = 0;
+    LLMClient.prototype.sendRequest = () => {
+      calls++;
+      return Promise.reject(new Error("should not be called"));
+    };
+    try {
+      const testPattern = builder.pattern(() =>
+        builder.generateText({ system: "Be brief.", messages: [] })
+      );
+      const resultCell = runtime.getCell(
+        space,
+        "no-request-generateText-messages",
         testPattern.resultSchema,
         tx,
       );

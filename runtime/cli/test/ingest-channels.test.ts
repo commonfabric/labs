@@ -10,11 +10,16 @@
 // Everything else (status handling, error surfacing) is about not swallowing
 // what the server said.
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   type ChannelConfig,
   controlPlaneUrl,
@@ -171,6 +176,12 @@ describe("resolveSpaceDid", () => {
       ).toBe(
         `https://host.example/fabric/api/spaces/${SPACE_DID}/ingest-channels/mint`,
       );
+    });
+
+    it("throws for a space that is not a DID, which would change the path", () => {
+      expect(() =>
+        controlPlaneUrl(new URL("https://host.example"), "mint", "../admin")
+      ).toThrow("Not a space DID: ../admin");
     });
 
     it("does not mutate the caller's URL", () => {

@@ -69,18 +69,24 @@ both directions of the cycle it finds.
 
 ## Asking the registry, and waiting only where it helps
 
-Each provider whose key is present adds its models to `MODELS` as `models.ts`
-loads. The gateway's are discovered instead of declared, over a request that
-runs alongside the server binding its port. That leaves two ways to ask:
+`createModelRegistry()` in `models.ts` builds a registry from the provider
+keys, the gateway URL, and the `fetch` every provider sends through; the
+registry the server uses is built from the process's configuration as
+`llm.index.ts` loads. Importing `models.ts` builds no registry, and a registry
+starts gateway discovery only when it is built with a gateway URL, so a test
+that builds one without that URL makes no request. Each provider whose key is
+present adds its models as the registry is built. The gateway's are discovered
+instead of declared, over a request that runs alongside the server binding its
+port. That leaves two ways to ask:
 
-- `resolveModel(name)` returns any already registered model straight away, and
+- `resolve(name)` returns any already registered model straight away, and
   waits only when the name is not registered yet — a `gateway:` name, the
   `default` alias, or a name that is no model at all, while discovery is still
   out. There is one such wait per process: once discovery finishes, every name
   returns immediately. The `default` alias selects the first registered model
   from `DEFAULT_MODEL_CANDIDATES`; it remains unavailable when none of those
   candidates is registered, even when other language models are available.
-- `whenModelsReady()` waits for the whole list, which is what
+- `whenReady()` waits for the whole list, which is what
   `GET /api/ai/llm/models` needs: a list quietly missing the gateway's models
   is a wrong answer rather than an early one.
 

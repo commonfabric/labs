@@ -1,15 +1,25 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
-import { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import {
+  deployedPieceRef,
+  PatternIndexClient,
+} from "@commonfabric/pattern-index/client";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
   computeEntryIdentity,
   ensureCompilerStack,
+  getPatternIdentityRef,
   Runtime,
 } from "@commonfabric/runner";
+import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { CfHarnessEngine } from "../src/engine.ts";
 import type { HarnessFetch } from "../src/contracts/http-fetch.ts";
 import type { RunPatternToolSuccessOutput } from "../src/tools/run-pattern.ts";
@@ -277,7 +287,7 @@ describe("run_pattern publish render gate", () => {
 
   const createEngine = (
     index: IndexStub,
-    options: { publishDiscoverable?: true } = {},
+    options: { publishDiscoverable?: true; origin?: "agent" } = {},
   ): CfHarnessEngine =>
     new CfHarnessEngine({
       sandboxRuntime: new FakeSandboxRuntime(),
@@ -291,6 +301,16 @@ describe("run_pattern publish render gate", () => {
             signer,
           }),
         ),
+      ...(options.origin === "agent"
+        ? {
+          fabricSession: {
+            apiUrl: "https://toolshed.test/",
+            identityKeyPath: "/keys/agent.pkcs8",
+            space: "publish-gate",
+          },
+          patternIndex: { baseUrl: "https://index.test", origin: "agent" },
+        }
+        : {}),
       ...(options.publishDiscoverable === true
         ? {
           fabricSession: {
@@ -519,6 +539,310 @@ describe("run_pattern publish render gate", () => {
     expect(output.patternPublication?.reason).toBe("ui-rendered");
     expect(published(index)[0].body.discoverable).toBe(true);
     expect(published(index)[0].body.discoverabilityReason).toBeUndefined();
+  });
+
+  it("names its origin and the piece it deployed to only when it is a person's own agent", async () => {
+    const run = async (origin: "agent" | undefined) => {
+      const index = stubIndex();
+      const engine = createEngine(index, origin ? { origin } : {});
+      const result = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: WORKING_SORTABLE_TABLE,
+        inputs: { rows: [{ name: "Avery", score: 12 }] },
+        description: "Sortable table that reads its cells",
+        hashtags: ["table"],
+      });
+      await engine.flushPatternIndexLedger();
+      const output = result.output as RunPatternToolSuccessOutput;
+      return { body: published(index)[0].body, pieceId: output.pieceId };
+    };
+    const agent = await run("agent");
+    const piece = await deployedPieceRef(pieces.getSpace(), agent.pieceId);
+    expect(agent.body.origin).toBe("agent");
+    expect(agent.body.deployedTo).toBe(piece);
+    expect(agent.body.slot).toBe(piece);
+    const other = await run(undefined);
+    expect(other.body.origin).toBeUndefined();
+    expect(other.body.deployedTo).toBeUndefined();
+    expect(other.body.slot).toBeUndefined();
+  });
+
+  describe("a revision named with revises", () => {
+    const REVISED_SORTABLE_TABLE = WORKING_SORTABLE_TABLE.replace(
+      "<th>Score</th>",
+      "<th>Points</th>",
+    );
+
+    /** What `getPattern` answers for an entry, as the caller's or not. */
+    const servedAs = (patternId: string, mine: boolean) => ({
+      [patternId]: {
+        patternId,
+        createdAt: "2026-11-17T00:00:00.000Z",
+        description: "Sortable table",
+        hashtags: ["table"],
+        dependencies: [],
+        author: { pseudonym: "quiet-otter", tier: 0 },
+        // The index says `mine` to the owner and leaves it out for anyone else.
+        ...(mine ? { mine: true } : {}),
+      },
+    });
+
+    /**
+     * Deploys the table in one run, then revises it in a later run that
+     * names the earlier piece, as a pattern-author does after
+     * read_piece_source. Each run is its own engine and its own ledger.
+     */
+    const reviseAcrossRuns = async (mine: boolean) => {
+      const original = await entryIdentityOf(WORKING_SORTABLE_TABLE);
+      const index = stubIndex(servedAs(original, mine));
+      const first = await createEngine(index, { origin: "agent" })
+        .invokeBuiltinTool("run_pattern", {
+          sourceText: WORKING_SORTABLE_TABLE,
+          inputs: { rows: [{ name: "Avery", score: 12 }] },
+          description: "Sortable table",
+        });
+      const firstOutput = first.output as RunPatternToolSuccessOutput;
+      const later = createEngine(index, { origin: "agent" });
+      const second = await later.invokeBuiltinTool("run_pattern", {
+        sourceText: REVISED_SORTABLE_TABLE,
+        revises: firstOutput.ref,
+        inputs: { rows: [{ name: "Avery", score: 12 }] },
+        description: "Sortable table with points",
+      });
+      await later.flushPatternIndexLedger();
+      const secondOutput = second.output as RunPatternToolSuccessOutput;
+      expect(secondOutput.status).toBe("ok");
+      return {
+        original,
+        body: published(index)[0].body,
+        piece: await deployedPieceRef(pieces.getSpace(), secondOutput.pieceId),
+      };
+    };
+
+    it("continues the history of the caller's own pattern the piece runs", async () => {
+      const { original, body, piece } = await reviseAcrossRuns(true);
+      expect(body.priorPatternId).toBe(original);
+      expect(body.remixedFrom).toBeUndefined();
+      // The new piece's slot would outrank the predecessor and start a new
+      // history; the piece is still named, for the person's use of it.
+      expect(body.slot).toBeUndefined();
+      expect(body.deployedTo).toBe(piece);
+    });
+
+    it("credits someone else's pattern the piece runs as a remix", async () => {
+      const { original, body, piece } = await reviseAcrossRuns(false);
+      expect(body.remixedFrom).toBe(original);
+      expect(body.priorPatternId).toBeUndefined();
+      expect(body.slot).toBe(piece);
+    });
+
+    it("refuses revises beside a patternId, and a token naming no piece, before running anything", async () => {
+      const index = stubIndex();
+      const engine = createEngine(index, { origin: "agent" });
+      const before = (await pieces.getRegisteredPieces()).length;
+      const paired = await engine.invokeBuiltinTool("run_pattern", {
+        patternId: "HOS6wWQmBMK8ewPc239FZc4VS6jMpCKGLMt4rFPTr2k",
+        revises: "/of:baedreinope",
+      });
+      expect(paired.output).toMatchObject({ status: "error" });
+      expect((paired.output as { message: string }).message).toContain(
+        "revises",
+      );
+      const unknown = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: WORKING_SORTABLE_TABLE,
+        revises: "not a reference",
+        description: "Sortable table",
+      });
+      expect(unknown.output).toMatchObject({ status: "error" });
+      expect((unknown.output as { message: string }).message).toContain(
+        "revises",
+      );
+      expect((await pieces.getRegisteredPieces()).length).toBe(before);
+    });
+  });
+
+  describe("an in-place revision with revise_piece", () => {
+    const REVISED = WORKING_SORTABLE_TABLE.replace(
+      "<th>Score</th>",
+      "<th>Points</th>",
+    );
+
+    /** What `getPattern` answers for the original table, as the index does. */
+    const servedOriginal = async (mine: boolean) => {
+      const original = await entryIdentityOf(WORKING_SORTABLE_TABLE);
+      return {
+        original,
+        served: {
+          [original]: {
+            patternId: original,
+            createdAt: "2026-11-17T00:00:00.000Z",
+            description: "Sortable table",
+            hashtags: ["table"],
+            dependencies: [],
+            author: { pseudonym: "quiet-otter", tier: 0 },
+            ...(mine ? { mine: true } : {}),
+          },
+        },
+      };
+    };
+
+    /** Deploys the table, as an earlier run would, and returns its piece. */
+    const deploy = async (engine: CfHarnessEngine) => {
+      const result = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: WORKING_SORTABLE_TABLE,
+        inputs: { rows: [{ name: "Avery", score: 12 }] },
+        description: "Sortable table",
+        hashtags: ["table"],
+      });
+      return result.output as RunPatternToolSuccessOutput;
+    };
+
+    /**
+     * Deploys in one run, then revises in place in a later one, with no
+     * description of its own: what most revisions are.
+     */
+    const reviseInLaterRun = async (
+      served: Record<string, unknown>,
+      extra: Record<string, unknown> = {},
+    ) => {
+      const index = stubIndex(served);
+      const first = createEngine(index, { origin: "agent" });
+      const deployed = await deploy(first);
+      await first.flushPatternIndexLedger();
+      const before = published(index).length;
+      const later = createEngine(index, { origin: "agent" });
+      const revised = await later.invokeBuiltinTool("revise_piece", {
+        token: deployed.ref,
+        sourceText: REVISED,
+        ...extra,
+      });
+      expect(revised.output).toMatchObject({ status: "ok" });
+      await later.flushPatternIndexLedger();
+      return {
+        versions: published(index).slice(before),
+        piece: await deployedPieceRef(pieces.getSpace(), deployed.pieceId),
+      };
+    };
+
+    it("keeps a later run's revision as the next version of the caller's own pattern, described as it was", async () => {
+      const { original, served } = await servedOriginal(true);
+      const { versions: [version], piece } = await reviseInLaterRun(served);
+      expect(version.body.patternId).toBe(await entryIdentityOf(REVISED));
+      expect(version.body.priorPatternId).toBe(original);
+      expect(version.body.meta).toMatchObject({
+        description: "Sortable table",
+      });
+      expect(version.body.meta).toMatchObject({
+        hashtags: [
+          "table",
+        ],
+      });
+      expect(version.body.deployedTo).toBe(piece);
+      // The piece's previous pattern finds the history; its key would outrank
+      // that and file the version wherever the key was first bound.
+      expect(version.body.slot).toBeUndefined();
+      expect(version.body.discoverabilityReason).toBeDefined();
+    });
+
+    it("takes a new description when the revision gives one", async () => {
+      const { served } = await servedOriginal(true);
+      const { versions: [version] } = await reviseInLaterRun(served, {
+        description: "Sortable table with points",
+        hashtags: ["points"],
+      });
+      expect(version.body.meta).toMatchObject({
+        description: "Sortable table with points",
+      });
+      expect(version.body.meta).toMatchObject({
+        hashtags: [
+          "points",
+        ],
+      });
+    });
+
+    it("reads a description of the wrong type as none, after the revision applied", async () => {
+      const { served } = await servedOriginal(true);
+      const { versions: [version] } = await reviseInLaterRun(served, {
+        description: 42,
+        hashtags: "points",
+      });
+      expect(version.body.meta).toMatchObject({
+        description: "Sortable table",
+        hashtags: ["table"],
+      });
+    });
+
+    it("credits someone else's pattern the piece ran as a remix", async () => {
+      const { original, served } = await servedOriginal(false);
+      const { versions: [version] } = await reviseInLaterRun(served);
+      expect(version.body.remixedFrom).toBe(original);
+      expect(version.body.priorPatternId).toBeUndefined();
+      expect(version.body.slot).toBeUndefined();
+    });
+
+    it("keeps no version of a revision whose predecessor nobody can describe", async () => {
+      const { versions } = await reviseInLaterRun({});
+      expect(versions).toEqual([]);
+    });
+
+    it("names no dependency for an import that only a data file the revision carries over spells", async () => {
+      // A data file is stored uninterpreted, so import-shaped text inside one
+      // is data. The revision carries this one over beside its new source.
+      const guest = { name: "/guest.js", contents: 'import("cf:pattern:abc")' };
+      const controller = await pieces.create({
+        main: "/main.tsx",
+        files: [
+          { name: "/main.tsx", contents: WORKING_SORTABLE_TABLE },
+          guest,
+        ],
+        dataFiles: [guest.name],
+      }, { input: { rows: [{ name: "Avery", score: 12 }] } });
+      const cell = controller.getCell();
+      const previous = getPatternIdentityRef(cell)?.identity;
+      expect(previous).toBeDefined();
+      const { original, served } = await servedOriginal(true);
+      const index = stubIndex({
+        [previous!]: { ...served[original], patternId: previous },
+      });
+      const engine = createEngine(index, { origin: "agent" });
+      const revised = await engine.invokeBuiltinTool("revise_piece", {
+        token: createLLMFriendlyLink(
+          cell.getAsNormalizedFullLink(),
+          pieces.getSpace(),
+        ),
+        sourceText: REVISED,
+      });
+      expect(revised.output).toMatchObject({ status: "ok" });
+      await engine.flushPatternIndexLedger();
+
+      const [version] = published(index);
+      expect(version.body.program).toMatchObject({ dataFiles: [guest.name] });
+      expect(version.body.dependencies).toEqual([]);
+    });
+
+    it("continues the iteration this session made without asking whose it is", async () => {
+      const index = stubIndex();
+      const engine = createEngine(index, { origin: "agent" });
+      const deployed = await deploy(engine);
+      await engine.invokeBuiltinTool("revise_piece", {
+        token: deployed.ref,
+        sourceText: REVISED,
+      });
+      await engine.flushPatternIndexLedger();
+
+      const original = await entryIdentityOf(WORKING_SORTABLE_TABLE);
+      const sent = published(index);
+      expect(sent.map((call) => call.body.patternId)).toEqual([
+        original,
+        await entryIdentityOf(REVISED),
+      ]);
+      expect(sent[1].body.priorPatternId).toBe(original);
+      expect(sent[1].body.meta).toMatchObject({
+        description: "Sortable table",
+      });
+      expect(index.calls.some((call) => call.fn === "getPattern")).toBe(
+        false,
+      );
+    });
   });
 
   it("records automatic and render-gated entries for distinguishable reasons", async () => {

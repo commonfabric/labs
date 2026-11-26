@@ -24,9 +24,11 @@
  * Each participant builds its own runtime in its own worker, so a mode the
  * orchestrator holds and does not forward leaves every one of them on the
  * preset's rung while the run reads as though it named one.
+ *
+ * And: the requests a participant's worker refuses, the console output it
+ * captures, and a press step it runs.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
@@ -34,6 +36,7 @@ import { Runtime } from "@commonfabric/runner";
 import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
 import {
   assertParticipantRung,
@@ -47,10 +50,24 @@ import type { ParticipantInitResult } from "../lib/multi-user-test-worker.ts";
 import { patternTestExperimentalOptions } from "../lib/pattern-test-experimental-options.ts";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/multi-user-markers");
+const EDGE_CASES = resolve(
+  import.meta.dirname!,
+  "fixtures/test-runner-edge-cases",
+);
 
 function fixture(name: string): string {
   return resolve(FIXTURES, name);
 }
+
+/**
+ * A function carrying what a built pattern carries, for a descriptor's
+ * participant to name.
+ */
+const pattern = Object.assign(() => ({}), {
+  argumentSchema: {},
+  resultSchema: {},
+  nodes: [],
+});
 
 /**
  * One participant worker, driven by hand over the same request/response
@@ -504,8 +521,6 @@ describe(
     });
 
     describe("the shared space's access list", () => {
-      const pattern = () => {};
-
       it("returns `OWNER` for the first participant's user and `WRITE` for an undeclared one", () => {
         expect(participantAccess([
           { name: "alice", user: "alice" },
@@ -569,6 +584,186 @@ describe(
             participants: { bob: { pattern, access: "ADMIN" } },
           })
         ).toThrow('Participant `bob` declares access `"ADMIN"`');
+      });
+    });
+
+    describe("a request a participant's worker cannot serve", () => {
+      it("refuses a command it does not know, naming it", async () => {
+        const worker = participantWorker("alice");
+        try {
+          await expect(worker.call("bogus")).rejects.toThrow(
+            '[alice] unknown command "bogus"',
+          );
+        } finally {
+          await closeWorker(worker);
+        }
+      });
+
+      it("refuses a step before `init`", async () => {
+        const worker = participantWorker("alice");
+        try {
+          await expect(worker.call("label", { marker: "early" })).rejects
+            .toThrow("worker not initialized");
+        } finally {
+          await closeWorker(worker);
+        }
+      });
+
+      it("refuses to start a participant the descriptor does not name, and to wait on a participant's markers it was not told of", async () => {
+        const server = await startServer();
+        await using cleanup = new AsyncDisposableStack();
+        cleanup.defer(() => server.close());
+        const identity = await Identity.fromPassphrase("test-runner alice", {
+          implementation: "noble",
+        });
+        const init = (participant: string) => ({
+          identity: realmValueFromKeyPair(identity.keyPair),
+          spaceDid: identity.did(),
+          apiUrl: server.url.href,
+          testPath: resolve(FIXTURES, "marker-barrier.test.tsx"),
+          root: FIXTURES,
+          participant,
+          participants: [participant],
+          seedDefaults: true,
+        });
+
+        const carol = participantWorker("carol", server);
+        cleanup.defer(() => closeWorker(carol));
+        await expect(carol.call("init", init("carol"))).rejects.toThrow(
+          'No participant pattern "carol" in test descriptor',
+        );
+
+        const alice = participantWorker("alice", server);
+        cleanup.defer(() => closeWorker(alice));
+        await alice.call("init", init("alice"));
+        await expect(
+          alice.call("awaitMarker", { announcedBy: "bob", marker: "ready" }),
+        ).rejects.toThrow('No marker document for participant "bob"');
+      });
+    });
+
+    it("reports a participant whose `[TESTS]` is not a list", async () => {
+      const { failed, results } = await runTests(
+        resolve(EDGE_CASES, "multi-user-tests-not-array.test.tsx"),
+        { root: EDGE_CASES },
+      );
+      expect(failed).toBe(1);
+      expect(results[0].error).toContain(
+        'Participant "alice" must return { [TESTS]: TestStep[] }',
+      );
+    });
+
+    it("reports a `setup` that is a function but not a pattern", async () => {
+      const { failed, results } = await runTests(
+        resolve(EDGE_CASES, "multi-user-setup-not-pattern.test.tsx"),
+        { root: EDGE_CASES },
+      );
+      expect(failed).toBe(1);
+      expect(results[0].error).toContain(
+        "A multi-user test's `setup` must be a pattern function, got a function that is not a pattern",
+      );
+    });
+
+    it("presses a participant's rendered control, and fails on the console output of its run but not of its module", async () => {
+      const { passed, failed, results } = await runTests(
+        resolve(EDGE_CASES, "multi-user-console-press.test.tsx"),
+        { root: EDGE_CASES },
+      );
+      expect(results[0].error).toBeUndefined();
+      expect(results[0].results.map(({ name, passed }) => ({ name, passed })))
+        .toEqual([{ name: "alice/assertion_1", passed: true }]);
+      expect(results[0].consoleErrors).toContain(
+        "[alice] [console.error] participant console error",
+      );
+      expect(results[0].consoleWarnings).toContain(
+        "[alice] [console.warn] participant console warning",
+      );
+      expect(
+        [...results[0].consoleErrors, ...results[0].consoleWarnings].some((
+          line,
+        ) => line.includes("participant body output")),
+      ).toBe(false);
+      expect(passed).toBe(1);
+      expect(failed).toBe(2);
+    });
+
+    describe("startParticipantServer()", () => {
+      it("starts a server that admits a runtime naming instances only for a posture that names them", async () => {
+        for (const instanceNames of [true, false]) {
+          const server = await startParticipantServer({ instanceNames });
+          await using cleanup = new AsyncDisposableStack();
+          cleanup.defer(() => server.close());
+          const identity = await Identity.fromPassphrase(
+            "multi-user-test-runner participants",
+          );
+          const storageManager = StorageManager.open({
+            as: identity,
+            memoryHost: server.url,
+          });
+          cleanup.defer(() => storageManager.close());
+          const runtime = new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager,
+            experimental: { instanceNames: true },
+          });
+          cleanup.defer(() => runtime.dispose());
+          await runtime.getCell(identity.did(), "probe").sync();
+          const refusal = storageManager.spaceSessionError(identity.did());
+          if (instanceNames) expect(refusal).toBeUndefined();
+          else expect(String(refusal)).toContain("does not name instances");
+        }
+      });
+    });
+
+    describe("multiUserDescriptorMeta()", () => {
+      it("returns `undefined` for a descriptor with a participant that is neither a function nor an entry naming one, and for one without a participants record", () => {
+        expect(
+          multiUserDescriptorMeta({
+            participants: { alice: pattern, bob: { user: "bob" } },
+          }),
+        ).toBeUndefined();
+        expect(multiUserDescriptorMeta({ participants: null })).toBeUndefined();
+        expect(multiUserDescriptorMeta({ participants: {} })).toBeUndefined();
+      });
+
+      it("returns `undefined` for a participant of neither shape beside one it would otherwise refuse, whichever comes first", () => {
+        const refused = [() => {}, { pattern, access: "ADMIN" }];
+        for (const alice of refused) {
+          expect(
+            multiUserDescriptorMeta({ participants: { alice, bob: 5 } }),
+          ).toBeUndefined();
+          expect(
+            multiUserDescriptorMeta({ participants: { bob: 5, alice } }),
+          ).toBeUndefined();
+        }
+      });
+
+      it("returns each participant's name and user for participants that are patterns or entries naming one", () => {
+        expect(
+          multiUserDescriptorMeta({
+            participants: { alice: pattern, bob: { pattern, user: "robert" } },
+          }),
+        ).toEqual({
+          participants: [
+            { name: "alice", user: "alice" },
+            { name: "bob", user: "robert" },
+          ],
+        });
+      });
+
+      it("throws, naming the participant, for a function that is not a pattern, alone or in an entry", () => {
+        expect(() =>
+          multiUserDescriptorMeta({ participants: { alice: () => {} } })
+        ).toThrow(
+          "Participant `alice` must be a pattern function, got a function that is not a pattern",
+        );
+        expect(() =>
+          multiUserDescriptorMeta({
+            participants: { alice: pattern, bob: { pattern: () => {} } },
+          })
+        ).toThrow(
+          "Participant `bob` must be a pattern function, got a function that is not a pattern",
+        );
       });
     });
   },

@@ -784,22 +784,7 @@ export const reduceHarnessChatSessionStatus = (
         updatedAt,
       };
     }
-    case "turn_completed": {
-      const rest = clearSessionActiveTurn(status);
-      if (status.status === "closed" || status.status === "failed") {
-        return {
-          ...rest,
-          reusable: false,
-          updatedAt,
-        };
-      }
-      return {
-        ...rest,
-        status: "idle",
-        reusable: true,
-        updatedAt,
-      };
-    }
+    case "turn_completed":
     case "turn_failed": {
       const rest = clearSessionActiveTurn(status);
       if (status.status === "closed" || status.status === "failed") {

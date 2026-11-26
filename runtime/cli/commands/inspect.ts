@@ -22,6 +22,8 @@ import {
   contendedEntities,
   convergenceExact,
   convergenceScanExact,
+  currencyCycles,
+  type CurrencyReadEdge,
   DEFAULT_SCAN_LIMIT,
   // Remote acquisition (`cf inspect --remote` / `pull`).
   defaultCacheDir,
@@ -73,9 +75,8 @@ import {
   summarizeSpace,
   valueAsIdentity,
 } from "@commonfabric/state-inspector";
-import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { maxOf } from "@commonfabric/collections/math";
-import { loadIdentity } from "../lib/identity.ts";
+import { firstPartySigner } from "../lib/first-party.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
 
 function humanSize(bytes: number): string {
@@ -341,9 +342,7 @@ async function remoteSigner(
 ): Promise<RequestSigner | undefined> {
   const path = options.identity ?? Deno.env.get("CF_IDENTITY");
   if (!path) return undefined;
-  const identity = await loadIdentity(path);
-  return ({ url, method }) =>
-    signFirstPartyHttpRequest({ url: new URL(url), method, signer: identity });
+  return await firstPartySigner(path);
 }
 
 // Map a token (full DID, prefix, or substring) to a full space DID on a remote,
@@ -418,33 +417,26 @@ async function resolveMultiSpaces(opts: {
   ) {
     throw new ValidationError("`--dir` cannot be used with `--remote`.");
   }
+  // Exactly one selector is set past this point, and `--dir` is local-only.
   const base = remoteBaseUrl(opts);
   if (base) {
     const sign = await remoteSigner(opts);
-    let dids: string[];
-    if (opts.all) {
-      dids = (await listRemoteSpaces(base, { sign })).map((s) => s.space);
-    } else if (spaceTokens) {
-      dids = await Promise.all(
-        spaceTokens.map((token) => resolveRemoteDid(token, base, sign)),
+    const dids = opts.all
+      ? (await listRemoteSpaces(base, { sign })).map((s) => s.space)
+      : await Promise.all(
+        (spaceTokens ?? []).map((token) => resolveRemoteDid(token, base, sign)),
       );
-    } else {
-      throw new Error("with --remote, provide --all or --spaces <a,b,…>.");
-    }
     const paths: string[] = [];
     for (const did of dids) paths.push(await fetchSpaceDb(did, base, { sign }));
     return openSpaces(paths);
   }
-  if (opts.dir) return openSpaces(listSqliteFiles(opts.dir));
+  if (opts.dir !== undefined) return openSpaces(listSqliteFiles(opts.dir));
   if (opts.all) return openSpaces(discoverSpaceDbs().map((s) => s.path));
-  if (spaceTokens) {
-    const discovered = discoverSpaceDbs();
-    const paths = await Promise.all(
-      spaceTokens.map((token) => resolveSpace(token, discovered)),
-    );
-    return openSpaces(paths);
-  }
-  throw new Error("provide --all, --spaces <a,b,…>, or --dir <dir>");
+  const discovered = discoverSpaceDbs();
+  const paths = await Promise.all(
+    (spaceTokens ?? []).map((token) => resolveSpace(token, discovered)),
+  );
+  return openSpaces(paths);
 }
 
 function relTag(r: ExactConvergenceResult): string {
@@ -614,7 +606,7 @@ export const inspect = new Command()
     );
     const result = groupDiscoveredSpaces(discovered);
     out(!!options.json, result, () => {
-      if (result.groups.length === 0 && result.ungrouped.length === 0) {
+      if (result.groups.length === 0) {
         console.log("no space DBs found.");
         return;
       }
@@ -653,13 +645,10 @@ export const inspect = new Command()
         return;
       }
 
-      // Default: one compact line per group, biggest first.
+      // Default: one compact line per group, biggest first. Every discovered
+      // space joins the group of its own principal, so none is ungrouped.
       console.log(
-        `${result.groups.length} user group(s)` +
-          (result.ungrouped.length
-            ? `, ${result.ungrouped.length} ungrouped`
-            : "") +
-          `  —  use --did <prefix> to expand one`,
+        `${result.groups.length} user group(s)  —  use --did <prefix> to expand one`,
       );
       for (const g of result.groups) {
         const c = roleCounts(g);
@@ -711,8 +700,8 @@ export const inspect = new Command()
       }
       if (w.totals.scopedEntities > 0) {
         console.log(
-          "\ntip: `inspect value-at <space> <id> --as " + shortDid(did) +
-            "…` reads a cell as this identity.",
+          `\ntip: \`inspect value-at <space> <id> --as ${did}\` reads a cell ` +
+            "as this identity.",
         );
       }
     });
@@ -1102,8 +1091,18 @@ export const inspect = new Command()
                     : ""),
               );
             }
-          } else {
+          } else if (c.readSetsNotKept === 0) {
             console.log("\n(no anomalous stale reads — store is consistent)");
+          } else {
+            console.log("\n(no anomalous stale reads among the reads kept)");
+          }
+          if (c.readSetsNotKept > 0) {
+            console.log(
+              `\n? ${c.readSetsNotKept} later commit(s) hold reads this ` +
+                `check cannot replay (a digest, compacted history, or an ` +
+                `unreadable payload), so whether they read this entity stale ` +
+                `was not checked.`,
+            );
           }
         });
         return;
@@ -1342,17 +1341,17 @@ export const inspect = new Command()
           const n = labelOf.get(src)!;
           console.log(`\n${n.kind} ${shortDid(src)}  ${n.label}`);
           for (const e of bySource.get(src)!) {
-            const t = labelOf.get(e.to);
-            // External targets carry the real id in `entityId` and the target
-            // space in `space`; print the space DID (not the qualified node key).
-            const desc = t
-              ? (e.external
-                ? `${shortDid(t.entityId)} (external)`
-                : `${t.kind} ${t.label}`)
-              : "?";
+            // The graph holds a node, a stub if nothing else, for every edge
+            // target. External targets carry the real id in `entityId` and the
+            // target space in `space`; print the space DID (not the qualified
+            // node key).
+            const t = labelOf.get(e.to)!;
+            const desc = e.external
+              ? `${shortDid(t.entityId)} (external)`
+              : `${t.kind} ${t.label}`;
             console.log(
               `  ${arrow(e.kind).padEnd(9)} ${desc}${
-                e.external ? ` @${shortDid(t?.space ?? "")} [cross-space]` : ""
+                e.external ? ` @${shortDid(t.space ?? "")} [cross-space]` : ""
               }${e.label ? `  (${e.label})` : ""}`,
             );
           }
@@ -1475,12 +1474,6 @@ export const inspect = new Command()
   )
   .action(async (options, space, entity) => {
     const path = parsePathOptions(options);
-    if (options.as !== undefined && options.as.length === 0) {
-      throw new ValidationError("`--as` must not be empty.");
-    }
-    if (options.session !== undefined && options.session.length === 0) {
-      throw new ValidationError("`--session` must not be empty.");
-    }
     if (options.as !== undefined && options.scope !== undefined) {
       throw new ValidationError(
         "Use either `--as` or `--scope`, not both.",
@@ -1837,6 +1830,74 @@ export const inspect = new Command()
               (missing ? `\tmissing=${missing}` : "") +
               `\tclusters=${f.clusters.length}`,
           );
+        }
+      });
+    } finally {
+      for (const ref of refs) ref.space.close();
+    }
+  })
+  /* inspect currency-cycles */
+  .command(
+    "currency-cycles",
+    "Find pieces in different spaces that read what each other write, from " +
+      "what each space's currency index recorded.",
+  )
+  .option("--all", "Use all discovered spaces.")
+  .option("--spaces <list:string>", "Comma-separated DIDs/prefixes/paths.")
+  .option("--dir <dir:string>", "Directory of *.sqlite files.")
+  .option("--limit <n:number>", "Max cycles to list.", { default: 50 })
+  .option("--branch <branch:string>", "Branch (default: '').")
+  .action(async (options) => {
+    const refs = await resolveMultiSpaces(options);
+    try {
+      const result = currencyCycles(refs, {
+        limit: validatedRowLimit(options.limit),
+        branch: options.branch,
+      });
+      out(!!options.json, result, () => {
+        const indexed = result.spaces.filter((space) => space.indexed);
+        console.log(
+          `spaces examined: ${result.spaces.length}  ` +
+            `with a currency index: ${indexed.length}  ` +
+            `pieces recorded: ${
+              indexed.reduce((sum, space) => sum + space.pieces, 0)
+            }`,
+        );
+        console.log(`reads across spaces: ${result.reads.length}`);
+        for (const { from, to, documents } of result.reads) {
+          console.log(
+            `  ${escapeTerminalText(to)} reads ${documents} document(s) of ` +
+              escapeTerminalText(from),
+          );
+        }
+        if (result.unexamined.length > 0) {
+          console.log(
+            "read and not examined, so a cycle through one is not seen: " +
+              result.unexamined.map(escapeTerminalText).join(", "),
+          );
+        }
+        console.log(
+          `cycles across spaces: ${result.cycleCount}` +
+            (result.cycleCount > result.cycles.length
+              ? ` (listing ${result.cycles.length})`
+              : ""),
+        );
+        const step = (edge: CurrencyReadEdge) =>
+          `    ${escapeTerminalText(edge.from.space)} ` +
+          `${escapeTerminalText(edge.from.piece)} writes ` +
+          `${escapeTerminalText(edge.id)}, read by ` +
+          `${escapeTerminalText(edge.to.space)} ` +
+          `${escapeTerminalText(edge.to.piece)} in ` +
+          edge.slices.map(escapeTerminalText).join(", ");
+        for (const cycle of result.cycles) {
+          console.log(
+            `  ${cycle.edges.length} piece(s) in ${cycle.spaces.length} ` +
+              `spaces` +
+              (cycle.pieces > cycle.edges.length
+                ? `, of ${cycle.pieces} that read each other`
+                : ""),
+          );
+          for (const edge of cycle.edges) console.log(step(edge));
         }
       });
     } finally {

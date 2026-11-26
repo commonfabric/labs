@@ -99,7 +99,8 @@ though it succeeds from source.
 
 The toolshed embeds the pattern trees so that it can serve them, which puts
 every module in them into its graph. It leaves out the files there that it never
-serves: the `integration/` and `baselines/` directories of `patterns`,
+serves: the `integration/`, `baselines/`, and `tools/test-support/` directories
+of `patterns`,
 every test file (`*.test.ts` and `*.test.tsx`), and every iframe guest source,
 which the iframe wrapper generator has already bundled into each generated
 `main.tsx`. An npm import in a pattern tree belongs in one of those files.
@@ -422,79 +423,28 @@ and the lowered form is not folded. esbuild fixed the underlying bug in 0.28.1.
 
 ### Tree-sitter
 
-The CLI pins `web-tree-sitter` and `tree-sitter-python` exactly. `cf view`
-colors and navigates Python through them, and a grammar package ships a
-compiled parser whose binary interface has to match the runtime that loads it.
-A range on either would let an install pair a parser with a runtime that
-rejects it, which fails when a view opens a Python file rather than when the
-dependency resolves. Roll the two together, and run the `cf view` Python tests
-afterward.
+`cf view`, the CLI's terminal file viewer, pins the Tree-sitter runtime and the
+grammar packages its languages load. Its own guide, beside its source, says
+why each is pinned and how to roll it:
+[`runtime/cli/lib/view/DEPENDENCIES.md`](../../runtime/cli/lib/view/DEPENDENCIES.md).
 
-`tree-sitter-python` is reached in two ways, both of which have to keep
-working. `runtime/cli/lib/view/languages/python/python.ts` imports its
-`package.json`, which is what makes the package present, and resolves the
-compiled grammar beside it with `import.meta.resolve`, which the adapter then
-reads as a file. A source run resolves that through the Deno cache, and
-`deno task build-binaries cf` embeds it in the binary with no step of its own.
-Neither path is exercised by type checking, so a change to either is checked by
-running `cf view` against a `.py` file.
+### KaTeX
 
-Swift reaches its grammar the same way, through
-`runtime/cli/lib/view/languages/swift/swift.ts`, and the CLI pins
-`@binclusive/tree-sitter-swift-wasm` exactly as well. The Swift grammar is
-[`alex-pinkus/tree-sitter-swift`](https://github.com/alex-pinkus/tree-sitter-swift),
-whose own npm package ships no compiled WebAssembly grammar; its WebAssembly
-build is published only as an asset on each GitHub release. The pinned package
-contains that release asset and nothing the pager uses besides it. Version
-0.1.0 holds the 0.7.3 release's `tree-sitter-swift.wasm`, whose SHA-256 is
-`0258a7ef17303a8079ffe0748b3583d59656b5c3e8653fca7b6451b3e6689eb2`, the digest
-of the asset downloaded from the upstream release. Before rolling it, download
-the new release's asset from the upstream repository and confirm that the
-package's `wasm/tree-sitter-swift.wasm` has the same digest; the lockfile's
-integrity hash then holds the package to those bytes. Run the `cf view` Swift
-tests afterward, and `cf view` against a `.swift` file.
+`runtime/ui` pins `katex` exactly, because `tasks/generate-katex-assets.ts`
+writes the editor's math assets from that release: the layout rules in
+`runtime/ui/src/v2/components/cf-code-editor/features/katex-styles.ts`, and the
+fonts and their faces in `runtime/shell/public/fonts/katex/` and
+`runtime/shell/public/styles/katex-fonts.css`. Markup from one release laid out
+by another's rules can draw wrong. To roll it, change the pin in
+`runtime/ui/deno.jsonc` and the two `npm:katex` specifiers in the generator,
+then run it from the repository root:
 
-Kotlin reaches its grammar through
-`runtime/cli/lib/view/languages/kotlin/kotlin.ts`, and the CLI pins
-`@binclusive/tree-sitter-kotlin-wasm` exactly. The Kotlin grammar is
-[`tree-sitter-grammars/tree-sitter-kotlin`](https://github.com/tree-sitter-grammars/tree-sitter-kotlin),
-whose own npm package ships its WebAssembly build beside 44 MB of generated C
-source and native bindings, a development tool as a runtime dependency, and an
-install script. The pinned package holds only that WebAssembly build. Version
-0.1.0 holds the 1.1.0 release's `tree-sitter-kotlin.wasm`, whose SHA-256 is
-`7009d69453bc8735e438b2818a633efb21c88f99782769abba60dffedfab73f7`, the digest
-of both the asset attached to the upstream release and the file in the
-upstream npm package. Before rolling it, confirm that the package's
-`wasm/tree-sitter-kotlin.wasm` has the digest of the new upstream release's
-asset. Like every grammar, it has to match the `web-tree-sitter` runtime's
-binary interface, so roll it with the runtime. Run the `cf view` Kotlin tests
-afterward, and `cf view` against a `.kt` file.
+```bash
+deno run --allow-read --allow-write --allow-run tasks/generate-katex-assets.ts
+```
 
-TOML reaches its grammar through `runtime/cli/lib/view/languages/toml/toml.ts`,
-and the CLI pins `@tree-sitter-grammars/tree-sitter-toml` exactly. That package
-is the grammar's own and ships its WebAssembly build. Like `tree-sitter-python`,
-it also ships native bindings and an install script that builds them, which the
-pager never loads; the whole package is 0.76 MB unpacked, and its two
-dependencies are the ones `tree-sitter-python` already brings. Roll it with the
-runtime, then run the `cf view` TOML tests and `cf view` against a `.toml`
-file.
-
-HCL reaches its grammar through `runtime/cli/lib/view/languages/hcl/hcl.ts`,
-and the CLI pins `@tree-sitter-grammars/tree-sitter-hcl` exactly. That package
-is the grammar's own and ships WebAssembly builds of HCL and of a Terraform
-dialect with the same rules, of which the pager loads the HCL one. Like
-`tree-sitter-python`, it also ships generated C source, native bindings, and an
-install script, which the pager never uses; its dependencies are the two
-`tree-sitter-python` already brings. Roll it with the runtime, then run the
-`cf view` HCL tests and `cf view` against a `.tf` file.
-
-Shell reaches its grammar through `runtime/cli/lib/view/languages/shell/shell.ts`,
-and the CLI pins `tree-sitter-bash` exactly. That package is the official Bash
-grammar and ships its WebAssembly build, which the pager loads for Bash and
-POSIX shell alike. Like `tree-sitter-python`, it also ships generated C source,
-native bindings, and an install script, which the pager never uses; its
-dependencies are the two `tree-sitter-python` already brings. Roll it with the
-runtime, then run the `cf view` shell tests and `cf view` against a `.sh` file.
+`features/katex-render.test.ts` fails while the generated layout rules come from
+another release than the one the editor imports.
 
 ### Viz.js
 
@@ -503,6 +453,17 @@ embeds the renderer's serialized SVG in its HTML output and records the renderer
 version in that file. A renderer update can change the graph layout and the
 generated bytes, so update the dependency pin and the recorded version together
 and inspect the generated HTML before accepting a new release.
+
+### entities
+
+The CLI and the agent harness both declare `entities` at `^8.1.0`, and the
+lockfile resolves them to one copy, so change the two together. 8.1.0 is the
+floor because `entities` 8.0.0's `decodeHTMLAttribute` decodes some character
+references in attribute values that the HTML standard leaves as written, such
+as `&ltimeout`, which it reads as `<imeout`. `cf view` reads HTML attribute
+values through it, and its HTML tests hold it to the standard's reading. Run
+those tests, and the Markdown tests of `cf view` and the harness console,
+after rolling it.
 
 ### Cliffy
 

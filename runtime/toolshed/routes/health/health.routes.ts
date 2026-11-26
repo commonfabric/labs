@@ -74,6 +74,7 @@ export const StatsResponseSchema = z.object({
         bytes: z.number().int().nonnegative(),
         budgetBytes: z.number().int().positive(),
         maxEntries: z.number().int().positive(),
+        held: z.number().int().nonnegative(),
       }),
     ),
   }).optional(),
@@ -102,6 +103,28 @@ export const StatsResponseSchema = z.object({
             tenMinutes: commitWindowCounts,
           }),
         ),
+      }),
+    ),
+  }).optional(),
+  // What passed between the currency indexes of the spaces the memory
+  // server holds (runtime/memory/v2/server.ts `CurrencyDeliveryReport`)
+  // — present whenever a memory server is co-hosted in this process.
+  currencyDelivery: z.object({
+    triggers: z.number().int().nonnegative(),
+    pulls: z.number().int().nonnegative(),
+    advancesQueued: z.number().int().nonnegative(),
+    holds: z.number().int().nonnegative(),
+    armed: z.number().int().nonnegative(),
+    spaces: z.array(
+      z.object({
+        space: z.string(),
+        origin: z.number().int().positive(),
+        hops: z.number().int().positive(),
+        laps: z.number().int().nonnegative(),
+        circle: z.array(z.string()),
+        holds: z.number().int().nonnegative(),
+        gapMs: z.number().int().nonnegative(),
+        heldUntil: z.number().optional(),
       }),
     ),
   }).optional(),

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   LOOM_COMMAND_SIGNATURE_MAX_LENGTH,
@@ -8,6 +7,7 @@ import {
   typeOfSchema,
   withoutSchemaExtensions,
 } from "../src/loom-command-signature.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A schema with one parameter of each shape a signature distinguishes. */
 const DOSSIER_SCHEMA = {
@@ -138,6 +138,13 @@ describe("loom-command-signature", () => {
     it("returns an enum member that would break the line or blur the `|` quoted and escaped, and a plain one bare", () => {
       expect(typeOfSchema({ enum: ["plain", "a|b", "two\nlines", ""] }))
         .toBe('plain|"a|b"|"two\\nlines"|""');
+    });
+
+    it("returns the object or array type a schema implies by its `properties` or `items` without naming a `type`", () => {
+      expect(typeOfSchema({ properties: { a: { type: "string" } } }))
+        .toBe("{...}");
+      expect(typeOfSchema({ items: { type: "integer" } })).toBe("integer[]");
+      expect(typeOfSchema({ description: "anything" })).toBe("any");
     });
 
     it("returns `never` for an empty `enum`, `anyOf`, or `oneOf`", () => {

@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  attachRequests,
   isInMain,
   isSingleEmoji,
   sameNameMarks,
@@ -8,7 +8,10 @@ import {
   threadExcerpt,
   type ViewItem,
   viewPlaces,
+  windowCount,
+  windowSlice,
 } from "./logic.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("logic", () => {
   describe("isSingleEmoji()", () => {
@@ -86,6 +89,60 @@ describe("logic", () => {
         c: { inMain: true, replies: 0, thread: "a" },
         d: { inMain: true, replies: 0 },
         e: { inMain: false, replies: 0, thread: "a" },
+      });
+    });
+  });
+
+  describe("windowCount()", () => {
+    it("returns the count requested, rounded down, up to the most", () => {
+      expect(windowCount(3, 10)).toBe(3);
+      expect(windowCount(3.7, 10)).toBe(3);
+      expect(windowCount(30, 10)).toBe(10);
+    });
+
+    it("returns 0 for a count that is negative, not finite, or not a number", () => {
+      for (const requested of [-1, Number.NaN, Infinity, "3", undefined]) {
+        expect(windowCount(requested, 10)).toBe(0);
+      }
+    });
+  });
+
+  describe("windowSlice()", () => {
+    it("returns the newest messages of a view for a window at its end", () => {
+      expect(windowSlice(5, { before: "end" }, 2)).toEqual({
+        start: 3,
+        end: 5,
+        hasOlder: true,
+        hasNewer: false,
+      });
+    });
+
+    it("returns the oldest messages of a view for a window at its start", () => {
+      expect(windowSlice(5, { after: "start" }, 2)).toEqual({
+        start: 0,
+        end: 2,
+        hasOlder: false,
+        hasNewer: true,
+      });
+    });
+
+    it("returns the whole view, with nothing beyond it, for a window as large as it or larger", () => {
+      for (const anchor of [{ before: "end" }, { after: "start" }] as const) {
+        expect(windowSlice(3, anchor, 7)).toEqual({
+          start: 0,
+          end: 3,
+          hasOlder: false,
+          hasNewer: false,
+        });
+      }
+    });
+
+    it("returns an empty window over an empty view", () => {
+      expect(windowSlice(0, { before: "end" }, 4)).toEqual({
+        start: 0,
+        end: 0,
+        hasOlder: false,
+        hasNewer: false,
       });
     });
   });
@@ -175,6 +232,40 @@ describe("logic", () => {
         { principal: ada, name: undefined },
         { principal: otherAda, name: "  " },
       ])).toStrictEqual({ [ada]: "", [otherAda]: "" });
+    });
+  });
+
+  describe("attachRequests()", () => {
+    const files = ["a.txt", "b.txt", "c.txt"];
+    const none = () => false;
+
+    it("names each file's request by the event's key and its place", () => {
+      expect(attachRequests("k", files, none, 0, 10)).toStrictEqual([
+        { requestId: "attach-k-0", file: "a.txt" },
+        { requestId: "attach-k-1", file: "b.txt" },
+        { requestId: "attach-k-2", file: "c.txt" },
+      ]);
+    });
+
+    it("leaves out a request an earlier run of the event made", () => {
+      const handled = (id: string) => id === "attach-k-1";
+      expect(attachRequests("k", files, handled, 2, 10).map((r) => r.file))
+        .toStrictEqual(["a.txt", "c.txt"]);
+    });
+
+    it("adds nothing again for an event already handled at the limit", () => {
+      const handled = (id: string) => id.startsWith("attach-k-");
+      expect(attachRequests("k", files, handled, 10, 10)).toStrictEqual([]);
+    });
+
+    it("allows exactly as many attachments as `max`", () => {
+      expect(attachRequests("k", files, none, 7, 10)).toHaveLength(3);
+    });
+
+    it("throws when the requests it adds would pass `max`", () => {
+      expect(() => attachRequests("k", files, none, 8, 10)).toThrow(
+        "A message can have at most 10 attachments.",
+      );
     });
   });
 });

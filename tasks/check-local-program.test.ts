@@ -6,6 +6,7 @@ import {
   namesResolverInCode,
   scan,
 } from "./check-local-program.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // Builds a git repository holding the named files and returns its root. The
 // scan reads what git tracks, so a fixture has to be a repository with the
@@ -51,7 +52,7 @@ async function captureConsole(
   return { out: out.join("\n"), err: err.join("\n") };
 }
 
-Deno.test("namesResolverInCode finds a direct construction", () => {
+test("namesResolverInCode finds a direct construction", () => {
   assert(
     namesResolverInCode(
       `const program = await resolve(new FileSystemProgramResolver(main, root));`,
@@ -60,7 +61,7 @@ Deno.test("namesResolverInCode finds a direct construction", () => {
   );
 });
 
-Deno.test("namesResolverInCode finds the import that an alias renames", () => {
+test("namesResolverInCode finds the import that an alias renames", () => {
   assert(
     namesResolverInCode(
       `import { FileSystemProgramResolver as Resolver } from "@commonfabric/js-compiler";
@@ -70,7 +71,7 @@ const program = await resolve(new Resolver(main, root));`,
   );
 });
 
-Deno.test("namesResolverInCode finds a type-position reference", () => {
+test("namesResolverInCode finds a type-position reference", () => {
   assert(
     namesResolverInCode(
       `let resolver: FileSystemProgramResolver | undefined;`,
@@ -79,7 +80,7 @@ Deno.test("namesResolverInCode finds a type-position reference", () => {
   );
 });
 
-Deno.test("namesResolverInCode ignores a line comment", () => {
+test("namesResolverInCode ignores a line comment", () => {
   assertFalse(
     namesResolverInCode(
       `// Do not reach for FileSystemProgramResolver here.\nexport const x = 1;`,
@@ -88,7 +89,7 @@ Deno.test("namesResolverInCode ignores a line comment", () => {
   );
 });
 
-Deno.test("namesResolverInCode ignores a doc comment", () => {
+test("namesResolverInCode ignores a doc comment", () => {
   assertFalse(
     namesResolverInCode(
       `/**\n * Prefer this to a bare FileSystemProgramResolver.\n */\nexport const x = 1;`,
@@ -97,7 +98,7 @@ Deno.test("namesResolverInCode ignores a doc comment", () => {
   );
 });
 
-Deno.test("namesResolverInCode ignores a string literal", () => {
+test("namesResolverInCode ignores a string literal", () => {
   assertFalse(
     namesResolverInCode(
       `throw new Error("Use resolveLocalProgram, not FileSystemProgramResolver.");`,
@@ -106,7 +107,7 @@ Deno.test("namesResolverInCode ignores a string literal", () => {
   );
 });
 
-Deno.test("namesResolverInCode reads past a comment marker inside a string", () => {
+test("namesResolverInCode reads past a comment marker inside a string", () => {
   // A scan that blanked a line from its first `//` would stop reading here at
   // the URL and never reach the construction that follows it.
 
@@ -118,7 +119,7 @@ Deno.test("namesResolverInCode reads past a comment marker inside a string", () 
   );
 });
 
-Deno.test("namesResolverInCode reads past a block-comment marker inside a string", () => {
+test("namesResolverInCode reads past a block-comment marker inside a string", () => {
   // Likewise for a block-comment opener: taken literally it would swallow the
   // rest of the file.
 
@@ -130,7 +131,7 @@ Deno.test("namesResolverInCode reads past a block-comment marker inside a string
   );
 });
 
-Deno.test("namesResolverInCode parses markup in a .tsx file", () => {
+test("namesResolverInCode parses markup in a .tsx file", () => {
   assert(
     namesResolverInCode(
       `const view = <div class="x">text</div>;\nconst r = new FileSystemProgramResolver(m);`,
@@ -139,7 +140,7 @@ Deno.test("namesResolverInCode parses markup in a .tsx file", () => {
   );
 });
 
-Deno.test("namesResolverInCode ignores a same-named property of another object", () => {
+test("namesResolverInCode ignores a same-named property of another object", () => {
   // A property access still names the resolver, so it counts; a property whose
   // name merely resembles it does not.
 
@@ -151,7 +152,7 @@ Deno.test("namesResolverInCode ignores a same-named property of another object",
   );
 });
 
-Deno.test("every allowlisted file still names the resolver in code", async () => {
+test("every allowlisted file still names the resolver in code", async () => {
   for (const path of ALLOWLIST.keys()) {
     const source = await Deno.readTextFile(
       new URL(`../${path}`, import.meta.url),
@@ -163,14 +164,14 @@ Deno.test("every allowlisted file still names the resolver in code", async () =>
   }
 });
 
-Deno.test("the allowlist records a reason for every exemption", () => {
+test("the allowlist records a reason for every exemption", () => {
   for (const [path, reason] of ALLOWLIST) {
     assertEquals(typeof reason, "string");
     assert(reason.length > 0, `${path} is exempt without a reason.`);
   }
 });
 
-Deno.test("scan names a file that constructs the resolver", async () => {
+test("scan names a file that constructs the resolver", async () => {
   const root = await fixtureRepo({
     "runtime/foo/build.ts":
       "export const r = new FileSystemProgramResolver(main);\n",
@@ -182,7 +183,7 @@ Deno.test("scan names a file that constructs the resolver", async () => {
   }
 });
 
-Deno.test("scan passes over a file that only writes about the resolver", async () => {
+test("scan passes over a file that only writes about the resolver", async () => {
   const root = await fixtureRepo({
     "runtime/foo/notes.ts":
       "// Never construct a FileSystemProgramResolver here.\nexport const x = 1;\n",
@@ -195,7 +196,7 @@ Deno.test("scan passes over a file that only writes about the resolver", async (
   }
 });
 
-Deno.test("scan passes over an allowlisted file that does construct it", async () => {
+test("scan passes over an allowlisted file that does construct it", async () => {
   const root = await fixtureRepo({
     "base/js-compiler/program.ts":
       "export class FileSystemProgramResolver {}\n",
@@ -207,7 +208,7 @@ Deno.test("scan passes over an allowlisted file that does construct it", async (
   }
 });
 
-Deno.test("scan tolerates a tracked file deleted from the working tree", async () => {
+test("scan tolerates a tracked file deleted from the working tree", async () => {
   const root = await fixtureRepo({
     "runtime/foo/gone.ts":
       "export const r = new FileSystemProgramResolver(main);\n",
@@ -220,7 +221,7 @@ Deno.test("scan tolerates a tracked file deleted from the working tree", async (
   }
 });
 
-Deno.test(
+test(
   "check-local-program main reports success and returns 0 on a clean tree",
   async () => {
     const root = await fixtureRepo({
@@ -239,7 +240,7 @@ Deno.test(
   },
 );
 
-Deno.test("main reports the offender and the route to take instead", async () => {
+test("main reports the offender and the route to take instead", async () => {
   const root = await fixtureRepo({
     "runtime/foo/build.ts":
       "export const r = new FileSystemProgramResolver(main);\n",
@@ -258,7 +259,7 @@ Deno.test("main reports the offender and the route to take instead", async () =>
   }
 });
 
-Deno.test("scan reports a tracked path it cannot read for another reason", async () => {
+test("scan reports a tracked path it cannot read for another reason", async () => {
   // A tracked path that has become a directory is not a deletion, so the read
   // fails for a reason the scan has no answer for and the failure carries.
 
@@ -276,7 +277,7 @@ Deno.test("scan reports a tracked path it cannot read for another reason", async
   }
 });
 
-Deno.test("the check runs as a program over this repository", async () => {
+test("the check runs as a program over this repository", async () => {
   // Runs the check the way CI does, as a program rather than as an import. The
   // repository passes it, so this doubles as the end-to-end case: the entry
   // point wires the scan to an exit code, and the tree it ships is clean.

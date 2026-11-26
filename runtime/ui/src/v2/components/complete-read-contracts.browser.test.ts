@@ -6,8 +6,8 @@
 // checked against the entry's schema. A read outside it is listed below with
 // the reason the component makes it, or the entry is not complete.
 //
-// `Deno.test` rather than `describe`/`it`: `deno-web-test` runs this file, and
-// does not support `@std/testing/bdd`.
+// `test` rather than `describe`/`it`: `deno-web-test` runs this file, and runs
+// flat tests alone.
 
 import { expect } from "@std/expect";
 
@@ -29,6 +29,7 @@ import {
   componentReadContracts,
   componentReadSchema,
 } from "@commonfabric/runner/component-read-contract";
+import { test } from "@commonfabric/test-support/test";
 
 import "../index.ts";
 
@@ -497,7 +498,7 @@ const completeEntries = Object.entries(componentReadContracts).flatMap((
   )
 );
 
-Deno.test("complete read contracts name components that are registered and read no position as a cell", () => {
+test("complete read contracts name components that are registered and read no position as a cell", () => {
   expect(completeEntries.length).toBeGreaterThan(0);
   for (const { tag, contract } of completeEntries) {
     expect({ tag, registered: customElements.get(tag) !== undefined })
@@ -511,7 +512,7 @@ Deno.test("complete read contracts name components that are registered and read 
 
 for (const { tag, prop, contract } of completeEntries) {
   for (const variant of VARIANTS) {
-    Deno.test(`${tag} ${prop} reads nothing outside its complete read contract when what it reads ${variant.name}`, async () => {
+    test(`${tag} ${prop} reads nothing outside its complete read contract when what it reads ${variant.name}`, async () => {
       // A projected entry reads its schema whatever the handle carries, so
       // the handle carries the widest; another reads the handle's own schema,
       // so the handle carries the one its entry declares.

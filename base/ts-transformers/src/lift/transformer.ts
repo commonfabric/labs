@@ -2,7 +2,6 @@ import ts from "typescript";
 
 import { detectCallKind } from "../ast/call-kind.ts";
 import { setParentPointers } from "../ast/utils.ts";
-import { registerLiftAppliedCallType } from "../ast/type-inference.ts";
 import { HelpersOnlyTransformer } from "../core/transformers.ts";
 import type { TransformationContext } from "../core/mod.ts";
 
@@ -74,12 +73,8 @@ function lowerComputedCall(
 ): ts.Node {
   const { factory, tsContext } = context;
 
-  if (node.arguments.length !== 1) {
-    return ts.visitEachChild(node, visitor, tsContext);
-  }
-
-  const callback = node.arguments[0];
-  if (!callback) {
+  const [callback, ...extra] = node.arguments;
+  if (!callback || extra.length > 0) {
     return ts.visitEachChild(node, visitor, tsContext);
   }
 
@@ -116,7 +111,7 @@ function finalizeLoweredCall(
   context: TransformationContext,
   visitor: ts.Visitor,
 ): ts.Node {
-  const { checker, tsContext } = context;
+  const { tsContext } = context;
 
   const visitedCall = ts.visitEachChild(
     liftAppliedCall,
@@ -130,17 +125,6 @@ function finalizeLoweredCall(
     ),
     originalNode,
   );
-
-  const originalType = context.state.typeRegistry.get(originalNode);
-  if (originalType) {
-    registerLiftAppliedCallType(
-      preservedVisitedCall,
-      undefined,
-      originalType,
-      checker,
-      context.state.typeRegistry,
-    );
-  }
 
   setParentPointers(preservedVisitedCall, originalNode.parent);
 

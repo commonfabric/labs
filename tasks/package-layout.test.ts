@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 import {
@@ -9,6 +8,7 @@ import {
   TOP_LEVEL_PACKAGES,
   withoutPackageParent,
 } from "./package-layout.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("package-layout", () => {
   describe("packageDirOf()", () => {
@@ -31,7 +31,7 @@ describe("package-layout", () => {
     it("returns undefined for a path in no package", () => {
       for (
         const path of [
-          "tasks/test.ts",
+          "tasks/workspace-tests.ts",
           "runtime",
           "runtime/",
           "data-model/README.md",

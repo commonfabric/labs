@@ -1,4 +1,4 @@
-import { Default, NAME, Stream, UI, type VNode, Writable } from "commonfabric";
+import type { Default, NAME, Stream, UI, VNode, Writable } from "commonfabric";
 
 // === Domain Types ===
 

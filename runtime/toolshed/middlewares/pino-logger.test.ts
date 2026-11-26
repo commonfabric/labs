@@ -1,7 +1,13 @@
 import { assertEquals } from "@std/assert";
-import { redactHeaders, serializeResponse } from "./pino-logger.ts";
+import { expect } from "@std/expect";
+import {
+  redactHeaders,
+  serializeRequest,
+  serializeResponse,
+} from "./pino-logger.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("redactHeaders removes sensitive Headers values", () => {
+test("redactHeaders removes sensitive Headers values", () => {
   assertEquals(
     redactHeaders(
       new Headers({
@@ -24,7 +30,7 @@ Deno.test("redactHeaders removes sensitive Headers values", () => {
   );
 });
 
-Deno.test("redactHeaders handles plain objects case-insensitively", () => {
+test("redactHeaders handles plain objects case-insensitively", () => {
   assertEquals(
     redactHeaders({
       Authorization: "Bearer secret",
@@ -45,14 +51,14 @@ Deno.test("redactHeaders handles plain objects case-insensitively", () => {
   );
 });
 
-Deno.test("redactHeaders preserves non-header values", () => {
+test("redactHeaders preserves non-header values", () => {
   assertEquals(redactHeaders(undefined), undefined);
   assertEquals(redactHeaders(null), null);
   assertEquals(redactHeaders("headers unavailable"), "headers unavailable");
   assertEquals(redactHeaders([]), []);
 });
 
-Deno.test("response serializer redacts sensitive headers", () => {
+test("response serializer redacts sensitive headers", () => {
   assertEquals(
     serializeResponse({
       statusCode: 200,
@@ -69,4 +75,47 @@ Deno.test("response serializer redacts sensitive headers", () => {
       }),
     },
   );
+});
+
+describe("request and response serializers", () => {
+  const request = {
+    method: "POST",
+    url: "/api/storage/memory",
+    headers: { authorization: "Bearer secret", accept: "application/json" },
+  };
+  const redacted = { authorization: "[redacted]", accept: "application/json" };
+
+  it("returns `undefined` for a request and a response when DISABLE_LOG_REQ_RES is set", () => {
+    expect(
+      serializeResponse({ statusCode: 200, headers: {} }, {
+        DISABLE_LOG_REQ_RES: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      serializeRequest(request, { DISABLE_LOG_REQ_RES: true, ENV: "test" }),
+    ).toBeUndefined();
+  });
+
+  it("returns a request's redacted headers as a JSON string outside production", () => {
+    expect(
+      serializeRequest(request, { DISABLE_LOG_REQ_RES: false, ENV: "test" }),
+    ).toEqual({
+      method: "POST",
+      url: "/api/storage/memory",
+      headers: JSON.stringify(redacted),
+    });
+  });
+
+  it("returns a request's redacted headers as an object in production", () => {
+    expect(
+      serializeRequest(request, {
+        DISABLE_LOG_REQ_RES: false,
+        ENV: "production",
+      }),
+    ).toEqual({
+      method: "POST",
+      url: "/api/storage/memory",
+      headers: redacted,
+    });
+  });
 });

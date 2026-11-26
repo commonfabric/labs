@@ -9,9 +9,10 @@ import {
 import { parseAgentsHostCliOptions } from "../src/cli-options.ts";
 import { basename, join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 import { assertConfiguredOwner } from "../src/fabric-runtime.ts";
 
-Deno.test("configured owner must match the signing identity", async () => {
+test("configured owner must match the signing identity", async () => {
   const owner = await Identity.fromPassphrase("agents host configured owner");
   const other = await Identity.fromPassphrase("agents host other owner");
   assertConfiguredOwner(owner, owner.did());
@@ -22,7 +23,7 @@ Deno.test("configured owner must match the signing identity", async () => {
   );
 });
 
-Deno.test("parseAgentsHostConfig validates and preserves provider options", () => {
+test("parseAgentsHostConfig validates and preserves provider options", () => {
   const config = parseAgentsHostConfig({
     schema: AGENTS_HOST_CONFIG_SCHEMA,
     ownerDid: "did:key:test-owner",
@@ -71,7 +72,7 @@ Deno.test("parseAgentsHostConfig validates and preserves provider options", () =
   ]);
 });
 
-Deno.test("parseAgentsHostConfig validates checkout search roots", () => {
+test("parseAgentsHostConfig validates checkout search roots", () => {
   for (
     const checkoutRoots of [
       "/workspace/checkouts",
@@ -96,7 +97,7 @@ Deno.test("parseAgentsHostConfig validates checkout search roots", () => {
   }
 });
 
-Deno.test("parseAgentsHostConfig rejects a non-DID owner", () => {
+test("parseAgentsHostConfig rejects a non-DID owner", () => {
   assertThrows(
     () =>
       parseAgentsHostConfig({
@@ -113,7 +114,7 @@ Deno.test("parseAgentsHostConfig rejects a non-DID owner", () => {
   );
 });
 
-Deno.test("parseAgentsHostConfig rejects malformed boundary fields", () => {
+test("parseAgentsHostConfig rejects malformed boundary fields", () => {
   const source = {
     id: "codex",
     driver: "codex-app-server",
@@ -177,7 +178,7 @@ Deno.test("parseAgentsHostConfig rejects malformed boundary fields", () => {
   }
 });
 
-Deno.test("parseAgentsHostConfig rejects ambiguous source identities", () => {
+test("parseAgentsHostConfig rejects ambiguous source identities", () => {
   assertThrows(
     () =>
       parseAgentsHostConfig({
@@ -196,7 +197,7 @@ Deno.test("parseAgentsHostConfig rejects ambiguous source identities", () => {
   );
 });
 
-Deno.test("parseAgentsHostConfig requires commands for enabled ACP sources", () => {
+test("parseAgentsHostConfig requires commands for enabled ACP sources", () => {
   assertThrows(
     () =>
       parseAgentsHostConfig({
@@ -209,7 +210,7 @@ Deno.test("parseAgentsHostConfig requires commands for enabled ACP sources", () 
   );
 });
 
-Deno.test("loadAgentsHostConfig accepts JSONC", async () => {
+test("loadAgentsHostConfig accepts JSONC", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "agents.jsonc");
   try {
@@ -235,7 +236,7 @@ Deno.test("loadAgentsHostConfig accepts JSONC", async () => {
   }
 });
 
-Deno.test("parseAgentsHostConfig rejects invalid collection intervals", () => {
+test("parseAgentsHostConfig rejects invalid collection intervals", () => {
   for (
     const collectionIntervalMs of [
       null,
@@ -263,7 +264,7 @@ Deno.test("parseAgentsHostConfig rejects invalid collection intervals", () => {
   }
 });
 
-Deno.test("loadAgentsHostConfig reports a missing file", async () => {
+test("loadAgentsHostConfig reports a missing file", async () => {
   await assertRejects(
     () => loadAgentsHostConfig("/path/that/does/not/exist/agents.jsonc"),
     Error,
@@ -271,7 +272,21 @@ Deno.test("loadAgentsHostConfig reports a missing file", async () => {
   );
 });
 
-Deno.test("loadAgentsHostConfig distinguishes invalid JSONC", async () => {
+test("loadAgentsHostConfig reports a file it cannot read", async () => {
+  const directory = await Deno.makeTempDir();
+  try {
+    const error = await assertRejects(
+      () => loadAgentsHostConfig(directory),
+      Error,
+      `could not read configuration file ${directory}`,
+    );
+    assertEquals(error.cause instanceof Deno.errors.NotFound, false);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+test("loadAgentsHostConfig distinguishes invalid JSONC", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "agents.jsonc");
   try {
@@ -286,7 +301,7 @@ Deno.test("loadAgentsHostConfig distinguishes invalid JSONC", async () => {
   }
 });
 
-Deno.test("parseAgentsHostCliOptions reads connection values from the environment", () => {
+test("parseAgentsHostCliOptions reads connection values from the environment", () => {
   const env: Record<string, string> = {
     CF_API_URL: "http://fabric.example.test",
     CF_IDENTITY: "./operator.key",
@@ -305,7 +320,7 @@ Deno.test("parseAgentsHostCliOptions reads connection values from the environmen
   assertEquals(options.debugView, false);
 });
 
-Deno.test("parseAgentsHostCliOptions rejects unknown flags", () => {
+test("parseAgentsHostCliOptions rejects unknown flags", () => {
   assertThrows(
     () =>
       parseAgentsHostCliOptions(
@@ -317,7 +332,7 @@ Deno.test("parseAgentsHostCliOptions rejects unknown flags", () => {
   );
 });
 
-Deno.test("parseAgentsHostCliOptions rejects missing and positional values", () => {
+test("parseAgentsHostCliOptions rejects missing and positional values", () => {
   assertThrows(
     () => parseAgentsHostCliOptions([], () => undefined),
     Error,
@@ -330,7 +345,7 @@ Deno.test("parseAgentsHostCliOptions rejects missing and positional values", () 
   );
 });
 
-Deno.test("parseAgentsHostCliOptions does not accept per-invocation ledgers", () => {
+test("parseAgentsHostCliOptions does not accept per-invocation ledgers", () => {
   assertThrows(
     () =>
       parseAgentsHostCliOptions(
@@ -342,7 +357,7 @@ Deno.test("parseAgentsHostCliOptions does not accept per-invocation ledgers", ()
   );
 });
 
-Deno.test("parseAgentsHostCliOptions does not expose invalid URL credentials", () => {
+test("parseAgentsHostCliOptions does not expose invalid URL credentials", () => {
   const secret = "credential-that-must-not-appear";
   const error = assertThrows(
     () =>
@@ -366,7 +381,7 @@ Deno.test("parseAgentsHostCliOptions does not expose invalid URL credentials", (
   assertEquals(String(error).includes(secret), false);
 });
 
-Deno.test("parseAgentsHostConfig accepts normalized command producers and rejects malformed ones", () => {
+test("parseAgentsHostConfig accepts normalized command producers and rejects malformed ones", () => {
   const base = {
     schema: AGENTS_HOST_CONFIG_SCHEMA,
     ownerDid: "did:key:test-owner",

@@ -5,8 +5,9 @@ import {
   parsePointer,
   pathsOverlap,
 } from "../v2/path.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("memory v2 path helpers round-trip JSON pointers", () => {
+test("memory v2 path helpers round-trip JSON pointers", () => {
   const path = ["value", "nested/key", "tilde~value", "0"];
   const encoded = encodePointer(path);
 
@@ -14,7 +15,7 @@ Deno.test("memory v2 path helpers round-trip JSON pointers", () => {
   assertEquals(parsePointer(encoded), path);
 });
 
-Deno.test("memory v2 path helpers compute parents and overlap", () => {
+test("memory v2 path helpers compute parents and overlap", () => {
   assertEquals(parentPath([]), []);
   assertEquals(parentPath(["value", "items", "0"]), ["value", "items"]);
   assert(pathsOverlap(["value"], ["value", "items", "0"]));

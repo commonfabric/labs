@@ -10,13 +10,13 @@
  * over an emulated storage manager and doubles only the piece around it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import type { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime, UI } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   callPieceHandler,
@@ -585,6 +585,7 @@ describe("piece-connection", () => {
                 Promise.resolve({
                   id: PIECE,
                   name: () => "Notes",
+                  getCell: () => runtime.getCell(space, "piece"),
                   getPatternRef: () => Promise.resolve(undefined),
                   input: {
                     get: () => Promise.resolve({}),

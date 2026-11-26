@@ -14,7 +14,6 @@
  * claims and only one of them shows up in the output.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { deepFreeze, FabricInstance, type FabricValue, isDeepFrozen } from "@";
@@ -25,6 +24,7 @@ import {
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
 } from "@/fabric-bases";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Minimal `BaseFabricInstance` subclass used to exercise the template-method

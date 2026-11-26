@@ -17,8 +17,6 @@
  *   than terminal and so never puts it on the error channel at all.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -27,6 +25,12 @@ import {
   setMockResponseGate,
 } from "@commonfabric/llm/client";
 import type { URI } from "@commonfabric/memory/interface";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import { setPatternEnvironment } from "../src/env.ts";
@@ -502,7 +506,6 @@ describe("refusal-detail", () => {
               expect(detail.inputs.length).toBeGreaterThan(0);
             }
             expect(stats.refusalDetailsRecorded).toBe(4);
-            expect(stats.consumedLabelWalks).toBe(1);
           } else {
             expect(result.error).toBeUndefined();
             expect(tx.getCfcState().refusalDetails).toEqual([]);
@@ -511,8 +514,10 @@ describe("refusal-detail", () => {
             );
             expect(flags).toHaveLength(4);
             expect(stats.refusalDetailsRecorded).toBe(0);
-            expect(stats.consumedLabelWalks).toBe(0);
           }
+          // A writer-fit refusal names the reads its flow join took each
+          // clause from, so no mode walks the egress collector for one.
+          expect(stats.consumedLabelWalks).toBe(0);
         } finally {
           await runtime.dispose();
           await storageManager.close();
@@ -583,7 +588,7 @@ describe("refusal-detail", () => {
           tx.getCfcState().refusalDetails.length,
         );
         expect(runtime.getCfcStats().refusalDetailsRecorded).toBeGreaterThan(0);
-        expect(runtime.getCfcStats().consumedLabelWalks).toBe(1);
+        expect(runtime.getCfcStats().consumedLabelWalks).toBe(0);
       } finally {
         await runtime.dispose();
         await storageManager.close();

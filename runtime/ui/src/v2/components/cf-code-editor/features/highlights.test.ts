@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   type ChangeDesc,
   ChangeSet,
@@ -7,6 +6,7 @@ import {
   EditorState,
 } from "@codemirror/state";
 import type { FieldAnchors } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { CodeMirrorSynchronizationSnapshot } from "../codemirror-collaboration.ts";
 import {
   characterAt,

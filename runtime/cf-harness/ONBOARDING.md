@@ -299,8 +299,8 @@ describes each entry.
 Two things the first turn does that are not faults:
 
 - The server log prints
-  `fabric grants unavailable for this turn: Error: space
-  has no default pattern to anchor the piece registry`
+  `fabric grants unavailable for this turn: space has no
+  default pattern to anchor the piece registry`
   on a space with no default pattern, which a new space always is. The turn
   continues without the grants that let a task explore what the space already
   holds.

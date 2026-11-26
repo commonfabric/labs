@@ -1,9 +1,14 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { argv, bytesToLines, cf, checkStderr, stripAnsi } from "./utils.ts";
-import { serializeMainExport } from "../lib/dev.ts";
+import { InMemoryProgram } from "@commonfabric/js-compiler";
+import {
+  collectLocalProgram,
+  process,
+  serializeMainExport,
+} from "../lib/dev.ts";
 
 const cliPackageDir = join(import.meta.dirname!, "..");
 const repoRoot = join(cliPackageDir, "..", "..");
@@ -14,6 +19,9 @@ describe("cli check", () => {
     circular.self = circular;
 
     expect(() => serializeMainExport({ default: 1n })).toThrow(
+      "Main export not serializable.",
+    );
+    expect(() => serializeMainExport({ default: () => 1 })).toThrow(
       "Main export not serializable.",
     );
     expect(() => serializeMainExport({ default: circular })).toThrow(
@@ -247,5 +255,85 @@ describe("cli check", () => {
       "fabric imports require a space context (options.fabricImports)",
     );
     expect(renderedStderr).not.toContain("Could not resolve");
+  });
+
+  describe("a data file read at run time", () => {
+    it("names --datafile when a read finds no data file attached", async () => {
+      const { code, stderr } = await cf(
+        argv`check test/fixtures/check-datafile-hint/reads-computed-data-file.tsx`,
+      );
+      const text = stripAnsi(stderr.join("\n"));
+
+      expect(text).toContain('No attached data file "/data/absent.json"');
+      expect(text).toContain(
+        "Attach it with --datafile <path>, repeating the flag per file.",
+      );
+      expect(code).not.toBe(0);
+    });
+
+    it("does not name --datafile to a caller who already passed it", async () => {
+      const { code, stderr } = await cf(
+        argv`check --root test/fixtures/check-datafile-hint
+          test/fixtures/check-datafile-hint/reads-computed-data-file.tsx
+          --datafile test/fixtures/check-datafile-hint/data/present.json`,
+      );
+      const text = stripAnsi(stderr.join("\n"));
+
+      expect(text).toContain('No attached data file "/data/absent.json"');
+      expect(text).not.toContain("Attach it with --datafile");
+      expect(code).not.toBe(0);
+    });
+  });
+
+  describe("collectLocalProgram()", () => {
+    it("collects a file two others import once", async () => {
+      const resolver = new InMemoryProgram("/main.tsx", {
+        "/main.tsx":
+          `import { a } from "./a.ts";\nimport { b } from "./b.ts";\nexport default [a, b];`,
+        "/a.ts": `import { c } from "./c.ts";\nexport const a = c;`,
+        "/b.ts": `import { c } from "./c.ts";\nexport const b = c;`,
+        "/c.ts": "export const c = 1;",
+      });
+
+      const program = await collectLocalProgram(resolver, {
+        fabricImports: "reject",
+      });
+
+      expect(program.files.map((file) => file.name)).toEqual([
+        "/main.tsx",
+        "/a.ts",
+        "/b.ts",
+        "/c.ts",
+      ]);
+    });
+  });
+
+  describe("process()", () => {
+    it("resolves a fabric import within the space it names", async () => {
+      // Without a space the import is refused before any lookup. With one, it
+      // is looked up there, and this space holds no such pattern.
+      const fixtures = join(cliPackageDir, "fixtures");
+
+      await expect(
+        process({
+          main: join(fixtures, "fabric-import.tsx"),
+          rootPath: fixtures,
+          run: false,
+          check: false,
+        }),
+      ).rejects.toThrow("fabric imports require a space context");
+      await expect(
+        process({
+          main: join(fixtures, "fabric-import.tsx"),
+          rootPath: fixtures,
+          run: false,
+          check: false,
+          space: "did:key:z6MkjcdxtxTiUWkPkPffhs8ENkCcJjuRCQPpJFb2xyzwHqEk",
+        }),
+      ).rejects.toThrow(
+        "source for pattern:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA not " +
+          "found in space did:key:z6MkjcdxtxTiUWkPkPffhs8ENkCcJjuRCQPpJFb2xyzwHqEk",
+      );
+    });
   });
 });

@@ -8,10 +8,10 @@ import {
   COMMON_SYMBOLS,
   createFuseArgs,
   type FileInfo,
-  type FuseLib,
   type FusePlatform,
+  type LoadedFuse,
+  loadFirstLibrary,
   makeWriteEntryParam,
-  type MountHandle,
   msToTimespec,
   type StatOpts,
 } from "./platform.ts";
@@ -40,7 +40,7 @@ const LINUX_SYMBOLS = {
   },
 } as const;
 
-type LinuxLib = Deno.DynamicLibrary<typeof LINUX_SYMBOLS>;
+export type LinuxLib = Deno.DynamicLibrary<typeof LINUX_SYMBOLS>;
 
 // struct stat (Linux):
 //   dev_t st_dev       @ 0   (u64)
@@ -107,11 +107,7 @@ function writeStat(buf: ArrayBuffer, opts: StatOpts): void {
 //
 
 const ENTRY_PARAM_SIZE = 16 + STAT_SIZE + 16;
-const writeEntryParam = makeWriteEntryParam(
-  writeStat,
-  STAT_SIZE,
-  ENTRY_PARAM_SIZE,
-);
+const writeEntryParam = makeWriteEntryParam(writeStat, STAT_SIZE);
 
 // fuse_file_info (FUSE v3)
 // v3 removed the deprecated fh_old field.
@@ -206,42 +202,61 @@ const OPS_OFFSETS = {
 const FUSE_ARGS_STRUCT_SIZE = 24;
 
 //
-// Module state
+// Loading libfuse
 //
 
-let fullLib: LinuxLib | null = null;
+/**
+ * Loads libfuse3 from the first of its usual locations that `load` opens.
+ * FUSE v3 creates the session before mounting it, and notifies the kernel
+ * through the session itself.
+ */
+export function openLinuxFuse(
+  load: (path: string) => LinuxLib = (path) => Deno.dlopen(path, LINUX_SYMBOLS),
+): LoadedFuse {
+  return loadFirstLibrary(
+    LINUX_LIBFUSE_PATHS,
+    load,
+    (lib) => ({
+      symbols: lib.symbols,
+      provider: "linux-libfuse",
+      mount(mountpoint, argsBuf, opsBuf, opsSize) {
+        const session = lib.symbols.fuse_session_new(
+          Deno.UnsafePointer.of(new Uint8Array(argsBuf)),
+          Deno.UnsafePointer.of(new Uint8Array(opsBuf)),
+          opsSize,
+          null,
+        );
+        if (!session) throw new Error("fuse_session_new failed");
+        const rc = lib.symbols.fuse_session_mount(session, mountpoint);
+        if (rc !== 0) {
+          lib.symbols.fuse_session_destroy(session);
+          throw new Error(
+            `fuse_session_mount failed (rc=${rc}). Is the mountpoint valid? Is FUSE available?`,
+          );
+        }
+        return { session, notifyTarget: session };
+      },
+      unmount(handle) {
+        lib.symbols.fuse_session_unmount(handle.session);
+      },
+      cleanup(handle, _mountpoint, alreadyUnmounted) {
+        if (!alreadyUnmounted) lib.symbols.fuse_session_unmount(handle.session);
+        lib.symbols.fuse_session_destroy(handle.session);
+      },
+    }),
+    `Could not open libfuse3. Install it with:\n` +
+      `  sudo apt-get install libfuse3-dev fuse3   # Debian/Ubuntu\n` +
+      `  sudo dnf install fuse3-devel fuse3         # Fedora/RHEL\n` +
+      `  sudo pacman -S fuse3                       # Arch\n`,
+  );
+}
 
 //
 // Platform implementation
 //
 
 const linuxPlatform: FusePlatform = {
-  provider() {
-    return fullLib ? "linux-libfuse" : "unknown";
-  },
-
-  openFuse(): FuseLib {
-    if (fullLib) return fullLib as unknown as FuseLib;
-
-    const errors: string[] = [];
-    for (const path of LINUX_LIBFUSE_PATHS) {
-      try {
-        fullLib = Deno.dlopen(path, LINUX_SYMBOLS);
-        console.log(`Loaded ${path}`);
-        return fullLib as unknown as FuseLib;
-      } catch (e) {
-        errors.push(`  ${path}: ${e}`);
-      }
-    }
-
-    throw new Error(
-      `Could not open libfuse3. Install it with:\n` +
-        `  sudo apt-get install libfuse3-dev fuse3   # Debian/Ubuntu\n` +
-        `  sudo dnf install fuse3-devel fuse3         # Fedora/RHEL\n` +
-        `  sudo pacman -S fuse3                       # Arch\n` +
-        `Tried:\n${errors.join("\n")}`,
-    );
-  },
+  openFuse: () => openLinuxFuse(),
 
   STAT_SIZE,
   ENTRY_PARAM_SIZE,
@@ -357,59 +372,6 @@ const linuxPlatform: FusePlatform = {
           newNamePtr,
         ),
     );
-  },
-
-  mount(
-    _lib: FuseLib,
-    mountpoint: Uint8Array,
-    argsBuf: ArrayBuffer,
-    opsBuf: ArrayBuffer,
-    opsSize: bigint,
-  ): MountHandle {
-    const lib = fullLib!;
-
-    // FUSE v3: create session first, then mount
-    const session = lib.symbols.fuse_session_new(
-      Deno.UnsafePointer.of(new Uint8Array(argsBuf)),
-      Deno.UnsafePointer.of(new Uint8Array(opsBuf)),
-      opsSize,
-      null,
-    );
-    if (!session) {
-      throw new Error("fuse_session_new failed");
-    }
-
-    const mp = mountpoint as unknown as BufferSource;
-    const rc = lib.symbols.fuse_session_mount(session, mp);
-    if (rc !== 0) {
-      lib.symbols.fuse_session_destroy(session);
-      throw new Error(
-        `fuse_session_mount failed (rc=${rc}). Is the mountpoint valid? Is FUSE available?`,
-      );
-    }
-
-    // v3: notify target is the session itself (no channel concept)
-    return { session, notifyTarget: session };
-  },
-
-  unmount(
-    _lib: FuseLib,
-    handle: MountHandle,
-    _mountpoint: Uint8Array,
-  ): void {
-    fullLib!.symbols.fuse_session_unmount(handle.session);
-  },
-
-  cleanup(
-    lib: FuseLib,
-    handle: MountHandle,
-    _mountpoint: Uint8Array,
-    alreadyUnmounted: boolean,
-  ): void {
-    if (!alreadyUnmounted) {
-      fullLib!.symbols.fuse_session_unmount(handle.session);
-    }
-    lib.symbols.fuse_session_destroy(handle.session);
   },
 };
 

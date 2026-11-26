@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   BACKGROUND_LOG_ENV,
   READY_MARKER,
@@ -20,6 +20,7 @@ import {
   resolveCapabilities,
   run,
   type Spawn,
+  spawn,
   type SpawnedProcess,
   takeGithubToken,
 } from "./ci-capabilities.ts";
@@ -459,6 +460,29 @@ describe("run()", () => {
     await expect(
       run("sh", ["-c", "exit 124"], { inheritOutput: true }),
     ).rejects.toThrow("sh -c exit 124 exited 124");
+  });
+});
+
+describe("spawn()", () => {
+  it("returns the running process's standard output and its exit status", async () => {
+    const dir = await Deno.makeTempDir({ prefix: "spawn-" });
+    try {
+      const child = spawn(
+        "sh",
+        ["-c", 'read line; echo "$PWD $GREETING [$line]"; echo no >&2; exit 3'],
+        { cwd: dir, env: { GREETING: "hello" } },
+      );
+      const [output, status] = await Promise.all([
+        new Response(child.stdout).text(),
+        child.status,
+      ]);
+      // Standard input is closed, so `read` sees nothing, and what went to
+      // standard error is nowhere in the output.
+      expect(output).toBe(`${await Deno.realPath(dir)} hello []\n`);
+      expect(status.code).toBe(3);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
   });
 });
 

@@ -29,7 +29,10 @@ import type {
 } from "@commonfabric/runner/cfc";
 import type { MAX_ENFORCEMENT_CFC_OPTIONS } from "@commonfabric/runner";
 
-import type { HarnessCfcPolicySnapshot } from "../../src/contracts/cfc-policy-snapshot.ts";
+import type {
+  HarnessCfcEnforcementModeSource,
+  HarnessCfcPolicySnapshot,
+} from "../../src/contracts/cfc-policy-snapshot.ts";
 import type { HarnessFabricSessionCfcPosture } from "../../src/run-state.ts";
 import { cfcEnforcementStrictness } from "@commonfabric/runner/cfc";
 
@@ -132,6 +135,16 @@ const READ_AS: Record<CfcPostureProvenance, string> = {
     "inherited posture (the record of the run whose fabric session this run shares)",
   resolved: "resolved posture",
 };
+
+/** Every source a policy snapshot can record its enforcement mode came from. */
+const ENFORCEMENT_MODE_SOURCES: readonly HarnessCfcEnforcementModeSource[] = [
+  "override",
+  "explicit-config",
+  "inherited",
+  "fabric-session",
+  "run-manifest",
+  "default",
+];
 
 /** How a finding names the record it read. */
 const readAs = (record: CfcPostureReport): string => READ_AS[record.provenance];
@@ -326,31 +339,55 @@ const defaultModeDrift: AuditCheck = {
         evidence: [{ artifact: "policy-snapshot.json", detail: "absent" }],
       };
     }
-    if (snapshot.cfc.enforcementModeSource !== "default") {
+    // A snapshot written before the field existed lacks it, although the type
+    // written today requires it, and the artifact is read unchecked; a value
+    // that names no known source records none.
+    const recorded: unknown = snapshot.cfc.enforcementModeSource;
+    const source = ENFORCEMENT_MODE_SOURCES.find((name) => name === recorded);
+    if (source !== undefined && source !== "default") {
       return {
         verdict: "not-applicable",
         message:
-          `this run's enforcement mode came from \`${snapshot.cfc.enforcementModeSource}\`, not from a default`,
+          `this run's enforcement mode came from \`${source}\`, not from a default`,
         evidence: [{
           artifact: "policy-snapshot.json",
           pointer: "cfc.enforcementModeSource",
-          detail: snapshot.cfc.enforcementModeSource ?? "absent",
+          detail: source,
         }],
       };
     }
+    const origin = source === undefined
+      ? "came from a source its snapshot does not record"
+      : "came from a default";
     const claimed = cfcEnforcementStrictness(posture.enforcementMode);
     const resolved = cfcEnforcementStrictness(snapshot.cfc.enforcementMode);
     if (resolved >= claimed) {
+      // Whatever the source, a mode no weaker than the claim fell back from
+      // nothing.
       return {
         verdict: "pass",
         message:
-          `this run's enforcement mode came from a default and landed at \`${snapshot.cfc.enforcementMode}\`, no weaker than the \`${posture.enforcementMode}\` its session claims`,
+          `this run's enforcement mode ${origin} and landed at \`${snapshot.cfc.enforcementMode}\`, no weaker than the \`${posture.enforcementMode}\` its session claims`,
+      };
+    }
+    if (source === undefined) {
+      // Weaker than the claim, from a source nobody recorded: a default it fell
+      // back from and a mode the operator chose are indistinguishable.
+      return {
+        verdict: "inconclusive",
+        message:
+          `this run's enforcement mode ${origin} and landed at \`${snapshot.cfc.enforcementMode}\`, weaker than the \`${posture.enforcementMode}\` its session claims, so whether it fell back from a default is not established`,
+        evidence: [{
+          artifact: "policy-snapshot.json",
+          pointer: "cfc.enforcementModeSource",
+          detail: "absent",
+        }],
       };
     }
     return {
       verdict: "fail",
       message:
-        `this run's enforcement mode came from a default and landed at \`${snapshot.cfc.enforcementMode}\`, weaker than the \`${posture.enforcementMode}\` its session claims`,
+        `this run's enforcement mode ${origin} and landed at \`${snapshot.cfc.enforcementMode}\`, weaker than the \`${posture.enforcementMode}\` its session claims`,
       evidence: [{
         artifact: "policy-snapshot.json",
         pointer: "cfc.enforcementModeSource",

@@ -122,6 +122,11 @@ const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
     reason: "a project the harness runs to prove a test can press trusted keys",
   },
   {
+    path: "runtime/deno-web-test/test/focus-project/",
+    reason: "a project the harness runs to prove its page keeps focus for " +
+      "every file of a run",
+  },
+  {
     path: "runtime/deno-web-test/test/late-registration-project/late.test.ts",
     reason: "a project the harness runs to prove a run with a test it never " +
       "ran claims nothing",
@@ -147,10 +152,6 @@ const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
   {
     path: "runtime/deno-web-test/test/timeout-project/hang.test.ts",
     reason: "a project the harness runs to prove it reports a wedged test",
-  },
-  {
-    path: "tasks/test.ts",
-    reason: "the root `deno task test` runner, named like a test module",
   },
   {
     path: "runtime/cli/test/fixtures/",
@@ -766,15 +767,14 @@ export async function check(
   options: CheckOptions,
 ): Promise<{ findings: Finding[]; suites: number }> {
   const suites = await loadTopology(options.root);
-  const findings = checkTree(
-    suites,
-    await candidateSurfaces(options.root),
-    { fixtures: NOT_A_TEST_SURFACE },
-  );
-  const workflows = await workflowRecords(options.root);
-  for (const finding of checkWorkflows(suites, workflows)) {
-    findings.push(finding);
-  }
+  const findings = [
+    ...checkTree(
+      suites,
+      await candidateSurfaces(options.root),
+      { fixtures: NOT_A_TEST_SURFACE },
+    ),
+    ...checkWorkflows(suites, await workflowRecords(options.root)),
+  ];
   if (options.store !== undefined) {
     // Each named path is read on its own, because a path holding nothing
     // is a part of the run the store half did not see, and summing them
@@ -874,7 +874,4 @@ export async function main(
   return report(findings, suites) ? 0 : 1;
 }
 
-// `Deno.exitCode` rather than `Deno.exit`, which would end the process
-// before the unload handlers run — and one of those is what writes a
-// test run's name map into its spool.
 if (import.meta.main) Deno.exitCode = await main();

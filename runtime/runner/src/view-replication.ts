@@ -7,7 +7,11 @@ import type { ViewExecutionError } from "@commonfabric/memory/v2";
 
 import type { NormalizedFullLink } from "./link-utils.ts";
 import { entityNameKey } from "./scheduler/keys.ts";
-import { forEachOverlappingWriter } from "./scheduler/scheduling-writes.ts";
+import {
+  forEachOverlappingWriter,
+  forEachWriterOverlappingRead,
+  type OverlappingWriterIndex,
+} from "./scheduler/scheduling-writes.ts";
 import type { SpaceScopeAndURI } from "./scheduler/types.ts";
 import type {
   IMemorySpaceAddress,
@@ -42,6 +46,10 @@ export class ViewDependencyGraph {
   #nodes: readonly ViewExecutionNode[];
   #writersByEntity = new Map<SpaceScopeAndURI, Set<ViewExecutionNode>>();
   #writes = new Map<ViewExecutionNode, readonly IMemorySpaceAddress[]>();
+  #writers: OverlappingWriterIndex<ViewExecutionNode> = {
+    writersByEntity: this.#writersByEntity,
+    getSchedulingWrites: (node) => this.#writes.get(node),
+  };
 
   /** Indexes the supplied write surface for each observed execution instance. */
   constructor(
@@ -99,12 +107,6 @@ export class ViewDependencyGraph {
     const handlers = this.#nodes.filter((node) =>
       node.kind === "handler" && visibleHandlers.has(node.id)
     );
-    const ancestors = this.ancestors(
-      renderReads,
-      renderShallowReads,
-      (node) => node.kind === "computation",
-    );
-    const selected = new Set(handlers);
     // The edits a visible interaction can make, indexed by the entity they
     // write. The index holds each source's edits sliced by entity, so an
     // ancestor's read is tested only against the edits to the entity it names.
@@ -135,30 +137,52 @@ export class ViewDependencyGraph {
         slice.push(write);
       }
     }
+    const editIndex: OverlappingWriterIndex<
+      readonly IMemorySpaceAddress[]
+    > = {
+      writersByEntity: editsByEntity,
+      getSchedulingWrites: (slice) => slice,
+    };
+    const isComputation = (node: ViewExecutionNode) =>
+      node.kind === "computation";
+    const ancestors = new Set<ViewExecutionNode>();
+    this.#visitWriters(
+      renderReads,
+      renderShallowReads,
+      (node) => ancestors.add(node),
+      isComputation,
+    );
+    const selected = new Set(handlers);
     const consumers = new Map<ViewExecutionNode, Set<ViewExecutionNode>>();
+    // Set iteration includes newly discovered nodes; every node is expanded
+    // once, and each of its reads is looked up once for both its producers
+    // and the edits that reach it.
     for (const node of ancestors) {
       let edited = false;
-      forEachOverlappingWriter(
-        {
-          writersByEntity: editsByEntity,
-          getSchedulingWrites: (edits) => edits,
-        },
-        node.log.reads,
-        node.log.shallowReads,
-        () => {
-          edited = true;
-          return true;
-        },
-      );
+      const scan = (read: IMemorySpaceAddress, shallow: boolean) => {
+        const key = entityNameKey(read);
+        edited ||= forEachWriterOverlappingRead(
+          editIndex,
+          read,
+          key,
+          shallow,
+          () => true,
+        );
+        forEachWriterOverlappingRead(this.#writers, read, key, shallow, (
+          writer,
+        ) => {
+          ancestors.add(writer);
+          let next = consumers.get(writer);
+          if (next === undefined) {
+            next = new Set();
+            consumers.set(writer, next);
+          }
+          next.add(node);
+        }, { filter: isComputation });
+      };
+      for (const read of node.log.reads) scan(read, false);
+      for (const read of node.log.shallowReads) scan(read, true);
       if (edited) selected.add(node);
-      this.#visitWriters(node.log.reads, node.log.shallowReads, (writer) => {
-        let next = consumers.get(writer);
-        if (next === undefined) {
-          next = new Set();
-          consumers.set(writer, next);
-        }
-        next.add(node);
-      }, (writer) => ancestors.has(writer));
     }
     for (const node of selected) {
       for (const consumer of consumers.get(node) ?? []) selected.add(consumer);
@@ -185,10 +209,7 @@ export class ViewDependencyGraph {
     filter: (node: ViewExecutionNode) => boolean,
   ): void {
     forEachOverlappingWriter(
-      {
-        writersByEntity: this.#writersByEntity,
-        getSchedulingWrites: (node) => this.#writes.get(node),
-      },
+      this.#writers,
       reads,
       shallowReads,
       visit,

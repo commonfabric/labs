@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type {
   FabricExecFunction,
@@ -9,6 +8,7 @@ import type {
   Pattern,
 } from "@commonfabric/api";
 import type { FabricInstancePlus } from "@commonfabric/data-model/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The assertions in this file are made when it is type-checked, not when it
 // runs. The carrier below is a function that is never called: an assignment

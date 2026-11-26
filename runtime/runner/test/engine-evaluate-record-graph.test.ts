@@ -1,5 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+
+import { decodeDataFile } from "@commonfabric/text/data-file";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+
 import {
   compileWithEntryBody,
   Engine,
@@ -535,6 +543,131 @@ describe("Engine.evaluateRecordGraph()", () => {
     await expect(engine.compileAndEvaluateModules(program)).rejects.toThrow(
       'No attached data file "/data/absent.json". Attached: /data/cities.json.',
     );
+  });
+
+  describe("dataFile.url()", () => {
+    /** A program whose entry exports `expression`, with three files attached. */
+    const programReading = (expression: string): RuntimeProgram => ({
+      main: "/main.tsx",
+      dataFiles: ["/glaze.png", "/logo.svg", "/cities.json"],
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            'import { __cf_data, dataFile } from "commonfabric";',
+            `export default __cf_data(${expression});`,
+          ].join("\n"),
+        },
+        {
+          name: "/glaze.png",
+          contents: decodeDataFile(
+            new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+            "/glaze.png",
+          ),
+        },
+        { name: "/logo.svg", contents: "<svg/>" },
+        { name: "/cities.json", contents: "[]" },
+      ],
+    });
+
+    it("returns a binary file's `data:` URL", async () => {
+      const { main } = await engine.compileAndEvaluateModules(
+        programReading('dataFile.url("./glaze.png")'),
+      );
+
+      expect(main?.default).toBe("data:image/png;base64,iVBORw==");
+    });
+
+    it("returns an SVG file as a `data:` URL of its text", async () => {
+      const { main } = await engine.compileAndEvaluateModules(
+        programReading('dataFile.url("./logo.svg")'),
+      );
+
+      expect(main?.default).toBe("data:image/svg+xml;base64,PHN2Zy8+");
+    });
+
+    it("throws for a file whose extension names no media type", async () => {
+      await expect(
+        engine.compileAndEvaluateModules(
+          programReading('dataFile.url("./cities.json")'),
+        ),
+      ).rejects.toThrow(
+        "`/cities.json` has no media type a `data:` URL can carry.",
+      );
+    });
+
+    it("leaves a plain read of a binary file to throw, naming `dataFile.url()`", async () => {
+      await expect(
+        engine.compileAndEvaluateModules(
+          programReading('dataFile("./glaze.png")'),
+        ),
+      ).rejects.toThrow(
+        "Data file `/glaze.png` is binary. Read it with `dataFile.url()`.",
+      );
+    });
+  });
+
+  describe("dataFile.urls()", () => {
+    /** A program whose entry exports `expression`, over a directory of files. */
+    const programReading = (expression: string): RuntimeProgram => ({
+      main: "/main.tsx",
+      dataFiles: ["/assets/glaze.png", "/assets/logo.svg", "/assets/notes.md"],
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            'import { __cf_data, dataFile } from "commonfabric";',
+            `export default __cf_data(${expression});`,
+          ].join("\n"),
+        },
+        {
+          name: "/assets/glaze.png",
+          contents: decodeDataFile(
+            new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+            "/assets/glaze.png",
+          ),
+        },
+        { name: "/assets/logo.svg", contents: "<svg/>" },
+        { name: "/assets/notes.md", contents: "# notes" },
+      ],
+    });
+
+    it("returns each asset in the directory as a `data:` URL, by name", async () => {
+      const { main } = await engine.compileAndEvaluateModules(
+        programReading('dataFile.urls("./assets")'),
+      );
+
+      expect(main?.default).toEqual({
+        glaze: "data:image/png;base64,iVBORw==",
+        logo: "data:image/svg+xml;base64,PHN2Zy8+",
+      });
+    });
+
+    it("returns an empty record in a program that attaches no data file", async () => {
+      // A program whose only declared directory holds no asset attaches
+      // nothing, and its modules read through the builder's placeholder.
+
+      const { main } = await engine.compileAndEvaluateModules({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: [
+            'import { __cf_data, dataFile } from "commonfabric";',
+            'export default __cf_data(dataFile.urls("./assets"));',
+          ].join("\n"),
+        }],
+      });
+
+      expect(main?.default).toEqual({});
+    });
+
+    it("returns an empty record for a directory holding no asset", async () => {
+      const { main } = await engine.compileAndEvaluateModules(
+        programReading('dataFile.urls("./elsewhere")'),
+      );
+
+      expect(main?.default).toEqual({});
+    });
   });
 
   it("separates identities for data files differing only in line endings", async () => {

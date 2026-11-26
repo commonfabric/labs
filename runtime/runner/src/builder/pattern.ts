@@ -31,6 +31,7 @@ import {
 
 import { type AliasBinding, isAliasBinding } from "../alias-binding.ts";
 import {
+  asBoundCell,
   exportCell,
   isCell,
   linkCellOutsideHandlerSpace,
@@ -360,24 +361,6 @@ function factoryFromPattern<T, R>(
       }
     });
   }
-
-  // Then from assignments in nodes
-  allCells.forEach((cell) => {
-    if (exportCell(cell).path.length) return;
-    exportCell(cell).nodes.forEach((node: NodeRef) => {
-      if (isObjectOrArray(node.inputs)) {
-        Object.entries(node.inputs).forEach(([key, input]) => {
-          if (
-            isReactive(input) && Object.is(exportCell(input).cell, cell) &&
-            !exportCell(cell).name && !usedNames.has(key)
-          ) {
-            cell.for(key, true); // allowIfSet=true to not override existing causes
-            usedNames.add(key);
-          }
-        });
-      }
-    });
-  });
 
   // Also collect otherwise disconnected cells and nodes, e.g. those that are
   // assigned to cells via .set or .push and aren't otherwise connected.
@@ -1007,8 +990,8 @@ function assignComputedCellKinds(
   const collectCellRoots = (value: unknown): Set<OpaqueCell<any>> => {
     const roots = new Set<OpaqueCell<any>>();
     visitValue(value as FactoryInput<unknown>, (item) => {
-      if (isCellResultForDereferencing(item)) item = getCellOrThrow(item);
-      if (isCell(item)) roots.add(exportCell(item).cell);
+      const cell = asBoundCell(item);
+      if (cell !== undefined) roots.add(exportCell(cell).cell);
       return item;
     });
     return roots;
@@ -1082,24 +1065,23 @@ function assignComputedCellKinds(
       collectAll();
       return;
     }
-    let target = value;
-    if (isCellResultForDereferencing(target)) target = getCellOrThrow(target);
-    if (isCell(target)) {
+    const cell = asBoundCell(value);
+    if (cell !== undefined) {
       // A cell bound where a deeper grant may exist: the handle the handler
       // obtains deeper in writes INTO this root.
-      out.add(exportCell(target).cell);
+      out.add(exportCell(cell).cell);
       return;
     }
-    if (!isObjectOrArray(target)) return; // Primitives hold no roots.
+    if (!isObjectOrArray(value)) return; // Primitives hold no roots.
     // A shared value can be bound at multiple schema positions with different
     // capabilities. Deduplicate only the same value/schema pair: deduplicating
     // by value alone can let an earlier read-only path suppress a later
     // writable path. The pair guard still terminates actual value/schema
     // cycles.
-    const seenSchemas = seen.get(target) ?? new Set<object>();
+    const seenSchemas = seen.get(value) ?? new Set<object>();
     if (seenSchemas.has(schema)) return;
-    seen.set(target, seenSchemas.add(schema));
-    if (Array.isArray(target)) {
+    seen.set(value, seenSchemas.add(schema));
+    if (Array.isArray(value)) {
       const items = schema.items;
       if ("prefixItems" in schema && !Array.isArray(schema.prefixItems)) {
         // Malformed prefixItems (not a schema array): a grant could hide in a
@@ -1114,7 +1096,7 @@ function assignComputedCellKinds(
         collectAll(); // Array value under an object-shaped schema: misaligned.
         return;
       }
-      for (let index = 0; index < target.length; index++) {
+      for (let index = 0; index < value.length; index++) {
         const slotSchema =
           prefixItems !== undefined && index < prefixItems.length
             ? prefixItems[index]
@@ -1124,17 +1106,17 @@ function assignComputedCellKinds(
         // position exists for it, so the handler receives at most a plain,
         // unwritable value.
         if (slotSchema === undefined) continue;
-        collectWritablyBoundRoots(target[index], slotSchema, out, seen);
+        collectWritablyBoundRoots(value[index], slotSchema, out, seen);
       }
       return;
     }
     // A `FabricPrimitive` is atomic and holds no cell, so it is not walked. A
     // `FabricInstance` is refused here.
-    if (isWalkableObjectOrArray(target) && !isReactive(target)) {
+    if (isWalkableObjectOrArray(value) && !isReactive(value)) {
       const properties = isObjectNotArray(schema.properties)
         ? schema.properties
         : undefined;
-      for (const [key, child] of Object.entries(target)) {
+      for (const [key, child] of Object.entries(value)) {
         const childSchema = properties !== undefined && key in properties
           ? properties[key]
           : schema.additionalProperties;
@@ -1431,6 +1413,7 @@ export function pushFrameFromCause(
     unsafe_binding?: UnsafeBinding;
     inHandler?: boolean;
     frameKind?: "lift" | "handler";
+    builtinRun?: boolean;
     eventTime?: number;
     eventKey?: string;
     implementationIdentity?: ImplementationIdentity;
@@ -1444,6 +1427,7 @@ export function pushFrameFromCause(
     unsafe_binding,
     inHandler,
     frameKind,
+    builtinRun,
     eventTime,
     eventKey,
     runtime,
@@ -1473,6 +1457,7 @@ export function pushFrameFromCause(
     ...(parent?.moduleEvaluation && { moduleEvaluation: true as const }),
     ...(inHandler && { inHandler: true }),
     ...(frameKind && { frameKind }),
+    ...(builtinRun && { builtinRun: true }),
     ...(eventTime !== undefined && { eventTime }),
     ...(eventKey !== undefined && { eventKey }),
     ...(unsafe_binding ? { unsafe_binding } : {}),

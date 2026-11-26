@@ -1,0 +1,78 @@
+# Keeps the patterns on main current in the pattern index: every push that
+# changes a pattern publishes a new version of each entry whose source moved,
+# under the commonfabric brand. `.github/actions/pattern-index-sync/README.md`
+# describes the action, and how another repository adopts it.
+name: Pattern Index Sync
+
+on:
+  push:
+    branches: [main]
+    # The moves table decides which lineage a moved pattern keeps.
+    paths: ["patterns/**", "runtime/runner/src/pattern-key-moves.ts"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One sync at a time. A push arriving while one runs waits rather than
+# cancelling it, and of several waiting only the newest runs; a sync reads the
+# whole tree, so the newest covers what the skipped ones changed.
+concurrency:
+  group: pattern-index-sync
+  cancel-in-progress: false
+
+# Both jobs wait for the repository variable PATTERN_INDEX_SYNC to be `on`,
+# which is set once the index accepts this repository's brand. Until then a
+# push runs nothing.
+jobs:
+  # Compiles the patterns, which evaluates their code, so it holds no
+  # credential: no id-token, and no git credential left in the checkout.
+  plan:
+    name: Compile patterns
+    if: vars.PATTERN_INDEX_SYNC == 'on'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 🏗️ Compile patterns
+        uses: ./.github/actions/pattern-index-sync
+        with:
+          step: plan
+          program-root: patterns
+          # A pattern Labs records as moved keeps its index history.
+          moves-table: runtime/runner/src/pattern-key-moves.ts
+          include: |
+            patterns/**
+          # Development fixtures, regression scaffolding and personal variants
+          # are not for anyone to find; tools and browser tests are not
+          # patterns.
+          exclude: |
+            patterns/dev/**
+            patterns/integration/**
+            patterns/tools/**
+            patterns/baselines/**
+
+  # Publishes what the plan says changed. It may ask GitHub for an OIDC token,
+  # the sync's only credential, and runs none of the repository's patterns.
+  publish:
+    name: Publish to the index
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 🚀 Publish patterns
+        uses: ./.github/actions/pattern-index-sync
+        with:
+          step: publish

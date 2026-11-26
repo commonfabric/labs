@@ -10,7 +10,6 @@
  * is a recorded gap; one that is merely never called is a gap nobody can see.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -24,6 +23,7 @@ import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases";
 import { FabricMap, FabricNativeWrapper } from "@/fabric-instances";
 import { FrozenMap } from "@/frozen-builtins.ts";
 import { subFreeze, subIsDeepFrozen } from "./fixtures.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("FabricMap", () => {
   // Pure type-identity / supertype checks: cross-cutting carve-out per the
@@ -40,6 +40,21 @@ describe("FabricMap", () => {
   });
 
   describe("instance members", () => {
+    describe("map", () => {
+      it("returns the wrapped `Map` itself rather than a copy", () => {
+        const wrapped = new Map<FabricValue, FabricValue>([["k", 1]]);
+        const other = new Map<FabricValue, FabricValue>([["k", 1]]);
+        const instance = new FabricMap(wrapped);
+        expect(instance.map).toBe(wrapped);
+        expect(instance.map).not.toBe(other);
+      });
+
+      it("returns a wrapped `FrozenMap` as is", () => {
+        const wrapped = new FrozenMap<FabricValue, FabricValue>([["k", 1]]);
+        expect(new FabricMap(wrapped).map).toBe(wrapped);
+      });
+    });
+
     describe("toNativeValue()", () => {
       it("returns a `FrozenMap` when `frozen` is `true`", () => {
         const map = new Map<FabricValue, FabricValue>([["a", 1]]);

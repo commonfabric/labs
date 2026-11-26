@@ -22,7 +22,11 @@ import {
   preParseGlobalValues,
   subcommandCandidates,
 } from "./static.ts";
-import { type Directive, liveCandidates } from "./providers.ts";
+import {
+  type Directive,
+  liveCandidates,
+  type LiveConnectionDeps,
+} from "./providers.ts";
 
 export type CompletionShell = "bash" | "zsh";
 
@@ -192,7 +196,8 @@ export function staticCandidates(line: CompletionLine): Candidate[] {
 }
 
 /**
- * Produce the lines the shell function consumes.
+ * Produce the lines the shell function consumes, reading live candidates over
+ * the connection `deps` opens.
  *
  * Candidates are filtered by the typed prefix here rather than left to the
  * shell: bash's own filtering works on its `COMP_WORDBREAKS` view of the word,
@@ -203,6 +208,7 @@ export async function complete(
   words: readonly string[],
   cword: number,
   shell: CompletionShell,
+  deps: LiveConnectionDeps = {},
 ): Promise<string[]> {
   // The same shell function is bound to both `cf` and `deno`, because the CLI
   // is most often run as `deno task cf …`. A `deno` line that is not a CLI
@@ -212,7 +218,7 @@ export async function complete(
 
   const line = resolveCompletionLine(root, words, cword);
 
-  const live = await liveCandidates(line);
+  const live = await liveCandidates(line, deps);
   const candidates = withInlinePrefix(
     [...staticCandidates(line), ...live.candidates],
     inlinePrefixOf(line.slot),

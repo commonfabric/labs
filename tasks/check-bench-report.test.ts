@@ -4,12 +4,12 @@
  * `dashboard/bench-report.test.ts`.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import { main } from "./check-bench-report.ts";
 import { KEY_BENCHMARKS } from "../dashboard/bench-report.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const CALIBRATION = "dashboard/machine-calibration.bench.ts";
 

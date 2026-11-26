@@ -5,16 +5,17 @@
   "exports": {
     ".": "./src/mod.ts",
     "./bench-worker": "./src/bench-worker.ts",
-    "./clock-preload": "./test/clock-preload.ts",
     "./compile-byte-cache": "./src/compile-byte-cache.ts",
     "./coverage-profiles": "./src/coverage-profiles.ts",
     "./equal-ignoring-symbols": "./src/equal-ignoring-symbols.ts",
+    "./fake-clock": "./src/fake-clock.ts",
     "./fixture-runner": "./src/fixture-runner.ts",
     "./isolated-deno": "./src/isolated-deno.ts",
     "./records": "./src/records/mod.ts",
     "./remove-directory": "./src/remove-directory.ts",
     "./shuffle": "./src/shuffle.ts",
-    "./stuck-net": "./test/stuck-net.ts"
+    "./stuck-net": "./test/stuck-net.ts",
+    "./test": "./src/testing.ts"
   },
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
@@ -25,8 +26,8 @@
     // its own path allows exactly the one binary the tests start.
     // Repository tools are outside the workspace, so list their regression
     // tests here to keep them in the normal workspace test suite.
-    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --frozen=true --allow-env=CF_COMPILE_CACHE_FILE,CF_TEST_RECORDS_DIR,CF_TEST_SHUFFLE_SEED,CF_TEST_SKIP_LIST --allow-read --allow-write --allow-run=git,\"$(deno eval \"console.log(Deno.execPath())\")\" src/*.test.ts src/records/*.test.ts test/*.test.ts test/records/*.test.ts",
-    "check": "deno check src/**/*.ts test/clock-preload.ts test/stuck-net.ts",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --frozen=true --allow-env=CF_COMPILE_CACHE_FILE,CF_TEST_RECORDS_DIR,CF_TEST_SHUFFLE_SEED,CF_TEST_SKIP_LIST,UPDATE_GOLDENS --allow-read --allow-write --allow-run=git,\"$(deno eval \"console.log(Deno.execPath())\")\" src/*.test.ts src/records/*.test.ts test/*.test.ts test/records/*.test.ts",
+    "check": "deno check src/**/*.ts test/stuck-net.ts",
     "fmt": "deno fmt src/ test/",
     "lint": "deno lint src/ test/"
   },

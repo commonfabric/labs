@@ -3,8 +3,10 @@ import { join } from "@std/path";
 import {
   readDenoConfig,
   runDenoCheckWithTemporaryConfig,
+  runDenoCommandWithTemporaryLock,
   runFrozenDriftCheck,
 } from "./isolated-deno.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const ROOT = join(import.meta.dirname!, "..", "..", "..");
 
@@ -12,7 +14,7 @@ function decode(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
-Deno.test({
+test({
   name: "a task's `deno` is the Deno running the task, not one on PATH",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -64,7 +66,7 @@ Deno.test({
   },
 });
 
-Deno.test("nested checks use the checked-in dependency graph", async () => {
+test("nested checks use the checked-in dependency graph", async () => {
   const lockPath = join(ROOT, "deno.lock");
   const lockBefore = await Deno.readTextFile(lockPath);
   const rootConfig = await readDenoConfig(join(ROOT, "deno.jsonc"));
@@ -86,7 +88,23 @@ Deno.test("nested checks use the checked-in dependency graph", async () => {
   assertEquals(await Deno.readTextFile(lockPath), lockBefore);
 });
 
-Deno.test("nested frozen checks reject dependency graph drift", async () => {
+test("a command with a temporary lock runs in the environment it is given", async () => {
+  const output = await runDenoCommandWithTemporaryLock({
+    root: ROOT,
+    args: (lockPath) => [
+      "eval",
+      "--lock",
+      lockPath,
+      "console.log(Deno.env.get('CF_ISOLATED_DENO_PROBE'), Deno.cwd())",
+    ],
+    env: { CF_ISOLATED_DENO_PROBE: "given" },
+  });
+
+  assert(output.success, decode(output.stderr));
+  assertEquals(decode(output.stdout).trim(), `given ${ROOT}`);
+});
+
+test("nested frozen checks reject dependency graph drift", async () => {
   // A frozen check rejects a config whose dependency graph no longer matches
   // its lockfile. Proving that against the whole workspace would force Deno to
   // re-resolve every npm package from the registry, so this uses a small
@@ -132,4 +150,34 @@ Deno.test("nested frozen checks reject dependency graph drift", async () => {
   );
   assert(!check.success, "a drifted dependency graph should fail the check");
   assertMatch(decode(check.stderr), /lockfile is out of date/i);
+});
+
+test("a child records nothing and skips nothing unless the caller says so", async () => {
+  // A child's tests are the caller's fixtures, so the recording variables the
+  // caller's own run carries do not reach it.
+
+  const read = (env?: Record<string, string>) =>
+    runDenoCommandWithTemporaryLock({
+      root: ROOT,
+      args: (lock) => [
+        "eval",
+        `--lock=${lock}`,
+        "console.log(JSON.stringify([" +
+        'Deno.env.get("CF_TEST_RECORDS_DIR"), ' +
+        'Deno.env.get("CF_TEST_SKIP_LIST")]))',
+      ],
+      ...(env === undefined ? {} : { env }),
+    });
+  assertEquals(JSON.parse(decode((await read()).stdout)), ["", ""]);
+  assertEquals(
+    JSON.parse(
+      decode(
+        (await read({
+          CF_TEST_RECORDS_DIR: "/spool",
+          CF_TEST_SKIP_LIST: "/skip.json",
+        })).stdout,
+      ),
+    ),
+    ["/spool", "/skip.json"],
+  );
 });

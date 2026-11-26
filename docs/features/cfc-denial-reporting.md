@@ -86,20 +86,28 @@ debug and to a denial listener (below), and they are passed as a function so a
 gate builds them only where something takes them.
 
 Where a label is read, `labelSource` says where from: `stored` for the cell's
-own label, `schema` for the information-flow constraint the gate falls back to,
-and `unreadable` when reading it threw, which is the case the gate blocks on
-without ever seeing a label.
+own label, `consumed` for one a read consumed on its way, `schema` for the
+information-flow constraint the gate falls back to, and `unreadable` when
+reading it threw, whether the stored envelope could not be interpreted or the
+schema could not be walked for its labels, which is the case the gate blocks on
+without ever seeing a label. A read that reported no consumed labels reports
+`unreadable` too, while one that consumed the read-failure marker as a stored
+label, as a runtime secret is stored, reports `consumed`. The kind carries
+nothing of the label, so it is the one part of the inputs the worker's host read
+gate also returns to the host, in the refusal of a host's read
+(`CellReadRefusal`, `runtime/runtime-client/src/protocol/types.ts`).
 
 A refused commit's message still quotes its first prepare reason. That message
 is a value returned to the caller that asked for the commit; the log is read by
 whoever holds the console, which in a worker is the page whose content the gate
 scrubbed and on a server is a file spanning every space it serves.
 
-Nothing else travels. The placeholder carries `data-cfc-blocked` and
-`data-cfc-blocked-reason`. A prop feeding one of the text-integrity sinks is
-turned away a third way — its value is replaced and the node is stamped
-`data-cfc-blocked-props` naming the prop — and the report names that prop in
-its inputs.
+Nothing else travels but one input, the kind of label a host's refused read was
+decided on, which the refusal returns as `labelSource`. The placeholder carries
+`data-cfc-blocked` and `data-cfc-blocked-reason`. A prop feeding one of the
+text-integrity sinks is turned away a third way — its value is replaced and the
+node is stamped `data-cfc-blocked-props` naming the prop — and the report names
+that prop in its inputs.
 
 No identifier ties a report to the surface it explains. Reports are addressed
 by their content, so an identifier stable enough to look one up is a function
@@ -161,7 +169,8 @@ value, or a path.
 
 The inputs may name labels, policies, and values freely, because they reach
 only debug and a denial listener. Nothing derived from them may reach the
-surface the denial produced.
+surface the denial produced, but for `labelSource`, which names a kind and
+carries nothing of a label, and which a host's refused read returns.
 
 Report the decision's inputs rather than a conclusion drawn from them. Which
 input decided is the gate's business, and a gate reads them together: the

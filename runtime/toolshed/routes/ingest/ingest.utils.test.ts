@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { type MemorySpace, parseLink, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   appendToJournal,
   channelId,
@@ -22,6 +27,7 @@ import {
   verifyIngestSecret,
   writeLatest,
 } from "./ingest.utils.ts";
+import { storedLabelEntries } from "../../../runner/test/cfc-stored-labels.ts";
 
 // Golden cell id for cause "location/2026-07-01" — pins the cross-repo cell
 // address so a `FabricHash`-format change fails CI loudly (loom recomputes it).
@@ -61,15 +67,14 @@ describe("ingest journal sink", () => {
   const ingestMarks = (docSpace: string, id: string): unknown[] => {
     const replica = storageManager.open(docSpace as MemorySpace)
       .replica as unknown as {
-        getDocument(id: string): {
-          cfc?: {
-            labelMap?: {
-              entries: { origin?: string; label: { integrity?: unknown[] } }[];
-            };
-          };
-        } | undefined;
+        getDocument(id: string): { cfc?: unknown } | undefined;
       };
-    return (replica.getDocument(id)?.cfc?.labelMap?.entries ?? [])
+    return storedLabelEntries<
+      { origin?: string; label: { integrity?: unknown[] } }
+    >(
+      replica.getDocument(id)?.cfc,
+      (labelId) => replica.getDocument(labelId),
+    )
       .filter((e) => e.origin === "external-ingest")
       .flatMap((e) => e.label.integrity ?? []);
   };

@@ -122,12 +122,14 @@ pattern. That call is the whole declaration: `setsrc`, `check`, `test` and
 follow what the source imports. Nothing names the file a second time on a
 command line.
 
-A data file is stored verbatim beside the source. Deployment never parses,
-type-checks, or compiles it, and no pattern can import it. It must be UTF-8
-text, and it must sit inside the deployment root, which the CLI infers to cover
-the main entry, every test entry, and every data file. Like a test entry, a data
-file is part of the source revision's identity, so changing one creates a new
-revision, and each revision keeps its own bytes.
+A data file is stored beside the source, and `cf piece getsrc` returns it byte
+for byte. Deployment never parses, type-checks, or compiles it, and no pattern
+can import it. It must be UTF-8
+text, or an image, a font, or a sound that `dataFile.url()` reads (below), and
+it must sit inside the deployment root, which the CLI infers to cover the main
+entry, every test entry, and every data file. Like a test entry, a data file is
+part of the source revision's identity, so changing one creates a new revision,
+and each revision keeps its own bytes.
 
 The bytes travel with the pattern's code, so the read is immediate and returns
 the same text on every load of a given revision. Reading at module scope rather
@@ -145,6 +147,32 @@ interface Cities {
 
 const parsed = JSON.parse(dataFile("./data/cities.json")) as Cities;
 ```
+
+An image, a font, or a sound has no text, so `dataFile()` refuses one.
+`dataFile.url()` reads it as a base64 `data:` URL carrying its media type, such
+as `data:image/png;base64,…`, which is the form an iframe guest can load (see
+"Images and other assets" in the
+[iframe pattern guide](../common/ai/iframe-pattern-guide.md)).
+`dataFile.urls()` reads every such file directly inside a directory, as a
+record keyed by file name without the extension:
+
+```tsx
+// Shown for illustration only.
+const GLAZE = dataFile.url("./assets/glaze.png");
+const ASSETS = dataFile.urls("./assets"); // { glaze: "data:image/png;…", … }
+```
+
+The extension decides which files these are: `.png`, `.jpg`, `.jpeg`, `.gif`,
+`.webp`, `.avif`, `.svg`, `.woff2`, `.woff`, `.ttf`, `.otf`, `.mp3`, `.ogg`, and
+`.wav`. An SVG is text, so `dataFile()` returns its markup and `dataFile.url()` its
+URL. Both calls declare what they read, as `dataFile()` does: a build attaches
+the file, or lists the directory and attaches each such file in it. `cf piece
+getsrc` writes an image back as the bytes it was read from.
+
+A string of 1,024 characters or more that a data-file read returns and a
+pattern passes into its view, as an iframe pattern passes its guest's document
+and script, is stored once in the space rather than once in each piece. A
+shorter one is stored inline in each piece.
 
 A file the source cannot name — one read by a computed path, or one that ships
 with a pattern that does not read it — is attached with a repeatable
@@ -266,7 +294,11 @@ Chapter 3 insisted on them. Keep assertions deterministic — no
 (`fetchJson` and friends) can still be tested deterministically: export a
 module-scope `fetchMocks` array from the test file and the harness injects
 it as the runtime's fetch (worked examples in
-`patterns/examples/fetch-json/fetch-mock.test.tsx`). The guidance from the
+`patterns/examples/fetch-json/fetch-mock.test.tsx`). Patterns that ask a
+language model are tested the same way: a module-scope `llmMocks` array
+states each answer the model gives, and a request the test states no answer
+for fails the test (see `docs/common/workflows/pattern-testing.md`). The
+guidance from the
 canonical guide: primary verification is still runtime behavior; write
 tests for logic that's awkward or expensive to verify by clicking.
 

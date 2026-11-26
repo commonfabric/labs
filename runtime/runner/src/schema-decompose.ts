@@ -105,6 +105,18 @@ export class SchemaNotDecomposableError extends Error {
 }
 
 /**
+ * Thrown by {@link recomposeSchema} for a schema document whose content does
+ * not fit the reference to it: a missing member, a bare reference to a
+ * cyclic group, or a local ref the document does not define.
+ */
+export class SchemaNotRecomposableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SchemaNotRecomposableError";
+  }
+}
+
+/**
  * The inline form of a schema in the `schema` metadata member grammar:
  * the reference form recomposes from the document it names, the inline
  * form is returned as it is, and the malformed form throws
@@ -509,6 +521,8 @@ export function decomposeSchema(
  * output. `lookup` supplies a document by tagged hash; a missing document
  * throws, since a recomposition is only asked for when the closure is at
  * hand (the fail-closed read path is the resolver's job, not this one's).
+ * A document that does not fit the reference to it throws
+ * {@link SchemaNotRecomposableError}.
  *
  * Cyclic-group members keep their names in the recomposed `$defs`; a bare
  * (name-free) document gets a hash-derived name. A name collision between
@@ -581,7 +595,7 @@ export function recomposeSchema(
       if (local !== undefined) {
         const renamed = ownMembers.get(local);
         if (renamed === undefined) {
-          throw new Error(
+          throw new SchemaNotRecomposableError(
             `Unresolvable local ref in schema document: \`${fragment.$ref}\``,
           );
         }
@@ -639,14 +653,14 @@ export function recomposeSchema(
     const members = membersOf(parsedRoot.taggedHash, rootDocument);
     const rootName = members.get(parsedRoot.defName);
     if (rootName === undefined) {
-      throw new Error(
+      throw new SchemaNotRecomposableError(
         `Schema document has no member \`${parsedRoot.defName}\``,
       );
     }
     rootBody = { $ref: encodeJsonPointer(["#", "$defs", rootName]) };
   } else {
     if (isObjectNotArray(rootDocument) && rootDocument.$defs !== undefined) {
-      throw new Error(
+      throw new SchemaNotRecomposableError(
         "A bare root reference must not target a cyclic-group document",
       );
     }
@@ -672,7 +686,7 @@ export function recomposeSchema(
         ? groupDefs[parsed.defName]
         : undefined;
       if (body === undefined) {
-        throw new Error(
+        throw new SchemaNotRecomposableError(
           `Schema document has no member \`${parsed.defName}\``,
         );
       }

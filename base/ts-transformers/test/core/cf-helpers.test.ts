@@ -1,7 +1,8 @@
 import { assertMatch } from "@std/assert";
 import { transformCfDirective } from "../../src/mod.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("transformCfDirective injects helpers by default", () => {
+test("transformCfDirective injects helpers by default", () => {
   const source = [
     'import { pattern } from "commonfabric";',
     "export default pattern<{ value: string }>(({ value }) => ({ value }));",

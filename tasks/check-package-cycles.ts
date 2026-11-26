@@ -55,6 +55,7 @@ import { walk } from "@std/fs/walk";
 import { parse as parseJsonc } from "@std/jsonc";
 import { dirname, fromFileUrl, relative, resolve } from "@std/path";
 import { packageDirOf, withoutPackageParent } from "./package-layout.ts";
+import { gitLsFiles } from "./repository-files.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -253,21 +254,10 @@ export function targetPackage(
 }
 
 // Repo-relative, forward-slash paths that git tracks under `root`, or null when
-// `root` is not a git working tree (a unit-test fixture directory).
+// git lists none there, as it lists none where it is not installed or `root`
+// is not a git working tree (a unit-test fixture directory).
 async function gitTrackedFiles(root: string): Promise<string[] | null> {
-  let output;
-  try {
-    output = await new Deno.Command("git", {
-      args: ["-C", root, "ls-files", "-z"],
-      stdout: "piped",
-      stderr: "null",
-    }).output();
-  } catch {
-    return null; // git is not installed
-  }
-  if (!output.success) return null;
-  const paths = new TextDecoder().decode(output.stdout)
-    .split("\0").filter((path) => path !== "");
+  const paths = await gitLsFiles(root, []).catch(() => []);
   return paths.length > 0 ? paths : null;
 }
 

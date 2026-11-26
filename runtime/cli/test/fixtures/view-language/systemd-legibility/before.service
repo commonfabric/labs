@@ -1,0 +1,18 @@
+# cf-legibility builder-self agent. The instance name is the person key:
+# systemctl start probe-self@mike
+[Unit]
+Description=cf-legibility probe agent (builder-self %i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=probe-self-%i
+WorkingDirectory=/srv/probe/self-%i/probe-code
+EnvironmentFile=/etc/probe/self-%i.env
+Environment=PROBE_CLASS=self-%i
+ExecStart=/srv/probe/self-%i/probe-code/deploy/probe-run.sh self-%i
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

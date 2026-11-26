@@ -11,11 +11,13 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
-import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import {
+  type CfcConfClause,
+  CfcReadCeilingError,
+} from "@commonfabric/runner/cfc";
 import type { CfHarnessEngine } from "@commonfabric/cf-harness/engine";
 import type { HarnessPromptLoopResult } from "@commonfabric/cf-harness/prompt-loop";
 import { getBuiltinTool } from "@commonfabric/cf-harness/tools";
@@ -39,6 +41,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { seedHomeAgentQueue } from "../../runner/test/support/agent-queue.ts";
 import { createTrustedBuilder } from "../../runner/test/support/trusted-builder.ts";
@@ -833,9 +841,12 @@ describe("agent runner", () => {
 
     clock = expiry.at;
     expiry.wake();
+    // The wake's scan is in flight and the run's execution never settles,
+    // so `idle()` resolves only once the scan has dropped the run.
+    await runner.idle();
+    expect(runner.activeRuns).toBe(0);
     const record = await waitForState(result, "cancelled");
     expect(record.errorCode).toBe("CANCELLED");
-    await runner.idle();
   });
 
   it("stops following a record removed from the queue", async () => {
@@ -1682,6 +1693,21 @@ describe("agent runner", () => {
           (value) => value?.sequence === sequence,
         );
         await visible.sync();
+        // The reader is a client of its own, so the record's new pointer
+        // reaches it on its own schedule. Wait until its copy points at this
+        // report, reading the pointer alone: the report's content is what
+        // the ceiling may withhold, and a read of it would throw here.
+        const milestoneId = milestone.getAsNormalizedFullLink().id;
+        await waitForCellValue<{ progress?: Cell<unknown> }>(
+          reader,
+          visible.asSchema({
+            type: "object",
+            properties: { progress: { asCell: ["cell"] } },
+          }),
+          (record) =>
+            record?.progress?.resolveAsCell().getAsNormalizedFullLink().id ===
+              milestoneId,
+        );
         if (readable) {
           expect(await message.pull()).toBe(text);
           expect(message.get()).toBe(text);
@@ -1956,6 +1982,46 @@ describe("agent runner", () => {
         (value) => value?.progress?.sequence === 2,
       );
       expect(settled.progress?.message).toBe("Recovered milestone");
+    });
+
+    it("ends a milestone with an error, and publishes none, once the record moves to a later attempt", async () => {
+      const moved = defer<void>();
+      const reported = defer<unknown>();
+      const reports: string[] = [];
+      await startHarnessRunner(async ({ engine, resultPath }) => {
+        await moved.promise;
+        reported.resolve(
+          await engine.invokeBuiltinTool("report_progress", {
+            message: "Stale milestone",
+          }).then(() => undefined, (error: unknown) => error),
+        );
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Hyperion" }),
+        );
+        return loopResult("lost-progress");
+      }, { report: (message) => reports.push(message) });
+      const result = await submit({ progress: true });
+      await waitForState(result, "running");
+      await patternSide.editWithRetry((tx) => {
+        recordOf(result).withTx(tx).key("attempts").set(2);
+      });
+      moved.resolve();
+
+      const error = await reported.promise;
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({
+        message: expect.stringContaining(
+          "Progress publication is no longer available",
+        ),
+      });
+      expect(reports).toContain(
+        "agent runner: progress publication failed: Progress publication is no longer available",
+      );
+      // The run goes on to write its result under `workRoot`, which the
+      // hook removes, so the case returns only once the run has ended.
+      await waitForState(result, "completed");
+      expect(recordOf(result).key("progress").getRaw()).toBeUndefined();
     });
 
     it("delivers successive labeled progress links while the result is pending", async () => {
@@ -2550,6 +2616,23 @@ describe("agent runner", () => {
       const record = await waitForState(result, "failed");
 
       expect(record.errorCode).toBe("PROVIDER_FAILURE");
+    });
+
+    it("fails as `CFC_REFUSED` a run a read above the session's read ceiling ended, saying why in the operator log", async () => {
+      const messages: string[] = [];
+      await startHarnessRunner(
+        () => Promise.reject(new CfcReadCeilingError()),
+        { report: (message) => messages.push(message) },
+      );
+      const result = await submit();
+      const record = await waitForState(result, "failed");
+
+      expect(record.errorCode).toBe("CFC_REFUSED");
+      expect(messages).toContainEqual(
+        expect.stringContaining(
+          "the runtime read ceiling withholds this value",
+        ),
+      );
     });
 
     it("fails as `INVALID_RESULT` a result that does not fit the schema", async () => {

@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callsNamed, literalToValue, parseModule } from "./transformed-ast.ts";
 import { transformSource } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The options argument on the single emitted `generateObject()` call. */
 async function generatedOptions(source: string): Promise<ts.Expression> {

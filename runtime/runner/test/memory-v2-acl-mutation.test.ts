@@ -21,6 +21,7 @@ import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { test } from "@commonfabric/test-support/test";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type Options,
@@ -231,7 +232,7 @@ const withUnGenesisedSpace = async (label: string) => {
   };
 };
 
-Deno.test("ACLManager can request space-authorized initialization", async () => {
+test("ACLManager can request space-authorized initialization", async () => {
   // Restores coverage the mocked `acl-manager.test.ts` used to carry: the
   // `current === null` branch of `#write`, i.e. creating the FIRST ACL rather
   // than replacing an existing one. Every other test here starts from a
@@ -264,7 +265,7 @@ Deno.test("ACLManager can request space-authorized initialization", async () => 
   }
 });
 
-Deno.test("ACLManager surfaces rejected writes with the server's error name", async () => {
+test("ACLManager surfaces rejected writes with the server's error name", async () => {
   // Also restored from the mocked suite, which was the only assertion that
   // `#write` rethrows with `error.name` preserved rather than collapsing the
   // rejection into a generic Error. The name is load-bearing: it is what
@@ -299,7 +300,7 @@ Deno.test("ACLManager surfaces rejected writes with the server's error name", as
   }
 });
 
-Deno.test("a batched value-path ACL write throws and leaves the earlier run applied", async () => {
+test("a batched value-path ACL write throws and leaves the earlier run applied", async () => {
   // The batch path runs writes through the same `noteSystemWrite` chokepoint as
   // single writes, so the ACL guard fires there too. But `writeBatch`
   // (storage/v2-transaction.ts) applies same-document runs as it PULLS from the
@@ -388,7 +389,7 @@ Deno.test("a batched value-path ACL write throws and leaves the earlier run appl
   }
 });
 
-Deno.test("ACL grant after genesis emits one whole-document set", async () => {
+test("ACL grant after genesis emits one whole-document set", async () => {
   const ctx = await withGenesisedSpace("runner-acl-mutation-grant");
   const bob = await Identity.fromPassphrase("runner-acl-mutation-grant bob");
   try {
@@ -414,7 +415,7 @@ Deno.test("ACL grant after genesis emits one whole-document set", async () => {
   }
 });
 
-Deno.test("ACL capability can be changed and revoked after genesis", async () => {
+test("ACL capability can be changed and revoked after genesis", async () => {
   const ctx = await withGenesisedSpace("runner-acl-mutation-revoke");
   const bob = await Identity.fromPassphrase("runner-acl-mutation-revoke bob");
   try {
@@ -444,7 +445,7 @@ Deno.test("ACL capability can be changed and revoked after genesis", async () =>
   }
 });
 
-Deno.test("a wildcard WRITE grant admits a stranger until the owner removes it", async () => {
+test("a wildcard WRITE grant admits a stranger until the owner removes it", async () => {
   // A space is born owned by its creator alone. Granting `"*"` is how its
   // owner opens it to everyone, and removing that grant is how the owner
   // closes it again. Both edits are whole-document sets like any other grant.
@@ -505,7 +506,7 @@ Deno.test("a wildcard WRITE grant admits a stranger until the owner removes it",
   }
 });
 
-Deno.test("ACL mutation preserves sibling envelope fields", async () => {
+test("ACL mutation preserves sibling envelope fields", async () => {
   // A whole-document write replaces every sibling field, so `#write` spreads
   // the stored envelope instead of constructing a bare `{ value }`. Without
   // that, a `["cfc"]` label map or `source` on the ACL document would be
@@ -552,7 +553,7 @@ Deno.test("ACL mutation preserves sibling envelope fields", async () => {
   }
 });
 
-Deno.test("ACL mutation does not mutate the caller's stored value", async () => {
+test("ACL mutation does not mutate the caller's stored value", async () => {
   // Ported from the mocked suite: `#write` derives a fresh object rather than
   // mutating the immutable view handed out by `get()`.
   const ctx = await withGenesisedSpace("runner-acl-mutation-immutable");
@@ -572,7 +573,7 @@ Deno.test("ACL mutation does not mutate the caller's stored value", async () => 
   }
 });
 
-Deno.test("concurrent ACL writers do not lose each other's grants", async () => {
+test("concurrent ACL writers do not lose each other's grants", async () => {
   // The classic ACL lost-update, and the specific hazard of a whole-document
   // write: a stale base clobbers a concurrent grant instead of merging with
   // it. `#write` re-reads and re-derives inside every `editWithRetry` attempt
@@ -603,7 +604,7 @@ Deno.test("concurrent ACL writers do not lose each other's grants", async () => 
   }
 });
 
-Deno.test("ACL mutation notifies subscribers of the ACL cell", async () => {
+test("ACL mutation notifies subscribers of the ACL cell", async () => {
   // `#write` addresses the whole document (path `[]`) while every reader —
   // notably `cfc/space-membership.ts`, which drives live revocation — holds a
   // Cell at link path `[]`, i.e. document path `["value"]`. A write that
@@ -641,7 +642,7 @@ Deno.test("ACL mutation notifies subscribers of the ACL cell", async () => {
   }
 });
 
-Deno.test("a value-path write to the ACL document is refused in-process", async () => {
+test("a value-path write to the ACL document is refused in-process", async () => {
   // The server's contract (INV-12) is that an ACL mutation is a single
   // whole-document `set`. Before this guard, a value-surface write was
   // decomposed into `op: "patch"`, refused after a round-trip, and reported as
@@ -676,7 +677,7 @@ Deno.test("a value-path write to the ACL document is refused in-process", async 
   }
 });
 
-Deno.test("ACL mutation still cannot remove the last concrete owner", async () => {
+test("ACL mutation still cannot remove the last concrete owner", async () => {
   // Guard against the fix having relaxed a real server invariant while making
   // mutation work.
   const ctx = await withGenesisedSpace("runner-acl-mutation-last-owner");
@@ -697,7 +698,7 @@ Deno.test("ACL mutation still cannot remove the last concrete owner", async () =
   }
 });
 
-Deno.test("ACLManager returns the committed ACL when an owner removes themself", async () => {
+test("ACLManager returns the committed ACL when an owner removes themself", async () => {
   const ctx = await withGenesisedSpace("runner-acl-mutation-self-remove");
   const bob = await Identity.fromPassphrase(
     "runner-acl-mutation-self-remove bob",
@@ -717,7 +718,7 @@ Deno.test("ACLManager returns the committed ACL when an owner removes themself",
   }
 });
 
-Deno.test("ACLManager monotonic grants preserve stronger concurrent access", async () => {
+test("ACLManager monotonic grants preserve stronger concurrent access", async () => {
   const harness = await withGenesisedSpace("monotonic-grant");
   try {
     const guest = (await Identity.fromPassphrase("monotonic-guest")).did();
@@ -762,7 +763,7 @@ Deno.test("ACLManager monotonic grants preserve stronger concurrent access", asy
   }
 });
 
-Deno.test("ACLManager grants refuse wildcard or unsupported authority without writing", async () => {
+test("ACLManager grants refuse wildcard or unsupported authority without writing", async () => {
   const ctx = await withGenesisedSpace("monotonic-grant-invalid");
   try {
     const marker = ctx.factory.mark();
@@ -784,7 +785,7 @@ Deno.test("ACLManager grants refuse wildcard or unsupported authority without wr
   }
 });
 
-Deno.test("ACLManager removals refuse a missing ACL", async () => {
+test("ACLManager removals refuse a missing ACL", async () => {
   const ctx = await withUnGenesisedSpace("remove-no-acl");
   try {
     const marker = ctx.factory.mark();
@@ -800,7 +801,7 @@ Deno.test("ACLManager removals refuse a missing ACL", async () => {
   }
 });
 
-Deno.test("ACLManager grants cannot initialize a missing ACL", async () => {
+test("ACLManager grants cannot initialize a missing ACL", async () => {
   const ctx = await withUnGenesisedSpace("monotonic-grant-no-acl");
   try {
     const marker = ctx.factory.mark();

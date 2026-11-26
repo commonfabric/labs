@@ -235,6 +235,43 @@ suggestion the service keeps beside the invitation, with the suggestion's
 lifetime; revocation, expiry and an issuer who no longer owns the space still
 refuse it.
 
+The service moves a document of the space with its ledger,
+`of:space-invites-revision`. Its value is `{ revision }`, a count of the
+ledger's changes from `1`. The service sets it, in a system commit of its own
+inside the transaction that makes the change, whenever an operation changes what
+`list` or `receipts` return: a `create` that adds an invitation, a `revoke` that
+withdraws one, a redemption that records a receipt, whether or not it raises the
+redeemer's access, and a preview or redemption that retires an invitation
+because its issuer no longer owns the space, which is refused but still commits.
+Reading the ledger, repeating a `create` or a redemption, a refusal for any
+other reason, and expiry move nothing; expiry because every reader compares
+`expiresAt` with the time itself. The commit is on the space's default branch,
+while the ledger itself belongs to no branch. A client holding a session on the
+space's default branch watches the document to learn of changes it did not make,
+such as another owner's invitation, and reads `list` and `receipts` again when
+it moves; a session on another branch sees the document as it stood when the
+branch was forked, and learns nothing from it. The memory server that ran the
+operation tells its own sessions on the space of the move, and no other process,
+so the guarantee rests on the deployment, not on this build: one that holds a
+space's sessions in one process must route that space's invitation requests,
+over HTTP as well as on a session, to the same process, as it routes Gmail
+ingest. Until it does, a session hears only of the moves its own process made,
+though its server advertises the flag below. The document says only that the
+ledger moved, so every principal that may read the space may read it, and its
+commit names no principal, so the space's history does not name whoever's
+operation moved it. Only the service writes it: the store refuses it in an
+authored or derived commit, the server's direct write path (`writeDocument`)
+refuses it too, and a branch restore leaves it as it is. A memory server whose
+service writes it advertises `spaceInvitesRevision` in its handshake
+([protocol](../../docs/specs/memory-v2/04-protocol.md#411-websocket)), so a
+client reads the flag on the connection its session is on, from the process that
+tells that session of the move. `ISpaceReplica.invitesRevisionWatchable()`
+answers `true` only for a session that asked for the default branch, which is
+narrower than the sessions that see the document move: a server that refuses a
+principal the fork it asked for opens its session on the default branch, and
+`session.open` does not say so, so the client errs toward reading the ledger. A
+server without the flag writes no such document.
+
 Over HTTP, every invitation operation is a signed JSON POST under
 `/api/spaces/:space/invites/`: `create`, `redeem`, `preview`, `list`, `revoke`,
 and `receipts`; the memory-session forms are below. They use the existing CF1
@@ -282,29 +319,62 @@ signature, or any code.
 The reusable client is `SpaceInviteClient` from
 `@commonfabric/runner/space-invites`. The same export provides
 `createInviteCredentials`, `inviteCodeVerifier`, `buildInviteLink`, and
-`parseInviteLink`. A join link is `/join?host&space&invite#code`, with an
-optional `inviter` DID key in the query; the parser refuses any other query key.
-`inviter` is a display hint that anyone holding the link can change; it is
-checked only syntactically and is not part of the code verifier. A recipient
-cannot read the space ACL before redeeming, and afterwards an ACL check can show
-at most that the DID is an owner, not that it issued the link. Like the space
-DID, it travels in the query, so it reaches the shell host's access logs.
-`issue` accepts a prepared request containing `inviteId`, `codeVerifier`,
-`access`, `ttlSeconds`, and optional `maxUses`, `suggestedProfile`, `spaceName`
-and `issuerName`. Retain the credentials before calling it so an uncertain
-response can be retried with the same ID. The convenience `create` accepts the
-same access/lifetime/limit/suggestion/name options and optional paired
-`inviteId` and `code`, and returns flat active metadata plus `code`. If the
-create request fails, `SpaceInviteCreateError` retains its credentials and
-original options in the frozen `retry` getter. Retry with
-`client.create(error.retry)` on the same client. The getter contains the bearer
-code: keep it private, and use it only to recover or retry this invitation.
-Ordinary error inspection and JSON serialization omit these credentials. The
-error preserves a structured refusal code; uncertain transport or response
-parsing failures use `create-outcome-unknown`. Validation failures before
-sending remain `SpaceInviteError` refusals. `redeem` and `preview` accept only
-`inviteId` and `code`, and `preview` always sends the signed HTTP request;
+`parseInviteLink`, and `INVITE_LINK_SCHEME`. A join link is
+`/join?host&space&invite#code`, with an optional `inviter` DID key in the query;
+the parser refuses any other query key, and any fragment but the code.
+`parseInviteLink` accepts the same invitation in three more forms and returns
+the same result for each: `/open?…#code=…` on any HTTPS origin, or loopback HTTP
+as for `/join`, which a person reaches by asking to open the invitation in
+Weaver; `fbrc://join?…#code=…`, on the custom scheme every Weaver answers, where
+`join` is the URL's host and its path is empty; and that scheme form without a
+fragment, with the code passed separately as `parseInviteLink(url, { code })`,
+which is how Android delivers it (the code arrives as the intent's `S.code`
+extra). The result's `host` is always the service named in the query, never the
+link's own origin. Other paths, a `/join` or `/open` URL whose query names none
+of `host`, `space`, and `invite`, and any scheme action but `join` return
+`undefined`: `fbrc://setup?n=<nonce>`, the reply a Weaver receives while making
+itself the browser's default for the scheme; a space link, `fbrc://space?…`
+(below); and any action added later, so a newer link reaches an older reader as
+one it does not know rather than a malformed one. A malformed `join` URL
+(`fbrc://JOIN?…`, `fbrc://join/?…`) or a scheme URL naming no action
+(`fbrc:join?…`) throws `invalid-link`. `inviter` is a display hint that anyone
+holding the link can change; it is checked only syntactically and is not part of
+the code verifier. A recipient cannot read the space ACL before redeeming, and
+afterwards an ACL check can show at most that the DID is an owner, not that it
+issued the link. Like the space DID, it travels in the query, so it reaches the
+shell host's access logs. `issue` accepts a prepared request containing
+`inviteId`, `codeVerifier`, `access`, `ttlSeconds`, and optional `maxUses`,
+`suggestedProfile`, `spaceName` and `issuerName`. Retain the credentials before
+calling it so an uncertain response can be retried with the same ID. The
+convenience `create` accepts the same access/lifetime/limit/suggestion/name
+options and optional paired `inviteId` and `code`, and returns flat active
+metadata plus `code`. If the create request fails, `SpaceInviteCreateError`
+retains its credentials and original options in the frozen `retry` getter. Retry
+with `client.create(error.retry)` on the same client. The getter contains the
+bearer code: keep it private, and use it only to recover or retry this
+invitation. Ordinary error inspection and JSON serialization omit these
+credentials. The error preserves a structured refusal code; uncertain transport
+or response parsing failures use `create-outcome-unknown`. Validation failures
+before sending remain `SpaceInviteError` refusals. `redeem` and `preview` accept
+only `inviteId` and `code`, and `preview` always sends the signed HTTP request;
 `list` and `receipts` return arrays; `revoke` returns `{ "revoked": true }`.
+
+A space link names a space and grants nothing, so a member can say which space
+they mean without handing out access: it opens the space for someone who already
+has access, and anyone else is told they don't.
+`@commonfabric/memory/space-links` defines it, and
+`@commonfabric/runner/space-invites` re-exports it.
+`buildSpaceLink(shell, link)` makes `/space?host&space` on the shell origin, and
+`parseSpaceLink` reads that and the scheme form `fbrc://space?host&space`. The
+service and the space follow the invitation's rules: an HTTPS (or loopback)
+origin, and a `did:key`. Each link names exactly one `host` and one `space`;
+unlike an invitation's, whose fields its code binds, other query fields and any
+fragment are ignored. The format has no version number: a new field may only add
+what a reader can safely ignore, and anything that would change what an existing
+link means takes a new path or scheme action. `parseSpaceLink` returns
+`undefined` for anything that is not a space link, including other scheme
+actions, and throws a `SpaceLinkError`: `invalid-link` for a malformed space
+link, and `invalid-host` for a link or service that is not a secure origin.
 
 Given a `session`, a function that sends an operation on the space's memory
 session as `IStorageManager.administerInvites()` does, `SpaceInviteClient` sends
@@ -341,22 +411,23 @@ itself. Outside the convenience `create` operation, transport failures remain
 transport failures. Malformed error responses use `service-error`.
 
 Admission uses private tables in the target space's SQLite engine, inside the
-same serialized transaction as its ACL-only public commit. A suggested profile
-is a private row of its own, beside the invitation's, and so is what its preview
-reads: the access and any names it returns, and the issuing DID, kept only to
-check that its issuer still owns the space and never returned. A unique receipt
-pair consumes one use, including when the recipient already has sufficient
-access. Stronger explicit or wildcard access remains intact. Exhaustion,
-revocation, and expiration remove the active verifier; successful receipt pairs
-remain. Expiration is checked on each operation, with lazy physical cleanup.
-Unredeemed retired IDs have secret-free rejection markers for 361 seconds,
-covering replay of every still-fresh accepted create proof.
+same serialized transaction as its public commits: a redemption's ACL-only
+grant, and the revision document's own commit. A suggested profile is a private
+row of its own, beside the invitation's, and so is what its preview reads: the
+access and any names it returns, and the issuing DID, kept only to check that
+its issuer still owns the space and never returned. A unique receipt pair
+consumes one use, including when the recipient already has sufficient access.
+Stronger explicit or wildcard access remains intact. Exhaustion, revocation, and
+expiration remove the active verifier; successful receipt pairs remain.
+Expiration is checked on each operation, with lazy physical cleanup. Unredeemed
+retired IDs have secret-free rejection markers for 361 seconds, covering replay
+of every still-fresh accepted create proof.
 
 A full SQLite backup includes private invite tables and receipts atomically.
 Restore the complete store; restoring only the graph must not be used to
 reconstruct active invitations. Ordinary graph exports contain neither the
-active rows nor receipt tables. Administrative whole-store snapshots contain
-private verifiers and must receive the same protection as the live store.
-Deletion of an active row does not erase retained backups, WAL pages, or old
-filesystem bytes. Expiry and revocation stop admission; removing a member is a
-separate ACL operation.
+active rows nor receipt tables; the revision document they do contain holds only
+its count. Administrative whole-store snapshots contain private verifiers and
+must receive the same protection as the live store. Deletion of an active row
+does not erase retained backups, WAL pages, or old filesystem bytes. Expiry and
+revocation stop admission; removing a member is a separate ACL operation.

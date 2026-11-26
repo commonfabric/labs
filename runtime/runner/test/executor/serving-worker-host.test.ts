@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { defer } from "@commonfabric/async/defer";
 import { Identity } from "@commonfabric/identity";
@@ -16,6 +15,13 @@ import {
   loggerCountsBreakdownOf,
 } from "@commonfabric/logger";
 import type { ServerExecutionObserver } from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { SpaceNotServedError } from "../../src/executor/host.ts";
 import type { ServingLoopDiagnostics } from "../../src/executor/serving-port-protocol.ts";
 import {
@@ -169,9 +175,8 @@ describe("serving-worker-host", () => {
     await clock.settle();
     expect(warnings("undelivered-events-check-failed")).toBe(failedChecks + 1);
     expect(workers()).toHaveLength(2);
-    expect(started.accessForTestingOnly.placements.get(alpha)?.worker).toBe(
-      workers()[1],
-    );
+    expect(started.accessForTestingOnly.placements.get(alpha)?.worker.port)
+      .toBe(workers()[1]);
   });
 
   it("closes a worker as it would have when the `onWorkerClosed` observer throws", async () => {
@@ -218,8 +223,7 @@ describe("serving-worker-host", () => {
     await clock.settle();
     expect(warnings("worker-teardown-failed")).toBe(failedTeardowns + 1);
     expect(workers()).toHaveLength(2);
-    expect(started.accessForTestingOnly.placements.get(alpha)?.worker).toBe(
-      workers()[1],
-    );
+    expect(started.accessForTestingOnly.placements.get(alpha)?.worker.port)
+      .toBe(workers()[1]);
   });
 });

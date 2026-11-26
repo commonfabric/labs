@@ -126,12 +126,36 @@ over its read prefix, skips write-destination reads too.
 
 **The write-destination marking sites:** `normalizeAndDiff` and the preserved
 output attempt read in `data-updating.ts`; `CellImpl.isStream` as called from
-`set()` and the append snapshot of `push` and `pushAll` in `cell.ts`;
+`set()`, the append snapshot of `push` and `pushAll`, and the add-unique
+snapshot of `addUnique` in `cell.ts`;
 `storedQueryState` and `storedRequestHash` in `builtins/sqlite-builtins.ts`;
-`storedCellsRead` in `builtins/fetch.ts`; and the document-root read in
-`storage/v2-transaction.ts`. [`cfc-write-destination-reads.md`](cfc-write-destination-reads.md)
+`storedCellsRead` in `builtins/fetch.ts`; the setup's comparison of the
+projection it builds with the stored result (`#nextResultProjection` in
+`runner.ts`); and the document-root read in `storage/v2-transaction.ts`. [`cfc-write-destination-reads.md`](cfc-write-destination-reads.md)
 is the design, with the unobservability argument under "Why the exclusion
 carries no label out" and the residual under "What it costs".
+
+**The scheduler-dependency marking sites:** dependency seeding
+(`#populateDeclaredSchedulerReads` in `runner.ts`), and the resolution of a
+new JavaScript action node's declared inputs that certifies its static read
+set for the scheduler (`#collectStaticReadTargetsWithCompleteness` in
+`runner.ts`, under `STATIC_READ_TARGET_READ` in
+`cfc/static-read-target-read.ts`, which carries `machineryRead` as well; the
+scheduler marker decides what both consume). Both read an action's
+declared inputs through their links for the scheduler, the first so the
+reactivity log covers them, the second to name the cells they reach in the
+certificate of the action's reads. Either record decides only whether and
+when the action runs, and nothing the transaction resolving it writes is
+taken from it. The action's own run reads the same links as ordinary reads,
+where their labels and the runtime read ceiling are weighed. §8.10.1 excludes
+dependency discovery only in a transaction used for nothing else, and §18.6.2
+names no class for these reads inside a transaction that also commits, so the
+second site is a nonconforming semantic gap, as the first is wherever it runs
+in a transaction that commits; `cfc-spec-correspondence.md` records it. The
+class [specs#100](https://github.com/commonfabric/specs/pull/100) proposes is
+narrower than §8.10.1's exclusion: these reads leave the flow join and read
+ceilings only, and stay in the consumed set the input gate, egress and sinks
+check, and in conflict detection.
 
 **The wiring marking sites:** `runner.ts`, `pattern-binding.ts`, and under
 `builtins/` the collection builtins `map.ts`, `filter.ts`, `flatmap.ts`,
@@ -306,6 +330,31 @@ statement.
   display, which `cellLabelRefusal` fits on its root's integrity, is not
   resolved location by location: a root stamp's evidence can release a clause
   a child entry carries, an under-taint.
+- The flow join (`deriveFlowJoin` in `cfc/prepare.ts`) evaluates the
+  value-intrinsic rules where a value is observed into a computation, at each
+  location the observation consumed and on the evidence there about the value
+  currently at it, and joins what they leave, so that what the computation
+  writes carries the exchanged confidentiality (§5.3). The other rules are
+  not evaluated there, since their result is never carried. Where an
+  evaluation runs out of fuel, each clause that location consumed is held
+  split into its alternatives, never looser than as read and stricter than
+  any outcome that keeps an original alternative (§5.3.2; the flow join has
+  callers outside prepare, so it refuses through the label rather than by
+  failing the transaction). It is not a bound on an outcome where an added
+  alternative enables a rule that drops an original one. A policy that cannot be resolved
+  fires none of its rules at that location, so its clause stays as read for
+  the next gate to decide, which is looser than intended where the policy
+  holds a rule that would tighten it. A read's container length is one of
+  its locations: a shallow read's, and the node a recursive read declares
+  onward. It departs from §5.3 in the over-taint direction in four
+  places. It evaluates only while `cfcPolicyEvaluation` is `enforce`. A
+  label-metadata
+  observation and the flow of external content join as read. The integrity
+  that satisfied a rule is recorded on the derived value's `TransformedBy`
+  only where the input-witness summary retains it
+  ([`cfc-transformed-by-input-witnesses.md`](cfc-transformed-by-input-witnesses.md)),
+  an under-claim of integrity. And a refusal names no read for a clause a
+  rule rewrote, since the sources are matched on the clause as stored.
 - Within one location, `labelForEntriesAtPath` in `cfc/consumed-label.ts` unions
   integrity across the label components resolving there, where §8.12.8 asks
   for the class-aware join of §3.1.6.2. Where two components carry integrity
@@ -356,8 +405,8 @@ dials.
 - A space-scoped store's residency ceiling includes its own space as both
   `Space(S)` and `PersonalSpace(S)`, alongside the declared policy. This
   implements the own-space proposal in
-  [specs#71](https://github.com/commonfabric/specs/pull/71), which is closed
-  without merging; no successor ruling is incorporated in the pin. The
+  [specs#71](https://github.com/commonfabric/specs/pull/71), which is open and
+  unruled; no ruling on it is incorporated in the pin. The
   pinned §8.12.4 has no residency term, and the proposed base rule in
   [specs#68](https://github.com/commonfabric/specs/pull/68) admits only the
   `Space(S)` form on an unbound store. The own-space addition admits writes
@@ -403,6 +452,34 @@ dials.
   accepted residual, and for the others a declaration that reaches such a
   document stays a read floor and stops being a write ceiling, as the same
   section states.
+- A served run is measured as any run is: its whole join fits a target by
+  §8.12.4 and the options of §8.12.5, whichever store a clause was read from.
+  A serving host reads what its acting principal's own runtime could not
+  (`docs/specs/server-side-execution/protocol.md` §2b, "read a foreign doc"),
+  so a served run can carry a clause its acting principal does not satisfy
+  into a store that principal reads, where it lands labeled. Two boundaries
+  then let it out, and both are open: an under-taint each. The memory server
+  delivers a document to every reader of its space whatever its label admits
+  (Topics top/3173), and a served effect's request is checked against its
+  sink only where the host declares a sink ceiling (Topics top/3174;
+  `served-effect-cross-holder.test.ts` pins a served fetch over another
+  space's private URL going out). An event's payload is delivered unlabeled,
+  so a send drops its sender's clauses (Topics top/3175). The holder rule of
+  [specs#95](https://github.com/commonfabric/specs/pull/95)'s first proposal,
+  which refused such writes by where a clause was read, ran here ahead of its
+  ruling and was removed when the proposal was withdrawn.
+- Writer-fit does not measure a reference or structure write. §8.2.6
+  requires "writer-fit for the reference and structure actually persisted,
+  including replica audiences", and §8.12.8 that writer-fit and upgrade
+  rules "govern the declared component, including reference
+  identity/structure writes". The measurement in `prepareBoundaryCommit`
+  takes only a target's value-write paths: a recorded link write, and a
+  value made entirely of references, are skipped
+  (`cfc-enforcement-matrix.md` §4, the writer-fit entry's scope note). What
+  such a write persists is the reference's own label, §3 above: the link
+  schema's declarations, the handle's carried restriction, and the creating
+  attempt's flow join as a pointer-class stamp at the slot. None of it is
+  measured against the target's ceiling: an under-taint.
 
 ## 6. Idempotent persistence (§4.6.4)
 
@@ -421,7 +498,7 @@ document is ensured; equality is computed after the cross-space transform of
 
 **Deviations.**
 
-- With `cfcContentAddressedLabels` on (off by default), a stored version-1
+- With `cfcContentAddressedLabels` on, its default, a stored version-1
   envelope with unchanged labels is rewritten once in version 2;
   [`content-addressed-cfc-labels.md`](content-addressed-cfc-labels.md) under
   "Idempotence and the merge loop" and `SC-11` state this as the one
@@ -647,6 +724,31 @@ describes: a release removes a clause that stands for someone other than the
 owner, which no route under the pin removes, and every such removal is signed
 by the owner and recorded.
 
+An array the value diff rewrites is persisted index by index:
+`normalizeAndDiff` in `data-updating.ts` writes each index whose value changed,
+and the persist region clears the `derived` and `structure` entries beneath
+those paths and stamps them with the attempt's join. An element whose value at
+its index did not change is not written, and keeps the entries stored beneath
+it. An element the write moves to another index keeps them too:
+`elementEntryPlacements` in `cfc/prepare.ts` aligns the old and new arrays by
+a shortest edit script and moves each such entry, existence entries excepted,
+to the element's new index. An element the script removes is paired, in
+order, with an equal element it adds, which is how an element that changes
+places with others is carried, and the entries beneath an element left
+unpaired are dropped, except where the new element at its index is unpaired
+too: that element is the old one edited in place, and keeps its entries
+beneath the paths the diff did not write. Where no script within 64 edits
+aligns the arrays between their common prefix and suffix, the elements between
+are paired by value, in order, and the same exception covers the rest. Without
+the move, an element moved onto an index holding an equal value would take the
+entries of the element that stood there, and its own would be lost. Declared
+entries stay with their position, and link entries follow the reference their
+slot holds. This is §8.10.2.3, which specs `main` adopted at `f549c796`
+([specs#106](https://github.com/commonfabric/specs/pull/106)), later than the
+pin. The runtime conforms to it: the pairing joins equal values only, the
+attempt's join is stamped at the length and the indices the diff writes and
+nowhere else, and existence entries stay at their paths.
+
 **Residuals, with direction.**
 
 - Containers outside the wildcard scope: schemas mixing named `properties`
@@ -667,6 +769,9 @@ by the owner and recorded.
   counts as one under this runtime's presence semantics is not established.
 - Entries written before classification existed are folded into existence
   conservatively, an over-taint the same section states.
+- The alignment matches elements by value, so a write that sets an element
+  equal to one stored elsewhere in the array, without reading it, carries that
+  element's entries to it, an over-taint §8.10.2.3 accepts.
 - Cross-space label metadata: commitments are probe-able; `Space` ids,
   `Policy` and `Context` names and hashes, and authorship subjects stay
   public; declared entries and carried-forward entries persist verbatim;
@@ -726,6 +831,23 @@ narrows what is stored and so does not satisfy the correspondence procedure's
 step 4, which asks for a default-off dial; the two deciding sites carry its
 `SPEC-PENDING` marker.
 
+A recorded wiring whose document holds data beside its references is taken
+too, at its root, from a setup the runtime did not start on its own,
+but its root is not treated as written: only an asking setup restates a wiring
+it finds unchanged, and the persist region's `restatedDataRoot` replaces the
+derived value entries at and below the root with one at the root re-derived
+from the transaction's whole flow join, the entry a write of the root would
+leave, or with none where the join is empty. The existence entries at and
+below the root and the membership entries below it stay as stored, as the
+existence entries do under a write of the root, and no existence entry is
+minted at the root. This
+implements
+[specs#98](https://github.com/commonfabric/specs/pull/98) ahead of its ruling,
+at strict and with no dial, at @danfuzz's direction; it lowers a stale value
+stamp and can raise one from the restating setup's decision reads, so it does
+not satisfy step 4 either, and its four deciding sites carry that pull
+request's `SPEC-PENDING` marker.
+
 **Residuals.**
 
 - A wiring whose stored name is carried over is stamped from the attempt's
@@ -735,7 +857,21 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
   hands `run`, `setup`, `runSynced` or `runInTransaction`, or the one `setup`
   or `runSynced` makes for that call; a setup nested in another, such as a
   pattern node its parent instantiates, takes that transaction's standing).
-  A `run` given no transaction is not one. A transaction the runner makes
+  A `run` given no transaction is not one. A setup the runtime starts on its
+  own but hands a transaction is one, and so re-mints an unchanged wiring's
+  membership, as specs#98's `restateResultWiring` requires of every
+  restating setup, from a join holding none of the reads that chose the
+  pattern. Whether that re-mint should also be limited to asking setups is a
+  question for the specification, not a labs deviation. Those setups
+  pass `runtimeStarted` (the source reconciler's adoption of a newer release
+  of the source a piece follows, on open or while it runs, the piece
+  controller's re-stage of a stale root
+  setup, its cold-start setup repair and its roll-forward, `wish.ts`'s
+  sidecar run in a continuation's transaction, compile-and-run's
+  instantiation and the LLM dialog's tool-call instantiation), which
+  `#runtimeStartedSetupTransactions` records and the `result-wiring` input
+  carries, and a restated result holding data takes its value entry only
+  from a setup that is not one of them. A transaction the runner makes
   later for a deferred start or a swap takes the standing of the transaction
   whose reads it carries (§7) while that transaction is committing or has
   committed, and not while it is open or once it is aborted or refused, so a
@@ -768,8 +904,288 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
   the attempt's whole join.
 - A result wiring at a path below its document's root is restated and
   narrowed only at the root.
-- A result document holding data beside its references is not restated, so
-  a setup that leaves it unchanged re-mints none of its membership: an
-  over-taint where an earlier attempt's stamp is wider than the setup's own.
-  Restating it would take a value stamp from what the setup read onto data no
-  write of the setup made.
+- A result document holding data beside its references has its value entry
+  re-derived at a restatement and none of its membership, so a setup that
+  leaves it unchanged keeps the stored membership: an over-taint where an
+  earlier attempt's stamp is wider than the setup's own.
+- A result document holding data and no reference at any depth is not restated,
+  so a stale value entry on it stays, pending specs#98's answer on whether
+  `restateResultWiring` covers such a root
+  ([comment](https://github.com/commonfabric/specs/pull/98#issuecomment-6899569496)).
+- A release the source reconciler adopts, on open or while a piece runs, is
+  runtime-started, so it leaves a stored value entry in place, pending
+  specs#98's answer on whether such an adoption is an asking setup. A hidden
+  view therefore heals at an update a caller asks for (`cf piece setsrc`, a
+  FUSE source write, a bulk retarget, the harness's source tool, the served
+  `setsrc` verb), whether or not the update touches the view, except the case
+  the next bullet describes, and not at an adopted release that leaves the
+  view unchanged. An update of either kind that rewrites the view replaces its
+  value entry, as a write does.
+- A setup of the pattern a result was set up with, other than one that
+  rebuilds the stored setup state (`reapplyStoredSetup`), reads the name it
+  would carry over from the stored result, whether or not one is stored, and
+  that read consumes the root's value entry. Its restatement re-derives the entry
+  from a join that carries the stored entry's clauses again, so a stale value
+  stamp comes off only at an asking setup of another pattern, such as an
+  update that changes the sub-pattern's module.
+
+## 10. Write-policy alternatives across a release (§8.15.6, §8.15.13)
+
+The specification at the pin has no write policy: nothing in it names
+`writePolicyAnyOf`, a list of alternatives at one position, each pairing a
+writer with an optional UI contract. Its rules for a schema that changes a
+stored claim are general: §4.2.2.1 rule 4 has schema evolution preserve the IFC
+contract attached to a path, and §8.15.3 has write authority stable.
+[specs#96](https://github.com/commonfabric/specs/pull/96), stacked on
+[specs#52](https://github.com/commonfabric/specs/pull/52), proposes the
+construct (§8.15.6.1, "Write-Policy Alternatives"), that a later schema may omit
+a stored alternative, which the merge keeps exactly as stored, in every write, a
+release included, and a release that may append an alternative to a stored
+policy (carve-out (c) of §8.15.13, "Release", `mergeWritePolicy` and
+`admissible`).
+
+**What the runtime does.** `mergeWritePolicyAnyOf` in `cfc/schema-merge.ts`
+matches each stored alternative to a candidate's by content: the same keys, the
+same contract, and writer claims that reconcile as two lone `writeAuthorizedBy`
+claims do (`reconcileWriterClaimStamp`). It keeps the stored alternatives as
+stored, in stored order, whatever order the candidate lists them in, and keeps
+one the candidate does not list as stored too, in every write, a release
+included. Its caller says which side is stored (`storedSide`): the persist
+loop's merge of the stored envelope with the writer's schema
+(`mergeStoredCfcEnvelope`), the dry run of that merge
+(`storedCfcEnvelopeMergeIssue`), and the merge of a linked document's stored
+envelope with the schema the transaction writes it under
+(`linkedSourceEvidence`) name the stored envelope; the verification overlay,
+which merges the writer's schema with the claims the merged envelope holds where
+the write puts links, names those claims. A merge of two schemas neither of
+which is stored, such as two inputs of one transaction to the same document,
+refuses a candidate that lacks an alternative. Every write, a link write too, is
+verified against its writer's own schema as well as the stored envelope, so a
+writer the candidate omits writes only under a schema that lists it, and only
+with the stamp that schema gives it. It appends a candidate's alternative that
+matches none only in a release, and only where
+`writePolicyAlternativeAdmissible` admits it: its writer carries a module stamp
+the release installs, and one stored alternative names the same keys and the
+same contract with a writer stamped with that module or with one the space
+attests the installed module succeeds, whose claim the appended one's is but for
+the symbol it binds, a nonempty path of names, and its stamp and file spelling.
+The commit site in `prepareBoundaryCommit` (`cfc/prepare.ts`) knows a release by
+the runtime's `release-program` input (`transactionReleasesStore`), names the
+installed modules from it (`releaseProgramModules`), and reads succession from
+the delegations the transaction is pinned to (`moduleSucceeds`), which for a
+source update's setup include the ones the update proposes. `droppedStoredClaim`
+in `cfc/claim-preservation.ts` checks the merged envelope again, reading it
+independently of how the merge built it: every stored alternative kept, wherever
+it sits. It shares the merge's admission predicate,
+`writePolicyAlternativeAdmissible`, for every other alternative, so a defect in
+that predicate passes both. `piece setsrc --check` and the origin-following
+review merge in dry run through a transaction pinned to the delegations the
+update would propose (`PatternManager.proposedSourceUpdateDelegations`,
+`Runtime.readTxProposingDelegations`), derived from the same verified source
+closures as the update's own where the space holds the candidate's, so the check
+and the commit give one verdict. A candidate the space does not hold yet, as
+`--check` compiles one, is derived from the modules this session evaluated it
+with, which leave out a module the program imports only for its types; there the
+check can refuse an appended writer the commit admits.
+
+This implements specs#96 ahead of its ruling, at strict and with no dial:
+@danfuzz ruled that it lands at the strict default with no default-off dial,
+recorded in the correspondence procedure as a nonconforming semantic gap,
+pending specs#96. Against the pin it admits more: an appended writer, a
+candidate listing the stored alternatives in another order, and a candidate
+omitting a stored alternative, which the pin's general stability rules refuse.
+The last follows specs#96 as amended, and @danfuzz ruled on 2026-11-15 that it
+lands the same way, at the strict default with no dial. So it does not satisfy
+the correspondence procedure's step 4, which asks for a default-off dial for a
+change admitting more. Its four deciding sites, the merge's matching and its
+append, and the keep rule's matching and its admission, carry its `SPEC-PENDING`
+marker, and the kernel manifest carries no row for `mergeWritePolicy` until a
+regenerated snapshot defines it.
+
+**The restatement waiver across a release.** A setup that carries a protected
+argument slot over unchanged has its writer refusal deferred and then waived
+where the envelope it would store declares the same policy throughout the
+document ([specs#67](https://github.com/commonfabric/specs/pull/67), §8.15.4,
+which the pin does not have). A release that appends an alternative changes the
+policy at that position, so the waiver's comparison would refuse every release
+of a piece whose argument holds a value under a lone writer claim beside the
+extended policy. In a release, the comparison that stores the derived envelope
+counts such a position as unchanged where the stored alternatives begin the
+derived list, element for element and in order, stamps and files included, each
+further alternative is one `writePolicyAlternativeAdmissible` admits, and every
+other claim there is the same (`ifcDiffersOnlyByReleaseAppend` in
+`cfc/schema-merge.ts`). A position whose logical path the comparison cannot
+tell, or that is at, above or beneath a deferred field, is compared exactly.
+That is specs#67 as amended (§8.15.4, the replayed-setup restatement), which
+decides the deferred paths against the stored envelope's requirements alone;
+the runtime decides them against every schema the write answers to, the
+stored envelope among them, so it compares at least the positions the
+amendment compares exactly. Against the pin the runtime admits more; @danfuzz
+ruled on 2026-11-17 that this lands at the strict default with no dial, ahead
+of specs#67's ruling, under its `SPEC-PENDING` marker.
+
+**Residuals.**
+
+- The merge also requires an appended alternative to hold the same keys as the
+  stored one it pairs with, which the proposal does not ask: an over-taint.
+- An unstamped stored writer claim, lone or a write policy's alternative, is
+  adopted wherever the merge runs: a write whose schema restates it stamped,
+  with a file spelling that corresponds, stamps it in that write, whichever
+  writer makes the write, in a release or outside one. The proposal lets only
+  the writer the stamp names bring the stamp over outside a release (§8.15.13,
+  "Release"), and asks of the spelling a directory as well as a file name
+  (§8.15.1, "Handler-Declared Write Capability"), so the runtime admits more
+  there. A write whose schema differs from the stored envelope only in its
+  stamps takes the persist loop's unchanged-envelope shortcut and adopts
+  nothing. A compiled pattern's claims are stamped when the compiler mints
+  them: a module compile carries each module's identity
+  (`ModuleCompileRequest.moduleIdentities` in `harness/module-compile.ts`),
+  and the schema transformer refuses to mint a claim for a module it has none
+  for (`schema-generator.ts` in `base/ts-transformers`). So an unstamped claim
+  is stored only from a schema the compiler did not mint, or from data stored
+  before claims were minted stamped.
+- A schema declaring an empty list where the document stores a policy is
+  refused by the merge ("the candidate lists no alternative"), whatever the
+  write touches, and one declaring nothing there keeps the stored policy as
+  stored, as the proposal has them. Where the document stores no policy at the
+  position, an empty list is refused as malformed only by a write that touches
+  the position; a write that leaves it untouched stores the empty list, which
+  then admits no writer there.
+
+## 11. Writer delegations across a source update (§8.11.3)
+
+A source update lets the successor pattern's modules exercise the writer
+authority of the modules they replace. The runtime keeps that relation in a
+registry of module delegations (`ModuleDelegationRegistry` in
+`module-delegations.ts`), which the commit site reads (`moduleSucceeds` in
+`cfc/prepare.ts`).
+
+**What the runtime does.** The transition, `applyPieceSourceTransition` in
+`runner.ts`, reads the piece's data and writes no cache document. It records
+what it grants in the piece's `pieceSourceDelegations` meta member, through the
+runtime's meta seam, naming the pattern it is for, in two fields: `edges`, every
+delegation edge the piece's history recorded, each with every position in the
+piece's source history at which a transition recorded it, never removed; and
+`delegations`, each module of that pattern's closure closed over `edges` along
+non-increasing positions (`inheritedAlongStamps` in `module-delegations.ts`), so
+a module takes what its predecessor held when the module was granted it.
+`PatternManager.prepareSourceUpdate` records each successor's edge to the module
+it succeeds at one past the piece's history length, never 0, and an entry of the
+predecessor record's attested list the edges do not already reach as the
+successor's own edge at that same position, marked terminal, which a walk
+reaches from that position or later and does not continue past, so the successor
+gets the list as written and no earlier successor of the predecessor or of the
+successor sees it (`composeRecordedEdges`), and closes the candidate's modules,
+before the transaction opens, so the transaction is pinned to the closed set;
+the transition is refused as a source that moved if the member has changed
+since. Any other transition carries `edges` and closes the next pattern's
+modules over them, so a module the next pattern keeps or brings back keeps its
+grant and a new module gets none. Once a source update's transition commits, the
+runtime registers its delegations and stages them on the successor's source and
+compiled cache records, on a cache transaction of its own that reads only those
+records (`#stageCommittedDelegations`). A staging that fails is not retried; the
+piece's next committed update stages the closed entries of the modules it then
+runs. A runtime that starts or swaps the piece to the member's pattern registers
+the `delegations` entries whose module is in the successor's closure, verified
+as it loads it (`PatternManager.readInheritedAuthority`), reads nothing else of
+the member, closes nothing, and writes nothing. A member that is absent or names
+another pattern registers nothing, and the records' own lists decide.
+
+This implements [specs#101](https://github.com/commonfabric/specs/pull/101)
+ahead of its ruling, at strict and with no dial. @danfuzz
+authorized landing this design ahead of the ruling, without a flag, on
+2026-11-14, recorded in the correspondence procedure as a nonconforming semantic
+gap. Against the pin it admits more, since a pattern update no longer labels the
+cache records it delegates through, so it does not satisfy the correspondence
+procedure's step 4. Its two deciding sites, the recording in
+`applyPieceSourceTransition` and the registration in `PatternManager`, carry its
+`SPEC-PENDING` marker.
+
+**Residuals.**
+
+- An under-taint: the decision label. A transition that chose its successor
+  by a labeled value put that value's clause on the records it staged, which
+  §8.11.3 asks of a decision's downstream outputs. The staging transaction
+  reads no piece data, so the records carry none, and the member carries no
+  flow label either.
+- Authority also comes from the piece's `pieceSourceDelegations` member, not
+  only from a closure's own records, and the member is trusted on its shape: its
+  predecessors are not checked against anything. Only the runtime's meta seam
+  writes it. A client that bypasses its runtime can forge it, as it can forge
+  the compiler's attestation on a record (`memory/v2/envelope-admission.ts`), so
+  no new attacker gains anything. What a forged entry reaches is wider than a
+  forged record: any runtime that starts the piece registers it for the whole
+  space. A start writes nothing, so the entry reaches the cache records only
+  when the piece's next honest update composes it into its own and stages it
+  there under the compiler's attestation, after which it cannot be told apart
+  from an attested entry.
+- Growth. `edges` grows by one edge, or one position on an edge already
+  recorded, per module an update replaces, and `delegations` by one predecessor
+  per earlier version of each module of the running pattern, so both grow
+  linearly with the piece's updates; nothing bounds the number of updates over a
+  long-lived piece. A record's attested list adds an edge only for a predecessor
+  the piece's own history does not already reach, as one another piece's update
+  gave a shared successor. The closure expands each module once, taking first
+  the module it reaches with the largest position, so one closure costs time
+  linear in the edges and their positions, times a logarithm. An honest member
+  keeps each file's versions in a chain of their own, a listed entry ending its
+  walk, so a walk covers one chain: an update after a thousand updates of a
+  hundred files composes in about 90 milliseconds, measured. Only a forged
+  member makes the edges dense, and one with a million edges costs one
+  preparation about twelve seconds, measured.
+- A grant whose staging failed. The piece's own authority does not depend on
+  the staging, but the grant stays missing from the cache records where nothing
+  of the piece's carries it to them, so three readers of the records alone are
+  refused it, where `main`'s staging in the transition would have kept it. A
+  runtime from before the member that makes any transition of the piece after
+  the failed staging, a source update or not, leaves the member naming another
+  pattern, so the member is ignored, the unstaged record decides, and the
+  runtime is refused the grant and granted nothing more (pinned by a test that
+  expects the refusal). A source update of another piece from the ungranted
+  module after the failed staging takes in its unstaged record, so it is refused
+  the grant, carries the loss into that piece's record and on to its successors,
+  and is granted nothing more. A module of another piece that writes, through a
+  link, into a field the granting module protects after the failed staging is
+  refused the grant, since that runtime registers it only from the records, and
+  is granted nothing more.
+- Records an earlier transition stamped keep their clause until the load
+  ahead of a setup repairs them (`module-loading.md`, "Repairing a stamped
+  record"). The repair erases a stamped compiled record and rewrites a stamped
+  source record to the value the compile-cache writer stores for its identity,
+  which lowers a stored label at strict ahead of the specification's ruling
+  (commonfabric/specs#103, §18.6.2.1). What §18.6.4 asks a repairing runtime
+  to record:
+  - When it runs: in `PatternManager.prepareSourceClosureVerification()`,
+    ahead of a setup that verifies the closure, once a check of the closure's
+    labels finds a stamp. A child a pattern's own graph places in another
+    space is created without that preparation, and is not repaired first
+    (`module-loading.md`).
+  - The identity it writes under: the `compile-cache-repair` builtin, through
+    `writeRepairedCompileCacheRecord()`, which refuses any other identity and
+    any key but a compile-cache record's.
+  - How the attestation at a delegation list is kept to lists the
+    compile-cache writer wrote: the writer mints it only on a list it writes
+    in an attempt of its own, and a write by another identity strips it at
+    the path it reaches, before or after the writer's write
+    (`module-loading.md`, "Per-space containment"). That cannot be
+    established for records a runtime before #9868 wrote, which staged the
+    lists in the update's own transaction. Nor does it hold for a write at
+    the `disabled` rung, which leaves the attestation over a list another
+    writer chose; no shipped host runs `disabled`.
+  - The four residuals it releases: the attested delegation list, carried
+    unlabeled; the cache-root edge set of the entry's record, kept as a set
+    of verified members; existence, since a reader not cleared for the
+    removed clauses learns that the record was once written under a label;
+    and program text a writer chose under a label below strict, released as
+    the canonical value of the record's key.
+
+  A record the repair refuses keeps its clause, and a setup that reads it
+  keeps refusing. A write-back still re-stamps the root of a record that
+  already carries a clause, which a later load repairs again. A closure whose
+  repair lost a race, or whose commit was refused for want of write access, is
+  tried again at its next load; one the repair refused is not tried again in
+  that session. A stamped compiled record of a
+  `fabric:` dependency is not repaired, and a write-back of its importer that
+  reads it re-stamps the importer's compiled record, which the next load
+  erases again; a setup of the importer still commits, since it reads source
+  records only.

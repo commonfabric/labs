@@ -162,6 +162,14 @@ export const highlightField = StateField.define<HighlightState>({
 export const highlightAnchors = (state: EditorState): FieldAnchors =>
   state.field(highlightField, false)?.anchors ?? {};
 
+/** The ids of the anchors that highlights of the kind `active` start at. */
+export const activeHighlightAnchors = (state: EditorState): Set<string> =>
+  new Set(
+    (state.field(highlightField, false)?.highlights ?? [])
+      .filter(({ kind }) => kind === "active")
+      .map(({ fromAnchor }) => fromAnchor),
+  );
+
 /**
  * What is wrong with the highlights `state` holds, one message each: a
  * highlight whose `kind` cannot be part of a class name, which is drawn

@@ -2,8 +2,8 @@
 import "../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { dirname, fromFileUrl, join } from "@std/path";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const COMPONENTS_ROOT = dirname(fromFileUrl(import.meta.url));
 

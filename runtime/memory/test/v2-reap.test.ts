@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
@@ -24,6 +23,12 @@ import {
   stageReap,
 } from "../v2/reap.ts";
 import { cellDatabaseFilePrefix } from "../v2/storage-path.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6MkReapSpace";
 const ALICE = "did:key:z6MkReapAlice";
@@ -236,6 +241,25 @@ describe("reap", () => {
     expect(() => publishReap(refused)).toThrow(ReapRefused);
     expect(Deno.readTextFileSync(out)).toBe("theirs");
     expect(() => Deno.statSync(refused.staged)).toThrow(Deno.errors.NotFound);
+  });
+
+  it("throws the link's own error, not `ReapRefused`, when the result path cannot be linked, and removes the staged file", async () => {
+    await build();
+    const staged = await stageReap({ store, out });
+    const unreachable = { ...staged, out: `${dir}/missing/space.sqlite` };
+
+    expect(() => publishReap(unreachable)).toThrow(Deno.errors.NotFound);
+    expect(() => Deno.statSync(staged.staged)).toThrow(Deno.errors.NotFound);
+    expect(() => Deno.statSync(out)).toThrow(Deno.errors.NotFound);
+  });
+
+  it("throws when a staged name cannot be removed for a reason other than its absence", async () => {
+    const staged = `${dir}/staged-directory`;
+    await Deno.mkdir(staged);
+    await Deno.writeTextFile(`${staged}/inside`, "x");
+
+    expect(() => discardReap(staged)).toThrow("Directory not empty");
+    expect(Deno.readTextFileSync(`${staged}/inside`)).toBe("x");
   });
 
   it("publishes a staged result at the result path, leaving nothing staged", async () => {

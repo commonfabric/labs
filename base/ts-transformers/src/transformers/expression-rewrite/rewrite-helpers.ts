@@ -19,6 +19,39 @@ import type { TransformationContext } from "../../core/mod.ts";
 import { createLiftAppliedCall } from "../builtins/lift-applied.ts";
 
 /**
+ * True when a function between `node` and the root is a compute callback an
+ * earlier lowering pass synthesized.
+ */
+export function hasSyntheticComputeCallbackAncestor(
+  node: ts.Node,
+  context: TransformationContext,
+): boolean {
+  let current = node.parent;
+  while (current) {
+    if (
+      (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) &&
+      context.isSyntheticComputeCallback(current)
+    ) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+/**
+ * True when `node` sits in a compute context and inside a node an earlier
+ * lowering pass marked as owned by a synthesized compute wrapper.
+ */
+export function isAlreadySyntheticComputeOwned(
+  node: ts.Node,
+  context: TransformationContext,
+): boolean {
+  return context.getReactiveContext(node).kind === "compute" &&
+    context.isSyntheticComputeOwnedNode(node);
+}
+
+/**
  * True when `node` is the receiver an array-method call is made on, looking
  * through any transparent wrappers between the two: `xs`, `(xs)`, and
  * `(xs as T[])!` are all the receiver of `.map(...)`.
@@ -309,8 +342,8 @@ function unionWithEnclosingScopeFreeIdentifiers(
       ) {
         const symbol = checker.getSymbolAtLocation(node);
         // Only capture value-space symbols that have a runtime binding: a
-        // `const enum` is inlined, so it is not an input. Type parameters are
-        // also filtered by `isEnclosingScopeDeclaration` below.
+        // `const enum` is inlined, so it is not an input, and a type
+        // parameter is no value at all.
         if (
           symbol &&
           (symbol.flags & ts.SymbolFlags.Value) !== 0 &&
@@ -397,18 +430,16 @@ function isEnclosingScopeDeclaration(symbol: ts.Symbol): boolean {
     ) {
       return false;
     }
-    if (ts.isTypeParameterDeclaration(decl)) {
-      return false;
-    }
   }
   // Accept only if SOME declaration is inside a function-like ancestor
   // (i.e., truly enclosing-scope, not floating somewhere weird).
   return declarations.some((decl) => {
-    let current: ts.Node | undefined = decl.parent;
-    while (current) {
+    for (
+      let current = decl.parent;
+      !ts.isSourceFile(current);
+      current = current.parent
+    ) {
       if (ts.isFunctionLike(current)) return true;
-      if (ts.isSourceFile(current)) return false;
-      current = current.parent;
     }
     return false;
   });

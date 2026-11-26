@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   consoleRunHandles,
@@ -18,6 +17,7 @@ import {
   type HarnessCellLabels,
 } from "../../src/contracts/cell-labels.ts";
 import { consoleCellLabelIndex } from "../../console/cell-labels.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const call = (
   id: string,
@@ -326,7 +326,13 @@ describe("console/steps", () => {
           },
         },
       ];
-      const locations = ["", "/items/0", "/items/no", "not-a-pointer"];
+      const locations = [
+        "",
+        "/items/0",
+        "/items/no",
+        "/absent",
+        "not-a-pointer",
+      ];
       const steps = consoleRunSteps(
         transcript,
         [],
@@ -371,6 +377,7 @@ describe("console/steps", () => {
       }))).toEqual([
         { available: true, value: { items: ["first"] }, redaction: undefined },
         { available: true, value: "first", redaction: undefined },
+        { available: false, value: undefined, redaction: undefined },
         { available: false, value: undefined, redaction: undefined },
         { available: false, value: undefined, redaction: undefined },
         {
@@ -525,6 +532,43 @@ describe("console/steps", () => {
         result("c2", "bash", { status: "read" }),
       ]);
       expect(steps.map((step) => step.status)).toEqual(["error", "error"]);
+    });
+
+    it("reads a result naming an error but no status as an error step", () => {
+      const steps = consoleRunSteps([
+        call("c1", "web_fetch", { url: "https://example.test" }),
+        result("c1", "web_fetch", { error: "connection refused" }),
+        call("c2", "web_fetch", { url: "https://example.test" }),
+        result("c2", "web_fetch", { body: "hello" }),
+      ]);
+      expect(steps.map((step) => step.status)).toEqual(["error", "ok"]);
+    });
+
+    it("returns every policy event on the step of the call it names, and none that names no call", () => {
+      const event = (detail: string, toolCallId?: string) => ({
+        type: "cf-harness.policy-event" as const,
+        severity: "warning" as const,
+        mode: "enforce-explicit" as const,
+        toolId: "bash",
+        detail,
+        at: "2026-01-01T00:00:00.000Z",
+        ...(toolCallId !== undefined ? { toolCallId } : {}),
+      });
+      const steps = consoleRunSteps(
+        [
+          call("c1", "bash", { command: "ls" }),
+          result("c1", "bash", { status: "ok" }),
+          call("c2", "bash", { command: "pwd" }),
+          result("c2", "bash", { status: "ok" }),
+        ],
+        [],
+        [event("first", "c1"), event("unattached"), event("second", "c1")],
+      );
+      expect(steps[0].policyEvents.map((each) => each.detail)).toEqual([
+        "first",
+        "second",
+      ]);
+      expect(steps[1].policyEvents).toEqual([]);
     });
 
     it("brings a handle into scope at the step its token first appears", () => {
@@ -1000,6 +1044,32 @@ describe("console/steps CFC and disclosure", () => {
     expect(steps[0].disclosure?.longestNumericRun).toBe(0);
   });
 
+  it("measures the longest numeric run wherever it sits among other values", () => {
+    const steps = consoleRunSteps([
+      call("c1", "run_pattern", {}),
+      result("c1", "run_pattern", {
+        status: "ok",
+        value: [1, 2, "gap", [3, 4, 5, 6], 7],
+      }),
+    ]);
+    // The nested run of four is longer than either run around it.
+    expect(steps[0].disclosure?.longestNumericRun).toBe(4);
+  });
+
+  it("counts a link to a sealed value as sealed, and a link to a cell as not", () => {
+    const steps = consoleRunSteps([
+      call("c1", "run_pattern", {}),
+      result("c1", "run_pattern", {
+        status: "ok",
+        value: {
+          sealed: { "@link": "opaque:handle/note" },
+          cell: { "@link": "of:fid1:abc" },
+        },
+      }),
+    ]);
+    expect(steps[0].disclosure?.sealedPositions).toBe(1);
+  });
+
   it("attaches the CFC invocation context recorded for the call's output", () => {
     const steps = consoleRunSteps(
       [
@@ -1233,7 +1303,106 @@ describe("console/steps provenance", () => {
     ]);
   });
 
+  it("returns on a handle the atoms each call's labels put on the argument it was spent as", () => {
+    // A call with a recorded invocation context, labelling `labelled` and
+    // leaving `plain` bare.
+    const labelledCall = (
+      id: string,
+      toolName: string,
+      args: Record<string, unknown>,
+      sequence: number,
+      atom: string,
+    ): {
+      messages: HarnessTranscriptMessage[];
+      context: HarnessCfcInvocationContext;
+    } => {
+      const outputId = createToolOutputId("r", toolName, sequence);
+      return {
+        messages: [call(id, toolName, args), {
+          role: "tool",
+          toolCallId: id,
+          toolName,
+          content: JSON.stringify({ status: "ok" }),
+          resultRef: {
+            type: "cf-harness.tool-result-ref",
+            outputId,
+            toolId: toolName,
+            runId: "r",
+          },
+        }],
+        context: {
+          type: "cf-harness.cfc-invocation-context",
+          version: 1,
+          sequence,
+          runId: "r",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          toolId: toolName,
+          toolOutputId: outputId,
+          operation: "shell",
+          cfcEnforcementMode: "enforce-explicit",
+          cwd: "/workspace",
+          runManifest: { present: false },
+          inputs: {},
+          cfcInputLabels: {
+            version: 1,
+            entries: [{
+              path: ["labelled"],
+              label: {
+                confidentiality: [
+                  { type: `test.cfc/${atom}`, subject: "did:key:observed" },
+                ],
+              },
+            }],
+          },
+        },
+      };
+    };
+    const pattern = labelledCall(
+      "c1",
+      "run_pattern",
+      {
+        inputs: { labelled: "cfh:a:aaaaa", plain: "cfh:a:bbbbb" },
+      },
+      1,
+      "PatternInput",
+    );
+    const described = labelledCall(
+      "c2",
+      "describe_handle",
+      {
+        labelled: "cfh:a:aaaaa",
+        plain: "cfh:a:bbbbb",
+      },
+      2,
+      "DescribedInput",
+    );
+    const steps = consoleRunSteps(
+      [
+        { role: "user", content: "use cfh:a:aaaaa and cfh:a:bbbbb" },
+        ...pattern.messages,
+        ...described.messages,
+      ],
+      [],
+      [],
+      [pattern.context, described.context],
+    );
+    const handles = consoleRunHandles(steps);
+    expect(
+      handles.find((handle) => handle.token === "cfh:a:aaaaa")
+        ?.confidentiality,
+    ).toEqual(["PatternInput", "DescribedInput"]);
+    expect(
+      handles.find((handle) => handle.token === "cfh:a:bbbbb")
+        ?.confidentiality,
+    ).toEqual([]);
+  });
+
   describe("consoleStepArguments()", () => {
+    it("returns no argument for a step that is not a call", () => {
+      const steps = consoleRunSteps([{ role: "user", content: "cfh:a:aaaaa" }]);
+      expect(consoleStepArguments(steps[0], [])).toEqual([]);
+    });
+
     it("reads an input written as a handle token as a reference", () => {
       const steps = composed("cfh:a:aaaaa");
       const handles = consoleRunHandles(steps, table);

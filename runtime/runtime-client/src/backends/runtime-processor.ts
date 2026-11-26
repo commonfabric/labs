@@ -6,7 +6,6 @@ import {
   type FabricValue,
   toStructuredDebugValue,
 } from "@commonfabric/data-model";
-import { newDefaultJsonCodecEngine } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import {
   type SiteTable,
@@ -37,6 +36,7 @@ import {
 } from "@commonfabric/memory/v2/client";
 import { presenceRoomForField } from "@commonfabric/memory/v2/presence";
 import {
+  type CommitSummary,
   dbNeedsColumnProvenance,
   DEFAULT_BRANCH,
   eventAttentionEntryKey,
@@ -80,6 +80,7 @@ import {
   isCellResult,
   isLoopbackHostname,
   isPieceRoot,
+  isWithheldDelivery,
   loadDocument,
   markDurableReadTx,
   type NormalizedFullLink,
@@ -92,7 +93,6 @@ import {
   resolveExternalRootRefForStructure,
   resolveSlugReference,
   resolveSlugTargetInPiece,
-  resolveWriteTarget,
   Runtime,
   runtimePresets,
   RuntimeTelemetry,
@@ -130,7 +130,13 @@ import {
   type CustodySealConsent,
   prepareCustodySeal,
 } from "@commonfabric/runner/cfc/custody-seal";
+import {
+  blobSuffix,
+  storeBlob,
+  storedBlobPath,
+} from "@commonfabric/runner/blob-record";
 import { cfcSchemaGivesNoShape } from "@commonfabric/runner/cfc/schema-primitives";
+import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import { offerProfileSuggestion } from "@commonfabric/runner/profile-suggestion";
 import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
@@ -140,6 +146,7 @@ import {
   viewPieceSchema,
 } from "@commonfabric/runner/schemas";
 import { linkRefPayload } from "@commonfabric/runner/shared";
+import { historySteps } from "@commonfabric/runner/history-steps";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
@@ -193,9 +200,9 @@ import {
   type CellPushRequest,
   type CellRef,
   type CellResolveAsCellRequest,
-  type CellResolveAsCellResponse,
   CellResponse,
   type CellSendRequest,
+  type CellSendResponse,
   type CellSendReviewedRequest,
   type CellSetRequest,
   type CellSubscribeRequest,
@@ -306,10 +313,17 @@ import {
   type SnapshotSharePrepareRequest,
   type SnapshotSharePreview,
   type SpaceAclResponse,
+  type SpaceBranchCreateRequest,
+  type SpaceBranchDeleteRequest,
   type SpaceGetAclRequest,
+  type SpaceHistoryListRequest,
+  type SpaceHistoryListResponse,
+  type SpaceHistoryWatchRequest,
   type SpaceHostRegistrationResponse,
   type SpaceRemoveAclEntryRequest,
   type SpaceResponse,
+  type SpaceRestoreRequest,
+  type SpaceRestoreResponse,
   type SpaceRootPatternResponse,
   type SpaceSetAclEntryRequest,
   type SqliteExecRequest,
@@ -330,6 +344,7 @@ import {
 import type { RemoteResponse, VDomOp } from "@/protocol/types.ts";
 import {
   type EveryFieldOf,
+  normalizeBranches,
   normalizeMemoryUrl,
   normalizeOrigin,
   normalizeSpaceHostMap,
@@ -386,7 +401,8 @@ export function subscribeEventAttentionNotifications(
  */
 const MAX_CONSOLE_DEBUG_DEPTH = 7;
 
-const blobUploadCodec = newDefaultJsonCodecEngine();
+/** How many commits of a space's history one page of its steps reads. */
+const HISTORY_PAGE_COMMITS = 500;
 
 /** Each registered logger's enabled state and level. */
 function loggerMetadata(): LoggerMetadata {
@@ -575,6 +591,33 @@ export function browserWorkerParamsFromInitializationData(
 }
 
 /**
+ * The principal a worker's display sinks show to: the acting principal of the
+ * trust snapshot the runtime runs against, or the session's own identity where
+ * the snapshot names none.
+ */
+function renderAudienceOf(runtime: Runtime, identity: Identity): string {
+  return runtime.trustSnapshotProvider()?.actingPrincipal ?? identity.did();
+}
+
+/**
+ * The display ceiling a worker renders with and decides a host's reads under,
+ * from the ceiling the host declared (spec §8.10.6). A host that declares none
+ * is given the default display ceiling for `audience`, which a display
+ * boundary no authored policy covers is fitted against. `null` is a host's
+ * declaration that it wants no root ceiling, so that none gates its reads or
+ * renders, while an authored boundary still applies its own. Any other value
+ * is normalized, a malformed one to the empty ceiling.
+ */
+export function renderCeilingFor(
+  declared: unknown,
+  audience: string,
+): RenderConfidentialityCeiling | undefined {
+  return declared === undefined
+    ? defaultDisplayCeiling(audience)
+    : normalizeRenderConfidentialityCeiling(declared);
+}
+
+/**
  * Builds the display-boundary resolver for a worker's renders. When a ceiling
  * is in force, each render egress resolves principal-form atoms
  * (Space-via-HasRole) RUNNER-side; the reconciler only fits the result.
@@ -603,8 +646,8 @@ export function browserWorkerParamsFromInitializationData(
  * resolves no manifest, and every `PolicyOf` label stays sealed. Service DIDs
  * are NOT threaded to the worker today (design §9), so `serviceDids` is `[]`
  * and service principals — which rarely render — fail closed. Returns
- * undefined when no ceiling is configured (no render gating — today's
- * behavior).
+ * undefined where no root ceiling is in force, as for a host that declares
+ * `null` (see {@link renderCeilingFor}), when the root resolves no label.
  */
 export function renderConfidentialityResolverFor(
   runtime: Runtime,
@@ -617,8 +660,7 @@ export function renderConfidentialityResolverFor(
   if (ceiling === undefined) {
     return undefined;
   }
-  const actingPrincipal = runtime.trustSnapshotProvider()?.actingPrincipal ??
-    identity.did();
+  const actingPrincipal = renderAudienceOf(runtime, identity);
   // `session.open` authorizes the key holder, so the workspace it gated on is
   // a member for that principal's own renders. A host that names somebody else
   // as acting has shown nothing about what that principal reads.
@@ -649,7 +691,7 @@ export function renderConfidentialityResolverFor(
  * the render lookup. Built once per worker (same lifetime as the resolver) and
  * threaded to BOTH `renderConfidentialityResolverFor` (as the resolver's
  * lookup) and the reconciler (for ACL-change subscriptions), so the two share
- * one instance. Undefined when no ceiling is configured — no render gating, so
+ * one instance. Undefined where no ceiling is in force — no render gating, so
  * no membership lookup. Service DIDs are not threaded to the worker
  * (design §9), so service principals fail closed.
  */
@@ -661,17 +703,18 @@ export function renderMembershipProviderFor(
   if (ceiling === undefined) {
     return undefined;
   }
-  const actingPrincipal = runtime.trustSnapshotProvider()?.actingPrincipal ??
-    identity.did();
-  return createRuntimeSpaceMembershipProvider(runtime, actingPrincipal);
+  return createRuntimeSpaceMembershipProvider(
+    runtime,
+    renderAudienceOf(runtime, identity),
+  );
 }
 
 /**
  * The module-policy manifest source for a worker's renders, shared like
  * {@link renderMembershipProviderFor}'s provider: the resolver reads verified
  * manifests through it, and the reconciler subscribes to a manifest a sealed
- * `PolicyOf` cell is still waiting on. Undefined when no ceiling is
- * configured.
+ * `PolicyOf` cell is still waiting on. Undefined where no ceiling is in
+ * force.
  */
 export function renderModulePolicySourceFor(
   runtime: Runtime,
@@ -867,6 +910,7 @@ export function securityContextFrom(
     apiUrl: normalizeOrigin(data.apiUrl),
     memoryUrl: normalizeMemoryUrl(data.memoryUrl, data.apiUrl),
     spaceHostMap: normalizeSpaceHostMap(data.spaceHostMap),
+    branches: normalizeBranches(data.branches),
     spaceDid: data.spaceDid,
     experimental: data.experimental,
     cfcEnforcementMode: data.cfcEnforcementMode,
@@ -972,6 +1016,22 @@ type RuntimeOperationSession = {
 };
 
 /**
+ * A request `RuntimeProcessor.handleRequest()` routes: every client request
+ * but those the client registry answers itself, which set up a connection or
+ * switch the worker's console forwarding rather than ask anything of the
+ * runtime.
+ */
+export type ProcessorRequest = Exclude<
+  IPCClientRequest,
+  {
+    type:
+      | RequestType.Initialize
+      | RequestType.Attach
+      | RequestType.SetForwardWorkerConsole;
+  }
+>;
+
+/**
  * The worker side of a runtime client connection. An instance owns the
  * worker's `Runtime`, keeps a `PiecesController` for the home space and for
  * each other space a request has named while something in that space is open,
@@ -1053,6 +1113,12 @@ export class RuntimeProcessor {
   /** Each custody answer watch, by client and the id the client chose. */
   #custodyAnswerWatches = new Map<string, Cancel>();
   #detachedClients = new WeakSet<WorkerClient>();
+
+  /**
+   * What stops each client's report of a space's seq, keyed by the client
+   * and the space (`clientScopedKey`).
+   */
+  #historyWatches = new Map<string, () => void>();
   #telemetry: RuntimeTelemetry;
 
   /**
@@ -1086,13 +1152,14 @@ export class RuntimeProcessor {
 
   /**
    * Render-boundary declassification policy applied to every mount's
-   * reconciler, from the initialization data; `allow` when it names none.
+   * reconciler, from the initialization data; `deny` when it names none.
    */
-  #renderDeclassificationPolicy: RenderDeclassificationPolicy = "allow";
+  #renderDeclassificationPolicy: RenderDeclassificationPolicy = "deny";
 
   /**
-   * Host-supplied default render ceiling applied to every mount's reconciler;
-   * `undefined` when the host set none.
+   * The default render ceiling applied to every mount's reconciler and to a
+   * host's reads, as {@link renderCeilingFor} makes it from the
+   * initialization data; `undefined` while none is in force.
    */
   #renderConfidentialityCeiling?: RenderConfidentialityCeiling;
 
@@ -1596,6 +1663,8 @@ export class RuntimeProcessor {
           cancel();
         }
         this.#subscriptions.clear();
+        for (const cancel of this.#historyWatches.values()) cancel();
+        this.#historyWatches.clear();
         for (const subscription of this.#operationSubscriptions.values()) {
           subscription.cancelled = true;
           subscription.cancel?.();
@@ -1710,6 +1779,12 @@ export class RuntimeProcessor {
       if (!key.startsWith(prefix)) continue;
       cancel();
       this.#custodyAnswerWatches.delete(key);
+    }
+
+    for (const [key, cancel] of [...this.#historyWatches]) {
+      if (!key.startsWith(prefix)) continue;
+      cancel();
+      this.#historyWatches.delete(key);
     }
 
     for (const [key, cancel] of [...this.#subscriptions]) {
@@ -2426,7 +2501,9 @@ export class RuntimeProcessor {
     });
   }
 
-  handleCellSend(request: CellSendRequest): void | Promise<void> {
+  handleCellSend(
+    request: CellSendRequest,
+  ): undefined | Promise<CellSendResponse> {
     const event = mapCellRefsToSigilLinks(request.event);
     return this.#sendCellEvent(
       request.cell,
@@ -2445,15 +2522,17 @@ export class RuntimeProcessor {
    * the event with `native` provenance for them, replacing any `provenance`
    * the payload carries, and marks it renderer-trusted, and waits for the
    * event's handling. Reached only through a client of this worker, which a
-   * pattern the worker runs is not.
+   * pattern the worker runs is not. Returns `{ handling: "withheld" }` for a
+   * handling whose outcome is withheld, which reports the same thing whether
+   * it committed or not, and nothing otherwise.
    *
    * @throws If the payload is not a record, or the surface or action is
    *   blank, and when the event, or the run of the stream's handler, is
-   *   refused.
+   *   refused, except for a run whose outcome is withheld.
    */
   async handleCellSendReviewed(
     request: CellSendReviewedRequest,
-  ): Promise<void> {
+  ): Promise<CellSendResponse> {
     const payload = mapCellRefsToSigilLinks(request.event);
     if (!isPlainObject(payload)) {
       throw new Error("A reviewed action's event must be a record.");
@@ -2464,7 +2543,7 @@ export class RuntimeProcessor {
       throw new Error("A reviewed action requires a surface and an action.");
     }
     const control = { surface: request.surface, action: request.action };
-    await this.#sendCellEvent(
+    return await this.#sendCellEvent(
       request.cell,
       (send) => bindNativeUiControl({ send }, control)(payload),
       "handling",
@@ -2477,7 +2556,9 @@ export class RuntimeProcessor {
    * through the function it is given. With `wait` undefined the outcome is
    * logged; `commit` waits for the transaction's commit, and `handling` for
    * the commit of the handler's run as well, and either rejects with the
-   * refusal.
+   * refusal. `handling` resolves with `{ handling: "withheld" }` for a run
+   * whose outcome is withheld, which may have committed or not and never
+   * rejects.
    *
    * The event goes to the address `ref`'s stored links lead to, so each
    * document they pass through is loaded first, and events reach their
@@ -2489,7 +2570,7 @@ export class RuntimeProcessor {
     ref: CellRef,
     deliver: (send: (event: unknown) => void) => void,
     wait: "commit" | "handling" | undefined,
-  ): void | Promise<void> {
+  ): undefined | Promise<CellSendResponse> {
     const target = getCell(this.#runtime, ref);
     const earlier = this.#loadingSends;
     const loading = earlier === undefined
@@ -2521,6 +2602,7 @@ export class RuntimeProcessor {
     void outcome.catch((error) => {
       console.error("[RuntimeProcessor] Cell send failed:", error);
     });
+    return undefined;
   }
 
   /**
@@ -2575,7 +2657,7 @@ export class RuntimeProcessor {
     target: Cell<unknown>,
     deliver: (send: (event: unknown) => void) => void,
     wait: "commit" | "handling" | undefined,
-  ): void | Promise<void> {
+  ): undefined | Promise<CellSendResponse> {
     const tx = this.#runtime.edit();
     const cell = target.withTx(tx);
     const handled = wait === "handling"
@@ -2589,15 +2671,26 @@ export class RuntimeProcessor {
     this.#runtime.prepareTxForCommit(tx);
     const commit = tx.commit().settled;
     if (handled !== undefined) {
-      return this.#requireCellCommit(commit).then(async () => {
-        const handling = (await handled.promise).status();
-        if (handling.status === "error") {
-          throw new Error(transactionFailureMessage(handling.error));
-        }
-      });
+      return this.#requireCellCommit(commit).then(
+        async (): Promise<CellSendResponse> => {
+          const handledTx = await handled.promise;
+          const handling = handledTx.status();
+          if (handling.status === "error") {
+            throw new Error(transactionFailureMessage(handling.error));
+          }
+          // A handling whose outcome is withheld may have committed or not
+          // (events.md §5), so it resolves, saying so.
+          return isWithheldDelivery(handledTx)
+            ? { handling: "withheld" }
+            : undefined;
+        },
+      );
     }
-    if (wait === "commit") return this.#requireCellCommit(commit);
+    if (wait === "commit") {
+      return this.#requireCellCommit(commit).then(() => undefined);
+    }
     this.#observeCellCommit(commit, "send");
+    return undefined;
   }
 
   #observeCellCommit(
@@ -2646,6 +2739,7 @@ export class RuntimeProcessor {
     let reported = false;
     const cancel = this.#hostReadGate.subscribe(cell, request.cell, {
       includeCfcLabel: request.includeCfcLabel,
+      includeWrittenPrincipal: request.includeWrittenPrincipal,
     }, (value) => {
       // Log subscriptions whose schema gives no shape and that produce
       // CellResult proxies, `true` and a schema of annotations alone among
@@ -2699,17 +2793,33 @@ export class RuntimeProcessor {
     return { value: false };
   }
 
+  /**
+   * Answers where `request.cell`'s links lead, from what the replica holds
+   * now. With `loaded`, the documents they pass through that the replica has
+   * no basis for are loaded first, as a send's are, so a cold chain answers
+   * its end rather than the first document still to arrive; only then is the
+   * answer a promise.
+   *
+   * @throws The promise rejects with a `DocumentLoadError` when such a load
+   *   fails.
+   */
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest & { loaded?: undefined },
+  ): CellResponse;
   handleCellResolveAsCell(
     request: CellResolveAsCellRequest,
-  ): CellResolveAsCellResponse {
-    const cell = getCell(this.#runtime, request.cell);
-    // Both are resolved in this one turn, so they describe the same links.
-    return {
-      cell: resolvedCellRef(cell.resolveAsCell()),
-      ...(request.withWriteTarget
-        ? { writeTarget: resolvedCellRef(resolveWriteTarget(cell)) }
-        : {}),
-    };
+  ): CellResponse | Promise<CellResponse>;
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest,
+  ): CellResponse | Promise<CellResponse> {
+    const target = getCell(this.#runtime, request.cell);
+    const answer = (): CellResponse => ({
+      cell: resolvedCellRef(target.resolveAsCell()),
+    });
+    const loading = request.loaded === true
+      ? this.#loadLinkedDocuments(target)
+      : undefined;
+    return loading === undefined ? answer() : loading.then(answer);
   }
 
   /** Keeps release authority in this backend while the host shows a preview. */
@@ -3265,14 +3375,14 @@ export class RuntimeProcessor {
         return undefined;
       },
     );
-    // The adoption reads the rooms it adopts, a few at a time, releasing what
-    // it read after each few, and reads no room once every room the catalog
-    // lists has a membership. A failure is reported unless the processor has
-    // been disposed, and the next bring-up of Home in this worker starts it
-    // again.
+    // The adoption reads the rooms it adopts, a few at a time, stopping the
+    // room pieces it started and releasing what it read after each few, and
+    // reads no room once every room the catalog lists has a membership. A
+    // failure is reported unless the processor has been disposed, and the
+    // next bring-up of Home in this worker starts it again.
     this.#catalogRoomsAdopted ??= homeCC.adoptCatalogRooms(
       this.#disposal.signal,
-    ).catch((error) => {
+    ).then(() => {}, (error) => {
       this.#catalogRoomsAdopted = undefined;
       if (this.#isDisposed) return;
       console.warn("[RuntimeProcessor] Adopting the catalog's rooms:", error);
@@ -4338,24 +4448,25 @@ export class RuntimeProcessor {
     this.#runtime.scheduler.setBreakpoints(request.actionIds);
   }
 
+  /**
+   * Stores the request's blob in the request's space with `storeBlob()`, on
+   * this runtime's session there, and returns its id and the URL that space's
+   * host serves it at.
+   *
+   * @throws Error when the request is malformed, or when `storeBlob()` refuses
+   *   or fails to store its record.
+   */
   async handleUploadBlob(
     request: UploadBlobRequest,
   ): Promise<UploadBlobResponse> {
-    // A request arrives as data, so its `space` is checked here. A request
-    // whose `space` is not a DID fails with an error that says so. Without the
-    // check, a request with no `space` would build an upload URL whose path
-    // begins `/undefined/blobs/`.
+    // A request arrives as data, so its fields are checked here, each with an
+    // error that says what is wrong.
     if (!isDID(request.space)) {
       throw new Error("uploadBlob requires a space DID");
     }
-    // With no suffix, the upload names no blob in its path, and the store
-    // chooses the suffix itself.
-    const suffix = request.suffix?.replace(/^\./, "");
-    const blobPath = suffix ? `/upload.${encodeURIComponent(suffix)}` : "";
-    // The blob belongs to the named space, so it uploads to — and its
-    // returned URL resolves against — THAT space's host.
-    const host = this.#runtime.hostForSpace(request.space);
-    const target = new URL(`/${request.space}/blobs${blobPath}`, host);
+    if (typeof request.contentType !== "string") {
+      throw new Error("uploadBlob requires a media type");
+    }
     // The envelope's decode already produced this; `request.body` is a
     // `FabricBytes` by the time it arrives, and a handler owns the values its
     // request carries per `BaseRequest`, so nothing else is reading it. The
@@ -4365,37 +4476,30 @@ export class RuntimeProcessor {
     if (!(bytes instanceof FabricBytes)) {
       throw new Error("uploadBlob requires bytes as its body");
     }
-    if (request.name !== undefined && typeof request.name !== "string") {
-      throw new Error(
-        "uploadBlob requires any name it is given to be a string",
-      );
-    }
-    // Blob upload payloads must preserve FabricBytes even when the wider
-    // process is running with legacy memory JSON flags. A blob with no name
-    // has no `name` key at all, since its id is the hash of exactly what is
-    // sent.
-    const body = blobUploadCodec.encode({
+    // A blob with no name has no `name` key at all, since its id is the hash
+    // of exactly the record stored.
+    const record = {
       type: request.contentType,
       body: bytes,
       ...(request.name === undefined ? {} : { name: request.name }),
-    });
-    const response = await fetch(target, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    });
-    if (!response.ok) {
-      throw new Error(
-        `Blob upload failed: ${response.status} ${await response.text()}`,
-      );
-    }
-    const result = await response.json() as Partial<UploadBlobResponse>;
-    if (typeof result.id !== "string" || typeof result.url !== "string") {
-      throw new Error("Blob upload returned an invalid response");
-    }
+    };
+    const space = request.space;
+    const id = await storeBlob(this.#runtime, space, record);
+
+    // A requested suffix is the extension of a name made of it alone, and
+    // without one the extension comes from the blob's own name.
+    const suffix = request.suffix?.replace(/^\./, "");
+    const host = this.#runtime.hostForSpace(space);
     return {
-      id: result.id,
-      url: resolveBlobUrl(result.url, host, request.space),
+      id,
+      url: resolveBlobUrl(
+        storedBlobPath(
+          id,
+          blobSuffix(suffix ? `.${suffix}` : request.name, record.type),
+        ),
+        host,
+        space,
+      ),
     };
   }
 
@@ -4422,6 +4526,125 @@ export class RuntimeProcessor {
         host,
         request.space,
       ),
+    };
+  }
+
+  /**
+   * Returns the steps of the requested space's history that the next page of
+   * its commit log holds.
+   */
+  async handleSpaceHistoryList(
+    request: SpaceHistoryListRequest,
+  ): Promise<SpaceHistoryListResponse> {
+    const provider = this.#historyProvider(request.space);
+    const served = this.#runtime.experimental.serverExecution === true;
+    const commits: CommitSummary[] = [];
+    let before = request.before;
+    for (;;) {
+      const page = await provider.listHistory({
+        limit: HISTORY_PAGE_COMMITS,
+        ...(before !== undefined ? { before } : {}),
+      });
+      for (const commit of page) commits.push(commit);
+      const steps = historySteps(commits, { served });
+      const exhausted = page.length < HISTORY_PAGE_COMMITS;
+      // A page holding the first commit of no step is the middle of one, so
+      // the listing reads on until it has that step whole.
+      if (steps.length === 0 && !exhausted) {
+        before = page.at(-1)!.seq;
+        continue;
+      }
+      // A full page may have cut its oldest step's predecessor off, whose
+      // commits the next request holds from that step's first commit down.
+      const next = exhausted ? undefined : steps.at(-1)!.startSeq;
+      return { steps, ...(next !== undefined ? { next } : {}) };
+    }
+  }
+
+  /** Forks a branch of the requested space. */
+  async handleSpaceBranchCreate(
+    request: SpaceBranchCreateRequest,
+  ): Promise<void> {
+    await this.#historyProvider(request.space).createBranch(request.name, {
+      forkSeq: request.forkSeq,
+    });
+  }
+
+  /** Deletes a branch of the requested space. */
+  async handleSpaceBranchDelete(
+    request: SpaceBranchDeleteRequest,
+  ): Promise<void> {
+    await this.#historyProvider(request.space).deleteBranch(request.name);
+  }
+
+  /**
+   * Starts or stops reporting to `client` each time the newest seq of the
+   * requested space the runtime has learned of moves forward.
+   */
+  handleSpaceHistoryWatch(
+    request: SpaceHistoryWatchRequest,
+    client: WorkerClient,
+  ): void {
+    if (!isDID(request.space)) {
+      throw new Error("space history requires a space DID");
+    }
+    const key = clientScopedKey(client, request.space);
+    if (!request.watch) {
+      this.#historyWatches.get(key)?.();
+      this.#historyWatches.delete(key);
+      return;
+    }
+    if (this.#historyWatches.has(key)) return;
+    const provider = this.#runtime.storageManager.open(request.space);
+    if (provider.subscribeServerSeq === undefined) {
+      throw new Error("the space's storage serves no history");
+    }
+    const space = request.space;
+    this.#historyWatches.set(
+      key,
+      provider.subscribeServerSeq((seq) => {
+        if (this.#isDisposed || this.#detachedClients.has(client)) return;
+        client.post({ type: NotificationType.SpaceSeqAdvanced, space, seq });
+      }),
+    );
+  }
+
+  /** Restores the requested space to a point of history. */
+  async handleSpaceRestore(
+    request: SpaceRestoreRequest,
+  ): Promise<SpaceRestoreResponse> {
+    const seq = await this.#historyProvider(request.space).restoreBranch({
+      ...(request.seq !== undefined ? { sourceSeq: request.seq } : {}),
+    });
+    return seq === undefined ? {} : { seq };
+  }
+
+  /**
+   * Helper for the space history handlers, which returns the history and
+   * branch methods of the storage provider of `space`.
+   *
+   * @throws When `space` is no DID, or its storage serves no history.
+   */
+  #historyProvider(space: DID): Required<
+    Pick<
+      ReturnType<Runtime["storageManager"]["open"]>,
+      "listHistory" | "createBranch" | "deleteBranch" | "restoreBranch"
+    >
+  > {
+    if (!isDID(space)) throw new Error("space history requires a space DID");
+    const provider = this.#runtime.storageManager.open(space);
+    const { listHistory, createBranch, deleteBranch, restoreBranch } = provider;
+    if (
+      listHistory === undefined || createBranch === undefined ||
+      deleteBranch === undefined || restoreBranch === undefined
+    ) {
+      throw new Error("the space's storage serves no history");
+    }
+    return {
+      listHistory: listHistory.bind(provider),
+      createBranch: createBranch.bind(provider),
+      deleteBranch: deleteBranch.bind(provider),
+      restoreBranch: restoreBranch.bind(provider),
     };
   }
 
@@ -4503,7 +4726,7 @@ export class RuntimeProcessor {
   }
 
   async handleRequest(
-    request: IPCClientRequest,
+    request: ProcessorRequest,
     client: WorkerClient = ownerClient,
   ): Promise<RemoteResponse | void> {
     switch (request.type) {
@@ -4528,7 +4751,7 @@ export class RuntimeProcessor {
       case RequestType.CellUnsubscribe:
         return this.handleCellUnsubscribe(request, client);
       case RequestType.CellResolveAsCell:
-        return this.handleCellResolveAsCell(request);
+        return await this.handleCellResolveAsCell(request);
       case RequestType.CellGetCfcLabel:
         return await this.handleCellGetCfcLabel(request);
       case RequestType.CellFields:
@@ -4695,12 +4918,28 @@ export class RuntimeProcessor {
         return await this.handleUploadBlob(request);
       case RequestType.BlobUrl:
         return this.handleBlobUrl(request);
+      case RequestType.SpaceHistoryList:
+        return await this.handleSpaceHistoryList(request);
+      case RequestType.SpaceHistoryWatch:
+        return this.handleSpaceHistoryWatch(request, client);
+      case RequestType.SpaceBranchCreate:
+        return await this.handleSpaceBranchCreate(request);
+      case RequestType.SpaceBranchDelete:
+        return await this.handleSpaceBranchDelete(request);
+      case RequestType.SpaceRestore:
+        return await this.handleSpaceRestore(request);
       case RequestType.VDomMount:
         return this.handleVDomMount(request, client);
       case RequestType.VDomUnmount:
         return this.handleVDomUnmount(request, client);
-      default:
-        throw new Error(`Unknown message type: ${(request as any).type}`);
+      default: {
+        // Every type the request can have is handled above, which this
+        // binding checks at compile time, so only a value from outside the
+        // type arrives here.
+        const unhandled: never = request;
+        const { type }: { type?: unknown } = unhandled;
+        throw new Error(`Unknown message type: ${String(type)}`);
+      }
     }
   }
 
@@ -4837,6 +5076,16 @@ export class RuntimeProcessor {
       if (!active) cancel?.();
       else cancelView = cancel;
       return render();
+    }, (error) => {
+      // A space deleted before its view registered admits no one again, so
+      // there is no coverage to wait for. The view renders all the same, and
+      // the reconciler shows the space's deleted placeholder, as it does for
+      // a view that was up when the deletion landed. A failed registration
+      // holds nothing, so the mount has no view registration to cancel. A
+      // mount the page has already given up renders nothing, and resolves as
+      // one whose registration succeeded after it was given up does.
+      if (isDeletedSpaceError(error)) return render();
+      throw error;
     }).catch((error) => {
       mount.cancel();
       reconciler.unmount();
@@ -4963,12 +5212,36 @@ export class RuntimeProcessor {
       space: data.spaceDid,
     };
 
+    // No serving loop runs a branch, so a runtime that takes its derived
+    // state from one would see a branch that never computes anything.
+    if (
+      normalizeBranches(data.branches) !== undefined &&
+      data.experimental?.serverExecution !== false
+    ) {
+      throw new Error(
+        "a runtime that opens a space on a branch computes what the branch " +
+          "stores itself, and declares `experimental.serverExecution` false",
+      );
+    }
+
+    // A runtime showing a fork keeps what it writes to every space apart, so
+    // a space the listing leaves out is opened on the listed branch as well,
+    // which the server forks there on the first open.
+    const listedBranches = new Set(
+      Object.values(normalizeBranches(data.branches) ?? {}),
+    );
+    const forkBranch = listedBranches.size === 1
+      ? [...listedBranches][0]
+      : undefined;
+
     const storageManager = StorageManager.open({
       as: identity,
       clientBuild: data.clientBuild ??
         { application: "runtime-client", gitSha: null },
       memoryHost,
       spaceHostMap: data.spaceHostMap,
+      ...(data.branches !== undefined ? { branches: data.branches } : {}),
+      ...(forkBranch !== undefined ? { forkBranch } : {}),
       // Host dogfood toggle (commonfabric.concurrentWatchRefresh): overlap
       // watch-refresh round trips up to a bounded window. Off unless the host
       // set it; the default is strict single-flight.
@@ -5096,11 +5369,18 @@ export class RuntimeProcessor {
     }
     // InitializationData crosses postMessage with no runtime validation, so a
     // typo'd host config or version-skewed peer must fail CLOSED, not open:
-    // any present-but-unknown value becomes "deny"; absent stays "allow".
+    // any present-but-unknown value becomes "deny". A host that declares
+    // neither field gets the shell's posture: the default display ceiling,
+    // and no author declassification (spec §8.10.6).
     processor.#renderDeclassificationPolicy =
-      normalizeRenderDeclassificationPolicy(data.renderDeclassificationPolicy);
+      normalizeRenderDeclassificationPolicy(
+        data.renderDeclassificationPolicy ?? "deny",
+      );
     processor.#configureRenderCeiling(
-      normalizeRenderConfidentialityCeiling(data.renderConfidentialityCeiling),
+      renderCeilingFor(
+        data.renderConfidentialityCeiling,
+        renderAudienceOf(runtime, identity),
+      ),
     );
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,

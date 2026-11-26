@@ -1,16 +1,21 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import {
   applyPullExecuteContinuation,
   applyQuiescentContinuation,
   type ExecuteContinuationState,
 } from "../src/scheduler/continuation.ts";
 import {
+  assessPullWork,
   isRunnableSchedulingSeed,
   type PullSchedulingState,
 } from "../src/scheduler/work-oracle.ts";
-import type { SchedulerNode } from "../src/scheduler/node-record.ts";
-import type { QueuedEvent } from "../src/scheduler/types.ts";
+import {
+  NodeRegistry,
+  type SchedulerNode,
+} from "../src/scheduler/node-record.ts";
+import { SchedulerGates } from "../src/scheduler/gates.ts";
+import type { Action, QueuedEvent } from "../src/scheduler/types.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 describe("split-clock readiness decisions", () => {
   // F11: a readiness/parked decision must read `performance.now()` once. When
@@ -31,6 +36,114 @@ describe("split-clock readiness decisions", () => {
     performance.now = () => sequence[Math.min(i++, sequence.length - 1)];
   }
 
+  // Use the real gate queries: a stub that always returns the deadline hides
+  // the clock read that can discard an expired deadline inside the gate.
+  function dirtyGatedEffect(
+    gate: "debounceReadyAt" | "throttleReadyAt" | "backoffUntil",
+  ) {
+    const nodes = new NodeRegistry();
+    const effect: Action = () => {};
+    const record = nodes.register(effect, "effect");
+    nodes.setStatus(effect, "invalid");
+    record.gate[gate] = 150;
+    const gates = new SchedulerGates({
+      nodes,
+      actionStats: new Map(),
+      getActionId: () => "effect",
+      isDisposed: () => false,
+      queueExecution: () => {},
+    });
+    const effects = new Set([effect]);
+    const runnable = {
+      effects,
+      isDemandedPullComputation: () => false,
+      shouldRunFirstPullComputationInDemandContext: () => false,
+      isThrottled: (action: Action, now?: number) =>
+        gates.isThrottled(action, now),
+      isDebouncedComputationWaiting: () => false,
+    };
+    return {
+      nodes,
+      // A debounce wake revisits invalid effects without an explicit run request.
+      pending: new Set<Action>(),
+      effects,
+      materializerIndex: {
+        scopeKeyIdentity: () => ({ principal: "did:test:split-clock" }),
+        materializersByEntity: new Map(),
+        effects,
+        getMaterializerWriteEnvelopes: () => undefined,
+        isMaterializer: () => false,
+      },
+      pendingPullRunnableState: runnable,
+      dirtyPullRunnableState: runnable,
+      dirtyPullRunnableStateWithDebounce: runnable,
+      isLiveAction: () => true,
+      hasActiveDebounceTimer: (action: Action) =>
+        gates.hasActiveDebounceTimer(action),
+      getNextEligibleRunTime: (action: Action, now?: number) =>
+        gates.getNextEligibleRunTime(action, now),
+      isConvergenceHoldActive: () => true,
+      isConvergenceBackoffDeferred: () => false,
+    } satisfies PullSchedulingState;
+  }
+
+  for (
+    const gate of [
+      "debounceReadyAt",
+      "throttleReadyAt",
+      "backoffUntil",
+    ] as const
+  ) {
+    it(`retains the wake when ${gate} expires during a dirty effect assessment`, () => {
+      const state = dirtyGatedEffect(gate);
+      // Throttle short-circuits before the aggregate time gate. Debounce and
+      // backoff first pass the throttle query, then find their deadline.
+      stubClock(
+        gate === "throttleReadyAt" ? [50, 100, 200] : [50, 50, 100, 200],
+      );
+
+      expect(assessPullWork(state)).toEqual({
+        runnableNow: false,
+        nextWakeAt: 150,
+        deferredIdleBlocking: true,
+      });
+    });
+  }
+
+  it("keeps idle pending and schedules a wake when a dirty effect's debounce expires during continuation", () => {
+    const pullScheduling = dirtyGatedEffect("debounceReadyAt");
+    let idleResolved = false;
+    const wakes: number[] = [];
+    const state = {
+      pullScheduling,
+      eventQueue: [],
+      idlePromises: [() => {
+        idleResolved = true;
+      }],
+      consumeRerunAfterCurrentExecute: () => false,
+      hasPendingLineageHeadEvent: () => false,
+      hasLoadWaitingHeadEvent: () => false,
+      settleDeferredForLoadPark: () => false,
+      scheduleWake: (at: number) => {
+        wakes.push(at);
+      },
+      hasWakeTimer: () => false,
+      setScheduled: () => {},
+      resetSettlingTracker: () => {},
+      resetConvergenceHoldPasses: () => {},
+      setQueuedPass: () => {},
+      execute: () => {},
+    } satisfies ExecuteContinuationState;
+    // The continuation takes its event-clock sample before the work oracle's
+    // sample. The effect's deadline expires between its gate and wake reads.
+    stubClock([50, 50, 50, 100, 200]);
+
+    applyPullExecuteContinuation(state);
+
+    expect(idleResolved).toBe(false);
+    expect(wakes).toEqual([150]);
+  });
+
   it("does not resolve idle for an event straddled between two clock reads", () => {
     const NOT_BEFORE = 150;
     // assessPullWork consumes one clock read over the empty work state (50,
@@ -43,7 +156,7 @@ describe("split-clock readiness decisions", () => {
     const state = {
       pullScheduling: {
         pending: new Set(),
-        nodes: { getInvalidNodes: () => [] },
+        nodes: new NodeRegistry(),
       } as unknown as PullSchedulingState,
       eventQueue: [{ notBefore: NOT_BEFORE } as unknown as QueuedEvent],
       idlePromises: [() => {
@@ -58,7 +171,7 @@ describe("split-clock readiness decisions", () => {
       setScheduled: () => {},
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => {},
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => {},
     } satisfies ExecuteContinuationState;
 
@@ -88,7 +201,7 @@ describe("split-clock readiness decisions", () => {
       setScheduled: () => {},
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => holdResets++,
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => {},
     } satisfies ExecuteContinuationState;
 
@@ -122,7 +235,7 @@ describe("split-clock readiness decisions", () => {
       setScheduled: () => {},
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => holdResets++,
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => {},
     } satisfies ExecuteContinuationState;
 
@@ -150,7 +263,7 @@ describe("split-clock readiness decisions", () => {
       setScheduled: () => {},
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => holdResets++,
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => {},
     } satisfies ExecuteContinuationState;
 

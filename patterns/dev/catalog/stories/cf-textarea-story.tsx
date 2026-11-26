@@ -29,7 +29,7 @@ export default pattern<TextareaStoryInput, TextareaStoryOutput>(() => {
           rows={3}
           disabled={disabled}
         />
-        <cf-textarea placeholder="Auto-resize textarea" rows={2} auto-resize />
+        <cf-textarea placeholder="Auto-resize textarea" rows={2} autoResize />
         <cf-textarea placeholder="Disabled" disabled rows={2} />
       </div>
     ),

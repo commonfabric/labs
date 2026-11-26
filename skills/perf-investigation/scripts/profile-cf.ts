@@ -37,7 +37,6 @@ import { renderProfileReport } from "../../../runtime/integration/cdp-profiler.t
 const out = Deno.env.get("CF_PROF_OUT") ?? "cf-prof";
 const cpu = Deno.env.get("CF_PROF_CPU") === "1";
 const interval = Number(Deno.env.get("CF_PROF_INTERVAL_US") ?? "500");
-Deno.env.set("CF_CLI_NAME", Deno.env.get("CF_CLI_NAME") ?? "cf");
 
 let session: Session | undefined;
 const post = (method: string, params?: unknown) =>

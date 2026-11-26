@@ -14,6 +14,7 @@ import type {
   StructureNode,
   TokenClass,
 } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** Build one identifier-class span at a given column. */
 function ident(
@@ -61,7 +62,7 @@ function node(partial: Partial<StructureNode>): StructureNode {
   };
 }
 
-Deno.test("findDependencies: skips line indices past the end of the document", () => {
+test("findDependencies: skips line indices past the end of the document", () => {
   // The node's endLine points beyond the available rows, so the loop body must
   // hit the missing-row guard and keep going rather than reading `undefined`.
   const dep: Definition = {
@@ -92,7 +93,7 @@ Deno.test("findDependencies: skips line indices past the end of the document", (
   assertEquals(deps, []);
 });
 
-Deno.test("findDependencies: real document still resolves a cross-node dep", () => {
+test("findDependencies: real document still resolves a cross-node dep", () => {
   // Sanity check that the synthetic-doc path above did not change normal
   // behavior: the pattern still depends on the hoisted lift.
   const doc = parseDocument(SAMPLE);
@@ -101,7 +102,7 @@ Deno.test("findDependencies: real document still resolves a cross-node dep", () 
   assert(deps.some((d) => d.name === "__cfLift_1"));
 });
 
-Deno.test("findDependencies: removed diff lines do not contribute dependencies", () => {
+test("findDependencies: removed diff lines do not contribute dependencies", () => {
   const dep: Definition = {
     name: "helper",
     kind: "function",
@@ -122,7 +123,7 @@ Deno.test("findDependencies: removed diff lines do not contribute dependencies",
   assertEquals(findDependencies(doc, n), []);
 });
 
-Deno.test("collectIdentUses: skips line indices past the end of the document", () => {
+test("collectIdentUses: skips line indices past the end of the document", () => {
   const doc = makeDoc([
     { text: "alpha beta", spans: [ident(0, "alpha"), ident(6, "beta")] },
   ]);
@@ -140,7 +141,7 @@ Deno.test("collectIdentUses: skips line indices past the end of the document", (
   assertEquals(uses.map((u) => u.name), ["alpha", "beta"]);
 });
 
-Deno.test("collectIdentUses: removed diff lines do not consume the result limit", () => {
+test("collectIdentUses: removed diff lines do not consume the result limit", () => {
   const doc = makeDoc([
     { text: "old", spans: [ident(0, "old")], bg: "del" },
     { text: "live", spans: [ident(0, "live")] },
@@ -152,7 +153,7 @@ Deno.test("collectIdentUses: removed diff lines do not consume the result limit"
   });
 });
 
-Deno.test("collectIdentUses: a bounded collection counts omitted exact uses", () => {
+test("collectIdentUses: a bounded collection counts omitted exact uses", () => {
   const doc = makeDoc([{
     text: "runrunrun",
     spans: [
@@ -181,7 +182,7 @@ Deno.test("collectIdentUses: a bounded collection counts omitted exact uses", ()
   });
 });
 
-Deno.test("collectIdentUses: drops end-line spans at or past endCol", () => {
+test("collectIdentUses: drops end-line spans at or past endCol", () => {
   // endLine == startLine here; the second span sits at col 6, and endCol is 5,
   // so the end-of-node column guard must exclude it.
   const doc = makeDoc([
@@ -199,7 +200,7 @@ Deno.test("collectIdentUses: drops end-line spans at or past endCol", () => {
   assertEquals(uses.map((u) => u.name), ["alpha"]);
 });
 
-Deno.test("collectIdentUses: keeps exact-position uses with equal spellings", () => {
+test("collectIdentUses: keeps exact-position uses with equal spellings", () => {
   const doc = makeDoc([
     {
       text: "alpha alpha alpha",
@@ -237,7 +238,7 @@ Deno.test("collectIdentUses: keeps exact-position uses with equal spellings", ()
   ]);
 });
 
-Deno.test("ancestorsOf: a node absent from the flat list has no ancestors", () => {
+test("ancestorsOf: a node absent from the flat list has no ancestors", () => {
   const doc = parseDocument(SAMPLE);
   // A freshly built node is not identity-equal to any element of flatStructure,
   // so indexOf returns -1 and the empty chain is returned.

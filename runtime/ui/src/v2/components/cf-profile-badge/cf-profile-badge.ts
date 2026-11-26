@@ -1,6 +1,10 @@
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import { isWrittenProfileName } from "@commonfabric/runner/cfc/represents-principal";
+import {
+  type BlobReference,
+  blobReferenceOf,
+} from "@commonfabric/runner/blob-record";
 import { ProfileBadgeSchema } from "@commonfabric/runner/component-read-contract";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { consume } from "@lit/context";
@@ -39,11 +43,36 @@ export type ProfileBadgeDisplay = {
   name: string | undefined;
 };
 
+/** The face a badge draws: its owner's picture, as a blob or as bytes, or
+ * else their avatar text, or none of these. */
+type BadgeFace = {
+  pictureBlob?: BlobReference;
+  picture?: FabricBytes;
+  avatar?: string;
+};
+
 /** Extra profile details surfaced in the badge hover/focus tooltip (CT-1648). */
 export type ProfileBadgeTooltip = {
   bio: string | undefined;
   pinnedCount: number;
 };
+
+const {
+  pictureBlob: _pictureBlob,
+  picture: _picture,
+  avatar: _avatar,
+  ...namedProperties
+} = ProfileBadgeSchema.properties;
+
+/**
+ * The fields of a profile the badge reads from the profile's own cell: all
+ * it shows but the face, which it reads from the cell holding each face
+ * field, so that the face's bytes are delivered once.
+ */
+const ProfileNamedSchema = {
+  ...ProfileBadgeSchema,
+  properties: namedProperties,
+} as const;
 
 /**
  * Extracts the tooltip details (bio + pinned-piece count) from a subscribed
@@ -208,10 +237,10 @@ export const profileSpaceOf = async (
  *
  * The badge draws the face of the principal its seal names: the picture, or
  * else the avatar text, only when the label of the cell holding it names that
- * principal alone (`observeWrittenPrincipal()`). Anyone can write a profile's
- * picture, so a picture a visitor set, or one stored without a label, is not
- * drawn, and a badge whose cell's label names no single principal draws no
- * face.
+ * principal alone (`observeWrittenPrincipal()`). A picture someone other
+ * than the owner set, which earlier releases allowed, or one stored without a
+ * label, is not drawn, and a badge whose cell's label names no single
+ * principal draws no face.
  *
  * @element cf-profile-badge
  * @attr {string} size - avatar size: xs | sm | md | lg | xl (default md)
@@ -606,11 +635,9 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   @state()
   private accessor _resolved = false;
 
+  /** The face the badge draws, as `#applyFace()` chose it. */
   @state()
-  private accessor _picture: FabricBytes | undefined = undefined;
-
-  @state()
-  private accessor _avatar: string | undefined = undefined;
+  private accessor _face: BadgeFace = {};
 
   /** The bio, an extra detail surfaced in the hover/focus tooltip. */
   @state()
@@ -641,6 +668,7 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
 
   /** What the face fields last reported, with whom each one's own cell represents. */
   #written: {
+    pictureBlob?: WrittenValue<{ space?: string; id?: string } | undefined>;
     picture?: WrittenValue<FabricBytes | undefined>;
     avatar?: WrittenValue<string | undefined>;
   } = {};
@@ -698,14 +726,11 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
    * the resolve and update steps, which a test drives directly.
    */
   get accessForTestingOnly(): {
-    state: ProfileBadgeState;
-    seal: IdentitySeal | undefined;
+    readonly state: ProfileBadgeState;
+    readonly seal: IdentitySeal | undefined;
     profileKnown: boolean;
     readonly verified: boolean;
-    readonly face: {
-      picture: FabricBytes | undefined;
-      avatar: string | undefined;
-    };
+    readonly face: BadgeFace;
     resolve(): Promise<void>;
     willUpdate(changed: PropertyValues): void;
   } {
@@ -715,14 +740,8 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
       get state() {
         return outerThis._state;
       },
-      set state(value) {
-        outerThis._state = value;
-      },
       get seal() {
         return outerThis._seal;
-      },
-      set seal(value) {
-        outerThis._seal = value;
       },
       get profileKnown() {
         return outerThis.#profileKnown;
@@ -734,7 +753,7 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
         return outerThis._verified;
       },
       get face() {
-        return { picture: outerThis._picture, avatar: outerThis._avatar };
+        return outerThis._face;
       },
       resolve: () => this._resolve(),
       willUpdate: (changed) => this.willUpdate(changed),
@@ -872,8 +891,7 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
     this.#cancelFace = undefined;
     this.#owner = undefined;
     this.#written = {};
-    this._picture = undefined;
-    this._avatar = undefined;
+    this._face = {};
   }
 
   private async _resolve(): Promise<void> {
@@ -923,10 +941,15 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
         {
           [NAME]?: string;
           name?: string;
-          picture?: FabricBytes;
-          avatar?: string;
           bio?: string;
           elements?: Array<{ title?: string }>;
+        }
+      >(ProfileNamedSchema);
+      const face = resolved.asSchema<
+        {
+          pictureBlob?: { space?: string; id?: string };
+          picture?: FabricBytes;
+          avatar?: string;
         }
       >(ProfileBadgeSchema);
       // The runtime-attested label rides each subscription update
@@ -949,21 +972,29 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
       });
       // Only a face field whose own cell represents the principal the label
       // names is drawn.
+      const cancelPictureBlob = observeWrittenPrincipal(
+        face.key("pictureBlob"),
+        (pictureBlob) => {
+          this.#written = { ...this.#written, pictureBlob };
+          this.#applyFace();
+        },
+      );
       const cancelPicture = observeWrittenPrincipal(
-        named.key("picture"),
+        face.key("picture"),
         (picture) => {
           this.#written = { ...this.#written, picture };
           this.#applyFace();
         },
       );
       const cancelAvatar = observeWrittenPrincipal(
-        named.key("avatar"),
+        face.key("avatar"),
         (avatar) => {
           this.#written = { ...this.#written, avatar };
           this.#applyFace();
         },
       );
       this.#cancelFace = () => {
+        cancelPictureBlob();
         cancelPicture();
         cancelAvatar();
       };
@@ -1001,14 +1032,14 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   }
 
   /**
-   * Navigate to the bound profile's page (CT-1750). No-op unless the resolved
-   * cell is a navigable root piece. Mirrors cf-cell-link's navigation; Cmd/Ctrl
-   * opens in a new tab.
+   * Navigate to the bound profile's page (CT-1750). Called only while the
+   * badge is navigable, which it is only when the resolved cell is a root
+   * piece; a no-op once `noNavigate` is set. Mirrors cf-cell-link's
+   * navigation; Cmd/Ctrl opens in a new tab.
    */
   private _navigateToProfile(newTab: boolean): void {
-    if (this.noNavigate) return;
     const cell = this._resolvedCell;
-    if (!cell || cell.ref().path.length > 0) return;
+    if (this.noNavigate || !cell) return;
     const view = { spaceDid: cell.space(), pieceId: cell.id() };
     if (newTab) {
       openInNewTab(view);
@@ -1056,8 +1087,7 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
     this._resolved = true;
     this._name = CFC_POLICY_PLACEHOLDER_TEXT;
     this.#owner = undefined;
-    this._picture = undefined;
-    this._avatar = undefined;
+    this._face = {};
     this._bio = undefined;
     this._pinnedCount = 0;
     this._seal = undefined;
@@ -1122,23 +1152,29 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   }
 
   /**
-   * Draws the face of the badge's owner: the picture, when it holds bytes and
-   * its own cell represents the owner, or else the avatar text, trimmed, when
-   * it is not blank and its own cell represents the owner, or else neither.
+   * Draws the face of the badge's owner: the picture's blob, when it names
+   * one, by a space's DID and a non-empty id, and its own cell represents the
+   * owner, or else the picture's bytes, when there are some and their own
+   * cell represents the owner, or else the avatar text, trimmed, when it is
+   * not blank and its own cell represents the owner, or else none of these.
    */
   #applyFace(): void {
     const owner = this.#owner;
-    const { picture, avatar } = this.#written;
-    const bytes = owner !== undefined && picture?.principal === owner
-      ? picture.value
-      : undefined;
-    const text = owner !== undefined && avatar?.principal === owner
-      ? (avatar.value ?? "").trim()
-      : "";
-    this._picture = bytes !== undefined && bytes.length > 0 ? bytes : undefined;
-    this._avatar = this._picture === undefined && text !== ""
-      ? text
-      : undefined;
+    const { pictureBlob, picture, avatar } = this.#written;
+    const own = <T>(written: WrittenValue<T> | undefined): T | undefined =>
+      owner !== undefined && written?.principal === owner
+        ? written.value
+        : undefined;
+    const blob = blobReferenceOf(own(pictureBlob));
+    const bytes = own(picture);
+    const text = (own(avatar) ?? "").trim();
+    this._face = blob !== undefined
+      ? { pictureBlob: blob }
+      : bytes !== undefined && bytes.length > 0
+      ? { picture: bytes }
+      : text !== ""
+      ? { avatar: text }
+      : {};
     this.requestUpdate();
   }
 
@@ -1216,8 +1252,9 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
               <cf-avatar
                 part="avatar"
                 exportparts="avatar"
-                .bytes="${this._picture}"
-                .src="${this._avatar}"
+                .blob="${this._face.pictureBlob}"
+                .bytes="${this._face.picture}"
+                .src="${this._face.avatar}"
                 .name="${presentedName}"
                 size="${this.size}"
               ></cf-avatar>

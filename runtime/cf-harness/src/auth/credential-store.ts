@@ -487,8 +487,6 @@ export class FileHarnessCredentialStore implements HarnessCredentialStore {
       dirname(this.path),
       `.auth-${crypto.randomUUID()}.tmp`,
     );
-    let operationFailed = false;
-    let operationError: unknown;
     try {
       await Deno.writeTextFile(
         temporaryPath,
@@ -499,18 +497,10 @@ export class FileHarnessCredentialStore implements HarnessCredentialStore {
       await Deno.rename(temporaryPath, this.path);
       this.#lastValid = structuredClone(document);
     } catch (error) {
-      operationFailed = true;
-      operationError = error;
-    }
-    try {
-      await Deno.remove(temporaryPath);
-    } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound) && !operationFailed) {
-        throw error;
-      }
-    }
-    if (operationFailed) {
-      throw operationError;
+      // The write failure is what the caller needs; a temporary file that
+      // was never created, or cannot be removed, does not change it.
+      await Deno.remove(temporaryPath).catch(() => {});
+      throw error;
     }
   }
 

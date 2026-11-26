@@ -6,7 +6,6 @@
  * not read as one it read and found clean.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -16,6 +15,7 @@ import {
   loadRunEvidence,
   loadRunFamily,
 } from "../evidence.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Builds a tree of files under a temporary directory, hands the directory to
@@ -249,6 +249,22 @@ describe("evidence", () => {
         expect(families.map((family) => family.root.runId)).toEqual([
           "first",
           "second",
+        ]);
+      });
+    });
+
+    it("returns the runs beside a `runs` directory that holds no run", async () => {
+      // A `runs` holding nothing that is a run is not the artifact root's
+      // runs, so the directory itself is read as a directory of runs.
+
+      await withTree({
+        "mixed/runs/notes/.keep": "",
+        "mixed/beside/run-state.json": runState("beside"),
+      }, async (root) => {
+        const families = await discoverRunFamilies(join(root, "mixed"));
+
+        expect(families.map((family) => family.root.runId)).toEqual([
+          "beside",
         ]);
       });
     });

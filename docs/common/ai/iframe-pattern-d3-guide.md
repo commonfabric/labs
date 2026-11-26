@@ -411,8 +411,11 @@ that does not leaves the guest blank.
 
 The sandbox does not grant arbitrary network access. Bundle modules, generate
 small assets locally, or pass data through `input`; do not depend on a CDN,
-`fetch()`, or remote fonts. Buttons must use `type="button"` so an accidental
-form ancestor cannot trigger navigation.
+`fetch()`, or remote fonts. An image or a font the pattern ships goes to the
+guest through `cf-iframe`'s `assets`; see
+[Images and other assets](./iframe-pattern-guide.md#images-and-other-assets).
+Buttons must use `type="button"` so an accidental form ancestor cannot trigger
+navigation.
 
 Style the document and the chart with the ambient theme the iframe receives —
 its elements, `cf-*` classes, and `--cf-theme-*` variables, which SVG `fill`

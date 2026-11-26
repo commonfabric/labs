@@ -28,9 +28,15 @@ import {
   type TimingStatsBreakdown,
 } from "@commonfabric/logger";
 import type { CollectedMemory } from "../collected-memory.ts";
+import type {
+  EncodedCompileFailure,
+  EncodedModule,
+} from "../harness/compile-worker-protocol.ts";
+import type { ModuleCompileRequest } from "../harness/module-compile.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
 import type { HostOccupancy } from "./host.ts";
+import type { RunEvent, RunIdentity } from "./run-beacon.ts";
 import type { ServedAclChangeData } from "./served-acl-change.ts";
 import type { SpaceServerPolicy } from "./space-server.ts";
 import type { ServingLoopCounters, ServingLoopStats } from "./stats.ts";
@@ -102,6 +108,28 @@ export type ServingWorkerPolicy = {
   ]: SpaceServerPolicy[Key];
 };
 
+/** What a serving worker says of its memory at each heartbeat. */
+export type WorkerHeartbeat = {
+  /**
+   * The worker's JavaScript heap as it stands, in bytes, which the pool's
+   * heap budget adds up.
+   */
+  readonly heapUsed: number;
+
+  /**
+   * The memory outside the heap that V8 accounts to the worker, array
+   * buffers included, in bytes. No heap limit bounds it.
+   */
+  readonly external: number;
+
+  /**
+   * Whether the worker's heap has reached its limit since the worker began
+   * to serve (`watchHeapLimit()`). What it was doing then is gone, and it
+   * may take no further message.
+   */
+  readonly heapLimitReached: boolean;
+};
+
 /** What the worker's entry module needs to build its host. */
 export type ServingWorkerInit = {
   /** The service identity's key pair, encoded for the realm crossing. */
@@ -131,7 +159,46 @@ export type ServingWorkerInit = {
    * host crosses through the process's own server.
    */
   readonly route: string | undefined;
+
+  /**
+   * Whether the worker's serving runtimes compile on the server's thread,
+   * through `compiler.compile`, in the compile workers the process shares.
+   * Absent or false, they compile where the worker's entry module says.
+   */
+  readonly compileOnHost: boolean | undefined;
+
+  /**
+   * The shared compiled-module cache directory
+   * (`openSharedCompileCache()`) the worker's serving runtimes read and put
+   * compiled modules in, and take their turns at a cold compile through.
+   * Absent, they use the cache the worker's entry module gives, if any.
+   */
+  readonly compileCacheDir: string | undefined;
+
+  /**
+   * The worker's run beacon (`run-beacon.ts`), which the worker's schedulers
+   * mark around each run and the pool reads on its watchdog timer. A shared
+   * buffer crosses by reference. Absent, the worker marks nothing.
+   */
+  readonly runBeacon: SharedArrayBuffer | undefined;
 };
+
+/** A compile `compiler.compile` ran, as its answer crosses. */
+export type PortCompileAnswer =
+  | {
+    readonly kind: "compiled";
+    readonly modules: readonly (readonly [string, EncodedModule])[];
+  }
+  | {
+    readonly kind: "failed";
+    readonly failure: EncodedCompileFailure;
+
+    /**
+     * Whether the failure is of the place the compile ran, such as a compile
+     * worker that died, rather than of its inputs.
+     */
+    readonly place: boolean;
+  };
 
 /** What the worker asks of the thread that holds the memory server. */
 export type PlaneRequests = {
@@ -177,6 +244,36 @@ export type PlaneRequests = {
       selection: ViewSelection;
     };
     result: boolean;
+  };
+  "server.advanceCurrency": {
+    params: { space: string };
+    result: Awaited<ReturnType<Server["advanceCurrency"]>>;
+  };
+  "server.storeCurrencyRecords": {
+    params: {
+      space: string;
+      batch: Parameters<Server["storeCurrencyRecords"]>[1];
+    };
+    result: Awaited<ReturnType<Server["storeCurrencyRecords"]>>;
+  };
+  "server.judgeCurrencyRoots": {
+    params: {
+      space: string;
+      roots: string[];
+      excludePrincipal: string | undefined;
+      epoch: string;
+      running: string[] | undefined;
+    };
+    result: Awaited<ReturnType<Server["judgeCurrencyRoots"]>>;
+  };
+  "server.setCarriedDemand": {
+    params: {
+      space: string;
+      reader: string;
+      rows: Parameters<Server["setCarriedDemand"]>[2][number][];
+      excludePrincipal: string | undefined;
+    };
+    result: Awaited<ReturnType<Server["setCarriedDemand"]>>;
   };
   "server.foreignWriteAuthorityFor": {
     params: { space: string; principal: string | undefined };
@@ -228,6 +325,15 @@ export type PlaneRequests = {
     params: { transport: number; payload: string };
     result: void;
   };
+
+  /**
+   * Runs a compile in the compile workers the server's thread holds for the
+   * whole process (`ServingWorkerInit.compileOnHost`).
+   */
+  "compiler.compile": {
+    params: { request: ModuleCompileRequest };
+    result: PortCompileAnswer;
+  };
 };
 
 /** What the worker tells the server's thread without waiting on an answer. */
@@ -241,10 +347,21 @@ export type PlaneNotices = {
   /**
    * The worker's thread still runs, which the watchdog on the server's thread
    * reads from any message of the worker's the same way (serving-loop.md §2).
-   * `heapUsed` is the worker's JavaScript heap as it stands, in bytes, which
-   * the pool's heap budget adds up.
    */
-  "worker.heartbeat": { heapUsed: number };
+  "worker.heartbeat": WorkerHeartbeat;
+
+  /**
+   * What a number on the worker's run beacon stands for, posted before the
+   * body of the first run it names starts.
+   */
+  "worker.runNamed": RunIdentity;
+
+  /**
+   * Numbers on the worker's run beacon that no longer stand for anything: the
+   * worker's realm has collected the actions they named, so no run of them
+   * starts again.
+   */
+  "worker.runsForgotten": { runs: readonly number[] };
 
   "server.noteExecutorCommit": { notice: AdmittedCommitNotice };
   "loopback.close": { transport: number };
@@ -271,12 +388,28 @@ export type BridgeRequests = {
   /** The worker entry's first request, answered once its host serves. */
   "worker.init": {
     params: ServingWorkerInit;
-    result: { lifetimeLock: string | undefined };
+    result: {
+      lifetimeLock: string | undefined;
+
+      /**
+       * V8's limit on the worker's heap as the worker reads it
+       * (`heap_size_limit`), in bytes: the limit it was started with plus the
+       * young generation, unless a process-wide `--max-old-space-size`
+       * replaced it.
+       */
+      heapSizeLimit: number;
+    };
   };
 
   "host.stats": { params: null; result: ServingLoopStats };
   "host.diagnostics": { params: null; result: ServingLoopDiagnostics };
   "host.collectedMemory": { params: null; result: CollectedMemory };
+
+  /** Writes the sampling heap profile of the worker's isolate into `directory`. */
+  "host.heapProfile": {
+    params: { directory: string };
+    result: { path: string };
+  };
   "host.runLifecycleVerb": {
     params: { space: MemorySpace; verb: LifecycleVerbDescriptor };
     result: LifecycleVerbRun;
@@ -307,8 +440,11 @@ export type BridgeNotices = {
     reason: DemandChangeReason | undefined;
     principal: string | undefined;
     sessionId: string | undefined;
+    servingOwn: true | undefined;
+    notDemand: true | undefined;
   };
   "observer.viewsChanged": { space: string; sessionId: string };
+  "observer.currencyChanged": { space: string };
   "observer.sessionChanged": { event: SessionLifecycleEvent };
 
   /**
@@ -318,6 +454,14 @@ export type BridgeNotices = {
    */
   "observer.spaceAclChanged": { space: string };
   "loopback.frame": { transport: number; frame: string };
+
+  /**
+   * An event of `space` whose handler's run held the thread of a worker the
+   * pool ended: the worker's host writes `reason` as the event's consequence,
+   * and does not run the handler for it. Sent ahead of anything else for the
+   * space, when the space is placed on this worker.
+   */
+  "host.failEvent": { space: MemorySpace; event: RunEvent; reason: string };
 };
 
 /** The shape of one request's parameters and answer. */

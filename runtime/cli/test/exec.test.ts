@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, join } from "@std/path";
 import type { JSONSchema } from "@commonfabric/api";
@@ -24,6 +23,13 @@ import { writeMountState } from "../lib/fuse.ts";
 import type { SpaceConfig } from "../lib/piece.ts";
 import { externalizeSchema } from "../../runner/src/link-utils.ts";
 import { argv, cf, relevantStderr, sendThroughStandIn } from "./utils.ts";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 function makeSpec(
@@ -51,6 +57,43 @@ function refusalFrom(
     return (error as Error).message;
   }
   return "";
+}
+
+const cliPackageDir = join(import.meta.dirname!, "..");
+const repoRoot = join(cliPackageDir, "..", "..");
+
+/**
+ * Runs the stdin fixture in `mode` in a Deno process of its own, feeding it
+ * `stdin`, so the input is read from that process's real standard input.
+ */
+async function readThroughStdin(mode: "json" | "value", stdin: string) {
+  const fixtures = join(import.meta.dirname!, "fixtures", "exec-stdin");
+  const input = await Deno.makeTempFile({ prefix: "exec-stdin-" });
+  try {
+    await Deno.writeTextFile(input, stdin);
+    return await runDenoCommandWithTemporaryLock({
+      root: repoRoot,
+      cwd: cliPackageDir,
+      args: (lockPath) => [
+        "run",
+        `--lock=${lockPath}`,
+        "--frozen=true",
+        "--allow-read",
+        "--allow-run",
+        join(fixtures, "pipe-file-into.ts"),
+        input,
+        "run",
+        `--lock=${lockPath}`,
+        "--frozen=true",
+        "--allow-read",
+        "--allow-env",
+        join(fixtures, "read-exec-stdin.ts"),
+        mode,
+      ],
+    });
+  } finally {
+    await Deno.remove(input);
+  }
 }
 
 describe("parseExecArgs", () => {
@@ -1287,6 +1330,23 @@ describe("parseExecArgs edge cases", () => {
       /--help takes no arguments/,
     );
   });
+
+  it("reads a single-value verb's bare `--json` as JSON from stdin", () => {
+    const spec = makeSpec("tool", { type: "string" });
+    expect(parseExecArgs(spec, ["--json"])).toMatchObject({
+      input: undefined,
+      readJsonFromStdin: true,
+      readTextFromStdin: false,
+      usedJsonInput: true,
+    });
+  });
+
+  it("throws for a single-value verb's `--value` with nothing after it", () => {
+    const spec = makeSpec("tool", { type: "string" });
+    expect(() => parseExecArgs(spec, ["--value"])).toThrow(
+      "Missing value for --value",
+    );
+  });
 });
 
 describe("resolveParsedExecInput edge cases", () => {
@@ -1476,6 +1536,40 @@ describe("resolveParsedExecInput", () => {
     });
 
     expect(input).toEqual(["not-an-object"]);
+  });
+
+  it("reads a `--value-file` from disk when no reader is injected", async () => {
+    const spec = makeSpec("tool", { type: "string" });
+    const dir = await Deno.makeTempDir({ prefix: "exec-value-file-" });
+    try {
+      const path = join(dir, "value.txt");
+      await Deno.writeTextFile(path, "from disk");
+
+      expect(
+        await resolveParsedExecInput(
+          spec,
+          parseExecArgs(spec, ["--value-file", path]),
+        ),
+      ).toBe("from disk");
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+
+  it("reads `--json` from the process's stdin when no reader is injected", async () => {
+    const output = await readThroughStdin("json", '{"n": 7}');
+
+    expect(new TextDecoder().decode(output.stderr)).toBe("");
+    expect(JSON.parse(new TextDecoder().decode(output.stdout))).toEqual({
+      n: 7,
+    });
+  });
+
+  it("reads `--value-file -` from the process's stdin when no reader is injected", async () => {
+    const output = await readThroughStdin("value", "42");
+
+    expect(new TextDecoder().decode(output.stderr)).toBe("");
+    expect(JSON.parse(new TextDecoder().decode(output.stdout))).toBe(42);
   });
 });
 
@@ -2148,6 +2242,120 @@ describe("mounted callable resolution and execution", () => {
     expect(delays[0]).toBeGreaterThan(3000);
   });
 
+  describe("mounted piece metadata", () => {
+    /** A callable file beside `meta`, or beside no `meta.json` when absent. */
+    const mountedWithMeta = async (meta?: string) => {
+      const mountpoint = join(tmpDir, "mount");
+      const pieceDir = join(mountpoint, "home/pieces/notes-2");
+      const filePath = join(pieceDir, "result", "add.handler");
+      await Deno.mkdir(join(pieceDir, "result"), { recursive: true });
+      await Deno.writeTextFile(filePath, "");
+      if (meta !== undefined) {
+        await Deno.writeTextFile(join(pieceDir, "meta.json"), meta);
+      }
+      await writeLiveMountState(stateDir, mountpoint);
+      return filePath;
+    };
+
+    it("throws when the piece has no `meta.json`", async () => {
+      const filePath = await mountedWithMeta();
+
+      await expect(resolveMountedCallableFile(filePath, { stateDir })).rejects
+        .toThrow(
+          `Mounted piece metadata not found for ${await Deno.realPath(
+            filePath,
+          )}`,
+        );
+    });
+
+    it("throws when `meta.json` holds no object", async () => {
+      const filePath = await mountedWithMeta('["of:piece-123"]');
+
+      await expect(resolveMountedCallableFile(filePath, { stateDir })).rejects
+        .toThrow(
+          `Mounted piece metadata is invalid for ${await Deno.realPath(
+            filePath,
+          )}`,
+        );
+    });
+
+    it("throws when `meta.json` names no piece id", async () => {
+      const filePath = await mountedWithMeta('{"id": "", "name": "Notes"}');
+
+      await expect(resolveMountedCallableFile(filePath, { stateDir })).rejects
+        .toThrow(
+          `Mounted piece metadata missing id for ${await Deno.realPath(
+            filePath,
+          )}`,
+        );
+    });
+  });
+
+  describe("a mounted callable file the filesystem cannot report on", () => {
+    const mountedFile = async () => {
+      const mountpoint = join(tmpDir, "mount");
+      const filePath = await createMountedFile(mountpoint, {
+        relativePath: "home/pieces/notes-2/result/add.handler",
+        pieceId: "of:piece-123",
+      });
+      await writeLiveMountState(stateDir, mountpoint);
+      return filePath;
+    };
+
+    it("throws the error a stat fails with when it is not a missing file", async () => {
+      const filePath = await mountedFile();
+      const denied = new Deno.errors.PermissionDenied("stat denied");
+
+      await expect(
+        resolveMountedCallableFile(filePath, {
+          stateDir,
+          stat: () => Promise.reject(denied),
+        }),
+      ).rejects.toBe(denied);
+    });
+
+    it("throws the error a listing fails with when it is not a missing directory", async () => {
+      const filePath = await mountedFile();
+      const denied = new Deno.errors.PermissionDenied("listing denied");
+
+      await expect(
+        resolveMountedCallableFile(filePath, {
+          stateDir,
+          stat: (path) => Promise.reject(new Deno.errors.NotFound(path)),
+          readDir: () => ({
+            [Symbol.asyncIterator]: () => ({
+              next: () => Promise.reject(denied),
+            }),
+          }),
+        }),
+      ).rejects.toBe(denied);
+    });
+
+    it("reports the file missing when its directory is missing too", async () => {
+      const filePath = await mountedFile();
+      const delays: number[] = [];
+
+      await expect(
+        resolveMountedCallableFile(filePath, {
+          stateDir,
+          stat: (path) => Promise.reject(new Deno.errors.NotFound(path)),
+          readDir: (path) => ({
+            [Symbol.asyncIterator]: () => ({
+              next: () => Promise.reject(new Deno.errors.NotFound(path)),
+            }),
+          }),
+          delay: (ms) => {
+            delays.push(ms);
+            return Promise.resolve();
+          },
+        }),
+      ).rejects.toThrow(
+        `Mounted callable file not found: ${await Deno.realPath(filePath)}`,
+      );
+      expect(delays.length).toBe(1);
+    });
+  });
+
   it("tolerates transient mounted callable ENOENT during FUSE invalidation", async () => {
     const mountpoint = join(tmpDir, "mount");
     const pieceDir = join(mountpoint, "home/pieces/notes-2");
@@ -2370,6 +2578,41 @@ describe("mounted callable resolution and execution", () => {
         entry: "/notes/note.tsx",
         origin: "file:///repo/notes/note.tsx",
       },
+    });
+  });
+
+  it("leaves out of the pattern source the fields `meta.json` does not give", async () => {
+    const mountpoint = join(tmpDir, "mount");
+    const filePath = await createMountedFile(mountpoint, {
+      relativePath: "home/pieces/notes-2/result/search.tool",
+      pieceId: "of:canonical-piece",
+      patternRef: {
+        identity: "A".repeat(43),
+        symbol: "default",
+        source: { ref: `cf:pattern:${"A".repeat(43)}` },
+      },
+    });
+    const harness = createExecHarness({
+      callableKind: "tool",
+      cellProp: "result",
+      cellKey: "search",
+      pieceId: "of:canonical-piece",
+      inputSchema: { type: "object", properties: {} },
+      pattern: { argumentSchema: { type: "object", properties: {} } },
+    });
+
+    await writeLiveMountState(stateDir, mountpoint);
+
+    const resolved = await resolveMountedCallableFile(filePath, {
+      stateDir,
+      loadPieces: () => Promise.resolve(harness.pieces),
+      loadPiece: () => Promise.resolve(harness.piece),
+    });
+
+    expect(resolved.pieceMeta.patternRef).toStrictEqual({
+      identity: "A".repeat(43),
+      symbol: "default",
+      source: { ref: `cf:pattern:${"A".repeat(43)}` },
     });
   });
 
@@ -2677,6 +2920,78 @@ describe("mounted callable resolution and execution", () => {
         value: { query: "milk" },
       },
     ]);
+  });
+
+  it("returns the help page for `--help`, and dispatches nothing", async () => {
+    const mountpoint = join(tmpDir, "mount");
+    const filePath = await createMountedFile(mountpoint, {
+      relativePath: "home/pieces/notes-2/result/add.handler",
+      pieceId: "of:piece-123",
+    });
+    const harness = createExecHarness({
+      callableKind: "handler",
+      cellProp: "result",
+      cellKey: "add",
+      pieceId: "of:piece-123",
+      inputSchema: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+    });
+
+    await writeLiveMountState(stateDir, mountpoint);
+
+    const result = await executeMountedCallableFile(filePath, ["--help"], {
+      stateDir,
+      invocationStyle: "cf",
+      loadPieces: () => Promise.resolve(harness.pieces),
+      loadPiece: () => Promise.resolve(harness.piece),
+    });
+
+    expect(result.helpText).toContain(`cf exec ${filePath}`);
+    expect(result.helpText).toContain("--query");
+    expect(harness.tracker.handlerWrites).toEqual([]);
+    expect(harness.tracker.events).not.toContain("pieces.synced");
+  });
+
+  it("returns the dispatch's result when the auto-step after it fails", async () => {
+    const mountpoint = join(tmpDir, "mount");
+    const filePath = await createMountedFile(mountpoint, {
+      relativePath: "home/pieces/notes-2/result/add.handler",
+      pieceId: "of:piece-123",
+    });
+    const harness = createExecHarness({
+      callableKind: "handler",
+      cellProp: "result",
+      cellKey: "add",
+      pieceId: "of:piece-123",
+      inputSchema: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+      pieceStepError: new Error("step lost its connection"),
+    });
+
+    await writeLiveMountState(stateDir, mountpoint);
+
+    const result = await executeMountedCallableFile(
+      filePath,
+      ["--query", "milk"],
+      {
+        sendEvent: sendThroughStandIn,
+        stateDir,
+        loadPieces: () => Promise.resolve(harness.pieces),
+        loadPiece: () => Promise.resolve(harness.piece),
+      },
+    );
+
+    expect(result.helpText).toBeUndefined();
+    expect(harness.tracker.handlerWrites).toEqual([
+      { cellProp: "result", path: ["add"], value: { query: "milk" } },
+    ]);
+    expect(harness.tracker.events).not.toContain("pieces.synced");
   });
 
   it("preserves the Cell.send receiver when dispatching mounted handlers", async () => {
@@ -3655,6 +3970,8 @@ function createExecHarness(options: {
   handlerFailureMessage?: string;
   handlerSendRequiresReceiver?: boolean;
   sparseHandlerCell?: boolean;
+  /** What the auto-step after a dispatch fails with, where it fails. */
+  pieceStepError?: Error;
 }) {
   const tracker = {
     events: [] as string[],
@@ -3766,7 +4083,12 @@ function createExecHarness(options: {
 
   const piece = {
     id: options.pieceId,
-    getCell: () => ({ pull: () => Promise.resolve() }),
+    getCell: () => ({
+      pull: () =>
+        options.pieceStepError === undefined
+          ? Promise.resolve()
+          : Promise.reject(options.pieceStepError),
+    }),
     input: {
       getCell: () => Promise.resolve(rootCell),
       set: (value: unknown, path?: (string | number)[]) => {

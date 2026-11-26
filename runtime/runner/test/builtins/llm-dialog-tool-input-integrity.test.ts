@@ -5,12 +5,17 @@
  * declare nothing, and references to values the walk cannot read into.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchema } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { llmToolExecutionHelpers } from "../../src/builtins/llm-dialog.ts";
 import { createLLMFriendlyLink } from "../../src/link-utils.ts";

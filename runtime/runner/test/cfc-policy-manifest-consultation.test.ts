@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -22,6 +22,7 @@ import {
 } from "../src/cfc/mod.ts";
 import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
 import { snapshotQueryResult } from "../src/query-result-proxy.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("manifest-consultation");
 const reference = cfcAtom.modulePolicyRef(
@@ -553,8 +554,10 @@ describe("module-policy manifest consultation", () => {
       // and no derived component beside it — the tainted join is the
       // declared policy, which the §4.6.4 redundant-entry collapse leaves
       // stated once.
-      const derivedEntries =
-        storedDocument(storageManager, derivedId)?.cfc?.labelMap?.entries ?? [];
+      const derivedEntries = storedLabelEntries<StoredEntry>(
+        storedDocument(storageManager, derivedId)?.cfc,
+        (labelId) => storedDocument(storageManager, labelId),
+      );
       expect(derivedEntries.some((entry) =>
         entry.origin === "declared" &&
         (entry.label.confidentiality ?? []).includes("secret")

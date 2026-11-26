@@ -285,8 +285,11 @@ views without copying connector state.
 
 ## Verification
 
+`cf test` runs the pattern tests, the `*.test.tsx` files. The package's own
+`test` task runs the plain Deno tests of its helper modules.
+
 ```sh
 deno task cf check connectors/agents/debug-view/main.tsx --no-run
-deno task cf test connectors/agents/debug-view/main.test.tsx \
-  --root . --verbose
+deno task cf test connectors/agents/debug-view/ --root . --verbose
+deno task --cwd connectors/agents/debug-view test
 ```

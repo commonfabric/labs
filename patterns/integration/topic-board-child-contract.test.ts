@@ -12,7 +12,6 @@
  * recorded as a body update, and that the board's index row tracks the child's
  * thread after the fact.
  */
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { debugStr } from "@commonfabric/data-model";
 import { createTestSpace, env } from "@commonfabric/integration";
@@ -21,6 +20,12 @@ import { Identity } from "@commonfabric/identity";
 import { join } from "@std/path";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { experimentalOptionsFromEnv } from "@commonfabric/runner";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   initializePiecesController,
   type PieceController,
@@ -390,14 +395,15 @@ describe("topic-board-pivot-contract", () => {
 
   // NOTE ON WHAT THIS CANNOT SEPARATE, because the distinction is easy to
   // assume from the wording: every topic here sits at exactly ONE index, so
-  // this case cannot tell the identity check `mentionedBy()` makes when it
-  // leaves a topic out of its own backlinks (`!equals(other, topic)` in
-  // `patterns/apps/topics/main.tsx`) from a check by array position: both
-  // pass it. Only a list naming one topic at two indices separates them, and
-  // the board's pivot hands `mentionedBy()` the list `distinctByIdentity()`
-  // returns, which names each topic once.
-  // `assert_self_mention_inert_through_a_twin` in
-  // `patterns/apps/topics/topics.test.tsx` hands `mentionedBy()` a
+  // this case cannot tell the identity check the pivot's join makes when it
+  // leaves a topic out of its own backlinks (`mentionedByEach()` in
+  // `patterns/apps/topics/main.tsx`, which `mentionedBy()` there states pair
+  // by pair) from a check by array position: both pass it. Only a list naming
+  // one topic at two indices separates them, and the board's pivot joins over
+  // the list `distinctByIdentity()` returns, which names each topic once.
+  // `assert_self_mention_inert_through_a_twin` and
+  // `assert_mentioned_by_each_agrees_with_mentioned_by` in
+  // `patterns/apps/topics/topics.test.tsx` hand the two functions a
   // duplicated list directly. No case here builds a board listing one topic
   // twice; the "over a board listing one topic twice" group in
   // `topics-headless-fixture.test.ts` runs the board's lifts over one.

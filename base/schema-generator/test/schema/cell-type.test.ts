@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { SchemaGenerator } from "../../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("Schema: Cell types", () => {
   for (const primitive of ["string", "number"] as const) {
@@ -90,6 +90,90 @@ describe("Schema: Cell types", () => {
     // The handle also carries `scope` and `owner`, which a read through this
     // schema must not drop.
     expect(handle.additionalProperties).toBe(true);
+  });
+
+  it("describes a handle type that extends SqliteDb by the descriptor, whatever its own type arguments", async () => {
+    // A subtype's type arguments are its own. They say nothing of the value
+    // the handle reads as, which is the database's.
+
+    const code = `
+      interface Board<Kinds> extends SqliteDb { kinds?: Kinds; }
+      interface X { db: Board<{ topics: string }>; }
+    `;
+    const { type, checker } = await getTypeFromCode(code, "X");
+    const gen = new SchemaGenerator();
+    const result = asObjectSchema(gen.generateSchema(type, checker));
+    const db = result.properties?.db as Record<string, unknown>;
+    expect(db.asCell).toEqual(["sqlite"]);
+    expect(db.$ref).toBe("#/$defs/SqliteDatabase");
+  });
+
+  it("leaves a handle type that extends SqliteDb out of `$defs`, behind an alias as well", async () => {
+    // A wrapper is stated where it is written. Hoisted under its own name,
+    // the position holding the handle would not say that it is one.
+
+    const code = `
+      interface Board<Kinds> extends SqliteDb { kinds?: Kinds; }
+      type TopicBoard = Board<{ topics: string }>;
+      interface X { db: TopicBoard; again?: TopicBoard; }
+    `;
+    const { type, checker } = await getTypeFromCode(code, "X");
+    const gen = new SchemaGenerator();
+    const result = asObjectSchema(gen.generateSchema(type, checker));
+    const handle = { $ref: "#/$defs/SqliteDatabase", asCell: ["sqlite"] };
+    expect(result.properties?.db).toEqual(handle);
+    expect(result.properties?.again).toEqual(handle);
+    expect(Object.keys(result.$defs ?? {})).toEqual(["SqliteDatabase"]);
+  });
+
+  it("describes a handle subtype behind a generic alias by the descriptor", async () => {
+    const code = `
+      interface Board<Kinds> extends SqliteDb { kinds?: Kinds; }
+      type BoardOf<Kinds> = Board<Kinds>;
+      interface X { db: BoardOf<{ topics: string }>; }
+    `;
+    const { type, checker } = await getTypeFromCode(code, "X");
+    const gen = new SchemaGenerator();
+    const result = asObjectSchema(gen.generateSchema(type, checker));
+    expect(result.properties?.db).toEqual({
+      $ref: "#/$defs/SqliteDatabase",
+      asCell: ["sqlite"],
+    });
+  });
+
+  it("reads the payload a handle subtype forwards to SqliteDb off the subtype's own argument", async () => {
+    // `SqliteDb<T>` under `interface Board<T> extends SqliteDb<T>` carries the
+    // declaration's parameter and not what `Board` was given.
+
+    const code = `
+      interface Named { name: string; }
+      interface Board<T> extends SqliteDb<T> {}
+      interface X { db: Board<Named>; }
+    `;
+    const { type, checker } = await getTypeFromCode(code, "X");
+    const gen = new SchemaGenerator();
+    const result = asObjectSchema(gen.generateSchema(type, checker));
+    expect(result.properties?.db).toEqual({
+      $ref: "#/$defs/Named",
+      asCell: ["sqlite"],
+    });
+  });
+
+  it("passes over a base whose payload is built from the subtype's parameter", async () => {
+    // Such a base, reached through the declaration of `Board<T>`, names no
+    // payload either, however far down the parameter is.
+
+    const code = `
+      interface Named { name: string; }
+      interface Board<T> extends SqliteDb<{ a: { b: { c: { d: { row: T } } } } }> {}
+      interface X { db: Board<Named>; }
+    `;
+    const { type, checker } = await getTypeFromCode(code, "X");
+    const gen = new SchemaGenerator();
+    const result = asObjectSchema(gen.generateSchema(type, checker));
+    const db = result.properties?.db as Record<string, unknown>;
+    expect(db.asCell).toEqual(["sqlite"]);
+    expect(JSON.stringify(db)).not.toContain('"row"');
   });
 
   it("leaves a type carrying some other brand structural", async () => {

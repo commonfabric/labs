@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { compileSourcesToRecords } from "../src/sandbox/module-record-compiler.ts";
 import { verifyCompiledModuleBody } from "../src/sandbox/module-record-verifier.ts";
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // These tests drive the sync transpile/record internals directly (below the
 // async flow boundaries that normally load the deferred compiler stack).

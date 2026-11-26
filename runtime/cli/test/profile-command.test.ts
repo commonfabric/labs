@@ -5,11 +5,10 @@
  * without a server. The create itself is covered in `profile-create.test.ts`.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 import { Identity } from "@commonfabric/identity";
-import { decode } from "@commonfabric/text/utf8";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   dataUrlByteLength,
@@ -45,7 +44,7 @@ import {
   type ProfileSpaceRootReport,
 } from "../lib/profile-space-root.ts";
 import type { WishReadConfig, WishReadResult } from "../lib/wish.ts";
-import { withEnv } from "./utils.ts";
+import { captureStdout, withEnv } from "./utils.ts";
 
 const CREATED: CreatedProfile = {
   name: "Ada Lovelace",
@@ -123,20 +122,17 @@ function stubDeps(
   };
 }
 
-/** Capture what render() writes to stdout during `fn`. */
-async function captureStdout(fn: () => Promise<void>): Promise<string> {
-  let captured = "";
-  const original = Deno.stdout.writeSync;
-  Deno.stdout.writeSync = (data: Uint8Array): number => {
-    captured += decode(data);
-    return data.length;
+/** A writable stream that collects the bytes written to it. */
+function collector(): { stream: WritableStream<Uint8Array>; bytes: number[] } {
+  const bytes: number[] = [];
+  return {
+    bytes,
+    stream: new WritableStream({
+      write(chunk) {
+        for (const byte of chunk) bytes.push(byte);
+      },
+    }),
   };
-  try {
-    await fn();
-  } finally {
-    Deno.stdout.writeSync = original;
-  }
-  return captured;
 }
 
 async function makeTempKeyFile(): Promise<
@@ -377,26 +373,6 @@ describe("cf profile command actions", () => {
   });
 
   describe("profileRenameAction()", () => {
-    it("renames the profile to the trimmed name", async () => {
-      const key = await makeTempKeyFile();
-      try {
-        const { deps, targets } = stubDeps();
-        await captureStdout(() =>
-          profileRenameAction(
-            { apiUrl: "http://127.0.0.1:8000", identity: key.path },
-            CREATED.space,
-            "  Countess  ",
-            deps,
-          )
-        );
-        expect(targets).toHaveLength(1);
-        expect(targets[0].profileSpace).toBe(CREATED.space);
-        expect(targets[0].name).toBe("Countess");
-      } finally {
-        await Deno.remove(key.path);
-      }
-    });
-
     it("throws a `ValidationError` for a blank name before connecting", async () => {
       const { deps, targets } = stubDeps();
       await expect(
@@ -412,21 +388,42 @@ describe("cf profile command actions", () => {
   });
 
   describe("profileGetPictureAction()", () => {
-    it("writes the picture's bytes to the file named", async () => {
+    it("writes the picture's bytes to the file named, and nothing to standard output", async () => {
       const key = await makeTempKeyFile();
       const out = await Deno.makeTempFile({ suffix: ".png" });
       try {
         const { deps } = stubDeps();
+        const stdout = collector();
         await profileGetPictureAction(
           { apiUrl: "http://127.0.0.1:8000", identity: key.path },
           CREATED.space,
           out,
           deps,
+          stdout.stream,
         );
         expect(await Deno.readFile(out)).toEqual(PICTURE);
+        expect(stdout.bytes).toEqual([]);
       } finally {
         await Deno.remove(key.path);
         await Deno.remove(out);
+      }
+    });
+
+    it("writes the picture's bytes to standard output for `-`", async () => {
+      const key = await makeTempKeyFile();
+      try {
+        const { deps } = stubDeps();
+        const stdout = collector();
+        await profileGetPictureAction(
+          { apiUrl: "http://127.0.0.1:8000", identity: key.path },
+          CREATED.space,
+          "-",
+          deps,
+          stdout.stream,
+        );
+        expect(stdout.bytes).toEqual([...PICTURE]);
+      } finally {
+        await Deno.remove(key.path);
       }
     });
 

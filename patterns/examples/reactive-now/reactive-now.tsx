@@ -1,3 +1,11 @@
+/**
+ * A demo of reading time and receiving input in reactive code: it shows when
+ * the piece first loaded and a clock that ticks each second using the `#now`
+ * and `#now/1` wishes, since `Date.now()` is not allowed in reactive code. A
+ * Tap button and a text box show that rapid input is delivered in real time
+ * but throttled to about one delivery per second under sustained mashing.
+ */
+
 import {
   computed,
   handler,

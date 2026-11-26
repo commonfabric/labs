@@ -1,5 +1,5 @@
 import { OAuth2Client, type Tokens } from "@cmd-johnson/oauth2-client";
-import type { JSONSchema } from "@commonfabric/runner";
+import type { JSONSchema, Runtime } from "@commonfabric/runner";
 import { getLogger } from "@commonfabric/logger";
 import type { Context } from "@hono/hono";
 
@@ -8,7 +8,6 @@ import type {
   OAuth2Tokens,
   UserInfo,
 } from "./oauth2-common.types.ts";
-import { runtime } from "@/index.ts";
 import {
   custodyIngest,
   durableSet,
@@ -44,16 +43,13 @@ export function createOAuth2Client(
 // URL helpers
 //
 
+// Returns the origin of a request URL, upgraded to `https:` unless it is a
+// `localhost` origin.
 export function getBaseUrl(url: string): string {
-  try {
-    const parsedUrl = new URL(url);
-    const origin = parsedUrl.origin;
-    return origin.startsWith("http://localhost")
-      ? origin
-      : origin.replace("http://", "https://");
-  } catch (_) {
-    return "http://localhost:8000";
-  }
+  const origin = new URL(url).origin;
+  return origin.startsWith("http://localhost")
+    ? origin
+    : origin.replace("http://", "https://");
 }
 
 //
@@ -118,13 +114,9 @@ export async function fetchUserInfo(
   mapper?: (raw: Record<string, unknown>) => UserInfo,
 ): Promise<UserInfo> {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10_000);
     const response = await fetch(endpoint, {
       headers: { Authorization: `Bearer ${accessToken}` },
-      signal: controller.signal,
     });
-    clearTimeout(timeoutId);
     if (!response.ok) {
       throw new Error(`Failed to fetch user info: ${response.status}`);
     }
@@ -140,7 +132,15 @@ export async function fetchUserInfo(
 // Auth cell CRUD
 //
 
-export async function getAuthCell(docLink: string, schema: JSONSchema) {
+/**
+ * The auth cell named by a serialized link, read under `schema` when the link
+ * carries no schema of its own.
+ */
+export async function getAuthCell(
+  runtime: Runtime,
+  docLink: string,
+  schema: JSONSchema,
+) {
   try {
     const parsedDocLink = JSON.parse(docLink);
     let authCell = runtime.getCellFromLink(parsedDocLink);
@@ -168,13 +168,13 @@ function oauthIngestChannel(
 }
 
 export async function persistTokens(
+  runtime: Runtime,
   tokenData: Record<string, unknown>,
   authCellDocLink: string,
   schema: JSONSchema,
 ) {
   try {
-    const authCell = await getAuthCell(authCellDocLink, schema);
-    if (!authCell) throw new Error("Auth cell not found");
+    const authCell = await getAuthCell(runtime, authCellDocLink, schema);
 
     // Tokens arrive from the OAuth provider — external bytes deposited into the
     // fabric — so this is a vouched ingest: custodyIngest mints the
@@ -192,13 +192,13 @@ export async function persistTokens(
 }
 
 export async function clearAuthData(
+  runtime: Runtime,
   authCellDocLink: string,
   schema: JSONSchema,
   emptyData: Record<string, unknown>,
 ) {
   try {
-    const authCell = await getAuthCell(authCellDocLink, schema);
-    if (!authCell) throw new Error("Auth cell not found");
+    const authCell = await getAuthCell(runtime, authCellDocLink, schema);
 
     // Clearing tokens on logout is an operator/user action, NOT external
     // ingest — a governed durable write, but no provenance mark.

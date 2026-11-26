@@ -19,12 +19,15 @@ import {
 } from "../typecheck.ts";
 import * as path from "@std/path";
 import { ACCEPTED_CONTRACT_BREAKS } from "../pattern-compat-accepted-breaks.ts";
-import { COMPILER_PATHS, GATE_PATHS } from "../check-cause-assignments.ts";
+import {
+  CAUSE_ASSIGNMENT_PARTS,
+  COMPILER_PATHS,
+  GATE_PATHS,
+} from "../check-cause-assignments.ts";
 import {
   BASELINES_DIR,
+  collectAllPatternFiles,
   collectCompatibilityPaths,
-  collectPatternFiles,
-  normalizePatternPath,
   PATTERN_TREES,
   patternKey,
 } from "../pattern-files.ts";
@@ -58,8 +61,12 @@ export interface Gate {
   /** What runs it, as the arguments Deno takes beyond its own path. */
   run: readonly string[];
 
-  /** Further arguments, for a gate that reads the base revision. */
-  args?: (context: { baseRef: string }) => string[];
+  /**
+   * Further arguments, for a gate that reads the base revision. `base` is
+   * the revision the lane names, or nothing where it names none, which
+   * leaves the gate to its own default.
+   */
+  args?: (context: { base: readonly string[] }) => string[];
 
   /** Where it runs, repository-relative, when that is not the root. */
   cwd?: string;
@@ -187,6 +194,7 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
       ".github/workflows/benchmarks.yml",
       "dashboard/bench-report.ts",
       "dashboard/machine-calibration.bench.ts",
+      "patterns/integration/fabrichat-setup.bench.ts",
       "patterns/integration/topic-board-navigation.bench.ts",
       "patterns/integration/topic-board-scale.bench.ts",
       "tasks/check-bench-workflow.ts",
@@ -407,27 +415,34 @@ export const REACHED_BY_ABSENT_PATHS: ReadonlySet<string> = new Set([
 
 /**
  * The gates that compare the tree with the revision the change is measured
- * against: two hold a file to being appended to, and one holds the
- * compiler to numbering an unchanged pattern's cells as it did. Each reads
+ * against: two hold a file to being appended to, and the others each hold
+ * the compiler to numbering the cells of one part of the unchanged patterns
+ * as it did. Each reads
  * the merge base with that revision, which takes a checkout carrying
  * history.
  */
 export const HISTORY_GATES: readonly Gate[] = [
-  {
-    name: "check-cause-assignments",
+  // One gate for each part of the patterns the cause-assignment gate
+  // compares, since comparing them all takes longer than a lane holds.
+  ...Array.from({ length: CAUSE_ASSIGNMENT_PARTS }, (_, at): Gate => ({
+    name: `check-cause-assignments ${at + 1} of ${CAUSE_ASSIGNMENT_PARTS}`,
     kind: "gate",
     run: ["task", "check-cause-assignments"],
-    args: ({ baseRef }) => [baseRef],
+    args: ({ base }) => [
+      ...base,
+      "--part",
+      `${at + 1}/${CAUSE_ASSIGNMENT_PARTS}`,
+    ],
     // The paths a pattern's numbering is built by, and the gate's own
     // modules. The task passes a change touching none of them without
     // compiling anything, so the two lists are one.
     reachedBy: [...COMPILER_PATHS, ...GATE_PATHS],
-  },
+  })),
   {
     name: "check-baselines-append-only",
     kind: "gate",
     run: ["task", "check-baselines-append-only"],
-    args: ({ baseRef }) => [baseRef],
+    args: ({ base }) => [...base],
     // The baselines. A deleted pattern file is what excuses deleting
     // the baselines beside it, so it can turn this gate's verdict from
     // a failure into a pass but never the other way, and reaches the
@@ -435,14 +450,16 @@ export const HISTORY_GATES: readonly Gate[] = [
     reachedBy: [
       "patterns/baselines/",
       "tasks/check-baselines-append-only.ts",
+      "tasks/command-output.ts",
       "tasks/pattern-files.ts",
+      "tasks/repository-files.ts",
     ],
   },
   {
     name: "check-test-aliases",
     kind: "gate",
     run: ["task", "check-test-aliases"],
-    args: ({ baseRef }) => [baseRef],
+    args: ({ base }) => [...base],
     // The alias files, and the module holding the line format the task
     // parses and the graph rules it applies; the task itself is a
     // `git show` wrapper around those. The `.jsonl` file beside the
@@ -451,6 +468,7 @@ export const HISTORY_GATES: readonly Gate[] = [
     reachedBy: [
       "base/test-support/",
       "tasks/check-test-aliases.ts",
+      "tasks/repository-files.ts",
       "tasks/test-identity-aliases/",
       "tasks/test-identity-aliases.jsonl",
     ],
@@ -495,7 +513,7 @@ function gateSuite(
         : undefined;
     },
     command(requests, context): Promise<Invocation[]> {
-      const baseRef = context.baseRef ?? "origin/main";
+      const base = context.baseRef === undefined ? [] : [context.baseRef];
       const invocations: Invocation[] = [];
       for (const request of requests) {
         const gate = byName.get(request.unit);
@@ -511,7 +529,7 @@ function gateSuite(
             "--",
             Deno.execPath(),
             ...gate.run,
-            ...gate.args?.({ baseRef }) ?? [],
+            ...gate.args?.({ base }) ?? [],
           ],
           cwd: gate.cwd === undefined
             ? context.root
@@ -575,24 +593,6 @@ async function typecheckSuite(root: string): Promise<Suite> {
 }
 
 /**
- * Every authored pattern in the tree, repository-relative.
- *
- * Collected against the root the topology was given rather than the
- * process's own directory: a lane runs from the repository root, and a
- * test of the topology runs from wherever its package does.
- */
-async function patternFiles(root: string): Promise<string[]> {
-  const found = await Promise.all(
-    PATTERN_TREES.map((tree) =>
-      collectPatternFiles(path.join(root, tree.directory))
-    ),
-  );
-  return found.flat()
-    .map((file) => normalizePatternPath(path.relative(root, file)))
-    .sort();
-}
-
-/**
  * The `--only` arguments that restrict a pattern task to `chosen`. The
  * flag takes a single value, so it is repeated rather than given a list.
  *
@@ -617,7 +617,7 @@ function onlyArguments(chosen: readonly string[], whole: boolean): string[] {
  * what the whole run took rather than what any pattern took.
  */
 async function cfcheckSuite(root: string): Promise<Suite> {
-  const units = await patternFiles(root);
+  const units = await collectAllPatternFiles(root);
   const known = new Set(units);
   const name = "cfcheck";
   const recordSurfaces = [{ kind: "typecheck", scope: "repo" }];
@@ -672,7 +672,7 @@ async function cfcheckSuite(root: string): Promise<Suite> {
  * `unitsForChange` says which patterns a change reaches.
  */
 async function patternCompatSuite(root: string): Promise<Suite> {
-  const files = await patternFiles(root);
+  const files = await collectAllPatternFiles(root);
   const paths = await collectCompatibilityPaths(
     files,
     path.join(root, BASELINES_DIR),

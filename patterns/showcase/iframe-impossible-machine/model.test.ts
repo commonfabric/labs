@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { machineEdgeId } from "./contract.ts";
 import type {
   IframeStateData,
@@ -17,6 +16,7 @@ import {
   machineNodePresentation,
   presentSignal,
 } from "./model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const PARAMETERS: MachineParameters = {
   active: false,
@@ -236,6 +236,52 @@ describe("evaluateSignals()", () => {
     });
     expect(isActuatorFiring(actuator, presentSignal(0.9, false).semantic))
       .toBe(true);
+  });
+
+  it("highlights a shown signal from half strength up", () => {
+    expect(presentSignal(0.5, true)).toEqual({
+      semantic: 0.5,
+      label: "50%",
+      highlighted: true,
+    });
+    expect(presentSignal(0.49, true).highlighted).toBe(false);
+  });
+
+  it("returns `true` for a wire from a module to itself", () => {
+    expect(createsFeedbackCycle([], "A", "A")).toBe(true);
+  });
+
+  it("follows each module once where a machine's branches rejoin", () => {
+    const diamond = [
+      { id: "A-B", source: "A", target: "B" },
+      { id: "A-C", source: "A", target: "C" },
+      { id: "B-D", source: "B", target: "D" },
+      { id: "C-D", source: "C", target: "D" },
+    ];
+
+    expect(createsFeedbackCycle(diamond, "E", "A")).toBe(false);
+    expect(createsFeedbackCycle(diamond, "D", "A")).toBe(true);
+  });
+
+  it("treats a wire from a missing module as a low input", () => {
+    const state: IframeStateData = {
+      nodes: [
+        node("sensor", "sensor", { active: true }),
+        node("gate", "gate", { operator: "and" }),
+      ],
+      edges: [
+        { id: "sensor-gate", source: "sensor", target: "gate" },
+        { id: "ghost-gate", source: "ghost", target: "gate" },
+      ],
+      disabledEdges: {},
+    };
+
+    expect(evaluateSignals(state, 0).get("gate")).toBe(0);
+    expect(
+      evaluateSignals({ ...state, edges: state.edges.slice(0, 1) }, 0).get(
+        "gate",
+      ),
+    ).toBe(1);
   });
 
   it("treats concurrent wires with the same endpoints as one input", () => {

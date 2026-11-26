@@ -24,6 +24,13 @@
  *   - get() followed by fully materializing getReadActivities()
  *   - materializing getReadActivities() after an untimed get()
  *
+ * Every iteration builds a fresh runtime, so setup leaves garbage behind, and
+ * where the young generation fills relative to the timed read would otherwise
+ * decide whether a collection lands inside it. A full collection runs just
+ * before each timed read, so the collections a sample includes are the ones
+ * the read's own allocation causes. That needs `--v8-flags=--expose-gc`, which
+ * the scheduled workflow and the runner's `bench` task pass.
+ *
  * Environment controls:
  * - SCHEMA_READ_DEPTH_N: list size, default 1000
  */
@@ -38,6 +45,13 @@ const signer = await Identity.fromPassphrase("bench schema read depth");
 const space = signer.did();
 
 const N = Number(Deno.env.get("SCHEMA_READ_DEPTH_N") ?? "1000");
+
+const collectGarbage = (globalThis as { gc?: () => void }).gc;
+if (collectGarbage === undefined) {
+  throw new Error(
+    "cell-schema-read-depth.bench.ts needs --v8-flags=--expose-gc.",
+  );
+}
 
 const items = Array.from({ length: N }, (_, i) => ({
   data: {
@@ -119,6 +133,7 @@ for (const [label, schema] of VARIANTS) {
         tx,
       );
       try {
+        collectGarbage();
         b.start();
         cell.get();
         b.end();
@@ -153,6 +168,7 @@ for (const [label, materializeReadActivities] of READ_JOURNAL_VARIANTS) {
       );
       let readCount: number | undefined;
       try {
+        collectGarbage();
         b.start();
         cell.get();
         if (materializeReadActivities) {
@@ -189,6 +205,7 @@ Deno.bench({
     let readCount = 0;
     try {
       cell.get();
+      collectGarbage();
       b.start();
       readCount = Array.from(getTransactionReadActivities(tx)).length;
       b.end();

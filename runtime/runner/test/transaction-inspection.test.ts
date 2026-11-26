@@ -1,11 +1,11 @@
-import { assertEquals, assertExists, assertThrows } from "@std/assert";
+import { assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { toDocumentPath } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { NormalizedFullLink } from "../src/link-utils.ts";
 import { writeChokepointMark } from "../src/storage/write-chokepoint.ts";
@@ -177,13 +177,12 @@ describe("transaction inspection", () => {
           path: [],
         }],
       };
-      const direct = tx.getReactivityLog?.();
-      assertExists(direct);
-      assertEquals(direct, expected);
+      assertEquals(tx.getReactivityLog(), expected);
 
       const extended = {
         tx,
         journal: tx.journal,
+        getReactivityLog: () => tx.getReactivityLog(),
         status: tx.status.bind(tx),
       } as unknown as IExtendedStorageTransaction;
       assertEquals(txToReactivityLog(extended), expected);
@@ -246,7 +245,7 @@ describe("transaction inspection", () => {
         }],
       };
 
-      assertEquals(tx.getReactivityLog?.(), expected);
+      assertEquals(tx.getReactivityLog(), expected);
     } finally {
       await storageManager.close();
     }
@@ -292,8 +291,8 @@ describe("transaction inspection", () => {
       const extended = new ExtendedStorageTransaction(tx);
       const wrapped = new TransactionWrapper(extended);
 
-      assertEquals(extended.getReactivityLog?.(), expected);
-      assertEquals(wrapped.getReactivityLog?.(), expected);
+      assertEquals(extended.getReactivityLog(), expected);
+      assertEquals(wrapped.getReactivityLog(), expected);
       assertEquals(txToReactivityLog(wrapped), expected);
     } finally {
       await storageManager.close();
@@ -623,7 +622,7 @@ describe("transaction inspection", () => {
       tx.write(address, 1);
 
       // The reactivity log lists only changed paths, so it names no write.
-      expect(tx.getReactivityLog?.().writes).toEqual([]);
+      expect(tx.getReactivityLog().writes).toEqual([]);
       expect(getTransactionWrittenSpaces(tx)).toEqual([space]);
     } finally {
       await storageManager.close();
@@ -709,21 +708,6 @@ describe("transaction inspection", () => {
       "did:key:written",
       "did:key:attempted",
     ]);
-  });
-
-  it("throws when a transaction offers no record of its writes", () => {
-    const tx = {
-      journal: {
-        activity: () => {
-          throw new Error("no replay");
-        },
-        novelty: () => [],
-        history: () => [],
-      },
-      tx: {} as any,
-    } as unknown as IExtendedStorageTransaction;
-
-    expect(() => getTransactionWrittenSpaces(tx)).toThrow("cannot be known");
   });
 
   it("leaves a space the transaction only read out of the written spaces", async () => {
@@ -1063,7 +1047,7 @@ describe("transaction inspection", () => {
         path: ["value", "tags", "length"],
       }, 1);
 
-      assertEquals(tx.getReactivityLog?.(), {
+      assertEquals(tx.getReactivityLog(), {
         reads: [],
         shallowReads: [],
         writes: [{
@@ -1113,7 +1097,7 @@ describe("transaction inspection", () => {
         path: ["value", "tags", "0"],
       }, "zero");
 
-      assertEquals(tx.getReactivityLog?.(), {
+      assertEquals(tx.getReactivityLog(), {
         reads: [],
         shallowReads: [],
         writes: [{

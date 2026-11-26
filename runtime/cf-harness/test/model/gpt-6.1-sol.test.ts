@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { OpenAICompatibleGatewayClient } from "../../src/gateway/openai-client.ts";
 import type { HarnessModelTurnRequest } from "../../src/model/client.ts";
 import { OpenAICodexResponsesClient } from "../../src/model/openai-codex-responses.ts";
 import { OpenAICompatibleGatewayModelClient } from "../../src/model/openai-compatible-gateway.ts";
 import { withEstimatedOpenAIModelUsageCost } from "../../src/model/usage.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const MODEL = "gpt-6.1-sol";
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];

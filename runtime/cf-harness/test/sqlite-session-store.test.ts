@@ -43,6 +43,13 @@ import {
   nextIsoNow,
   unattachedTurnContext,
 } from "./support/session-store-fixtures.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
 
 /** Asserts a synthesized result states an unknown outcome without `ok`. */
 const assertUnknownToolOutcome = (
@@ -84,7 +91,7 @@ const localHostPromptLoopOptions = (
   },
 });
 
-Deno.test("sqlite session store rejects unsupported URL schemes", async () => {
+test("sqlite session store rejects unsupported URL schemes", async () => {
   await assertRejects(
     () =>
       openSqliteHarnessChatSessionStore({
@@ -95,7 +102,7 @@ Deno.test("sqlite session store rejects unsupported URL schemes", async () => {
   );
 });
 
-Deno.test("sqlite session store persists chat sessions and replayable events", async () => {
+test("sqlite session store persists chat sessions and replayable events", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -226,7 +233,7 @@ Deno.test("sqlite session store persists chat sessions and replayable events", a
   }
 });
 
-Deno.test("sqlite session restart rejects changed or missing local Loom bindings before model traffic", async () => {
+test("sqlite session restart rejects changed or missing local Loom bindings before model traffic", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -353,7 +360,7 @@ Deno.test("sqlite session restart rejects changed or missing local Loom bindings
   }
 });
 
-Deno.test("sqlite session restart rejects a changed local Loom model before model traffic", async () => {
+test("sqlite session restart rejects a changed local Loom model before model traffic", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -420,7 +427,7 @@ Deno.test("sqlite session restart rejects a changed local Loom model before mode
   }
 });
 
-Deno.test("sqlite session restart validates every durable local Loom binding field", async () => {
+test("sqlite session restart validates every durable local Loom binding field", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -503,7 +510,7 @@ Deno.test("sqlite session restart validates every durable local Loom binding fie
   }
 });
 
-Deno.test("sqlite session replay survives bounded in-memory event retention", async () => {
+test("sqlite session replay survives bounded in-memory event retention", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -574,7 +581,7 @@ Deno.test("sqlite session replay survives bounded in-memory event retention", as
   }
 });
 
-Deno.test("sqlite session store persists session snapshots and events atomically", async () => {
+test("sqlite session store persists session snapshots and events atomically", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -639,7 +646,7 @@ Deno.test("sqlite session store persists session snapshots and events atomically
   }
 });
 
-Deno.test("sqlite session store loads a session row without a handle table and persists one added later", async () => {
+test("sqlite session store loads a session row without a handle table and persists one added later", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   // A store written before sessions carried a handle table: its
   // `chat_session` has no column for one.
@@ -706,7 +713,7 @@ Deno.test("sqlite session store loads a session row without a handle table and p
   }
 });
 
-Deno.test("sqlite session store refuses a session whose stored handle table is not JSON, naming the column", async () => {
+test("sqlite session store refuses a session whose stored handle table is not JSON, naming the column", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -735,7 +742,7 @@ Deno.test("sqlite session store refuses a session whose stored handle table is n
   }
 });
 
-Deno.test("sqlite session store persists turn session event mutations atomically", async () => {
+test("sqlite session store persists turn session event mutations atomically", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -820,7 +827,7 @@ Deno.test("sqlite session store persists turn session event mutations atomically
   }
 });
 
-Deno.test("sqlite session store restores and terminalizes active legacy transcripts", async () => {
+test("sqlite session store restores and terminalizes active legacy transcripts", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -963,7 +970,7 @@ Deno.test("sqlite session store restores and terminalizes active legacy transcri
   }
 });
 
-Deno.test("sqlite restore normalizes legacy history through every terminalization branch", async () => {
+test("sqlite restore normalizes legacy history through every terminalization branch", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -1106,7 +1113,7 @@ Deno.test("sqlite restore normalizes legacy history through every terminalizatio
   }
 });
 
-Deno.test("sqlite session restore heals terminal legacy transcripts idempotently", async () => {
+test("sqlite session restore heals terminal legacy transcripts idempotently", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -1236,7 +1243,7 @@ Deno.test("sqlite session restore heals terminal legacy transcripts idempotently
   }
 });
 
-Deno.test("sqlite chat resumes a canceled tool call from its checkpoint", async () => {
+test("sqlite chat resumes a canceled tool call from its checkpoint", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -1331,7 +1338,7 @@ Deno.test("sqlite chat resumes a canceled tool call from its checkpoint", async 
   }
 });
 
-Deno.test("sqlite session restore preserves partial batches later history and compaction", async () => {
+test("sqlite session restore preserves partial batches later history and compaction", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -1416,7 +1423,6 @@ Deno.test("sqlite session restore preserves partial batches later history and co
       normalized,
       "gpt-test",
       "openai-compatible-gateway",
-      "gateway Responses",
     );
     const calls = input.filter((item) => item.type === "function_call").map(
       (item) => item.call_id,
@@ -1430,7 +1436,7 @@ Deno.test("sqlite session restore preserves partial batches later history and co
   }
 });
 
-Deno.test("sqlite session restore leaves complete tool exchanges byte-for-byte unchanged", async () => {
+test("sqlite session restore leaves complete tool exchanges byte-for-byte unchanged", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -1479,7 +1485,7 @@ Deno.test("sqlite session restore leaves complete tool exchanges byte-for-byte u
   }
 });
 
-Deno.test("sqlite session restore pairs late tool results across interleaved history", async () => {
+test("sqlite session restore pairs late tool results across interleaved history", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -1529,7 +1535,7 @@ Deno.test("sqlite session restore pairs late tool results across interleaved his
   }
 });
 
-Deno.test("sqlite restore closes a missing sibling without moving a late real result", async () => {
+test("sqlite restore closes a missing sibling without moving a late real result", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -1575,7 +1581,6 @@ Deno.test("sqlite restore closes a missing sibling without moving a late real re
       normalized,
       "gpt-test",
       "openai-compatible-gateway",
-      "gateway Responses",
     );
     const calls = input.filter((item) => item.type === "function_call").map(
       (item) => item.call_id,
@@ -1589,7 +1594,7 @@ Deno.test("sqlite restore closes a missing sibling without moving a late real re
   }
 });
 
-Deno.test("sqlite chat fails closed on malformed tool exchanges", async () => {
+test("sqlite chat fails closed on malformed tool exchanges", async () => {
   const cases: Array<{
     name: string;
     transcript: HarnessTranscriptMessage[];
@@ -1770,7 +1775,7 @@ Deno.test("sqlite chat fails closed on malformed tool exchanges", async () => {
   }
 });
 
-Deno.test("sqlite chat propagates unexpected transcript normalization faults", async () => {
+test("sqlite chat propagates unexpected transcript normalization faults", async () => {
   for (const phase of ["restore", "next-turn"] as const) {
     const path = await Deno.makeTempFile({ suffix: ".sqlite" });
     const store = await openSqliteHarnessChatSessionStore({
@@ -1834,7 +1839,7 @@ Deno.test("sqlite chat propagates unexpected transcript normalization faults", a
   }
 });
 
-Deno.test("sqlite session restore keeps closed sessions closed while terminalizing turns", async () => {
+test("sqlite session restore keeps closed sessions closed while terminalizing turns", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -1986,14 +1991,14 @@ const transcriptAfterFaultedTurn = async (
 // Whichever fault point a turn dies at, a service rebuilt from the same store
 // resumes from the last completed turn and nothing else.
 for (const resultsBeforeFault of FAULT_POINTS) {
-  Deno.test(`sqlite session restore resumes from the last completed turn after a fault with ${resultsBeforeFault} of two tool results`, async () => {
+  test(`sqlite session restore resumes from the last completed turn after a fault with ${resultsBeforeFault} of two tool results`, async () => {
     const next = await transcriptAfterFaultedTurn(resultsBeforeFault, "error");
     assertEquals(next, RESUMED_AFTER_FIRST_TURN);
     assertEquals(inspectHarnessTranscriptPairing(next).valid, true);
   });
 }
 
-Deno.test("sqlite session restore keeps a reusable checkpoint when a turn is interrupted mid-tool", async () => {
+test("sqlite session restore keeps a reusable checkpoint when a turn is interrupted mid-tool", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -2121,7 +2126,7 @@ const ORPHAN_TRANSCRIPT: readonly HarnessTranscriptMessage[] = [
 // Malformation is independent of session status. In particular, a `failed`
 // session otherwise accepts a new turn, so transcript validation must refuse it.
 for (const status of ["idle", "failed"] as const) {
-  Deno.test(`sqlite session restore keeps ${status} malformed sessions refused without deleting evidence`, async () => {
+  test(`sqlite session restore keeps ${status} malformed sessions refused without deleting evidence`, async () => {
     const path = await Deno.makeTempFile({ suffix: ".sqlite" });
     const store = await openSqliteHarnessChatSessionStore({
       url: toFileUrl(path),
@@ -2173,7 +2178,7 @@ for (const status of ["idle", "failed"] as const) {
   });
 }
 
-Deno.test("sqlite session restore normalizes a truncated transcript without deleting history", async () => {
+test("sqlite session restore normalizes a truncated transcript without deleting history", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -2234,7 +2239,7 @@ Deno.test("sqlite session restore normalizes a truncated transcript without dele
   }
 });
 
-Deno.test("a listener failure after normalization commit does not poison the session", async () => {
+test("a listener failure after normalization commit does not poison the session", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -2299,7 +2304,7 @@ Deno.test("a listener failure after normalization commit does not poison the ses
   }
 });
 
-Deno.test("sqlite session restore refuses structural corruption without deleting evidence", async () => {
+test("sqlite session restore refuses structural corruption without deleting evidence", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
     url: toFileUrl(path),
@@ -2376,4 +2381,160 @@ Deno.test("sqlite session restore refuses structural corruption without deleting
     store.close();
     await Deno.remove(path);
   }
+});
+
+describe("sqlite-session-store", () => {
+  describe("SqliteHarnessChatSessionStore", () => {
+    const SESSION_ID = "session-store-unit";
+    let path: string;
+    let store: Awaited<ReturnType<typeof openSqliteHarnessChatSessionStore>>;
+    const session = createHarnessChatSessionStatus({
+      sessionId: SESSION_ID,
+      createdAt: "2026-05-27T00:00:00.000Z",
+      workspace: { hostPath: "/workspace" },
+      metadata: { version: "before" },
+    });
+    const sessionEvent = (sequence: number) =>
+      createHarnessChatEventEnvelope({
+        sessionId: SESSION_ID,
+        sequence,
+        emittedAt: `2026-05-27T00:00:0${sequence}.000Z`,
+        event: { kind: "status_changed", session },
+      });
+    const turn = {
+      turnId: "turn-1",
+      status: "running" as const,
+      startedAt: "2026-05-27T00:00:05.000Z",
+      updatedAt: "2026-05-27T00:00:05.000Z",
+    };
+    const turnMutation = (sequence: number, version: string) => ({
+      session: {
+        session: { ...session, metadata: { version } },
+        transcript: [{ role: "user" as const, content: version }],
+      },
+      turn: {
+        sessionId: SESSION_ID,
+        turn,
+        input: { text: version },
+        policy: session.policy,
+      },
+      createTurn: true,
+      event: createHarnessChatEventEnvelope({
+        sessionId: SESSION_ID,
+        turnId: turn.turnId,
+        sequence,
+        emittedAt: "2026-05-27T00:00:05.000Z",
+        event: { kind: "turn_started", turn },
+      }),
+    });
+
+    /**
+     * Makes every event insert end the transaction it runs in, the way a
+     * storage failure SQLite answers with an automatic rollback does, so the
+     * store's own rollback finds no transaction left to end.
+     */
+    const failEventInsertsWithRollback = () => {
+      const database = new Database(path);
+      try {
+        database.exec(`
+          CREATE TRIGGER fail_event_insert BEFORE INSERT ON chat_event
+          BEGIN SELECT RAISE(ROLLBACK, 'event storage failed'); END;
+        `);
+      } finally {
+        database.close();
+      }
+    };
+
+    beforeEach(async () => {
+      path = await Deno.makeTempFile({ suffix: ".sqlite" });
+      store = await openSqliteHarnessChatSessionStore({ url: toFileUrl(path) });
+      store.saveSessionAndAppendEvent(
+        { session, transcript: [] },
+        sessionEvent(1),
+      );
+    });
+
+    afterEach(async () => {
+      store.close();
+      await Deno.remove(path);
+    });
+
+    describe("instance members", () => {
+      describe("listEvents()", () => {
+        it("returns at most the limit of events, earliest first", () => {
+          store.appendEvent(sessionEvent(2));
+          store.appendEvent(sessionEvent(3));
+
+          expect(
+            store.listEvents({ limit: 2 }).map((event) => event.sequence),
+          ).toEqual([1, 2]);
+          expect(store.listEvents().map((event) => event.sequence)).toEqual([
+            1,
+            2,
+            3,
+          ]);
+          expect(
+            store.listEvents({ afterSequence: 1, limit: 1 }).map((event) =>
+              event.sequence
+            ),
+          ).toEqual([2]);
+        });
+      });
+
+      describe("saveSessionAndAppendEvent()", () => {
+        it("throws the storage failure rather than the failed rollback, keeping the prior session", () => {
+          failEventInsertsWithRollback();
+
+          expect(() =>
+            store.saveSessionAndAppendEvent(
+              {
+                session: { ...session, metadata: { version: "after" } },
+                transcript: [],
+              },
+              sessionEvent(2),
+            )
+          ).toThrow("event storage failed");
+          expect(store.getSession(SESSION_ID)?.session.metadata).toEqual({
+            version: "before",
+          });
+          expect(store.listEvents().map((event) => event.sequence)).toEqual([
+            1,
+          ]);
+        });
+      });
+
+      describe("saveSessionTurnAndAppendEvent()", () => {
+        it("returns `false` and writes nothing when creating a turn that already exists", () => {
+          expect(store.saveSessionTurnAndAppendEvent(turnMutation(2, "first")))
+            .toBe(true);
+
+          expect(
+            store.saveSessionTurnAndAppendEvent(turnMutation(3, "second")),
+          ).toBe(false);
+          expect(store.getSession(SESSION_ID)?.session.metadata).toEqual({
+            version: "first",
+          });
+          expect(store.getTurn(SESSION_ID, turn.turnId)?.input).toEqual({
+            text: "first",
+          });
+          expect(store.listEvents().map((event) => event.sequence)).toEqual([
+            1,
+            2,
+          ]);
+        });
+
+        it("throws the storage failure rather than the failed rollback, writing no turn", () => {
+          failEventInsertsWithRollback();
+
+          expect(() =>
+            store.saveSessionTurnAndAppendEvent(turnMutation(2, "first"))
+          ).toThrow("event storage failed");
+          expect(store.getTurn(SESSION_ID, turn.turnId)).toBe(undefined);
+          expect(store.getSession(SESSION_ID)?.session.metadata).toEqual({
+            version: "before",
+          });
+        });
+      });
+    });
+  });
 });

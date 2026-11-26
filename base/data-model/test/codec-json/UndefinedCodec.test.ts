@@ -8,11 +8,11 @@
  * something to salvage.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { CODEC_TYPE_TAGS, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
 import { UndefinedCodec } from "@/codec-json/UndefinedCodec.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("UndefinedCodec", () => {
   const codec = new UndefinedCodec();

@@ -89,7 +89,6 @@ const mergeAnalyses = (...analyses: InternalAnalysis[]): InternalAnalysis => {
   let requires = false;
   const dataFlows: ts.Expression[] = [];
   for (const analysis of analyses) {
-    if (!analysis) continue;
     contains ||= analysis.containsReactive;
     requires ||= analysis.requiresRewrite;
     for (const dataFlow of analysis.dataFlows) dataFlows.push(dataFlow);
@@ -213,83 +212,56 @@ export function createDataFlowAnalyzer(
   const getObjectBindingAccessSegment = (
     element: ts.BindingElement,
   ): StaticBindingAccessSegment | undefined => {
-    if (!element.propertyName) {
-      if (ts.isIdentifier(element.name)) {
-        return { kind: "property", text: element.name.text };
-      }
-      return undefined;
-    }
-
-    if (ts.isIdentifier(element.propertyName)) {
-      return { kind: "property", text: element.propertyName.text };
-    }
-
-    const propertyNameText = getStaticPropertyNameText(element.propertyName);
-    if (propertyNameText !== undefined) {
-      return { kind: "property", text: propertyNameText };
-    }
-
-    return undefined;
+    const text = getStaticPropertyNameText(
+      element.propertyName ?? element.name,
+    );
+    return text === undefined ? undefined : { kind: "property", text };
   };
 
   const getStaticPropertyNameText = (
-    name: ts.PropertyName,
-  ): string | undefined => {
-    if (ts.isIdentifier(name)) {
-      return name.text;
-    }
-
-    if (
+    name: ts.PropertyName | ts.BindingName,
+  ): string | undefined =>
+    ts.isIdentifier(name) ||
       ts.isStringLiteral(name) ||
       ts.isNumericLiteral(name) ||
       ts.isNoSubstitutionTemplateLiteral(name)
-    ) {
-      return name.text;
-    }
-
-    return undefined;
-  };
+      ? name.text
+      : undefined;
 
   const getBindingElementStaticAccessPath = (
     element: ts.BindingElement,
   ): readonly StaticBindingAccessSegment[] | undefined => {
     const path: StaticBindingAccessSegment[] = [];
-    let current: ts.BindingElement | undefined = element;
+    let current = element;
 
-    while (current) {
+    while (true) {
       if (current.dotDotDotToken || current.initializer) {
         return undefined;
       }
 
-      const parentPattern: ts.Node = current.parent;
+      const parentPattern = current.parent;
       if (ts.isObjectBindingPattern(parentPattern)) {
         const segment = getObjectBindingAccessSegment(current);
         if (!segment) {
           return undefined;
         }
         path.unshift(segment);
-      } else if (ts.isArrayBindingPattern(parentPattern)) {
-        const index = parentPattern.elements.indexOf(current);
-        if (index < 0) {
-          return undefined;
-        }
-        path.unshift({ kind: "index", text: String(index) });
       } else {
-        return undefined;
+        path.unshift({
+          kind: "index",
+          text: String(parentPattern.elements.indexOf(current)),
+        });
       }
 
-      const owner: ts.Node = parentPattern.parent;
+      const owner = parentPattern.parent;
       if (ts.isVariableDeclaration(owner)) {
         return path;
       }
-      if (ts.isBindingElement(owner)) {
-        current = owner;
-        continue;
+      if (!ts.isBindingElement(owner)) {
+        return undefined;
       }
-      return undefined;
+      current = owner;
     }
-
-    return undefined;
   };
 
   const createStaticBindingAccessExpression = (
@@ -891,9 +863,6 @@ export function createDataFlowAnalyzer(
         target.containsReactive &&
         leftmostIdentifierIsArrayMethodElementBinding(expression)
       ) {
-        if (originatesFromIgnored(expression.expression)) {
-          return emptyAnalysis();
-        }
         const parentId =
           context.expressionToNodeId.get(expression.expression) ?? null;
         recordDataFlow(expression, scope, parentId, true);
@@ -1233,12 +1202,9 @@ export function createDataFlowAnalyzer(
     }
 
     if (ts.isArrayLiteralExpression(expression)) {
-      const analyses = expression.elements.map((element) => {
-        if (ts.isExpression(element)) {
-          return analyzeExpression(element, scope, context);
-        }
-        return emptyAnalysis();
-      });
+      const analyses = expression.elements.map((element) =>
+        analyzeExpression(element, scope, context)
+      );
       return mergeAnalyses(...analyses);
     }
 

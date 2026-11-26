@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   ambiguousCells,
@@ -7,6 +6,7 @@ import {
   movedCells,
   type PatternAssignment,
 } from "./cause-assignments-lib.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A built pattern's fields, as far as the cause assignment reads them. */
 interface Built {
@@ -95,6 +95,24 @@ describe("cause-assignments-lib", () => {
     it("returns no level for a value that is not a pattern", () => {
       expect(assignmentLevels({ nodes: "none" }, entryRefOf)).toEqual([]);
     });
+
+    it("returns a level for each pattern a builtin's inputs hold, however deep, each once", () => {
+      const other = child();
+      const parent = {
+        ...built([]),
+        nodes: [
+          { inputs: { op: CHILD } },
+          { module: "not an object", inputs: { op: CHILD } },
+          {
+            module: { type: "ref", implementation: "map" },
+            inputs: { list: [1, "two", null, { op: CHILD }, CHILD, other] },
+          },
+        ],
+      };
+
+      expect(assignmentLevels(parent, entryRefOf).map((level) => level.key))
+        .toEqual(["", "/builtin map[0]#0", "/builtin map[0]#1"]);
+    });
   });
 
   describe("movedCells()", () => {
@@ -123,6 +141,23 @@ describe("cause-assignments-lib", () => {
           to: 1,
         },
       ]);
+    });
+
+    it("returns nothing for a level only one side has", () => {
+      const base = assignment([{ lift: true }]);
+      const head: PatternAssignment = {
+        ...base,
+        levels: [...base.levels, {
+          key: "/sub-pattern child-identi#Child[0]#0",
+          cells: [{
+            number: 1,
+            description: "cell, no writer",
+            hasState: true,
+          }],
+        }],
+      };
+
+      expect(movedCells(base, head)).toEqual([]);
     });
   });
 

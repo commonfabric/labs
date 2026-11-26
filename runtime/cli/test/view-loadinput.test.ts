@@ -1,8 +1,8 @@
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { _internal, loadViewInput } from "../lib/view/loadinput.ts";
 import { MAX_BINARY_VIEW_BYTES } from "../lib/view/languages/binary/binary.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 type LoadFromSource = typeof _internal.loadViewInputFromSource;
 type ChunkSource = Parameters<LoadFromSource>[0];

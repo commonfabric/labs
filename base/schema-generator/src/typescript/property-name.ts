@@ -1,15 +1,26 @@
 import ts from "typescript";
 
-import { isCellInternalMarkerName } from "./cell-brand.ts";
 import { isCommonFabricDeclaration } from "./common-fabric-symbols.ts";
 
 const COMMON_FABRIC_HELPERS_IDENTIFIER = "__cfHelpers";
-const COMMON_FABRIC_KEY_NAMES = ["NAME", "UI", "SELF", "FS", "VIEWS"] as const;
-const COMMON_FABRIC_KEY_NAME_SET = new Set<CommonFabricKeyName>(
+const COMMON_FABRIC_KEY_NAMES = [
+  "NAME",
+  "UI",
+  "SELF",
+  "FS",
+  "VIEWS",
+  "SUGGESTIONS",
+] as const;
+const COMMON_FABRIC_KEY_NAME_SET: ReadonlySet<string> = new Set(
   COMMON_FABRIC_KEY_NAMES,
 );
 
 export type CommonFabricKeyName = typeof COMMON_FABRIC_KEY_NAMES[number];
+
+/** Whether `name` is one of the keys Common Fabric declares. */
+function isCommonFabricKeyName(name: string): name is CommonFabricKeyName {
+  return COMMON_FABRIC_KEY_NAME_SET.has(name);
+}
 
 export type ComputedPropertyKeyInfo =
   | {
@@ -66,18 +77,6 @@ function resolveAliasedSymbol(
   return symbol;
 }
 
-function isUniqueSymbolKeySymbol(
-  symbol: ts.Symbol,
-  checker: ts.TypeChecker,
-): boolean {
-  const declaration = symbol.declarations?.[0];
-  if (!declaration) {
-    return false;
-  }
-  const type = checker.getTypeOfSymbolAtLocation(symbol, declaration);
-  return (type.flags & ts.TypeFlags.UniqueESSymbol) !== 0;
-}
-
 function resolveCommonFabricComputedKeyName(
   expr: ts.Expression,
   checker?: ts.TypeChecker,
@@ -90,9 +89,9 @@ function resolveCommonFabricComputedKeyName(
     ts.isPropertyAccessExpression(expr) &&
     ts.isIdentifier(expr.expression) &&
     expr.expression.text === helperIdentifier &&
-    COMMON_FABRIC_KEY_NAME_SET.has(expr.name.text as CommonFabricKeyName)
+    isCommonFabricKeyName(expr.name.text)
   ) {
-    return expr.name.text as CommonFabricKeyName;
+    return expr.name.text;
   }
 
   if (!ts.isIdentifier(expr)) {
@@ -107,21 +106,19 @@ function resolveCommonFabricComputedKeyName(
     checker.getSymbolAtLocation(expr),
     checker,
   );
-  const resolvedName = symbol?.getName() as CommonFabricKeyName | undefined;
-  if (!resolvedName || !COMMON_FABRIC_KEY_NAME_SET.has(resolvedName)) {
-    return undefined;
-  }
+  if (symbol === undefined) return undefined;
+  const resolvedName = symbol.getName();
+  if (!isCommonFabricKeyName(resolvedName)) return undefined;
 
-  const declaration = symbol?.declarations?.[0];
-  if (!declaration) {
-    return undefined;
-  }
-
-  if (isCommonFabricDeclaration(declaration)) {
+  // The key Common Fabric declares, or a unique symbol of its name.
+  const declaration = symbol.declarations?.[0];
+  if (declaration !== undefined && isCommonFabricDeclaration(declaration)) {
     return resolvedName;
   }
-
-  return isUniqueSymbolKeySymbol(symbol, checker) ? resolvedName : undefined;
+  const type = checker.getTypeOfSymbol(symbol);
+  return (type.flags & ts.TypeFlags.UniqueESSymbol) !== 0
+    ? resolvedName
+    : undefined;
 }
 
 export function getComputedPropertyKeyInfo(
@@ -187,11 +184,14 @@ export function getPropertyNameText(
 }
 
 /**
- * Whether schema generation leaves the member named `name` out of an object's
- * schema whatever node the object is read through: a member keyed by a
- * symbol, whose name the checker writes starting `__@`, or a cell's internal
- * marker.
+ * Whether schema generation leaves the member whose escaped name is `name` out
+ * of an object's schema whatever node the object is read through: a member
+ * keyed by a symbol, whose escaped name the checker writes starting `__@`, a
+ * cell's internal markers among them, or a class's private member, whose
+ * escaped name starts `__#`. A string key starting `__` has one more leading
+ * underscore in its escaped name, so neither `"__@x"` nor `"__#x"` is taken
+ * for one.
  */
 export function isInternalMemberName(name: string): boolean {
-  return name.startsWith("__@") || isCellInternalMarkerName(name);
+  return name.startsWith("__@") || name.startsWith("__#");
 }

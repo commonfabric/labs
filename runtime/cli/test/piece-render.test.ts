@@ -8,9 +8,9 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { getLoggerCountsByKey } from "@commonfabric/logger";
 import { assignSlug, pieceId, setSlugLink } from "@commonfabric/piece";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
@@ -26,6 +26,12 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/async/defer";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { parsePieceOptions } from "../commands/piece.ts";
 import { renderPiece, renderVDomToHtml } from "../lib/piece-render.ts";
@@ -52,6 +58,11 @@ async function cellHolding(
   cell.set(value);
   await tx.commit().settled;
   return cell;
+}
+
+/** How many render errors the `piece-render` logger has recorded so far. */
+function renderErrorCount(): number {
+  return getLoggerCountsByKey()["piece-render"]?.["render-error"]?.info ?? 0;
 }
 
 async function setCell(
@@ -354,6 +365,82 @@ describe("piece-render", () => {
           expect(updates).toEqual(["<div>two</div>"]);
         } finally {
           cancel?.();
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps reporting after `onUpdate` throws", async () => {
+        const runtime = makeRuntime();
+        let cancel: (() => void) | undefined;
+        try {
+          const label = await cellHolding(runtime, "throwing-label", "one");
+          const vdom = await cellHolding(
+            runtime,
+            "throwing-root",
+            vnode("div", {}, [label]),
+          );
+
+          const updates: string[] = [];
+          const first = defer<void>();
+          const second = defer<string>();
+          cancel = renderVDomToHtml(vdom, () => runtime.idle(), (html) => {
+            updates.push(html);
+            if (updates.length === 1) {
+              first.resolve();
+              throw new Error("consumer failed");
+            }
+            second.resolve(html);
+          }) as () => void;
+
+          await first.promise;
+          await setCell(runtime, label, "two");
+          expect(await second.promise).toBe("<div>two</div>");
+          expect(updates).toEqual(["<div>one</div>", "<div>two</div>"]);
+        } finally {
+          cancel?.();
+          await runtime.dispose();
+        }
+      });
+    });
+
+    describe("on content that is not a render node", () => {
+      it("renders nothing and records a render error for a node whose type is not `vnode`", async () => {
+        const runtime = makeRuntime();
+        try {
+          const before = renderErrorCount();
+          // The renderer's schema admits any record with a string `type` and
+          // `name`, and only a `type` of "vnode" is an element the reconciler
+          // can render.
+          const record = await cellHolding(runtime, "not-a-vnode", {
+            type: "element",
+            name: "p",
+          });
+
+          const html = await renderVDomToHtml(record, () => runtime.idle());
+
+          expect(html).toBe("");
+          expect(renderErrorCount()).toBe(before + 1);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("records no render error for a tree it can render", async () => {
+        const runtime = makeRuntime();
+        try {
+          const before = renderErrorCount();
+          const tree = await cellHolding(runtime, "a-vnode", {
+            type: "vnode",
+            name: "p",
+            props: {},
+            children: ["shown"],
+          });
+
+          const html = await renderVDomToHtml(tree, () => runtime.idle());
+
+          expect(html).toBe("<p>shown</p>");
+          expect(renderErrorCount()).toBe(before);
+        } finally {
           await runtime.dispose();
         }
       });

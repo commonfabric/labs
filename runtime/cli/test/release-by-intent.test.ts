@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
@@ -7,6 +6,12 @@ import { parseOwnerReleaseByIntentRecord } from "@commonfabric/memory/v2/cfc-own
 import { type Cell, Runtime } from "@commonfabric/runner";
 import { readStoredCfcMetadata } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   type ReleasableClause,
@@ -296,6 +301,51 @@ describe("cf cell release-by-intent", () => {
         ),
       ).rejects.toThrow(`is not the space's owner (${owner})`);
       expect(asked).toBe(false);
+    });
+
+    it("shows that no clause stays when every clause stored at the path is named", async () => {
+      const shown: string[] = [];
+      const outcome = await releaseCellConfidentialityByIntent(
+        pieceConfig,
+        [],
+        [own, ...others].map(cfcCanonicalClauseDigest),
+        {},
+        {
+          ...deps,
+          readConfirmation: () => Promise.resolve("release"),
+          show: (line: string) => shown.push(line),
+        },
+      );
+
+      expect(shown.slice(shown.indexOf("Clauses that stay:"))[1]).toBe(
+        "  (none)",
+      );
+      expect([...outcome.released!].sort()).toEqual(
+        [own, ...others].map(cfcCanonicalClauseDigest).sort(),
+      );
+    });
+
+    it("throws the identity's failure to sign, and releases nothing", async () => {
+      const before = storedEntries();
+      const locked = new Error("the key is locked");
+      await expect(
+        releaseCellConfidentialityByIntent(
+          pieceConfig,
+          [],
+          [cfcCanonicalClauseDigest(others[0])],
+          {},
+          {
+            ...deps,
+            loadIdentity: () =>
+              Promise.resolve({
+                did: () => signer.did(),
+                sign: () => Promise.resolve({ error: locked }),
+              } as never),
+            readConfirmation: () => Promise.resolve("release"),
+          },
+        ),
+      ).rejects.toBe(locked);
+      expect(storedEntries()).toEqual(before);
     });
 
     it("signs nothing for an ambiguous or unknown digest", async () => {

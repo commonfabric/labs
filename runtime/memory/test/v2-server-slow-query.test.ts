@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import { applyCommit, createBranch, open as openEngine } from "../v2/engine.ts";
@@ -7,13 +6,21 @@ import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
   MEMORY_PROTOCOL,
+  resetServerExecutionConfig,
   type ResponseMessage,
   type ServerMessage,
   type SessionOpenAuthMetadata,
+  setServerExecutionConfig,
   type SqliteQueryRequest,
   toDocumentPath,
   type TransactRequest,
 } from "../v2.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const TEST_AUDIENCE = "did:key:z6Mk-memory-v2-slow-query-test-audience";
 
@@ -304,6 +311,112 @@ describe("v2 server slow queries", () => {
       expect(slowest!.walk.dagTraversals).toBeGreaterThan(0);
     } finally {
       connection.close();
+    }
+  });
+
+  it("records the session and `request` as the cause of a slow watch.set evaluation", async () => {
+    const space = "did:key:z6Mk-slow-query-watch-set-cause";
+    const server = createServer("memory://slow-query-watch-set-cause");
+    const messages: ServerMessage[] = [];
+    const connection = server.connect((message) => messages.push(message));
+    try {
+      const sessionId = await openSession(connection, messages, space);
+      performance.now = () => {
+        nowOffsetMs += 60;
+        return realNow() + nowOffsetMs;
+      };
+      await connection.receive(encodeMemoryBoundary({
+        type: "session.watch.set",
+        requestId: "watch-set-cause",
+        space,
+        sessionId,
+        watches: [{
+          id: "watch-set-cause-id",
+          kind: "graph",
+          query: {
+            roots: [{ id: "of:caused", selector: { path: [], schema: true } }],
+          },
+        }],
+      }));
+
+      const entry = getSlowQueries().find((slow) =>
+        slow.space === space && slow.operation === "session.watch.set"
+      );
+      expect(entry).toMatchObject({
+        sessionId,
+        principal: "did:key:z6Mk-memory-v2-slow-query-principal",
+        views: 0,
+        cause: "request",
+        part: "demand",
+      });
+    } finally {
+      connection.close();
+    }
+  });
+
+  it("records a view's first selection as the cause of the full evaluation the next refresh runs", async () => {
+    const space = "did:key:z6Mk-slow-query-first-selection";
+    const server = createServer(
+      "memory://slow-query-first-selection",
+      "manual",
+    );
+    const messages: ServerMessage[] = [];
+    const connection = server.connect((message) => messages.push(message));
+    setServerExecutionConfig(true);
+    try {
+      const sessionId = await openSession(connection, messages, space);
+      await server.writeDocument(space, "of:render", { label: "render" });
+      await server.writeDocument(space, "of:support", { label: "support" });
+      const root = (id: string) => ({
+        roots: [{ id, selector: { path: [], schema: false as const } }],
+      });
+      await connection.receive(encodeMemoryBoundary({
+        type: "session.watch.set",
+        requestId: "first-views",
+        space,
+        sessionId,
+        watches: [],
+        views: [{
+          id: "screen",
+          revision: 0,
+          query: root("of:render"),
+          mode: "speculate",
+          componentContractVersion: "1",
+        }],
+      }));
+      const [{ handle }] = server.viewInterestsForSpace(space);
+      await server.setViewSelection(space, handle, {
+        generation: 1,
+        delivery: [root("of:support")],
+      });
+
+      // A step past the threshold makes each evaluation slow on its own,
+      // whether or not the evaluation cache serves it.
+      performance.now = () => {
+        nowOffsetMs += 150;
+        return realNow() + nowOffsetMs;
+      };
+      await server.flushSessions();
+
+      const parts = getSlowQueries()
+        .filter((slow) =>
+          slow.space === space && slow.operation === "session.watch.refresh" &&
+          slow.part !== undefined
+        )
+        .map(({ sessionId, views, cause, part }) => ({
+          sessionId,
+          views,
+          cause,
+          part,
+        }));
+      expect(parts).toEqual([
+        { sessionId, views: 1, cause: "first-selection", part: "demand" },
+        { sessionId, views: 1, cause: "first-selection", part: "support" },
+      ]);
+    } finally {
+      resetServerExecutionConfig();
+      connection.close();
+      await server.close();
     }
   });
 

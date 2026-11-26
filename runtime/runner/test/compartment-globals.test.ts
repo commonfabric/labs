@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   createModuleCompartmentGlobals,
@@ -6,6 +5,7 @@ import {
 } from "../src/sandbox/compartment-globals.ts";
 import { ensureSESLockdown } from "../src/sandbox/ses-runtime.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("createSafeConsoleGlobal()", () => {
   it("keeps standard console methods callable when the host console is partial", () => {

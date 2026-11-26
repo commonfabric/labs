@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Weaver · The Pond (home base)</title>
+<style>
+  :root{
+    --paper:#f4ecd6; --paper-deep:#ece2c2; --paper-edge:#d8c89a;
+    --ink:#2f2a20; --ink-soft:#6b6354; --ink-faint:#9a9281;
+  }
+  .leaf{position:absolute;background:var(--paper-deep);border-radius:12px;}
+  .leaf:hover{transform:translateY(-2px);}
+  .compose::before{content:"🌱  ";font-style:normal;color:var(--seed);}
+</style>
+</head>
+<body>
+<div class="pond">
+  <div class="spot-label">your fabric · <strong>home</strong></div>
+
+  <!-- Native intention -->
+  <div class="leaf fresh" id="l-tokyo">
+    <div class="row"><span class="seed">🌱</span><span class="title">Family trip to Tokyo, Jul 10–19</span></div>
+    <div class="row" style="margin-top:4px;"><span style="width:14px;"></span><span class="meta">Planning</span></div>
+    <div class="nest">4 steps nested · 2 explorations running</div>
+  </div>
+
+  <div class="compose">place an intention here…</div>
+</div>
+<script>
+  // Leaves open the living-Intention mockup. Tokyo is the fully-fleshed one;
+  // the visiting leaves open the same leaf view as a stand-in.
+  document.querySelectorAll('.leaf').forEach(function(leaf){
+    leaf.addEventListener('click', function(){
+      window.location.href = 'leaf-skim-inspect.html';
+    });
+  });
+</script>
+</body>
+</html>

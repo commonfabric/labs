@@ -245,9 +245,13 @@ interface SESLockdownOptions {
 
 const DEFAULT_LOCKDOWN_OPTIONS: SESLockdownOptions = {
   errorTaming: "safe",
-  errorTrapping: "platform",
+  // Lockdown installs no handlers for uncaught exceptions or unhandled
+  // rejections, so the platform reports them as it does in an unlocked realm:
+  // Deno prints the error with its stack and exits with status 1, and
+  // `deno test` fails the test module the error escaped from.
+  errorTrapping: "none",
   reporting: "none",
-  unhandledRejectionTrapping: "report",
+  unhandledRejectionTrapping: "none",
   regExpTaming: "safe",
   // "unsafe" here does NOT mean ambient locale access: sanitizeLocaleMethods()
   // (called just before lockdown) replaces every method "safe" would amputate

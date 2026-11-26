@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { consoleRunFlow } from "../../console/flow.ts";
 import { type ConsoleHandle, consoleRunSteps } from "../../console/steps.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
 import type { HarnessPolicyEvent } from "../../src/contracts/policy.ts";
 import type { ConsoleCellLabels } from "../../console/cell-labels.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const call = (
   id: string,
@@ -149,6 +149,56 @@ describe("console/flow", () => {
     expect(node.produces).toHaveLength(1);
     expect(node.produces[0].ref).toBe("/of:fid1:def");
     expect(flow.unwiredPatterns).toBe(0);
+  });
+
+  it("carries a read for every handle one argument names", () => {
+    const steps = consoleRunSteps([
+      { role: "user", content: "go" },
+      call("c1", "run_pattern", {
+        sourceText: "y",
+        inputs: { sources: ["cfh:a:aaaaa", "cfh:a:bbbbb"] },
+      }),
+      result("c1", "run_pattern", { status: "ok" }),
+    ]);
+    const flow = consoleRunFlow({
+      runId: "r",
+      steps,
+      handles: [handle("cfh:a:aaaaa", "/of:fid1:abc")],
+    });
+    // The handle the run holds resolves to its address; the other is drawn
+    // by its token alone.
+    expect(flow.turns[0].nodes[0].reads.map((cell) => [cell.id, cell.as]))
+      .toEqual([["/of:fid1:abc", "sources"], ["cfh:a:bbbbb", "sources"]]);
+  });
+
+  it("carries what a call let across as a value, and nothing for a call that let none", () => {
+    const steps = consoleRunSteps([
+      { role: "user", content: "go" },
+      call("c1", "run_pattern", { sourceText: "y" }),
+      result("c1", "run_pattern", { status: "ok", value: [1, 2, 3] }),
+      call("c2", "run_pattern", { sourceText: "z" }),
+      result("c2", "run_pattern", { status: "ok" }),
+    ]);
+    const [valued, bare] = consoleRunFlow({ runId: "r", steps, handles: [] })
+      .turns[0].nodes;
+    expect(valued.valueBytes).toBe("[1,2,3]".length);
+    expect(valued.longestNumericRun).toBe(3);
+    expect(bare.valueBytes).toBeUndefined();
+    expect(bare.longestNumericRun).toBeUndefined();
+  });
+
+  it("draws the agent's words as a reply, elided, and draws no reply for words that are only space", () => {
+    const steps = consoleRunSteps([
+      { role: "user", content: "go" },
+      { role: "assistant", content: "   " },
+      { role: "assistant", content: "x".repeat(300) },
+    ]);
+    const nodes = consoleRunFlow({ runId: "r", steps, handles: [] }).turns[0]
+      .nodes;
+    expect(nodes.map((node) => [node.kind, node.label, node.step])).toEqual([
+      ["reply", "reply", 2],
+    ]);
+    expect(nodes[0].text).toBe(`${"x".repeat(240)}…`);
   });
 
   it("carries the labels the space holds on a cell a call read", () => {

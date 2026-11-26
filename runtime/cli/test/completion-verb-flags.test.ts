@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { shapeVerbFlagCandidates } from "../lib/completion/verb-flags.ts";
 import { type ExecCommandSpec, parseExecArgs } from "../lib/exec-schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The `inputSchema` of one verb, in the shape `cf piece verbs --json` reports
@@ -214,5 +214,20 @@ describe("shapeVerbFlagCandidates()", () => {
     }).map((candidate) => candidate.value);
     expect(values).toContain("--title");
     expect(values).toContain("--body");
+  });
+
+  it("offers a flag that two field names spell once, with the first field's annotation", () => {
+    const candidates = shapeVerbFlagCandidates({
+      inputSchema: {
+        type: "object",
+        properties: {
+          sortKey: { type: "string", description: "The camelCase field." },
+          "sort-key": { type: "string", description: "The kebab-case field." },
+        },
+      },
+    }).filter((candidate) => candidate.value === "--sort-key");
+    expect(candidates).toEqual([
+      { value: "--sort-key", description: "The camelCase field." },
+    ]);
   });
 });

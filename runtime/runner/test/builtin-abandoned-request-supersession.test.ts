@@ -1,5 +1,3 @@
-/// <reference path="./clock.d.ts" />
-
 /**
  * Whose cells a builtin's abandoned-request ending writes.
  *
@@ -16,13 +14,19 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { createBuilder } from "../src/builder/factory.ts";
 import { getPatternEnvironment, setPatternEnvironment } from "../src/env.ts";
@@ -92,10 +96,10 @@ describe("whose cells an abandoned request's ending writes", () => {
         llmDialog: [],
         generateText: [],
         generateObject: [],
-        // The `sqliteQuery` sink is ungated under the bundle for a reason of
-        // its own — the bound a read wants is the database's space, which a
-        // clause list cannot hold — so the query case here declares the
-        // ceiling its refusal comes from, as the llm cases above do.
+        // The `sqliteQuery` sink is ungated under the bundle, since the
+        // server a query reaches applies the same access rules — so the query
+        // case here declares the ceiling its refusal comes from, as the llm
+        // cases above do.
         sqliteQuery: [],
       },
     });

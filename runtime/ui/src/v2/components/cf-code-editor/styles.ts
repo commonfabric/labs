@@ -123,12 +123,49 @@ export const styles = css`
     min-height: var(--cf-code-editor-min-height, 200px);
   }
 
+  .layout {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+  }
+
   .code-editor {
     display: flex;
     flex-direction: column;
     flex: 1;
     min-height: 0;
     width: 100%;
+  }
+
+  /*
+  * The margin beside the text, shown while the editor has a child: a column
+  * of the editor's children, which features/margin.ts moves beside their
+  * anchors. It wraps below the text where the two do not fit side by side.
+  */
+  .margin {
+    display: none;
+  }
+
+  .layout.has-margin {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: var(--cf-code-editor-margin-spacing, 1rem);
+  }
+
+  .layout.has-margin > .code-editor {
+    flex: 3 1 var(--cf-code-editor-text-basis, 24rem);
+    min-width: 0;
+  }
+
+  .layout.has-margin > .margin {
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    flex: 1 1 var(--cf-code-editor-margin-basis, 16rem);
+    min-width: 0;
+    row-gap: var(--cf-code-editor-margin-gap, 0.5rem);
   }
 
   .cm-editor {

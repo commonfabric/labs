@@ -55,6 +55,13 @@ const PIVOT_TOPIC_COUNTS = [32, 128, 512];
 /** Topic count of the small pivot cases. */
 const SMALL_TOPIC_COUNT = 4;
 
+/**
+ * Topic count of the one pivot case whose topics are unbound, each lookup
+ * handed the pivot and no index, as a topic filed before its board published
+ * one is: the size the read-budget tests gate.
+ */
+const UNBOUND_TOPIC_COUNT = 32;
+
 /** The mention graphs whose spread the pivot cases compare. */
 const SPREADS = ["low-degree", "high-degree", "single-bucket"] as const;
 
@@ -166,16 +173,25 @@ export function probeCases(): ProbeCase[] {
       });
     }
   };
-  const pivot = (mentions: MentionGraph, topicCount: number) => {
+  const pivot = (
+    mentions: MentionGraph,
+    topicCount: number,
+    unbound = false,
+  ) => {
     const perSource = mentions.shape === "none" ? 0 : mentions.perSource;
     add(
       "pivot",
       PIVOT_WORKLOADS,
       topicCount === SMALL_TOPIC_COUNT,
-      [mentions.shape, `mentions-${perSource}`, `topics-${topicCount}`],
+      [
+        mentions.shape,
+        `mentions-${perSource}`,
+        `topics-${topicCount}`,
+        ...(unbound ? ["unbound"] : []),
+      ],
       2,
       topicCount,
-      { topicCount, mentions },
+      unbound ? { topicCount, mentions, unbound } : { topicCount, mentions },
     );
   };
   for (const shape of SPREADS) {
@@ -200,6 +216,11 @@ export function probeCases(): ProbeCase[] {
       }
     }
   }
+  pivot(
+    { shape: "high-degree", perSource: SCALING_MENTIONS_PER_SOURCE },
+    UNBOUND_TOPIC_COUNT,
+    true,
+  );
   return cases;
 }
 
@@ -228,6 +249,7 @@ export function caseRecord(
     fixture: {
       topicCount: options.topicCount,
       mentions: options.mentions,
+      unbound: options.unbound === true,
       commentsPerTopic: options.commentsPerTopic ?? DEFAULT_COMMENTS_PER_TOPIC,
       linksPerTopic: options.linksPerTopic ?? DEFAULT_LINKS_PER_TOPIC,
       mentionEntries: fixture.topics.reduce(
@@ -300,7 +322,10 @@ export interface MeasuredPhaseRecord {
 
   /** Completed-body reads by role, and summed over every run as `total`. */
   readonly bodies: {
-    readonly producer: { readonly crossrefTable: BodyRecord };
+    readonly producer: {
+      readonly crossrefTable: BodyRecord;
+      readonly crossrefIndexOf: BodyRecord;
+    };
     readonly consumer: { readonly backlinksOf: BodyRecord };
     readonly other: BodyRecord;
     readonly total: BodyRecord;
@@ -308,7 +333,10 @@ export interface MeasuredPhaseRecord {
 
   /** Transaction-attempt reads by role, and summed over all as `total`. */
   readonly attempts: {
-    readonly producer: { readonly crossrefTable: AttemptReads };
+    readonly producer: {
+      readonly crossrefTable: AttemptReads;
+      readonly crossrefIndexOf: AttemptReads;
+    };
     readonly consumer: { readonly backlinksOf: AttemptReads };
     readonly other: AttemptReads;
     readonly unattributed: AttemptReads;
@@ -653,7 +681,11 @@ function demandedActionsOf(
   topicCount: number,
 ): Record<TopicsLiftName, number> {
   const { pivot, backlinks } = demandedOutputsOf(demand, topicCount);
-  return { crossrefTable: pivot ? 1 : 0, backlinksOf: backlinks.length };
+  return {
+    crossrefTable: pivot ? 1 : 0,
+    crossrefIndexOf: pivot ? 1 : 0,
+    backlinksOf: backlinks.length,
+  };
 }
 
 /**
@@ -758,13 +790,19 @@ function phaseRecord(
     ...(edit === undefined ? {} : { edit }),
     elapsedMs,
     bodies: {
-      producer: { crossrefTable: bodyRecord(bodies.crossrefTable) },
+      producer: {
+        crossrefTable: bodyRecord(bodies.crossrefTable),
+        crossrefIndexOf: bodyRecord(bodies.crossrefIndexOf),
+      },
       consumer: { backlinksOf: bodyRecord(bodies.backlinksOf) },
       other: bodyRecord(bodies.other),
       total: bodyTotalOf(Object.values(bodies)),
     },
     attempts: {
-      producer: { crossrefTable: { ...attempts.crossrefTable } },
+      producer: {
+        crossrefTable: { ...attempts.crossrefTable },
+        crossrefIndexOf: { ...attempts.crossrefIndexOf },
+      },
       consumer: { backlinksOf: { ...attempts.backlinksOf } },
       other: { ...attempts.other },
       unattributed: { ...attempts.unattributed },

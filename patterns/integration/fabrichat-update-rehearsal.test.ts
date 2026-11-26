@@ -61,7 +61,6 @@ import { expect } from "@std/expect";
 import { walk } from "@std/fs";
 import { fromFileUrl, join, relative } from "@std/path";
 import * as posix from "@std/path/posix";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
@@ -84,6 +83,14 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+
+import { moduleByteCache } from "./pieces-controller.ts";
 
 const owner = await Identity.fromPassphrase("FabriChat update rehearsal");
 
@@ -514,7 +521,11 @@ const rehearse = (
       );
       const apiUrl = new URL(`http://127.0.0.1:${http.addr.port}`);
       storage = EmulatedStorageManager.connectTo(server, { as: owner });
-      runtime = new Runtime({ apiUrl, storageManager: storage });
+      runtime = new Runtime({
+        apiUrl,
+        storageManager: storage,
+        moduleByteCache,
+      });
       controller = new PiecesController(
         createSession({ identity: owner, spaceDid: owner.did() }),
         runtime,

@@ -198,6 +198,18 @@ export async function collectPatternCoverage(page: Page): Promise<void> {
 }
 
 /**
+ * Write the hits of the runtimes this test process runs itself, those built
+ * with {@link patternCoverageCollector}, when the run collects coverage. A test
+ * whose pattern code runs only in such runtimes, with no browser page to collect
+ * from, calls this once it has disposed them; a browser test's collection writes
+ * the same report.
+ */
+export async function writeProcessPatternCoverage(): Promise<void> {
+  const dir = patternCoverageDir();
+  if (dir) await writeMergedPatternCoverage(dir);
+}
+
+/**
  * Write every realm's hits as one LCOV.
  *
  * The rename happens here rather than as each realm reports, because the realms

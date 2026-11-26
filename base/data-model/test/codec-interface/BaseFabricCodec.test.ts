@@ -10,12 +10,12 @@
  * are different promises.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@";
 import { BaseFabricCodec, type LiveEnvironment } from "@/codec-common";
-import { FabricRegExp } from "@/fabric-primitives";
+import { FabricEpochDay } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Minimal concrete `BaseFabricCodec` for exercising the base class's own
@@ -58,9 +58,9 @@ describe("BaseFabricCodec", () => {
 
     describe("uniqueHandledClass", () => {
       it("returns the class passed to the constructor", () => {
-        const codec = new TestCodec("Test@1", FabricRegExp);
+        const codec = new TestCodec("Test@1", FabricEpochDay);
 
-        expect(codec.uniqueHandledClass).toBe(FabricRegExp);
+        expect(codec.uniqueHandledClass).toBe(FabricEpochDay);
       });
 
       it("is `undefined` when constructed with no handled class", () => {
@@ -72,15 +72,15 @@ describe("BaseFabricCodec", () => {
 
     describe("canEncode()", () => {
       it("returns `true` for an instance of the handled class", () => {
-        const codec = new TestCodec("Test@1", FabricRegExp);
+        const codec = new TestCodec("Test@1", FabricEpochDay);
 
-        expect(codec.canEncode(new FabricRegExp(/x/))).toBe(true);
+        expect(codec.canEncode(new FabricEpochDay(1n))).toBe(true);
       });
 
       it("returns `false` for a value of another class", () => {
-        const codec = new TestCodec("Test@1", FabricRegExp);
+        const codec = new TestCodec("Test@1", FabricEpochDay);
 
-        expect(codec.canEncode("not a regexp")).toBe(false);
+        expect(codec.canEncode("not an epoch day")).toBe(false);
       });
 
       it("returns `false` when there is no handled class", () => {
@@ -89,7 +89,7 @@ describe("BaseFabricCodec", () => {
         // overrides.
         const codec = new TestCodec("Test@1", undefined);
 
-        expect(codec.canEncode(new FabricRegExp(/x/))).toBe(false);
+        expect(codec.canEncode(new FabricEpochDay(1n))).toBe(false);
       });
     });
 

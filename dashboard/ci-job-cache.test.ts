@@ -6,7 +6,6 @@ import {
 } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   type CachedCiHistoryRefresh,
   type CachedCiRun,
@@ -15,6 +14,7 @@ import {
   CiJobHistoryStore,
   ganttRunSummary,
 } from "./ci-job-cache.ts";
+import { afterEach, beforeEach, describe, it, test } from "@commonfabric/test-support/test";
 
 const DAY_MS = 86_400_000;
 const NOW = Date.UTC(2026, 6, 20);
@@ -58,7 +58,7 @@ function cachedRun(
   };
 }
 
-Deno.test("CI job cache removes the layout that held step detail inline", async () => {
+test("CI job cache removes the layout that held step detail inline", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const superseded = `${directory}/fabric-wall-ci-job-history.json`;
   const file = `${directory}/fabric-wall-ci-run-index.json`;
@@ -92,7 +92,7 @@ Deno.test("CI job cache removes the layout that held step detail inline", async 
   }
 });
 
-Deno.test("CI job cache reports a superseded file it cannot reach", async () => {
+test("CI job cache reports a superseded file it cannot reach", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/fabric-wall-ci-run-index.json`;
   const logged: string[] = [];
@@ -130,7 +130,7 @@ Deno.test("CI job cache reports a superseded file it cannot reach", async () => 
   assertStringIncludes(logged[1], "cannot remove");
 });
 
-Deno.test("CI job cache never removes the file it was given", async () => {
+test("CI job cache never removes the file it was given", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/fabric-wall-ci-job-history.json`;
   try {
@@ -149,7 +149,7 @@ Deno.test("CI job cache never removes the file it was given", async () => {
   }
 });
 
-Deno.test("CI job cache orders retained attempts by when their run started", async () => {
+test("CI job cache orders retained attempts by when their run started", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   try {
     const store = new CiJobHistoryStore(`${directory}/history.json`);
@@ -174,7 +174,7 @@ Deno.test("CI job cache orders retained attempts by when their run started", asy
   }
 });
 
-Deno.test("CI job cache refreshes legacy and outdated samples without dropping their runs", async () => {
+test("CI job cache refreshes legacy and outdated samples without dropping their runs", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   const run = cachedRun(90);
@@ -245,7 +245,7 @@ Deno.test("CI job cache refreshes legacy and outdated samples without dropping t
   }
 });
 
-Deno.test("CI job cache rejects a sampling version that is not a version", async () => {
+test("CI job cache rejects a sampling version that is not a version", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   try {
@@ -283,7 +283,7 @@ Deno.test("CI job cache rejects a sampling version that is not a version", async
   }
 });
 
-Deno.test("CI job cache rejects malformed persisted structures before merging", async () => {
+test("CI job cache rejects malformed persisted structures before merging", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const valid = cachedRun(1);
   const invalidDrawable = structuredClone(valid);
@@ -405,7 +405,7 @@ Deno.test("CI job cache rejects malformed persisted structures before merging", 
   }
 });
 
-Deno.test("CI job cache records a validated commit on an exact run attempt", async () => {
+test("CI job cache records a validated commit on an exact run attempt", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   try {
     const store = new CiJobHistoryStore(`${directory}/history.json`);
@@ -441,7 +441,7 @@ Deno.test("CI job cache records a validated commit on an exact run attempt", asy
   }
 });
 
-Deno.test("CI job cache quarantines future persisted refresh state", async () => {
+test("CI job cache quarantines future persisted refresh state", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   const run = cachedRun(301);
@@ -489,7 +489,7 @@ Deno.test("CI job cache quarantines future persisted refresh state", async () =>
   }
 });
 
-Deno.test("CI job cache validates refresh changes and isolates source revisions", async () => {
+test("CI job cache validates refresh changes and isolates source revisions", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   const now = Date.now;
@@ -613,7 +613,7 @@ Deno.test("CI job cache validates refresh changes and isolates source revisions"
   }
 });
 
-Deno.test("CI job cache drops a refresh whose retained run is pruned", async () => {
+test("CI job cache drops a refresh whose retained run is pruned", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   try {
@@ -644,7 +644,7 @@ Deno.test("CI job cache drops a refresh whose retained run is pruned", async () 
   }
 });
 
-Deno.test("CI job cache removes a temporary file after rename fails", async () => {
+test("CI job cache removes a temporary file after rename fails", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   const rename = Deno.rename;
@@ -667,7 +667,7 @@ Deno.test("CI job cache removes a temporary file after rename fails", async () =
   }
 });
 
-Deno.test("CI job cache preserves a write error when temporary cleanup fails", async () => {
+test("CI job cache preserves a write error when temporary cleanup fails", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   const rename = Deno.rename;
@@ -701,6 +701,173 @@ const STORE_VERSION_LATER = 2;
 describe("ci-job-cache", () => {
   describe("CiJobHistoryStore", () => {
     describe("instance members", () => {
+      describe("load()", () => {
+        let directory: string;
+
+        beforeEach(async () => {
+          directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
+        });
+
+        afterEach(async () => {
+          await Deno.remove(directory, { recursive: true });
+        });
+
+        it("returns the runs and refreshes held under a name a repository had before under the name it has now", async () => {
+          const file = join(directory, "history.json");
+          const before = cachedRun(7, 1, NOW, "commonfabric/loom");
+          const other = cachedRun(8);
+          await Deno.writeTextFile(
+            file,
+            JSON.stringify({
+              version: 1,
+              runs: [before, other],
+              refreshes: [{
+                repo: "commonfabric/loom",
+                workflow: WORKFLOW,
+                days: 30,
+                refreshedAt: NOW,
+                samplingVersion: CI_JOB_HISTORY_SAMPLING_VERSION,
+                successfulRunTimes: [NOW],
+                sampledRuns: [{ runId: 7, runAttempt: 1 }],
+                failedRunCount: 0,
+                failedRunTimes: [],
+                stale: false,
+              }],
+            }),
+          );
+          const store = new CiJobHistoryStore(file);
+          await store.load();
+
+          expect(store.get("commonfabric/cfs", WORKFLOW, 7, 1)).toEqual({
+            ...before,
+            repo: "commonfabric/cfs",
+          });
+          expect(
+            store.refresh("commonfabric/cfs", WORKFLOW, 30)?.sampledRuns,
+          ).toEqual([{ runId: 7, runAttempt: 1 }]);
+          // A repository that was not renamed keeps its runs under its name.
+          expect(store.get(REPO, WORKFLOW, 8, 1)).toEqual(other);
+          expect(store.list("commonfabric/cfs", WORKFLOW)).toHaveLength(1);
+        });
+
+        it("applies an invalidation held under a name a repository had before to the refresh under the name it has now", async () => {
+          const file = join(directory, "history.json");
+          const refreshOf = (repo: string): CachedCiHistoryRefresh => ({
+            repo,
+            workflow: WORKFLOW,
+            days: 30,
+            refreshedAt: NOW - 1_000,
+            samplingVersion: CI_JOB_HISTORY_SAMPLING_VERSION,
+            successfulRunTimes: [NOW],
+            sampledRuns: [{ runId: 7, runAttempt: 1 }],
+            failedRunCount: 0,
+            failedRunTimes: [],
+            stale: false,
+          });
+          const loaded = async (invalidated: string) => {
+            await Deno.writeTextFile(
+              file,
+              JSON.stringify({
+                version: 1,
+                runs: [cachedRun(7, 1, NOW, "commonfabric/cfs")],
+                refreshes: [refreshOf("commonfabric/cfs")],
+                invalidations: [{
+                  repo: invalidated,
+                  workflow: WORKFLOW,
+                  days: 30,
+                  invalidatedAt: NOW,
+                }],
+              }),
+            );
+            const store = new CiJobHistoryStore(file);
+            await store.load();
+            return store;
+          };
+
+          const renamed = await loaded("commonfabric/loom");
+          expect(renamed.refresh("commonfabric/cfs", WORKFLOW, 30))
+            .toBeDefined();
+          expect(renamed.freshRefresh("commonfabric/cfs", WORKFLOW, 30))
+            .toBeUndefined();
+          // An invalidation of a repository whose name only starts with an
+          // old name leaves the refresh fresh.
+          const other = await loaded("commonfabric/loom-scripts");
+          expect(other.freshRefresh("commonfabric/cfs", WORKFLOW, 30))
+            .toBeDefined();
+        });
+
+        it("saves over a future invalidation another process stored under a name a repository had before when the name it has now is quarantined", async () => {
+          const file = join(directory, "history.json");
+          const observedNow = Date.now();
+          const future = observedNow + DAY_MS;
+          const invalidation = (repo: string) => ({
+            repo,
+            workflow: WORKFLOW,
+            days: 7,
+            invalidatedAt: future,
+          });
+          const quarantined = async () => {
+            await Deno.writeTextFile(
+              file,
+              JSON.stringify({
+                version: 1,
+                runs: [],
+                invalidations: [invalidation("commonfabric/cfs")],
+              }),
+            );
+            // The future invalidation quarantines the refresh it names.
+            const store = new CiJobHistoryStore(file);
+            await store.load();
+            store.set(cachedRun(302, 1, observedNow, "commonfabric/cfs"));
+            return store;
+          };
+          const replaced = (repo: string) =>
+            Deno.writeTextFile(
+              file,
+              JSON.stringify({
+                version: 1,
+                runs: [cachedRun(303, 1, observedNow, "commonfabric/cfs")],
+                invalidations: [invalidation(repo)],
+              }),
+            );
+
+          const store = await quarantined();
+          await replaced("commonfabric/loom");
+          await store.save(observedNow);
+          const persisted = JSON.parse(await Deno.readTextFile(file));
+          expect(persisted.runs.map((run: CachedCiRun) => run.runId)).toEqual([
+            302,
+            303,
+          ]);
+          // A future invalidation of a repository whose name only starts with
+          // an old name is not quarantined, so the file is refused.
+          const refused = await quarantined();
+          await replaced("commonfabric/loom-scripts");
+          await expect(refused.save(observedNow)).rejects.toThrow(
+            "Invalid CI job history refresh invalidation.",
+          );
+        });
+
+        it("returns a run another store saved under a name its repository had before under the name it has now", async () => {
+          const file = join(directory, "history.json");
+          const writer = new CiJobHistoryStore(file);
+          await writer.load();
+          writer.set(cachedRun(7, 1, NOW, "commonfabric/loom"));
+          writer.set(cachedRun(9, 1, NOW, "commonfabric/loom-scripts"));
+          await writer.save(NOW);
+          const store = new CiJobHistoryStore(file);
+          await store.load();
+
+          expect(store.get("commonfabric/cfs", WORKFLOW, 7, 1)?.repo).toBe(
+            "commonfabric/cfs",
+          );
+          // A repository whose name only starts with an old name keeps it.
+          expect(store.get("commonfabric/cfs", WORKFLOW, 9, 1)).toBeUndefined();
+          expect(store.get("commonfabric/loom-scripts", WORKFLOW, 9, 1)?.runId)
+            .toBe(9);
+        });
+      });
+
       describe("save()", () => {
         let directory: string;
         let file: string;

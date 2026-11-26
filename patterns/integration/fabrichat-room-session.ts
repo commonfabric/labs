@@ -137,7 +137,7 @@ const findInRow = (
  * survived a settle. `text`, when given, is the control's whole text, its
  * white space collapsed.
  */
-async function clickInRow(
+export async function clickInRow(
   page: Page,
   heading: string,
   selector: string,
@@ -170,7 +170,7 @@ const badgesShow = (probe: ProbeApi, names: readonly string[]): boolean => {
  * Whether the row whose text holds `heading` shows a tally of `count` for
  * `emoji`.
  */
-const rowTallies = async (
+export const rowTallies = async (
   probe: ProbeApi,
   heading: string,
   emoji: string,

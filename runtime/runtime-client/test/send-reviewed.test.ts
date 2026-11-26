@@ -9,7 +9,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
@@ -25,6 +24,12 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import { describe, it } from "@commonfabric/test-support/test";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../../runner/test/cfc-seed-envelope.ts";
 
 import type { RuntimeProcessor } from "@/backends/mod.ts";
 import { RuntimeClients } from "@/backends/client-registry.ts";
@@ -363,10 +368,16 @@ const relayPatternSource = `
  * over the same memory server, which has loaded none of it. `save` names the
  * outermost result's `save` as a host's handle on the stream does, `items`
  * names that result's `items`, and `markStream` names the document of the
- * stream that result's `mark` leads to. With `serverExecution`, both
- * runtimes are clients of a serving memory server, which runs the handlers.
+ * stream that result's `mark` leads to. With `saveEnd`, it also gives
+ * `saveEnd`, where `save`'s links end as the runtime that ran the pattern
+ * resolves them; only a case that compares a resolution with it asks, so
+ * the other cases set up exactly as they would without it. With
+ * `serverExecution`, both runtimes are clients of a serving memory server,
+ * which runs the handlers.
  */
-async function coldRelay(options: { serverExecution?: boolean } = {}) {
+async function coldRelay(
+  options: { serverExecution?: boolean; saveEnd?: boolean } = {},
+) {
   const serverExecution = options.serverExecution === true;
   const serving = serverExecution
     ? await startServingMemoryServer({
@@ -416,6 +427,9 @@ async function coldRelay(options: { serverExecution?: boolean } = {}) {
         ...createCellRef(root.key("mark").resolveAsCell()),
         schema: STREAM,
       },
+      saveEnd: options.saveEnd
+        ? root.key("save").resolveAsCell().getAsNormalizedFullLink()
+        : undefined,
     };
   }
   const cold = connect();
@@ -448,6 +462,110 @@ async function coldRelay(options: { serverExecution?: boolean } = {}) {
  * whose lease timer keeps the process from going quiet on a send that never
  * settles.
  */
+/**
+ * A pattern whose `peek` handler reads the `secret` of the document its
+ * event links to, and writes nothing.
+ */
+const peekPatternSource = `
+  import { type Cell, handler, pattern } from "commonfabric";
+
+  const peek = handler<{ source: Cell<{ secret: string }> }, Record<string, never>>(
+    (event) => {
+      event.source.get();
+    },
+  );
+
+  export default pattern(() => ({ peek: peek({}) }));
+`;
+
+/** The label on the document of `bob`'s that a `peek` handler reads. */
+const PEEKED_ATOM = "https://commonfabric.org/cfc/atom/Public/peeked-secret";
+
+/**
+ * A serving runtime running the peek pattern in `signer`'s space, a document
+ * of `bob`'s own space whose `secret` carries a label `signer`'s space doesn't
+ * admit, and a client attached to the runtime, holding handles on the
+ * pattern's `peek` stream and on that document.
+ */
+async function peekRoom() {
+  const serving = await startServingMemoryServer({
+    apiUrl: new URL(import.meta.url),
+    policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+  });
+  const bobStorage = EmulatedStorageManager.connectTo(serving.server, {
+    as: bob,
+  });
+  const bobRuntime = new Runtime({
+    apiUrl: new URL(apiUrl),
+    storageManager: bobStorage,
+  });
+  const secret = bobRuntime.getCell(bob.did(), "peeked-secret");
+  const secretId = secret.getAsNormalizedFullLink().id;
+  const seed = bobRuntime.edit();
+  writeSeedEnvelopeDoc(seed, bob.did());
+  seedStoredEnvelope(seed, {
+    space: bob.did(),
+    scope: "space",
+    id: secretId,
+    path: [],
+  }, {
+    value: { secret: "s3cr3t" },
+    cfc: {
+      version: 1,
+      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: {
+        version: 1,
+        entries: [{
+          path: ["secret"],
+          label: { confidentiality: [PEEKED_ATOM] },
+        }],
+      },
+    },
+  });
+  expect((await seed.commit().settled).error).toBeUndefined();
+
+  const storage = EmulatedStorageManager.connectTo(serving.server, {
+    as: signer,
+  });
+  const runtime = new Runtime({
+    apiUrl: new URL(apiUrl),
+    storageManager: storage,
+    experimental: { serverExecution: true },
+  });
+  const compiled = await runtime.patternManager.compilePattern({
+    main: "/main.tsx",
+    files: [{ name: "/main.tsx", contents: peekPatternSource }],
+  }, { space });
+  const output = runtime.getCell<{ peek: unknown }>(
+    space,
+    `send-reviewed-peek-${crypto.randomUUID()}`,
+  );
+  const result: Cell<{ peek: unknown }> = await runtime.runSynced(
+    output,
+    compiled,
+    {},
+  );
+  const client = await attachClient(runtime);
+  const peek: CellHandle<Record<string, unknown>> = client.getCellFromRef(
+    createCellRef(result.key("peek")),
+  );
+  const source = client.getCellFromRef(
+    createCellRef(runtime.getCellFromLink(secret.getAsNormalizedFullLink())),
+  );
+  return {
+    peek,
+    source,
+    [Symbol.asyncDispose]: async () => {
+      await client.dispose();
+      await runtime.dispose();
+      await storage.close();
+      await bobRuntime.dispose();
+      await bobStorage.close();
+      await serving.close();
+    },
+  };
+}
+
 const settled = <T>(
   serverExecution: boolean,
   promise: Promise<T>,
@@ -631,6 +749,50 @@ describe("send-reviewed", () => {
     });
   });
 
+  describe("resolving a handle through an unloaded result", () => {
+    // `resolveAsCell()` answers from what the worker's replica holds, so on a
+    // runtime that has loaded none of the pattern a plain resolution can stop
+    // at a document still to arrive. A caller that acts on the address at
+    // once asks with `loaded`.
+
+    it("answers where the links end when asked with `loaded`", async () => {
+      await using relay = await coldRelay({ saveEnd: true });
+      const saveEnd = relay.saveEnd!;
+      const client = await attachClient(relay.runtime);
+      try {
+        const resolved = await client.getCellFromRef(relay.save).resolveAsCell(
+          { loaded: true },
+        );
+        const ref = resolved.ref();
+        expect({ id: ref.id, scope: ref.scope ?? "space", path: ref.path })
+          .toEqual({
+            id: saveEnd.id,
+            scope: saveEnd.scope,
+            path: saveEnd.path,
+          });
+      } finally {
+        await client.dispose();
+      }
+    });
+
+    it("gives a plain request and a `loaded` one answers of their own", async () => {
+      await using relay = await coldRelay({ saveEnd: true });
+      const saveEnd = relay.saveEnd!;
+      const client = await attachClient(relay.runtime);
+      try {
+        const handle = client.getCellFromRef(relay.save);
+        const [plain, loaded] = await Promise.all([
+          handle.resolveAsCell(),
+          handle.resolveAsCell({ loaded: true }),
+        ]);
+        expect(plain.ref().id).not.toBe(saveEnd.id);
+        expect(loaded.ref().id).toBe(saveEnd.id);
+      } finally {
+        await client.dispose();
+      }
+    });
+  });
+
   describe("the event the worker sends", () => {
     it("holds `native` provenance for the bound surface and action in place of the payload's, is renderer-trusted, matches the bound contract, and is a trusted gesture, where `sendStrict()` sends one that is none of those", async () => {
       // A handler of the scheduler's own reads the event the worker sends,
@@ -740,14 +902,15 @@ describe("send-reviewed", () => {
     describe(
       serverExecution ? "under server execution" : "run in the worker",
       () => {
-        it("commits a write gated on the bound surface and action", async () => {
+        it("commits a write gated on the bound surface and action, and resolves with nothing", async () => {
           await using room = await chatRoom(serverExecution);
-          await settled(
+          const outcome = await settled(
             serverExecution,
             room.save.sendReviewed({ body: "  exact text  " }, chatSend),
             "the reviewed send's handling",
           );
 
+          expect(outcome).toBeUndefined();
           expect(await room.stored()).toEqual(["  exact text  "]);
         });
 
@@ -907,4 +1070,44 @@ describe("send-reviewed", () => {
       },
     );
   }
+
+  describe("a handling whose outcome is withheld", () => {
+    // Under server execution, a served handling that read data its stream's
+    // space doesn't admit reports the same thing whether it committed or not
+    // (events.md §5). The sends that wait for the handling resolve with
+    // `{ handling: "withheld" }`, and never reject.
+
+    it('resolves `sendReviewed()` with `{ handling: "withheld" }`', async () => {
+      await using room = await peekRoom();
+      const outcome = await settled(
+        true,
+        room.peek.sendReviewed({ source: room.source }, chatSend),
+        "the peeking reviewed send's handling",
+      );
+
+      expect(outcome).toEqual({ handling: "withheld" });
+    });
+
+    it('resolves `sendStrict()` with `awaitHandling` with `{ handling: "withheld" }`', async () => {
+      await using room = await peekRoom();
+      const outcome = await settled(
+        true,
+        room.peek.sendStrict({ source: room.source }, { awaitHandling: true }),
+        "the peeking strict send's handling",
+      );
+
+      expect(outcome).toEqual({ handling: "withheld" });
+    });
+
+    it("resolves `sendStrict()` without `awaitHandling` with nothing", async () => {
+      await using room = await peekRoom();
+      const outcome = await settled(
+        true,
+        room.peek.sendStrict({ source: room.source }),
+        "the peeking strict send's commit",
+      );
+
+      expect(outcome).toBeUndefined();
+    });
+  });
 });

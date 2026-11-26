@@ -163,10 +163,7 @@ export class CFTab extends BaseElement {
   }
 
   get button(): HTMLButtonElement | null {
-    if (!this._button) {
-      this._button =
-        this.shadowRoot?.querySelector(".tab") as HTMLButtonElement || null;
-    }
+    this._button ??= this.shadowRoot?.querySelector("button") ?? null;
     return this._button;
   }
 
@@ -237,5 +234,14 @@ export class CFTab extends BaseElement {
    */
   override blur(): void {
     this.button?.blur();
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "cf-tab": CFTab;
+  }
+  interface HTMLElementEventMap {
+    "tab-click": CustomEvent<{ tab: CFTab }>;
   }
 }

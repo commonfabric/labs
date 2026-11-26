@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { ServedAclChange } from "@commonfabric/memory/v2/server";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   type ServedAclChangeData,
   servedAclChangeData,

@@ -1,6 +1,12 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { getLogger } from "@commonfabric/logger";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import type { NormalizedFullLink } from "../../src/link-utils.ts";
 import type { EnsurePieceVerdict } from "../../src/ensure-piece-running.ts";
 import { EventDroppedError } from "../../src/scheduler/backpressure.ts";
@@ -33,7 +39,7 @@ import {
   refuseFirstEventCommit,
   staleReadRefusal,
 } from "../support/refuse-event-commit.ts";
-import { captureLogs } from "../support/log-capture.ts";
+import { captureLogs } from "../support/captured-logs.ts";
 import {
   createSchedulerTestRuntime,
   disposeSchedulerTestRuntime,
@@ -204,7 +210,7 @@ describe("events", () => {
 
       expect(eventQueue).not.toContain(event);
       expect(settled).toEqual(["error"]);
-      expect(capture.messages("scheduler")).toContainEqual([
+      expect(capture.messagesOf("scheduler")).toContainEqual([
         "routine purge",
         { eventLink: ref },
       ]);
@@ -306,7 +312,7 @@ describe("events", () => {
       }
 
       expect(ran).toBe(1);
-      const timings = capture.messages("action-timing");
+      const timings = capture.messagesOf("action-timing");
       expect(timings.length).toBe(1);
       expect(String(timings[0][0])).toMatch(/^Action .* completed in /);
     });
@@ -698,7 +704,7 @@ describe("events", () => {
       runner.pendingPatternChangeFor = consult;
 
       expect(received).toEqual(["first", "second"]);
-      expect(capture.messages("scheduler")).toContainEqual([
+      expect(capture.messagesOf("scheduler")).toContainEqual([
         expect.stringMatching(/waits for its piece's pattern change$/),
       ]);
     });
@@ -731,7 +737,7 @@ describe("events", () => {
 
       expect(received).toEqual([]);
       expect(settled).toEqual(["error"]);
-      expect(capture.messages("scheduler-lineage"))
+      expect(capture.messagesOf("scheduler-lineage"))
         .toEqual([[
           "Dropping event from failed lineage origin",
           { eventId: "events-failed-origin-event" },
@@ -894,6 +900,60 @@ describe("events", () => {
           "after starting its piece",
       }]);
       expect(errors).toEqual([]);
+    });
+
+    describe("a piece whose refused update cannot be read", () => {
+      // The verdict's `refusedUpdate` probe only adds to the drop's reason,
+      // so a probe that throws leaves the drop as it would be without one.
+
+      function setUnreadableRefusal(): void {
+        setLoadPieceForEvent(() =>
+          Promise.resolve({
+            started: true,
+            graphIsInstalled: () => true,
+            refusedUpdate: () => {
+              throw new Error("the record cannot be read");
+            },
+            observedDocIds: [],
+            observedDocs: [],
+          })
+        );
+      }
+
+      it("drops a served send with the plain no-handler reason", async () => {
+        const ref = streamLink("events-served-unreadable-refusal");
+        setUnreadableRefusal();
+        const outcomes: ServedEventFailureOutcome[] = [];
+
+        sendTracked(ref, 1, {
+          served: { onFailure: (outcome) => outcomes.push(outcome) },
+        });
+        await env.runtime.idle();
+
+        expect(outcomes).toEqual([{
+          kind: "dropped",
+          message: `Event dropped: no handler registered for ${ref.id} ` +
+            "after starting its piece",
+        }]);
+      });
+
+      it("reports a client's own drop with the plain no-handler reason", async () => {
+        const ref = streamLink("events-client-unreadable-refusal");
+        setUnreadableRefusal();
+        const errors = collectErrors();
+
+        sendTracked(ref, 1);
+        await env.runtime.idle();
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toBeInstanceOf(EventDroppedError);
+        expect(errors[0]).toMatchObject({
+          reason: `Event dropped: no handler registered for ${ref.id} ` +
+            "after starting its piece",
+          attempts: 1,
+          pieceStartReason: undefined,
+        });
+      });
     });
 
     describe("waiting for the piece", () => {
@@ -1110,7 +1170,7 @@ describe("events", () => {
         expect(outcomes).toEqual([]);
         expect(logger.countsByKey["served-event-commit-failed"]?.warn ?? 0)
           .toBe(warnsBefore);
-        expect(capture.messages("lt1-late-seal-refused"))
+        expect(capture.messagesOf("lt1-late-seal-refused"))
           .toEqual([[
             "LT1 in-process copy of lt1-copy sealed outside its appending " +
             "wave and was refused; the drain delivers the entry",

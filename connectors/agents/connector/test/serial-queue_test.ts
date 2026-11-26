@@ -1,7 +1,8 @@
 import { assertEquals } from "@std/assert";
 import { AsyncSerialQueue } from "../src/serial-queue.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("two-session shared-index updates are serialized without lost entries", async () => {
+test("two-session shared-index updates are serialized without lost entries", async () => {
   const queue = new AsyncSerialQueue();
   let sharedIndex: string[] = [];
   let releaseFirst!: () => void;

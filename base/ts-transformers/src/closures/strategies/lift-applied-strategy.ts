@@ -52,10 +52,8 @@ function preRegisterCaptureTypes(
   body: ts.ConciseBody,
   captureExpressions: Set<ts.Expression>,
   checker: ts.TypeChecker,
-  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  typeRegistry: WeakMap<ts.Node, ts.Type>,
 ): void {
-  if (!typeRegistry) return;
-
   // Build map: capture name -> type to register
   // Only unwrap Reactive types (kind === "opaque"), not Cell types
   const captureTypes = new Map<string, ts.Type>();
@@ -328,16 +326,6 @@ function rewriteCaptureReferences(
     }
   }
 
-  // Build a map: original name -> renamed name (for all captures, not just renamed)
-  const substitutions = new Map<string, string>();
-  for (const [originalName, renamedName] of captureNameMap) {
-    substitutions.set(originalName, renamedName);
-  }
-
-  if (substitutions.size === 0) {
-    return body; // No captures to substitute
-  }
-
   const visitor = (node: ts.Node, parent?: ts.Node): ts.Node => {
     // A printed node names no capture: it stands for its type, and is not
     // taken apart.
@@ -346,7 +334,7 @@ function rewriteCaptureReferences(
     // Handle shorthand property assignments specially
     // { multiplier } needs to become { multiplier: multiplier_1 } if multiplier is renamed
     if (ts.isShorthandPropertyAssignment(node)) {
-      const substituteName = substitutions.get(node.name.text);
+      const substituteName = captureNameMap.get(node.name.text);
       if (substituteName) {
         const newIdentifier = factory.createIdentifier(substituteName);
         // Register with unwrapped type
@@ -378,7 +366,7 @@ function rewriteCaptureReferences(
         return node;
       }
 
-      const substituteName = substitutions.get(node.text);
+      const substituteName = captureNameMap.get(node.text);
       if (substituteName) {
         const newIdentifier = factory.createIdentifier(substituteName);
         // Register with unwrapped type

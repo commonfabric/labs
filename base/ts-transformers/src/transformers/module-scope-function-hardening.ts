@@ -152,10 +152,8 @@ function transformFunctionDeclaration(
     ];
   }
 
-  if (!hasDefaultExportModifier(statement.modifiers)) {
-    return [statement];
-  }
-
+  // The parser leaves a declaration without a name only under
+  // `export default`.
   state.useHelper();
   const fnExpr = factory.createFunctionExpression(
     retainRuntimeFunctionModifiers(statement.modifiers),
@@ -851,14 +849,6 @@ function collectTypeQueryIdentifiers(
 function isDirectFunctionExpression(expression: ts.Expression): boolean {
   const expr = unwrapExpression(expression);
   return ts.isArrowFunction(expr) || ts.isFunctionExpression(expr);
-}
-
-function hasDefaultExportModifier(
-  modifiers: ts.NodeArray<ts.ModifierLike> | undefined,
-): boolean {
-  return !!modifiers?.some((modifier) =>
-    modifier.kind === ts.SyntaxKind.DefaultKeyword
-  );
 }
 
 function hasExportModifier(

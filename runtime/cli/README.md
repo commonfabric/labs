@@ -515,12 +515,36 @@ uses this fixture mechanism at both postures.
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
-Swift, Kotlin, TOML, HCL, shell, makefile, Java properties, INI, ProGuard, and
-XML files use their own syntax highlighting. HCL covers OpenTofu and Terraform
-configuration named `.tf` or `.tofu`, variable definitions files named
-`.tfvars`, backend configuration files named `.tfbackend`, and other `.hcl`
-files, such as dependency lock files. A string's interpolations and template
-directives are colored as code inside the string. Shell covers Bash and POSIX
+Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, C, C++, CUDA, CSS,
+HTML, shell, makefile, Dockerfile, Java properties, INI, dotenv, Graphviz DOT,
+ProGuard, XML, Org mode, CSV, TSV, assembly, and SQL files use their own
+highlighting. A lowercase `.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`,
+`.hpp`, `.hxx`, `.h++`, `.tcc`, and an uppercase `.C` select C++; and `.cu` and
+`.cuh` select CUDA. C++ and CUDA share one grammar, which colors CUDA's
+qualifiers, such as `__global__`, as keywords. C and C++ both write `.h`
+headers, so a `.h` file is colored in a mode that claims neither dialect, using
+the C++ grammar, which reads the declarations C headers usually make; a C header
+that uses one of C++'s keywords, such as `new`, as a name is colored as C when
+piped with `--language
+c`. HCL covers OpenTofu and Terraform configuration named
+`.tf` or `.tofu`, variable definitions files named `.tfvars`, backend
+configuration files named `.tfbackend`, and other `.hcl` files, such as
+dependency lock files. A string's interpolations and template directives are
+colored as code inside the string. Starlark covers Bazel's build files, named
+`BUILD`, `BUILD.bazel`, or with a `.BUILD` suffix, its module, repository, and
+workspace files, `.bzl` extension files, and other `.star` files. Its structure
+tree lists functions, each name that a statement outside functions assigns a
+value to on its own, and the target that each rule call outside functions
+declares when its `name` argument is a string literal. The Bazel rc language
+covers `.bazelrc` and other files named with that suffix, and lists the files an
+rc file imports and the configurations it defines, such as `race` in
+`build:race`. `.bazelversion` is plain text. CSS covers style sheets named
+`.css`, with a structure tree of rule sets, at-rules, and custom property
+declarations. HTML covers pages named `.html` or `.htm`, with a structure tree
+of elements. A `script` element's text is colored as JavaScript, or as JSON for
+an import map or a JSON data block, as its `type` and `language` attributes say,
+and an event handler attribute's value as JavaScript. A `style` element's text
+and a `style` attribute's value are colored as CSS. Shell covers Bash and POSIX
 shell scripts named `.sh`, `.bash`, or `.command`, and Bash's startup files,
 such as `.bashrc` and `.profile`. A heredoc's body is colored as a string, with
 the expansions its delimiter allows. The makefile language reads GNU make's
@@ -562,6 +586,19 @@ and suppress unified-diff auto-detection. An explicit language takes priority
 when both options are present. Use `--diff` instead when the pipe is a unified
 diff.
 
+Lean covers Lean 4 source named `.lean`. Lean lets a file add its own notation,
+so the highlighting reads the lexical syntax every Lean file shares: comments,
+strings and the code interpolated into them, other literals, identifiers,
+keywords, and attributes. The structure tree lists namespaces, sections, and
+`mutual` blocks, and the definitions, theorems, instances, structures, classes,
+and inductive types inside them. A project's `lean-toolchain` file, which names
+the Lean release the project builds with, colors the repository that publishes
+the release and the release's name.
+
+Assembly covers `.s` and `.S` files in the Go assembler's dialect and in the GNU
+assembler's, including GNU assembler source that the C preprocessor reads first.
+Linker scripts named `.lds.S` are not assembly.
+
 INI covers `.ini` files, which include Ansible inventories with that suffix,
 Ansible's `ansible.cfg` and `.ansible.cfg`, and the configuration files of
 Python tools such as `setup.cfg`, `.coveragerc`, `.flake8`, `pylintrc`, and
@@ -571,14 +608,226 @@ array's first value does. A line in an Ansible inventory that names a host and
 then sets `name=value` variables colors the host and each variable. The
 structure tree lists sections with the keys and hosts in each.
 
+Dotenv covers the environment files that programs, Docker Compose, and shell
+scripts read variables from. `.env` selects it, as does a name that continues
+`.env` with a further suffix, such as `.env.local` or `.env.example`, unless
+that suffix is another language's extension, as `.env.json` is. An example copy
+of an environment file, such as `config.env.example` or `deploy-env.sample`,
+selects it as well, through an `.example`, `.sample`, `.template`, or `.dist`
+suffix. Another name ending in `.env` is dotenv when its first line other than
+blank lines and `#` comments sets a variable, because Ansible Vault files and
+Skip's Xcode-style app configuration use that suffix too. A value that opens
+with a quote runs to the matching quote, across lines, and is read as an
+unquoted value when no quote matches it. A `#` that follows white space starts a
+comment after a value. References to other variables, such as `$NAME` and
+`${NAME:-default}`, are colored in unquoted and double-quoted values, and `$$`
+is a dollar sign, as Docker Compose reads it. The structure tree lists the
+variables the file sets.
+
+Tables color each unquoted field that reads as a decimal number as a number,
+every other field that holds more than white space as a string, and each
+separator as punctuation. `.csv` files are comma-separated values as RFC 4180
+defines them, so a quoted field can hold commas, doubled quotes, and line
+breaks. `.tsv` files are tab-separated values, which have no quoting, and a line
+in one that starts with `#` is a comment. The `.dat` suffix names data of every
+kind, so a `.dat` file is shown as a table only when its first line other than
+blank lines and comments, or the next such line, is a row of two or more
+numbers. Spaces and tabs separate the fields of such a table, as gnuplot and
+PGFPlots read it, and a line whose first character other than spaces and tabs is
+`#`, or `%` as PGFPlots also accepts, is a comment. Tables have no structure
+tree.
+
+The Dockerfile language reads the syntax of BuildKit's Dockerfile frontend in
+files named `Dockerfile`, `dockerfile`, `Containerfile`, or `containerfile`, in
+names that add a dot and a suffix to `Dockerfile` or `Containerfile`, in any
+case, such as `Dockerfile.x86_64`, and in `.dockerfile` and `.containerfile`
+files. A suffix that is an extension another language claims whatever the source
+holds, as shell claims `.sh`, selects that language. The ignore file BuildKit
+pairs with a Dockerfile, such as `Dockerfile.build.dockerignore`, is not a
+Dockerfile. The shell form of `RUN`, `CMD`, `ENTRYPOINT`, and a health check's
+command is colored as shell, unless a `SHELL` instruction earlier in the build
+stage, or in the stage it is built from, names a shell other than `sh`, `bash`,
+`dash`, or `ash`. The exec form is colored as a JSON array of strings. The body
+of a `RUN` whose command is a single heredoc is a script, colored as shell when
+its shebang names one of those shells or, without a shebang, when the shell form
+is. The bodies of `COPY` and `ADD` heredocs are colored as strings. A
+continuation line skips blank lines and comments, as BuildKit does, and an
+`escape` parser directive can make the backtick the escape character. The
+structure tree lists build stages and the variables that `ARG` and `ENV` set in
+each.
+
+Org mode covers `.org` files. Headlines, keywords, blocks, comments, drawers,
+tables, lists, links, code, and timestamps are colored, and the structure tree
+lists headlines, each inside the one above it. A source block is colored as the
+language its first parameter names, such as `bash`, when `cf view` supports that
+language and it is not Org, and as a string otherwise.
+
+`.gitattributes` files in any directory use the Git attributes language's syntax
+highlighting. It colors each line's pattern and the wildcards in it, and each
+attribute, whether set, unset with `-`, left unspecified with `!`, or given a
+value with `=`. The structure tree lists the patterns and the macros that
+patterns written `[attr]name` define. A line that Git ignores, such as one
+holding a name Git does not accept, is left uncolored.
+
+The directive configuration language covers the syntax that nginx, Apache httpd,
+nftables, Netdata health alerts, and sysusers.d share: each statement starts
+with a directive and ends at the end of its line, unless the line ends with `\`
+or a list is still open. A `{` that ends a line opens a block and a `}` that
+starts a line closes it, and only a whole line that starts with `#` is a
+comment, unless the line before ends with `\`. In a file in which at least half
+of the statement lines end with `;`, as nginx's and some nftables rulesets' do,
+a `;` ends a statement, any `{` or `}` opens or closes a block, a `#` after
+white space, `;`, `{`, or `}` starts a comment, a statement continues onto a
+line that is indented further, unless that line sets a key or opens a section,
+as an nginx argument list that runs over several lines does, and a quoted string
+runs to its closing quote over as many lines as it takes. It colors directives,
+quoted strings, `$name`, `${name}`, and `%{name}` variable references, numbers
+with units such as `10s`, and the booleans `on`, `off`, `yes`, `no`, `true`, and
+`false`. Netdata's `key: value` lines and Apache's section tags such as
+`<Directory /srv>` are colored as directives and sections. A `{` that follows
+`=` opens a list rather than a block, such as an nftables set, as does a block's
+`{` that a comma follows on its line before any `;`, `{`, or `#`, or that a `}`
+closes later on its line around content without a `;`, `{`, or `#`, counting
+nothing inside quotes. The structure tree lists blocks, sections, and Netdata
+`alarm` and `template` entries. `nginx.conf`, `httpd.conf`, `apache2.conf`, and
+other `.conf` names that begin with one of those words select it, as do
+`.htaccess`, `.nft`, `nftables.conf`, and `nft` shebangs. Another `.conf` file
+uses it when it does not open with a shebang and its first line other than blank
+lines and `#` or `;` comments starts a Netdata entry, opens an Apache section,
+starts with a sysusers.d `u`, `g`, or `m` line, or starts with a word that
+neither ends with `:` nor holds or precedes `=` and then holds a `;` or a `{`
+that does not follow `$` or `%`. A `.conf` file that opens, after blank lines
+and `#` comments, with a `---` document marker or an unindented key with no
+value followed by an indented line or a sequence entry, as a Netdata collector's
+configuration is, is YAML; one whose first line other than blank lines and
+comments heads a section other than one of a systemd unit's is INI; and one that
+opens with `{` is JSON.
+
+Per-platform copies of a Swift package resolution, such as
+`Package.resolved.android`, Xcode string catalogs (`.xcstrings`), CPU profiles
+(`.cpuprofile`), and Firebase's `.firebaserc` are JSON as well. So are `.config`
+and `.lock` files whose source opens a JSON object, as for `.cfg`.
+
+Prose such as `AUTHORS` and `CNAME`, captured output (`.stdout`, `.out`), logs
+and error output (`.log`, `.stderr`) that do not open with a JSON object,
+checksum lists such as `SHA256SUMS` and `.sha256` files, version files such as
+`VERSION`, `GO_VERSION`, `.python-version`, and `.nvmrc`, PID and port records
+(`.pid`, `.port`), SSH `known_hosts` files (`known_hosts`, `ssh_known_hosts`,
+and `github-known-hosts`), and keys and certificates (`.pem`, `.crt`, `.key`)
+are plain text by name, so a shebang or an XML declaration at the start of their
+content does not select another language.
+
+Ignore files are colored by the rules of the tool that reads each one, for its
+comments, negation, wildcards, and white space. `.gitignore` uses Git's
+patterns, and so do `.denoignore` and Claude Code's `.worktreeinclude`, which
+are written in Git's syntax. Each part of a Git pattern is colored: a leading
+`!` that negates it, the wildcards `*` and `?`, a bracket expression, the `/`
+between directories, and a backslash that makes the next character literal.
+`.dockerignore`, a Docker ignore file named after its Dockerfile, such as
+`Dockerfile.build.dockerignore`, and Podman's `.containerignore` use Docker's
+patterns, which differ from Git's in that white space before a pattern, after
+its `!`, and at its end, escaped or not, is not part of it, and in that bracket
+expressions follow Go's rules, where only `^` negates one. `.bazelignore` lists
+directories for Bazel to leave out, one literal path to a line, so `*` and `!`
+have no meaning there. In all of them, a line that starts with `#` is a comment.
+
+Go source named `.go` has syntax highlighting as well, and a structure tree of
+the package clause, types, functions, methods, package-level constants and
+variables, and the fields and methods each type declares. Go module and
+workspace files, `go.mod` and `go.work`, have a language of their own, whose
+structure tree lists each directive and the lines of its block. So do Go
+checksum files, `go.sum` and `go.work.sum`, whose structure tree lists each
+module over the lines that name it.
+
+Graphviz DOT covers graph descriptions named `.dot` or `.gv`. The DOT that
+`cf inspect graph --dot` and `cf piece map --format dot` print can be piped into
+`cf view --language dot`. Each ID is colored by what it names: a graph, an
+attribute, an attribute's value, a port, or a node. The structure tree lists
+graphs and subgraphs, with the nodes that node statements declare in each. A
+node that only an edge names is not listed.
+
+Git configuration files use their own syntax highlighting as well. The language
+covers `.gitmodules`, user and system configuration named `.gitconfig` or
+`gitconfig`, a worktree's `config.worktree`, other files whose names end in
+`.gitconfig`, and Git LFS's `.lfsconfig`. The structure tree lists sections with
+the variables in each.
+
+SQL covers `.sql` files in PostgreSQL's lexical syntax, which SQLite's follows,
+or in MySQL's, for a file that holds syntax only MySQL reads, such as a
+statement that starts with a `#` comment, an executed comment such as
+`/*!40101 … */`, or a `DELIMITER` command, or one whose strings PostgreSQL's
+syntax leaves open at its end and MySQL's closes, as it does for `'it\'s'`. In
+MySQL's syntax, `#` starts a comment anywhere, `"…"` is a string, a backslash in
+a string escapes the next character, executed comments are colored as
+statements, and a `DELIMITER` command sets the text that ends a statement. A
+PostgreSQL dollar quote that follows `AS`, `DO`, or a `LANGUAGE` clause holds a
+function's or a block's body, which is colored as SQL when the statement names
+no language or names `sql` or `plpgsql`, and the variables its `declare` section
+names are colored as declarations. Any other dollar quote is a string, and so
+are the lines of data that pg_dump writes after a `COPY … FROM stdin` statement,
+and a line that starts with `\` is a psql command. The structure tree lists each
+`create` statement, labeled with the kind of thing it creates and the name it
+declares, and each `alter table` statement, with the columns each defines, apart
+from one inside a MySQL executed comment that adds no columns.
+
+The linker script language covers the scripts that tell GNU `ld` how to lay out
+its output, named `.ld` or `.lds`, and those named `.lds.S` or `.ld.S`, which
+pass through the C preprocessor before `ld` reads them, as do scripts with a
+line that opens with `#include`, `#include_next`, or `#import` followed by `<`
+or `"`, or with `#define`, `#undef`, `#ifdef`, or `#ifndef`, or with `#else` or
+`#endif` and nothing after it but a comment. In such a script, the `#` and name
+that open a preprocessor directive are colored as a directive, every branch of a
+conditional directive is colored with only the first listed in the structure
+tree, and `//` starts a comment. Elsewhere, `#` starts a comment, as it does for
+`ld`. The structure tree lists the `SECTIONS`, `MEMORY`, `PHDRS`, and `VERSION`
+blocks, the output sections, memory regions, program headers, and version nodes
+each one declares, and the symbols the script assigns.
+
+The pager also highlights systemd unit files named `.service`, `.socket`,
+`.timer`, `.target`, `.mount`, `.automount`, `.swap`, `.path`, or `.slice`, and
+a `.conf` drop-in whose first line other than blank lines and comments heads a
+section that units hold, such as `[Service]`. It reads them as systemd does. A
+line that ends in an odd number of backslashes continues on the next line that
+is not a comment, and the first `=` on the joined line separates a key from its
+value. Booleans, numbers, time spans, and `%` specifiers are colored as such.
+The value of a setting that runs commands, such as `ExecStart`, is colored as a
+command line, with its prefix characters, its program, and the environment
+variable expansions systemd performs marked. The structure tree lists sections
+with the keys in each.
+
+OpenSSH authorized keys files, named `authorized_keys` or `authorized_keys2` or
+with a name ending in either after `_`, `-`, or `.`, and `.pub` public key files
+use their own syntax highlighting, which colors each key's options, type, data,
+and comment. The structure tree lists each key by its comment, or by its type
+when it has none.
+
+A Jinja template, named with a `.j2`, `.jinja`, or `.jinja2` suffix, is colored
+as the file it produces, whose language the rest of the name selects, with
+Jinja's expressions, tags, and comments colored inside it. `deploy.sh.j2` is
+shell. When the rest of the name selects no language, a shebang can select one,
+and otherwise, as for `nginx-logrotate.j2`, the file is plain text. The
+structure tree is that of the file the template produces. With `--language`,
+`jinja` selects Jinja over plain text, and `jinja-` followed by another text
+language's identifier or alias, as in `jinja-shell`, selects Jinja over that
+language.
+
+A Terraform template, the file OpenTofu's `templatefile` function reads, named
+with a `.tftpl` suffix, is colored in the same way, so `startup-script.sh.tftpl`
+is colored as shell, with its interpolations and directives colored as HCL code.
+In the escapes `$${` and `%%{`, the first character is colored as the
+template's, and the `${` or `%{` that the escape produces is colored as the
+file's. With `--language`, `terraform-template` selects it over plain text, and
+`terraform-template-` followed by another text language's identifier or alias,
+as in `terraform-template-shell`, selects it over that language.
+
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each
-row. Other bytes use the same control-picture glyphs as the pager's
-non-printable display mode. Use `--language binary` or its `bytes` alias to
-select it explicitly for piped input. Interactive views retain at most 256 KiB
-and report the omitted byte count when the complete size is known. Use `--plain`
-to stream the complete dump without building it in memory.
+row. Other bytes use the same control-picture glyphs as the pager's pictures
+mode. Use `--language binary` or its `bytes` alias to select it explicitly for
+piped input. Interactive views retain at most 256 KiB and report the omitted
+byte count when the complete size is known. Use `--plain` to stream the complete
+dump without building it in memory.
 
 Each language selects how bytes are decoded. Text languages currently require
 valid UTF-8. The binary language keeps each raw byte unchanged. An explicit
@@ -591,14 +840,30 @@ and TypeScript semantic lookup.
 Automatic content detection is limited to binary input, structurally identified
 raw unified diffs, and standard Git commit output. A raw diff starts at the
 first nonblank line. Recognized shebangs, XML declarations, and transformed
-compiler headers remain explicit selectors. A shared extension such as `.cfg`
-consults the source for the pattern each language's metadata pairs with it.
-JSON-, YAML-, Markdown-, Python-, and other language-shaped source is otherwise
-not guessed from its syntax.
+compiler headers remain explicit selectors. A shared extension such as `.cfg` or
+`.dat` consults the source for the evidence each language's metadata pairs with
+it. JSON-, YAML-, Markdown-, Python-, and other language-shaped source is
+otherwise not guessed from its syntax.
 
 A diff shows its whole-diff change totals at the top right corner of its first
 line: the added line count and the removed line count, colored like additions
 and removals.
+
+A diff colors its lines from the complete files on both sides of each change,
+and parsing large files can take seconds. The interactive pager parses up to
+131,072 characters of those files before it shows the diff, and shows the lines
+of the rest as plain text. It parses them in the background while it takes keys,
+and colors the files that have finished each time source as long as a sixteenth
+of the diff, and at least 131,072 characters, has finished parsing since it last
+colored them, and again once every parse has ended. A file stays plain until
+both of its sides have finished parsing. Meanwhile, the status bar shows a
+spinner and a gauge of how much of their source has been parsed, before the
+current file's name, with the word "Highlighting" when there is room. Key hints
+make way for the gauge, except the first two, Help and Quit. When files cannot
+be parsed, the status line says so, with the reason the first one failed, and
+they stay plain. A file saved before its parse finishes is parsed again as
+saved, and a file opened from the viewer stops the parses. Output that is not to
+a terminal is colored in full before it is written.
 
 Dialogs share Up / Down, Page Up / Page Down, and Home / End for navigation.
 Ctrl-F / Ctrl-B also page down / up. Pages follow the dialog's visible height,
@@ -612,30 +877,47 @@ button activates that button. Releasing it anywhere else, or pressing a key
 first, lets go of the button without activating it. Printable keys enter text
 while a filter is active.
 
-Some dialogs also hold check boxes and input lines, drawn as Turbo Vision draws
-them. Tab and Shift-Tab, like the navigation keys, move the focus through those
-first and then through the buttons. Space toggles the focused check box, and so
-does a click on it. Moving the focus to an input line selects its text, so that
-typing replaces it. While an input line is focused, every key but Tab,
-Shift-Tab, Enter, Escape, and Alt with a letter goes to it: typed text goes in,
-Backspace and Delete (or Ctrl-D) delete a character, Alt-Backspace deletes the
-word before the cursor, and Left, Right, Home, and End (or Ctrl-B, Ctrl-F,
-Ctrl-A, and Ctrl-E) move its cursor. A click on an input line puts its cursor
-where the click lands, and a click on its label selects its text. An arrow at
-either end of the line says that its text runs on past that end. A check box's
-highlighted letter toggles it, an input line's moves the focus to it, and a
-button's activates it; while an input line is focused, Alt with the letter does.
-Enter activates the default button wherever the focus is, unless it is on
-another button.
+Some dialogs also hold check boxes, radio buttons, and input lines, drawn as
+Turbo Vision draws them, and sliders. On a screen too short for all of a
+dialog's fields, its buttons stay in view and its fields scroll to show the
+focused one. Tab and Shift-Tab, like the navigation keys, move the focus through
+those first and then through the buttons. Space toggles the focused check box,
+and so does a click on it. Moving the focus to an input line selects its text,
+so that typing replaces it. While an input line is focused, every key but Tab,
+Shift-Tab, Enter, Escape, and Alt with a shortcut letter goes to it: typed text
+goes in, Backspace and Delete (or Ctrl-D) delete a character, Alt-Backspace
+deletes the word before the cursor, and Left, Right, Home, and End (or Ctrl-B,
+Ctrl-F, Ctrl-A, and Ctrl-E) move its cursor. A click on an input line puts its
+cursor where the click lands, and a click on its label selects its text. An
+arrow at either end of the line says that its text runs on past that end. While
+a slider is focused, the arrow keys move its thumb to the stop before or after
+the one it is at, and Home and End move it to its ends. A click on a slider's
+track moves it to the stop nearest the click. A check box's highlighted letter
+toggles it, an input line's or a slider's moves the focus to it, a radio
+button's selects it and moves the focus to its set, and a button's activates it.
+Alt with the letter does the same wherever the focus is, including on an input
+line or among radio buttons. Alt with a letter that is no control's shortcut
+types into a focused input line the character the terminal says it typed, if
+any, and otherwise does nothing. Enter activates the default button wherever the
+focus is, unless it is on another button.
+
+While a dialog is up, the viewer asks the terminal to report every key in full,
+as the kitty keyboard protocol defines. In that mode, iTerm2 reports Option with
+a letter as Alt with that letter even when its Option key is set to "Normal",
+which otherwise types characters such as `ß`. A terminal without the protocol
+reports Alt only when its Option key is set to send Escape first, which iTerm2
+calls "Esc+" and Terminal calls "Use Option as Meta key".
 
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
 browse mode, Space pages through the entries, and `g` and `G` select the first
-and last entry. The `f`, `F`, `E`, `T`, `M`, and `C` file-visibility keys remain
-active. On a commit row, `f` hides all of that commit's files. Pressing it again
-shows them. Each commit row reports its total added and removed lines under the
-selected count policy. The list's summary reports added and removed lines for
-the complete diff and for the files that are currently shown.
+and last entry. Pressing the primary mouse button on an entry selects it, in
+this list and in the list of files that Ctrl-X Ctrl-F opens. The `f`, `F`, `E`,
+`T`, `M`, and `C` file-visibility keys remain active. On a commit row, `f` hides
+all of that commit's files. Pressing it again shows them. Each commit row
+reports its total added and removed lines under the selected count policy. The
+list's summary reports added and removed lines for the complete diff and for the
+files that are currently shown.
 
 Use `<` and `>` to move to the preceding or following commit header in the main
 view or the index list. From within a commit, `<` returns to that commit's
@@ -668,15 +950,16 @@ a diff whose `index` line names both versions of the file (as `git diff` does),
 and only when the versions the viewer rebuilds from the repository or the
 working tree are the ones named. Editing a comment's text, or adding or removing
 a line that holds only comments and whitespace, leaves the code as it was. Where
-such a line can be content or an error, as in XML text, a YAML scalar, or JSON,
-adding or removing it changes the file too. A line that follows code ending with
-a backslash continues that code, and a first line that starts with `#!` names
-the program that runs the file, so both are read exactly as written. Adding or
-removing a comment on a line that holds anything else changes the code, and so
-does a change to blank lines or other whitespace. Each side is read on its own,
-so a comment marker that turns unchanged lines into a comment changes the code.
-`C` never selects a renamed or new file, a file whose mode changes, or a file
-whose byte order mark is added or removed.
+such a line can be content, an error, or an attribute, as in XML text, a YAML
+scalar, JSON, or a Rust doc comment, adding, removing, or editing it changes the
+file too. A line that follows code ending with a backslash continues that code,
+and a first line that starts with `#!` names the program that runs the file, so
+both are read exactly as written. Adding or removing a comment on a line that
+holds anything else changes the code, and so does a change to blank lines or
+other whitespace. Each side is read on its own, so a comment marker that turns
+unchanged lines into a comment changes the code. `C` never selects a renamed or
+new file, a file whose mode changes, or a file whose byte order mark is added or
+removed.
 
 Markdown files can switch between the source and a rendered terminal view with
 `V`. The rendered view formats headings, emphasis, links, quotes, lists, task
@@ -687,46 +970,202 @@ positions, and hunk expansion remain in place.
 Press `P` to push the branch checked out in the repository the viewer runs in,
 as it stands, to the branch of the same name on `origin`. The push is forced,
 but fails rather than discard commits on `origin` that the branch has never
-included, even when they have been fetched. A dialog shows git's output as it
-arrives, with an Abort button that stops the push. When the push ends, the
-dialog adds how it ended, and two buttons replace Abort. Close leaves that
-summary in the status line. Quit (`Q`) closes the viewer, first offering to save
-any unsaved edits. When the server's reply offers a page for creating a pull
-request, the viewer opens it in the browser. Git asks nothing on the terminal
-while the viewer holds it; a question such as a key's passphrase goes to the
-program `SSH_ASKPASS` names, and fails when it names none. `P` refuses to push
-`origin`'s default branch, and refuses when `origin` names no default branch
-(`git remote set-head origin --auto` finds it). It also refuses a checkout not
-on a branch, and refuses when git started the viewer as its pager for a
-different repository.
+included, even when they have been fetched. A dialog says which branch it pushes
+where, then shows git's output as it arrives, with an Abort button that stops
+the push. Up, Down, Page Up, Page Down, Home, End, and the mouse wheel scroll
+the output, and Left and Right move the focus between the buttons. When the push
+ends, the dialog adds how it ended, and two buttons replace Abort. Close leaves
+that summary in the status line. Quit (`Q`) closes the viewer, first offering to
+save any unsaved edits. Git asks nothing on the terminal while the viewer holds
+it; a question such as a key's passphrase goes to the program `SSH_ASKPASS`
+names, and fails when it names none. `P` refuses to push `origin`'s default
+branch, and refuses when `origin` names no default branch or cannot be asked
+which it is. It asks `origin`'s server which branch that is, with
+`git ls-remote --symref`, when a push starts, before any question below, and
+shows what git prints only when that fails. The push that the question confirms,
+and any retry of it, uses that answer rather than asking again. Asking is a
+connection to `origin` of its own, which can mean one more passphrase prompt or
+security key touch. The viewer asks the server because the
+`refs/remotes/origin/HEAD` that git sets when it clones stays as it is when the
+default branch changes. It also refuses a checkout not on a branch, and refuses
+when git started the viewer as its pager for a different repository.
 
-Press `O` to open the settings dialog. Its check box, "Quit when the pushed
-branch's pull request opens", has the viewer watch the GitHub webhook relay
-while the push dialog is up. The relay passes on each delivery of the
-organization's GitHub webhook as it arrives, and keeps none for a subscriber
-that was not connected; `github-webhook-relay/README.md` in the infra repository
-describes it. The dialog's input line holds the `host:port` of the relay's
-subscriber listener. When the push succeeds and the server offers a page for
-creating a pull request, the viewer connects to the relay, and opens the page
-once it has connected or failed to. While it connects, Abort, or an interrupt,
-gives up on the connection and opens the page. When a delivery reports that a
-pull request was opened from the pushed branch, at the pushed commit, in the
-GitHub repository that `origin` names, the viewer closes the push dialog and
-quits as Quit does. Once the screen is restored, it prints the pull request's
-address on the terminal. The address is printed only when the viewer quit for
-it, so a quit after cancelling the save prompt it raised prints nothing. With
-the check box on, the push dialog says under git's output whether the viewer is
-connecting or watching, or why it is not watching: no relay is set, `origin` is
-not on GitHub, or the connection failed or ended. Closing the push dialog stops
-the watch.
+The push and land dialogs draw what the viewer says in bright text, and the
+names it mentions, such as a branch, a repository, a commit, or a pull request's
+number, in a second bright color, with a blank line between paragraphs. Each
+line that says what the viewer is doing, such as "Pushing feature to origin...",
+ends in three dots, and the latest step still running also has a spinner after
+them. A line that waits for someone, as the request to touch a security key and
+the wait for a pull request to open or merge do, has neither. Once a step ends,
+it shows a check mark, or a cross when it failed or was aborted; when a step
+fails inside another, such as the touch of a security key while a pull request
+is created, only the step that failed shows the cross. Git's output, the reason
+GitHub gives for refusing a request, and the message touch-gate gives when it
+creates a pull request without naming it are quoted: indented two columns, in
+the dialog's ordinary color. When color is on, each web address and pull request
+number in the dialog is a link for terminals that open links.
 
-The viewer keeps these settings in git's configuration, as the boolean
-`cf-view.quitOnPullRequest` and the string `cf-view.webhookRelay`, so the
-`git config` command can set them too. OK saves each setting that differs from
-what the dialog opened showing. It saves it in the configuration file that git
-read the setting's value from, which may be a file another one includes, so that
-git then reads the new value. A value read from the machine's own configuration
-file, or set nowhere, is saved in the user's global configuration file instead.
+When `origin` already has the branch, as git last fetched or pushed it, the
+dialog asks before pushing. It says which commit `origin`'s branch is at, and
+what pushing would do to it: add commits, replace it, removing the commits that
+the checkout does not have, or leave it as it is. In a shallow checkout, whose
+history git cannot count to the end, it says so in place of the counts. It also
+gives the number and address of the pull request open from the branch, which it
+looks for as `L` does, below, or says that there is none, or why it could not
+look. It looks for the pull request while it asks `origin`'s server for its
+default branch, and asks whether to push once both are done. Once the server has
+answered, Abort stops the search, and the dialog asks without it; before then,
+Abort stops the push. Push (`u`) then pushes, its output following the question,
+and Cancel takes the dialog down. No button is the default, so Enter does
+nothing until a button has the focus, and pressing `P` again does not push.
+
+When git fails to push or is aborted, as it can when the network is unreliable,
+or does not learn which branch is `origin`'s default, a Retry push button (`P`)
+starts the push again, unless git says the push was rejected, or GitHub says the
+account has no permission to push, which pushing again cannot change. The retry
+asks before pushing, as `P` does, unless the question had confirmed the push
+that failed. Each later push's output follows the earlier one's in the same
+dialog.
+
+Once the push succeeds, the settings say what happens next, and the radio
+buttons under "Pull requests" choose one of the four ways below. The first and
+the third act on the page for creating a pull request that the server's reply
+may offer, which GitHub does when the branch has new commits and no open pull
+request. The second and the fourth create the pull request after any push that
+succeeds, including one that had nothing new to push, unless the branch already
+has an open pull request, which they look for as `L` does, below. The pull
+request goes to the GitHub repository of the remote named `upstream`, `github`,
+or `origin`, whichever is the first to name one, and merges into that remote's
+default branch, as its server names it then, from the branch on `origin`. When
+the viewer has to ask GitHub for the open pull request, it asks that remote's
+server for its default branch at the same time. The created pull request's title
+and description are the subject and the rest of the message of the branch's
+oldest commit that the default branch, as last fetched, does not have, leaving
+out merges and commits whose changes that branch already has.
+
+- "Just push, and link to them": the summary gives the page's address, which the
+  status line makes a link for terminals that open links.
+- "Use the GitHub API": the viewer creates the pull request with GitHub's REST
+  API, using `GH_TOKEN`, `GITHUB_TOKEN`, or else the token `gh auth token`
+  prints.
+- "Show them in the browser", the default: the viewer opens the page in the
+  browser.
+- "Use touch-gate and a security key": the viewer asks a touch-gate server to
+  create the pull request with the token the settings name. The dialog asks for
+  the named security key to be touched, as "Touch the “carthusian” security key
+  to create a PR.", and the server acts only once it is. While it asks, a
+  drawing of a security key with a yellow touch pad comes in from past the right
+  edge of the screen and plugs into the dialog's right side, speeding up as it
+  goes and taking 350 milliseconds, and then the green light along the key's top
+  and bottom edges blinks. On a terminal too narrow for the plugged-in key
+  beside the centered dialog, the dialog moves left, and narrows if it must, to
+  make room. A dialog too short to hold the key draws none. As soon as the
+  security key is touched, the light stops blinking and stays lit in blue, that
+  step is done, and the dialog shows a step that sends the server the approval.
+  If the step fails instead, the key is shown plugged in with its light out.
+  When a security key fails, the summary says what libfido2's error means, as
+  "the security key stopped answering", followed by the tool and the error's
+  name, or else gives what the tool printed. The server's address, its
+  certificate, the secret its clients share, and the registered security keys
+  come from `~/.config/touch-gate`, as the touch-gate project's client keeps
+  them, and the viewer talks to the security key through libfido2's
+  `fido2-token` and `fido2-assert` tools.
+
+When creating the pull request with the GitHub API or touch-gate fails, or is
+aborted, the dialog says what went wrong, and a Create PR button (`P`) tries
+again, with the settings as they are then, its output following the failed
+attempt's. Trying again looks for an open pull request first, in case the failed
+attempt created one.
+
+When GitHub refuses a creation or a merge, whether the viewer asked it directly
+or through touch-gate, the summary gives GitHub's status and the message its
+reply gives, as "GitHub answered 405: Merge already in progress". The button
+that tries again is left out when the status says the request itself cannot
+succeed: 404 (not found), 405 (not allowed), 409 (in conflict), or 422 (not
+valid).
+
+Press `L` to land the checked-out branch's open pull request; `l` pans right,
+and `h` and `H` pan left. A dialog like the push's opens at once, saying what it
+looks for, and its Abort button stops the search. The viewer looks for the pull
+request in `~/.cache/github-prs.tsv`, a list of open pull requests that another
+program keeps, one a line as its repository, branch, and number separated by
+tabs. The list does not say whose fork a branch is in, so unless it names
+exactly one pull request for the branch, the viewer asks GitHub. When the branch
+has no open pull request, or the viewer cannot land it, the dialog says so. With
+the first radio button, the dialog gives the pull request's address. With the
+third, the viewer opens the pull request in the browser, or, when no browser can
+be opened, gives its address as the first does. With the second or the fourth,
+the viewer asks GitHub's GraphQL API how GitHub's page would merge the pull
+request: by the method the token's account last used, or else by the
+repository's default. GitHub's merge API itself merges with a merge commit
+unless told otherwise, which a repository that allows only squashing or rebasing
+refuses. With the second radio button, the dialog then asks whether to merge
+that way, with Merge and Cancel buttons in place of Abort. No button is its
+default: Enter does nothing until Tab or an arrow key has moved the focus to a
+button, while a button's letter acts at once. With the fourth, the touch of the
+security key approves the merge, so the viewer asks nothing first. The viewer
+merges the pull request with GitHub's API or touch-gate in the same dialog, its
+output following what the dialog found. The merge happens only while the pull
+request's head is the commit the viewer has checked out. Asking for the merge
+method needs a GitHub token, from the same places the API uses. When the merge
+fails or is aborted, a Merge PR button (`P`) merges the same pull request, at
+the same commit and by the same method, again, with the settings as they are
+then, without looking for it again and without asking first. When a creation or
+a merge is aborted after its request was sent, it may have happened anyway, and
+the summary says so.
+
+Press `O` to open the settings dialog. Below the radio buttons, an input line
+holds the name of the token the touch-gate server uses. Its check box, "Quit
+when the pull request opens or merges", has the viewer quit as soon as it
+creates or merges the pull request, printing its address as described below, and
+otherwise has it watch the GitHub webhook relay while the push or land dialog is
+up. The relay passes on each delivery of the organization's GitHub webhook as it
+arrives, and keeps none for a subscriber that was not connected;
+`github-webhook-relay/README.md` in the infra repository describes it. The
+dialog's last input line holds the `host:port` of the relay's subscriber
+listener. When the push succeeds and the server offers a page for creating a
+pull request, or `L` finds the pull request with the first or third radio
+button, the viewer connects to the relay, and gives the address or opens the
+page once it has connected or failed to. While it connects, Abort, or an
+interrupt, gives up on the connection. When a delivery reports that a pull
+request was opened from the pushed branch, at the pushed commit, in the GitHub
+repository that `origin` names, or that the pull request `L` found merged, the
+dialog gives the pull request's address, unless how the task ended already gave
+it, and says it is quitting, and once the delay that the "Delay before quitting"
+slider below sets has passed the viewer closes the dialog and quits as Quit
+does, unless the dialog was closed meanwhile. Pressing Quit in that moment quits
+at once, for the pull request all the same. With no delay, the viewer quits at
+once, without giving the address in the dialog. Quitting once the viewer creates
+or merges the pull request works the same way. Once the screen is restored, it
+prints the pull request's address on the terminal. The address is printed only
+when the viewer quit for it, so a quit after cancelling the save prompt it
+raised prints nothing. When the viewer would watch the relay, in the cases above
+where it connects to it, the dialog shows, under how the task ended, a step that
+connects to the relay and then one that waits for the pull request, or says why
+it is not watching: no relay is set, `origin` is not on GitHub, or the
+connection failed or ended. Closing the dialog stops the watch.
+
+Under the check box, the "Delay before quitting" slider sets how long the dialog
+says it is quitting before the viewer quits, from none to 10 seconds on a
+logarithmic scale, and two seconds unless it is set. Its stops are ten to each
+power of ten from 16 milliseconds up, rounded to two significant digits. The
+first, 16 milliseconds, counts as no delay: the dialog shows it as `none`, and
+the viewer quits at once. It shows the others as `20 ms`, `25 ms`, `32 ms`, and
+so on up to `7.9 s` and `10 s`.
+
+The viewer keeps these settings in git's configuration, as the strings
+`cf-view.pullRequestTool` (`link`, `api`, `browser`, or `touch-gate`) and
+`cf-view.touchGateToken`, the boolean `cf-view.quitOnPullRequest`, the number of
+milliseconds `cf-view.quitDelay`, and the string `cf-view.webhookRelay`, so the
+`git config` command can set them too. A delay outside the slider's range is
+read as the nearer end of it, so that 16 or less is none, and one that git
+cannot read as a whole number as two seconds. A delay that is not one of the
+slider's stops is kept until the slider moves. OK saves each setting that
+differs from what the dialog opened showing. It saves it in the configuration
+file that git read the setting's value from, which may be a file another one
+includes, so that git then reads the new value. A value read from the machine's
+own configuration file, or set nowhere, is saved in the user's global
+configuration file instead.
 
 In the main view, `b` shows or hides the blame column in place of paging up;
 Page Up and Ctrl-B still page up there. The column takes the right 20 columns of
@@ -744,26 +1183,40 @@ text, so edited lines read `uncommitted` before they are saved. In a diff, a
 file that follows a commit header is blamed as it stands in that commit. Any
 other hunk is blamed as its file stands in the working tree, and only while that
 file still holds the hunk's added and context lines where the hunk places them.
-Removed lines show nothing. The column fills in as `git blame` finishes for each
-file in view. When git cannot blame a file, the status line says why, and the
-viewer does not try that file again.
+A commit header, and the lines after it that are not part of the diff, such as
+the commit's author, date, and message, show the commit's own entry when the
+viewer can find the commit's repository: when the commit was authored, and its
+author. Such a line edited since the view was loaded or last saved shows
+nothing. Removed lines show nothing. The column fills in as git finishes reading
+each file and commit in view. Turning the column on when no line on the screen
+can be blamed says so in the status line. When git cannot blame a file, the
+status line says why, and the viewer does not try that file again.
 
 Press `\` in the interactive pager to cycle through unwrapped lines, hard
 wrapping, and word wrapping. Hard wrapping fills every screen row before it
 continues. Word wrapping breaks at whitespace and indents each continuation row
 by the width of the line's leading punctuation and whitespace. A row is drawn
 unindented when it could hold the rest of the line only without the indentation,
-or when it is too narrow for the indentation and any text.
+or when it is too narrow for the indentation and any text. Either way, a row
+does not start in the middle of a character that takes two columns, such as a
+Han character or an emoji. A character the edge of the screen would cut in two
+when lines are not wrapped is left blank.
 
-Press `c` to cycle how non-printable characters are shown. The first mode draws
-each control character as its control-picture glyph, such as `␉` for a tab, one
-column per character. The ANSI color mode applies color escape sequences to the
-text that follows them instead of showing them. It also advances each tab to the
-next column that is a multiple of 4, counting the columns drawn from the start
-of the line. Other control characters still appear as control pictures. The
+Press `c` to cycle how non-printable characters are shown. The pager starts in
+the ANSI color mode, which applies color escape sequences to the text that
+follows them instead of showing them. It also advances each tab to the next
+column that is a multiple of 4, counting the columns drawn from the start of the
+line. It draws a character overstruck through backspaces once, the way a printer
+would: struck over itself it is bold, and struck over an underscore it is
+underlined. Other characters struck together draw the last one struck, as a
+terminal would. This is how `man` marks emphasis, so a manual page that `man`
+formats for `cf view` keeps its bold and underlined text. Other control
+characters appear as their control-picture glyphs, such as `␇` for a bell. The
 hidden mode drops every complete escape sequence that starts with `ESC [`, and
 shows each run of other control characters, including the escape characters of
-other sequences, as one `…`. Editing always uses the first mode.
+other sequences, as one `…`. The pictures mode draws each control character as
+its control-picture glyph, such as `␉` for a tab, one column per character.
+Editing always uses the pictures mode.
 
 Redirected text output keeps the source text verbatim by default and adds ANSI
 color only when the selected color mode permits it. Binary output uses its
@@ -1439,26 +1892,29 @@ A run plans first, read-only, and prints the plan; refuses a store the plan says
 it must not write — one whose schema is behind the engine's, so that opening it
 would migrate it (a table, index or column the engine declares and the store
 lacks, a column declared differently, a legacy table the engine drops), one with
-a second branch, one with no commit 1, one with foreign-key violations, one
-holding more than one ACL document or an ACL document whose value is not an ACL,
-one with a non-empty `-wal` or `-journal` beside it, one another connection
-holds, or a store or result path under a directory a local server serves; then
-opens the store through the engine with an exclusive lock and, in order: inserts
-the compaction commit at the next seq, a `system` commit under the
-`compaction:<run id>` session with the plan as its payload; compacts each
-selected instance in its own transaction — the oldest row the cut keeps becomes
-the base, rewritten as a `set` holding the engine's reconstruction at exactly
-that row if it was a patch, and attributed to the compaction commit whatever its
-op, with the rows and snapshots behind it deleted; hollows the payloads outside
-the window in seq-ranged batches; writes the audit revision on the space's ACL
-document, a whole-document `set` of the document as it stands with a
-`compaction` member beside `value`, when the store has a live one (a space with
-no ACL document gets none, and a tombstoned one is left as it is, since a `set`
-would recreate it); checks the foreign keys and the file's integrity; and writes
-the result with `VACUUM
-INTO` to `--out`, `<store>.compacted.sqlite` beside the
-source by default, never overwriting. A run interrupted anywhere leaves a store
-every reader can use, and running it again resumes it under a second compaction
+an active branch other than the default one and the leftover history forks a run
+deletes, one with no commit 1, one with foreign-key violations, one holding more
+than one ACL document or an ACL document whose value is not an ACL, one with a
+non-empty `-wal` or `-journal` beside it, one another connection holds, or a
+store or result path under a directory a local server serves; then opens the
+store through the engine with an exclusive lock and, in order: deletes every
+leftover history fork — an active branch named `history:…`, left by a page that
+went away with an earlier step of the space open — and inserts the compaction
+commit at the next seq, a `system` commit under the `compaction:<run id>`
+session with the plan as its payload; compacts each selected instance in its own
+transaction — the oldest row the cut keeps becomes the base, rewritten as a
+`set` holding the engine's reconstruction at exactly that row if it was a patch,
+and attributed to the compaction commit whatever its op, with the rows and
+snapshots behind it deleted; hollows the payloads outside the window in
+seq-ranged batches; writes the audit revision on the space's ACL document, a
+whole-document `set` of the document as it stands with a `compaction` member
+beside `value`, when the store has a live one (a space with no ACL document gets
+none, and a tombstoned one is left as it is, since a `set` would recreate it);
+checks the foreign keys and the file's integrity; and writes the result with
+`VACUUM
+INTO` to `--out`, `<store>.compacted.sqlite` beside the source by
+default, never overwriting. A run interrupted anywhere leaves a store every
+reader can use, and running it again resumes it under a second compaction
 commit. The run's own summary follows the plan on stdout; progress goes to
 stderr; `--json` emits the summary as one document.
 
@@ -1476,15 +1932,15 @@ snapshots deleted only at or below a boundary; every document reconstructed on
 both files through the inspector's replay — a second implementation of the
 engine's rule — and compared, with the ACL document's `value` unchanged and a
 valid ACL and `compaction` the only member that differs, or its tombstone
-untouched; every table outside the history — `op_*`, `scheduler_basis`,
-`execution_outbox`, `blob_store`, the tables patterns created — identical in
-schema and contents; the content fingerprint; exactly the payloads the runs'
-windows reach hollowed, every marker's hash and length matching the backup's
-bytes, every commit row and every other commit column surviving; the single
-run's counts against its plan; and commit 1's payload byte-identical.
-`--verify-sample <n>` reconstructs every n-th document and checks every n-th
-marker, and skips the fingerprint: a quick pass during rehearsal, and a weaker
-claim.
+untouched; every table outside the history — `op_*`, `scheduler_basis`, the
+`currency_*` tables, `execution_outbox`, `blob_store`, the tables patterns
+created — identical in schema and contents; the content fingerprint; exactly the
+payloads the runs' windows reach hollowed, every marker's hash and length
+matching the backup's bytes, every commit row and every other commit column
+surviving; the single run's counts against its plan; and commit 1's payload
+byte-identical. `--verify-sample <n>` reconstructs every n-th document and
+checks every n-th marker, and skips the fingerprint: a quick pass during
+rehearsal, and a weaker claim.
 
 The dry-run report counts the instances matched and truncated, the boundaries
 that become a `set`, the revision and snapshot rows and bytes that would go, the
@@ -2089,9 +2545,11 @@ cf agent runner --identity ./my.key --api-url https://toolshed.example \
 | `--max-concurrent-local`    | How many local jobs run at once, beside and apart from `--max-concurrent`. Defaults to 2.                                         |
 | `--local-only`              | Serve local jobs and start no Fabric lane; `--identity` and `--api-url` are then not needed.                                      |
 
-The model provider is the one `cf-harness` is configured with under its harness
-home directory. The Fabric lane uses the `context` prompt role, so the default
-`enforce-strict` mode admits only `submit_result`; set
+The model provider is the one `cf-harness` resolves, from
+`CF_HARNESS_MODEL_PROVIDER` and then the persisted preference in its harness
+home directory, except for a local job whose profile names one
+([Local jobs](#local-jobs)). The Fabric lane uses the `context` prompt role, so
+the default `enforce-strict` mode admits only `submit_result`; set
 `CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit` to use read tools.
 
 A run's sandbox, and a local job's, is the one `cf-harness` selects from the
@@ -2144,6 +2602,7 @@ What the Fabric lane does, in order:
 | hit the model-turn limit                              | `failed`, `LIMIT_REACHED`    |
 | finished without a result satisfying its schema       | `failed`, `INVALID_RESULT`   |
 | failed in the model, a tool, or storage               | `failed`, `PROVIDER_FAILURE` |
+| was stopped by a read the read ceiling withholds      | `failed`, `CFC_REFUSED`      |
 | had its result write refused by the space's policy    | `refused`, `REFUSED`         |
 | was cancelled (`cancelRequestedAt` set on the record) | `cancelled`, `CANCELLED`     |
 
@@ -2315,20 +2774,45 @@ last step, and the parent's step resumes when no child remains. Children cannot
 delegate further; nested progress needs lineage in the harness's transcript
 contract before that restriction is widened.
 
+A profile may name the `model` its jobs run, in place of the runner's `--model`,
+and the `modelProvider` they run on, `openai-codex` or
+`openai-compatible-gateway`, which the runner passes to `cf-harness` as
+`--model-provider`. A profile naming a provider fixes the provider its jobs'
+model calls go to; one naming none leaves `cf-harness` to resolve a provider as
+each job starts, from `CF_HARNESS_MODEL_PROVIDER` and then the harness home's
+persisted preference. Such a profile that bounds model calls fails each job that
+resolves to `openai-compatible-gateway`, which cannot verify the bounds. The
+runner refuses a profile file naming a provider `cf-harness` does not know. A
+follow-up continues its predecessor's recorded run, and `cf-harness` refuses to
+continue a run on a provider other than the one it recorded, or on another model
+where it recorded one. A follow-up under a profile whose `modelProvider` differs
+from its predecessor's recorded provider therefore fails `PROVIDER_FAILURE`
+before any model call, with the `errorDetail`
+`continue provider mismatch: run uses <recorded>, requested <profile's>`. It
+records no run, so the conversation it ends can open no further follow-up; a
+host that changes a profile's provider starts a new job instead. A job pinned to
+`openai-codex` runs without `CF_HARNESS_GATEWAY_BASE_URL` and
+`CF_HARNESS_GATEWAY_AUTH_MODE`, which the harness refuses beside that provider,
+so one runner can serve gateway and Codex profiles alike.
+
 A host profile may bound each model call with `maxInputBytes` and
 `maxOutputTokens`; a caller may only narrow either ceiling. Bounded calls use
-`openai-codex`, make one provider attempt without transport retries, check the
-final UTF-8 request body before sending it, and set the provider's output-token
-ceiling, including reasoning tokens. The byte check includes instructions,
-history and tool schemas and rejects oversized context without discarding it.
-The same model client carries these limits into research and delegated calls. A
-run under the gateway provider refuses these limits as its model client is
-built, before any model call. An input-byte ceiling is not a token count;
-callers budgeting tokens must reserve separate provider framing headroom.
-Provider-added native-search context and image token expansion require separate
-accounting; the serialized byte check does not bound them. A response that
-reaches its output-token ceiling ends as a provider failure, with no partial
-structured result admitted.
+`openai-codex`, make one provider attempt without transport retries (a request
+whose access token the provider refuses is issued once more with a refreshed
+token), check the final UTF-8 request body before sending it, and set the
+provider's output-token ceiling, including reasoning tokens. The byte check
+includes instructions, history and tool schemas and rejects oversized context
+without discarding it. The same model client carries these limits into research
+and delegated calls. A run under the gateway provider refuses these limits as
+its model client is built, before any model call; a profile pinned to
+`openai-compatible-gateway` that sets either is refused when the profile file is
+read, and a request naming either under such a profile is refused
+`beyond_profile`. An input-byte ceiling is not a token count; callers budgeting
+tokens must reserve separate provider framing headroom. Provider-added
+native-search context and image token expansion require separate accounting; the
+serialized byte check does not bound them. A response that reaches its
+output-token ceiling ends as a provider failure, with no partial structured
+result admitted.
 
 `imageAttachments` contains at most eight `{mediaType, base64}` objects, using
 PNG, JPEG, GIF or WebP bytes. Canonical base64 and the declared image signature
@@ -2340,8 +2824,9 @@ key.
 
 Enqueue commits its job and first event in a SQLite WAL transaction with
 `synchronous = FULL` before acknowledging it. Repeating a caller's idempotency
-key with the same request returns that job; a different request or profile
-returns a conflict.
+key with the same request returns that job, even after the host's profiles
+change or drop the job's profile, since only a job to be added is held to the
+profiles; a different request or profile returns a conflict.
 
 A caller sends another message with `POST /jobs/<id>/messages`, also bounded at
 1 MiB of UTF-8 JSON:
@@ -3050,6 +3535,14 @@ from that container directly. An address-only selection can therefore return a
 stored child link without loading the child. The verb's declared result remains
 available for cycle bounding; it does not replace the selection's source schema.
 
+A selection that names fields beside an address loads no more than it names. A
+source with no schema of its own is read through the positions the selection
+selects, with no claim about the shape at any of them: a named field is loaded
+with what it links to, and every other child is left unloaded. What a read loads
+is what the runtime's session goes on watching, and a serving runtime keeps
+current every value a session watches, so a process that makes many calls keeps
+only what their selections named.
+
 Root links, instances, scalars, and receipts read through an explicit schema are
 materialized before selection. A root link can resolve to an absent value, so
 its stored existence alone does not establish a result. Tool calls also
@@ -3210,9 +3703,9 @@ the launcher's current directory. This preserves `deno task cf` behavior from a
 caller directory. Direct sandbox or wrapper callers should pass `--cwd` when
 they need to ignore a stale inherited `INIT_CWD`.
 
-The child CLI process inherits the parent environment. The launcher only adds
-`CF_CLI_NAME=cf`, so caller-provided `CF_API_URL`, `CF_IDENTITY`, experimental
-flags, and CFC/sandbox-related environment variables continue to flow through.
+The child CLI process inherits the parent environment unchanged, so
+caller-provided `CF_API_URL`, `CF_IDENTITY`, experimental flags, and
+CFC/sandbox-related environment variables continue to flow through.
 
 From the Labs checkout:
 
@@ -3239,6 +3732,249 @@ deno run --allow-run --allow-env --allow-read vendor/labs/runtime/cli/launcher.t
 
 Use `--launcher-help` for launcher-specific help. Normal CLI flags such as
 `--help` are passed through to `cf`.
+
+## Keeping, sharing and publishing in the pattern index
+
+The pattern index is where a person's patterns are kept while they work on them,
+and where shared and published patterns are found. `cf index` holds the
+membership commands and `cf pattern` the rest: `cf index join` once, after which
+each deploy of the person's own pattern is kept as a private version
+(`cf pattern history`, `cf pattern rollback`); `cf pattern share` shares one
+anonymously, `cf pattern publish` under the person's name, and `cf pattern ls`
+(also `cf pattern mine`) says where shared ones stand. Every call to the index
+signs with the identity (`--identity` or `CF_IDENTITY`), except the invite
+redemption in `cf index join`, which the index-only root key it creates signs
+(see "Joining"). All of them talk to the index `--pattern-index-url` or
+`CF_PATTERN_INDEX_URL` names, the deployment's by default.
+
+### Joining
+
+The index admits people by invite. `cf index join` reads the invite link from
+stdin, which keeps the secret code in its fragment out of shell history and
+transcripts, or takes it as an argument. It makes a key for the index alone,
+redeems the invite with it so it becomes the root of the person's membership,
+and has that root delegate `/index` to the `cf` identity. The person's own
+identity never becomes their index root, so nothing the index learns links to
+their spaces or profile. The root key and the chains it issued are kept under
+`$XDG_STATE_HOME/commonfabric/pattern-index/<host>/` (or `~/.local/state/…`, or
+`CF_PATTERN_INDEX_HOME`), private to the user; that directory is the person's
+standing on the index and is worth backing up. Joining again redeems nothing,
+and a join whose redemption landed without its answer arriving is completed by
+running it again.
+
+A link to a signing key holds for at most 90 days, so every index call from `cf`
+renews it from the kept root when it has under a week left. Other keys act for
+the same person through chains the root issues:
+
+- `cf delegation issue --index --to <did> --out <file>` writes the chain another
+  key presents: a Loom instance key, or a second machine, which then runs
+  `cf index join --chain <file>` instead of redeeming a second invite. A chain
+  adopted this way is not renewed where the root is not kept; the root's machine
+  issues a new one before it lapses.
+- `cf delegation issue --index-root --to <did> --out <file>` writes the
+  single-use delegation that moves the membership to a new root key, which
+  presents it with `cf index move-root <file>`. Chains from the old root stop
+  working.
+
+`cf index sharing` shows the person's give-to-get setting, the same one their
+loom's settings change, and `cf index sharing on|off` and `--self-built on|off`
+change it. On, which is the default, their patterns are shared anonymously once
+they have used them in their loom for a day with no newer version and they pass
+the privacy check, and they see what others share; off, nothing of theirs is
+shared on its own (what they shared with `cf pattern share` stays shared until
+`cf pattern unshare`), and search and listings show them only patterns published
+under a name, though a shared pattern opened by its id, as an import or
+`--from-index` does, still works. `--self-built` says whether that covers the
+patterns they build themselves in `cf` and Claude Code.
+
+`cf index whoami` says which member the index sees the identity as. An admin
+admits a key without an invite with `cf index admit <did>`.
+
+### Private versions
+
+On an index that keeps versions, each `cf piece new <file>` and
+`cf piece setsrc` of a pattern the person owns is kept as a version only they
+can read, once the deploy commits, and the deploy prints one line saying which
+version it is (`piece new --json` carries it as `version`, whose `status` is
+`recorded`, `unchanged`, `not-joined`, `skipped` or `failed`). A deploy whose
+source the newest version already has keeps no new one and says so
+(`unchanged`). An index from before private versions is sent nothing, and the
+deploy prints no version line (`--json` reports `skipped`). A version holds the
+source as deployed, personal details included, so it is kept where only its
+owner can read it, and admins cannot see it. The versions of one entry file form
+its lineage, which the index finds by a slot `cf` computes. In a git checkout
+with an `origin` remote the slot is a hash of the remote and the file's path in
+the repository, so every worktree and clone continues one lineage. Elsewhere it
+is the absolute path keyed with a secret kept in this machine's index store, so
+the index cannot confirm a guessed path; moving such a file starts a new
+lineage. A deploy from the index (`--from-index`), a `setsrc --origin` deploy (a
+system or repository pattern), and a file fetched from someone else's pattern
+and deployed unchanged keep no version; an edited one is kept as the person's
+remix of it. When this machine never joined an index, a deploy makes no index
+call and says so once. The index write never changes a deploy's outcome: a
+failure is reported in one line and the deploy's exit status stands.
+
+`--no-index-version` on `piece new <file>` and `piece setsrc` keeps no version
+of that deploy and makes no index call to record one, so a deploy in a tight
+edit loop never waits on the index (`--json` reports `skipped`). A
+`--from-index` deploy still reads the index for its source, and keeps no version
+either way.
+
+`--version-entry <path>` on `piece new` and `piece setsrc` keeps the version in
+the lineage of `<path>` rather than of the file deployed, for a deploy of a copy
+of it (a snapshot in a temporary directory), so the copy continues the
+original's history.
+
+An agent deploying a pattern it wrote for the person (a service building one for
+their piece) says so with `--version-origin agent` on `piece new <file>` or
+`piece setsrc`: the version is kept as agent work, so the person's sharing
+setting treats it as one, in the history of the piece it is deployed to rather
+than of the file, which for such a deploy is a staged copy. Its description and
+hashtags come from the doc comment of the program the deploy committed, not from
+the staged entry, which may be gone by the time the version is recorded.
+`--version-description <text>` says what the version does, in place of that doc
+comment's description (its hashtags stay). `--built-from <patternId>` names the
+index pattern the source was built from, as `piece getsrc` notes it for a file
+it writes: someone else's is credited as the remix's origin on the history's
+first version, and that pattern deployed unchanged keeps no version. None of
+them goes with `--no-index-version`, `setsrc --origin` or `new --from-index`
+(none of which keeps a version), and `--version-origin` does not go with
+`--version-entry`.
+
+`cf pattern checkpoint <entry> --cell <piece>` keeps what a piece runs now as a
+private version of the entry's lineage, without deploying: the pattern the piece
+points at, with its source, so it is exactly what was deployed. It is shared as
+a deployed version is: by `cf pattern share`, or by the sharing setting once it
+settles. It pairs with `--no-index-version` deploys, keeping one when a change
+is done, and exits 1 with the reason when no version was kept. A checkpoint of a
+source the newest version already has keeps no new one, says so, and exits 0. It
+refuses an entry file whose contents are not what the piece runs (another file,
+or this one edited since its deploy). A piece following an origin keeps no
+version, as a deploy of it does not.
+
+A deploy never shares a version by itself: drafts land many times an hour. The
+index shares a version once it settles, when its owner has used it in a loom for
+a day with no newer version and it passes the privacy check, and only while
+their sharing setting (kept by the index; `cf index sharing` and Loom's settings
+change it) covers what they build; the deploy's line says so, and `--json`
+carries it as `version.autoShare: "when_used"`. `cf pattern share` shares one at
+once. The index write follows the deploy's commit and never changes its outcome,
+but the command waits for it before exiting.
+
+`cf pattern history` lists the person's lineages; `cf pattern history <entry>`
+lists one entry's versions, newest first, and where each stands.
+`cf pattern rollback <entry> <version>` writes an earlier version's files over
+the entry's, then makes it the newest version in the index. It refuses when a
+file it would write over holds something no version keeps, since nothing could
+bring that back, unless `--force`, and it never writes outside the pattern's
+directory. Naming the current version with `--force` writes its files back
+without a new version. Running pieces keep the source they have until the next
+`cf piece setsrc`.
+
+### Sharing
+
+`cf pattern share <entry file>` compiles the pattern as `cf piece new` does,
+against the same fabric (`--api-url`, `--space`), so that the id it shares under
+is the one a deploy computes; `--test`, `--datafile`, `--main-export` and
+`--root` package it the same way and must match how the piece was deployed. The
+description is the first paragraph of the entry's doc comment, which may follow
+`//` lines and imports, and the tags are its `@hashtags` and `@keywords` lines;
+`--description`, `--hashtags` and `--keywords` override them. An identity that
+is no member is refused before anything compiles. What it shares is a version of
+the entry's lineage. Others who share see it under a pseudonym of that lineage
+alone, never linked to the person's other lineages, beside a coarse tier of how
+much their other shared work is used.
+
+Before sharing, it asks the index's own privacy question locally: it fetches the
+prompt the index's privacy check runs and sends it, with the pattern, to the
+fabric toolshed's LLM. When the answer is that the pattern would reveal
+something identifying, it asks for a generalized version, with specific values
+lifted into arguments and fields renamed away from personal names, at most
+twice, recompiling and checking each. A rewrite may change only the files the
+findings name. A rewrite that passes is written over those files only when git
+tracks each one, it has no uncommitted edits, it is not a symbolic link, and it
+has not changed since it was read (`--allow-dirty` waives the git checks), or,
+outside git or over uncommitted edits, once the source as it stood is kept as a
+private version, which `cf pattern rollback` restores. The command then names
+the kinds of change and the files, never a value, and says how to take it back.
+When a rewrite passes but cannot be written, nothing is shared and the command
+exits 1, saying what to do. When no rewrite passes, the pattern is shared as it
+is, with the findings shown. The index's own check then holds it unlisted until
+they are fixed: it is in no one else's search or listing, and only its author
+and admins see it listed, though anyone given its id can still open it, as with
+any unlisted pattern. When the LLM call fails, the local check is skipped with
+one line saying so; the index checks every listing request either way.
+`--skip-local-check` skips it on purpose.
+
+A share names the id last shared from the same entry file on this machine as its
+predecessor (`priorPatternId`), so the new version keeps the old one's standing.
+A file `cf piece getsrc` wrote from a piece that `cf piece new --from-index`
+created is published as a remix of that pattern (`remixedFrom`), or as a new
+version of it when it was the caller's own; `--remixed-from` names the source
+where `cf` has no record. `--standalone` offers the pattern to a person choosing
+what to place, on its own at the top of a loom; `--part` offers it only as a
+part other patterns build from. With neither, the index decides: a new version
+keeps its predecessor's answer, a remix its source's, and any other first
+version stands alone when its entry file is `main.tsx`. A pattern with a
+required input and no default is a part whatever was asked, and the command
+names that input. Sharing then shares that version on **beta**: once the index's
+check passes it becomes the lineage's next numbered shared version (1, 2, 3…),
+which anyone with its link can open, and nobody finds in search or a listing.
+Source unchanged since the version already shared makes no new version, and the
+command says `Already shared`. Past the index's daily limit it says when the
+limit resets, and running the same command then shares it again. The next step
+it prints is deploying the pattern with `cf piece new --from-index <id>`, or
+opening it in a loom with `/deploy index:<id>`. Once stable, a listed pattern
+moves from Unvetted to Main once its author opens it in a loom.
+
+`cf pattern stable <entry>` makes the newest shared version **stable**: what
+search, listings and a plain link give. It passed the check when it was shared,
+so no new source is exposed; only who can find it changes. A share still being
+checked is made stable instead, so it is findable once it passes and an older
+number never becomes stable by being the newest so far. Both channels only move
+forward: to go back, roll back, share again (a new number), then make that
+stable. `cf pattern history` shows each version's shared number and channel.
+
+`cf pattern link <entry>` prints a link that names the pattern by its lineage's
+pseudonym, which shows the person's name only on a lineage published under it:
+`<pseudonym>` for stable (beta when nothing is stable yet), `--beta` for
+`<pseudonym>@beta`, and `--number <n>` for `<pseudonym>@<n>`, exactly version n,
+which never changes. It checks the link with the index first, so it never prints
+one that opens nothing.
+
+`cf piece new --from-link <link>` makes a piece from what a link names now: it
+asks the index which shared version that is, then deploys it and remembers where
+it came from exactly as `--from-index` does with that version's id.
+
+`cf pattern unshare <entry>` takes the pattern out of others' searches and
+listings and shares no later version until `cf pattern share` runs again. A
+version already shared stays readable by its id, so imports of it keep working.
+
+### Publishing under a name
+
+`cf pattern publish <entry file>` shares the pattern as `cf pattern share` does,
+but on stable, since a published pattern is meant to be found, then names the
+person as its author under one of their Common Fabric profiles
+(`--profile <space>`, the one `#profile` answers with by default). Only that
+lineage is named; the person's other lineages stay anonymous and are not linked
+to it. Without `--as "<the profile's name>"` it prints one line saying the name
+will be shown to every member and cannot be unseen, and names nothing: repeating
+the name is how an agent shows it asked the person. The index takes the profile
+only with proof that it is the person's: the delegation the profile space issued
+to their identity, which Home records. A profile made before profiles owned
+themselves has none and cannot be published under yet. Everything that can
+refuse the naming is checked before anything is shared; a naming the index
+refuses afterwards leaves the pattern shared, says so, and exits 1.
+`cf pattern unpublish <entry>` stops showing the name from then on; the lineage
+stays shared under its pseudonym.
+
+### Where patterns stand
+
+`cf pattern ls` lists the caller's patterns, one row per lineage (a pattern and
+its later versions): whether the newest version is being checked, held (with the
+findings to fix and the command that republishes it), in error waiting for an
+admin re-run, or listed, and then its bucket, its use counts, and what moves it
+on.
 
 ## JSON command contract
 
@@ -3280,7 +4016,21 @@ The supported output switches are:
   accepted, documented no-ops for callers that select JSON explicitly.
 - `cf delegation show --json` prints one row per delegation of each chain the
   file holds; `cf delegation issue --out <file> --json` reports the write as one
-  object naming the file, the space, the audience, and the chain's length.
+  object naming the file, the space, the audience, and the chain's length; with
+  `--index` or `--index-root` the object names the command and the index root
+  instead of a space, and the expiry.
+- `cf index join --json` and `cf index move-root --json` print
+  `{handle, role, root, signer, joined, storeDir, rootKeptHere}`, where
+  `rootKeptHere` says whether backing up `storeDir` keeps the root key;
+  `cf index whoami --json` prints the handle, the role and the signer.
+- `cf pattern share --json` prints the share report. Its `outcome` is `shared`,
+  with the id, the version, whether it was new, the listing request's outcome
+  and the next step, or `blocked`, with nothing shared and the next step. Both
+  carry the local check's outcome: findings and changes by category and file,
+  never a value. `cf pattern publish --json` prints the same report with a
+  `named` line once the name is shown. `cf pattern ls --json` prints its rows,
+  `cf pattern history --json` the versions (or, without an entry, the lineages),
+  and `cf pattern rollback --json` what it restored and wrote.
 - `cf check --json` compiles without evaluating and prints one object with a
   `files` array. Each entry has the input `path` and the compiled module bodies
   in `output`.

@@ -92,9 +92,15 @@ const WORKER_RUNS_NOTE =
  */
 export const TOPICS_SOURCE_ROOT = join(import.meta.dirname!, "..");
 
-/** The board's pivot, and the per-topic lift that reads it. */
+/** The board's pivot, its index by number, and the per-topic lift that reads
+ * them. */
 export const TOPICS_LIFTS: readonly TopicsLift[] = [
   { name: "crossrefTable", module: "apps/topics/main.tsx", role: "producer" },
+  {
+    name: "crossrefIndexOf",
+    module: "apps/topics/crossref-index.ts",
+    role: "producer",
+  },
   { name: "backlinksOf", module: "apps/topics/topic.tsx", role: "consumer" },
 ];
 

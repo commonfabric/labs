@@ -1,13 +1,13 @@
 /** Checks warnings for unresolved defaults and successful fallback extraction. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type SchemaGenerationDiagnostic,
   SchemaGenerator,
 } from "../../src/index.ts";
 import { asObjectSchema, getTypeFromCode, getTypeFromFiles } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("default diagnostics", () => {
   describe("DeepDefault", () => {

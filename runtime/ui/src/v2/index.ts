@@ -130,6 +130,7 @@ export * from "./components/cf-attachments-bar/index.ts";
 export * from "./components/cf-chip/index.ts";
 export * from "./components/cf-cfc-authorship/index.ts";
 export * from "./components/cf-owner-view/index.ts";
+export * from "./components/cf-pattern-install/index.ts";
 export * from "./components/cf-cfc-label/index.ts";
 export * from "./components/cf-question/index.ts";
 export * from "./components/cf-cell-link/index.ts";

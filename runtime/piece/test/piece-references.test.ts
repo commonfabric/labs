@@ -1,11 +1,11 @@
 import { assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   entityRefFromString,
   entityRefToString,
   isEntityRef,
 } from "@commonfabric/data-model/cell-rep";
+import { describe, it } from "@commonfabric/test-support/test";
 
 type MockDoc = {
   get: () => unknown;

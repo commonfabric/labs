@@ -8,7 +8,12 @@
  * 2. On an initially empty Record
  * 3. With keys containing hyphens (interpreted as path separators?)
  *
- * Error observed: "Value at path value/argument/corrections/0-Technical_Expertise is not an object"
+ * Error once reported: "Value at path
+ * value/argument/corrections/0-Technical_Expertise is not an object"
+ *
+ * The claim is false: every case below writes its entry, and a hyphenated
+ * key is stored whole as one entry. test-record-key-set-56.test.tsx asserts
+ * this.
  */
 import {
   Cell,
@@ -35,117 +40,31 @@ interface Input {
   logs: string[] | Default<[]>;
 }
 
-// ============================================================
-// TEST A: .key().set() on EMPTY record with SIMPLE key
-// ============================================================
-const testEmptySimpleKey = handler<
+// Writes `item` under `key` with `.key(key).set()`, which works on an empty
+// or populated record, for a new or existing key, hyphenated or not.
+const setKey = handler<
   unknown,
-  { record: Cell<Record<string, Item>>; logs: Cell<string[]> }
->(
-  (_, { record, logs }) => {
-    try {
-      const key = "simplekey";
-      record.key(key).set({ value: "test-a", count: 1 });
-      const msg = `A: SUCCESS - .key("${key}").set() on empty record`;
-      console.log(`[#56] ${msg}`);
-      logs.set([...logs.get(), msg]);
-    } catch (e) {
-      const msg = `A: FAILED - ${e}`;
-      console.error(`[#56] ${msg}`);
-      logs.set([...logs.get(), msg]);
-    }
-  },
-);
+  {
+    record: Cell<Record<string, Item>>;
+    logs: Cell<string[]>;
+    key: string;
+    item: Item;
+    label: string;
+  }
+>((_, { record, logs, key, item, label }) => {
+  record.key(key).set(item);
+  logs.push(`${label}: SUCCESS - .key("${key}").set() wrote "${item.value}"`);
+});
 
-// ============================================================
-// TEST B: .key().set() on EMPTY record with HYPHENATED key
-// ============================================================
-const testEmptyHyphenKey = handler<
+// Writes the same kind of entry by spreading the current record.
+const spreadKey = handler<
   unknown,
   { record: Cell<Record<string, Item>>; logs: Cell<string[]> }
->(
-  (_, { record, logs }) => {
-    try {
-      const key = "0-Technical_Expertise"; // The exact key from the superstition
-      record.key(key).set({ value: "test-b", count: 2 });
-      const msg = `B: SUCCESS - .key("${key}").set() on empty record`;
-      console.log(`[#56] ${msg}`);
-      logs.set([...logs.get(), msg]);
-    } catch (e) {
-      const msg = `B: FAILED - ${e}`;
-      console.error(`[#56] ${msg}`);
-      logs.set([...logs.get(), msg]);
-    }
-  },
-);
-
-// ============================================================
-// TEST C: .key().set() on POPULATED record (update existing)
-// ============================================================
-const testPopulatedUpdate = handler<
-  unknown,
-  { record: Cell<Record<string, Item>>; logs: Cell<string[]> }
->(
-  (_, { record, logs }) => {
-    try {
-      const key = "existing"; // This key already exists
-      record.key(key).set({ value: "updated", count: 99 });
-      const msg = `C: SUCCESS - .key("${key}").set() update existing key`;
-      console.log(`[#56] ${msg}`);
-      logs.set([...logs.get(), msg]);
-    } catch (e) {
-      const msg = `C: FAILED - ${e}`;
-      console.error(`[#56] ${msg}`);
-      logs.set([...logs.get(), msg]);
-    }
-  },
-);
-
-// ============================================================
-// TEST D: .key().set() on POPULATED record (create new)
-// ============================================================
-const testPopulatedNew = handler<
-  unknown,
-  { record: Cell<Record<string, Item>>; logs: Cell<string[]> }
->(
-  (_, { record, logs }) => {
-    try {
-      const key = "new-hyphen-key"; // New key with hyphen
-      record.key(key).set({ value: "test-d", count: 4 });
-      const msg =
-        `D: SUCCESS - .key("${key}").set() new key on populated record`;
-      console.log(`[#56] ${msg}`);
-      logs.set([...logs.get(), msg]);
-    } catch (e) {
-      const msg = `D: FAILED - ${e}`;
-      console.error(`[#56] ${msg}`);
-      logs.set([...logs.get(), msg]);
-    }
-  },
-);
-
-// ============================================================
-// TEST E: Spread workaround (should always work)
-// ============================================================
-const testSpreadWorkaround = handler<
-  unknown,
-  { record: Cell<Record<string, Item>>; logs: Cell<string[]> }
->(
-  (_, { record, logs }) => {
-    try {
-      const key = "spread-key";
-      const current = record.get() ?? {};
-      record.set({ ...current, [key]: { value: "test-e", count: 5 } });
-      const msg = `E: SUCCESS - spread workaround with key "${key}"`;
-      console.log(`[#56] ${msg}`);
-      logs.set([...logs.get(), msg]);
-    } catch (e) {
-      const msg = `E: FAILED - ${e}`;
-      console.error(`[#56] ${msg}`);
-      logs.set([...logs.get(), msg]);
-    }
-  },
-);
+>((_, { record, logs }) => {
+  const key = "spread-key";
+  record.set({ ...record.get(), [key]: { value: "test-e", count: 5 } });
+  logs.push(`E: SUCCESS - spread workaround with key "${key}"`);
+});
 
 // Clear logs handler
 const clearLogs = handler<unknown, { logs: Cell<string[]> }>(
@@ -194,7 +113,13 @@ export default pattern<Input>(({ emptyRecord, populatedRecord, logs }) => {
 
           <div style={{ marginBottom: "0.5rem" }}>
             <cf-button
-              onClick={testEmptySimpleKey({ record: emptyRecord, logs })}
+              onClick={setKey({
+                record: emptyRecord,
+                logs,
+                key: "simplekey",
+                item: { value: "test-a", count: 1 },
+                label: "A",
+              })}
             >
               A: Simple key on empty
             </cf-button>
@@ -202,7 +127,13 @@ export default pattern<Input>(({ emptyRecord, populatedRecord, logs }) => {
 
           <div style={{ marginBottom: "0.5rem" }}>
             <cf-button
-              onClick={testEmptyHyphenKey({ record: emptyRecord, logs })}
+              onClick={setKey({
+                record: emptyRecord,
+                logs,
+                key: "0-Technical_Expertise",
+                item: { value: "test-b", count: 2 },
+                label: "B",
+              })}
             >
               B: Hyphen key on empty (the problematic case)
             </cf-button>
@@ -221,7 +152,13 @@ export default pattern<Input>(({ emptyRecord, populatedRecord, logs }) => {
 
           <div style={{ marginBottom: "0.5rem" }}>
             <cf-button
-              onClick={testPopulatedUpdate({ record: populatedRecord, logs })}
+              onClick={setKey({
+                record: populatedRecord,
+                logs,
+                key: "existing",
+                item: { value: "updated", count: 99 },
+                label: "C",
+              })}
             >
               C: Update existing key
             </cf-button>
@@ -229,7 +166,13 @@ export default pattern<Input>(({ emptyRecord, populatedRecord, logs }) => {
 
           <div style={{ marginBottom: "0.5rem" }}>
             <cf-button
-              onClick={testPopulatedNew({ record: populatedRecord, logs })}
+              onClick={setKey({
+                record: populatedRecord,
+                logs,
+                key: "new-hyphen-key",
+                item: { value: "test-d", count: 4 },
+                label: "D",
+              })}
             >
               D: New hyphen key on populated
             </cf-button>
@@ -248,7 +191,7 @@ export default pattern<Input>(({ emptyRecord, populatedRecord, logs }) => {
 
           <div style={{ marginBottom: "0.5rem" }}>
             <cf-button
-              onClick={testSpreadWorkaround({ record: emptyRecord, logs })}
+              onClick={spreadKey({ record: emptyRecord, logs })}
             >
               E: Spread workaround on empty
             </cf-button>
@@ -282,32 +225,22 @@ export default pattern<Input>(({ emptyRecord, populatedRecord, logs }) => {
             }}
           >
             {logs.map((log) => (
-              <div
-                style={{
-                  color: log.includes("SUCCESS")
-                    ? "green"
-                    : log.includes("FAILED")
-                    ? "red"
-                    : "#333",
-                  marginBottom: "0.25rem",
-                }}
-              >
+              <div style={{ color: "green", marginBottom: "0.25rem" }}>
                 {log}
               </div>
             ))}
           </div>
         </div>
 
-        {/* Expected results */}
+        {/* Observed results */}
         <div style={{ marginTop: "1rem", fontSize: "0.8rem", color: "#666" }}>
           <strong>Superstition claims:</strong>
           <ul>
-            <li>A & B should FAIL (empty record)</li>
-            <li>B especially should FAIL (hyphenated key)</li>
-            <li>C should PASS (update existing)</li>
-            <li>D might PASS (populated record)</li>
-            <li>E should always PASS (workaround)</li>
+            <li>A & B fail (empty record)</li>
+            <li>B especially fails (hyphenated key)</li>
           </ul>
+          <strong>Observed:</strong>{" "}
+          all five succeed, and a hyphenated key is stored whole as one entry.
         </div>
       </div>
     ),

@@ -1,5 +1,10 @@
 import { assertEquals } from "@std/assert";
-import { APICallError, InvalidPromptError, RetryError } from "ai";
+import {
+  APICallError,
+  InvalidPromptError,
+  NoObjectGeneratedError,
+  RetryError,
+} from "ai";
 
 import env from "@/env.ts";
 import {
@@ -7,6 +12,7 @@ import {
   LLMRequestError,
   LLMUpstreamError,
 } from "./errors.ts";
+import { test } from "@commonfabric/test-support/test";
 
 if (env.ENV !== "test") {
   throw new Error("ENV must be 'test'");
@@ -31,7 +37,7 @@ function providerFailure(statusCode: number): APICallError {
 // not trap the search.
 //
 
-Deno.test("a status survives a retry wrapper", () => {
+test("a status survives a retry wrapper", () => {
   const wrapped = new RetryError({
     message: "Failed after 3 attempts",
     reason: "maxRetriesExceeded",
@@ -40,14 +46,14 @@ Deno.test("a status survives a retry wrapper", () => {
   assertEquals(httpStatusForError(wrapped), 429);
 });
 
-Deno.test("a status survives a chain of causes", () => {
+test("a status survives a chain of causes", () => {
   const wrapped = new Error("wrapped", {
     cause: new Error("wrapped again", { cause: providerFailure(503) }),
   });
   assertEquals(httpStatusForError(wrapped), 503);
 });
 
-Deno.test("a cycle among causes does not trap the search", () => {
+test("a cycle among causes does not trap the search", () => {
   const outer: { cause?: unknown } = new Error("outer");
   outer.cause = outer;
   assertEquals(httpStatusForError(outer), 500);
@@ -60,7 +66,7 @@ Deno.test("a cycle among causes does not trap the search", () => {
 // own error types, or from the fallback for an error that names no origin.
 //
 
-Deno.test("a request the SDK would not send is the caller's mistake", () => {
+test("a request the SDK would not send is the caller's mistake", () => {
   // The AI SDK raises these over what the caller sent, before any provider is
   // asked. Reporting them against the provider would send the caller looking in
   // the wrong place.
@@ -76,7 +82,7 @@ Deno.test("a request the SDK would not send is the caller's mistake", () => {
   );
 });
 
-Deno.test("the error types carry their own classification", () => {
+test("the error types carry their own classification", () => {
   assertEquals(httpStatusForError(new LLMRequestError("bad")), 400);
   assertEquals(httpStatusForError(new LLMUpstreamError("down")), 502);
   assertEquals(
@@ -85,7 +91,31 @@ Deno.test("the error types carry their own classification", () => {
   );
 });
 
-Deno.test("an error from nowhere in particular is this service's", () => {
+test("a provider answer that could not be used is a bad gateway", () => {
+  assertEquals(
+    httpStatusForError(
+      new NoObjectGeneratedError({
+        message: "No object generated",
+        response: { id: "r", timestamp: new Date(0), modelId: "m" },
+        usage: {
+          inputTokens: 1,
+          inputTokenDetails: {
+            noCacheTokens: 1,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          },
+          outputTokens: 1,
+          outputTokenDetails: { textTokens: 1, reasoningTokens: 0 },
+          totalTokens: 2,
+        },
+        finishReason: "stop",
+      }),
+    ),
+    502,
+  );
+});
+
+test("an error from nowhere in particular is this service's", () => {
   assertEquals(
     httpStatusForError(new TypeError("undefined is not a function")),
     500,

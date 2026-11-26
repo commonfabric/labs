@@ -1,3 +1,10 @@
+/**
+ * A gallery of thirty untrusted host patterns (chat and direct-message
+ * sends, support replies, announcements, release notes, status pages,
+ * reposts, queued and staged posts) that embed reviewed trusted send and
+ * publish surfaces. The host's own buttons are visible decoys that cannot
+ * authorize the protected write.
+ */
 import {
   computed,
   handler,
@@ -1798,39 +1805,6 @@ export const MeetingRecapPublishExample = pattern<
   };
 });
 
-const exampleTitles = [
-  "Chat Thread Send",
-  "Incident Channel Send",
-  "Direct Message Send",
-  "Support Case Reply",
-  "Classroom Announcement",
-  "Project Update Publish",
-  "Release Notes Publish",
-  "Public Status Publish",
-  "Internal Repost",
-  "Team Digest Publish",
-  "Roadmap Update Publish",
-  "Incident Summary Publish",
-  "Policy Publish",
-  "Changelog Publish",
-  "Launch Readiness Publish",
-  "Embedded Composer Send",
-  "Team Digest Context Send",
-  "Executive Brief Send",
-  "Support Escalation Send",
-  "Customer Reply Send",
-  "Classroom Digest Send",
-  "Internal Only Repost",
-  "Public Bulletin",
-  "Staged Announcement",
-  "Announcement Queue",
-  "Visible Queue",
-  "Conversation Target Send",
-  "Host Lookalike Control",
-  "Internal Note Repost",
-  "Meeting Recap Publish",
-] as const;
-
 export const SEND_PUBLISH_EXAMPLE_COUNT = 30;
 export const SEND_PUBLISH_RENDERED_EXAMPLE_COUNT = 30;
 
@@ -1886,9 +1860,9 @@ export default pattern<Record<PropertyKey, never>>(() => {
           <cf-card>
             <cf-vstack slot="content" gap="2">
               <cf-heading level={3}>Catalog</cf-heading>
-              {exampleTitles.map((title, index) => (
+              {renderedExamples.map((example, index) => (
                 <div>
-                  {index + 1}. {title}
+                  {index + 1}. {example[NAME]}
                 </div>
               ))}
             </cf-vstack>

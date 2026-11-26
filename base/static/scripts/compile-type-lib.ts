@@ -15,12 +15,8 @@ import { stripWithheldGlobals } from "./strip-withheld-globals.ts";
  * the way out.
  */
 
-function help() {
-  const message = `
-compile-type-lib /path/to/typescript/src/lib/ lib.d.ts
-`;
-  Deno.stdout.writeSync(new TextEncoder().encode(message));
-}
+/** What the script prints when it is not given the arguments it needs. */
+export const USAGE = "compile-type-lib /path/to/typescript/src/lib/ lib.d.ts";
 
 interface CompileOptions {
   // Path to a typescript repo's library of .d.ts files.
@@ -29,21 +25,6 @@ interface CompileOptions {
   target: string;
   // File to output the compiled .d.ts file
   outFile: string;
-}
-
-function parseArgs(libDir?: string, outFile?: string): CompileOptions {
-  if (
-    typeof libDir !== "string" || libDir === "" ||
-    typeof outFile !== "string" || outFile === ""
-  ) {
-    help();
-    Deno.exit(1);
-  }
-  return {
-    target: "es2023", // Target used in js-compiler
-    libDir,
-    outFile,
-  };
 }
 
 const encoder = new TextEncoder();
@@ -82,8 +63,25 @@ export async function compileMain(options: CompileOptions) {
   await Deno.writeFile(outFile, encoder.encode(text));
 }
 
+/**
+ * Runs the script on its command-line arguments, the TypeScript library
+ * directory and the output file, and returns the exit status.
+ */
+export async function runCompileTypeLib(
+  args: readonly string[],
+): Promise<number> {
+  const [libDir, outFile] = args;
+  if (!libDir || !outFile) {
+    console.log(USAGE);
+    return 1;
+  }
+  // The target js-compiler compiles against.
+  await compileMain({ target: "es2023", libDir, outFile });
+  return 0;
+}
+
 export type { CompileOptions };
 
 if (import.meta.main) {
-  compileMain(parseArgs(Deno.args[0], Deno.args[1]));
+  Deno.exit(await runCompileTypeLib(Deno.args));
 }

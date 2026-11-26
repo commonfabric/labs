@@ -1,7 +1,6 @@
 // First, so that the document it installs is there when CodeMirror loads.
 import { window } from "../../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { EditorState, type Extension } from "@codemirror/state";
@@ -10,6 +9,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree } from "@codemirror/language";
 import { GFM } from "@lezer/markdown";
 import { createProseMarkdownPlugin } from "./prose-markdown.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** Every view `openView()` has opened and `closeViews()` not yet destroyed. */
 const openViews: EditorView[] = [];
@@ -164,6 +164,16 @@ describe("createProseMarkdownPlugin()", () => {
       const view = openView("a\n\n---\n\nb");
       expect(elementsOf(view, "hr.cm-prose-hr")).toHaveLength(1);
       expect(view.contentDOM.textContent).toBe("ab");
+    });
+  });
+
+  describe("line break tags", () => {
+    it("renders a line break element in place of a `<br>` tag", () => {
+      const view = openView("one<br>two");
+      const [drawn] = elementsOf(view, ".cm-prose-br");
+      expect(drawn.children).toHaveLength(1);
+      expect(drawn.firstElementChild?.tagName).toBe("BR");
+      expect(view.contentDOM.textContent).toBe("onetwo");
     });
   });
 

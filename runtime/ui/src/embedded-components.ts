@@ -66,6 +66,7 @@ import "./v2/components/cf-message-beads/index.ts";
 import "./v2/components/cf-message-input/index.ts";
 import "./v2/components/cf-modal/index.ts";
 import "./v2/components/cf-owner-view/index.ts";
+import "./v2/components/cf-pattern-install/index.ts";
 import "./v2/components/cf-piece-menu/index.ts";
 import "./v2/components/cf-picker/index.ts";
 import "./v2/components/cf-profile-badge/index.ts";

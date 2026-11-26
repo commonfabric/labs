@@ -22,6 +22,23 @@ export interface HarnessInputCellSpec {
   ref: string;
 }
 
+/**
+ * One name a run or a session already associates with a handle — an
+ * attachment's, an assigned piece's slug, or a grant's — with the cell behind
+ * it. A new attachment may take the name only for that cell.
+ */
+export interface HarnessHeldInput {
+  /** The held name, as the model was told it. */
+  name: string;
+
+  /**
+   * The canonical reference the name stands for; never model-facing. Absent
+   * where the record holding the name carries no reference, which leaves the
+   * name available to no attachment.
+   */
+  ref?: string;
+}
+
 /** One input cell, as recorded in run state. */
 export interface HarnessInputCell {
   name: string;

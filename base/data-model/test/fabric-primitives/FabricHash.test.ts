@@ -12,7 +12,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   CODEC_TYPE_TAGS,
@@ -20,8 +19,11 @@ import {
   NULL_LIVE_ENVIRONMENT,
   ProblematicValue,
   REALM_CODEC,
+  UnknownValue,
 } from "@/codec-common";
+import { jsonFromFabricValue, newDefaultJsonCodecEngine } from "@/codecs.ts";
 import { FabricHash } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A fixed 32-byte hash for deterministic tests. */
 const SAMPLE_HASH = new Uint8Array(32);
@@ -275,6 +277,11 @@ describe("FabricHash", () => {
           expect(codec.canDecode({ tag: "fid1", hash: 7 })).toBe(false);
         });
 
+        it("returns `false` for a record holding a key it does not read", () => {
+          expect(codec.canDecode({ tag: "fid1", hash: "AQID", extra: 1 }))
+            .toBe(false);
+        });
+
         it("returns `false` for an algorithm tag outside the tag syntax", () => {
           for (const tag of ["", "fid-1", "sys.sha256", "1sha"]) {
             expect(codec.canDecode({ tag, hash: "AQID" })).toBe(false);
@@ -365,6 +372,35 @@ describe("FabricHash", () => {
           }
           expect(codec.canDecode({ tag: "sha256", hash })).toBe(true);
         });
+
+        it("returns `false` for a record holding a key it does not read", () => {
+          expect(
+            codec.canDecode({
+              tag: "fid1",
+              hash: new ArrayBuffer(1),
+              extra: 1,
+            }),
+          ).toBe(false);
+        });
+      });
+    });
+
+    describe("[JSON_CODEC] under an engine", () => {
+      it("decodes a state holding a key it does not read to a `ProblematicValue` preserving the state", () => {
+        const state = { tag: "fid1", hash: "AQID", extra: 1 };
+        const text = jsonFromFabricValue(
+          new UnknownValue(CODEC_TYPE_TAGS.Hash, state),
+        );
+        const decoded = newDefaultJsonCodecEngine({ lenient: true })
+          .decode(text, NULL_LIVE_ENVIRONMENT);
+
+        expect(decoded).toBeInstanceOf(ProblematicValue);
+        expect((decoded as ProblematicValue).wireTypeTag)
+          .toBe(CODEC_TYPE_TAGS.Hash);
+        expect((decoded as ProblematicValue).state).toStrictEqual(state);
+        expect(() =>
+          newDefaultJsonCodecEngine().decode(text, NULL_LIVE_ENVIRONMENT)
+        ).toThrow();
       });
     });
   });

@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+
+import { ValidationError } from "@cliffy/command";
 
 import { BaseFabricSpecialObject } from "@commonfabric/data-model/fabric-bases";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
@@ -45,6 +46,7 @@ import {
   setCellValueFromCommand,
   setPieceSourceFromCommand,
   setsrcSuccessLine,
+  spaceWasWritten,
 } from "../commands/piece.ts";
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import { ServedLifecycleError } from "../lib/pattern-lifecycle.ts";
@@ -76,6 +78,12 @@ import { safeStringify } from "../lib/render.ts";
 import { argv, cf, checkStderr, stripAnsi } from "./utils.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const API_URL = "https://cf.dev";
 const SPACE = "common-knowledge";
@@ -1748,6 +1756,7 @@ describe("cli piece parsing", () => {
 
     it("should reject invalid scope suffixes on the piece ID segment", () => {
       expect(() => parseLink("piece1@any")).toThrow(/Invalid scope suffix/);
+      expect(() => parseLink("piece1@any")).toThrow(ValidationError);
       expect(() => parseLink("piece1@inherit")).toThrow(
         /requires a reference context/,
       );
@@ -1824,6 +1833,19 @@ describe("cli piece parsing", () => {
         embeddedSpace: SPACE_DID,
         path: ["field"],
       });
+    });
+
+    it("reads an endpoint's scope written as a named qualifier", () => {
+      expect(parseLink("fid1:abc@scope=session/field")).toEqual({
+        pieceId: "fid1:abc",
+        scope: "session",
+        path: ["field"],
+      });
+    });
+
+    it("throws for an endpoint carrying a pin", () => {
+      expect(() => parseLink(`fid1:abc@pin=${"A".repeat(43)}/field`))
+        .toThrow("which a target does not take");
     });
   });
 
@@ -5693,6 +5715,7 @@ describe("cli piece parsing", () => {
                 Promise.resolve({
                   id: PIECE,
                   name: () => "Notes",
+                  getCell: () => runtime.getCell(space, "piece"),
                   getPatternRef: () => Promise.resolve(patternRef),
                   input: {
                     get: () => Promise.resolve({ title: "Input" }),
@@ -5810,5 +5833,125 @@ describe("cli piece parsing", () => {
           ),
       },
     )).rejects.toThrow(/Slug "demo" not found/);
+  });
+
+  describe("parsePieceOptions() on a bare target", () => {
+    const target = {
+      apiUrl: "http://127.0.0.1:8000",
+      identity: "/nonexistent-but-unread.key",
+      space: "did:key:z6MkSpace",
+      quiet: true,
+    };
+    const pin = "A".repeat(43);
+
+    it("reads a scope written as a named qualifier", () => {
+      const config = parsePieceOptions({ ...target, cell: "lunch@scope=user" });
+
+      expect(config.piece).toBe("lunch");
+      expect(config.pieceScope).toBe("user");
+    });
+
+    it("reads no scope on a target that names none", () => {
+      const config = parsePieceOptions({ ...target, cell: "lunch" });
+
+      expect(config.piece).toBe("lunch");
+      expect(config.pieceScope).toBeUndefined();
+    });
+
+    it("throws for a target carrying a pin", () => {
+      expect(() => parsePieceOptions({ ...target, cell: `lunch@pin=${pin}` }))
+        .toThrow(
+          `"lunch@pin=${pin}" carries a \`@pin\` or \`@inherit\` qualifier, which a target does not take.`,
+        );
+    });
+
+    it("throws a `ValidationError` naming the grammar's refusal for a target holding a path", () => {
+      const parse = () =>
+        parsePieceOptions({ ...target, cell: "lunch@user/title" });
+      expect(parse).toThrow(ValidationError);
+      expect(parse).toThrow(
+        "Expected one piece segment, without a path separator.",
+      );
+    });
+  });
+
+  describe("parseSpaceOptions() beside `--url`", () => {
+    const space = "did:key:z6MkjcdxtxTiUWkPkPffhs8ENkCcJjuRCQPpJFb2xyzwHqEk";
+    const target = {
+      apiUrl: "http://127.0.0.1:8000",
+      identity: "/nonexistent-but-unread.key",
+      space,
+      cell: "fid1:refused",
+    };
+    const url = `http://127.0.0.1:8000/${space}`;
+
+    it("throws for `--url` beside a space written on the command line", () => {
+      expect(() => parseSpaceOptions({ ...target, url, explicitSpace: true }))
+        .toThrow('"--space" cannot be provided when using "--url".');
+    });
+
+    it("takes the space from `--url` over one supplied by the environment", () => {
+      expect(parseSpaceOptions({ ...target, url, explicitSpace: false }).space)
+        .toBe(space);
+    });
+  });
+
+  describe("spaceWasWritten()", () => {
+    it("returns what the caller says when it says", () => {
+      expect(spaceWasWritten(true, [])).toBe(true);
+      expect(spaceWasWritten(false, ["--space", "home"])).toBe(false);
+    });
+
+    it("returns whether the command's own arguments spell the space", () => {
+      expect(spaceWasWritten(undefined, ["--space", "home"])).toBe(true);
+      expect(spaceWasWritten(undefined, ["-s", "home"])).toBe(true);
+      expect(spaceWasWritten(undefined, ["--space=home"])).toBe(true);
+      expect(spaceWasWritten(undefined, ["--cell", "lunch"])).toBe(false);
+    });
+
+    it("returns `false` for a space spelled only after `--`, which a callable takes", () => {
+      expect(
+        spaceWasWritten(undefined, ["--cell", "lunch", "--", "--space", "x"]),
+      ).toBe(false);
+      expect(spaceWasWritten(undefined, ["-s", "home", "--", "--space"]))
+        .toBe(true);
+    });
+  });
+
+  describe("setCellValueFromCommand() stale-value hint", () => {
+    /** Writes through the command, the write reporting `served`. */
+    async function set(served: boolean): Promise<string[]> {
+      const hints: string[] = [];
+      await setCellValueFromCommand(
+        {
+          apiUrl: "http://127.0.0.1:8000",
+          identity: "/nonexistent-but-unread.key",
+          space: "did:key:z6MkSpace",
+          quiet: true,
+          cell: "lunch",
+        },
+        "title",
+        undefined,
+        {
+          drainStdin: () => Promise.resolve({ text: "Tacos" }),
+          setCellValue: () =>
+            Promise.resolve({ piece: "lunch", path: ["title"], served }),
+          render: () => {},
+          hint: (message) => hints.push(message),
+        },
+      );
+      return hints;
+    }
+
+    it("says computed values may be stale after a write this process runs", async () => {
+      const hints = await set(false);
+
+      expect(hints).toHaveLength(1);
+      expect(hints[0]).toContain("TIP: Computed values may be stale.");
+    });
+
+    it("says nothing about stale values after a write the server runs", async () => {
+      expect(await set(true)).toEqual([]);
+    });
   });
 });

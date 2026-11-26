@@ -8,11 +8,11 @@
  * machine with no browser, which is to say it would pass for the regression.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
 import { extractAstralConfig } from "../config.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A path that exists, whatever machine this runs on: this file. */
 const EXISTING_FILE = fromFileUrl(import.meta.url);

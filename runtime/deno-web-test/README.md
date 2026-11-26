@@ -6,13 +6,14 @@ functionality.
 
 ## Usage
 
-Write a test using `Deno.test`:
+Write a test using `test` from `@commonfabric/test-support/test`:
 
 ```ts
 // add.test.ts
 import { assert } from "@std/assert";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("add", function () {
+test("add", function () {
   assert((5 + 5) === 10, "math checks out");
 });
 ```
@@ -55,8 +56,9 @@ instead, and the browser handles it as the person's own:
 
 ```ts
 import { pressKey } from "@commonfabric/deno-web-test/commands";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("Tab reaches the switch", async () => {
+test("Tab reaches the switch", async () => {
   // ... a focused element before the switch ...
   await pressKey("Tab");
   // document.activeElement is now the switch
@@ -69,6 +71,17 @@ and presses run one at a time in the order they were asked for. The keys a test
 may press and hold down are `PRESSABLE_KEYS` and `MODIFIER_KEYS` in
 `commands-protocol.ts`; the driver refuses any other, which rejects the promise,
 and a key a test needs is added there.
+
+## Focus
+
+In Chrome, the page a run loads its test files into behaves as the focused page
+for the whole run: `document.hasFocus()` is true, and focusing an element fires
+its focus events and sends keys to it. That holds however many files the run has
+loaded before, so a test that focuses an editor or an input passes or fails the
+same wherever the shuffle puts its file. The harness turns on Chrome's focus
+emulation for the page to do this, since Chrome otherwise stops treating the
+page as focused after it has loaded a few files. A run with `product: "firefox"`
+gets no such emulation, which is Chrome's.
 
 ## Stuck tests
 
@@ -137,8 +150,10 @@ integration tests also use.
 
 ## Support
 
-Currently only the `Deno.test(string, fn)` signature works. Using other
-signatures, or the BDD framework in `@std/testing/bdd` is not yet supported.
+In a browser, `test` hands each test to the page's `Deno.test`, which the
+harness defines. That `Deno.test` reads only the test's name and function, and
+ignores every other option. `describe`, `it`, and the hooks throw in a browser,
+so a test file that runs there uses `test` alone.
 
 ## Testing
 

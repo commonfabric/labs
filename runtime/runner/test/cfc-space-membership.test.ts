@@ -1,12 +1,12 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { ACL } from "@commonfabric/memory/acl";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
+  type AclDocumentSource,
   createRuntimeSpaceMembershipProvider,
   spaceReaderRole,
 } from "../src/cfc/space-membership.ts";
 import type { Cancel } from "../src/cancel.ts";
-import type { Runtime } from "../src/runtime.ts";
 
 // §4.9.3 render membership lookup — the client-side capability resolver
 // (design: docs/history/specs/cfc-render-membership-lookup.md §3.1). `spaceReaderRole`
@@ -98,8 +98,8 @@ describe("spaceReaderRole (§4.9.3 capability resolver)", () => {
 const fakeRuntime = (aclBySpace: Record<string, unknown>) => {
   const sinks = new Map<string, Set<() => void>>();
   const getCalls: string[] = [];
-  const runtime = {
-    getCellFromLink(link: { id: string; path: readonly []; space: string }) {
+  const runtime: AclDocumentSource = {
+    getCellFromLink(link) {
       return {
         get() {
           getCalls.push(link.id);
@@ -115,9 +115,10 @@ const fakeRuntime = (aclBySpace: Record<string, unknown>) => {
           cb(); // real Cell.sink runs the action once synchronously at subscribe
           return () => set!.delete(cb);
         },
+        sync: () => Promise.resolve(),
       };
     },
-  } as unknown as Runtime;
+  };
   const fire = (space: string) => {
     for (const cb of sinks.get(`of:${space}`) ?? []) cb();
   };

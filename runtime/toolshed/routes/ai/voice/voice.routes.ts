@@ -9,7 +9,7 @@ export type TranscriptionChunk = {
   text: string;
 };
 
-const TranscriptionChunkSchema = z.object({
+export const TranscriptionChunkSchema = z.object({
   timestamp: z.tuple([z.number(), z.number()]),
   text: z.string(),
 }) satisfies z.ZodType<TranscriptionChunk>;

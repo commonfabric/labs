@@ -5,11 +5,13 @@
  * preserved, which `sealedPaths` never lists — passes through untouched.
  */
 
-import { describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { addressSealedPositions } from "../src/structured-result.ts";
+import { describe, it } from "@commonfabric/test-support/test";
+import {
+  addressSealedPositions,
+  parseStructuredResultSchema,
+} from "../src/structured-result.ts";
 import { sealedPositionLink } from "../src/tools/run-pattern.ts";
 
 const SPACE =
@@ -112,6 +114,23 @@ describe("structured-result", () => {
           ["n", "x"],
         ], buildRef),
       ).toEqual(value);
+    });
+  });
+
+  describe("parseStructuredResultSchema()", () => {
+    it("returns the schema and its encoded size when it fits the bound", () => {
+      // `{"type":"object"}` is 17 bytes encoded.
+      expect(parseStructuredResultSchema('{"type":"object"}', { maxBytes: 17 }))
+        .toEqual({ schema: { type: "object" }, bytes: 17 });
+    });
+
+    it("throws naming the label and the bound for a schema one byte over it", () => {
+      expect(() =>
+        parseStructuredResultSchema({ type: "object" }, {
+          label: "--result-schema",
+          maxBytes: 16,
+        })
+      ).toThrow("--result-schema must be at most 16 bytes");
     });
   });
 });

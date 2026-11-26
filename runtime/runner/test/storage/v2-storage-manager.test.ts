@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Identity, issueDelegation } from "@commonfabric/identity";
@@ -7,6 +6,12 @@ import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import { STORAGE_DIAGNOSTICS_LIMIT } from "../../src/storage/diagnostics.ts";
@@ -15,7 +20,7 @@ import {
   type SessionFactory,
   StorageManager,
 } from "../../src/storage/v2.ts";
-import { captureLogs } from "../support/log-capture.ts";
+import { captureLogs } from "../support/captured-logs.ts";
 
 const AUDIENCE = "did:key:z6Mk-runner-v2-storage-manager-audience";
 
@@ -392,9 +397,9 @@ describe("StorageManager", () => {
         });
         const space = await manager.createSpace({ [alice.did()]: "OWNER" });
         expect(released).toEqual([space]);
-        expect(logs.lines("create-space-release")).toEqual([
+        expect(logs.textsOf("create-space-release")).toEqual([
           expect.stringContaining(
-            `space ${space}: releasing its key failed: Error: release refused`,
+            `space ${space}: releasing its key failed: release refused`,
           ),
         ]);
       });
@@ -541,10 +546,10 @@ describe("StorageManager", () => {
       notify!(alice.did(), alice.did());
       await manager.retrySpaceAccess(alice.did()).catch(() => {});
       expect(failures.length).toBe(0);
-      expect(logs.lines("admission-notice-retry")).toEqual([
+      expect(logs.textsOf("admission-notice-retry")).toEqual([
         expect.stringContaining(
           `space ${alice.did()}: the retry a \`session/admissible\` started ` +
-            "failed: Error: the host is down",
+            "failed: the host is down",
         ),
       ]);
     });

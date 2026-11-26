@@ -28,7 +28,6 @@
 // is exactly the hop-target dead-end: the lift's input chain crosses
 // the piece's result/process doc while it is still materializing.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -37,6 +36,12 @@ import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const spaceSigner = await Identity.fromPassphrase("unresolved input space");
 const space = spaceSigner.did() as MemorySpace;

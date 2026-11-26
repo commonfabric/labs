@@ -799,12 +799,22 @@ export async function dispatch(
   }
 }
 
-if (import.meta.main) {
+/**
+ * Runs one command line as `dispatch()` does, and returns the code to exit
+ * with, having printed what a `Stop` had to say.
+ */
+export async function main(
+  args: readonly string[],
+  sources: Sources = LIVE,
+  root?: string,
+): Promise<number> {
   try {
-    Deno.exit(await dispatch(Deno.args));
+    return await dispatch(args, sources, root);
   } catch (error) {
     if (!(error instanceof Stop)) throw error;
     console.error(error.message);
-    Deno.exit(error.code);
+    return error.code;
   }
 }
+
+if (import.meta.main) Deno.exit(await main(Deno.args));

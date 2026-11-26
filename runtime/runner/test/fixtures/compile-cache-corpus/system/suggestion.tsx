@@ -241,7 +241,7 @@ Use the user context above to personalize your suggestions when relevant.`;
       <cf-question
         question={computed(() => pendingQuestion.get()?.question ?? "")}
         options={computed(() => pendingQuestion.get()?.options ?? [])}
-        allow-custom
+        allowCustom
         style={computed(() => (hasPendingQuestion ? "" : "display:none"))}
         oncf-answer={onQuestionAnswer({ addMessage, pendingQuestion })}
       />

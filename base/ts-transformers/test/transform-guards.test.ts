@@ -4,6 +4,7 @@ import ts from "typescript";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { transformSource } from "./utils.ts";
 import { callsNamed, collect, parseModule } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** True when a `<receiver>.key(...)` call reads the exact segment path. */
 function hasKeyPath(root: ts.Node, receiver: string, ...segments: string[]) {
@@ -33,7 +34,7 @@ function memberCalls(
   });
 }
 
-Deno.test(
+test(
   "Transform guards: nested block shadowing does not leak opaque alias roots",
   async () => {
     const source = `import { pattern } from "commonfabric";
@@ -64,7 +65,7 @@ const p = pattern((input: { user: { name: string }; value: { foo: number } }) =>
   },
 );
 
-Deno.test(
+test(
   "Transform guards: plain callback parameter map is not rewritten in pattern",
   async () => {
     const source = `import { pattern } from "commonfabric";
@@ -82,7 +83,7 @@ const p = pattern((input: { ok: boolean }) => {
   },
 );
 
-Deno.test(
+test(
   "Transform guards: rewritten mapWithPattern callback uses key(...) canonicalization",
   async () => {
     const source = `import { pattern } from "commonfabric";
@@ -97,7 +98,7 @@ const p = pattern((input: { list: Array<{ name: string; age: number }> }) => <di
   },
 );
 
-Deno.test(
+test(
   "Transform guards: state property names that collide with method names still lower to key() access",
   async () => {
     for (
@@ -127,7 +128,7 @@ const p = pattern<State>((state) => ({
   },
 );
 
-Deno.test(
+test(
   "Transform guards: numeric element-access receiver keys use canonical numeric values",
   async () => {
     const source = `import { pattern } from "commonfabric";
@@ -151,7 +152,7 @@ const p = pattern((input: { groups: Group[] }) =>
   },
 );
 
-Deno.test(
+test(
   "Transform guards: unsupported reactive array find() does not lower to findWithPattern",
   async () => {
     const source = `import { pattern, UI } from "commonfabric";
@@ -170,7 +171,7 @@ const p = pattern<State>((state) => ({
   },
 );
 
-Deno.test(
+test(
   "Transform guards: aliased get-result callbacks inside computed stay plain",
   async () => {
     const source = `import { computed, pattern, UI } from "commonfabric";
@@ -225,7 +226,7 @@ export default pattern<Input>(({ habits, logs, todayDate }) => {
   },
 );
 
-Deno.test(
+test(
   "Transform guards: ternary branch derive absorbs inner arithmetic instead of nesting",
   async () => {
     const source = `import { pattern, UI } from "commonfabric";
@@ -279,7 +280,7 @@ export default pattern<State>((state) => ({
   },
 );
 
-Deno.test(
+test(
   "Transform guards: ifElse predicate binary is not treated as a pattern-owned branch",
   async () => {
     const source = `import { ifElse, pattern, UI } from "commonfabric";
@@ -325,7 +326,7 @@ export default pattern<{ fields: Field[] }>((state) => ({
   },
 );
 
-Deno.test(
+test(
   "Transform guards: helper-owned non-cell get() calls are not force-wrapped",
   async () => {
     const source = `import { ifElse, pattern, UI } from "commonfabric";
@@ -362,7 +363,7 @@ export default pattern<State>((state) => {
   },
 );
 
-Deno.test(
+test(
   "Transform guards: helper-owned child key references stay structural",
   async () => {
     const source =
@@ -419,7 +420,7 @@ export default pattern<{ left: Default<number, 0>; right: Default<number, 0> }>(
   },
 );
 
-Deno.test(
+test(
   "Transform guards: ordinary helper calls with child key references stay structural",
   async () => {
     const source =

@@ -9,7 +9,10 @@
 
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
-import { CompileTurns } from "../harness/compile-interleave.ts";
+import {
+  type CompileClaims,
+  CompileTurns,
+} from "../harness/compile-interleave.ts";
 import type { ModuleCompiler } from "../harness/module-compile.ts";
 import {
   type ExperimentalOptions,
@@ -22,6 +25,7 @@ import {
   type LoopbackPlane,
   LoopbackStorageManager,
 } from "./loopback-storage.ts";
+import type { RunBeacon } from "./run-beacon.ts";
 
 /**
  * The flags a serving runtime runs regardless of the flags it is otherwise
@@ -75,12 +79,26 @@ export type ServingRuntimeFactoryOptions = {
   moduleByteCache?: ModuleByteCache;
 
   /**
+   * The turns at a cold compile the serving runtimes take with whatever else
+   * shares {@link moduleByteCache}: for a cache on disk, the other realms and
+   * processes that use it. Absent, the factory's runtimes take turns among
+   * themselves. Unused without a byte cache.
+   */
+  compileClaims?: CompileClaims;
+
+  /**
    * Where every serving runtime the factory builds runs the type-check,
    * transform and emit step of its compiles: a compile worker, which keeps
    * that step and its heap off the thread the serving loop runs on. Absent,
    * each runtime compiles on that thread.
    */
   moduleCompiler?: ModuleCompiler;
+
+  /**
+   * The run beacon of the serving worker the factory's runtimes run in, which
+   * each runtime's scheduler marks for its space. Absent, they mark nothing.
+   */
+  runBeacon?: RunBeacon;
 
   /**
    * Called with each serving runtime's storage manager before the runtime
@@ -106,7 +124,7 @@ export function servingRuntimeFactory(
   // byte cache take turns, which keeps it compiling a program once.
   const sharedByteCache = options.moduleByteCache === undefined ? {} : {
     moduleByteCache: options.moduleByteCache,
-    compileTurns: new CompileTurns(),
+    compileTurns: options.compileClaims ?? new CompileTurns(),
   };
   return (space, context) => {
     const storageManager = LoopbackStorageManager.connect(options.server, {
@@ -145,6 +163,9 @@ export function servingRuntimeFactory(
       ...(options.moduleCompiler === undefined
         ? {}
         : { moduleCompiler: options.moduleCompiler }),
+      ...(options.runBeacon === undefined
+        ? {}
+        : { runBeacon: options.runBeacon.forSpace(space) }),
     });
     return Promise.resolve({
       runtime,

@@ -8,11 +8,11 @@
 
 import { expect } from "@std/expect";
 import { isAbsolute } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { sh, shuttleFromCommand } from "../commands/sh.ts";
 import type { SpaceConfig } from "../lib/piece.ts";
 import { withEnv } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The flags a case writes, in the shape Cliffy hands them to the action. */
 const OPTIONS = {

@@ -117,6 +117,14 @@ export interface SessionConnection {
   readonly serverFlags: MemoryProtocolFlags | null;
 
   /**
+   * The connection's state now. Only while it is `connected` are
+   * `serverFlags` the live handshake's; while it is `reconnecting` they are
+   * still the last connection's. Optional: a connection without it is read as
+   * not connected.
+   */
+  readonly connectionState?: MemoryClient.ConnectionState;
+
+  /**
    * Resolves once every server frame the connection held at the call has
    * been handed to its client.
    */
@@ -634,9 +642,15 @@ export class WebSocketTransport implements MemoryClient.Transport {
   /**
    * Sends in submission order using the compression mode active at submission.
    * Every payload stays on the queue because a later text frame must not
-   * overtake earlier asynchronous compression. A payload lost with its
-   * connection — one queued when the socket closes, one whose write fails, or
-   * one sent on a socket that fails to open — rejects with a `ConnectionError`.
+   * overtake earlier asynchronous compression. A payload none of which
+   * reached the socket, as its socket closed or was replaced before its turn
+   * came, or while its first record waited for router credit, rejects marked
+   * unsent (`unsentConnectionError()`, `markUnsent()`): no server holds it.
+   * One lost once a frame of it reached the socket (a write that fails, or a
+   * socket replaced between a routed payload's records), or one sent on a
+   * socket that fails to open, rejects with a plain `ConnectionError`. As
+   * `MemoryClient.Transport.send()` says, a response that arrives before the
+   * rejection answers the request, whatever the rejection.
    */
   async send(payload: string): Promise<void> {
     const opening = this.#open();
@@ -673,7 +687,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
         ? checkedRoutedText(payload, frameSlots)
         : payload;
       if (this.#socket !== connection.socket) {
-        throw MemoryClient.connectionError(
+        throw MemoryClient.unsentConnectionError(
           "Memory websocket changed before send",
         );
       }
@@ -681,16 +695,18 @@ export class WebSocketTransport implements MemoryClient.Transport {
       // frame's bytes.
       this.#messagesSent++;
       if (decoded !== undefined && (!control || credits !== undefined)) {
+        let first = true;
         for (const record of routerRecords(routerRoute(decoded.body), frame)) {
           if (this.#socket !== connection.socket) {
             throw MemoryClient.connectionError(
               "Memory websocket changed during send",
             );
           }
-          await this.#write(connection, record, credits);
+          await this.#write(connection, record, credits, first);
+          first = false;
         }
       } else {
-        await this.#write(connection, frame);
+        await this.#write(connection, frame, undefined, true);
       }
     });
     this.#sending = send.catch(() => {});
@@ -1043,13 +1059,21 @@ export class WebSocketTransport implements MemoryClient.Transport {
    * when the socket was current and open: a write refused because the socket
    * is closing, or because it was already replaced, says nothing about the
    * payload.
+   *
+   * With `first`, `frame` is the first its payload sends, and a failure
+   * before `frame` reaches the socket, such as a wait for router credit cut
+   * off by a socket closed or replaced, or by credit that never came, rejects
+   * marked unsent (`markUnsent()`): no server holds any of the payload.
    */
   async #write(
     connection: MemorySocketConnection,
     frame: EncodedMemoryMessage,
     credits?: RouterUploadCredits,
+    first = false,
   ): Promise<void> {
     this.#bytesSent += frameSize(frame);
+    // Whether `frame` has been handed to the socket.
+    let handed = false;
     try {
       if (credits !== undefined) {
         // `frame` is a router record, at most `ROUTER_CHUNK_BYTES + 5` bytes,
@@ -1100,19 +1124,22 @@ export class WebSocketTransport implements MemoryClient.Transport {
           throw new Error("Router socket output limit");
         }
       }
+      handed = true;
       await connection.send(frame);
     } catch (cause) {
       const { socket } = connection;
       const ownFailure = this.#socket === socket &&
         socket.readyState === WebSocket.OPEN;
-      const error = (ownFailure
-        ? MemoryClient.writeFailedError
-        : MemoryClient.connectionError)(
-          cause instanceof Error
-            ? cause.message
-            : "Memory websocket write failed",
-          cause,
-        );
+      const failure = () =>
+        (ownFailure
+          ? MemoryClient.writeFailedError
+          : MemoryClient.connectionError)(
+            cause instanceof Error
+              ? cause.message
+              : "Memory websocket write failed",
+            cause,
+          );
+      const error = failure();
       if (this.#socket === socket) {
         this.#detachSocket(error);
         this.#closeReceiver(error);
@@ -1123,7 +1150,9 @@ export class WebSocketTransport implements MemoryClient.Transport {
           socket.close();
         }
       }
-      throw error;
+      // The close receiver hears of the connection's loss; the payload's
+      // sender also learns that none of it was written.
+      throw first && !handed ? MemoryClient.markUnsent(failure()) : error;
     }
   }
 
@@ -1306,6 +1335,11 @@ class SharedSessionConnection implements SessionConnection {
   }
 
   /** @inheritDoc */
+  get connectionState(): MemoryClient.ConnectionState {
+    return this.#client.connectionState;
+  }
+
+  /** @inheritDoc */
   delivered(): Promise<void> {
     // The connection carries other spaces' sessions too; this share waits
     // only for what is held for its own.
@@ -1391,6 +1425,10 @@ export class RemoteSessionFactory implements SessionFactory {
   readonly #defaultSigner: Signer;
   readonly #createSocket: MemorySocketFactory;
 
+  /** Whether this factory's sessions are demand (`Options.demand` of the
+   * storage manager; the memory client's `ConnectOptions.demand`). */
+  readonly #demand: boolean;
+
   /** The chains held here, one of which a session's open presents. */
   readonly #delegations = new DelegationStore();
 
@@ -1399,11 +1437,13 @@ export class RemoteSessionFactory implements SessionFactory {
     defaultSigner: Signer,
     createSocket: MemorySocketFactory = createMemorySocket,
     clientBuild?: ClientBuild,
+    demand = true,
   ) {
     this.#resolveAddress = resolveAddress;
     this.#defaultSigner = defaultSigner;
     this.#clientInfo = createClientInfo(clientBuild);
     this.#createSocket = createSocket;
+    this.#demand = demand;
   }
 
   /** @inheritDoc */
@@ -1652,6 +1692,7 @@ export class RemoteSessionFactory implements SessionFactory {
         transport,
         client: this.#clientInfo,
         instanceNames: this.#instanceNames,
+        demand: this.#demand,
         syncCidReferences: this.#syncCidReferences,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
@@ -1694,6 +1735,7 @@ export class RemoteSessionFactory implements SessionFactory {
         signal,
         client: this.#clientInfo,
         instanceNames: this.#instanceNames,
+        demand: this.#demand,
         syncCidReferences: this.#syncCidReferences,
       });
       return client.serverFlags;
@@ -1717,6 +1759,7 @@ export class RemoteSessionFactory implements SessionFactory {
         signal,
         client: this.#clientInfo,
         instanceNames: this.#instanceNames,
+        demand: this.#demand,
         syncCidReferences: this.#syncCidReferences,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
@@ -1792,6 +1835,7 @@ export class RemoteSessionFactory implements SessionFactory {
         signal,
         client: this.#clientInfo,
         instanceNames: this.#instanceNames,
+        demand: this.#demand,
         syncCidReferences: this.#syncCidReferences,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,

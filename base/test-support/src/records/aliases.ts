@@ -82,8 +82,8 @@ function isIdentityPart(value: unknown, wholeScope: boolean): boolean {
   return typeof part.n === "string" && part.n.length > 0;
 }
 
+/** Whether `date`, written `yyyy-mm-dd`, names a day the calendar has. */
 function isCalendarDate(date: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
   const stamp = new Date(`${date}T00:00:00Z`);
   return !Number.isNaN(stamp.getTime()) &&
     stamp.toISOString().slice(0, 10) === date;

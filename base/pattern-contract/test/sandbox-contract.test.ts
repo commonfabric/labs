@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   isTrustedBuilder,
@@ -6,6 +5,7 @@ import {
   TRUSTED_BUILDERS,
   TRUSTED_DATA_HELPERS,
 } from "@commonfabric/pattern-contract/sandbox-contract";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("sandbox-contract", () => {
   it("exports the shared trusted builder names", () => {

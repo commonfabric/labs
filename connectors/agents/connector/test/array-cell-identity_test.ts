@@ -4,6 +4,7 @@ import {
   planStableArrayCells,
   type StableArrayCellPlan,
 } from "../src/array-cell-identity.ts";
+import { test } from "@commonfabric/test-support/test";
 
 class FakeCell {
   constructor(
@@ -31,7 +32,7 @@ function cellsById(value: unknown): Map<string, FakeCell> {
   }));
 }
 
-Deno.test("array object cells keep their causes when their array is reordered", async () => {
+test("array object cells keep their causes when their array is reordered", async () => {
   const scope = { agentConnector: "session-index" };
   const first = materialize(
     await planStableArrayCells({
@@ -66,7 +67,7 @@ Deno.test("array object cells keep their causes when their array is reordered", 
   );
 });
 
-Deno.test("every array element is materialized as a stable cell", async () => {
+test("every array element is materialized as a stable cell", async () => {
   const { value, writes } = materialize(
     await planStableArrayCells({
       sources: [{
@@ -96,7 +97,7 @@ Deno.test("every array element is materialized as a stable cell", async () => {
   assertEquals(writes.length, 8);
 });
 
-Deno.test("primitive array elements keep content-derived causes when reordered", async () => {
+test("primitive array elements keep content-derived causes when reordered", async () => {
   const scope = { agentConnector: "source" };
   const first = materialize(
     await planStableArrayCells({ modes: ["ask", "edit"] }, scope),
@@ -116,7 +117,7 @@ Deno.test("primitive array elements keep content-derived causes when reordered",
   assertEquals(cellsByValue(first), cellsByValue(reordered));
 });
 
-Deno.test("nested ids are scoped to their owning array object", async () => {
+test("nested ids are scoped to their owning array object", async () => {
   const { value } = materialize(
     await planStableArrayCells({
       sessions: [
@@ -134,7 +135,7 @@ Deno.test("nested ids are scoped to their owning array object", async () => {
   assert(JSON.stringify(messageCauses[0]) !== JSON.stringify(messageCauses[1]));
 });
 
-Deno.test("unidentified objects use content identity instead of array position", async () => {
+test("unidentified objects use content identity instead of array position", async () => {
   const scope = { agentConnector: "health" };
   const first = materialize(
     await planStableArrayCells({
@@ -167,7 +168,7 @@ Deno.test("unidentified objects use content identity instead of array position",
   );
 });
 
-Deno.test("stable structural identity wins over mutable chunk content", async () => {
+test("stable structural identity wins over mutable chunk content", async () => {
   const scope = { agentConnector: "session" };
   const first = materialize(
     await planStableArrayCells({
@@ -185,7 +186,7 @@ Deno.test("stable structural identity wins over mutable chunk content", async ()
   assertEquals(cause(first), cause(updated));
 });
 
-Deno.test("command identity wins over the shared session identity", async () => {
+test("command identity wins over the shared session identity", async () => {
   const scope = { agentConnector: "receipt-index" };
   const first = materialize(
     await planStableArrayCells({
@@ -219,6 +220,35 @@ Deno.test("command identity wins over the shared session identity", async () => 
   const cells = (result: ReturnType<typeof materialize>) =>
     (result.value as Record<string, unknown>).receipts as FakeCell[];
   assertEquals(cells(first)[0].cause, cells(updated)[0].cause);
+  assert(
+    JSON.stringify(cells(first)[0].cause) !==
+      JSON.stringify(cells(first)[1].cause),
+  );
+});
+
+test("session identity spans the source, not the session ID alone", async () => {
+  const scope = { agentConnector: "session-index" };
+  const first = materialize(
+    await planStableArrayCells({
+      sessions: [
+        { sourceId: "codex", nativeSessionId: "session-1", title: "Old" },
+        { sourceId: "claude", nativeSessionId: "session-1", title: "Old" },
+      ],
+    }, scope),
+  );
+  const updated = materialize(
+    await planStableArrayCells({
+      sessions: [
+        { sourceId: "claude", nativeSessionId: "session-1", title: "New" },
+        { sourceId: "codex", nativeSessionId: "session-1", title: "New" },
+      ],
+    }, scope),
+  );
+
+  const cells = (result: ReturnType<typeof materialize>) =>
+    (result.value as Record<string, unknown>).sessions as FakeCell[];
+  assertEquals(cells(first)[0].cause, cells(updated)[1].cause);
+  assertEquals(cells(first)[1].cause, cells(updated)[0].cause);
   assert(
     JSON.stringify(cells(first)[0].cause) !==
       JSON.stringify(cells(first)[1].cause),

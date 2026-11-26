@@ -57,8 +57,32 @@ characters they replace, so the module computes what it was written to; only a
 raw template string, read through `String.raw`, sees the escape itself. The
 guest's policy admits the script as it admits any inline script the document
 carries, so a document that declares a policy of its own must allow inline
-scripts. An empty `src` is no guest, and runs no script. A change to either
-reloads the guest.
+scripts. An empty `src` is no guest, and runs no script. Assigning `null` or
+`undefined` to `src`, or removing its attribute, sets it to the empty string,
+clears the guest, and releases its capability sessions. A change to either `src`
+or `script` reloads the guest.
+
+`assets`, when set, holds the guest's static files: a record from a name
+matching `[A-Za-z0-9_-]+` to a base64 `data:` URL, the one image source the
+sandbox's policy admits in every host. A document that declares a policy of its
+own must allow `data:` images too. The element refuses any other record with a
+`TypeError`. Each `cf-asset:<name>` in `src` is replaced with that asset's URL
+in the text, before anything parses the document, so a reference works wherever
+a URL does: `<img src="cf-asset:glaze">`, `url(cf-asset:glaze)` in a style, or
+an author's own `@font-face`. A name runs to the first character outside its
+grammar, so it ends at an attribute's quote or a `url()`'s parenthesis. `script`
+is not searched. A reference to a name the record lacks stays in the document,
+and the element reports it as a `common-iframe-error` naming the reference and
+the names the record holds; the guest loads all the same. `cf-asset:` is
+therefore reserved in a guest's document, and text that needs those characters
+writes the colon as `&#58;`. The element also writes the record into the
+document, right after its doctype and ahead of every script, as a
+`<script type="application/json" data-cf-assets>` element, which the guest reads
+with `fabric.asset()` ([Assets](#assets)). A change to `assets` reloads the
+guest; assigning a record that holds the same names and URLs does not. A host
+that loads a guest some other way, such as a guest's Deno test, assembles the
+same document with `guestDocument(src, script, assets)`, and lists the names
+`src` refers to that `assets` lacks with `missingAssets(src, assets)`.
 
 A resource has a `kind`, optional schema and description, and only the
 operations the host supplies. A cell capability follows the runtime's Cell
@@ -72,13 +96,15 @@ after `pull()` safely materializes it before a child write. The resource kinds
 are `cell`, `stream`, `sqlite`, `service`, and `presence`. Named methods let an
 application expose a narrow service without expanding the cell protocol.
 
-The higher-level `cf-iframe` component accepts the same `bridge`, `src`, and
-`script` properties. Its `context` convenience property turns Fabric cells into
-resources: a pattern binds a record of them, and each field becomes a cell
-resource, a read-only resource without `set`, a `send` resource for a stream, or
-a `query`/`exec` resource for a SQLite database. A pattern names the kinds the
-renderer cannot read off a cell, which in a record are every stream, database,
-and presence room:
+The higher-level `cf-iframe` component accepts the same `bridge`, `src`,
+`script`, and `assets` properties. It refuses an `assets` value that is not a
+record from a name to a base64 `data:` URL without throwing: it shows why in its
+error display, and holds the guest closed until `assets` changes. Its `context`
+convenience property turns Fabric cells into resources: a pattern binds a record
+of them, and each field becomes a cell resource, a read-only resource without
+`set`, a `send` resource for a stream, or a `query`/`exec` resource for a SQLite
+database. A pattern names the kinds the renderer cannot read off a cell, which
+in a record are every stream, database, and presence room:
 
 ```tsx
 <cf-iframe
@@ -232,6 +258,27 @@ await tasks.push({ title: "Review bridge", done: false });
 
 `pushAll()` appends every member of one list the same way, for a list too long
 to spread into `push()`'s arguments.
+
+### Assets
+
+`asset(name)` returns one of the assets the host wrote into the document. It is
+synchronous: the record is in the document from the start, ahead of every script
+and before the port arrives. A name the document carries no asset for throws,
+listing the names it does carry.
+
+```ts
+const glaze = fabric.asset("glaze");
+context.drawImage(await glaze.image(), 0, 0);
+const bell = await audio.decodeAudioData(fabric.asset("bell").bytes().buffer);
+```
+
+An asset has its `mediaType`, the `size` of its decoded bytes, and its `url`,
+for an element or a style the script sets. The guest's policy refuses `fetch()`
+of a `data:` URL, so the bytes are decoded in the guest: `bytes()` returns a
+fresh copy on each call, `blob()` returns them as a `Blob` of the asset's media
+type, and `text()` reads them as UTF-8. `image()` resolves with a new image
+element once it has decoded the asset, which is what a 2D canvas and most
+engines take, and `bitmap()` with the asset decoded by `createImageBitmap()`.
 
 ## React
 

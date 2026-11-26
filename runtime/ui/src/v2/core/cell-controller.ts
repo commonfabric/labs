@@ -89,10 +89,6 @@ export interface CellControllerOptions<T> {
  *     timing: { strategy: "blur" }
  *   });
  *
- *   private handleFocus() {
- *     this.cellController.onFocus();
- *   }
- *
  *   private handleBlur() {
  *     this.cellController.onBlur();
  *   }
@@ -106,7 +102,7 @@ export class CellController<T> implements ReactiveController {
   private readonly _customSetter: boolean;
   private _currentValue: CellHandle<T> | T | undefined;
   private _cellUnsubscribe: (() => void) | null = null;
-  private _inputTiming?: InputTimingController;
+  private _inputTiming: InputTimingController;
 
   /**
    * Pending-local-edit tracking (early-boot wipe guard)
@@ -118,7 +114,10 @@ export class CellController<T> implements ReactiveController {
    */
   private _localEdit: { value: T } | undefined;
 
-  /** Number of in-flight cell writes started by the default setter. */
+  /**
+   * Number of writes to the bound cell in flight, started by the default
+   * setter or by {@link updateValue}.
+   */
   private _inFlightWrites = 0;
 
   /**
@@ -204,10 +203,7 @@ export class CellController<T> implements ReactiveController {
       triggerUpdate: options.triggerUpdate ?? true,
     };
 
-    // Create timing controller if timing options are provided
-    if (this.options.timing) {
-      this._inputTiming = new InputTimingController(host, this.options.timing);
-    }
+    this._inputTiming = new InputTimingController(host, this.options.timing);
 
     host.addController(this);
   }
@@ -231,9 +227,11 @@ export class CellController<T> implements ReactiveController {
         sameCellDoc(this._currentValue.ref(), value.ref());
       if (!samePersistentCell) {
         this._bindEpoch++;
+        // Writes in flight to the cell bound before settle for that cell.
+        this._inFlightWrites = 0;
         // A write waiting on its timing was made for the cell bound when it
         // was asked for; run later, it would go to whatever is bound then.
-        this._inputTiming?.cancel();
+        this._inputTiming.cancel();
         this._localEdit = undefined;
         this._settledAwaitingRelease = false;
         this._lastKnownValue = undefined;
@@ -259,7 +257,11 @@ export class CellController<T> implements ReactiveController {
         this._currentValue = value;
       }
       this._setupCellSubscription();
-      if (this._refusal !== undefined) void this._askWorker();
+      if (
+        this._refusal !== undefined && this._currentValue instanceof CellHandle
+      ) {
+        this._askWorker(this._currentValue);
+      }
     }
   }
 
@@ -359,7 +361,7 @@ export class CellController<T> implements ReactiveController {
     const handle = this._currentValue as CellHandle<T>;
     const epoch = this._bindEpoch;
     // A write waiting on its timing was asked for first.
-    this._inputTiming?.flush();
+    this._inputTiming.flush();
     const asked = this._askWrite();
     const turn = Promise.withResolvers<void>();
     let inFlight = false;
@@ -416,9 +418,8 @@ export class CellController<T> implements ReactiveController {
   /** A computed write settled, or was passed over. */
   private _settleComputed(inFlight: boolean, epoch: number): void {
     this._computedEcho = undefined;
-    if (!inFlight) return;
-    this._inFlightWrites--;
-    if (epoch !== this._bindEpoch || this._inFlightWrites > 0) return;
+    if (!inFlight || epoch !== this._bindEpoch) return;
+    if (--this._inFlightWrites > 0) return;
     this._releaseLocalEditAfterSettle();
   }
 
@@ -443,25 +444,17 @@ export class CellController<T> implements ReactiveController {
   }
 
   /**
-   * Asks the worker to read the bound cell. The answer reaches the
+   * Asks the worker to read the bound `handle`. The answer reaches the
    * controller through its subscription, a refusal as much as a value, and
    * answers a handle that has read nothing yet even where the cell holds
-   * nothing, which its subscription never delivers. Settles with whether the
-   * worker admitted the read.
+   * nothing, which its subscription never delivers.
    */
-  private _askWorker(): Promise<boolean> {
-    if (!isCellHandle(this._currentValue)) return Promise.resolve(true);
-    return (this._currentValue as CellHandle<T>).pull({
-      awaitDurability: false,
-    }).then(
-      () => true,
-      (error) => {
-        if (!(error instanceof CellReadRefusedError)) {
-          console.error("[CellController] Reading the cell failed:", error);
-        }
-        return false;
-      },
-    );
+  private _askWorker(handle: CellHandle<T>): void {
+    handle.pull({ awaitDurability: false }).catch((error) => {
+      if (!(error instanceof CellReadRefusedError)) {
+        console.error("[CellController] Reading the cell failed:", error);
+      }
+    });
   }
 
   /**
@@ -485,13 +478,8 @@ export class CellController<T> implements ReactiveController {
       this._beginLocalEdit(newValue);
     }
 
+    // A refusal arriving while the write waits on its timing cancels it.
     const performUpdate = () => {
-      // A refusal that arrived while the write waited on its timing stands
-      // against it as it would have against the call.
-      if (this._refusal !== undefined) {
-        this._localEdit = undefined;
-        return;
-      }
       this._applyingLocalWrite = true;
       try {
         this.options.setValue(this._currentValue!, newValue, oldValue);
@@ -511,43 +499,29 @@ export class CellController<T> implements ReactiveController {
       this.options.onChange(newValue, oldValue);
     };
 
-    // Use timing controller if available
-    if (this._inputTiming) {
-      this._inputTiming.schedule(performUpdate);
-    } else {
-      performUpdate();
-    }
+    this._inputTiming.schedule(performUpdate);
   }
 
   /**
    * Update timing controller options
    */
   updateTimingOptions(timingOptions: Partial<InputTimingOptions>): void {
-    if (this._inputTiming) {
-      this._inputTiming.updateOptions(timingOptions);
-    }
+    this._inputTiming.updateOptions(timingOptions);
     this.options.timing = { ...this.options.timing, ...timingOptions };
-  }
-
-  /**
-   * Notify timing controller of focus event
-   */
-  onFocus(): void {
-    this._inputTiming?.onFocus();
   }
 
   /**
    * Notify timing controller of blur event
    */
   onBlur(): void {
-    this._inputTiming?.onBlur();
+    this._inputTiming.onBlur();
   }
 
   /**
    * Cancel any pending operations
    */
   cancel(): void {
-    this._inputTiming?.cancel();
+    this._inputTiming.cancel();
     // A cancelled pending write abandons its local edit; bound state is
     // authoritative again.
     this._localEdit = undefined;
@@ -559,7 +533,7 @@ export class CellController<T> implements ReactiveController {
    * read or commit sees the latest value.
    */
   flush(): void {
-    this._inputTiming?.flush();
+    this._inputTiming.flush();
   }
 
   /**
@@ -588,7 +562,7 @@ export class CellController<T> implements ReactiveController {
 
   hostDisconnected(): void {
     this._cleanupCellSubscription();
-    this._inputTiming?.cancel();
+    this._inputTiming.cancel();
   }
 
   //
@@ -614,8 +588,7 @@ export class CellController<T> implements ReactiveController {
       // set() resolves once the write round-trip completes (it never rejects;
       // failures are logged and swallowed inside set()).
       value.set(newValue).finally(() => {
-        this._inFlightWrites--;
-        if (epoch !== this._bindEpoch || this._inFlightWrites > 0) return;
+        if (epoch !== this._bindEpoch || --this._inFlightWrites > 0) return;
         this._releaseLocalEditAfterSettle();
       });
     } else {
@@ -660,19 +633,18 @@ export class CellController<T> implements ReactiveController {
           // the cell, so a refusal standing from a rebind still stands.
           if (!("unread" in handle.lastRead())) this._refusal = undefined;
           if (!this._subscribeEcho) this._bindingHydrated = true;
-          const suppressed = this._classifyDelivery(typedNewValue);
           // `Object.is`, not `!==`: an unchanged `NaN` must not re-announce,
-          // and a `0` -> `-0` change is a real change.
-          if (!suppressed && !Object.is(typedNewValue, previousValue)) {
-            const oldValue = previousValue;
-            previousValue = typedNewValue;
-            if (oldValue !== undefined || typedNewValue !== undefined) {
-              this.options.onChange(typedNewValue as T, oldValue as T);
-            }
-          } else if (suppressed) {
-            // Keep the raw-stream bookkeeping coherent without announcing a
-            // value the UI never showed.
-            previousValue = typedNewValue;
+          // and a `0` -> `-0` change is a real change. A delivery that is not
+          // news is not announced, but the raw-stream bookkeeping still
+          // follows it.
+          const oldValue = previousValue;
+          previousValue = typedNewValue;
+          if (
+            this._classifyDelivery(typedNewValue) === "news" &&
+            !Object.is(typedNewValue, oldValue) &&
+            (oldValue !== undefined || typedNewValue !== undefined)
+          ) {
+            this.options.onChange(typedNewValue as T, oldValue as T);
           }
           if (this.options.triggerUpdate) {
             this.host.requestUpdate();
@@ -683,7 +655,7 @@ export class CellController<T> implements ReactiveController {
             // keep, no write waiting on its timing to make once a read is
             // admitted again, and no last value to show in its place.
             this._refusal = refusal;
-            this._inputTiming?.cancel();
+            this._inputTiming.cancel();
             this._localEdit = undefined;
             this._settledAwaitingRelease = false;
             this._lastKnownValue = undefined;
@@ -700,11 +672,25 @@ export class CellController<T> implements ReactiveController {
   }
 
   /**
-   * Decide how a subscription delivery interacts with a pending local edit.
-   * Returns true when the delivery is a stale snapshot that must neither
-   * repaint nor be announced over the user's pending edit.
+   * Decide how a subscription delivery interacts with a pending local edit:
+   * `"stale"` for a stale snapshot that must neither repaint nor be announced
+   * over the user's pending edit, `"own"` for this controller's own write
+   * showing, which repaints but was announced as it was written, and
+   * `"news"` for anything else.
    */
-  private _classifyDelivery(value: T | undefined): boolean {
+  private _classifyDelivery(value: T | undefined): "stale" | "own" | "news" {
+    if (
+      this._applyingLocalWrite ||
+      (this._computedEcho !== undefined &&
+        deepValueEqual(value, this._computedEcho.value))
+    ) {
+      this._computedEcho = undefined;
+      // Our own optimistic apply echoing back synchronously. A local echo
+      // does not confirm the edit — only bound state catching up (below) or
+      // the write settling may release it.
+      if (value !== undefined) this._lastKnownValue = value;
+      return "own";
+    }
     if (this._localEdit === undefined) {
       if (value !== undefined) {
         this._lastKnownValue = value;
@@ -714,26 +700,14 @@ export class CellController<T> implements ReactiveController {
         // known value so a later same-cell rebind cannot resurrect it.
         this._lastKnownValue = undefined;
       }
-      return false;
-    }
-    if (
-      this._applyingLocalWrite ||
-      (this._computedEcho !== undefined &&
-        deepValueEqual(value, this._computedEcho.value))
-    ) {
-      this._computedEcho = undefined;
-      // Our own optimistic apply echoing back synchronously. Deliver it as
-      // before, but a local echo does not confirm the edit — only bound state
-      // catching up (below) or the write settling may release it.
-      if (value !== undefined) this._lastKnownValue = value;
-      return false;
+      return "news";
     }
     if (value !== undefined && deepValueEqual(value, this._localEdit.value)) {
       // Bound state caught up with the edit — the echo confirmed it.
       this._localEdit = undefined;
       this._settledAwaitingRelease = false;
       this._lastKnownValue = value;
-      return false;
+      return "news";
     }
     if (
       this._settledAwaitingRelease &&
@@ -747,12 +721,12 @@ export class CellController<T> implements ReactiveController {
       this._localEdit = undefined;
       this._settledAwaitingRelease = false;
       this._lastKnownValue = value;
-      return false;
+      return "news";
     }
     // Stale pre-write snapshot: late hydration, the partial echo of an
     // earlier keystroke, or a rebound handle's initial state. The local edit
     // wins until the echo confirms or a post-settle value supersedes it.
-    return true;
+    return "stale";
   }
 
   private _cleanupCellSubscription(): void {

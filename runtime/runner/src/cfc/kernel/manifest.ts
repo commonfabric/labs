@@ -269,7 +269,6 @@ export const MANIFEST: readonly ManifestRow[] = [
     relation: "missing",
     decidedToday: [
       { file: "cfc/consumed-label.ts", symbol: "joinLabels" },
-      { file: PREPARE, symbol: "mergeLabels" },
       { file: "cfc/label-view-core.ts", symbol: "mergeLabel" },
       {
         file: "cfc/observation.ts",
@@ -278,7 +277,7 @@ export const MANIFEST: readonly ManifestRow[] = [
       { file: "cfc/access-integrity.ts", symbol: "joinLocationIntegrity" },
     ],
     note: "each concatenates and deduplicates confidentiality clauses; the " +
-      "integrity side is a plain union in `prepare.ts`, the class-aware " +
+      "integrity side is a plain union in `joinLabels`, the class-aware " +
       "meet of hereditary atoms is inside `deriveFlowJoin`, and " +
       "`joinLocationIntegrity` is the class-aware join of the locations a " +
       "release gate's access consumed, counting two observations of one " +
@@ -497,13 +496,19 @@ export const MANIFEST: readonly ManifestRow[] = [
     lean: "`Cfc/ResultWiring.lean`: `create`, `restate`",
     relation: "missing",
     decidedToday: [
+      { file: PREPARE, symbol: "resultWiringsByTarget" },
       { file: PREPARE, symbol: "withRestatedResultWirings" },
       { file: PREPARE, symbol: "ownRestampContainerPaths" },
+      { file: PREPARE, symbol: "prepareBoundaryCommitSteps" },
     ],
-    note: "a setup's result wiring is taken as written at the root of its " +
-      "document whether or not the setup wrote it, so the root's " +
-      "membership is re-minted each setup; a container reached only so " +
-      "mints no existence entry",
+    note: "a root of references only is taken as written at the root of its " +
+      "document whether or not the setup wrote it, so its membership is " +
+      "re-minted each setup that restates it; a root holding data is " +
+      "taken from an asking setup the runtime did not start on its own " +
+      "(`runtimeStarted`), whose persist region re-derives the root's " +
+      "value entry from the attempt's join and drops the derived value " +
+      "entries below it, ahead of specs#98; no restatement mints an " +
+      "existence entry",
   },
   {
     file: PROPAGATION,

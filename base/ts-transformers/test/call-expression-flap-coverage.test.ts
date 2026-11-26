@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import ts from "typescript";
 import { StaticCache } from "@commonfabric/static";
+import { test } from "@commonfabric/test-support/test";
 
 import { TransformationContext } from "../src/core/context.ts";
 import { transformCfDirective } from "../src/mod.ts";
@@ -115,7 +116,6 @@ function emitterContextFor(
     context,
     analyze,
     dataFlows,
-    inSafeContext: false,
     reactiveContextKind: "pattern",
     preferInputBoundWrappers: false,
     rewriteChildren: (node: ts.Expression) => node,
@@ -130,7 +130,7 @@ interface Input { base: Cell<number>; }
 interface Output { [UI]: VNode; }
 `;
 
-Deno.test("emitCallExpression declines a call with no reactive data flows", () => {
+test("emitCallExpression declines a call with no reactive data flows", () => {
   // A plain call to a non-reactive local function has no reactive dependencies,
   // so the emitter's `dataFlows.length === 0` guard fires and it emits nothing.
   const { program, sourceFile } = buildProgram(`${HEAD}
@@ -158,7 +158,7 @@ export default pattern<Input, Output>(() => ({
   assertEquals(result, undefined);
 });
 
-Deno.test("emitCallExpression scans a zero-arg IIFE for captured cell reads and wraps it", () => {
+test("emitCallExpression scans a zero-arg IIFE for captured cell reads and wraps it", () => {
   // A zero-arg inline IIFE reading a captured pattern-input cell via a bare
   // identifier (`base.get()`) reaches the IIFE receiver scan. That scan walks the
   // IIFE body, finds the `.get()` on the identifier `base`, and asks whether

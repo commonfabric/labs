@@ -313,13 +313,17 @@ document. Coverage follows the same rule: a later query naming a document
 an earlier evaluation reached is covered by existing watch state when the
 tracker already covers its selector. A server attributes each tracker record
 to what reached it: a watch root to its watch, a linked document to the
-document holding the link, a schema document to each delivered document whose
-refs reach it, directly or through the schema documents between. A covered
-root or link attributes to the record covering it. A record whose last
-walking referrer lets go retires, and the referrers it covered are walked on
-their own. Removing a watch releases its roots, and a write re-walks the
-changed document and releases what the re-walk does not reach again. Either
-way the documents nothing reaches any more leave the result.
+record of the document holding the link whose walk followed it, a schema
+document to each delivered document whose refs reach it, directly or through
+the schema documents between. A covered root or link attributes to the
+record covering it: as a walker of it when that record is under the selector
+the root or link needs, since it is the record a walk of its own would have
+made, and as a cover when the record is wider. A record whose last walking
+referrer lets go retires and releases what its own walk reached, and the
+referrers it covered are walked on their own. Removing a watch releases its
+roots, and a write re-walks the changed document and releases what the
+re-walk does not reach again. Either way the documents nothing reaches any
+more leave the result.
 
 Content-addressed schema documents ride the same mechanism
 (`docs/specs/content-addressed-schemas.md`): a link or selector schema
@@ -764,15 +768,16 @@ interface PaginatedResult {
 
 ## 5.9 Branch-Aware Queries
 
-All queries operate on a specific branch. If no branch is specified, the default
-branch is used.
+All queries operate on a specific branch. If no branch is specified, the branch
+the session was opened on is used (`04-protocol.md` section 4.10), which is the
+default branch unless the open named another.
 
 ### 5.9.1 Branch Resolution
 
 ```typescript
 // Shown at module scope.
 interface QueryOptions {
-  branch?: BranchName; // Omit for default branch
+  branch?: BranchName; // Omit for the session's branch
   atSeq?: number; // Point-in-time read (latest if omitted)
 }
 ```

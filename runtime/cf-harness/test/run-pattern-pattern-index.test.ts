@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
@@ -29,7 +28,13 @@ import {
   MAX_COMPOSED_PATTERNS,
   patternIndexDependencies,
   runtimeProgramFromIndex,
-} from "../src/pattern-index/composition.ts";
+} from "@commonfabric/pattern-index/deploy";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { OUTPUT_CONCERN_MESSAGES } from "../src/run-pattern-output-concerns.ts";
 import type {
   RunPatternToolErrorOutput,
@@ -723,6 +728,27 @@ describe("run-pattern over the pattern index", () => {
       expect(output.message).toContain("404");
     });
 
+    it("returns the connection failure when the index cannot be reached, with no withheld body", async () => {
+      // A failure before the index answered carries no service body that
+      // could quote indexed source, so there is nothing to withhold.
+      const unreachable: IndexStub = {
+        fetchFn: () =>
+          Promise.reject(new TypeError("error sending request: refused")),
+        calls: [],
+        settled: () => Promise.resolve(),
+      };
+      const result = await createEngine(unreachable).invokeBuiltinTool(
+        "run_pattern",
+        { patternId: "pat-doubler" },
+      );
+      const output = result.output as RunPatternToolErrorOutput;
+      expect(output.status).toBe("error");
+      expect(output.message).toBe(
+        'pattern index lookup failed for "pat-doubler": error sending request: refused',
+      );
+      expect(output.rawCauseMessage).toBeUndefined();
+    });
+
     it("returns an error naming the pattern when the index answers without its program", async () => {
       const { program: _program, ...withoutProgram } = INDEXED_PATTERN;
       const index = stubIndex({ "pat-doubler": withoutProgram });
@@ -735,6 +761,29 @@ describe("run-pattern over the pattern index", () => {
       expect(output.message).toContain(
         'the pattern index returned no program for "pat-doubler"',
       );
+    });
+
+    it("withholds the failure text when the index answers with a malformed program", async () => {
+      // A file without its contents is not one the run can compile. The
+      // client names the missing field, and nothing the index answered
+      // reaches the model, as for a malformed import.
+      const index = stubIndex({
+        "pat-malformed": {
+          ...INDEXED_PATTERN,
+          patternId: "pat-malformed",
+          program: { main: "/main.tsx", files: [{ name: SOURCE_MARKER }] },
+        },
+      });
+      const result = await createEngine(index).invokeBuiltinTool(
+        "run_pattern",
+        { patternId: "pat-malformed" },
+      );
+      const output = result.output as RunPatternToolErrorOutput;
+      expect(output.status).toBe("error");
+      expect(output.message).toBe(
+        'pattern index lookup failed for "pat-malformed": pattern index getPattern answer is malformed: program.files[0].contents is not a string',
+      );
+      expect(JSON.stringify(result.output)).not.toContain(SOURCE_MARKER);
     });
 
     it("withholds the failure text when an indexed pattern fails while starting", async () => {
@@ -932,6 +981,26 @@ describe("run-pattern over the pattern index", () => {
       // Source the model wrote names no indexed pattern, so the run reports no
       // event either: nothing at all reaches the index.
       expect(index.calls).toEqual([]);
+    });
+
+    it("publishes nothing when the compiled pattern carries no durable entry identity", async () => {
+      // An entry the index stored under no content-addressed identity could
+      // never be loaded by another runtime, so the run answers as usual and
+      // offers the index nothing.
+      Object.assign(runtime.patternManager, {
+        getArtifactEntryRef: () => undefined,
+      });
+      const index = stubIndex({}, { publish: { created: true } });
+      const result = await runAndFlush(
+        createEngine(index),
+        { ...publishInput, resultSchema: DOUBLED_RESULT_SCHEMA },
+      );
+
+      const output = result.output as RunPatternToolSuccessOutput;
+      expect(output.status).toBe("ok");
+      expect((output.value as { doubled: number }).doubled).toBe(42);
+      expect(index.calls.filter((call) => call.fn === "publishPattern"))
+        .toEqual([]);
     });
 
     it("withholds the index's failure body from a failed lookup's message", async () => {
@@ -1294,6 +1363,31 @@ describe("run-pattern over the pattern index", () => {
       expect(JSON.stringify(result.output)).not.toContain(
         "export default pattern",
       );
+    });
+
+    it("withholds the failure text when the index answers an imported pattern with a malformed program", async () => {
+      // The client names the missing field, and nothing the index answered
+      // reaches the model.
+      const index = stubIndex({
+        malformedPatternIdentity: {
+          ...INDEXED_PATTERN,
+          patternId: "malformedPatternIdentity",
+          program: { main: SOURCE_MARKER },
+        },
+      });
+      const result = await createEngine(index).invokeBuiltinTool(
+        "run_pattern",
+        {
+          sourceText: quadruplerSource("malformedPatternIdentity"),
+          inputs: {},
+        },
+      );
+      const output = result.output as RunPatternToolErrorOutput;
+      expect(output.status).toBe("error");
+      expect(output.message).toBe(
+        'the imported pattern "malformedPatternIdentity" could not be read from the pattern index: pattern index getPattern answer is malformed: program.files is not an array',
+      );
+      expect(JSON.stringify(result.output)).not.toContain(SOURCE_MARKER);
     });
 
     it("refuses a composed source when the run has no pattern index", async () => {

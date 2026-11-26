@@ -289,6 +289,46 @@ export async function batchTypeCheckFixtures(
   return { diagnosticsByFile, program };
 }
 
+/**
+ * A program over the in-memory `files`, keyed by absolute path, with every
+ * file a root. A bare module specifier `name` resolves to `/name.d.ts` where
+ * `files` holds one, so a `/commonfabric.d.ts` answers `commonfabric`; any
+ * other specifier resolves by `options` among `files`. The default library is
+ * `/lib.d.ts`, which `files` supplies unless `options.noLib` is set.
+ */
+export function createInMemoryProgram(
+  files: Readonly<Record<string, string>>,
+  options: ts.CompilerOptions,
+): ts.Program {
+  const host: ts.CompilerHost = {
+    fileExists: (name) => Object.hasOwn(files, name),
+    readFile: (name) => files[name],
+    directoryExists: () => true,
+    getDirectories: () => [],
+    getCanonicalFileName: (name) => name,
+    getCurrentDirectory: () => "/",
+    getNewLine: () => "\n",
+    getDefaultLibFileName: () => "/lib.d.ts",
+    useCaseSensitiveFileNames: () => true,
+    writeFile: () => {},
+    getSourceFile: (name, languageVersion) => {
+      const text = files[name];
+      return text === undefined
+        ? undefined
+        : ts.createSourceFile(name, text, languageVersion, true);
+    },
+    resolveModuleNames: (names, containingFile) =>
+      names.map((name) => {
+        const declaration = `/${name}.d.ts`;
+        return Object.hasOwn(files, declaration)
+          ? { resolvedFileName: declaration, extension: ts.Extension.Dts }
+          : ts.resolveModuleName(name, containingFile, options, host)
+            .resolvedModule;
+      }),
+  };
+  return ts.createProgram(Object.keys(files), options, host);
+}
+
 export async function transformSource(
   source: string,
   options: TransformOptions = {},

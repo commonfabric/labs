@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { HoverPresence } from "./presence.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("presence", () => {
   describe("HoverPresence", () => {

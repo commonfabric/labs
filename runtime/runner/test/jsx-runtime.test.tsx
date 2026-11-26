@@ -7,10 +7,10 @@
  * the static-children flag — can be supplied explicitly.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Fragment, jsx, jsxs } from "../src/jsx-runtime.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("jsx-runtime", () => {
   describe("jsx()", () => {

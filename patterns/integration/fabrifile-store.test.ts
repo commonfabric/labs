@@ -8,11 +8,14 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
+import {
+  patternCoverageCollector,
+  writeProcessPatternCoverage,
+} from "@commonfabric/integration/pattern-coverage";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type { DID } from "@commonfabric/identity/did";
 import { type Cell, type JSONSchema, Runtime } from "@commonfabric/runner";
@@ -25,6 +28,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const owner = await Identity.fromPassphrase("fabrifile-store");
 // A member of the store's space, who may write in it but does not own it.
@@ -94,6 +103,7 @@ describe("FabriFile store", () => {
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: storage,
+      patternCoverage: patternCoverageCollector(),
     });
     home = await runtime.createSpace({ grants: { [member.did()]: "WRITE" } });
   });
@@ -104,6 +114,7 @@ describe("FabriFile store", () => {
     await runtime?.dispose();
     await storage?.close();
     await server?.close();
+    await writeProcessPatternCoverage();
   });
 
   /** Writes `record` to the home space as the blob store would. */
@@ -227,6 +238,7 @@ describe("FabriFile store", () => {
     const memberRuntime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: memberStorage,
+      patternCoverage: patternCoverageCollector(),
     });
     const link = (cell: Cell<unknown>) =>
       memberRuntime.getCellFromLink(cell.getAsNormalizedFullLink());

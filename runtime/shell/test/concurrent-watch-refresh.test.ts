@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   isConcurrentWatchRefreshEnabled,
@@ -8,6 +7,7 @@ import {
 // the cast below (the command rides its `[key: string]: unknown` index
 // signature, matching how cfcRenderCeiling is typed).
 import "../src/globals.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const STORAGE_KEY = "concurrentWatchRefresh";
 

@@ -69,7 +69,10 @@ export interface ExecCommandOptions {
  * reaching the lines.
  */
 export function renderExecOutcome(
-  result: ExecutedMountedCallableFile,
+  result: Pick<
+    ExecutedMountedCallableFile,
+    "helpText" | "outputText" | "resultRef" | "invocation"
+  >,
   deps: {
     write?: (text: string) => void;
     writeError?: (text: string) => void;

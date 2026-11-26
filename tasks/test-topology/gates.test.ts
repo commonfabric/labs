@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
 import { parse as parseJsonc } from "@std/jsonc";
 import { dirname, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { DOC_DEMOS } from "../check-verb-session-sync.ts";
 import { namedBenchmarkFiles } from "../check-bench-workflow.ts";
+import { CAUSE_ASSIGNMENT_PARTS } from "../check-cause-assignments.ts";
 import { matchesPatternFilter } from "../pattern-files.ts";
 import {
   parseVintagePath,
@@ -18,8 +18,15 @@ import {
   WORKING_TREE_GATES,
 } from "./gates.ts";
 import { entryNames, type Suite } from "./suite.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const gates: readonly Gate[] = [...WORKING_TREE_GATES, ...HISTORY_GATES];
+
+/** The gates that each compare one part of the patterns' cell numbering. */
+const CAUSE_ASSIGNMENT_GATES = Array.from(
+  { length: CAUSE_ASSIGNMENT_PARTS },
+  (_, at) => `check-cause-assignments ${at + 1} of ${CAUSE_ASSIGNMENT_PARTS}`,
+);
 
 /**
  * The most of the tree one gate may be reached by, as a divisor. A gate
@@ -82,7 +89,7 @@ describe("the repository's gate suites", () => {
     }
     expect(reading.toSorted()).toEqual([
       "check-baselines-append-only",
-      "check-cause-assignments",
+      ...CAUSE_ASSIGNMENT_GATES,
       "check-test-aliases",
     ]);
     expect(declared.toSorted()).toEqual(reading.toSorted());
@@ -165,12 +172,12 @@ describe("the repository's gate suites", () => {
     // not: an edited pattern is never compared.
     expect(
       reached("base/ts-transformers/src/transformers/opaque-roots.ts"),
-    ).toEqual(["check-cause-assignments"]);
-    expect(reached("runtime/runner/src/builder/pattern.ts")).toEqual([
-      "check-cause-assignments",
-    ]);
+    ).toEqual(CAUSE_ASSIGNMENT_GATES);
+    expect(reached("runtime/runner/src/builder/pattern.ts")).toEqual(
+      CAUSE_ASSIGNMENT_GATES,
+    );
     expect(reached("runtime/runner/src/builtins/sqlite/query-node.ts"))
-      .toEqual(["check-cause-assignments"]);
+      .toEqual(CAUSE_ASSIGNMENT_GATES);
     // An ordinary source file reaches no gate. What runs for it is what
     // the score chose, which is what keeps this feature a fraction of a
     // lane rather than the bulk of one.
@@ -195,13 +202,20 @@ describe("the repository's gate suites", () => {
       [byId("repo-gates"), byId("repo-history-gates")]
         .flatMap((suite) => [...suite.unitsForChange!(new Set([at]))]);
     const share = new Map<string, number>();
-    let crowded: { at: string; names: readonly string[] } = {
+    // A gate split into parts is counted once, by the task its parts run,
+    // since the parts together are the one gate's work.
+    const taskOf = new Map(
+      gates.map((gate) => [gate.name, gate.run.join(" ")]),
+    );
+    let crowded: { at: string; names: readonly string[]; tasks: number } = {
       at: "",
       names: [],
+      tasks: 0,
     };
     for (const at of files) {
       const names = reached(at);
-      if (names.length > crowded.names.length) crowded = { at, names };
+      const tasks = new Set(names.map((name) => taskOf.get(name))).size;
+      if (tasks > crowded.tasks) crowded = { at, names, tasks };
       for (const name of names) share.set(name, (share.get(name) ?? 0) + 1);
     }
     const over: string[] = [];
@@ -220,9 +234,9 @@ describe("the repository's gate suites", () => {
         );
       }
     }
-    if (crowded.names.length > GATES_PER_FILE) {
+    if (crowded.tasks > GATES_PER_FILE) {
       over.push(
-        `${crowded.at} reaches ${crowded.names.length} gates: ` +
+        `${crowded.at} reaches ${crowded.tasks} gates: ` +
           crowded.names.toSorted().join(", "),
       );
     }
@@ -352,15 +366,31 @@ describe("the repository's gate suites", () => {
       [{ unit: "check-test-aliases", skip: [] }],
       { ...context, baseRef: "origin/release" },
     );
-    expect(invocation!.command).toContain("origin/release");
+    expect(invocation!.command.at(-1)).toBe("origin/release");
   });
 
-  it("compares against main where the lane names no base", async () => {
-    const [invocation] = await byId("repo-history-gates").command(
-      [{ unit: "check-baselines-append-only", skip: [] }],
+  it("names no base to a gate where the lane names none", async () => {
+    for (const unit of ["check-baselines-append-only", "check-test-aliases"]) {
+      const [invocation] = await byId("repo-history-gates").command(
+        [{ unit, skip: [] }],
+        context,
+      );
+      expect(invocation!.command.at(-1)).toBe(unit);
+    }
+
+    const [part] = await byId("repo-history-gates").command(
+      [{
+        unit: `check-cause-assignments 1 of ${CAUSE_ASSIGNMENT_PARTS}`,
+        skip: [],
+      }],
       context,
     );
-    expect(invocation!.command).toContain("origin/main");
+    expect(part!.command.slice(-4)).toEqual([
+      "task",
+      "check-cause-assignments",
+      "--part",
+      `1/${CAUSE_ASSIGNMENT_PARTS}`,
+    ]);
   });
 
   it("runs a gate that belongs to a package in that package", async () => {

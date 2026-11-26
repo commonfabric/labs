@@ -13,11 +13,11 @@
  * field-by-field check pass over one without reading a field.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/api";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { isACL, isDeletionTombstone, sameAcl } from "../acl.ts";
 import {

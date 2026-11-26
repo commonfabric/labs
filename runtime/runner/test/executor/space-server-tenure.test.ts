@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/logger";
@@ -8,6 +7,12 @@ import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
 import { insertExecutionOutboxRows } from "@commonfabric/memory/v2/execution-outbox";
 import { replaceSchedulerBasisRows } from "@commonfabric/memory/v2/scheduler-basis";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { EngineWaveCommitSink } from "../../src/executor/engine-wave-sink.ts";
 import {

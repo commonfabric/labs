@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -11,6 +10,7 @@ import {
   parseReportArgs,
   recentDatePrefixes,
   runReport,
+  runReportCommand,
 } from "./test-records-report.ts";
 import {
   AliasResolver,
@@ -18,6 +18,7 @@ import {
   type StoredReport,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function record(
   n: string,
@@ -126,6 +127,26 @@ describe("test-records-report", () => {
         maxDurationMs: 40,
       });
       expect(overSixtySeconds(byIdentity)).toEqual([]);
+    });
+
+    it("counts skips as runs and takes no duration from them", () => {
+      const byIdentity = aggregate([
+        report("a", [
+          { ...record("glaze", "pass", 0), outcome: "skip", durationMs: 90 },
+          record("glaze", "pass", 40),
+        ]),
+      ]);
+      expect(byIdentity.get(identityKey({
+        k: "unit",
+        s: "bakery",
+        n: "glaze",
+      }))).toEqual({
+        key: '["unit","bakery","glaze"]',
+        runs: 2,
+        failures: 0,
+        skips: 1,
+        maxDurationMs: 40,
+      });
     });
 
     it("leaves out a lane's measurements of itself", () => {
@@ -507,6 +528,59 @@ describe("test-records-report", () => {
       expect(err).toContain("listing `2026/08/18` failed");
       expect(out).toContain("1 day(s) could not be listed");
       expect(err).toContain("the ratchet could not check it");
+    });
+  });
+
+  describe("runReportCommand()", () => {
+    /** A store with nothing in it, recording each URL it was asked for. */
+    function emptyStore(urls: string[]): typeof fetch {
+      return ((input: URL | RequestInfo) => {
+        urls.push(String(input));
+        return Promise.resolve(
+          new Response(JSON.stringify({ items: [] }), { status: 200 }),
+        );
+      }) as typeof fetch;
+    }
+
+    it("reads the days the command line asks for from the store the environment names", async () => {
+      const urls: string[] = [];
+      const { result: status, out } = await captureConsole(() =>
+        runReportCommand(
+          ["--days", "2", "--gate"],
+          (name) =>
+            ({
+              TEST_RECORDS_BUCKET: "probe-bucket",
+              TEST_RECORDS_PREFIX: "probe/records",
+            })[name],
+          {
+            fetchImpl: emptyStore(urls),
+            now: Date.parse("2026-08-18T12:00:00Z"),
+          },
+        )
+      );
+      expect(status).toBe(0);
+      expect(urls.length).toBe(2);
+      expect(urls.every((url) => url.includes("/b/probe-bucket/"))).toBe(true);
+      expect(urls.map((url) => new URL(url).searchParams.get("prefix")))
+        .toEqual([
+          "probe/records/submissions/ci/v1/2026/08/18/",
+          "probe/records/submissions/ci/v1/2026/08/17/",
+        ]);
+      expect(out).toContain(
+        "0 object(s) under probe/records/submissions/ci in the last 2 day(s).",
+      );
+    });
+
+    it("returns 2 and reads nothing for a malformed command line", async () => {
+      const urls: string[] = [];
+      const { result: status, err } = await captureConsole(() =>
+        runReportCommand(["--mystery"], () => undefined, {
+          fetchImpl: emptyStore(urls),
+        })
+      );
+      expect(status).toBe(2);
+      expect(err).toBe("unknown flag --mystery");
+      expect(urls).toEqual([]);
     });
   });
 

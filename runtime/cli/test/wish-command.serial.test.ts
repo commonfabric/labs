@@ -1,8 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 import { Identity } from "@commonfabric/identity";
-import { decode } from "@commonfabric/text/utf8";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   parseScopeFlags,
   wish,
@@ -12,7 +11,7 @@ import {
 import { setQuietMode } from "../commands/piece.ts";
 import type { WishReadConfig, WishReadResult } from "../lib/wish.ts";
 import { CellSelectionError } from "../lib/cell-selection.ts";
-import { captureStderr, withEnv } from "./utils.ts";
+import { captureStderr, captureStdout, withEnv } from "./utils.ts";
 
 // Drives the `cf wish` action body in-process with a stubbed readWish/exit
 // (same idiom as test/inspect-remote.serial.test.ts), so flag handling, config
@@ -45,22 +44,6 @@ function stubDeps(result: WishReadResult, throws?: Error): {
     calls,
     exits,
   };
-}
-
-/** Capture what render() writes to stdout during `fn`. */
-async function captureStdout(fn: () => Promise<void>): Promise<string> {
-  let captured = "";
-  const original = Deno.stdout.writeSync;
-  Deno.stdout.writeSync = (data: Uint8Array): number => {
-    captured += decode(data);
-    return data.length;
-  };
-  try {
-    await fn();
-  } finally {
-    Deno.stdout.writeSync = original;
-  }
-  return captured;
 }
 
 async function makeTempKeyFile(): Promise<{ path: string; did: string }> {
@@ -211,6 +194,19 @@ describe("cf wish command action", () => {
 
     expect(exits).toEqual([1]);
     expect(errors.join("\n")).toContain("kept nothing over the target");
+  });
+
+  it("rethrows a resolution failure that is not about the selection, and exits nothing", async () => {
+    const failure = new Error("toolshed unreachable");
+    const { deps, exits } = stubDeps({ result: null }, failure);
+
+    await expect(
+      captureStdout(() =>
+        wishAction({ ...BASE_OPTIONS, select: "absent" }, "#profile", deps)
+      ),
+    ).rejects.toBe(failure);
+
+    expect(exits).toEqual([]);
   });
 
   it("wish.parse routes missing config through cliffy as exit 1", async () => {

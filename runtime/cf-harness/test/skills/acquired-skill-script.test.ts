@@ -1,6 +1,5 @@
 import { join, normalize } from "@std/path";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { createHarnessCfcInvocationContext } from "../../src/contracts/cfc-invocation-context.ts";
 import { skillsShValueDigest } from "../../src/skills-sh/acquisition.ts";
@@ -26,6 +25,12 @@ import type {
 import { runSkillScriptTool } from "../../src/tools/run-skill-script.ts";
 import type { HarnessToolContext } from "../../src/tools/types.ts";
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const REGISTRY_ID = "zubair-trabzada/ai-finance-claude/finance-budget";
 const COMMIT_SHA = "dd93980e2f9a1d4c4d50a6e1a3cbb6e2b7a91f3c";
@@ -145,10 +150,8 @@ const createContext = (options: ContextOptions): HarnessToolContext => {
     resolvePath: (path) => options.sandbox.resolvePath(path, "/workspace"),
     resolveHostPath: (path) => `/tmp/cf-harness-workspace${path}`,
     resolveHostRootPath: () => "/tmp/cf-harness-workspace",
-    hostPathToWorkspacePath: () => undefined,
     isHostPathWithinWorkspace: () => Promise.resolve(true),
     isHostPathWithinArtifactRoot: () => Promise.resolve(false),
-    doesHostPathIntersectArtifactRoot: () => Promise.resolve(false),
     setCurrentDir: () => {},
     nextOutputId(toolId) {
       sequence += 1;
@@ -487,6 +490,27 @@ describe("run_skill_script on an acquired skill's script", () => {
 
     expect(output.status).toBe("error");
     expect(output.error?.code).toBe("script_not_allowlisted");
+    expect(sandbox.calls.length).toBe(0);
+  });
+
+  it("refuses a script the acquisition did not fetch, naming the acquisition", async () => {
+    const output = await runSkillScriptTool.invoke(
+      createContext({
+        sandbox,
+        executions,
+        acquiredSkills: [acquiredSkill()],
+        skillActivations: activationsHoldingTheAcquiredSkill(),
+        allowSkillScripts: true,
+      }),
+      { skill: PIN, path: "scripts/other.sh" },
+    );
+
+    expect(output.status).toBe("error");
+    expect(output.error).toEqual({
+      code: "script_not_indexed",
+      message: `script not acquired at pin ${PIN}: scripts/other.sh`,
+    });
+    expect(output.acquisition).toEqual(acquisition());
     expect(sandbox.calls.length).toBe(0);
   });
 

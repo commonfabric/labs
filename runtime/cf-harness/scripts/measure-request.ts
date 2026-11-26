@@ -7,7 +7,8 @@
  * `OpenAICodexResponsesClient.complete()` with a capturing fetch, so the bytes
  * are exactly what the provider serializes. The tools are the ones a recorded
  * run was granted, through `builtinToolDescriptorForRuntime`; the system
- * prompt is `buildCfHarnessBatchSystemPrompt` for each tag; the context
+ * prompt is `buildCfHarnessBatchSystemPrompt` for each tag, followed by the
+ * result schema's own system message when the run has one; the context
  * messages are what `establishHarnessSessionContext` opens a fabric-backed run
  * with that holds loom commands and retrieval, fitted to the tag by
  * `orientContextMessages`; a run with attached patterns or client actions opens
@@ -21,7 +22,10 @@
  *   deno run --allow-read scripts/measure-request.ts <recorded-artifact-dir>
  */
 
-import { buildCfHarnessBatchSystemPrompt } from "../src/cli.ts";
+import {
+  buildCfHarnessBatchSystemPrompt,
+  buildStructuredResultSchemaPrompt,
+} from "../src/cli.ts";
 import type { HarnessSubagentProfile } from "../src/contracts/subagent.ts";
 import type { BuiltinToolId } from "../src/contracts/tool-descriptor.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
@@ -47,6 +51,7 @@ const TAGS: readonly (HarnessTaskTag | "fallback")[] = [
 
 const ADDITIONAL = "\nAdditional instructions:\n";
 const SCHEMA = "Result schema (JSON):\n";
+const CONTRACT = "\n\nStructured result contract:\n";
 
 const bytes = (text: string): number =>
   new TextEncoder().encode(text).byteLength;
@@ -130,15 +135,50 @@ export const measureRequest = async (
     role: string;
     content: string;
   }[];
-  const system = recorded[0].content;
+  const systems = recorded.filter((message) => message.role === "system")
+    .map((message) => message.content);
+  const system = systems[0];
+  // A run whose schema is a system message of its own ends its prompt on the
+  // result contract, so the instructions end at the last contract heading.
+  const schemaMessage = systems.slice(1).find((content) =>
+    content.startsWith(SCHEMA)
+  );
+  // Otherwise the schema is inside the prompt. When the result contract
+  // follows the caller's instructions its schema line ends the prompt, so the
+  // real schema is the one the prompt ends on and the instructions end at the
+  // contract before it. A run recorded with its schema ahead of the
+  // instructions has them run to the end: there the first schema heading is
+  // the real one. Either way a heading the instructions quote is not taken for
+  // the real one.
   const additionalAt = system.indexOf(ADDITIONAL);
-  const additional = additionalAt === -1
-    ? undefined
-    : system.slice(additionalAt + ADDITIONAL.length);
-  const schemaAt = system.indexOf(SCHEMA);
-  const schema = schemaAt === -1
+  const firstSchemaAt = system.indexOf(SCHEMA);
+  const lastSchemaAt = system.lastIndexOf(SCHEMA);
+  const schemaFirst = additionalAt === -1 ||
+    (firstSchemaAt !== -1 && firstSchemaAt < additionalAt);
+  const schemaAt = schemaFirst ? firstSchemaAt : lastSchemaAt !== -1 &&
+      !system.slice(lastSchemaAt + SCHEMA.length).includes("\n")
+    ? lastSchemaAt
+    : -1;
+  const contractAt = schemaMessage !== undefined
+    ? system.lastIndexOf(CONTRACT)
+    : schemaFirst || schemaAt === -1
+    ? -1
+    : system.lastIndexOf(CONTRACT, schemaAt);
+  const additional = additionalAt === -1 ? undefined : system.slice(
+    additionalAt + ADDITIONAL.length,
+    contractAt > additionalAt ? contractAt : undefined,
+  );
+  const schema = schemaMessage !== undefined
+    ? JSON.parse(schemaMessage.slice(SCHEMA.length))
+    : schemaAt === -1
     ? undefined
     : JSON.parse(system.slice(schemaAt + SCHEMA.length).split("\n")[0]);
+  const structuredResult = schema === undefined ? undefined : {
+    path: "/unused/agent-result.json",
+    sandboxPath: "/workspace/agent-result.json",
+    schema,
+  };
+  const schemaPrompt = buildStructuredResultSchemaPrompt(structuredResult);
   const grants = recorded.find((message) =>
     message.role === "user" && message.content.startsWith("Granted references")
   )?.content;
@@ -177,15 +217,7 @@ export const measureRequest = async (
         role: "system",
         content: buildCfHarnessBatchSystemPrompt({
           ...(additional !== undefined ? { systemPrompt: additional } : {}),
-          ...(schema !== undefined
-            ? {
-              structuredResult: {
-                path: "/unused/agent-result.json",
-                sandboxPath: "/workspace/agent-result.json",
-                schema,
-              },
-            }
-            : {}),
+          ...(structuredResult !== undefined ? { structuredResult } : {}),
           allowedToolIds,
           // The parent is told about a pattern index when it may search one.
           ...(allowedToolIds.includes("search_patterns")
@@ -194,6 +226,9 @@ export const measureRequest = async (
           ...(tags !== undefined ? { taskTags: tags } : {}),
         }),
       },
+      ...(schemaPrompt !== undefined
+        ? [{ role: "system" as const, content: schemaPrompt }]
+        : []),
       ...orientContextMessages(opened, {
         ...(tags !== undefined ? { tags } : {}),
         depth: "standard",

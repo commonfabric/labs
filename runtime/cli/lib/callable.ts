@@ -209,10 +209,11 @@ export type InvocationResultLink = string;
 export interface InvocationOutcome {
   id: string;
 
-  /** `"settled"` once receipt readback completed. Otherwise the furthest
-   * phase the caller chose to observe: `--no-wait` returns at `"committed"`
-   * (commit acknowledged, readback skipped), and a caller-bounded wait
-   * reports the phase its bound expired in. */
+  /** `"settled"` once receipt readback completed, or once a handling whose
+   * outcome is `withheld` landed, which reads no receipt. Otherwise the
+   * furthest phase the caller chose to observe: `--no-wait` returns at
+   * `"committed"` (commit acknowledged, readback skipped), and a
+   * caller-bounded wait reports the phase its bound expired in. */
   status: "settled" | InvocationPhase;
 
   /** Durable address of this handling's receipt — the cell the outcome is
@@ -248,6 +249,12 @@ export interface InvocationOutcome {
   /** True when this call collided on the create-only receipt: the handling
    * did not commit again, and `result` is the ORIGINAL outcome. */
   deduplicated?: boolean;
+
+  /** True when the handling's outcome is withheld: under server execution
+   * it read data its stream's space doesn't admit, so whether it committed,
+   * and what it returned, is not told. Such an outcome is `"settled"` with
+   * no `result` and no `receipt`. */
+  withheld?: true;
 
   /** Under `--show-links` only: result paths mapped to their backing cell
    * addresses in canonical reference syntax, provenance beside the value the
@@ -1067,6 +1074,18 @@ export async function executeResolvedCallable(
         }`,
       );
     }
+    // A withheld handling may never have written its receipt, so nothing is
+    // read back, and no receipt is named.
+    if (handling.status === "withheld") {
+      return {
+        invocation: {
+          id: invocationId,
+          status: "settled",
+          withheld: true,
+          ...(deduplicated ? { deduplicated: true } : {}),
+        },
+      };
+    }
 
     // Read the handling's outcome back off its receipt. On a receipt-exists
     // collision this is the ORIGINAL handling's receipt — same id, same
@@ -1228,13 +1247,15 @@ export async function executeResolvedCallable(
   try {
     await runtime.idle();
     runtime.prepareTxForCommit(tx);
-    await tx.commit().settled;
     // A tool's result cell is durable, so a transaction that wrote one is a
     // write to the space like a handler's is. Neither `commit()` resolving
     // nor a `done` status proves that: an empty transaction commits
     // successfully too. The journal's novelty for this space is what was
-    // actually written, so the receipt follows it.
-    if (transactionWroteTo(tx, resolved.space)) noteWroteTo(resolved.space);
+    // actually written, so the receipt follows it. The journal is read before
+    // the commit, because a committed transaction releases it.
+    const wrote = transactionWroteTo(tx, resolved.space);
+    const committed = await tx.commit().settled;
+    if (wrote && committed.error === undefined) noteWroteTo(resolved.space);
 
     // Drain the tool to a fully settled state — scheduler idle, storage synced,
     // and every in-flight async builtin finished — so the result is final by the

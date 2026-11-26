@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -9,7 +8,11 @@ import { normalize } from "@std/path/posix";
 import { createSession, Identity } from "@commonfabric/identity";
 import type { DID } from "@commonfabric/identity/did";
 import { PiecesController } from "@commonfabric/piece/ops";
-import { Runtime } from "@commonfabric/runner";
+import {
+  computeEntryIdentity,
+  ensureCompilerStack,
+  Runtime,
+} from "@commonfabric/runner";
 import { cfcLabelViewForCellFailClosed } from "@commonfabric/runner/cfc";
 import {
   createLLMFriendlyLink,
@@ -47,6 +50,12 @@ import type {
   CfcRefusalDetail,
   CfcRefusalInput,
 } from "@commonfabric/runner/cfc";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type {
   SandboxCommandRequest,
   SandboxCommandResult,
@@ -2907,6 +2916,80 @@ describe("run-pattern", () => {
       expect(output.message).toContain("cancelled");
       expect(stopped.length).toBe(1);
       expect(result.runState.status).not.toBe("failed");
+    });
+
+    it("returns a `cancelled` output when stopping the cancelled piece fails", async () => {
+      // Stopping the piece a cancelled run created is best-effort: the run
+      // has already decided its outcome, and a runner that cannot stop the
+      // piece does not turn a cancellation into a failure.
+      const controller = new AbortController();
+      Object.assign(runtime, {
+        settled: () => {
+          controller.abort();
+          return new Promise<void>(() => {});
+        },
+      });
+      const stops: unknown[] = [];
+      Object.assign(runtime.runner, {
+        stop: (cell: unknown) => {
+          stops.push(cell);
+          throw new Error("the runner is already shutting down");
+        },
+      });
+      const engine = createEngine();
+      const result = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: DOUBLING_PATTERN_SOURCE,
+        inputs: { n: 1 },
+      }, { signal: controller.signal });
+      const output = result.output as RunPatternToolErrorOutput;
+      expect(output.status).toBe("cancelled");
+      expect(stops).toHaveLength(1);
+      expect(JSON.stringify(output)).not.toContain("shutting down");
+    });
+
+    it("names a scheduler deferral of the pattern's own actions as why its result never landed", async () => {
+      // The scheduler reports actions it deferred past a pass's convergence
+      // budget with a telemetry marker naming each action's module. A result
+      // that settled to nothing beside such a marker for this pattern's
+      // module is reported as that, and one without it is not.
+      const source = [
+        "import { pattern } from 'commonfabric';",
+        "export default pattern<Record<string, never>, Record<string, never>>(",
+        "  () => ({}),",
+        ");",
+        "",
+      ].join("\n");
+      const quiet = (await createEngine().invokeBuiltinTool("run_pattern", {
+        sourceText: source,
+      })).output;
+      expect(JSON.stringify(quiet)).not.toContain("convergence budget");
+
+      await ensureCompilerStack();
+      const identity = await computeEntryIdentity("/main.tsx", [
+        { name: "/main.tsx", contents: source },
+      ]);
+      const settled = runtime.settled.bind(runtime);
+      Object.assign(runtime, {
+        settled: () => {
+          runtime.telemetry.submit({
+            type: "scheduler.non-settling",
+            busyTime: 0,
+            windowDuration: 0,
+            busyRatio: 0,
+            deferredActions: [{ label: `cf:module/${identity}:default:0` }],
+            deferredActionCount: 3,
+          });
+          return settled();
+        },
+      });
+      const output = (await createEngine().invokeBuiltinTool("run_pattern", {
+        sourceText: source,
+      })).output as RunPatternToolErrorOutput;
+      expect(output.status).toBe("error");
+      expect(output.message).toContain(
+        "the scheduler deferred 3 action(s) of this piece or this pattern's module past its convergence budget",
+      );
+      expect(output.pieceId).toBeDefined();
     });
 
     it("returns a `cancelled` output when the signal aborts during the release measurement", async () => {

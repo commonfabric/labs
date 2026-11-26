@@ -112,9 +112,9 @@ export class Field {
     };
     switch (key.alt ? `alt-${key.name}` : key.name) {
       case "left":
-        return move(() => key.ctrl ? b.moveWordBackward() : this.#across(-1));
+        return move(() => key.ctrl ? b.moveWordBackward() : b.moveLeft());
       case "right":
-        return move(() => key.ctrl ? b.moveWordForward() : this.#across(1));
+        return move(() => key.ctrl ? b.moveWordForward() : b.moveRight());
       case "alt-b":
       case "alt-left":
         return move(() => b.moveWordBackward());
@@ -122,9 +122,9 @@ export class Field {
       case "alt-right":
         return move(() => b.moveWordForward());
       case "ctrl-b":
-        return move(() => this.#across(-1));
+        return move(() => b.moveLeft());
       case "ctrl-f":
-        return move(() => this.#across(1));
+        return move(() => b.moveRight());
       case "up":
       case "ctrl-p":
         return this.#multiline && move(() => this.#vertical(-1));
@@ -150,14 +150,10 @@ export class Field {
       case "enter":
         return this.#multiline && edit(() => b.insertNewline());
       case "backspace":
-        return edit(() => {
-          for (let n = this.#across(-1, false); n > 0; n--) b.deleteBackward();
-        });
+        return edit(() => b.deleteBackward());
       case "delete":
       case "ctrl-d":
-        return edit(() => {
-          for (let n = this.#across(1, false); n > 0; n--) b.deleteForward();
-        });
+        return edit(() => b.deleteForward());
       case "alt-backspace":
       case "ctrl-w":
         return edit(() => b.killWordBackward());
@@ -309,30 +305,6 @@ export class Field {
     flush();
     if (used < width) spans.push({ text: " ".repeat(width - used), style });
     return spans;
-  }
-
-  /**
-   * Moves the cursor one character as a reader sees it in direction `by`,
-   * however many code points it holds, onto the next line at a line's end;
-   * or, when `moving` is unset, leaves the cursor and returns how many code
-   * points that character holds, which an edit deletes.
-   */
-  #across(by: 1 | -1, moving = true): number {
-    const b = this.#buffer;
-    const chars = graphemes(b.lines[b.row]);
-    const index = graphemeIndex(chars, b.col);
-    const char = by < 0 ? chars[index - 1] : chars[index];
-    // At a line's end the step crosses the line break, one code point.
-    const size = char === undefined ? 1 : [...char].length;
-    if (moving) {
-      if (char === undefined) {
-        if (by < 0) b.moveLeft();
-        else b.moveRight();
-      } else {
-        b.place(b.row, b.col + by * size);
-      }
-    }
-    return size;
   }
 
   /**

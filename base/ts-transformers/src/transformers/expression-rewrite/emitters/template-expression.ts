@@ -7,15 +7,9 @@ export const emitTemplateExpression = ({
   expression,
   dataFlows,
   context,
-  inSafeContext,
   preferInputBoundWrappers,
 }: EmitterContext) => {
   if (!ts.isTemplateExpression(expression)) return undefined;
-
-  // Skip lift-applied wrapping in safe contexts - they don't need it
-  if (inSafeContext) return undefined;
-
-  if (dataFlows.length === 0) return undefined;
 
   return createReactiveWrapperForExpression(
     expression,

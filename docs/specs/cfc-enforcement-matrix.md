@@ -231,8 +231,8 @@ The strict-only delta is:
   [specs#71](https://github.com/commonfabric/specs/pull/71): §4.9.4 reads both
   spellings against that space's ACL. It uses the target's space, not the
   acting principal or an ownership lookup, and adds no clause for another
-  space. The proposal is closed without merging; this implementation follows
-  its proposed rule ahead of a ruling and a reconciled pin. The existing
+  space. The proposal is open and unruled; this implementation follows its
+  proposed rule ahead of a ruling and a reconciled pin. The existing
   residency marker names specs#68; this addition has no separate marker.
   The conformance statement records the semantic gap at the strict default.
   A `user` or `session` document is one principal's instance: its scope key is
@@ -302,6 +302,16 @@ The strict-only delta is:
   transaction with recorded reasons CFC-relevant (`prepare-reasons`), so a
   reasoned tx whose reads never tripped an eager relevance mark cannot slip the
   ladder ([extended-storage-transaction.ts](../../runtime/runner/src/storage/extended-storage-transaction.ts)).
+
+  **A served run.** A run the serving posture executes for an acting
+  principal, an event handler, a derivation or bookkeeping, is measured as any
+  writer is: nothing here depends on which runtime ran the transaction or on
+  which store a clause was read from
+  ([cfc-writer-fit.test.ts](../../runtime/runner/test/cfc-writer-fit.test.ts),
+  "a served run's writes", compares the two). Such a run can read what its
+  acting principal's own runtime could not, so the clauses it carries land
+  where that principal reads, labeled. The conformance statement's §5 records
+  the two boundaries that then let such a value out.
 
   The DECLARED half of the ceiling also admits an owner case, in one
   direction. A `PersonalSpace(owner)` LABEL clause answers a
@@ -404,12 +414,15 @@ The strict-only delta is:
   The schemas that describe their fields are the cache's own write schemas,
   which declare integrity and no confidentiality, so the ceiling that resolves
   there is the empty one, and a measured cache write carrying any clause
-  misfits. A piece's source transition stages the
-  successor module's delegation union on the same transaction that moves the
-  piece's source pointer, so that the authority and the pointer land together,
-  and that transaction also reads the piece's argument — which is why the
-  measurement reaches a cache document during an ordinary pattern update
-  rather than only in an unusual flow.
+  misfits. A piece's source transition reads the piece's argument, so it writes
+  no cache document: it records the successor's delegation union in the piece's
+  own `pieceSourceDelegations` meta member, on the piece's document rather than
+  a cache one, and the union is staged on the cache documents once the
+  transition commits, on a transaction that reads nothing but cache documents.
+  An ordinary pattern update therefore brings no clause from the piece's data to
+  a cache write. The measurement still reaches a cache document whenever a
+  transaction that consumed a clause writes one, as a write-back over a record
+  that already carries a clause does.
 
   Three things bound the marker, and the first is what the other two rest on.
   The recording method is the same public one the ownership marker uses, so the
@@ -426,6 +439,55 @@ The strict-only delta is:
   marker recorded beside the write always covers the question. That is the one
   respect in which it is narrower than the ownership marker, which answers for
   stores a later transaction writes.
+
+  The marker also stands only for what a builtin wrote. The transaction records
+  every value write made under an identity other than a builtin's, an
+  unattributed or a verified one alike (`CfcTxState.nonBuiltinWrites`), and a
+  document such a write reached is measured, marker or not, as any writer's
+  would be. A `write()` or `writeBatch()` made on the storage transaction
+  beneath the extended one without its write chokepoint's mark carries no
+  identity, and is recorded the same way whatever the transaction's identity is
+  when it is made (`reportUnmarkedWrites()`); it also invalidates a standing
+  preparation, as any write does, which refuses the commit of a transaction
+  CFC already counts as relevant. A later builtin write to the same path does
+  not lift that: a builtin can read the transaction's view and write it back,
+  so its write is no evidence that the value is its own, and the rule cannot
+  rely on every builtin guarding what it carries. The cache writer does guard
+  its delegation-list carry: a list another identity wrote in the transaction
+  is carried into neither record's list (`writtenByAnotherIdentity()` in
+  `cell-cache.ts`), and on a compiled
+  record, whose attestation sits at its root, another identity's write anywhere
+  on it excludes its list. It carries the annotations even where another
+  identity wrote them: they bear no evidence, and that identity's write leaves
+  the record measured. So after a labeled read, a pattern's or an unattributed
+  host's write of a cache record misfits, whether it comes before or after the
+  cache writer's in the transaction, or in a transaction of its own. A write
+  made under any builtin identity is the runtime's own and stays exempt. The
+  compiler's attestation is held to the same line as every runtime-minted atom:
+  `gateRuntimeMintedIntegrity` treats a schema's evidence at a path such a write
+  overlaps as it treats an unattributed write's, so a record keeps no
+  attestation over a value another identity chose.
+
+  The record holds against code that writes through the transaction it is
+  handed, not against code that takes the transaction apart. Code holding the
+  transaction object can still write around it: through a second extended
+  transaction it builds over the same storage transaction, whose own marked
+  writes the first never hears; through a storage transaction it puts in
+  place of `.tx`; with a chokepoint mark taken from a marked write's options;
+  through `accessForTestingOnly.privilegedSystemWrite`, which also writes a
+  label map directly; by committing `.tx` itself, with no preparation; or by
+  writing a storage transaction before any extended one wraps it. Each needs
+  the transaction object, which host code holds and pattern code does not
+  reach.
+
+  A cache record that holds a flow stamp keeps it until the load ahead of a
+  setup repairs it: the
+  repair erases a stamped compiled record and rewrites a stamped source record
+  to the value the compile-cache writer stores for its identity, under an
+  identity reserved for it, in a transaction it refuses to commit if that
+  transaction is CFC-relevant or its commit would prepare it
+  (`module-loading.md`, "Repairing a stamped record"; pending
+  [specs#103](https://github.com/commonfabric/specs/pull/103)).
 
   One thing this class does NOT take from §18.6.2 is its write-side mirror.
   That section states its read exclusion as mirroring "the write-side rule
@@ -475,6 +537,29 @@ The strict-only delta is:
   piece in that space running the module it holds, so in each case the value
   reaches no reader it had not reached already, and what follows it is the
   stamp.
+
+  One write to an entries document is outside both the measurement and the
+  stamp whatever space the join came from: a served event's processed claim,
+  the `consequenced` mark (and the cleared delivery deferral beside it) the
+  serving loop writes on the event's own entry in the transaction that runs
+  the handler. §6.2.2 claims an event's processed cell apart from its
+  handler, so the claim reads nothing the handler reads and carries none of
+  its labels; writing it in the handler's transaction, so that it commits with
+  the consequences, leaves it that way
+  ([specs#94](https://github.com/commonfabric/specs/pull/94) states this).
+  The serving loop names each such path as it writes it
+  (`writeProcessedClaim()` in `runtime/runner/src/executor/processed-claim.ts`)
+  under the runtime-authorized `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM`
+  marker, which the gate takes only on a stream's entries document. For the
+  same reason the claim is outside the transaction's authorship summary
+  (§8.9.3): a run whose own writes are all its handler's is attributed to the
+  handler, so they carry `TransformedBy`, while the claim, unstamped, carries
+  none. Only the claim's own value, written under no identity at a path the
+  runtime named, is left out, the write the stamp leaves out too. Every
+  other write the transaction makes, an entry it appends or a field it writes
+  beside the mark included, is measured and stamped as above, so a handler
+  over another space's labeled value still cannot carry it into the stream's
+  space.
 
   A declared entry can still reach one of these documents, from a
   schema-carrying write to it, and the skip is unconditional over that route.
@@ -643,13 +728,10 @@ The strict-only delta is:
     ceilings until the gate that should own them exists. `sqliteQuery` has
     that gate now. Its request stages under a `sqliteQuery` sink, which
     releases ungated under the max-enforcement posture for a reason of its
-    own: the bound a read wants is the database's own SPACE, and a per-sink
-    ceiling holds a clause list and nothing else. That bound is also what the
-    store's own ceiling was refusing, and it was worth exactly one case — a
-    database in another space receiving a request that carries a label —
-    so the builtin applies it before staging, where which space the database
-    is in is a thing it can see, measuring the transaction's flow join rather
-    than the transaction-global consumed set the sink ceilings read. The
+    own: the server a query reaches, in its own space or another, is an
+    attested runtime applying the same access rules, and the rows' labels
+    decide what each reader is shown
+    (`sqlite-builtin/06-cfc.md`). The
     control state takes the route, because a request hash is a function of
     parameters no author can foresee, while `/result`'s per-column entries
     stay the author's: the route declines at a declared path, and the

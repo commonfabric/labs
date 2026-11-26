@@ -79,6 +79,10 @@ interface InflightEffect {
   retirement: Promise<void>;
   candidates: EffectCandidate[] | undefined;
   countsAsRequest: boolean;
+
+  /** Whether a candidate's flush has passed its release check and started
+   * the request's work. */
+  dispatched: boolean;
 }
 
 /** Per-space egress budgets (Phase 6 — serving-loop.md §5's
@@ -355,6 +359,19 @@ export class SpaceOutbox {
   }
 
   /**
+   * Whether `effectKey`'s request has gone out and its carriage is still
+   * held: true from the moment a candidate's flush passes its release check
+   * until the effect retires. A completion committed meanwhile commits under
+   * that carriage. During a flush whose release check refuses the request,
+   * and once every candidate's has, this is false, since that carriage
+   * retires as soon as the flush returns.
+   */
+  hasDispatchedCarriage(effectKey: string): boolean {
+    return this.#inflight.get(effectKey)?.dispatched === true &&
+      this.#carriage.has(effectKey);
+  }
+
+  /**
    * Defer the effect's in-flight retirement behind `barrier` — the B-1
    * read-consistency gate: the completion committer registers, per
    * completion commit, a promise resolving when that commit's writes
@@ -415,6 +432,7 @@ export class SpaceOutbox {
           retirement: retired.promise,
           candidates: [candidate],
           countsAsRequest,
+          dispatched: false,
         };
         this.#inflight.set(key, entry);
         if (countsAsRequest) this.#stats.memo.inflight += 1;
@@ -511,6 +529,7 @@ export class SpaceOutbox {
       this.#capturing = undefined;
       if (flushResult === POST_COMMIT_RELEASE_REJECTED) continue;
       dispatched = true;
+      entry.dispatched = true;
       break;
     }
     entry.candidates = undefined;

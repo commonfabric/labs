@@ -7,7 +7,6 @@
 // Spec: docs/specs/sqlite-builtin/06-cfc.md ("Write — the runner gate").
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   all,
@@ -19,11 +18,18 @@ import {
   whenMatches,
 } from "@commonfabric/memory/sqlite/row-label";
 import { table } from "@commonfabric/memory/sqlite/schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { checkSqliteRowLabelWrite } from "../src/builtins/sqlite/row-label-write.ts";
 
 const ADDR = /[^\s<>,;"]+@[^\s<>,;"]+/g;
 const OWNER = "did:key:zOwner";
+// A reader as `dbOwner()`/`principal()` name it: the CFC `User{subject}` atom
+// (spec §15.2), never the bare DID.
+const user = (subject: string) => ({
+  type: "https://commonfabric.org/cfc/atom/User",
+  subject,
+});
 
 const tables = {
   emails: table(
@@ -112,7 +118,7 @@ describe("checkSqliteRowLabelWrite — the value the column will store", () => {
     }));
     assertEquals(res.policies?.[0].label.confidentiality, [
       "did:mailbox:seven",
-      OWNER,
+      user(OWNER),
     ]);
   });
 
@@ -126,7 +132,7 @@ describe("checkSqliteRowLabelWrite — the value the column will store", () => {
       owner: OWNER,
       confidentialityOf: unlabeled,
     }));
-    assertEquals(res.policies?.[0].label.confidentiality, [OWNER]);
+    assertEquals(res.policies?.[0].label.confidentiality, [user(OWNER)]);
   });
 
   it("binds the canonical text of an integer to an INTEGER column: same text either side", () => {
@@ -141,7 +147,7 @@ describe("checkSqliteRowLabelWrite — the value the column will store", () => {
     }));
     assertEquals(res.policies?.[0].label.confidentiality, [
       "did:mailbox:seven",
-      OWNER,
+      user(OWNER),
     ]);
   });
 
@@ -199,7 +205,7 @@ describe("checkSqliteRowLabelWrite — the value the column will store", () => {
     }));
     assertEquals(res.policies?.[0].label.confidentiality, [
       "did:mailbox:seven",
-      OWNER,
+      user(OWNER),
     ]);
   });
 });
@@ -218,9 +224,9 @@ describe("checkSqliteRowLabelWrite — INSERT evaluates the rule", () => {
       table: "emails",
       label: {
         confidentiality: [
-          "did:mailto:alice@a.example",
-          "did:mailto:bob@example.com",
-          OWNER,
+          user("did:mailto:alice@a.example"),
+          user("did:mailto:bob@example.com"),
+          user(OWNER),
         ],
         integrity: [
           {
@@ -241,8 +247,8 @@ describe("checkSqliteRowLabelWrite — INSERT evaluates the rule", () => {
       confidentialityOf: unlabeled,
     }));
     assertEquals(res.policies?.[0].label.confidentiality, [
-      "did:mailto:alice@a.example",
-      OWNER,
+      user("did:mailto:alice@a.example"),
+      user(OWNER),
     ]);
   });
 
@@ -261,14 +267,14 @@ describe("checkSqliteRowLabelWrite — INSERT evaluates the rule", () => {
     }));
     assertEquals(res.policies?.length, 2);
     assertEquals(res.policies?.[0].label.confidentiality, [
-      "did:mailto:alice@a.example",
-      "did:mailto:bob@example.com",
-      OWNER,
+      user("did:mailto:alice@a.example"),
+      user("did:mailto:bob@example.com"),
+      user(OWNER),
     ]);
     assertEquals(res.policies?.[1].label.confidentiality, [
-      "did:mailto:carol@c.example",
-      "did:mailto:dave@d.example",
-      OWNER,
+      user("did:mailto:carol@c.example"),
+      user("did:mailto:dave@d.example"),
+      user(OWNER),
     ]);
   });
 
@@ -292,7 +298,7 @@ describe("checkSqliteRowLabelWrite — INSERT evaluates the rule", () => {
       tables,
       owner: OWNER,
       confidentialityOf: (v) =>
-        v === "secret body" ? ["did:mailto:bob@example.com"] : [],
+        v === "secret body" ? [user("did:mailto:bob@example.com")] : [],
     });
     expectOk(res);
   });
@@ -305,7 +311,9 @@ describe("checkSqliteRowLabelWrite — INSERT evaluates the rule", () => {
         tables,
         owner: OWNER,
         confidentialityOf: (v) =>
-          v === "mallory's secret" ? ["did:mailto:mallory@evil.example"] : [],
+          v === "mallory's secret"
+            ? [user("did:mailto:mallory@evil.example")]
+            : [],
       }),
       "captured",
     );

@@ -12,7 +12,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { FabricInstance, FabricPrimitive } from "@";
 import {
@@ -22,6 +21,7 @@ import {
   ProblematicValue,
 } from "@/codec-common";
 import { FabricBytes } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("FabricBytes", () => {
   it("extends `FabricPrimitive` (not `FabricInstance`)", () => {

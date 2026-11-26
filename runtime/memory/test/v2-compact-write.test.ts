@@ -6,13 +6,13 @@
  * stay refused against the tool's own output rather than a hand transform.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { relative, toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 
 import {
   applyCommit,
+  branchState,
   close,
   COMPACTION_SESSION_PREFIX,
   ConflictError,
@@ -23,7 +23,11 @@ import {
   selectCommitsSince,
 } from "../v2/engine.ts";
 import { readGenesisRoot, readSpaceKind } from "../v2/genesis-root.ts";
-import { encodeMemoryBoundary, ProtocolError } from "../v2.ts";
+import {
+  encodeMemoryBoundary,
+  HISTORY_FORK_BRANCH_PREFIX,
+  ProtocolError,
+} from "../v2.ts";
 import { isACL } from "../acl.ts";
 import {
   type CompactionProgress,
@@ -38,6 +42,12 @@ import {
   planCompaction,
   refusals,
 } from "../v2/compact.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6MkTestSpace";
 const ACL = `of:${SPACE}`;
@@ -833,7 +843,121 @@ describe("compactStore", () => {
     expect(whole.hollowed).toBe(second.hollowed + 0);
   });
 
+  it("deletes every leftover history fork and compacts the store", async () => {
+    const forks = [
+      `${HISTORY_FORK_BRANCH_PREFIX}one`,
+      `${HISTORY_FORK_BRANCH_PREFIX}two`,
+    ];
+    await build((e) => {
+      standard(e);
+      for (const fork of forks) createBranch(e, fork);
+    });
+
+    const run = await compactStore({
+      store,
+      out,
+      selection: { prefixes: ["computed:"] },
+    });
+
+    expect(run.report.preconditions).toMatchObject({
+      singleBranch: true,
+      branches: [],
+      historyForks: forks,
+    });
+    expect(run.historyForksDeleted).toEqual(forks);
+    expect(formatCompactionRun(run)).toContain(
+      `2 leftover history fork(s) deleted (${forks.join(", ")})`,
+    );
+    expect(run.rowsDeleted).toBe(15);
+    const result = await reopen(out);
+    for (const fork of forks) {
+      expect(branchState(result, fork)?.status).toBe("deleted");
+    }
+    expect(branchState(result, "")?.status).toBe("active");
+    expect(value(result, A)).toEqual({ value: { n: 15 } });
+    // A deleted branch keeps its name, so the fork cannot be created again
+    // over the rows the run removed.
+    expect(() => createBranch(result, forks[0])).toThrow(
+      "branch name is taken",
+    );
+  });
+
+  it("deletes a history fork created after the plan was taken", async () => {
+    await build(standard);
+    const late = `${HISTORY_FORK_BRANCH_PREFIX}late`;
+
+    const run = await compactStore({
+      store,
+      out,
+      selection: { prefixes: ["computed:"] },
+      // The `planned` report is made between the read-only plan and the
+      // locked run, which is when another writer could still add a branch.
+      onProgress: (progress) => {
+        if (progress.phase !== "planned") return;
+        expect(progress.report.preconditions.historyForks).toEqual([]);
+        const db = new Database(store);
+        db.prepare(
+          `INSERT INTO branch (name, parent_branch, fork_seq, created_seq, head_seq, status)
+           SELECT ?, '', head_seq, head_seq, head_seq, 'active' FROM branch WHERE name = ''`,
+        ).run(late);
+        db.close();
+      },
+    });
+
+    expect(run.historyForksDeleted).toEqual([late]);
+    expect(run.report.preconditions.historyForks).toEqual([late]);
+    const result = await reopen(out);
+    expect(branchState(result, late)?.status).toBe("deleted");
+  });
+
+  it("refuses a branch that is not a history fork created after the plan was taken, writing nothing", async () => {
+    await build(standard);
+
+    const refused = await compactStore({
+      store,
+      out,
+      selection: { prefixes: ["computed:"] },
+      onProgress: (progress) => {
+        if (progress.phase !== "planned") return;
+        const db = new Database(store);
+        db.prepare(
+          `INSERT INTO branch (name, parent_branch, fork_seq, created_seq, head_seq, status)
+           SELECT ?, '', head_seq, head_seq, head_seq, 'active' FROM branch WHERE name = ''`,
+        ).run("draft");
+        db.close();
+      },
+    }).catch((error) => error);
+
+    expect(refused).toBeInstanceOf(CompactionRefused);
+    expect(refused.message).toContain("second branch (draft)");
+    const untouched = await reopen(store);
+    expect(compactionCommits(untouched.database)).toEqual([]);
+  });
+
   describe("refusals", () => {
+    it("refuses a store with an active branch besides its history forks, naming that branch alone and deleting nothing", async () => {
+      const fork = `${HISTORY_FORK_BRANCH_PREFIX}one`;
+      await build((e) => {
+        standard(e);
+        createBranch(e, fork);
+        createBranch(e, "draft");
+      });
+
+      const refused = await compactStore({
+        store,
+        out,
+        selection: { prefixes: ["computed:"] },
+      }).catch((error) => error);
+
+      expect(refused).toBeInstanceOf(CompactionRefused);
+      expect(refused.message).toContain("second branch (draft)");
+      expect(refused.message).not.toContain(fork);
+      const untouched = await reopen(store);
+      expect(branchState(untouched, fork)?.status).toBe("active");
+      expect(branchState(untouched, "draft")?.status).toBe("active");
+      expect(compactionCommits(untouched.database)).toEqual([]);
+    });
+
     it("refuses a store with a second branch, a result that exists, a log beside the store, and a missing store", async () => {
       await build((e) => {
         standard(e);
@@ -921,6 +1045,7 @@ describe("compactStore", () => {
           missingTables: ["branch"],
           singleBranch: false,
           branches: ["fork"],
+          historyForks: [`${HISTORY_FORK_BRANCH_PREFIX}one`],
           genesisPresent: false,
           foreignKeyViolations: 2,
         },
@@ -1013,6 +1138,17 @@ describe("compactStore", () => {
           encodeMemoryBoundary({ value: { n: 15 } } as never)
         }' WHERE id = '${A}' AND seq = (SELECT seq FROM head WHERE id = '${A}')`,
       )).rejects.toThrow("the planned patch boundary");
+      // The same boundary rewritten as a delete: it reconstructs to nothing.
+      await fresh(standard);
+      await expect(tamper(
+        `UPDATE revision SET op = 'delete', data = NULL WHERE id = '${A}' AND seq = (SELECT seq FROM head WHERE id = '${A}')`,
+      )).rejects.toThrow("reconstructs to no document at its patch boundary");
+      // A column dropped: the engine's migration adds it back on opening,
+      // which the run notices by the schema it then finds.
+      await fresh(standard);
+      await expect(tamper(`ALTER TABLE "commit" DROP COLUMN holder`)).rejects
+        .toThrow("opening the store through the engine changed its schema");
+      expect(await Deno.stat(out).catch(() => undefined)).toBeUndefined();
       // A planned set boundary rewritten as a patch.
       await fresh((e) => {
         standard(e);

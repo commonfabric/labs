@@ -1,23 +1,33 @@
-import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join, resolve, toFileUrl } from "@std/path";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
-import { Identity, legacySpaceDid } from "@commonfabric/identity";
+import {
+  createSession,
+  Identity,
+  legacySpaceDid,
+} from "@commonfabric/identity";
 import { urlToAppView } from "@commonfabric/navigation";
 import { pieceUrl } from "../../src/piece-url.ts";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { beforeEach, describe, it } from "@commonfabric/test-support/test";
 import {
+  answerWhenReady,
+  closeConsole,
   consoleDataDirectories,
   consoleHealthRows,
   consoleHelpText,
+  type ConsoleHost,
   consoleSandboxBanner,
   ConsoleServer,
+  type ConsoleServing,
   consoleStartupBanner,
   consoleVmHealthProbes,
   createConsoleHealth,
   createConsoleInteractiveServiceOptions,
   parseConsoleArgs,
+  PING_INTERVAL_MS,
+  resolveConsoleModelOptions,
 } from "../../console/server.ts";
 import {
   LINUX_HOME,
@@ -30,6 +40,9 @@ import {
   harnessSessionEngineOptions,
 } from "../../src/session-assembly.ts";
 import { CfHarnessEngine } from "../../src/engine.ts";
+import { PiecesController } from "@commonfabric/piece/ops";
+import { Runtime } from "@commonfabric/runner";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { writeRunRootFixture } from "./run-root-fixture.ts";
 import { createHarnessRunState } from "../../src/run-state.ts";
 import {
@@ -56,6 +69,7 @@ import {
   type HarnessInteractivePromptLoopFactory,
 } from "../../src/interactive-chat-service.ts";
 import { openSqliteHarnessChatSessionStore } from "../../src/sqlite-session-store.ts";
+import { HarnessChatStoreHeldError } from "../../src/session-store.ts";
 import type {
   CreateHarnessPromptLoopOptions,
   HarnessPromptLoopResult,
@@ -69,6 +83,8 @@ import {
   createHarnessChatErrorResponse,
   createHarnessChatEventEnvelope,
   createHarnessChatOkResponse,
+  createHarnessChatSessionStatus,
+  type HarnessChatListEventsResult,
   type HarnessChatResponse,
   type HarnessChatStartTurnParams,
   type HarnessChatTurnStatus,
@@ -79,6 +95,17 @@ import {
   harnessClientProtocolEcho,
 } from "../../src/contracts/client-command.ts";
 import { INERT_RUNSC } from "../support/inert-runsc.ts";
+import { FakeTime } from "@std/testing/time";
+import { spy, stub } from "@std/testing/mock";
+import {
+  defaultHarnessProviderSettingsPath,
+  FileHarnessProviderSettingsStore,
+} from "../../src/auth/provider-settings.ts";
+import {
+  defaultHarnessCredentialStorePath,
+  FileHarnessCredentialStore,
+} from "../../src/auth/credential-store.ts";
+import { OpenAICodexResponsesClient } from "../../src/model/openai-codex-responses.ts";
 import { persistAssignSlugOutputs } from "../support/assign-slug-outputs.ts";
 
 /**
@@ -1738,6 +1765,45 @@ describe("console/server", () => {
       ).toMatchObject({ value: "high", detail: "--reasoning-effort" });
     });
 
+    it("takes the research reasoning effort the flag names over the environment's, and reports where it came from", async () => {
+      const resolveWith = (args: string[]) =>
+        resolveConsoleConfig(
+          [
+            "--fabric-identity",
+            "key.pkcs8",
+            "--fabric-space",
+            "console-test",
+            "--session-db",
+            "none",
+            ...args,
+          ],
+          { CF_HARNESS_RESEARCH_REASONING_EFFORT: "low" },
+          "/console",
+        );
+      const researchRow = (
+        configured: Parameters<typeof consoleHealthRows>[0],
+      ) =>
+        consoleHealthRows(configured).find((row) =>
+          row.id === "config.research-reasoning-effort"
+        );
+
+      const flagged = await resolveWith([
+        "--research-reasoning-effort",
+        "high",
+      ]);
+      expect(harnessSessionEngineOptions(flagged).researchReasoningEffort)
+        .toBe("high");
+      expect(researchRow(flagged)).toMatchObject({
+        value: "high",
+        detail: "--research-reasoning-effort",
+      });
+      // Without the flag, the environment's names the effort and its source.
+      expect(researchRow(await resolveWith([]))).toMatchObject({
+        value: "low",
+        detail: "CF_HARNESS_RESEARCH_REASONING_EFFORT",
+      });
+    });
+
     it("keeps missing inventory, automatic store discovery and unobserved credentials unknown", async () => {
       const rows = consoleHealthRows(await config());
       expect(rows.find((row) => row.id === "connectors.inventory"))
@@ -2221,6 +2287,60 @@ describe("console/server", () => {
     });
   });
 
+  describe("GET /api/turns/<turnId>/result for a turn canceled without a reason", () => {
+    it("answers 410 `turn_canceled` with no detail", async () => {
+      /** A service that keeps no record of why a turn was canceled. */
+      class ReasonlessService extends HarnessInteractiveChatService {
+        override async listTurnsForReplay(
+          params: Parameters<HarnessInteractiveChatService["listTurns"]>[0],
+        ) {
+          const { turns } = await super.listTurnsForReplay(params);
+          return {
+            turns: turns.map((record) => {
+              const { cancelReason: _, ...turn } = record.turn;
+              return { ...record, turn };
+            }),
+          };
+        }
+      }
+      const gate = Promise.withResolvers<void>();
+      const reasonless = new ConsoleServer(
+        await config(),
+        (onEvent) =>
+          new ReasonlessService({
+            createPromptLoop: () => ({
+              runTranscript: async (options) => {
+                await gate.promise;
+                return await answeringLoop({} as never).runTranscript(options);
+              },
+            }),
+            now: advancingClock(),
+            onEvent,
+          }),
+      );
+      const started = await reasonless.handle(
+        jsonRequest("/api/task", { text: "keep working" }),
+      );
+      const { sessionId, turnId } = await started.json();
+      const canceled = await reasonless.handle(
+        jsonRequest("/api/cancel", { sessionId, reason: "stopped" }),
+      );
+      expect(canceled.status).toBe(200);
+      gate.resolve();
+      await reasonless.service.waitForTurn(sessionId, turnId);
+
+      const response = await reasonless.handle(
+        getRequest(`/api/turns/${turnId}/result`),
+      );
+
+      expect(response.status).toBe(410);
+      expect(await response.json()).toEqual({
+        code: "turn_canceled",
+        error: `turn ${turnId} was canceled`,
+      });
+    });
+  });
+
   describe("POST /api/cancel", () => {
     /** What the turn's result route gives as the reason it was canceled. */
     const cancelReason = async (held: HeldTurn): Promise<unknown> => {
@@ -2258,6 +2378,26 @@ describe("console/server", () => {
       expect(await cancelReason(held)).toBe(
         "canceled by a request to the console",
       );
+    });
+
+    it("answers 400 for a body that is not JSON or names no session", async () => {
+      const notJson = await server.handle(
+        new Request("http://127.0.0.1:8100/api/cancel", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{",
+        }),
+      );
+      expect(notJson.status).toBe(400);
+      expect(await notJson.json()).toEqual({
+        error: "request body is not JSON",
+      });
+
+      const unnamed = await server.handle(
+        jsonRequest("/api/cancel", { turnId: "turn-1" }),
+      );
+      expect(unnamed.status).toBe(400);
+      expect(await unnamed.json()).toEqual({ error: "sessionId is required" });
     });
 
     it("refuses a turn id that is not a string, and leaves the turn running", async () => {
@@ -2568,6 +2708,46 @@ describe("console/server", () => {
   });
 
   describe("POST /api/task", () => {
+    it("returns 400 for a task with no text, and starts no session", async () => {
+      for (const body of [{}, { text: "   " }, { text: 7 }]) {
+        const response = await server.handle(jsonRequest("/api/task", body));
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ error: "text is required" });
+      }
+      expect((await listSessions()).sessions).toEqual([]);
+    });
+
+    it("answers with the service's refusal when it will not start a session", async () => {
+      /** A service whose provider is not connected. */
+      class UnconnectedService extends HarnessInteractiveChatService {
+        override startSession(requestId: string) {
+          return Promise.resolve(createHarnessChatErrorResponse(requestId, {
+            code: "provider-auth-required",
+            message: "connect a provider first",
+          }));
+        }
+      }
+      const refusing = new ConsoleServer(
+        await config(),
+        (onEvent) =>
+          new UnconnectedService({
+            createPromptLoop: answeringLoop,
+            now: advancingClock(),
+            onEvent,
+          }),
+      );
+
+      const response = await refusing.handle(
+        jsonRequest("/api/task", { text: "build it" }),
+      );
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        error: "connect a provider first",
+        code: "provider-auth-required",
+      });
+    });
+
     it("returns 400 for malformed JSON before starting or settling a turn", async () => {
       const response = await server.handle(
         new Request("http://127.0.0.1:8100/api/task", {
@@ -3298,6 +3478,20 @@ describe("console/server", () => {
 
       expect(response.status).toBe(400);
     });
+
+    it("answers 503, opening no stream, once its streams have ended", async () => {
+      // A request read just before the server stops reaches this route after
+      // `endStreams()`, and a stream it opened would hold shutting down open.
+      const before = await server.handle(getRequest("/api/events"));
+      await before.body!.cancel();
+
+      server.endStreams();
+      const after = await server.handle(getRequest("/api/events"));
+
+      expect(before.status).toBe(200);
+      expect(after.status).toBe(503);
+      expect(await after.json()).toEqual({ error: "the console is stopping" });
+    });
   });
 
   describe("resolveConsoleConfig()", () => {
@@ -3315,6 +3509,48 @@ describe("console/server", () => {
           CF_HARNESS_MODEL: "gpt-5.6-sol",
         }, "/console")).model,
       ).toBe("gpt-6-luna");
+    });
+
+    it("returns the CFC flow labels and enforcement mode named, and throws naming a value no mode has", async () => {
+      const flags = ["--fabric-identity", "k", "--fabric-space", "s"];
+      const named = await resolveConsoleConfig(
+        [
+          ...flags,
+          "--fabric-cfc-flow-labels",
+          "observe",
+        ],
+        { CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE: "enforce-explicit" },
+        "/c",
+      );
+      expect(named.fabricSession).toMatchObject({
+        cfcPosture: "max-enforcement",
+        cfcFlowLabels: "observe",
+        cfcEnforcementMode: "enforce-explicit",
+      });
+      const unnamed = await resolveConsoleConfig(flags, {}, "/c");
+      expect(unnamed.fabricSession.cfcFlowLabels).toBeUndefined();
+      expect(unnamed.fabricSession.cfcEnforcementMode).toBeUndefined();
+
+      for (
+        const [flag, refusal] of [
+          [
+            "--fabric-cfc-posture",
+            "--fabric-cfc-posture must be max-enforcement or none: lax",
+          ],
+          [
+            "--fabric-cfc-flow-labels",
+            "--fabric-cfc-flow-labels must be off, observe, or persist: lax",
+          ],
+          [
+            "--fabric-cfc-enforcement-mode",
+            "--fabric-cfc-enforcement-mode must be enforce-explicit or " +
+            "enforce-strict: lax",
+          ],
+        ]
+      ) {
+        await expect(resolveConsoleConfig([...flags, flag, "lax"], {}, "/c"))
+          .rejects.toThrow(refusal);
+      }
     });
 
     it("throws naming both ways to supply a fabric session when neither is given", async () => {
@@ -3351,14 +3587,42 @@ describe("console/server", () => {
       expect(resolved.fabricSpaceDid).toBe(CONSOLE_TEST_SPACE_DID);
     });
 
-    it("throws naming the flag for a port that is not a positive integer", async () => {
-      await expect(
+    it("throws naming the flag for a port no socket can listen on, and returns port 0 for the system to pick", async () => {
+      const withPort = (port: string) =>
         resolveConsoleConfig(
-          ["--fabric-identity", "k", "--fabric-space", "s", "--port", "0"],
+          ["--fabric-identity", "k", "--fabric-space", "s", "--port", port],
           {},
           "/console",
-        ),
-      ).rejects.toThrow("--port must be a positive integer");
+        );
+      for (const port of ["65536", "1.5"]) {
+        await expect(withPort(port)).rejects.toThrow(
+          `--port must be a port from 0 to 65535: ${port}`,
+        );
+      }
+      expect((await withPort("0")).port).toBe(0);
+      expect((await withPort("65535")).port).toBe(65_535);
+    });
+
+    it("throws naming the flag for a turn budget that is not a positive integer, and returns one that is", async () => {
+      const withBudget = (turns: string) =>
+        resolveConsoleConfig(
+          [
+            "--fabric-identity",
+            "k",
+            "--fabric-space",
+            "s",
+            "--max-model-turns",
+            turns,
+          ],
+          {},
+          "/console",
+        );
+      for (const turns of ["0", "2.5"]) {
+        await expect(withBudget(turns)).rejects.toThrow(
+          `--max-model-turns must be a positive integer: ${turns}`,
+        );
+      }
+      expect((await withBudget("12")).maxModelTurns).toBe(12);
     });
 
     it("throws naming the variable for a port the environment set wrongly", async () => {
@@ -3368,7 +3632,9 @@ describe("console/server", () => {
           { CF_HARNESS_CONSOLE_PORT: "http" },
           "/console",
         ),
-      ).rejects.toThrow("CF_HARNESS_CONSOLE_PORT must be a positive integer");
+      ).rejects.toThrow(
+        "CF_HARNESS_CONSOLE_PORT must be a port from 0 to 65535: http",
+      );
     });
 
     it("throws naming a misspelled restriction flag and the flag it meant", async () => {
@@ -3575,7 +3841,7 @@ describe("console/server", () => {
         jsonRequest("/api/index/call", body),
       );
 
-    it("passes a `listEvents` read through with the pattern and limit it named", async () => {
+    it("refuses `listEvents` by name, before the index is touched", async () => {
       const indexed = await indexServer([Response.json({ events: [] })]);
 
       const response = await call(indexed, {
@@ -3583,20 +3849,11 @@ describe("console/server", () => {
         body: { patternId: "ss-2w4nQ8", limit: 5 },
       });
 
-      expect(response.status).toBe(200);
-      expect(indexed.requests).toHaveLength(1);
-      const sent = `${indexed.requests[0].url} ${indexed.requests[0].body}`;
-      expect(sent).toContain("ss-2w4nQ8");
-      expect(sent).toContain("5");
-    });
-
-    it("passes a `listEvents` read naming neither a pattern nor a limit", async () => {
-      const indexed = await indexServer([Response.json({ events: [] })]);
-
-      const response = await call(indexed, { fn: "listEvents" });
-
-      expect(response.status).toBe(200);
-      expect(indexed.requests).toHaveLength(1);
+      expect(response.status).toBe(400);
+      const { error } = await response.json();
+      expect(error).toContain("fn must be one of");
+      expect(error).not.toContain("listEvents");
+      expect(indexed.requests).toEqual([]);
     });
 
     it("answers a host-side failure generically, never with its message", async () => {
@@ -3631,7 +3888,7 @@ describe("console/server", () => {
           description: "Totals an expense list",
           hashtags: ["expenses"],
           keywords: [],
-          ownerDid: "did:key:zOwner",
+          handle: "p-owner00001",
           createdAt: "2026-08-01T00:00:00.000Z",
           events: { run_succeeded: 2 },
           score: 2,
@@ -3984,16 +4241,6 @@ describe("console/server", () => {
             cell: { ref: string },
           ) => cell.ref),
         ).toEqual(["/of:fid1:selected"]);
-        const graph = await json("/api/runs/asked/graph");
-        expect(
-          graph.nodes.filter((node: { kind: string }) =>
-            node.kind === "pattern"
-          ).map((node: { patternId: string }) => node.patternId),
-        ).toEqual(["selected-parent", "selected-child"]);
-        expect(
-          graph.nodes.filter((node: { kind: string }) => node.kind === "cell")
-            .map((node: { address: string }) => node.address),
-        ).toEqual(["/of:fid1:selected"]);
         expect(await json("/api/runs/asked/artifacts/transcript.json")).toEqual(
           detail.transcript,
         );
@@ -4007,7 +4254,7 @@ describe("console/server", () => {
       }
     });
 
-    it("lists an /ask job's run and serves its detail, flow, graph and files", async () => {
+    it("lists an /ask job's run and serves its detail, flow and files", async () => {
       const base = await Deno.makeTempDir();
       try {
         const agentRuns = join(base, "agent-runs");
@@ -4046,7 +4293,6 @@ describe("console/server", () => {
           const path of [
             "/api/runs/asked",
             "/api/runs/asked/flow",
-            "/api/runs/asked/graph",
             "/api/runs/asked/artifacts/run-state.json",
           ]
         ) {
@@ -4066,6 +4312,73 @@ describe("console/server", () => {
   });
 
   describe("GET /api/runs/<runId>", () => {
+    it("answers 404 for every run path it does not serve, from a console that reads no work root", async () => {
+      const root = await Deno.makeTempDir();
+      try {
+        await Deno.mkdir(join(root, "r1"));
+        await Deno.writeTextFile(
+          join(root, "r1", "run-state.json"),
+          JSON.stringify(createHarnessRunState({
+            runId: "r1",
+            cfcEnforcementMode: "observe",
+            currentDir: "/workspace",
+            now: "2026-01-01T00:00:00.000Z",
+          })),
+        );
+        await Deno.writeTextFile(join(root, "r1", "transcript.json"), "[]");
+        const configured = await resolveConsoleConfig(
+          [
+            "--fabric-identity",
+            "key.pkcs8",
+            "--fabric-space",
+            "console-test",
+            "--session-db",
+            "none",
+            "--artifact-root",
+            root,
+            "--agent-runs-root",
+            "none",
+          ],
+          {},
+          "/console",
+        );
+        expect(configured.agentRunsRoot).toBeUndefined();
+        const reading = new ConsoleServer(
+          configured,
+          (onEvent) =>
+            new HarnessInteractiveChatService({
+              createPromptLoop: answeringLoop,
+              now: advancingClock(),
+              onEvent,
+            }),
+        );
+        const status = async (path: string): Promise<number> => {
+          const response = await reading.handle(getRequest(path));
+          await response.body?.cancel();
+          return response.status;
+        };
+
+        expect(await status("/api/runs/r1")).toBe(200);
+        expect(await status("/api/runs/r1/flow")).toBe(200);
+        for (
+          const path of [
+            "/api/runs/",
+            "/api/runs/%E0%A4%A",
+            "/api/runs/r1/flow/extra",
+            "/api/runs/r1/graph",
+            "/api/runs/r1/artifacts",
+            "/api/runs/r1/artifacts/",
+            "/api/runs/r1/elsewhere/run-state.json",
+            "/api/runs/r1/artifacts/run-state.json/extra",
+          ]
+        ) {
+          expect([path, await status(path)]).toEqual([path, 404]);
+        }
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
     /**
      * A run holding two strings a browsing child returned, one labeled for
      * `owner` and one for someone else, read by a server whose fabric session
@@ -4346,6 +4659,98 @@ describe("console/server", () => {
       );
     });
 
+    it("serves each built file with its content type, and refuses a path that climbs out", async () => {
+      const base = await Deno.makeTempDir();
+      const pageRoot = join(base, "pages");
+      try {
+        // A file beside the page root, which a path that climbed out of it
+        // would serve.
+        await Deno.writeTextFile(join(base, "secret.txt"), "SECRET");
+        await Deno.mkdir(join(pageRoot, "scripts"), { recursive: true });
+        await Deno.mkdir(join(pageRoot, "styles"));
+        const files: Record<string, string> = {
+          "index.html": "<!doctype html><title>console</title>",
+          "live.html": "<!doctype html><title>live</title>",
+          "scripts/index.js": "export {};",
+          "scripts/index.js.map": "{}",
+          "styles/index.css": "body {}",
+          "build-manifest.json": "{}",
+          "scripts/font.woff2": "font",
+        };
+        for (const [name, text] of Object.entries(files)) {
+          await Deno.writeTextFile(join(pageRoot, name), text);
+        }
+        const paged = new ConsoleServer(
+          { ...await config(), pageRoot },
+          (onEvent) =>
+            new HarnessInteractiveChatService({
+              createPromptLoop: answeringLoop,
+              now: advancingClock(),
+              onEvent,
+            }),
+        );
+        const served = async (path: string) => {
+          const response = await paged.handle(getRequest(path));
+          return [
+            response.status,
+            response.headers.get("content-type"),
+            await response.text(),
+          ];
+        };
+
+        expect(await served("/")).toEqual([
+          200,
+          "text/html; charset=utf-8",
+          files["index.html"],
+        ]);
+        expect(await served("/live/session-1")).toEqual([
+          200,
+          "text/html; charset=utf-8",
+          files["live.html"],
+        ]);
+        expect(await served("/scripts/index.js")).toEqual([
+          200,
+          "text/javascript; charset=utf-8",
+          files["scripts/index.js"],
+        ]);
+        expect((await served("/scripts/index.js.map"))[1]).toBe(
+          "application/json; charset=utf-8",
+        );
+        expect((await served("/styles/index.css"))[1]).toBe(
+          "text/css; charset=utf-8",
+        );
+        expect((await served("/build-manifest.json"))[1]).toBe(
+          "application/json; charset=utf-8",
+        );
+        expect((await served("/scripts/font.woff2"))[1]).toBe(
+          "application/octet-stream",
+        );
+        // A file the build did not write is not found, and not as the page.
+        expect(await served("/scripts/absent.js")).toEqual([
+          404,
+          "text/plain; charset=utf-8",
+          "not found",
+        ]);
+        // Dot segments, written plainly or encoded, resolve inside the URL
+        // before the page root is reached. An encoded slash is left encoded
+        // by the URL parser, so it names a file in the page root whose name
+        // holds `%2F`, never a directory above it.
+        for (
+          const path of [
+            "/scripts/../../secret.txt",
+            "/scripts/%2e%2e/%2E%2E/secret.txt",
+            "/scripts/..%2F..%2Fsecret.txt",
+            "/styles/..%2f..%2fsecret.txt",
+          ]
+        ) {
+          const [status, , body] = await served(path);
+          expect([path, status, body]).toEqual([path, 404, "not found"]);
+        }
+      } finally {
+        await Deno.remove(base, { recursive: true });
+      }
+    });
+
     it("does not answer an API route with a page policy", async () => {
       const response = await server.handle(
         getRequest("/api/sessions"),
@@ -4419,6 +4824,831 @@ describe("console/server", () => {
       await response.body?.cancel();
 
       expect(response.status).toBe(403);
+    });
+  });
+
+  describe("the event fan-out", () => {
+    /** A service whose replay answers with `replay` once it settles. */
+    class GatedReplayService extends HarnessInteractiveChatService {
+      readonly #replay: Promise<HarnessChatListEventsResult>;
+
+      constructor(
+        onEvent: HarnessInteractiveChatEventListener,
+        replay: Promise<HarnessChatListEventsResult>,
+      ) {
+        super({
+          createPromptLoop: answeringLoop,
+          now: advancingClock(),
+          onEvent,
+        });
+        this.#replay = replay;
+      }
+
+      override listEventsForReplay(): Promise<HarnessChatListEventsResult> {
+        return this.#replay;
+      }
+    }
+
+    const gatedServer = async (
+      replay: Promise<HarnessChatListEventsResult>,
+    ): Promise<ConsoleServer> =>
+      new ConsoleServer(
+        await config(),
+        (onEvent) => new GatedReplayService(onEvent, replay),
+      );
+
+    const delta = (sessionId: string, sequence: number, text: string) =>
+      createHarnessChatEventEnvelope({
+        sessionId,
+        turnId: "turn-1",
+        sequence,
+        event: { kind: "assistant_delta", text },
+      });
+
+    /** The text of the next frame a stream writes, as a delta's text. */
+    const nextText = async (
+      frames: ReturnType<typeof frameReader>,
+    ): Promise<unknown> =>
+      JSON.parse((await frames.next()).data ?? "").event.text;
+
+    it("writes what arrives during the backfill once, after it, and only for the session the stream names", async () => {
+      const replay = Promise.withResolvers<HarnessChatListEventsResult>();
+      const gated = await gatedServer(replay.promise);
+      const frames = frameReader(
+        await gated.handle(getRequest("/api/events?sessionId=s1")),
+      );
+      expect((await frames.next()).comment).toBe(": connected");
+
+      // Held while the backfill is read; the first is in the replay too.
+      await gated.broadcast(delta("s1", 1, "a"));
+      await gated.broadcast(delta("s2", 2, "elsewhere"));
+      await gated.broadcast(delta("s1", 3, "b"));
+      replay.resolve({ events: [delta("s1", 1, "a")], latestSequence: 3 });
+      expect([await nextText(frames), await nextText(frames)]).toEqual([
+        "a",
+        "b",
+      ]);
+
+      // Live now: one the stream has already been written is not written
+      // again.
+      await gated.broadcast(delta("s1", 3, "b"));
+      await gated.broadcast(delta("s1", 4, "c"));
+      expect(await nextText(frames)).toBe("c");
+      await frames.cancel();
+    });
+
+    it("ends a stream with the failure when its backfill cannot be read, and one already closed quietly", async () => {
+      const replay = Promise.withResolvers<HarnessChatListEventsResult>();
+      const gated = await gatedServer(replay.promise);
+      const closed = frameReader(await gated.handle(getRequest("/api/events")));
+      expect((await closed.next()).comment).toBe(": connected");
+      await closed.cancel();
+      const frames = frameReader(await gated.handle(getRequest("/api/events")));
+      expect((await frames.next()).comment).toBe(": connected");
+
+      replay.reject(new Error("the replay could not be read"));
+
+      await expect(frames.next()).rejects.toThrow(
+        "the replay could not be read",
+      );
+    });
+
+    it("writes a turn it backfills whose result cannot be read as given up, reporting why, and goes on to what follows", async () => {
+      const replay = Promise.withResolvers<HarnessChatListEventsResult>();
+      const gated = await gatedServer(replay.promise);
+      const frames = frameReader(await gated.handle(getRequest("/api/events")));
+      expect((await frames.next()).comment).toBe(": connected");
+      const errors: string[] = [];
+      const error = stub(console, "error", (...data: unknown[]) => {
+        errors.push(data.join(" "));
+      });
+      const completed = (
+        sequence: number,
+        outcome: { outcome: "completed" } | {
+          outcome: "gave-up";
+          reason: string;
+        },
+      ) =>
+        createHarnessChatEventEnvelope({
+          sessionId: "s1",
+          turnId: `turn-${sequence}`,
+          sequence,
+          event: {
+            kind: "turn_completed",
+            turnId: `turn-${sequence}`,
+            ...outcome,
+          },
+        });
+      try {
+        // No run backs these turns, so each result is read off its event,
+        // and a reason that says nothing is no outcome at all.
+        replay.resolve({
+          events: [
+            delta("s1", 1, "before"),
+            completed(2, { outcome: "gave-up", reason: " " }),
+            completed(3, { outcome: "completed" }),
+          ],
+          latestSequence: 3,
+        });
+
+        expect(await nextText(frames)).toBe("before");
+        // The page learns the turn ended, and why it has no result to show,
+        // as it would have live.
+        const unread = JSON.parse((await frames.next()).data ?? "");
+        expect(unread.sequence).toBe(2);
+        expect(unread.event).toMatchObject({
+          kind: "turn_completed",
+          outcome: "gave-up",
+          reason:
+            "the console could not read this turn's result: console result contains an invalid task outcome",
+        });
+        expect(unread.event.result).toMatchObject({
+          outcome: "gave-up",
+          sessionId: "s1",
+          pieces: [],
+        });
+        // A turn whose result can be read is written as it ended.
+        const closing = JSON.parse((await frames.next()).data ?? "");
+        expect(closing.sequence).toBe(3);
+        expect(closing.event.result).toMatchObject({ outcome: "completed" });
+        expect(errors).toEqual([
+          "console result contains an invalid task outcome",
+        ]);
+
+        // The stream is live after the backfill, for what comes next.
+        await gated.broadcast(delta("s1", 4, "after"));
+        expect(await nextText(frames)).toBe("after");
+      } finally {
+        error.restore();
+        await frames.cancel();
+      }
+    });
+
+    it("keeps writing to the other streams when one closes during its backfill", async () => {
+      const replay = Promise.withResolvers<HarnessChatListEventsResult>();
+      const gated = await gatedServer(replay.promise);
+      const closed = frameReader(await gated.handle(getRequest("/api/events")));
+      expect((await closed.next()).comment).toBe(": connected");
+      await closed.cancel();
+      const open = frameReader(await gated.handle(getRequest("/api/events")));
+      expect((await open.next()).comment).toBe(": connected");
+
+      replay.resolve({ events: [delta("s1", 1, "a")], latestSequence: 1 });
+
+      expect(await nextText(open)).toBe("a");
+      await gated.broadcast(delta("s1", 2, "b"));
+      expect(await nextText(open)).toBe("b");
+      await open.cancel();
+    });
+
+    it("writes a liveness tick, counted, to every open stream", async () => {
+      const first = frameReader(await server.handle(getRequest("/api/events")));
+      const second = frameReader(
+        await server.handle(getRequest("/api/events?sessionId=s1")),
+      );
+      expect((await first.next()).comment).toBe(": connected");
+      expect((await second.next()).comment).toBe(": connected");
+
+      server.ping();
+      server.ping();
+
+      for (const frames of [first, second]) {
+        expect(await frames.next()).toMatchObject({ event: "ping", data: "1" });
+        expect(await frames.next()).toMatchObject({ event: "ping", data: "2" });
+        await frames.cancel();
+      }
+    });
+
+    it("reports a turn result it cannot read to the caller, and still writes the turn's end and what follows", async () => {
+      const frames = frameReader(
+        await server.handle(getRequest("/api/events")),
+      );
+      expect((await frames.next()).comment).toBe(": connected");
+      const completed = (
+        sequence: number,
+        outcome: { outcome: "completed" } | {
+          outcome: "gave-up";
+          reason: string;
+        },
+      ) =>
+        createHarnessChatEventEnvelope({
+          sessionId: "s1",
+          turnId: `turn-${sequence}`,
+          sequence,
+          event: {
+            kind: "turn_completed",
+            turnId: `turn-${sequence}`,
+            ...outcome,
+          },
+        });
+
+      // No run backs these turns, so each result is read off its event, and
+      // a reason that says nothing is no outcome at all.
+      const failed = server.broadcast(
+        completed(1, { outcome: "gave-up", reason: " " }),
+      );
+      const following = server.broadcast(delta("s1", 2, "after"));
+      const last = server.broadcast(completed(3, { outcome: "completed" }));
+
+      await expect(failed).rejects.toThrow(
+        "console result contains an invalid task outcome",
+      );
+      await following;
+      await last;
+      // The stream still learns the turn ended, so a page does not show it
+      // running, and is told why it has no result to show.
+      const unread = JSON.parse((await frames.next()).data ?? "");
+      expect(unread.sequence).toBe(1);
+      expect(unread.event).toMatchObject({
+        kind: "turn_completed",
+        outcome: "gave-up",
+        reason:
+          "the console could not read this turn's result: console result contains an invalid task outcome",
+      });
+      expect(unread.event.result).toMatchObject({
+        outcome: "gave-up",
+        reason:
+          "the console could not read this turn's result: console result contains an invalid task outcome",
+        sessionId: "s1",
+        pieces: [],
+        finalText: "",
+      });
+      expect(await nextText(frames)).toBe("after");
+      const closing = JSON.parse((await frames.next()).data ?? "");
+      expect(closing.sequence).toBe(3);
+      expect(closing.event.result).toMatchObject({
+        outcome: "completed",
+        finalText: "",
+      });
+      await frames.cancel();
+    });
+  });
+
+  describe("resolveConsoleModelOptions()", () => {
+    /** A configuration whose harness home selects `provider`. */
+    const homed = async (
+      provider: "openai-codex" | "openai-compatible-gateway",
+    ) => {
+      const harnessHome = await Deno.makeTempDir();
+      await new FileHarnessProviderSettingsStore({
+        path: defaultHarnessProviderSettingsPath(harnessHome),
+      }).set(provider);
+      return { ...await config(), harnessHome };
+    };
+
+    it("returns the gateway's key and base URL from the environment", async () => {
+      const configured = await homed("openai-compatible-gateway");
+      try {
+        expect(
+          await resolveConsoleModelOptions(configured, {
+            CF_HARNESS_API_KEY: "key-from-harness",
+            OPENAI_API_KEY: "key-from-openai",
+          }),
+        ).toEqual({
+          modelProvider: "openai-compatible-gateway",
+          modelAuthSource: "api-key",
+          gatewayAuthMode: "bearer",
+          apiKey: "key-from-harness",
+        });
+        expect(
+          await resolveConsoleModelOptions(configured, {
+            OPENAI_API_KEY: "key-from-openai",
+          }),
+        ).toMatchObject({ apiKey: "key-from-openai" });
+        expect(
+          await resolveConsoleModelOptions(configured, {
+            CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+            CF_HARNESS_GATEWAY_BASE_URL: "http://127.0.0.1:9/v1",
+          }),
+        ).toEqual({
+          modelProvider: "openai-compatible-gateway",
+          modelAuthSource: "none",
+          gatewayAuthMode: "none",
+          gatewayBaseUrl: "http://127.0.0.1:9/v1",
+        });
+      } finally {
+        await Deno.remove(configured.harnessHome, { recursive: true });
+      }
+    });
+
+    it("throws for a Codex provider that is not connected, and binds one that is", async () => {
+      const configured = await homed("openai-codex");
+      try {
+        await expect(resolveConsoleModelOptions(configured, {})).rejects
+          .toThrow(
+            "cf-harness Codex is disconnected; connect it with " +
+              "`cf-harness auth` before starting the console server",
+          );
+
+        await new FileHarnessCredentialStore({
+          path: defaultHarnessCredentialStorePath(configured.harnessHome),
+        }).set("local", "openai-codex", {
+          type: "oauth",
+          providerId: "openai-codex",
+          accessToken: "test-access",
+          refreshToken: "test-refresh",
+          expiresAt: Date.now() + 3_600_000,
+          accountId: "test-account",
+        });
+        const options = await resolveConsoleModelOptions(configured, {});
+        expect(options).toMatchObject({
+          modelProvider: "openai-codex",
+          modelAuthSource: "cf-harness-local-store",
+          credentialOwnerKey: "local",
+          credentialOwner: { ownerKey: "local" },
+        });
+        expect(options.modelClient).toBeInstanceOf(OpenAICodexResponsesClient);
+      } finally {
+        await Deno.remove(configured.harnessHome, { recursive: true });
+      }
+    });
+  });
+
+  describe("startConsoleServer()", () => {
+    /** A home whose provider settings name a gateway that needs no key. */
+    const consoleBase = async (): Promise<string> => {
+      const base = await Deno.realPath(await Deno.makeTempDir());
+      await new FileHarnessProviderSettingsStore({
+        path: defaultHarnessProviderSettingsPath(join(base, "home")),
+      }).set("openai-compatible-gateway");
+      return base;
+    };
+
+    /**
+     * Signal listeners held here rather than added to the process, with the
+     * exit statuses the console asked to end the process with.
+     */
+    const heldProcess = () => {
+      const signals = new Map<Deno.Signal, () => void>();
+      const exits: number[] = [];
+      const exited = Promise.withResolvers<void>();
+      return {
+        signals,
+        exits,
+        exited: exited.promise,
+        host: {
+          signals: {
+            addSignalListener: (signal: Deno.Signal, handler: () => void) => {
+              signals.set(signal, handler);
+            },
+            removeSignalListener: (
+              signal: Deno.Signal,
+              handler: () => void,
+            ) => {
+              if (signals.get(signal) === handler) signals.delete(signal);
+            },
+          },
+          exit: (code: number) => {
+            exits.push(code);
+            exited.resolve();
+          },
+        },
+      };
+    };
+
+    /** Starts a console on a port the system picks, with its state in `base`. */
+    const start = (base: string, host?: ConsoleHost) =>
+      startConsoleServer(
+        [
+          "--fabric-identity",
+          join(base, "key.pkcs8"),
+          "--fabric-space",
+          "console-test",
+          "--port",
+          "0",
+          "--workspace",
+          join(base, "workspace"),
+          "--artifact-root",
+          join(base, "runs"),
+          "--session-db",
+          join(base, "sessions.sqlite"),
+          "--agent-runs-root",
+          "none",
+        ],
+        {
+          CF_HARNESS_HOME: join(base, "home"),
+          CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+        },
+        base,
+        undefined,
+        host,
+      );
+
+    it("serves on the port it was given until a signal stops it, ticking each stream and answering 500 for a request that fails, then closes its session store", async () => {
+      const base = await consoleBase();
+      const logged: string[] = [];
+      const log = stub(console, "log", (...data: unknown[]) => {
+        logged.push(data.join(" "));
+      });
+      const errors: string[] = [];
+      const error = stub(console, "error", (...data: unknown[]) => {
+        errors.push(data.join(" "));
+      });
+      // A request to this path fails inside the server, whatever it asks.
+      const handle = ConsoleServer.prototype.handle;
+      const failing = stub(
+        ConsoleServer.prototype,
+        "handle",
+        function (this: ConsoleServer, request: Request) {
+          return new URL(request.url).pathname === "/api/fails"
+            ? Promise.reject(new Error("the handler failed"))
+            : handle.call(this, request);
+        },
+      );
+      const process = heldProcess();
+      const time = new FakeTime();
+      let served: ConsoleServing | undefined;
+      try {
+        served = await start(base, process.host);
+        if (served === undefined) {
+          throw new Error("the console printed its usage rather than serving");
+        }
+        // Port 0 asked the system for one; the server names the one it got.
+        expect(served.addr.port).toBeGreaterThan(0);
+        const origin = `http://127.0.0.1:${served.addr.port}`;
+
+        // The host gate admits a request addressed to the port it listens on,
+        // not the 0 it was asked for, and the banner names that port.
+        const health = await fetch(`${origin}/api/health`);
+        expect(await health.json()).toMatchObject({ ok: true });
+        expect(logged).toContain(`\n  cf-harness console: ${origin}`);
+        // The detailed health report names that port too.
+        const detail = await (await fetch(`${origin}/api/health/detail`))
+          .json();
+        expect(
+          detail.rows.find((row: ConsoleHealthRow) => row.id === "config.port"),
+        ).toMatchObject({ value: String(served.addr.port) });
+        expect((await Deno.stat(join(base, "workspace"))).isDirectory).toBe(
+          true,
+        );
+
+        const failed = await fetch(`${origin}/api/fails`);
+        expect([failed.status, await failed.text()]).toEqual([
+          500,
+          "internal error",
+        ]);
+        expect(errors).toEqual(["the handler failed"]);
+
+        const frames = frameReader(await fetch(`${origin}/api/events`));
+        expect((await frames.next()).comment).toBe(": connected");
+        await time.tickAsync(PING_INTERVAL_MS);
+        expect(await frames.next()).toMatchObject({ event: "ping", data: "1" });
+
+        // SIGTERM stops serving, ending the stream a page still holds open,
+        // and once the console has closed it ends the process with SIGTERM's
+        // status.
+        expect([...process.signals.keys()]).toEqual(["SIGINT", "SIGTERM"]);
+        process.signals.get("SIGTERM")?.();
+        await expect(frames.next()).rejects.toThrow("the stream ended");
+        await process.exited;
+        expect(process.exits).toEqual([143]);
+        // The store's hold is released, so another can take it.
+        const reopened = await openSqliteHarnessChatSessionStore({
+          url: toFileUrl(join(base, "sessions.sqlite")),
+        });
+        reopened.close();
+        expect(errors).toEqual(["the handler failed"]);
+      } finally {
+        await served?.shutdown();
+        time.restore();
+        failing.restore();
+        error.restore();
+        log.restore();
+        await Deno.remove(base, { recursive: true });
+      }
+    });
+
+    it("cancels a running turn before it ends the streams, lets a second signal through at once, and then exits with SIGINT's status", async () => {
+      const base = await consoleBase();
+      const log = stub(console, "log");
+      const process = heldProcess();
+      const order: string[] = [];
+      let served: ConsoleServing | undefined;
+      const stubs: { restore(): void }[] = [];
+      try {
+        served = await start(base, process.host);
+        // One turn is running, as the service tells it until it is canceled.
+        let running = true;
+        stubs.push(stub(
+          HarnessInteractiveChatService.prototype,
+          "status",
+          () => ({
+            sessions: [{
+              ...createHarnessChatSessionStatus({ sessionId: "session-1" }),
+              ...(running
+                ? { status: "turn_running" as const, activeTurnId: "turn-1" }
+                : {}),
+            }],
+          }),
+        ));
+        stubs.push(stub(
+          HarnessInteractiveChatService.prototype,
+          "cancelTurn",
+          (requestId, sessionId, turnId, reason) => {
+            order.push(`canceled ${sessionId} ${turnId} ${reason}`);
+            running = false;
+            return Promise.resolve(createHarnessChatOkResponse(
+              requestId,
+              createHarnessChatSessionStatus({ sessionId }),
+            ));
+          },
+        ));
+        // Ending the streams closes the browser hosts a turn acts through.
+        const endStreams = ConsoleServer.prototype.endStreams;
+        stubs.push(stub(
+          ConsoleServer.prototype,
+          "endStreams",
+          function (this: ConsoleServer) {
+            order.push("streams ended");
+            endStreams.call(this);
+          },
+        ));
+
+        process.signals.get("SIGINT")?.();
+        // The listeners went as the signal arrived, before shutting down has
+        // settled, so a second Ctrl-C reaches the process's own handling.
+        expect(process.signals.size).toBe(0);
+        expect(order).toEqual([
+          "canceled session-1 turn-1 process_interrupted",
+          "streams ended",
+        ]);
+        expect(process.exits).toEqual([]);
+
+        await process.exited;
+        expect(process.exits).toEqual([130]);
+        // The turn canceled as serving stopped is not canceled again once
+        // it has finished.
+        expect(order).toEqual([
+          "canceled session-1 turn-1 process_interrupted",
+          "streams ended",
+        ]);
+      } finally {
+        for (const restoring of stubs) restoring.restore();
+        await served?.shutdown();
+        log.restore();
+        await Deno.remove(base, { recursive: true });
+      }
+    });
+
+    it("stops serving, printing nothing, when its session store is held", async () => {
+      const base = await consoleBase();
+      const holder = await openSqliteHarnessChatSessionStore({
+        url: toFileUrl(join(base, "sessions.sqlite")),
+      });
+      const log = stub(console, "log");
+      // Watched, for the listener the start that fails opened.
+      const serve = spy(Deno, "serve");
+      try {
+        await expect(start(base)).rejects.toThrow(HarnessChatStoreHeldError);
+        expect(log.calls).toHaveLength(0);
+        // The listener did not outlive the start: it has finished serving.
+        const listener = serve.calls[0].returned;
+        expect(listener?.addr.port).toBeGreaterThan(0);
+        await listener?.finished;
+      } finally {
+        serve.restore();
+        log.restore();
+        holder.close();
+        await Deno.remove(base, { recursive: true });
+      }
+    });
+  });
+
+  describe("answerWhenReady()", () => {
+    it("answers with the server once it is ready, and refuses quietly once there will be none", async () => {
+      const errors = stub(console, "error");
+      try {
+        const answered = await answerWhenReady(
+          Promise.resolve({
+            handle: () => Promise.resolve(new Response("answered")),
+          }),
+          getRequest("/api/health"),
+        );
+        expect([answered.status, await answered.text()]).toEqual([
+          200,
+          "answered",
+        ]);
+
+        const refused = await answerWhenReady(
+          Promise.resolve(undefined),
+          getRequest("/api/health"),
+        );
+        expect([refused.status, await refused.text()]).toEqual([
+          503,
+          "the console did not start",
+        ]);
+        expect(errors.calls).toHaveLength(0);
+      } finally {
+        errors.restore();
+      }
+    });
+  });
+
+  describe("closeConsole()", () => {
+    /**
+     * A service running no turn, whose turns have settled and runtimes have
+     * been released once `releaseFabricRuntimes` settles.
+     */
+    const idleService = (releaseFabricRuntimes: () => Promise<void>) => ({
+      status: () => ({ sessions: [] }),
+      cancelTurn: () => Promise.reject(new Error("no turn is running")),
+      releaseFabricRuntimes,
+    });
+
+    it("closes the store only once every running turn has settled", async () => {
+      const idle = Promise.withResolvers<void>();
+      const order: string[] = [];
+      const closing = closeConsole(
+        idleService(async () => {
+          await idle.promise;
+          order.push("idle");
+        }),
+        {
+          close: () => {
+            order.push("closed");
+          },
+        },
+      );
+      await Promise.resolve();
+      expect(order).toEqual([]);
+
+      idle.resolve();
+      await closing;
+      expect(order).toEqual(["idle", "closed"]);
+    });
+
+    it("cancels a running turn, reporting a cancel that fails, and closes the store once the turn has settled", async () => {
+      const order: string[] = [];
+      const running = Promise.withResolvers<void>();
+      const service = new HarnessInteractiveChatService({
+        createPromptLoop: () => ({
+          runTranscript: (options) =>
+            new Promise((_, reject) => {
+              options.signal?.addEventListener("abort", () => {
+                order.push("aborted");
+                reject(options.signal?.reason);
+              }, { once: true });
+              running.resolve();
+            }),
+        }),
+        now: advancingClock(),
+        onEvent: (envelope) => {
+          if (envelope.event.kind === "turn_canceled") {
+            throw new Error("the cancel was not delivered");
+          }
+        },
+        onEventDeliveryError: () => {},
+      });
+      await service.startSession("req-session", {
+        sessionId: "session-1",
+        workspace: { hostPath: "/workspace" },
+      });
+      await service.startSession("req-idle", {
+        sessionId: "session-idle",
+        workspace: { hostPath: "/workspace" },
+      });
+      await service.startTurn("req-turn", {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        input: { text: "Go" },
+      });
+      await running.promise;
+      const errors: string[] = [];
+      const error = stub(console, "error", (...data: unknown[]) => {
+        errors.push(data.join(" "));
+      });
+      try {
+        await closeConsole(service, {
+          close: () => {
+            order.push("closed");
+          },
+        });
+      } finally {
+        error.restore();
+      }
+
+      expect(order).toEqual(["aborted", "closed"]);
+      expect(errors).toEqual(["the cancel was not delivered"]);
+      expect(
+        service.listTurns().turns.map(({ sessionId, turn }) => [
+          sessionId,
+          turn.status,
+          turn.cancelReason,
+        ]),
+      ).toEqual([["session-1", "canceled", "process_interrupted"]]);
+    });
+
+    it("releases the Fabric runtime a session's turn opened, leaving the session open, before it closes the store", async () => {
+      const order: string[] = [];
+      const storage = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager: storage,
+      });
+      const dispose = runtime.dispose.bind(runtime);
+      const disposing = stub(runtime, "dispose", async () => {
+        order.push("released");
+        await dispose();
+      });
+      const pieces = new PiecesController(
+        createSession({
+          identity: signer,
+          spaceDid: (await Identity.generate()).did(),
+        }),
+        runtime,
+      );
+      const service = new HarnessInteractiveChatService({
+        basePromptLoopOptions: {
+          ...INERT_RUNSC,
+          fabricSessionFactory: () => Promise.resolve({ pieces }),
+        },
+        // The turn opens the session's Fabric runtime, as one that runs a
+        // pattern does.
+        createPromptLoop: (options) => {
+          const engine = new CfHarnessEngine(options);
+          return {
+            runTranscript: async (runOptions) => {
+              await engine.fabricSessionFactory?.();
+              return await answeringLoop(options).runTranscript(runOptions);
+            },
+          };
+        },
+        now: advancingClock(),
+      });
+      try {
+        await service.startSession("req-session", {
+          sessionId: "session-1",
+          workspace: { hostPath: "/workspace" },
+        });
+        await service.startTurn("req-turn", {
+          sessionId: "session-1",
+          turnId: "turn-1",
+          input: { text: "Go" },
+        });
+        await service.waitForTurn("session-1", "turn-1");
+        // A finished turn leaves its runtime to the session.
+        expect(order).toEqual([]);
+
+        await closeConsole(service, {
+          close: () => {
+            order.push("closed");
+          },
+        });
+
+        expect(order).toEqual(["released", "closed"]);
+        // The session is not closed, so a later console can go on with it.
+        expect(service.status("session-1").sessions[0]).toMatchObject({
+          status: "idle",
+          reusable: true,
+        });
+      } finally {
+        // Releases nothing where the console already has.
+        await service.releaseFabricRuntimes();
+        disposing.restore();
+        await storage.close();
+      }
+    });
+
+    it("reports runtimes that fail to release, and closes the store all the same", async () => {
+      const errors: string[] = [];
+      const error = stub(console, "error", (...data: unknown[]) => {
+        errors.push(data.join(" "));
+      });
+      let closed = false;
+      try {
+        await closeConsole(
+          idleService(() => Promise.reject(new Error("the fabric went away"))),
+          {
+            close: () => {
+              closed = true;
+            },
+          },
+        );
+      } finally {
+        error.restore();
+      }
+      expect(errors).toEqual(["the fabric went away"]);
+      expect(closed).toBe(true);
+    });
+
+    it("reports a store that fails to close, rather than rejecting", async () => {
+      const errors: string[] = [];
+      const error = stub(console, "error", (...data: unknown[]) => {
+        errors.push(data.join(" "));
+      });
+      try {
+        await closeConsole(idleService(() => Promise.resolve()), {
+          close: () => Promise.reject(new Error("the disk went away")),
+        });
+        expect(errors).toEqual(["the disk went away"]);
+        // A store that closes is not reported.
+        await closeConsole(idleService(() => Promise.resolve()), {
+          close: () => Promise.resolve(),
+        });
+        expect(errors).toEqual(["the disk went away"]);
+      } finally {
+        error.restore();
+      }
     });
   });
 
@@ -4629,6 +5859,71 @@ describe("console/server", () => {
       await hosted.service.waitForTurn(started.sessionId, started.turnId);
 
       expect(ticked).toContain(": 1\n\n");
+    });
+
+    it("ends every event stream and host channel when told to end its streams", async () => {
+      const { server: hosted, results } = await hostedServer();
+      const started = await (await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: {},
+      }))).json();
+      const stream = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+      const reader = stream.body!.getReader();
+      await readUntil(reader, "event: request");
+      const events = await hosted.handle(getRequest("/api/events"));
+      const eventReader = events.body!.getReader();
+      await readUntil(eventReader, ": connected");
+
+      hosted.endStreams();
+
+      // The host is told the channel closed, and the turn's outstanding
+      // action settles rather than waiting on a host that is gone.
+      await readUntil(reader, "event: close");
+      await hosted.service.waitForTurn(started.sessionId, started.turnId);
+      expect(results.map((result) => result?.status)).toEqual([
+        "session-ended",
+      ]);
+      // The event stream ends rather than staying open, so these reads
+      // reach its end.
+      while (!(await eventReader.read()).done) {
+        // What the stream backfilled before it ended.
+      }
+      await reader.cancel();
+    });
+
+    it("answers 503 to a host attaching to a turn started after its streams ended", async () => {
+      // A task read just before the server stops starts its turn, with a
+      // channel, after `endStreams()`; the host's stream would then hold
+      // shutting down open.
+      const { server: hosted, results } = await hostedServer();
+      hosted.endStreams();
+      const started = await (await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: {},
+      }))).json();
+
+      const stream = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+
+      expect(stream.status).toBe(503);
+      expect(await stream.json()).toEqual({
+        error: "the console is stopping",
+      });
+      // Ending the streams again closes the channel, so the turn ends.
+      hosted.endStreams();
+      await hosted.service.waitForTurn(started.sessionId, started.turnId);
+      expect(results.map((result) => result?.status)).toEqual([
+        "session-ended",
+      ]);
     });
 
     it("returns 400 for a host route body that is not JSON or names no turn", async () => {
@@ -4997,6 +6292,40 @@ interface StreamedEnvelope {
   sequence: number;
   event: { kind: string; result?: unknown };
 }
+
+/**
+ * Reads a stream frame by frame: its event name and data, or for a comment
+ * frame the comment. Each read resolves on the chunk that completes a frame.
+ */
+const frameReader = (response: Response) => {
+  const reader = response.body!.pipeThrough(new TextDecoderStream())
+    .getReader();
+  let buffered = "";
+  return {
+    next: async (): Promise<
+      { event?: string; data?: string; comment?: string }
+    > => {
+      while (!buffered.includes("\n\n")) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          throw new Error("the stream ended");
+        }
+        buffered += chunk.value;
+      }
+      const end = buffered.indexOf("\n\n");
+      const frame = buffered.slice(0, end);
+      buffered = buffered.slice(end + 2);
+      if (frame.startsWith(":")) {
+        return { comment: frame };
+      }
+      const field = (name: string) =>
+        frame.split("\n").find((line) => line.startsWith(`${name}: `))
+          ?.slice(name.length + 2);
+      return { event: field("event"), data: field("data") };
+    },
+    cancel: () => reader.cancel(),
+  };
+};
 
 /**
  * The envelopes a stream writes up to and including the one of `finalKind`.

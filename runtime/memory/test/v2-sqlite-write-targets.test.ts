@@ -2,12 +2,12 @@
 // column for the CFC write-ceiling check. Security-critical → fail closed on
 // anything it can't confidently attribute.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   parseWriteParamColumns,
   parseWriteTable,
 } from "../v2/sqlite/write-targets.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("parseWriteParamColumns — determinable shapes", () => {
   it("INSERT with explicit column list", () => {
@@ -73,6 +73,10 @@ describe("parseWriteParamColumns — fail closed (undefined)", () => {
     failsClosed("UPDATE t SET a = b + ? WHERE id = ?"));
   it("UPDATE with a subquery in SET", () =>
     failsClosed("UPDATE t SET a = (SELECT x FROM u WHERE z = ?) WHERE id = ?"));
+  it("returns `undefined` for an UPDATE whose SET opens a parenthesis it never closes", () =>
+    failsClosed("UPDATE t SET a = (? WHERE id = ?"));
+  it("returns `undefined` for an UPDATE whose SET closes a parenthesis it never opened", () =>
+    failsClosed("UPDATE t SET a = ?) WHERE id = ?"));
   it("UPDATE tuple assignment", () =>
     failsClosed("UPDATE t SET (a, b) = (?, ?) WHERE id = ?"));
   it("named params (positional attribution unsafe)", () =>

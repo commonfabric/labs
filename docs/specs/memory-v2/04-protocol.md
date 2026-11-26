@@ -48,8 +48,8 @@ rewrite. In particular:
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
-- the public one-shot read surfaces are `graph.query`, `entity-id.list`, and
-  `entity-id.exists`
+- the public one-shot read surfaces are `graph.query`, `entity-id.list`,
+  `entity-id.exists`, `history.list`, and `branch.list`
 - watch-set mutations return inline `sync` payloads; a pushed frame retracts a
   document a write left no watch reaching, and a client shrinks its watch set
   explicitly
@@ -124,6 +124,8 @@ If the server accepts the protocol, it returns:
     "patternLifecycleScopes": true,
     "servedRequests": true,
     "spaceInvites": true,
+    "spaceInvitesRevision": true,
+    "branches": true,
     "syncCrossingsV1": true,
     "watchRemoveV1": true,
     "syncPartsV1": true,
@@ -142,6 +144,24 @@ If the server accepts the protocol, it returns:
 If the server does not support the requested version or the required data-model
 flags do not match what it implements, it returns a typed error response and
 does not mark the connection ready.
+
+A server given a limit on client messages other than the default also sends
+`messageSlots` in `hello.ok`: the most slots it reads in one message from this
+connection's client. A slot is a place a value fills or leaves absent, an array
+counting as its length and a record as its number of members, and the default
+is 1,000,000. A direct client holds each request to the advertised limit in
+place of the default: it stages a watch set in parts that fit it, and refuses,
+unsent, a commit that does not. The client measures a request by the values it
+writes out, and the server by the slots those values stand for, and the two
+counts differ. The client counts values that fill no slot, the request's root
+among them, so it can refuse a dense request at the limit that the server would
+read. A sparse array's absent places count for the server alone, so a commit
+whose array holds few values at indices past the limit passes the client and is
+refused by the server on receipt. A client that does not read the field keeps
+to the default, which a server's limit is never below. A `messageSlots` that is
+not a safe integer at or above the default fails the handshake. A routed
+connection takes its bounds from the router instead (`routerFrameSlots`,
+[routed Mode A](routed-mode-a.md)).
 
 `stableExpressionResultIds` declares the expression result identity contract:
 `ifElse`, `when`, and `unless` key their result stores on the owning piece and
@@ -306,9 +326,10 @@ compact commits. See [commit metadata encoding](#negotiated-commit-metadata-enco
 `syncCrossingsV1` is a server capability: its session sync payloads carry
 `crossings`, the links its schema traversals followed out of the space, as
 described in [Session Sync Payload](#423-session-sync-payload). It defaults to
-`false` when absent. A client of a server that does not advertise it finds
-those links by reading the documents it synced, and sends nothing on account
-of the flag.
+`false` when absent. A serving runtime of a server that does not advertise it
+finds those links by reading the documents it synced, and sends nothing on
+account of the flag; a client that isn't serving looks for them in neither
+form.
 
 `watchRemoveV1` advertises support for `session.watch.remove` (section
 4.3.9). It defaults to `false` when absent. A client must not send the request
@@ -452,6 +473,23 @@ origin. It defaults to `false` when absent: a client then sends no
 `space.invite` request, and administers invitations some other way or not at
 all. Only the server advertises it, and a client's `hello` leaves it out.
 
+`spaceInvitesRevision` advertises that the server's invitation service moves a
+space's invitation ledger revision document, `of:space-invites-revision`, on
+the space's default branch in the transaction that changes the ledger, and
+tells the server's own sessions on the space of the move
+([invitation service contract](../../../runtime/toolshed/README.md#space-invitations)).
+It is build-inherent, whether or not the server also advertises
+`spaceInvites`, since the ledger also changes through the host's HTTP routes.
+A session on the default branch learns of each change to the ledger by
+watching the document, on a deployment that runs a space's invitations in the
+process that holds its sessions; a session on another branch sees the document
+as it stood at the fork. A client reads the flag on the connection its session is on, and
+again when that session is replaced on reconnect, since the server it reaches
+then may not advertise it. It defaults to `false` when absent: such a server
+writes no such document, and a client that wants to learn of a change to the
+ledger it did not make reads the ledger again itself. Only the server
+advertises it, and a client's `hello` leaves it out.
+
 `spaceKind` advertises that the server seals the kind a space's genesis commit
 declares, and reports it in the result of every `session.open` it admits
 (sections 4.1.2 and 4.5.1). It is build-inherent and
@@ -476,6 +514,14 @@ client whose runtime names none declares nothing and is unaffected on any
 server. A client of a build that knows the capability treats the
 `session/revoked` reason `instance-names` as the refusal
 `clientUpdateRequired` marks, and keeps it the same way.
+
+`branches` advertises that the server opens a session on a branch
+(`SessionDescriptor.branch`, section 4.1.2) and serves the branch and history
+commands (section 4.3.8). It is build-inherent, defaults to `false` when
+absent, and only the server advertises it. A client refuses to open a session
+on a branch against a server that does not advertise it, since that server
+would open the session on the default branch and the session would write
+there, and sends such a server none of the commands.
 
 ### 4.1.2 Logical Sessions and Resume
 
@@ -527,6 +573,15 @@ interface SessionOpenRequest {
     // Present when the session's runtime names instances (see the rules and
     // INV-16). Absent means positional. Inside the signed descriptor.
     instanceNames?: true;
+    // Present when no one waits on the session's results (see the rules).
+    // Absent means the session is demand. Inside the signed descriptor.
+    demand?: false;
+    // The branch the session is of (see the rules). Absent means the default
+    // branch. Inside the signed descriptor.
+    branch?: BranchId;
+    // Present when the server is to fork `branch` where the space has no
+    // branch of that name (see the rules). Inside the signed descriptor.
+    forkBranch?: true;
   };
   invocation?: SessionOpenInvocation;
   authorization?: {
@@ -699,6 +754,18 @@ Rules:
   `invite` only to a server advertising `spaceInvites`, on the open that
   redeems and on none of the session's resumes: a server that does not know
   the field would open, or refuse, the session without redeeming anything
+- a session that no one waits on declares `demand: false`: a server-side
+  component that reads and writes a space as an ordinary client and keeps its
+  sessions open for as long as it runs, such as a toolshed's webhook runtime,
+  or a client that only copies a space's documents, such as a command-line
+  tool's local mirror. A value other than `false` refuses the message. A
+  client declares it on every open, a resume included. A server running the
+  serving loop leaves such a session out of client demand, whichever identity
+  signed it: it neither activates the space, nor keeps it from parking, nor
+  adds to its demand (`server-side-execution/serving-loop.md` §1). The
+  session still reads and writes as any other; what it gives up is the
+  server deriving anything on its account. A server that does not know the
+  field ignores it, and the session counts as it did before;
 - a session whose runtime names instances declares `instanceNames: true`, and
   one that declares nothing is positional; a value other than `true` refuses
   the message. A client declares it on every open, a resume included, when
@@ -713,6 +780,29 @@ Rules:
   refuses every later commit to the space from a positional session, and
   revokes the space's positional sessions with the reason `instance-names`.
   INV-16 states the rule
+- a session is of the branch its `session.open` descriptor names in `branch`,
+  and of the default branch when it names none: what the session sends
+  without naming a branch reads and writes that one (`06-branching.md`
+  section 6.16). A value that is not a string refuses the message. A client
+  declares the branch on every open, a resume included, and only to a server
+  advertising `branches`. The server refuses an open on a branch the space
+  does not have, or has deleted, with a `ProtocolError`, after authorization,
+  so a principal the space would refuse learns nothing of its branches; and it
+  refuses a resume that declares another branch than the session's. A session
+  of a branch other than the default is not client demand, as a session
+  declaring `demand: false` is not
+- an open that names a `branch` and carries `forkBranch: true` asks the server
+  to make that branch where the space has none of the name (`06-branching.md`
+  section 6.16). For a principal that may write to the space, the server
+  forks the branch from the default branch's head and opens the session on
+  it. For a principal that may not, it makes no branch and opens the session
+  on the default branch. An open naming a branch a `branch.create` would
+  refuse the name of (section 4.3.8) is refused. A branch that exists and is
+  active is used as it is, and an open on a deleted branch is refused as it
+  is without `forkBranch`. Any value other than `true` reads as absent. A
+  client carries `forkBranch` on every open of the session, a resume
+  included, so a session the server opened on the default branch resumes
+  there
 - the server rotates `sessionToken` on every successful `session.open`
 - a client sends the same `resumeKey` on every open of one session, a random
   value it makes for that session alone, with a `resumeAttempt` that counts
@@ -832,9 +922,11 @@ interface HelloMessage {
     patternLifecycleScopes?: boolean;
     servedRequests?: boolean;
     spaceInvites?: boolean;
+    spaceInvitesRevision?: boolean;
     spaceKind?: boolean;
     // INV-16.
     instanceNameMark?: boolean;
+    branches?: boolean;
   };
 }
 
@@ -845,6 +937,11 @@ interface RequestMessage {
     | "graph.query"
     | "entity-id.list"
     | "entity-id.exists"
+    | "branch.create"
+    | "branch.delete"
+    | "branch.list"
+    | "history.list"
+    | "branch.restore"
     | "session.watch.set"
     | "session.watch.add"
     | "session.watch.remove"
@@ -902,7 +999,7 @@ descriptor's `invite`. Both sides refuse anything else there, and the refusal
 is the one a string or a number in that position gets.
 
 The value codec that decodes a frame builds class instances as well as
-records: a `FabricBytes`, a `FabricLink`, a `FabricRegExp`, a
+records: a `FabricBytes`, a `FabricLink`, a `FabricHash`, a
 `FabricError`. None of those carries properties, so reading named fields
 off one reads nothing at all. The shape check at the position is what
 settles whether a value belongs there; the field checks that follow it
@@ -925,9 +1022,12 @@ and a compressed envelope can expand a small frame into millions of elements.
 The size of the text itself, including one long string, is bounded separately
 by the 256 MiB limit on an expanded envelope.
 
-A message standing for more than 1,000,000 slots is refused before it is
-parsed: its elements and members are counted by scanning its text, and its
-holes before any of the parsed message is walked. When the message's root
+A message standing for more than the server's slot limit is refused before it
+is parsed: its elements and members are counted by scanning its text, and its
+holes before any of the parsed message is walked. The limit is 1,000,000 slots
+unless the deployment raises it, which it may do for a bounded operation that
+needs more but never below that default, since a client sizes the parts it
+stages a watch set in by the default. When the message's root
 record names a string `requestId`, the refusal is a `response` on that
 request, with error name `MessageTooLargeError`, so the request fails rather
 than waiting forever. Otherwise the refusal is the one any unreadable message
@@ -935,8 +1035,9 @@ gets: a `response` with `requestId: "invalid"` and error name
 `InvalidMessageError`.
 
 The limit applies to every message a client sends. A `session.open` declaring
-holdings costs three slots or more per holding, so a replica declaring more
-than about 330,000 holdings in one space cannot resume. The limit does not
+holdings costs three slots or more per holding, so under the default limit a
+replica declaring more than about 330,000 holdings in one space cannot
+resume. The limit does not
 apply to what a server reads from its own storage, or to what a client reads
 from a server, since a stored document may stand for more slots than one
 message may.
@@ -1070,9 +1171,14 @@ oldest is dropped past that, and its principal then learns of a grant only by
 opening the session again. A connection whose peer did not advertise
 `admissionNotice` records nothing, and neither does a routed connection
 ([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor does
-a session opened `actingAs: "space-owner"`: only a co-hosted serving runtime
-opens one, and it hears of every access-list commit in process, after which its
-next read of the space opens the session again.
+a session opened `actingAs: "space-owner"`, which only a serving runtime opens.
+An access-list change that gives the session's space an owner the binding can
+stand for, such as the genesis ACL of a home space created after the session
+opened, binds the session to that owner in place rather than revoking it (a
+profile's own DID is not one), because a serving runtime in
+another process hears of no access-list commit on this server. A co-hosted
+serving runtime whose session a change does revoke hears of the commit in
+process, after which its next read of the space opens the session again.
 
 Live data delivery is not routed through the initiating request id.
 
@@ -1151,9 +1257,13 @@ Semantics:
   another space. The server walks one space, so it stops at such a link and
   reports it instead: the target document by space, scope name, and id, and
   the path within the document's value and the schema the read needed there,
-  which is what a walk rooted at the target would deliver. A client loads
-  each from the target space under that selector, so the documents a read
-  through the link reaches are local before anything reads them. A session
+  which is what a walk rooted at the target would deliver. A serving runtime
+  loads each from the target space under that selector, so the documents a
+  read through the link reaches are local before anything reads them. A
+  client that isn't serving loads none of them: it loads a document in
+  another space when one of its reads reaches the link, so what a piece's
+  derivations declare of another space costs it nothing until it runs one
+  that reads there. A session
   is told of each crossing once, on the first frame whose watches reach it,
   and of all of them again on a `session.watch.set` that declares no
   `holdings`. A crossing is a hint about what to load, never a holding: a
@@ -1196,7 +1306,12 @@ with it, as it loses any frame in flight.
 The routed host splits a sync that one message could not carry, past the
 routed frame cap or the bytes a message may take, into parts of at most 1 MiB
 ([`routed-mode-a.md`](routed-mode-a.md)): splitting costs the server more than
-sending whole. A direct server sends every sync whole.
+sending whole. The toolshed's direct memory socket splits a sync larger than
+the largest message it still sends compressed (256 MiB), or one too long for
+the server to encode whole, into parts of at most 32 MiB
+(`MEMORY_SOCKET_SYNC_PARTS`); an entry larger than that goes alone, in a part
+of its own, as above. A direct connection given no part bounds sends every
+sync whole.
 
 #### Negotiated schema-table encoding
 
@@ -1809,11 +1924,37 @@ Semantics:
 - a `session.close` naming a session the connection does not hold gets a
   `SessionError`
 
-### 4.3.8 Branch Lifecycle Commands
+### 4.3.8 Branch and History Commands
 
-Branch create / delete / merge lifecycle commands are not currently exposed on
-the v2 wire. The engine already carries branch state internally, but public wire
-commands for that surface remain deferred in this pass.
+A server advertising the `branches` capability serves five session commands
+about a space's branches and its history. `06-branching.md` holds the
+semantics of each; this section holds the wire shape and what each requires
+of the session. Every one carries `requestId`, `space` and `sessionId`, and
+its result carries `serverSeq`.
+
+| Command          | Further fields                       | Result                | Requires |
+| ---------------- | ------------------------------------ | --------------------- | -------- |
+| `branch.create`  | `name`, `parentBranch?`, `forkSeq?`  | `branch: BranchInfo`  | WRITE    |
+| `branch.delete`  | `name`                               |                       | WRITE    |
+| `branch.list`    |                                      | `branches`            | READ     |
+| `history.list`   | `branch?`, `before?`, `limit?`       | `commits`             | READ     |
+| `branch.restore` | `source?`, `sourceSeq?`              | `seq?`                | OWNER    |
+
+- A request the engine refuses, for a name that is taken, a fork point outside
+  the parent's history or below the store's compaction floor, or a branch
+  that does not exist, gets a `QueryError` carrying the reason.
+- `branch.create` refuses, the same way, a name that holds a control character
+  or that begins with `view-demand:` or `view-support:`.
+- `history.list` reports a commit as a restore (`restored`) only when it is a
+  `system` commit.
+- `branch.restore` restores the default branch only, and only from its own
+  history: the server refuses a `source` other than the default branch with a
+  `QueryError`, after the OWNER check (`06-branching.md` section 6.15). It is
+  serialized with the space's commits, and the documents it writes reach the
+  space's sessions as any commit's do.
+- A client sends none of these to a server that does not advertise `branches`.
+
+Merge commands remain deferred (`06-branching.md` section 6.7).
 
 ### 4.3.9 `session.watch.remove` — Shrink the Session Watch Set
 
@@ -1968,7 +2109,7 @@ side of
 [owner routing](../server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally), where a crossing
 was a call on the host's own co-hosted memory server. A server advertises it
 with the `servedRequests` capability flag. The session is the host's routed
-session to the owner, open as the deployment's service identity.
+session to the owner, open as the identity of the host's process.
 
 ```typescript
 // Shown at module scope.
@@ -2050,9 +2191,15 @@ Semantics:
   `payload-too-large`. A client refuses before sending a request whose
   encoding takes more than that, or more than its connection takes in one
   request
-- the session's principal must be of the access list's delegating class
-  (`acl.delegatingDids`, the deployment's service identity); any other
-  session is refused with `forbidden`. The crossing then runs under the actor
+- the session's principal must be of the access list's delegating class;
+  any other session is refused with `forbidden`. The class is the identities
+  of the deployment's serving processes: the server's own process identity
+  (`acl.delegatingDids`), which is the whole class where every process shares
+  one identity, and, behind the memory router, where each toolshed has an
+  identity of its own, every toolshed identity the deployment's directory
+  lists (`acl.isDelegatingPeer`; `routed-mode-a.md`, "Toolshed deployment
+  inputs"). The directory is read on each decision, so a toolshed removed
+  from it is refused from the next request. The crossing then runs under the actor
   its body carries, as the delegated carriage does on the host's own server
   (`protocol.md` §2): the deployment's processes trust each other's carried
   actor claims, and admissibility comes from the validated grant
@@ -2715,7 +2862,11 @@ entity values remain content-addressed.
 ## 4.10 Branch Parameter
 
 `branch` on read and write commands still determines which branch is being read
-or mutated. If omitted, the default branch is used.
+or mutated. If omitted, the branch the session was opened on is used
+(`SessionDescriptor.branch`, section 4.1.2; `06-branching.md` section 6.16),
+which is the default branch unless the open named another. The commands that
+carry no `branch` and are served on the default branch alone are refused from
+a session of another branch; section 6.16 lists them.
 
 ## 4.11 Message Ordering
 
@@ -2778,22 +2929,37 @@ enforced through the catch-up marker and CLIENT-side verdict parking (CT-1927):
   The frame includes a doc unless the session provably holds it (CT-1965,
   decided per doc by the LAST op the session's accepted commit applied):
   own `set`- and `delete`-produced heads are elided — the writer supplied
-  the bytes (or the absence), and the verdict plus marker promote them —
-  while own `patch`-produced heads are delivered as full post-apply
-  documents, since merged state is truth the writer cannot extrapolate. A
-  head moved past the session's own write, and all foreign novelty, is
-  delivered in full. REJECTED commits' docs are staged origin-less, so
-  repair frames DO cover them, and a frame lost in flight re-stages its
-  docs origin-less, so the retry delivers full documents.
+  the bytes (or the absence), and the verdict plus marker promote them. An
+  own `patch`-produced head can hold merged state the writer cannot
+  extrapolate, so it is delivered as the full post-apply document unless
+  every condition below holds, in which case it is elided:
+  - the commit wrote the document once, by a `patch` the engine applied
+    exactly as the session sent it. A patch the engine rewrote first, as it
+    stamps an appended event, is not one, and neither is any write of a
+    commit that carries an `apply-op`
+  - every revision between the one the session holds and the head is such a
+    patch of the session's own, each applied over the one before. The
+    session holds the revision the server last sent it or last elided for
+    it, and its own `set` or `delete` earlier in the same fan-out batch
+  - no other session's write to the document shares the fan-out batch
+
+  The writer's replay of the patches it sent, over the revision it holds, is
+  then the head: the client and the engine apply a patch with the same
+  function. A head moved past the session's own write, and all foreign
+  novelty, is delivered in full. REJECTED commits' docs are staged
+  origin-less, so repair frames DO cover them, and a frame lost in flight
+  re-stages its docs origin-less, so the retry delivers full documents.
 - the CLIENT MUST NOT apply a verdict's state effects ahead of the marker
   that covers it: an accept's promotion (pending overlay to confirmed
   mirror, removing the pending local copy) is PARKED until
   `caughtUpLocalSeq` reaches its localSeq. For an elided `set` head the
   promotion installs the client's own value; for a `patch` head the
-  covering frame has already delivered the post-apply document, so
-  promotion retires the overlay against delivered truth. Extrapolating the
-  post-apply state from the client's own ops remains the fallback where no
-  frame channel exists — unwatched docs, servers that still suppress; a
+  covering frame has delivered the post-apply document, so promotion
+  retires the overlay against delivered truth, or has left the document
+  out, and promotion replays the commit's patches over the confirmed
+  document. That replay is exact for a head the server elided under the
+  conditions above, and it remains the fallback where no frame channel
+  exists — unwatched docs, servers that still suppress; a
   conflict rejection's drop/revert is held by the read-repair gate
   (`finalizeRejection`, with a timeout backstop for lost connections).
   Visible state is unaffected by parking — the pending overlay already

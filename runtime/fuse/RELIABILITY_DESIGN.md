@@ -27,10 +27,10 @@ The implementation already has several reliability foundations:
   publish time both, rather than publishing again, so the descriptor's reads
   stay consistent. It also marks the mount disconnected/read-only on transport
   errors, and reconnects with capped exponential backoff.
-- `cell-bridge.ts` serializes and coalesces per-piece-property rebuilds, dedupes
-  in-flight hydrations, stages rebuilds under pending roots and reconciles them
-  onto the live subtree in place so inodes stay stable, and invalidates the
-  exact cache entries a rebuild changed.
+- `cell-bridge.ts` serializes per-piece-property rebuilds, dedupes in-flight
+  hydrations, stages rebuilds under pending roots and reconciles them onto the
+  live subtree in place so inodes stay stable, and invalidates the exact cache
+  entries a rebuild changed.
 - `cfc-writeback.ts` persists prepared CFC writeback records, tracks crash-point
   states, and reconciles records after a subtree rebuild.
 

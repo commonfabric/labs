@@ -1,14 +1,13 @@
 import type {
-  PatternIndexEvent,
   PatternIndexListedPattern,
   PatternIndexSearchResult,
 } from "@commonfabric/pattern-index/client";
-import { describe, it } from "@std/testing/bdd";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
 import {
   eventBadges,
-  filterEvents,
   formatIndexTime,
+  listingLabel,
   matchRatio,
   patternsByScore,
   searchRequestOf,
@@ -24,20 +23,10 @@ const pattern = (
   description: `pattern ${patternId}`,
   hashtags: [],
   keywords: [],
-  ownerDid: "did:key:zOwner",
+  handle: "p-owner00001",
   createdAt: "2026-08-01T00:00:00.000Z",
   events,
   score,
-});
-
-const event = (
-  overrides: Partial<PatternIndexEvent> = {},
-): PatternIndexEvent => ({
-  patternId: "pat-1",
-  did: "did:key:zOwner",
-  eventType: "run_succeeded",
-  ts: "2026-08-02T09:04:11.000Z",
-  ...overrides,
 });
 
 describe("console/index-inspector", () => {
@@ -95,32 +84,6 @@ describe("console/index-inspector", () => {
   });
 
   describe("eventBadges", () => {
-    it("keeps two authors of the same verdict separate", () => {
-      expect(eventBadges({ thumbs_up: 3, thumbs_down: 1 }, {
-        thumbs_up: { "did:key:zRun": 2, "did:key:zConsole": 1 },
-        thumbs_down: { "did:key:zRun": 1 },
-      })).toEqual([
-        { eventType: "thumbs_down", count: 1, did: "did:key:zRun" },
-        { eventType: "thumbs_up", count: 1, did: "did:key:zConsole" },
-        { eventType: "thumbs_up", count: 2, did: "did:key:zRun" },
-      ]);
-    });
-
-    it("keeps the unattributed remainder separate from a known author", () => {
-      expect(eventBadges({ thumbs_up: 4 }, {
-        thumbs_up: { "did:key:zRun": 2 },
-      })).toEqual([
-        { eventType: "thumbs_up", count: 2, did: "did:key:zRun" },
-        { eventType: "thumbs_up", count: 2 },
-      ]);
-    });
-
-    it("returns an unattributed total when author counts exceed it", () => {
-      expect(eventBadges({ thumbs_up: 1 }, {
-        thumbs_up: { "did:key:zRun": 2 },
-      })).toEqual([{ eventType: "thumbs_up", count: 1 }]);
-    });
-
     it("answers one badge per counted event type, by type", () => {
       expect(eventBadges({ thumbs_up: 2, instantiated: 5 })).toEqual([
         { eventType: "instantiated", count: 5 },
@@ -140,36 +103,29 @@ describe("console/index-inspector", () => {
     });
   });
 
-  describe("filterEvents", () => {
-    const events = [
-      event({ eventType: "run_succeeded", note: "ran in the harness" }),
-      event({ patternId: "pat-2", eventType: "thumbs_down" }),
-    ];
-
-    it("keeps every event for an empty filter", () => {
-      expect(filterEvents(events, "   ")).toHaveLength(2);
+  describe("listingLabel", () => {
+    it("joins the listing state, whether it is listed, the bucket and both flags in that order", () => {
+      expect(listingLabel({
+        listing: "passed",
+        listed: true,
+        bucket: "main",
+        grandfathered: true,
+        hidden: true,
+      })).toBe("passed · listed · main · grandfathered · hidden");
     });
 
-    it("keeps the events whose note carries the filter", () => {
-      expect(filterEvents(events, "harness")).toEqual([events[0]]);
+    it("says unlisted for a pattern the index does not list", () => {
+      expect(listingLabel({ listing: "held", listed: false })).toBe(
+        "held · unlisted",
+      );
     });
 
-    it("matches a pattern identifier as readily as an event type", () => {
-      expect(filterEvents(events, "pat-2")).toEqual([events[1]]);
-      expect(filterEvents(events, "thumbs")).toEqual([events[1]]);
+    it("reads a listing state with no bucket on its own", () => {
+      expect(listingLabel({ listing: "pending" })).toBe("pending");
     });
 
-    it("matches without regard to case", () => {
-      expect(filterEvents(events, "HARNESS")).toEqual([events[0]]);
-    });
-
-    it("keeps no event a filter matches nothing of", () => {
-      expect(filterEvents(events, "nothing here")).toEqual([]);
-    });
-
-    it("matches an event carrying no note", () => {
-      expect(filterEvents([event({ note: undefined })], "run_succeeded"))
-        .toHaveLength(1);
+    it("answers nothing for an answer carrying no listing fields", () => {
+      expect(listingLabel({})).toBeUndefined();
     });
   });
 
@@ -180,7 +136,7 @@ describe("console/index-inspector", () => {
       patternId: "pat-1",
       description: "Totals an expense list",
       hashtags: [],
-      ownerDid: "did:key:zOwner",
+      handle: "p-owner00001",
       createdAt: "2026-08-01T00:00:00.000Z",
       dependencies: [],
       kind: "part",

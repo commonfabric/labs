@@ -6,10 +6,19 @@
  */
 
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
-import { type Cell, parseLink } from "@commonfabric/runner";
+import {
+  type Cell,
+  type IExtendedStorageTransaction,
+  parseLink,
+} from "@commonfabric/runner";
 import { maxOf } from "@commonfabric/collections/math";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   buildTopicsFixture,
@@ -22,8 +31,10 @@ import {
   reachTopicsDerivations,
   resolveTopicsProgram,
   topicIndicesOf,
+  TOPICS_FIXTURE_MODES,
   TOPICS_LIFT_NAMES,
   type TopicsFixture,
+  type TopicsFixtureMode,
   topicsFixtureModeOf,
   type TopicsLiftName,
   type TopicsMeasurement,
@@ -73,6 +84,7 @@ function graphActionCounts(
     graph.nodes.filter((node) => node.src === derivations.sources[lift]).length;
   return {
     crossrefTable: countOf("crossrefTable"),
+    crossrefIndexOf: countOf("crossrefIndexOf"),
     backlinksOf: countOf("backlinksOf"),
   };
 }
@@ -85,7 +97,7 @@ function mentionCount(fixture: TopicsFixture): number {
 /**
  * Returns what `mentionedBy` returns for `topic`, by index, over the measured
  * board's distinct topics in the order of each one's first entry, which is the
- * list the pivot hands it.
+ * list the pivot joins over.
  */
 function mentionedByIndex(
   measurement: TopicsMeasurement,
@@ -164,6 +176,29 @@ describe("topics-headless-fixture", () => {
       expect(mentionCount(fixture)).toBe(14);
       expect(fixture.topics[0].mentions).toEqual([1, 2, 0]);
       expect(fixture.topics[1].mentions).toEqual([2, 3, 2]);
+    });
+
+    it("returns each topic numbered one past its index, unless `shortNames` gives another number or none", () => {
+      const fixture = buildTopicsFixture({
+        topicCount: 5,
+        mentions: { shape: "none" },
+        shortNames: { 1: null, 2: "1", 3: " 4" },
+      });
+      expect(fixture.topics.map((topic) => topic.shortName)).toEqual([
+        "1",
+        undefined,
+        "1",
+        " 4",
+        "5",
+      ]);
+      expect(Object.hasOwn(fixture.topics[1], "shortName")).toBe(false);
+      expect(() =>
+        buildTopicsFixture({
+          topicCount: 2,
+          mentions: { shape: "none" },
+          shortNames: { 2: "3" },
+        })
+      ).toThrow(RangeError);
     });
 
     it("returns a board listing a duplicated topic again after every other entry", () => {
@@ -296,7 +331,7 @@ describe("topics-headless-fixture", () => {
   });
 
   describe("reachTopicsDerivations()", () => {
-    it("returns the two lifts, each with its authored source, and `mentionedBy` from the Topics sources", async () => {
+    it("returns the three lifts, each with its authored source, and `mentionedBy` from the Topics sources", async () => {
       await using measurement = await measureTopicsFixture(
         buildTopicsFixture({ topicCount: 1, mentions: { shape: "none" } }),
         "topics-headless-fixture reach",
@@ -305,10 +340,13 @@ describe("topics-headless-fixture", () => {
       expect(sources.crossrefTable).toMatch(
         /^cf:module\/[^/]+\/apps\/topics\/main\.tsx:\d+:\d+$/,
       );
+      expect(sources.crossrefIndexOf).toMatch(
+        /^cf:module\/[^/]+\/apps\/topics\/crossref-index\.ts:\d+:\d+$/,
+      );
       expect(sources.backlinksOf).toMatch(
         /^cf:module\/[^/]+\/apps\/topics\/topic\.tsx:\d+:\d+$/,
       );
-      expect(new Set(Object.values(sources)).size).toBe(2);
+      expect(new Set(Object.values(sources)).size).toBe(3);
       expect(typeof mentionedBy).toBe("function");
     });
 
@@ -328,12 +366,24 @@ describe("topics-headless-fixture", () => {
             name: "/topics/main.tsx",
             contents: [
               `import { lift } from "commonfabric";`,
+              `import { indexed } from "./crossref-index.ts";`,
               `import { presentCount } from "./topic.tsx";`,
               `const crossrefTable = lift(`,
               `  ({ sources }: { sources: unknown[] }) => sources.length,`,
               `);`,
               `export const pivot = crossrefTable;`,
               `export const counted = presentCount;`,
+              `export const index = indexed;`,
+            ].join("\n"),
+          },
+          {
+            name: "/topics/crossref-index.ts",
+            contents: [
+              `import { lift } from "commonfabric";`,
+              `const crossrefIndexOf = lift(`,
+              `  ({ rows }: { rows: unknown[] }) => rows.length,`,
+              `);`,
+              `export const indexed = crossrefIndexOf;`,
             ].join("\n"),
           },
           {
@@ -351,7 +401,7 @@ describe("topics-headless-fixture", () => {
       const reached = reachTopicsDerivations(runtime, stub);
       await expect(reached).rejects.toThrow(/`backlinksOf`, `mentionedBy`/);
       await expect(reachTopicsDerivations(runtime, stub)).rejects.not.toThrow(
-        /`crossrefTable`/,
+        /`crossrefTable`|`crossrefIndexOf`/,
       );
       await expect(
         reachTopicsDerivations(runtime, await resolveTopicsProgram(runtime)),
@@ -465,7 +515,10 @@ describe("topics-headless-fixture", () => {
 
       const topics = fixture.topics.length;
       const workloads: [TopicsMeasurement, Record<TopicsLiftName, number>][] = [
-        [measurement, { crossrefTable: 1, backlinksOf: topics }],
+        [
+          measurement,
+          { crossrefTable: 1, crossrefIndexOf: 1, backlinksOf: topics },
+        ],
       ];
       for (const [measured, instances] of workloads) {
         const { reads, graph, derivations, demand } = measured;
@@ -671,12 +724,13 @@ describe("topics-headless-fixture", () => {
     it("starts none of the reached lifts and holds none of their outputs", () => {
       expect(graphActionCounts(measurement)).toEqual({
         crossrefTable: 0,
+        crossrefIndexOf: 0,
         backlinksOf: 0,
       });
       expect(outputKeys(measurement)).toEqual({ pivot: false, backlinks: [] });
       expect(
         TOPICS_LIFT_NAMES.map((lift) => measurement.reads.bodies[lift].runs),
-      ).toEqual([0, 0]);
+      ).toEqual([0, 0, 0]);
     });
   });
 
@@ -703,9 +757,10 @@ describe("topics-headless-fixture", () => {
       expect(measurement.errors).toEqual([]);
     });
 
-    it("starts the pivot and the open topic's backlinks, and nothing else", () => {
+    it("starts the pivot, its index, and the open topic's backlinks, and nothing else", () => {
       expect(graphActionCounts(measurement)).toEqual({
         crossrefTable: 1,
+        crossrefIndexOf: 1,
         backlinksOf: 1,
       });
       expect(outputKeys(measurement)).toEqual({
@@ -848,8 +903,337 @@ describe("topics-headless-fixture", () => {
         })),
       ).toEqual([
         { lift: "crossrefTable", actions: 1, attempted: true },
+        { lift: "crossrefIndexOf", actions: 1, attempted: true },
         { lift: "backlinksOf", actions: 1, attempted: true },
       ]);
     });
   });
+
+  // A lookup reads the pivot and the index through their declared schemas,
+  // and what such a read hands a lift differs between the two materialization
+  // modes, so the six ways run under each.
+  for (const mode of Object.keys(TOPICS_FIXTURE_MODES) as TopicsFixtureMode[]) {
+    describe(`over a board whose topics find their rows by number, ${mode}`, () => {
+      // Every topic runs its lookup six ways at once. `keyed` is the board's own
+      // wiring: the pivot and its live index. `scan` is handed an index of no
+      // pivot, so it reads every row. `frozen` holds the index as it stood after
+      // initialization and is never updated, the shape a board rolled back to
+      // code that no longer computes it leaves behind. `foreign` holds the same
+      // buckets with the index naming another pivot. `tableless` holds the live
+      // index and no pivot. `shrunk` is written at the shrink phase, with one
+      // topic's bucket naming a position past the pivot's new end before its
+      // true one. Each phase checks all six against an oracle computed from the
+      // fixture's own data, and checks the keyed and scanned answers are the
+      // same stored value.
+
+      const TOPICS = 10;
+      const ADDED = TOPICS - 1;
+      const SHRUNK_TOPIC = 6;
+      const fixture = buildTopicsFixture({
+        topicCount: TOPICS,
+        mentions: { shape: "low-degree", perSource: 3 },
+        // Topic 3 has no number, topics 4 and 5 share one, and 7 and 8 carry
+        // strings no member name is.
+        shortNames: { 3: null, 5: "5", 7: " 8", 8: "constructor" },
+        selfMention: 2,
+      });
+      const WAYS = [
+        "keyed",
+        "scan",
+        "frozen",
+        "foreign",
+        "tableless",
+        "shrunk",
+      ] as const;
+      type Way = typeof WAYS[number];
+      const lookups = new Map<Way, Cell<unknown[]>[]>();
+      const held: {
+        table?: Cell<PivotRow[]>;
+        cells?: Record<
+          "empty" | "frozen" | "foreign" | "shrunk",
+          Cell<unknown>
+        >;
+        noTable?: Cell<unknown[]>;
+      } = {};
+      // The board's entries by topic index, `-1` for an entry with nothing
+      // behind it, and each topic's mentions, kept in step with every edit.
+      let board = fixture.board.filter((topic) => topic !== ADDED);
+      const mentions = fixture.topics.map((topic) => [...topic.mentions]);
+      let measurement: TopicsMeasurement;
+
+      /**
+       * What a topic's backlinks are over the board as it stands: none for a
+       * topic the board does not list, which has no row.
+       */
+      const expected = (topic: number): number[] =>
+        board.includes(topic)
+          ? [...new Set(board.filter((entry) => entry >= 0))].filter((source) =>
+            source !== topic && mentions[source].includes(topic)
+          )
+          : [];
+
+      /**
+       * What the pivot's own row for a topic says mentions it, which is nothing
+       * for a topic with no row.
+       */
+      const pivotSays = (topic: number): number[] =>
+        pivotEntriesOf(measurement.seeded, held.table!)
+          .find((entry) => entry.topic === topic)?.mentionedBy.slice() ?? [];
+
+      /**
+       * Checks the measurement's errors, and every lookup of every topic against
+       * `oracle`, which defaults to the fixture's own data.
+       */
+      const checkAll = (
+        phase: string,
+        oracle: (topic: number) => number[] = expected,
+      ) => {
+        const { seeded, outputs } = measurement;
+        expect({ phase, errors: measurement.errors }).toEqual({
+          phase,
+          errors: [],
+        });
+        for (let topic = 0; topic < TOPICS; topic++) {
+          const want = WAYS.map((way) => ({
+            phase,
+            topic,
+            way,
+            backlinks: way === "tableless" ? [] : oracle(topic),
+          }));
+          const got = WAYS.map((way) => ({
+            phase,
+            topic,
+            way,
+            backlinks: topicIndicesOf(seeded, lookups.get(way)![topic]),
+          }));
+          expect(got).toEqual(want);
+          expect({
+            phase,
+            topic,
+            raw: outputOf(outputs.backlinks, topic).resolveAsCell().getRaw(),
+          }).toEqual({
+            phase,
+            topic,
+            raw: lookups.get("scan")![topic].resolveAsCell().getRaw(),
+          });
+        }
+      };
+
+      /** Writes the board as `board` holds it. */
+      const writeBoard = (tx: IExtendedStorageTransaction) => {
+        const { runtime, seeded } = measurement;
+        const space = seeded.board.getAsNormalizedFullLink().space;
+        seeded.board.withTx(tx).set(
+          board.map((entry) =>
+            entry >= 0 ? seeded.topics[entry] : runtime.getCell<unknown>(
+              space,
+              "topics-headless-fixture-nothing-behind",
+              undefined,
+              tx,
+            )
+          ),
+        );
+      };
+
+      /** The pivot positions of the board as it stands, by topic index. */
+      const pivotPositions = (): Map<number, number> =>
+        new Map(
+          [...new Set(board.filter((entry) => entry >= 0))].map((topic, at) => [
+            topic,
+            at,
+          ]),
+        );
+
+      beforeAll(async () => {
+        measurement = await measureTopicsFixture(
+          { ...fixture, board },
+          `topics-headless-fixture keyed lookup ${mode}`,
+          { workload: "all-backlinks" },
+          {
+            mode,
+            variant: (runtime, derivations) =>
+              Promise.resolve(({ tx, seeded, outputs, output }) => {
+                const table = outputs.table!;
+                const index = outputs.index!;
+                const cell = (name: string, value: unknown) => {
+                  const made = output<unknown>(name);
+                  made.set(value);
+                  return made;
+                };
+                const cells = {
+                  empty: cell("empty-index", { byName: {} }),
+                  frozen: cell("frozen-index", { byName: {} }),
+                  foreign: cell("foreign-index", { byName: {} }),
+                  shrunk: cell("shrunk-index", { byName: {} }),
+                };
+                const noTable = cell("no-table", []) as Cell<unknown[]>;
+                held.table = table;
+                held.cells = cells;
+                held.noTable = noTable;
+                const wiring: Record<Way, [unknown, unknown]> = {
+                  keyed: [table, index],
+                  scan: [table, cells.empty],
+                  frozen: [table, cells.frozen],
+                  foreign: [table, cells.foreign],
+                  tableless: [noTable, index],
+                  shrunk: [table, cells.shrunk],
+                };
+                const started: Cell<unknown>[] = [];
+                for (const way of WAYS) {
+                  const [wayTable, wayIndex] = wiring[way];
+                  const cellsOfWay = seeded.topics.map((topic, at) =>
+                    way === "keyed" ? outputs.backlinks.get(at)! : runtime.run(
+                      tx,
+                      derivations.lifts.backlinksOf,
+                      {
+                        table: wayTable,
+                        index: wayIndex,
+                        self: topic,
+                        shortName: topic.key("shortName"),
+                      },
+                      output<unknown[]>(`${way}-backlinks-${at}`),
+                    )
+                  );
+                  lookups.set(way, cellsOfWay);
+                  if (way !== "keyed") {
+                    for (const cell of cellsOfWay) started.push(cell);
+                  }
+                }
+                return started;
+              }),
+          },
+        );
+      });
+      afterAll(async () => {
+        await measurement?.[Symbol.asyncDispose]();
+      });
+
+      it("returns every topic's backlinks, six ways, through every phase", async () => {
+        checkAll("initialization");
+
+        // The live index files each numbered row under its topic's number, as
+        // a link to the row's pivot position, and files nothing else.
+        const { outputs } = measurement;
+        const table = held.table!;
+        const index = outputs.index!;
+        const positions = pivotPositions();
+        const rowIds = [...positions.keys()].map((topic) =>
+          table.key(positions.get(topic)!).resolveAsCell()
+            .getAsNormalizedFullLink().id
+        );
+        const filed: Record<string, string[]> = {};
+        for (const name of Object.keys(index.key("byName").get() ?? {})) {
+          const bucket = index.key("byName").key(name);
+          filed[name] = Array.from(
+            { length: bucket.get()?.length ?? 0 },
+            (_, at) =>
+              bucket.key(at).resolveAsCell().getAsNormalizedFullLink().id,
+          );
+        }
+        const wanted: Record<string, string[]> = {};
+        for (const [topic, at] of positions) {
+          const name = fixture.topics[topic].shortName;
+          if (name === undefined || !/^[1-9][0-9]*$/.test(name)) continue;
+          (wanted[name] ??= []).push(rowIds[at]);
+        }
+        expect(filed).toEqual(wanted);
+        expect(Object.keys(filed)).not.toContain("constructor");
+        expect(filed["5"]).toHaveLength(2);
+
+        // Freeze the index as it stands, and the same buckets under another
+        // pivot's name.
+        await measurement.update((tx) => {
+          const byName = Object.fromEntries(
+            Object.entries(
+              (index.key("byName").get() ?? {}) as Record<string, unknown[]>,
+            ).map(([name, bucket]) => [
+              name,
+              bucket.map((_, at) =>
+                table.key(
+                  rowIds.indexOf(
+                    index.key("byName").key(name).key(at).resolveAsCell()
+                      .getAsNormalizedFullLink().id,
+                  ),
+                )
+              ),
+            ]),
+          );
+          held.cells!.frozen.withTx(tx).set({ source: table, byName });
+          held.cells!.foreign.withTx(tx).set({
+            source: held.noTable!,
+            byName,
+          });
+        });
+        checkAll("frozen");
+
+        await measurement.update((tx) => {
+          mentions[0].push(5);
+          measurement.seeded.topics[0].withTx(tx).key("mentions").push(
+            measurement.seeded.topics[5],
+          );
+        });
+        checkAll("mention insertion");
+
+        await measurement.update((tx) => {
+          mentions[1].splice(mentions[1].indexOf(3), 1);
+          measurement.seeded.topics[1].withTx(tx).key("mentions").set(
+            mentions[1].map((target) => measurement.seeded.topics[target]),
+          );
+        });
+        checkAll("mention removal");
+
+        await measurement.update((tx) => {
+          measurement.seeded.topics[3].withTx(tx).key("shortName").set("4");
+        });
+        checkAll("renumber");
+
+        await measurement.update((tx) => {
+          board = [...board].reverse();
+          writeBoard(tx);
+        });
+        checkAll("reorder");
+
+        await measurement.update((tx) => {
+          board = [...board, ADDED];
+          writeBoard(tx);
+        });
+        checkAll("addition");
+
+        // The shrink: the entry at an early position leaves, so every later
+        // row moves down one and the last position falls off the end. The
+        // `shrunk` index names, for one topic, that fallen-off position and then
+        // the topic's true one.
+        await measurement.update((tx) => {
+          board = board.filter((_, at) => at !== 1);
+          writeBoard(tx);
+          const after = pivotPositions();
+          const name = fixture.topics[SHRUNK_TOPIC].shortName!;
+          held.cells!.shrunk.withTx(tx).set({
+            source: table,
+            byName: {
+              [name]: [
+                table.key(after.size),
+                table.key(after.get(SHRUNK_TOPIC)!),
+              ],
+            },
+          });
+        });
+        checkAll("shrink");
+
+        // An entry linking to a document nothing has written. The pivot
+        // mishandles one, against what `distinctByIdentity` and
+        // `crossrefTable` document of it, which is a defect of the pivot and
+        // not of the lookup: with lazy materialization on it reads the board as
+        // holding no topics, and with it off it gives the entry a row of no
+        // topic. So the pivot's own rows are the oracle here rather than the
+        // fixture's data, and this phase holds every lookup to the pivot, not
+        // the pivot to the board.
+        await measurement.update((tx) => {
+          board = board.map((entry, at) => at === 0 ? -1 : entry);
+          writeBoard(tx);
+        });
+        checkAll("entry with nothing behind it", pivotSays);
+      });
+    });
+  }
 });

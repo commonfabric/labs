@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -21,6 +20,12 @@ import { writeResultSchemaMeta } from "../src/result-schema-meta.ts";
 import { Runtime } from "../src/runtime.ts";
 import { lookupSchemaDocument } from "../src/schema-registry.ts";
 import type { SessionSync } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { SpaceReplica } from "../src/storage/v2.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer, TestStorageManager } from "./memory-v2-test-utils.ts";

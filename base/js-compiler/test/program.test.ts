@@ -1,12 +1,12 @@
 import { expect } from "@std/expect";
 import * as path from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import {
   FileSystemProgramResolver,
   HttpProgramResolver,
   InMemoryProgram,
   readDataFileSource,
 } from "../program.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("InMemoryProgram", () => {
   it("resolves empty main and dependency sources", async () => {
@@ -24,6 +24,12 @@ describe("InMemoryProgram", () => {
       contents: "",
     });
     expect(await resolver.resolveSource("/missing.ts")).toBeUndefined();
+  });
+
+  it("throws for a main module it does not hold", () => {
+    const resolver = new InMemoryProgram("/main.ts", { "/other.ts": "" });
+
+    expect(() => resolver.main()).toThrow("/main.ts not in modules.");
   });
 });
 
@@ -45,6 +51,7 @@ describe("FileSystemProgramResolver", () => {
         name: "/dependency.ts",
         contents: "export default 2;",
       });
+      expect(await resolver.resolveSource("dependency.ts")).toBeUndefined();
 
       const filesystemRoot = path.parse(directory).root;
       const mainSpecifier = `/${
@@ -407,6 +414,139 @@ describe("FileSystemProgramResolver.resolveDataFile", () => {
     } finally {
       await Deno.remove(root, { recursive: true });
     }
+  });
+});
+
+describe("listDataFiles()", () => {
+  it("lists the in-memory names directly inside a directory", async () => {
+    const program = new InMemoryProgram("/main.tsx", {
+      "/main.tsx": "",
+      "/assets/glaze.png": "",
+      "/assets/old/glaze.png": "",
+    });
+
+    expect(await program.listDataFiles("/assets")).toEqual([
+      "/assets/glaze.png",
+    ]);
+    expect(await program.listDataFiles("/absent")).toBeUndefined();
+  });
+
+  it("lists the files directly inside a directory on the file system", async () => {
+    const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
+    try {
+      await Deno.mkdir(path.join(root, "assets/old"), { recursive: true });
+      await Deno.writeTextFile(path.join(root, "main.tsx"), "");
+      await Deno.writeTextFile(path.join(root, "assets/glaze.png"), "");
+      await Deno.writeTextFile(path.join(root, "assets/menu.woff2"), "");
+      const resolver = new FileSystemProgramResolver(
+        path.join(root, "main.tsx"),
+        root,
+      );
+
+      expect(await resolver.listDataFiles("/assets")).toEqual([
+        "/assets/glaze.png",
+        "/assets/menu.woff2",
+      ]);
+      expect(await resolver.listDataFiles("/absent")).toBeUndefined();
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("returns undefined for a path naming a file rather than a directory", async () => {
+    const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
+    try {
+      await Deno.writeTextFile(path.join(root, "main.tsx"), "");
+      await Deno.writeTextFile(path.join(root, "guest.html"), "");
+      const resolver = new FileSystemProgramResolver(
+        path.join(root, "main.tsx"),
+        root,
+      );
+
+      expect(await resolver.listDataFiles("/guest.html")).toBeUndefined();
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("leaves out a link in the directory that resolves to nothing", async () => {
+    const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
+    try {
+      await Deno.mkdir(path.join(root, "assets"));
+      await Deno.writeTextFile(path.join(root, "main.tsx"), "");
+      await Deno.writeTextFile(path.join(root, "assets/glaze.png"), "");
+      await Deno.symlink("missing.png", path.join(root, "assets/gone.png"));
+      const resolver = new FileSystemProgramResolver(
+        path.join(root, "main.tsx"),
+        root,
+      );
+
+      expect(await resolver.listDataFiles("/assets")).toEqual([
+        "/assets/glaze.png",
+      ]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("refuses a directory that climbs out of the root", async () => {
+    const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
+    try {
+      await Deno.writeTextFile(path.join(root, "main.tsx"), "");
+      const resolver = new FileSystemProgramResolver(
+        path.join(root, "main.tsx"),
+        root,
+      );
+
+      await expect(resolver.listDataFiles("/../elsewhere")).rejects.toThrow(
+        "resolves outside of root directory",
+      );
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+});
+
+describe("HttpProgramResolver.resolveSource", () => {
+  it("fetches the module a grounded specifier names, beside the main module", async () => {
+    const requested: string[] = [];
+    const resolver = new HttpProgramResolver(
+      "https://example.com/pattern/main.tsx",
+      (input) => {
+        requested.push(String(input));
+        return Promise.resolve(new Response("export default 2;"));
+      },
+    );
+
+    expect(await resolver.resolveSource("/lib/../dep.ts")).toEqual({
+      name: "/dep.ts",
+      contents: "export default 2;",
+    });
+    expect(requested).toEqual(["https://example.com/dep.ts"]);
+  });
+
+  it("returns undefined for a specifier that is not grounded", async () => {
+    const resolver = new HttpProgramResolver(
+      "https://example.com/main.tsx",
+      () => Promise.reject(new Error("fetched")),
+    );
+
+    expect(await resolver.resolveSource("dep.ts")).toBeUndefined();
+    expect(await resolver.resolveSource("")).toBeUndefined();
+  });
+
+  it("rejects with the status of a fetch that fails", async () => {
+    const resolver = new HttpProgramResolver(
+      "https://example.com/main.tsx",
+      () =>
+        Promise.resolve(
+          new Response("no", { status: 503, statusText: "Unavailable" }),
+        ),
+    );
+
+    await expect(resolver.resolveSource("/dep.ts")).rejects.toThrow(
+      "Failed to fetch https://example.com/dep.ts: 503 Unavailable",
+    );
   });
 });
 

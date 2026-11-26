@@ -6,9 +6,11 @@
  * there would report the absence of evidence as evidence of compliance.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
+
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   asksDeploymentQuestion,
@@ -513,6 +515,32 @@ describe("cli", () => {
         "results",
       ]);
       expect(Array.isArray(parsed.results)).toBe(true);
+    });
+  });
+
+  describe("as a program", () => {
+    it("exits with the code the command line decides, writing its refusal", async () => {
+      // The entry point runs only as a program, so this spawns it, once: a
+      // spawned Deno is slow to start. An unknown option is refused before
+      // anything is read.
+
+      const root = fromFileUrl(new URL("../../../..", import.meta.url));
+      const output = await runDenoCommandWithTemporaryLock({
+        root,
+        args: (lock) => [
+          "run",
+          "-A",
+          `--lock=${lock}`,
+          "--frozen",
+          "--cached-only",
+          join(root, "runtime/cf-harness/audit/cli.ts"),
+          "--no-such-flag",
+        ],
+      });
+      expect(output.code).toBe(2);
+      expect(new TextDecoder().decode(output.stdout)).toContain(
+        "unknown option `--no-such-flag`\nusage: cfc-audit",
+      );
     });
   });
 });

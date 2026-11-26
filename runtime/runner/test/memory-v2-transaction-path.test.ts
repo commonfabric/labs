@@ -1,7 +1,12 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import type { IMemorySpaceAddress, URI } from "../src/storage/interface.ts";
 import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
@@ -208,7 +213,7 @@ describe("memory v2 transaction path semantics", () => {
     expect(Array.from(batched.getReadActivities!())).toEqual(
       Array.from(individual.getReadActivities!()),
     );
-    expect(batched.getReactivityLog!()).toEqual(individual.getReactivityLog!());
+    expect(batched.getReactivityLog()).toEqual(individual.getReactivityLog());
     individual.abort();
     batched.abort();
   });

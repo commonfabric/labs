@@ -184,8 +184,15 @@ transaction the verb seals joins that cycle's wave. The request settles once the
 wave has committed and the verb's `confirm` step — a read of the durable state
 the verb was to leave — has passed. A seal's acceptance is not durability, since the wave commit can
 withdraw a contribution, and this is what keeps a receipt from naming a piece
-that is not there. A space that parks before a queued verb runs rejects it, and
-the host queues the verb once more on the successor tenure.
+that is not there. The verb is held only to its own contributions: those
+sealed from within its run and stamped `bookkeeping`, the kind its writes carry.
+The space's served pieces keep deriving and handling events into the same wave
+meanwhile, and other work of the loop, such as a root ensure its deadline left
+running, can seal into it too. The wave commit can withdraw a derivation's
+write, superseded by a client's commit, and requeue a handler run. Neither fails
+the verb: the derivation runs again and the handler run replays. A
+space that parks before a queued verb runs rejects it, and the host queues the
+verb once more on the successor tenure.
 
 A verb that stages a piece names the piece's root as its demand
 (`LifecycleVerb.demandRoots`), and the loop takes every document the verb's
@@ -397,9 +404,14 @@ registration cannot find that root, the response reports the created piece and
 failed registration. The CLI exits unsuccessfully unless registration is
 handled, printing the retry key and created piece when available.
 `cf piece new --request-key <key>` resumes an uncertain creation or incomplete
-registration. The request is awaited without a wall-clock bound, since a
-creation the server is still committing lands whether or not the client waits;
-the bound the client keeps is on its own start. With `CF_CLI_TRACE_TIMINGS=1`,
+registration. With `--from-index`, a key whose creation already committed is
+resumed from its receipt: the request names the pattern the receipt holds and
+the pattern index is not read, so the retry does not depend on the index being
+reachable or the pattern still being published. It can still fail for the
+reasons any retry can, such as a registration that fails again. The request is
+awaited without a wall-clock bound, since a creation the server is still
+committing lands whether or not the client waits; the bound the client keeps is
+on its own start. With `CF_CLI_TRACE_TIMINGS=1`,
 the command reports each step of the creation as a `newPiece.create.<step>`
 phase line, and each of the receipt's `timings` as
 `newPiece.create.server.<phase>`.
@@ -445,8 +457,11 @@ shape. Moving it is its own change; the served operations and the
 
 - `runtime/runner/test/executor-lifecycle-verbs.test.ts` — the queue: a verb
   activates a sessionless space and resolves once its write is durable, a failed
-  run or a failed confirmation rejects and is counted, queued verbs run in
-  order, and an inactive server refuses; and a direct commit is durable when its
+  run or a failed confirmation rejects and is counted, a served piece's
+  derivation that seals during the verb and is dropped does not fail it, nor
+  does a dropped bookkeeping write of work that started before the verb, while
+  a verb's own write that is dropped does, queued verbs run in order, and an
+  inactive server refuses; and a direct commit is durable when its
   `commit().settled` resolves, refuses a document that moved past its stamp, and lets a
   piece it stages derive.
 - `runtime/runner/test/runner.test.ts` — `runSyncedWithCommit` issues a receipt

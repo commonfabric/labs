@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 
 import { StaticCache } from "@commonfabric/static";
+import { test } from "@commonfabric/test-support/test";
 import ts from "typescript";
 
 import { unwrapOpaqueLikeType } from "../src/ast/type-inference.ts";
@@ -152,7 +153,7 @@ function fallbackMapDecision(source: string): {
   }));
 }
 
-Deno.test("array-method-policy: (cell ?? []).map in a compute context is recognized as a reactive fallback receiver but not transformed", () => {
+test("array-method-policy: (cell ?? []).map in a compute context is recognized as a reactive fallback receiver but not transformed", () => {
   const result = fallbackMapDecision(`/// <cts-enable />
 import { Cell, computed, pattern, UI, VNode } from "commonfabric";
 interface Input { tags: Cell<string[]>; }
@@ -167,7 +168,7 @@ export default pattern<Input, Output>(({ tags }) => {
   assertEquals(result.decision, false);
 });
 
-Deno.test("array-method-policy: the same reactive-cell fallback receiver in a pattern context does transform", () => {
+test("array-method-policy: the same reactive-cell fallback receiver in a pattern context does transform", () => {
   const result = fallbackMapDecision(`/// <cts-enable />
 import { Cell, pattern, UI, VNode } from "commonfabric";
 interface Input { tags: Cell<string[]>; }
@@ -192,7 +193,7 @@ export default pattern<Input, Output>(({ tags }) => ({
 // nested site.
 //
 
-Deno.test("expression-site-policy: the nested-site search does not descend into a nested function, so a site behind a closure boundary is not chosen", () => {
+test("expression-site-policy: the nested-site search does not descend into a nested function, so a site behind a closure boundary is not chosen", () => {
   const { program, sourceFile } = buildProgram(`/// <cts-enable />
 import { Cell, pattern, UI, VNode } from "commonfabric";
 interface Input { flag: Cell<boolean>; items: Cell<number[]>; }
@@ -232,7 +233,7 @@ export default pattern<Input, Output>(({ flag, items }) => ({
 // recursing forever.
 //
 
-Deno.test("type-inference: unwrapping a self-referential branded cell terminates via the seen-set guard", () => {
+test("type-inference: unwrapping a self-referential branded cell terminates via the seen-set guard", () => {
   const { program, sourceFile } = buildProgram(`
 declare const CELL_BRAND: unique symbol;
 interface OpaqueCell<T> { [CELL_BRAND]: "opaque"; value: T; }
@@ -267,7 +268,7 @@ export const x = r;
 // nothing and leaves the access untouched.
 //
 
-Deno.test("element-access-expression: an index read with no reactive data flows is left untouched by the emitter", () => {
+test("element-access-expression: an index read with no reactive data flows is left untouched by the emitter", () => {
   const { program, sourceFile } = buildProgram(`/// <cts-enable />
 import { pattern, UI, VNode } from "commonfabric";
 interface Input {}
@@ -291,7 +292,6 @@ export default pattern<Input, Output>(() => ({
         context,
         analyze,
         dataFlows,
-        inSafeContext: false,
         reactiveContextKind: "pattern",
         preferInputBoundWrappers: false,
         rewriteChildren: (node: ts.Expression) => node,

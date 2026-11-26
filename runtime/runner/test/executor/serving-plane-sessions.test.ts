@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import type { SessionViewInterest } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   ServingPlane,
   servingPlaneEndpoint,
@@ -71,6 +71,100 @@ describe("serving-plane-sessions", () => {
       expect(await plane.server.viewInterestsForSpace(space)).toEqual([]);
       expect(reads).toBe(2);
       expect(plane.server.hasLiveSessionsForSpace(space)).toBe(false);
+    } finally {
+      await plane.close();
+      bridge.close();
+      channel.port1.close();
+      channel.port2.close();
+    }
+  });
+
+  it("counts no session that declared it is not demand as live, whoever signed it", async () => {
+    // The declaration travels with the session's open, so the worker's
+    // mirror leaves the session out where the server would.
+
+    const channel = new MessageChannel();
+    const endpoint = servingPlaneEndpoint(channel.port1);
+    const plane = new ServingPlane(endpoint);
+    const bridge = new PortEndpoint<
+      BridgeRequests,
+      BridgeNotices,
+      PlaneRequests,
+      PlaneNotices
+    >(channel.port2, () => {});
+    endpoint.onRequest("host.stats", emptyServingLoopStats);
+    const service = "did:key:z6MkPlaneSessionService";
+    try {
+      bridge.notify("observer.sessionChanged", {
+        event: {
+          kind: "opened",
+          space,
+          sessionId: "mirror",
+          principal: "did:key:z6MkPlaneSessionSomeoneElse",
+          servingOwn: true,
+          notDemand: true,
+        },
+      });
+      await bridge.request("host.stats", null);
+      expect(
+        plane.server.hasLiveSessionsForSpace(space, {
+          excludePrincipal: service,
+        }),
+      ).toBe(false);
+    } finally {
+      await plane.close();
+      bridge.close();
+      channel.port1.close();
+      channel.port2.close();
+    }
+  });
+
+  it("counts a session signed by the excluded principal as live unless it is a serving loop's own", async () => {
+    // A client that signs with the serving loop's own key is still a
+    // client, so the worker's mirror keeps it where the server would.
+
+    const channel = new MessageChannel();
+    const endpoint = servingPlaneEndpoint(channel.port1);
+    const plane = new ServingPlane(endpoint);
+    const bridge = new PortEndpoint<
+      BridgeRequests,
+      BridgeNotices,
+      PlaneRequests,
+      PlaneNotices
+    >(channel.port2, () => {});
+    endpoint.onRequest("host.stats", emptyServingLoopStats);
+    const service = "did:key:z6MkPlaneSessionService";
+    try {
+      bridge.notify("observer.sessionChanged", {
+        event: {
+          kind: "opened",
+          space,
+          sessionId: "serving",
+          principal: service,
+          servingOwn: true,
+        },
+      });
+      await bridge.request("host.stats", null);
+      expect(
+        plane.server.hasLiveSessionsForSpace(space, {
+          excludePrincipal: service,
+        }),
+      ).toBe(false);
+
+      bridge.notify("observer.sessionChanged", {
+        event: {
+          kind: "opened",
+          space,
+          sessionId: "client",
+          principal: service,
+        },
+      });
+      await bridge.request("host.stats", null);
+      expect(
+        plane.server.hasLiveSessionsForSpace(space, {
+          excludePrincipal: service,
+        }),
+      ).toBe(true);
     } finally {
       await plane.close();
       bridge.close();

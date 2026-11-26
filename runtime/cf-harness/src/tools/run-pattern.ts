@@ -1,14 +1,16 @@
-import {
-  PatternIndexError,
-  type PatternIndexEventType,
-  type PatternIndexPublishRequest,
+import type {
+  PatternIndexClient,
+  PatternIndexEventType,
+  PatternIndexPublishRequest,
 } from "@commonfabric/pattern-index/client";
+import { deployedPieceRef } from "@commonfabric/pattern-index/client";
 import type { JSONSchema } from "@commonfabric/api";
 import {
   type Cell,
   cellWithScopedLinkRequiredsRelaxed,
   compileAndSavePattern,
   getPatternIdentityRef,
+  type Pattern,
   PatternManager,
   type RuntimeProgram,
 } from "@commonfabric/runner";
@@ -79,13 +81,15 @@ import {
 } from "../pattern-index/publish-render-gate.ts";
 import { openProbeRuntime } from "../pattern-index/probe-runtime.ts";
 import {
+  compileIndexedPattern,
   composedPatternIds,
+  composeProgram,
+  IndexedPatternError,
   materializeComposedPatterns,
-  PatternCompositionError,
   patternIndexDependencies,
-  runtimeProgramFromIndex,
-} from "../pattern-index/composition.ts";
+} from "@commonfabric/pattern-index/deploy";
 import type { HarnessToolDefinition } from "./types.ts";
+import { resolvePiece } from "./piece-source.ts";
 import {
   RUN_PATTERN_INPUT_SCHEMA,
   type RunPatternToolInput,
@@ -972,15 +976,6 @@ export const runPatternTool: HarnessToolDefinition<
       );
     }
     const { sourceText, patternId } = input;
-    if (sourceText !== undefined && patternId !== undefined) {
-      return errorOutput(
-        "error",
-        "run_pattern takes sourceText or patternId, not both; pass your own source or the id of an indexed pattern",
-      );
-    }
-    if (sourceText === undefined && patternId === undefined) {
-      return errorOutput("error", RUN_PATTERN_NO_PROGRAM_MESSAGE);
-    }
     // The run's index client and its ledger, held once: which of the index
     // paths below run is decided by the call and by whether the run has an
     // index at all, and both questions are settled here rather than at each of
@@ -989,14 +984,33 @@ export const runPatternTool: HarnessToolDefinition<
     // it had to say.
     const getPatternIndexClient = context.getPatternIndexClient;
     const patternIndexLedger = context.patternIndexLedger;
-    if (
-      patternId !== undefined &&
-      (getPatternIndexClient === undefined || patternIndexLedger === undefined)
+    let named:
+      | { sourceText: string }
+      | { patternId: string; getClient: () => Promise<PatternIndexClient> };
+    if (sourceText !== undefined) {
+      if (patternId !== undefined) {
+        return errorOutput(
+          "error",
+          "run_pattern takes sourceText or patternId, not both; pass your own source or the id of an indexed pattern",
+        );
+      }
+      named = { sourceText };
+    } else if (input.revises !== undefined) {
+      return errorOutput(
+        "error",
+        "run_pattern revises goes with sourceText: it names the piece your source revises, and an indexed pattern's run has no source of yours",
+      );
+    } else if (patternId === undefined) {
+      return errorOutput("error", RUN_PATTERN_NO_PROGRAM_MESSAGE);
+    } else if (
+      getPatternIndexClient === undefined || patternIndexLedger === undefined
     ) {
       return errorOutput(
         "error",
         "run_pattern patternId requires a pattern index; configure --pattern-index-url, or pass sourceText instead",
       );
+    } else {
+      named = { patternId, getClient: getPatternIndexClient };
     }
     if (sourceText !== undefined) {
       const sourceTextBytes = new TextEncoder().encode(sourceText).length;
@@ -1028,6 +1042,20 @@ export const runPatternTool: HarnessToolDefinition<
     }
     const { pieces } = session;
     const space = pieces.getSpace();
+    // The pattern the revised piece runs, read before anything is created:
+    // a token naming no piece is the caller's mistake, said now rather than
+    // after a piece exists. It matters only to what the index is told, and is
+    // settled there (`PatternIndexStageOptions.revisedFrom`).
+    let revisedFrom: string | undefined;
+    if (input.revises !== undefined) {
+      const revised = await resolvePiece(
+        "run_pattern revises",
+        pieces,
+        input.revises.trim(),
+      );
+      if (!revised.ok) return errorOutput("error", revised.message);
+      revisedFrom = getPatternIdentityRef(revised.cell)?.identity;
+    }
     const signal = context.signal;
     if (signal?.aborted) {
       return cancelledOutput();
@@ -1091,73 +1119,53 @@ export const runPatternTool: HarnessToolDefinition<
       }
       pieceInput = converted;
     }
-    // The indexed program is fetched here, on the trusted host side, and goes
-    // straight into the compiler. Nothing read from the index is carried into
-    // any output this tool returns.
+    // The indexed program is fetched, its composed imports materialized, and
+    // the whole compiled here, on the trusted host side, through the same
+    // path `cf piece new --from-index` deploys by. Nothing read from the index
+    // is carried into any output this tool returns: a failure's text that can
+    // quote indexed source goes only to the artifact.
     let program: RuntimeProgram;
-    // What the index recorded the fetched pattern composes, when the run named
-    // one. A published pattern's own imports are materialized on the same
-    // terms as an authored source's.
-    let recordedDependencies: readonly string[] = [];
-    if (sourceText !== undefined) {
-      program = {
-        main: RUN_PATTERN_SOURCE_MAIN,
-        files: [{ name: RUN_PATTERN_SOURCE_MAIN, contents: sourceText }],
-      };
-    } else if (patternId !== undefined && getPatternIndexClient !== undefined) {
-      let indexed;
+    let pattern: Pattern;
+    if ("patternId" in named) {
       try {
-        const client = await getPatternIndexClient();
-        indexed = await client.getPattern({
-          patternId,
-          includeSource: true,
-        });
+        ({ program, pattern } = await compileIndexedPattern({
+          runtime: pieces.runtime,
+          space,
+          patternId: named.patternId,
+          getClient: named.getClient,
+        }));
       } catch (error) {
-        // `PatternIndexError.message` is stable by construction; the service
-        // body it withheld can quote indexed source, so it goes only to the
-        // artifact.
+        if (!(error instanceof IndexedPatternError)) throw error;
         return {
           ...errorOutput(
-            "error",
-            `pattern index lookup failed for "${patternId}": ${
-              describeFailure(error)
-            }`,
+            error.stage === "compile" ? "compile-error" : "error",
+            error.message,
           ),
-          ...(error instanceof PatternIndexError && error.detail !== undefined
-            ? { rawCauseMessage: error.detail }
+          ...(error.rawCauseMessage !== undefined
+            ? { rawCauseMessage: error.rawCauseMessage }
             : {}),
         };
       }
-      if (indexed.program === undefined) {
-        return errorOutput(
-          "error",
-          `the pattern index returned no program for "${patternId}"`,
-        );
-      }
-      program = runtimeProgramFromIndex(indexed.program);
-      recordedDependencies = indexed.dependencies;
     } else {
-      // Unreachable: a call naming neither was refused above, and one naming
-      // a `patternId` without an index with it. The pair's exclusivity is a
-      // fact about those checks rather than about the input type, so the
-      // branch is written out instead of asserted away.
-      return errorOutput("error", RUN_PATTERN_NO_PROGRAM_MESSAGE);
-    }
-    // A `cf:pattern:` import resolves from the space's own source cache, and
-    // for a pattern this space has never run there is nothing there to
-    // resolve. Each one is fetched from the index and compiled into the space
-    // first, host-side, so the compile below finds it — and so no part of what
-    // was fetched reaches this tool's output, on the success path or on any of
-    // the failure paths.
-    try {
-      await materializeComposedPatterns({
-        runtime: pieces.runtime,
-        space,
-        patternIds: composedPatternIds(program, recordedDependencies),
-        getClient: getPatternIndexClient,
-      });
-    } catch (error) {
-      if (error instanceof PatternCompositionError) {
+      program = {
+        main: RUN_PATTERN_SOURCE_MAIN,
+        files: [{ name: RUN_PATTERN_SOURCE_MAIN, contents: named.sourceText }],
+      };
+      // A `cf:pattern:` import resolves from the space's own source cache, and
+      // for a pattern this space has never run there is nothing there to
+      // resolve. Each one is fetched from the index and compiled into the
+      // space first, host-side, so the compile below finds it — and so no part
+      // of what was fetched reaches this tool's output, on the success path or
+      // on any of the failure paths.
+      try {
+        await composeProgram({
+          runtime: pieces.runtime,
+          space,
+          program,
+          getClient: getPatternIndexClient,
+        });
+      } catch (error) {
+        if (!(error instanceof IndexedPatternError)) throw error;
         return {
           ...errorOutput("error", error.message),
           ...(error.rawCauseMessage !== undefined
@@ -1165,38 +1173,19 @@ export const runPatternTool: HarnessToolDefinition<
             : {}),
         };
       }
-      return {
-        ...errorOutput(
-          "error",
-          "the published patterns this source composes could not be made available; the failure text is retained in the run artifact and withheld here, since it can quote source you did not author",
-        ),
-        rawCauseMessage: describeFailure(error),
-      };
-    }
-    let pattern;
-    try {
-      pattern = await compileAndSavePattern(pieces.runtime, program, {
-        space,
-      });
-    } catch (error) {
-      // Compiler diagnostics are the model's feedback loop for source it
-      // wrote, so the full message goes into the artifact; the prompt loop
-      // scrubs bare fabric identifiers from the model-facing rendering. An
-      // indexed pattern is source the model never saw and cannot correct, and
-      // a diagnostic quotes the line it failed on, so there the artifact
-      // keeps the diagnostic and the model gets the fact of the failure.
-      return patternId === undefined
-        ? errorOutput(
+      try {
+        pattern = await compileAndSavePattern(pieces.runtime, program, {
+          space,
+        });
+      } catch (error) {
+        // Compiler diagnostics are the model's feedback loop for source it
+        // wrote, so the full message goes into the artifact; the prompt loop
+        // scrubs bare fabric identifiers from the model-facing rendering.
+        return errorOutput(
           "compile-error",
           withRuntimeModuleCorrection(describeFailure(error)),
-        )
-        : {
-          ...errorOutput(
-            "compile-error",
-            `the indexed pattern "${patternId}" did not compile; the diagnostic is retained in the run artifact and withheld here, since it quotes source you did not author`,
-          ),
-          rawCauseMessage: describeFailure(error),
-        };
+        );
+      }
     }
     // An input's value must match the compiled pattern's argument schema for
     // its key before any piece exists, so a mismatch is a model-correctable
@@ -2007,6 +1996,16 @@ export const runPatternTool: HarnessToolDefinition<
           "run_pattern could not publish the pattern it ran: the compiled pattern carries no durable content-addressed entry identity",
         );
       } else {
+        // A person's own agent (`--pattern-index-origin agent`) says so, and
+        // names the piece it deployed to: the index shares the version under
+        // the person's sharing setting once they use that piece in a loom.
+        // The piece is the lineage, so its iterations are versions of one
+        // pattern. Any other run names neither, and is never shared on its
+        // own. Taken before the gate, whose abort check then covers this
+        // await too.
+        const madeForPerson = context.patternIndexOrigin === "agent"
+          ? await deployedPieceRef(space, piece.id)
+          : undefined;
         const verdict = await renderGateVerdict();
         // A cancelled gate is a cancelled run. Nothing is staged: an index
         // entry is a claim about a run that finished, and this one did not.
@@ -2039,6 +2038,13 @@ export const runPatternTool: HarnessToolDefinition<
         {
           const request: PatternIndexPublishRequest = {
             patternId: entryIdentity,
+            ...(madeForPerson !== undefined
+              ? {
+                origin: "agent" as const,
+                slot: madeForPerson,
+                deployedTo: madeForPerson,
+              }
+              : {}),
             program: {
               main: program.main,
               files: program.files.map((file) => ({
@@ -2056,6 +2062,9 @@ export const runPatternTool: HarnessToolDefinition<
             argumentSchema: pattern.argumentSchema,
             resultSchema: pattern.resultSchema,
             dependencies: patternIndexDependencies(program.files),
+            // No `standalone`: a revision keeps its predecessor's answer, and
+            // a first version's entry is always `main.tsx`, so a harness
+            // pattern stands alone unless it needs an input with no default.
             // Recording and surfacing are separate. Only an explicit seed
             // configuration asks search to offer a passing render immediately.
             ...(publicationVerdict.status === "recorded"
@@ -2067,7 +2076,10 @@ export const runPatternTool: HarnessToolDefinition<
               }
               : { discoverable: true }),
           };
-          patternIndexLedger.stage(request);
+          patternIndexLedger.stage(
+            request,
+            revisedFrom !== undefined ? { revisedFrom } : {},
+          );
         }
       }
     }

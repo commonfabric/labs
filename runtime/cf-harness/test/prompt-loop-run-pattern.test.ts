@@ -9,12 +9,12 @@
 
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
-import { describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   FileSystemHarnessArtifactStore,
@@ -175,6 +175,19 @@ describe("prompt-loop run_pattern model boundary", () => {
       const computed = `computed:fid1:${hash}`;
       const token = "cfh:a:abcde";
       const text = `see ${schemed} then ${computed} and ${token}`;
+      expect(scrubBareFabricIdentifiers(text)).toBe(text);
+    });
+
+    it("replaces a bare tagged hash whose tag holds `_`, the whole tag included", () => {
+      const hash = "C".repeat(43);
+      expect(scrubBareFabricIdentifiers(`at my_hash:${hash} now`))
+        .toBe("at [fabric-id] now");
+      expect(scrubBareFabricIdentifiers(`at _:${hash} now`))
+        .toBe("at [fabric-id] now");
+    });
+
+    it("leaves a schemed link whose hash tag holds `_` untouched", () => {
+      const text = `see /of:my_hash:${"D".repeat(43)}/items/0`;
       expect(scrubBareFabricIdentifiers(text)).toBe(text);
     });
   });

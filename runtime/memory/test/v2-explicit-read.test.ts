@@ -8,6 +8,7 @@
 // key is refused; a read naming none resolves from the session as today.
 
 import { assertEquals, assertExists } from "@std/assert";
+import { expect } from "@std/expect";
 import { Server } from "../v2/server.ts";
 import {
   encodeMemoryBoundary,
@@ -25,6 +26,7 @@ import {
   type WatchSetResult,
 } from "../v2.ts";
 import { executionLeaseHolder } from "../v2/execution-lease.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 const TEST_AUDIENCE = "did:key:z6Mk-explicit-read-audience";
 const SPACE = "did:key:z6Mk-explicit-read-space";
@@ -122,7 +124,7 @@ const newServer = (store: string): Server =>
     acl: { mode: "off", delegatingDids: [SERVICE] },
   });
 
-Deno.test("explicit entity_scope_key reads: the space's serving session and a service-identity session are admitted, an ordinary client and the off flag are refused (protocol.md §2's read row)", async () => {
+test("explicit entity_scope_key reads: the space's serving session and a service-identity session are admitted, an ordinary client and the off flag are refused (protocol.md §2's read row)", async () => {
   const server = newServer("memory://explicit-read");
   setServerExecutionConfig(true);
   try {
@@ -269,7 +271,7 @@ Deno.test("explicit entity_scope_key reads: the space's serving session and a se
   }
 });
 
-Deno.test("explicit entity_scope_key reads: among in-process sessions of the service identity, the space's serving session is the one whose connection names the holder component the lease is held under (protocol.md §2's read row)", async () => {
+test("explicit entity_scope_key reads: among in-process sessions of the service identity, the space's serving session is the one whose connection names the holder component the lease is held under (protocol.md §2's read row)", async () => {
   const server = newServer("memory://explicit-read-worker-holder");
   setServerExecutionConfig(true);
   try {
@@ -343,7 +345,7 @@ Deno.test("explicit entity_scope_key reads: among in-process sessions of the ser
   }
 });
 
-Deno.test("explicit entity_scope_key reads: an anonymous session naming a key is refused, since without a principal it serves nothing (protocol.md §2's read row)", async () => {
+test("explicit entity_scope_key reads: an anonymous session naming a key is refused, since without a principal it serves nothing (protocol.md §2's read row)", async () => {
   const server = newServer("memory://explicit-read-anonymous");
   setServerExecutionConfig(true);
   try {
@@ -476,7 +478,7 @@ const writeAliceProfile = async (
   assertExists(write.ok, JSON.stringify(write.error));
 };
 
-Deno.test("delivery of a named foreign instance outlives the lease: a serving session whose lease lapsed keeps receiving the instance it was admitted, keyed, and so does its resumed session (owner routing R3)", async () => {
+test("delivery of a named foreign instance outlives the lease: a serving session whose lease lapsed keeps receiving the instance it was admitted, keyed, and so does its resumed session (owner routing R3)", async () => {
   const server = newServer("memory://explicit-read-lapse");
   setServerExecutionConfig(true);
   try {
@@ -578,7 +580,7 @@ const writeOwnProfile = async (
   assertExists(write.ok, JSON.stringify(write.error));
 };
 
-Deno.test("an admitted session's keyed-delivered foreign instance is retracted BY KEY when its watch drops the instance: its own instance of the same doc is never named", async () => {
+test("an admitted session's keyed-delivered foreign instance is retracted BY KEY when its watch drops the instance: its own instance of the same doc is never named", async () => {
   // protocol.md §3's sticky wire vocabulary: an instance delivered keyed is
   // retracted keyed, since an unkeyed remove names the session's own
   // instance in its replica.
@@ -676,7 +678,7 @@ Deno.test("an admitted session's keyed-delivered foreign instance is retracted B
 // as a changed spec, never silently the same watch.
 //
 
-Deno.test("stage A: a lease holder names two instances of one (branch, id, scope) and receives BOTH, keyed — watch.set, watch.add, graph.query, and the push frame; the collapse guard still refuses a non-holder (OW17's wire leg)", async () => {
+test("stage A: a lease holder names two instances of one (branch, id, scope) and receives BOTH, keyed — watch.set, watch.add, graph.query, and the push frame; the collapse guard still refuses a non-holder (OW17's wire leg)", async () => {
   // OW17's wire leg (server-execution v2 stage A, 2026-08-16): a lease
   // holder may name two instances of one (branch, id, scope) — its frames and
   // query results carry the instance key (`scopeKey`) per entry, so the two
@@ -946,7 +948,7 @@ const effectUpserts = (
       }).effect?.upserts ?? []
     );
 
-Deno.test("watch.add with a changed entityScopeKey on an existing watch id is a changed spec, not silently the old instance", async () => {
+test("watch.add with a changed entityScopeKey on an existing watch id is a changed spec, not silently the old instance", async () => {
   const server = newServer("memory://explicit-read-changed-key");
   setServerExecutionConfig(true);
   try {
@@ -1009,7 +1011,7 @@ Deno.test("watch.add with a changed entityScopeKey on an existing watch id is a 
 // foreign-instance frame must be REDELIVERED once sends succeed again.
 //
 
-Deno.test("a failed delivery of an explicit foreign-instance frame is redelivered (rollback keys the exact instance)", async () => {
+test("a failed delivery of an explicit foreign-instance frame is redelivered (rollback keys the exact instance)", async () => {
   const server = newServer("memory://explicit-read-rollback");
   setServerExecutionConfig(true);
   try {
@@ -1105,7 +1107,7 @@ Deno.test("a failed delivery of an explicit foreign-instance frame is redelivere
   }
 });
 
-Deno.test("a non-canonical entity_scope_key (raw '/') is refused at admission — descendant composite keys never see it (thread r3731191505; the shared-validator fix)", async () => {
+test("a non-canonical entity_scope_key (raw '/') is refused at admission — descendant composite keys never see it (thread r3731191505; the shared-validator fix)", async () => {
   const server = newServer("memory://explicit-read-noncanonical");
   setServerExecutionConfig(true);
   try {
@@ -1224,7 +1226,7 @@ const initializeSpaceAcl = async (
   authority.connection.close();
 };
 
-Deno.test("a service-identity session from another process names a foreign space's instance under the actor's READ grant on the space, holding no lease anywhere; an ordinary client stays refused (owner routing R3)", async () => {
+test("a service-identity session from another process names a foreign space's instance under the actor's READ grant on the space, holding no lease anywhere; an ordinary client stays refused (owner routing R3)", async () => {
   const server = newServer("memory://explicit-read-routed");
   setServerExecutionConfig(true);
   try {
@@ -1296,7 +1298,7 @@ Deno.test("a service-identity session from another process names a foreign space
   }
 });
 
-Deno.test("a lease held on this server admits only the in-process session that holds it: a service-identity session from another process naming an ungranted instance is refused where the space's serving session is admitted (owner routing R3)", async () => {
+test("a lease held on this server admits only the in-process session that holds it: a service-identity session from another process naming an ungranted instance is refused where the space's serving session is admitted (owner routing R3)", async () => {
   const server = newServer("memory://explicit-read-per-process");
   setServerExecutionConfig(true);
   try {
@@ -1374,7 +1376,7 @@ Deno.test("a lease held on this server admits only the in-process session that h
   }
 });
 
-Deno.test("a service session naming a FOREIGN instance of an actor the space grants no READ is refused (the grant-scoped read), as is one in a space with no list", async () => {
+test("a service session naming a FOREIGN instance of an actor the space grants no READ is refused (the grant-scoped read), as is one in a space with no list", async () => {
   const server = newServer("memory://explicit-read-ungranted");
   setServerExecutionConfig(true);
   try {
@@ -1452,7 +1454,7 @@ Deno.test("a service session naming a FOREIGN instance of an actor the space gra
   }
 });
 
-Deno.test("a serving session's UNNAMED scoped read of a space it does not serve on this server is refused fail-closed, from another process or in process; an ordinary client's read, a space-scope read and the space's own serving session's read are untouched (the grant-scoped read)", async () => {
+test("a serving session's UNNAMED scoped read of a space it does not serve on this server is refused fail-closed, from another process or in process; an ordinary client's read, a space-scope read and the space's own serving session's read are untouched (the grant-scoped read)", async () => {
   const server = newServer("memory://explicit-read-fail-closed");
   setServerExecutionConfig(true);
   try {
@@ -1617,4 +1619,63 @@ Deno.test("a serving session's UNNAMED scoped read of a space it does not serve 
     resetServerExecutionConfig();
     await server.close();
   }
+});
+
+describe("Server", () => {
+  describe("demandForSpace()", () => {
+    it("demands the instance a client session of the service identity names on a root, not its own", async () => {
+      // A local toolshed signs with the key its operator's client uses, so
+      // that client's sessions are admitted to name another actor's
+      // instance, and are demand.
+
+      const server = newServer("memory://explicit-read-client-demand");
+      setServerExecutionConfig(true);
+      try {
+        const alice = await connect(server);
+        const { sessionId: aliceSession } = await openSession(alice, ALICE);
+        await writeAliceProfile(server, aliceSession, 1, { name: "alice" });
+        await server.writeDocument(SPACE, `of:${SPACE}`, { [ALICE]: "OWNER" });
+        const aliceKey = resolveScopeKey("user", { principal: ALICE });
+        const serviceKey = resolveScopeKey("user", { principal: SERVICE });
+        const client = await connect(server);
+        const { sessionId } = await openSession(client, SERVICE);
+
+        const watched = await server.watchSet({
+          type: "session.watch.set",
+          requestId: nextRequestId("client-watch"),
+          space: SPACE,
+          sessionId,
+          watches: [{
+            id: "w1",
+            kind: "graph",
+            query: {
+              roots: [{
+                id: "of:profile",
+                scope: "user",
+                entityScopeKey: aliceKey,
+                selector: { path: [], schema: false },
+              }],
+            },
+          }],
+        }) as ResponseMessage<WatchSetResult>;
+        expect(watched.error).toBeUndefined();
+
+        const share = server.demandForSpace(SPACE, {
+          excludePrincipal: SERVICE,
+        }).find((candidate) => candidate.sessionId === sessionId);
+        const roots = [...share?.rows.values() ?? []]
+          .filter((row) => row.root)
+          .map((row) => ({ id: row.id, scopeKey: row.scopeKey }));
+
+        expect(roots).toContainEqual({ id: "of:profile", scopeKey: aliceKey });
+        expect(roots).not.toContainEqual({
+          id: "of:profile",
+          scopeKey: serviceKey,
+        });
+      } finally {
+        resetServerExecutionConfig();
+        await server.close();
+      }
+    });
+  });
 });

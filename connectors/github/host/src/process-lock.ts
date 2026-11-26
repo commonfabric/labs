@@ -4,12 +4,27 @@ import { encodeGithubTargetIdentity } from "@commonfabric/github-connector/ident
 
 const heldPaths = new Set<string>();
 
-function validatePrivateFile(info: Deno.FileInfo, path: string): void {
+/** The facts about the running platform a lock file is checked against. */
+export interface ProcessLockPlatform {
+  os: typeof Deno.build.os;
+  uid: () => number | null;
+}
+
+const RUNNING_PLATFORM: ProcessLockPlatform = {
+  os: Deno.build.os,
+  uid: () => Deno.uid(),
+};
+
+function validatePrivateFile(
+  info: Deno.FileInfo,
+  path: string,
+  platform: ProcessLockPlatform,
+): void {
   if (info.isSymlink || !info.isFile) {
     throw new Error(`GitHub host process lock is not a regular file: ${path}`);
   }
-  if (Deno.build.os === "windows") return;
-  if (info.uid !== null && info.uid !== Deno.uid()) {
+  if (platform.os === "windows") return;
+  if (info.uid !== null && info.uid !== platform.uid()) {
     throw new Error(`GitHub host process lock has a different owner: ${path}`);
   }
   if (info.mode !== null && (info.mode & 0o077) !== 0) {
@@ -19,10 +34,13 @@ function validatePrivateFile(info: Deno.FileInfo, path: string): void {
   }
 }
 
-async function openLockFile(path: string): Promise<Deno.FsFile> {
+async function openLockFile(
+  path: string,
+  platform: ProcessLockPlatform,
+): Promise<Deno.FsFile> {
   try {
     const info = await Deno.lstat(path);
-    validatePrivateFile(info, path);
+    validatePrivateFile(info, path, platform);
     return await Deno.open(path, { read: true, write: true });
   } catch (error) {
     if (!(error instanceof Deno.errors.NotFound)) throw error;
@@ -93,8 +111,31 @@ export class GithubHostProcessLock {
     this.#path = path;
   }
 
+  /**
+   * Acquiring a lock as if on the platform `platform` states, which a test
+   * chooses.
+   */
+  static get accessForTestingOnly(): {
+    acquire(
+      path: string,
+      platform: ProcessLockPlatform,
+    ): Promise<GithubHostProcessLock>;
+  } {
+    return {
+      acquire: (path, platform) =>
+        GithubHostProcessLock.#acquire(path, platform),
+    };
+  }
+
   /** Acquire an exclusive lock or reject when another host owns it. */
-  static async acquire(path: string): Promise<GithubHostProcessLock> {
+  static acquire(path: string): Promise<GithubHostProcessLock> {
+    return GithubHostProcessLock.#acquire(path, RUNNING_PLATFORM);
+  }
+
+  static async #acquire(
+    path: string,
+    platform: ProcessLockPlatform,
+  ): Promise<GithubHostProcessLock> {
     const normalizedPath = resolve(path);
     if (heldPaths.has(normalizedPath)) {
       throw new Error(`another GitHub host holds the process lock: ${path}`);
@@ -106,8 +147,8 @@ export class GithubHostProcessLock {
         recursive: true,
         mode: 0o700,
       });
-      file = await openLockFile(normalizedPath);
-      validatePrivateFile(await file.stat(), normalizedPath);
+      file = await openLockFile(normalizedPath, platform);
+      validatePrivateFile(await file.stat(), normalizedPath, platform);
       if (!(await file.tryLock(true))) {
         throw new Error(
           `another GitHub host holds the process lock: ${normalizedPath}`,

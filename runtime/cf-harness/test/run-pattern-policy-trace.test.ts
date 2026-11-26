@@ -12,13 +12,13 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
-import { describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -332,6 +332,8 @@ describe("run_pattern release decisions in the policy trace", () => {
     expect(harnessReleaseDecisionOf({ releaseDecision: "withheld" }))
       .toBeUndefined();
     expect(harnessReleaseDecisionOf({})).toBeUndefined();
+    // A tool whose output is plain text states no decision either.
+    expect(harnessReleaseDecisionOf("withheld")).toBeUndefined();
   });
 
   it("gives each reason code the decision it states", () => {

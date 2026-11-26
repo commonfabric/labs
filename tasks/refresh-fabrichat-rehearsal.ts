@@ -2,11 +2,12 @@
 /**
  * Refreshes the "before" release that the FabriChat update rehearsal
  * (`patterns/integration/fabrichat-update-rehearsal.test.ts`) serves:
- * a copy of FabriChat's pattern source as a git revision holds it, `origin/main`
- * unless another is named.
+ * a copy of FabriChat's pattern source as a git revision holds it, the
+ * default branch unless another is named: `upstream/main` where that exists,
+ * and `origin/main` otherwise.
  *
- *   deno task refresh-fabrichat-rehearsal              # from `origin/main`
- *   deno task refresh-fabrichat-rehearsal <revision>   # from another revision
+ *   deno task refresh-fabrichat-rehearsal              # the default branch
+ *   deno task refresh-fabrichat-rehearsal <revision>   # another revision
  *
  * The copy is every non-test module under `patterns/system/fabrichat/`, and
  * `patterns/system/loom/participants.tsx`, whose roster type is part of what a
@@ -20,7 +21,9 @@
  * an uncommitted change, and it needs that revision to be fetched.
  */
 
+import { emptyDir } from "@std/fs";
 import { dirname, fromFileUrl, join } from "@std/path";
+import { defaultBase, type Git, gitIn } from "./repository-files.ts";
 
 const REPO = fromFileUrl(new URL("..", import.meta.url));
 
@@ -32,28 +35,31 @@ const FIXTURES = join(
 /** The modules outside `fabrichat/` that the copy holds. */
 const ALSO = ["patterns/system/loom/participants.tsx"];
 
-/** Runs git in the repository, and returns its standard output. */
-const git = async (...args: string[]): Promise<string> => {
-  const { code, stdout, stderr } = await new Deno.Command("git", {
-    args,
-    cwd: REPO,
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  if (code !== 0) {
-    throw new Error(
-      `\`git ${args.join(" ")}\` failed: ${new TextDecoder().decode(stderr)}`,
-    );
-  }
-  return new TextDecoder().decode(stdout);
-};
-
 /** Whether `path` names a FabriChat module the copy holds. */
 const isCopied = (path: string): boolean =>
   /\.tsx?$/.test(path) && !/\.test\.tsx?$/.test(path);
 
-if (import.meta.main) {
-  const revision = Deno.args[0] ?? "origin/main";
+/** Where a refresh reads the revision from, and where it writes the copy. */
+export interface RefreshPlaces {
+  readonly git: Git;
+  readonly fixtures: string;
+}
+
+/** The repository's own git, and the directory the rehearsal reads. */
+const CHECKOUT: RefreshPlaces = { git: gitIn(REPO), fixtures: FIXTURES };
+
+/**
+ * Replaces the copy in `fixtures` with the one the revision `argv` names
+ * holds, the default base when it names none, and returns what it did.
+ *
+ * Every module is read before the old copy is removed, so a revision missing
+ * one leaves the old copy as it was.
+ */
+export async function refreshRehearsal(
+  argv: readonly string[],
+  { git, fixtures }: RefreshPlaces,
+): Promise<string> {
+  const revision = argv[0] ?? await defaultBase(git);
   const commit = (await git("rev-parse", "--verify", `${revision}^{commit}`))
     .trim();
   const listed = await git(
@@ -66,24 +72,20 @@ if (import.meta.main) {
     ...listed.split("\n").filter((path) => path !== "" && isCopied(path)),
     ...ALSO,
   ];
-  // Every module is read before the old copy is removed, so a revision missing
-  // one leaves the old copy as it was.
   const modules = await Promise.all(
     paths.map(async (path) => ({
-      target: join(FIXTURES, `${path.slice("patterns/".length)}.txt`),
+      target: join(fixtures, `${path.slice("patterns/".length)}.txt`),
       text: await git("show", `${commit}:${path}`),
     })),
   );
-  await Deno.remove(FIXTURES, { recursive: true }).catch((error) => {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-  });
+  await emptyDir(fixtures);
   for (const { target, text } of modules) {
     await Deno.mkdir(dirname(target), { recursive: true });
     await Deno.writeTextFile(target, text);
   }
-  await Deno.writeTextFile(join(FIXTURES, "SOURCE.txt"), `${commit}\n`);
-  console.log(
-    `Copied ${paths.length} modules from ${revision} (${commit}) into ` +
-      `${FIXTURES}.`,
-  );
+  await Deno.writeTextFile(join(fixtures, "SOURCE.txt"), `${commit}\n`);
+  return `Copied ${paths.length} modules from ${revision} (${commit}) into ` +
+    `${fixtures}.`;
 }
+
+if (import.meta.main) console.log(await refreshRehearsal(Deno.args, CHECKOUT));

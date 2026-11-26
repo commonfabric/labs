@@ -25,6 +25,7 @@ export {
   buildInviteLink,
   createInviteCredentials,
   INVITE_ACCESS,
+  INVITE_LINK_SCHEME,
   inviteCodeVerifier,
   isInviteAccess,
   isInviteName,
@@ -33,11 +34,19 @@ export {
   normalizeInviteHost,
   parseInviteLink,
   SPACE_INVITE_CAPABILITY,
+  SPACE_INVITES_REVISION_DOC_ID,
   SpaceInviteError,
 } from "@commonfabric/memory/space-invites";
+export {
+  buildSpaceLink,
+  parseSpaceLink,
+  SpaceLinkError,
+} from "@commonfabric/memory/space-links";
+export type { SpaceLink } from "@commonfabric/memory/space-links";
 export type {
   CreateInvite,
   InviteAccess,
+  InviteLedgerRevision,
   InviteLink,
   InviteMetadata,
   InvitePreview,

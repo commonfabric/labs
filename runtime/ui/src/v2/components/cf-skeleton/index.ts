@@ -1,5 +1,4 @@
 import { CFSkeleton, SkeletonVariant } from "./cf-skeleton.ts";
-import { skeletonStyles } from "./styles.ts";
 
 if (!customElements.get("cf-skeleton")) {
   customElements.define("cf-skeleton", CFSkeleton);
@@ -7,5 +6,5 @@ if (!customElements.get("cf-skeleton")) {
 
 export type { CFSkeleton as CFSkeletonElement } from "./cf-skeleton.ts";
 
-export { CFSkeleton, skeletonStyles };
+export { CFSkeleton };
 export type { SkeletonVariant };

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
@@ -23,6 +22,7 @@ import {
 } from "../src/schema-registry.ts";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("mergeCfcSchemaEnvelopes", () => {
   describe("a recursion meeting itself", () => {
@@ -590,6 +590,41 @@ describe("mergeCfcSchemaEnvelopes", () => {
         type: ["string", "boolean"],
       })
     ).toThrow(/type changed incompatibly/);
+  });
+
+  it("merges a `false` schema with itself where both sides declare it", () => {
+    // `never[]` compiles to `items: false`: an array that is always empty.
+    // A pattern update that changes the envelope elsewhere still walks that
+    // position on both sides, and must keep it rather than refuse.
+    const envelope = (extra: Record<string, JSONSchema>): JSONSchema => ({
+      type: "object",
+      properties: {
+        participants: { type: "array", items: false },
+        ...extra,
+      },
+    });
+    const merged = mergeCfcSchemaEnvelopes(
+      envelope({}),
+      envelope({ title: { type: "string" } }),
+    ) as JSONSchemaObj;
+    expect(merged.properties?.participants).toEqual({
+      type: "array",
+      items: false,
+    });
+    expect(merged.properties?.title).toEqual({ type: "string" });
+
+    // `false` against a schema that admits values is still refused.
+    expect(() =>
+      mergeCfcSchemaEnvelopes(
+        envelope({}),
+        {
+          type: "object",
+          properties: {
+            participants: { type: "array", items: { type: "string" } },
+          },
+        },
+      )
+    ).toThrow(/unsupported schema form at \/participants\/\*/);
   });
 
   it("merges item schemas and object defaults", () => {

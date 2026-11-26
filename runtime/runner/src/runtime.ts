@@ -53,6 +53,10 @@ import type {
   Pattern,
   Schema,
 } from "./builder/types.ts";
+import {
+  IndexedCollectionMaintainer,
+  type IndexedCollectionMaintenance,
+} from "./builtins/indexed-collection/maintainer.ts";
 import { registerBuiltins } from "./builtins/index.ts";
 import type { Cancel } from "./cancel.ts";
 import {
@@ -117,6 +121,7 @@ import {
   memoryHostForForeignOrigin,
 } from "./deployment-meta.ts";
 import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
+import type { SpaceRunBeacon } from "./executor/run-beacon.ts";
 import {
   type DelegatedCarriage,
   waveRunActorOf,
@@ -124,7 +129,7 @@ import {
 } from "./executor/wave.ts";
 import type { OwningRootAddress } from "./ensure-piece-running.ts";
 import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
-import type { CompileTurns } from "./harness/compile-interleave.ts";
+import type { CompileClaims } from "./harness/compile-interleave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { ModuleCompiler } from "./harness/module-compile.ts";
@@ -168,6 +173,7 @@ import {
   type PieceSourceTransition,
   Runner,
   type RunnerRunOptions,
+  type RunnerStartOptions,
   type RunSyncedCommitResult,
   type RunSyncedOptions,
   type RunSyncedWithCommitOptions,
@@ -219,6 +225,7 @@ import type {
   IStorageManager,
   IStorageProvider,
   MemorySpace,
+  ReleaseOptions,
   TransactionSealDestination,
   UnexaminedAbsence,
   URI,
@@ -781,6 +788,27 @@ export interface RuntimeOptions {
    */
   servingPosture?: boolean;
 
+  /**
+   * Where this runtime's scheduler marks the body of each action run while it
+   * holds the thread: the run beacon of the serving worker this runtime
+   * serves a space in (`executor/run-beacon.ts`; serving-loop.md §2, "The
+   * watchdog"). Absent, the scheduler marks nothing.
+   */
+  runBeacon?: SpaceRunBeacon;
+
+  /**
+   * Which indexed collections this runtime keeps current: every collection
+   * the registries of the spaces it hears of list, as well as those it
+   * declares or writes (`"listed"`); only those it declares or writes
+   * (`"own"`); or none (`"none"`). Unset, a runtime in the serving posture
+   * maintains `"listed"`, any other runtime under server execution `"none"`,
+   * and the rest `"own"`. One runtime maintains a space's collections, so
+   * the presets for a runtime that talks to a deployed toolshed set
+   * `"none"`: the toolshed's serving runtime, or its `IndexedCollectionHost`
+   * while server execution is off, maintains them.
+   */
+  indexedCollectionMaintenance?: IndexedCollectionMaintenance;
+
   /** Rollout mode for commit-boundary CFC enforcement. Defaults to `enforce-strict`. */
   cfcEnforcementMode?: CfcEnforcementMode;
 
@@ -840,7 +868,7 @@ export interface RuntimeOptions {
   cfcDecomposedEnvelopes?: CfcDecomposedEnvelopes;
 
   /**
-   * Defaults to `false`. When true, the envelope persist path stores
+   * Defaults to `true`. When true, the envelope persist path stores
    * version-2 envelopes: each label above the inline limit is a reference
    * to a content-addressed label document shared by every envelope that
    * carries the label (`docs/specs/content-addressed-cfc-labels.md`). Off
@@ -1024,12 +1052,14 @@ export interface RuntimeOptions {
   moduleByteCache?: ModuleByteCache;
 
   /**
-   * The turns at a cold compile this runtime takes with the other runtimes that
-   * share its {@link RuntimeOptions.moduleByteCache}, so that a compile that
-   * yields does not leave them to read a miss and compile the same modules.
+   * The turns at a cold compile this runtime takes, keyed by the modules it
+   * compiles, with whatever else shares its
+   * {@link RuntimeOptions.moduleByteCache}: the other runtimes of this realm,
+   * and where the cache is on disk, the other realms and processes that use
+   * it. Two that would compile the same modules at once then compile them once.
    * When unset, this runtime compiles without waiting for any other.
    */
-  compileTurns?: CompileTurns;
+  compileTurns?: CompileClaims;
 
   /**
    * Where this runtime's compiles run their type-check, transform and emit
@@ -1324,6 +1354,7 @@ type RuntimeSetupOptions = {
   initialPieceSourceOrigin?: string;
   reapplyStoredSetup?: boolean;
   prepareForResume?: boolean;
+  runtimeStarted?: boolean;
 };
 
 /**
@@ -1456,6 +1487,25 @@ export type CommitRetryPullFailure = {
 };
 
 /**
+ * Writes `banner` as a line to `stderr`, the process's standard error in
+ * Deno, or to the console where there is none, as in a browser realm, which
+ * has no stdout contract. Never stdout in Deno: the cf CLI's machine-readable
+ * output (`cf piece ls` and the like) is consumed by scripts. Not
+ * `console.error()` or `console.warn()` either: the cf test console
+ * enforcement fails tests on those.
+ */
+export function writeOverrideBanner(
+  banner: string,
+  stderr: { writeSync(bytes: Uint8Array): number } | undefined,
+): void {
+  if (stderr === undefined) {
+    console.log(banner);
+    return;
+  }
+  stderr.writeSync(new TextEncoder().encode(banner + "\n"));
+}
+
+/**
  * Main Runtime class that orchestrates all services in the runner package.
  *
  * This class eliminates the singleton pattern by providing a single entry point
@@ -1484,6 +1534,13 @@ export class Runtime {
    */
   #documentRelease: Promise<void> | undefined;
 
+  /**
+   * Whether something other than a hold token's collection has asked for the
+   * release pass not yet under way, which then follows up on the tokens it
+   * finds live (`ReleaseOptions.followUpOnCollection`).
+   */
+  #documentReleaseFollowsUp = false;
+
   /** The release pass under way, if any, settled whether or not it failed. */
   #documentReleaseRunning: Promise<void> | undefined;
 
@@ -1492,11 +1549,12 @@ export class Runtime {
   readonly #writeTeardown = new AbortController();
   readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
   readonly #derivedInternalCellIds = new DerivedInternalCellIds();
-  readonly #compileTurns: CompileTurns | undefined;
+  readonly #compileTurns: CompileClaims | undefined;
   readonly #moduleCompiler: ModuleCompiler | undefined;
 
   readonly id: string;
   readonly scheduler: Scheduler;
+  readonly indexedCollections: IndexedCollectionMaintainer;
   readonly patternManager: PatternManager;
   readonly sourceReconciler: SourceReconciler;
   readonly moduleRegistry: ModuleRegistry;
@@ -1567,6 +1625,12 @@ export class Runtime {
   readonly spaceHostMap?: Record<string, string>;
 
   /**
+   * The deployment this runtime's patterns talk to, where its host named one
+   * ({@link RuntimeOptions.patternEnvironment}); see {@link llmEndpointFor}.
+   */
+  readonly #patternApiUrl?: URL;
+
+  /**
    * The memory URL Memory opens on, when it is not `apiUrl`
    * ({@link RuntimeOptions.memoryUrl}).
    */
@@ -1627,6 +1691,12 @@ export class Runtime {
     | undefined;
 
   /**
+   * Whether the serving loop holds the identity carriage of an effect whose
+   * request has gone out (installed _with_ the destination).
+   */
+  #dispatchedEffectCarriage: ((effectKey: string) => boolean) | undefined;
+
+  /**
    * The client speculation overlay (`speculation.md`): the _default_ seal
    * destination of every runtime under the flag that has no wave destination
    * installed. Created lazily on the first `edit()`; derivation-kind runs
@@ -1673,6 +1743,9 @@ export class Runtime {
    */
   #serverExecutionRelease: (() => void) | undefined;
 
+  /** Where the scheduler marks each run's body (`RuntimeOptions.runBeacon`). */
+  readonly #runBeacon: SpaceRunBeacon | undefined;
+
   /** Serving posture (RuntimeOptions.servingPosture): true only for the
    * SpaceServer's own runtime. Gates the Phase-2 speculation-overlay
    * default (a serving runtime never speculates). */
@@ -1699,7 +1772,7 @@ export class Runtime {
   }
 
   /** See `RuntimeOptions.compileTurns`. */
-  get compileTurns(): CompileTurns | undefined {
+  get compileTurns(): CompileClaims | undefined {
     return this.#compileTurns;
   }
 
@@ -1773,7 +1846,9 @@ export class Runtime {
 
   /**
    * The writer-authority delegations this runtime has learned from verified
-   * source closures and integrity-valid compiled closures, by attesting
+   * source closures and integrity-valid compiled closures, from the source
+   * updates it committed, and from the pieces' `pieceSourceDelegations`
+   * members (`PatternManager.readInheritedAuthority()`), by attesting
    * space. `edit()` hands every transaction the registry's published
    * transitive snapshot, so an in-flight authorization decision cannot
    * change when another module loads, and authorization in one space can
@@ -1905,8 +1980,8 @@ export class Runtime {
     }
     let artifact: PolicyArtifactManifestV1 | undefined;
     const spaces = new Set<MemorySpace>();
-    const log = tx.getReactivityLog?.();
-    for (const address of [...(log?.writes ?? []), ...(log?.reads ?? [])]) {
+    const log = tx.getReactivityLog();
+    for (const address of [...log.writes, ...log.reads]) {
       spaces.add(address.space);
     }
     for (const space of spaces) {
@@ -2035,10 +2110,10 @@ export class Runtime {
         type: "application/json",
         path: ["value"],
       });
-      const alreadyWritten = tx.getReactivityLog?.().writes.some((address) =>
+      const alreadyWritten = tx.getReactivityLog().writes.some((address) =>
         address.space === link.space && address.id === link.id &&
         address.scope === link.scope
-      ) ?? false;
+      );
       if (!alreadyWritten) {
         if (!tx.addCommitPrecondition) {
           throw new Error(
@@ -2108,12 +2183,7 @@ export class Runtime {
       ...options.experimental,
     };
 
-    // Log any overridden experimental flags. Never on stdout: the cf CLI's
-    // machine-readable output (`cf piece ls` etc.) is consumed by scripts, and
-    // this banner made every command's stdout non-empty under a flag override.
-    // Not console.error/warn either: the cf test console enforcement fails
-    // tests on those. Direct process stderr in Deno; plain console in browser
-    // realms (no stdout contract there).
+    // Log any overridden experimental flags (`writeOverrideBanner()`).
     // `serverExecution` at the first-party default is no override: a deployed
     // entry point and every serving runtime state it explicitly, and only
     // the other arm, selected per deployment, is worth announcing.
@@ -2124,12 +2194,10 @@ export class Runtime {
       )
       .map(([k, v]) => `${k}=${v}`);
     if (overrideFlags.length > 0) {
-      const banner = `Experimental flag overrides: ${overrideFlags.join(", ")}`;
-      if (typeof Deno !== "undefined" && Deno.stderr) {
-        Deno.stderr.writeSync(new TextEncoder().encode(banner + "\n"));
-      } else {
-        console.log(banner);
-      }
+      writeOverrideBanner(
+        `Experimental flag overrides: ${overrideFlags.join(", ")}`,
+        globalThis.Deno?.stderr,
+      );
     }
 
     // Some flags are consumed from this Runtime instance. Normalize their
@@ -2190,6 +2258,7 @@ export class Runtime {
     this.experimental.serverExecution = this.#explicitServerExecution ??
       getServerExecutionConfig();
     this.servingPosture = options.servingPosture === true;
+    this.#runBeacon = options.runBeacon;
     // Everything below can throw (URL parsing, host validation, engine
     // construction). The enabler claimed above is process-global state,
     // so a THROWING construction must roll it back — a leaked enabler
@@ -2201,6 +2270,9 @@ export class Runtime {
 
       this.id = options.storageManager.id;
       this.apiUrl = new URL(options.apiUrl);
+      this.#patternApiUrl = options.patternEnvironment
+        ? new URL(options.patternEnvironment.apiUrl)
+        : undefined;
       this.memoryUrl = parseMemoryUrl(options.memoryUrl, this.apiUrl);
       // Validate eagerly, mirroring the storage layer's resolver: a
       // malformed host should fail at configuration time naming the
@@ -2372,6 +2444,15 @@ export class Runtime {
 
       // Register built-in modules with runtime injection
       registerBuiltins(this);
+      this.indexedCollections = new IndexedCollectionMaintainer(
+        this,
+        options.indexedCollectionMaintenance ??
+          (this.servingPosture
+            ? "listed"
+            : this.experimental.serverExecution === true
+            ? "none"
+            : "own"),
+      );
 
       // Set this runtime as the current runtime for global cell compatibility
       // Removed setCurrentRuntime call - no longer using singleton pattern
@@ -2429,6 +2510,9 @@ export class Runtime {
     } catch (error) {
       this.#releaseServerExecutionEnabler();
       immutableCellsFor(this).dispose();
+      // Unset when the failure came before the maintainer was constructed.
+      (this as { indexedCollections?: IndexedCollectionMaintainer })
+        .indexedCollections?.dispose();
       throw error;
     }
   }
@@ -2775,6 +2859,7 @@ export class Runtime {
     // `stopAll()` below would release.
     this.scheduler.endPieceStartWaits();
     this.scheduler.endPatternChangeWaits();
+    this.indexedCollections.dispose();
     try {
       // A kept store keeps RECORDING, so this path drains what could still write
       // into it. In-flight async builtin work is that shape: a fetch / llm call or
@@ -2939,9 +3024,24 @@ export class Runtime {
       sourceUpdate?: PreparedSourceUpdate;
     } = {},
   ): IExtendedStorageTransaction {
+    return this.#newTransaction(
+      options.changeGroup,
+      this.#moduleDelegationSnapshot(options.sourceUpdate),
+    );
+  }
+
+  /**
+   * Helper for `edit()` and `readTxProposingDelegations()`, which creates a
+   * transaction in `changeGroup`, pinned to the delegation snapshot
+   * `delegations`.
+   */
+  #newTransaction(
+    changeGroup: ChangeGroup | undefined,
+    delegations: ModuleDelegationSnapshot,
+  ): ExtendedStorageTransaction {
     const tx = this.storageManager.edit();
-    if (options.changeGroup !== undefined) {
-      tx.changeGroup = options.changeGroup;
+    if (changeGroup !== undefined) {
+      tx.changeGroup = changeGroup;
     }
     (tx as { writeTraceScopeId?: string }).writeTraceScopeId = this.id;
     const debugActionId = this.getWriteDebugContext();
@@ -2971,9 +3071,7 @@ export class Runtime {
     wrapped.setCfcClientIdentity(
       this.servingPosture ? undefined : this.userIdentityDID,
     );
-    wrapped.setCfcModuleDelegations(
-      this.#moduleDelegationSnapshot(options.sourceUpdate),
-    );
+    wrapped.setCfcModuleDelegations(delegations);
     setCfcTrustSnapshot(wrapped, this.trustSnapshotProvider());
     wrapped.configureSealDestination(
       this.#transactionSealDestination ?? this.#speculationDestination(),
@@ -3181,6 +3279,14 @@ export class Runtime {
     this.#speculationDestination()?.trackIntent(space, sidecarId, eventId);
   }
 
+  /**
+   * Where the scheduler marks the body of each action run while it holds the
+   * thread (`RuntimeOptions.runBeacon`); `undefined` off a serving worker.
+   */
+  get runBeacon(): SpaceRunBeacon | undefined {
+    return this.#runBeacon;
+  }
+
   /** The client-effect channel of a flag-ON non-serving runtime
    * (server-execution v2 Phase 4, protocol.md §5): the overlay's
    * optimistic navigateTo enactment records its nonce here, and the
@@ -3234,6 +3340,12 @@ export class Runtime {
        * the run identity). Absent (or returning nothing) the run keeps
        * the wave-level fallback — the Phase-1 cardinality-1 posture. */
       runDemanderResolver?: ServerRunDemanderResolver;
+
+      /** Whether the serving loop's outbox holds the identity carriage of
+       * an effect whose request has gone out: captured when the run that
+       * staged the effect sealed, held until the effect retires
+       * (serving-loop.md §4). */
+      dispatchedEffectCarriage?: (effectKey: string) => boolean;
     } = {},
   ): void {
     if (this.experimental.serverExecution !== true) {
@@ -3252,6 +3364,7 @@ export class Runtime {
     this.#transactionSealDestination = destination;
     this.#serverRunStamper = options.runStamper;
     this.#serverRunDemanderResolver = options.runDemanderResolver;
+    this.#dispatchedEffectCarriage = options.dispatchedEffectCarriage;
   }
 
   /** The installed seal destination (the serving loop), if any —
@@ -3274,6 +3387,19 @@ export class Runtime {
     this.#transactionSealDestination = undefined;
     this.#serverRunStamper = undefined;
     this.#serverRunDemanderResolver = undefined;
+    this.#dispatchedEffectCarriage = undefined;
+  }
+
+  /**
+   * Whether `effectKey`'s request has gone out and the serving loop still
+   * holds the identity carriage the staging run's seal recorded: an effect
+   * completion committed now commits under that carriage (serving-loop.md
+   * §4). False for a request whose release check refused it, whose carriage
+   * retires without a request going out, and everywhere a serving loop
+   * installed no answer.
+   */
+  hasDispatchedEffectCarriage(effectKey: string): boolean {
+    return this.#dispatchedEffectCarriage?.(effectKey) ?? false;
   }
 
   /**
@@ -3380,12 +3506,16 @@ export class Runtime {
   /**
    * Lets the storage manager release the documents nothing reads (see
    * `releaseUnreadDocuments()`): it asks the scheduler whether an action
-   * reads a document, and forgets a load kicked for a document it drops, so
-   * that a later read of it kicks the load again.
+   * reads a document, forgets a load kicked for a document it drops, so
+   * that a later read of it kicks the load again, and asks for a pass when a
+   * hold token a pass followed up on has been collected.
    */
   #installDocumentRelease(): void {
     const manager = this.storageManager;
     const cancels = [
+      manager.subscribeHoldsCollected?.(() => {
+        void this.#requestDocumentRelease();
+      }),
       manager.addDocumentReader?.((address) =>
         this.scheduler.readsEntity(
           entityKey(
@@ -3404,6 +3534,16 @@ export class Runtime {
           );
         }
       }),
+      // A released space opens again on its next use, as a first open does:
+      // its loads are kicked again, and the effects channel subscribes to
+      // it again.
+      manager.subscribeSpacesReleased?.((space) => {
+        const prefix = `${space}\0`;
+        for (const key of this.#missingDocLoadKicks) {
+          if (key.startsWith(prefix)) this.#missingDocLoadKicks.delete(key);
+        }
+        this.#effectsChannel?.forgetSpace(space);
+      }),
     ];
     for (const cancel of cancels) {
       if (cancel !== undefined) this.#documentReleaseCancels.push(cancel);
@@ -3415,7 +3555,14 @@ export class Runtime {
    * (`IStorageManager.releaseUnreadDocuments()`), and resolves when that
    * pass has run. Stopping a piece asks for one. A host asks for one when
    * something that read documents through this runtime has gone, such as a
-   * client whose subscriptions it cancelled. Calls made before a pass begins
+   * client whose subscriptions it cancelled. A pass these ask for keeps a
+   * document a cell still holds, and follows up on that cell's hold token
+   * (`ReleaseOptions.followUpOnCollection`): once the token has been
+   * collected, which is when the cells holding the document have gone, the
+   * storage manager says so (`IStorageManager.subscribeHoldsCollected()`)
+   * and a pass of its own follows, which follows up on nothing. So a
+   * collection completes a release something asked for, and never begins
+   * one. Calls made before a pass begins
    * share it. A call made while a pass is under way is answered by the next
    * one, which waits for that one to finish and then for the scheduler. So at
    * most one pass waits at a time, however many calls are made.
@@ -3425,10 +3572,23 @@ export class Runtime {
    * reason alone, a second pass runs once the scheduler is next idle, and the
    * call resolves when that has run too: the documents a stopped piece read
    * are released by the pass after the one its stop asked for, which nothing
-   * else may ever ask for. The second pass asks for no third.
+   * else may ever ask for. The second pass asks for no third, and follows up
+   * on no token, so what a request follows up on is what its first pass
+   * found live.
    */
   releaseUnreadDocuments(): Promise<void> {
+    this.#documentReleaseFollowsUp = true;
+    return this.#requestDocumentRelease();
+  }
+
+  /**
+   * Helper for `releaseUnreadDocuments()`, and for a hold token's
+   * collection, which asks for a pass without following up on the tokens it
+   * finds live.
+   */
+  #requestDocumentRelease(): Promise<void> {
     this.#documentRelease ??= (async () => {
+      let options: ReleaseOptions;
       try {
         // The pass under way may have begun before what this call is about
         // let go of its documents, so it cannot answer the call.
@@ -3437,9 +3597,13 @@ export class Runtime {
       } finally {
         // A request made from here on asks for a pass of its own.
         this.#documentRelease = undefined;
+        options = { followUpOnCollection: this.#documentReleaseFollowsUp };
+        this.#documentReleaseFollowsUp = false;
       }
       const running = (async () => {
-        const deferred = await this.storageManager.releaseUnreadDocuments?.();
+        const deferred = await this.storageManager.releaseUnreadDocuments?.(
+          options,
+        );
         if (deferred !== true) return;
         await this.scheduler.idle();
         await this.storageManager.releaseUnreadDocuments?.();
@@ -3620,10 +3784,15 @@ export class Runtime {
    * After `fn` returns, while retry budget remains, the runtime may load
    * documents read as absent that the replica has not examined. If any exist,
    * it aborts the staged attempt and invokes `fn` with a fresh transaction
-   * before sending a commit. These reconciliation re-runs and retries after
+   * before sending a commit. After `fn` throws, the runtime does the same
+   * before reporting the throw: if a document the attempt read as absent
+   * exists, `fn` runs again with a fresh transaction, and the throw is
+   * reported only when none does, so a check that refuses on a document not
+   * loaded yet sees it loaded. These reconciliation re-runs and retries after
    * commit rejection share one `maxRetries` budget, in addition to the initial
-   * invocation. With no budget left, reconciliation is skipped and the current
-   * transaction proceeds to ordinary commit validation.
+   * invocation. With no budget left, reconciliation is skipped: the current
+   * transaction proceeds to ordinary commit validation, or the throw is
+   * reported.
    *
    * A retryable commit rejection also re-runs `fn` while budget remains.
    * Retryability is decided by the shared rejection vocabulary
@@ -3665,7 +3834,8 @@ export class Runtime {
    * @returns `{ ok }` once the transaction commits, carrying whatever `fn`
    *   returned, or `{ error }` when it does not commit: a rejection that is not
    *   retryable, a retryable one whose retries are spent, or `fn` itself
-   *   throwing, which aborts the transaction.
+   *   throwing, which aborts the transaction, on an attempt that read no
+   *   absent document that exists or that has no retry budget left.
    */
   editWithRetry<T = void>(
     fn: (tx: IExtendedStorageTransaction) => T,
@@ -3701,14 +3871,41 @@ export class Runtime {
     } catch (error) {
       // fn(tx) threw before commit -- abort the transaction so it isn't
       // orphaned, and surface the error as a Result instead of a rejection.
+      // A throw can follow from a read that found a document absent, as a
+      // check that refuses on the `undefined` does, so the attempt's absences
+      // are reconciled as a returning attempt's are (below): when one of them
+      // turns out to exist, `fn` runs again against it. The absences are
+      // named before the abort, which ends the transaction's reads. Naming
+      // them only decides whether to run again, so a failure to name them, or
+      // to count them, reports the throw as it is, or the owner's cancellation
+      // when that came first.
+      let reconciliation: number | Promise<number> = 0;
+      if (maxRetries > 0) {
+        try {
+          reconciliation = this.#awaitUnexaminedAbsences(tx);
+        } catch {
+          reconciliation = 0;
+        }
+      }
       tx.abort(error);
-      return Promise.resolve({
+      const thrown = {
         error: {
           name: "StorageTransactionAborted" as const,
           message: `editWithRetry action threw: ${error}`,
           reason: error,
         },
-      });
+      };
+      if (typeof reconciliation === "number") return Promise.resolve(thrown);
+      return reconciliation.then(
+        (present) => {
+          if (signal.aborted) return stoppedResult();
+          if (present > 0) {
+            return this.editWithRetry<T>(fn, maxRetries - 1, options);
+          }
+          return thrown;
+        },
+        () => signal.aborted ? stoppedResult() : thrown,
+      );
     }
     const commitPrepared = (): Promise<
       { ok: T; error?: undefined } | { ok?: undefined; error: CommitError }
@@ -4535,6 +4732,32 @@ export class Runtime {
     return this.#createReadTx();
   }
 
+  /**
+   * A transaction that cannot write, pinned for `space` to the published
+   * delegations with `delegations` layered over them, as the setup
+   * transaction of a source update proposing them is (see `edit()`), and
+   * reading as `scopeKeyIdentity`'s instance where it names one. A review
+   * reads through it to judge a candidate by `delegations`, which judges it as
+   * the update's commit will only as far as they are the update's own
+   * proposal (see `PatternManager.proposedSourceUpdateDelegations()`); being
+   * unable to write, it authorizes nothing.
+   */
+  readTxProposingDelegations(
+    space: MemorySpace,
+    delegations: ReadonlyMap<string, ReadonlySet<string>>,
+    scopeKeyIdentity?: ScopeKeyIdentity,
+  ): IExtendedStorageTransaction {
+    const tx = this.#newTransaction(
+      undefined,
+      this.#moduleDelegations.snapshotWith(space, delegations),
+    );
+    if (scopeKeyIdentity !== undefined) {
+      tx.tx.scopeKeyIdentity = scopeKeyIdentity;
+    }
+    tx.setReadOnly("runtime.readTxProposingDelegations()");
+    return tx;
+  }
+
   #createReadTx(): IExtendedStorageTransaction {
     const tx = this.edit();
     tx.setReadOnly?.("runtime.readTx()");
@@ -5015,7 +5238,6 @@ export class Runtime {
     const links = profiles.get();
     if (!Array.isArray(links)) return 0;
     const spaces = links.flatMap((link) => {
-      if (!isCell(link)) return [];
       const space = link.getAsNormalizedFullLink().space;
       return space === home.space ? [] : [space];
     });
@@ -5414,8 +5636,11 @@ export class Runtime {
     );
   }
 
-  start<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    return this.runner.start(resultCell);
+  start<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    return this.runner.start(resultCell, options);
   }
 
   /**
@@ -5423,8 +5648,11 @@ export class Runtime {
    * it instantiates, rejecting when that commit failed; see
    * `Runner.startWithCommit()`.
    */
-  startWithCommit<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    return this.runner.startWithCommit(resultCell);
+  startWithCommit<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    return this.runner.startWithCommit(resultCell, options);
   }
 
   /**
@@ -5433,7 +5661,8 @@ export class Runtime {
    * "no per-space fact" — callers choose their own default (storage
    * uses the host it was opened on, which for a deployed client is
    * `memoryUrl` where one is set and apiUrl otherwise; hostForSpace uses
-   * apiUrl; LLM/fetch keep their module-level defaults, which may
+   * apiUrl; LLM calls use the pattern-facing deployment through
+   * llmEndpointFor; fetch keeps its module-level default; the last two may
    * deliberately differ from apiUrl).
    */
   mappedHostFor(space: MemorySpace): string | undefined {
@@ -5441,13 +5670,28 @@ export class Runtime {
   }
 
   /**
-   * The host that serves a space's space-bound work (LLM, fetch, blob).
-   * A mapped space resolves to its host; everything else to the
-   * default `apiUrl`. The single compute-side analog of the storage
-   * layer's per-space address resolver.
+   * The host that serves a space's space-bound work other than its model
+   * calls (fetch, blob; LLM calls go through {@link llmEndpointFor}, whose
+   * fallback is the pattern-facing deployment). A mapped space resolves to
+   * its host; everything else to the default `apiUrl`. The compute-side
+   * analog of the storage layer's per-space address resolver.
    */
   hostForSpace(space: MemorySpace): URL {
     return new URL(this.mappedHostFor(space) ?? this.apiUrl);
+  }
+
+  /**
+   * The LLM endpoint a pattern in `space` sends its model calls to: the
+   * space's mapped host where it has one, else the deployment this runtime's
+   * patterns talk to ({@link RuntimeOptions.patternEnvironment}, which the
+   * deployment-facing presets set from their `apiUrl`). Undefined for a
+   * runtime whose host named neither, whose calls go to the process's
+   * default (`setLLMUrl`). Not `apiUrl`: a deployment may serve memory on a
+   * different host than the one its patterns talk to.
+   */
+  llmEndpointFor(space: MemorySpace): URL | undefined {
+    const host = this.mappedHostFor(space) ?? this.#patternApiUrl;
+    return host === undefined ? undefined : new URL("/api/ai/llm", host);
   }
 
   /**

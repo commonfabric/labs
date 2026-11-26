@@ -6,21 +6,27 @@
  * what the visitor's writes reach decides what the owner sees afterwards.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { isFabricArray, isFabricPlainObject } from "@commonfabric/data-model";
 import { decodeDelegation, Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { principalOf } from "../src/builder/principal-of.ts";
 import { getEntityId } from "../src/create-ref.ts";
 import { resolveSpaceRootPattern } from "../src/ensure-space-root.ts";
-import type { NormalizedFullLink } from "../src/link-utils.ts";
+import { type NormalizedFullLink, parseLink } from "../src/link-utils.ts";
 import { inSpaceRootCause } from "../src/in-space-root-cause.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace, URI } from "../src/storage/interface.ts";
@@ -124,6 +130,108 @@ describe("profile-space-access", () => {
       await visitorRuntime.dispose();
       await disposeOwner();
     }
+  });
+
+  describe("the edit form's drafts", () => {
+    // The causes of the cells the profile's edit form keeps its drafts in.
+    const DRAFTS = [
+      "bioDraft",
+      "externalLinkLabel",
+      "externalLinkUrl",
+      "patternUrl",
+      "elementTitle",
+      "elementTag",
+      "userTagsText",
+      "pieceSpaceForm",
+      "pieceIdForm",
+      "pieceTitleForm",
+    ];
+
+    let ownerRuntime: Runtime;
+    let visitorRuntime: Runtime;
+    let profileLink: NormalizedFullLink;
+
+    beforeEach(async () => {
+      ownerRuntime = runtimeAs(owner);
+      visitorRuntime = runtimeAs(visitor);
+      profileLink = await createProfileThroughHome(ownerRuntime, "Ada");
+    });
+
+    afterEach(async () => {
+      await visitorRuntime.dispose();
+      await ownerRuntime.dispose();
+    });
+
+    /**
+     * The profile as `runtime` runs it, and the cell the profile's stored list
+     * of its own cells names for the draft `cause`, as `runtime` reaches it.
+     */
+    const draftOf = async (runtime: Runtime, cause: string) => {
+      const profile = runtime.getCellFromLink(profileLink);
+      await profile.sync();
+      expect(await runtime.start(profile)).toBe(true);
+      await runtime.idle();
+      const manifest = profile.resolveAsCell().getMetaRaw("internal");
+      const entry = isFabricArray(manifest)
+        ? manifest.find((entry) =>
+          isFabricPlainObject(entry) && entry.partialCause === cause
+        )
+        : undefined;
+      const link = isFabricPlainObject(entry)
+        ? parseLink(entry.link, profile.resolveAsCell())
+        : undefined;
+      if (link === undefined) throw new Error(`The profile has no ${cause}.`);
+      return {
+        profile,
+        draft: runtime.getCellFromLink<string>(link, { type: "string" }),
+      };
+    };
+
+    /** Writes `text` into the draft `cause` from `runtime`. */
+    const writeDraft = async (
+      runtime: Runtime,
+      cause: string,
+      text: string,
+    ) => {
+      const { profile, draft } = await draftOf(runtime, cause);
+      const tx = runtime.edit();
+      draft.withTx(tx).set(text);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await runtime.idle();
+      await runtime.storageManager.synced();
+      return profile;
+    };
+
+    it("saves the owner's bio draft, not the one a visitor wrote after it", async () => {
+      const owned = await writeDraft(
+        ownerRuntime,
+        "bioDraft",
+        "Written by the owner",
+      );
+      await writeDraft(visitorRuntime, "bioDraft", "Written by a visitor");
+
+      // The form's button sends no text, so the draft is what is stored.
+      const tx = ownerRuntime.edit();
+      owned.withTx(tx).key("setBio").send({});
+      ownerRuntime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await ownerRuntime.idle();
+      expect(
+        await owned.key("bio").asSchema<string>({ type: "string" }).pull(),
+      ).toBe("Written by the owner");
+    });
+
+    it("leaves every draft of the owner's empty after a visitor writes them all", async () => {
+      for (const cause of DRAFTS) {
+        await writeDraft(visitorRuntime, cause, `A visitor's ${cause}`);
+      }
+
+      for (const cause of DRAFTS) {
+        const { draft } = await draftOf(ownerRuntime, cause);
+        expect([cause, await draft.pull()]).toEqual([cause, ""]);
+      }
+    });
   });
 
   it("creates a profile in a space granting every principal READ alone, its creator writing there under the delegation the space's key issues", async () => {

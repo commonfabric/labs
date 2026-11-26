@@ -1,3 +1,10 @@
+/**
+ * Lists the people found with `wish` for the `#person` tag in the current space
+ * and the viewer's home space, showing each contact's name and email. The
+ * list view is exported separately so it can be shown with any set of
+ * people.
+ */
+
 import {
   computed,
   Default,
@@ -27,19 +34,23 @@ export type PersonListOutput = {
 
 // ===== Pattern =====
 
-const PersonList = pattern<PersonListInput, PersonListOutput>(() => {
-  const people = wish<Person>({ query: "#person", scope: [".", "~"] });
+export interface PersonListViewInput {
+  /** The people to list. */
+  people: Person[];
+}
 
+/** Lists `people`, and counts them in its name. */
+export const PersonListView = pattern<PersonListViewInput, PersonListOutput>((
+  { people },
+) => {
   return {
     [NAME]: computed(() =>
-      people.candidates?.length
-        ? `People: ${people.candidates?.length}`
-        : "People"
+      people.length ? `People: ${people.length}` : "People"
     ),
     [UI]: (
       <cf-vstack gap="2" style="padding: 1.5rem;">
         <div>
-          {people.candidates.map((person) => (
+          {people.map((person) => (
             <cf-hstack gap="2" align="center">
               <span>{person.contact.name}</span>
               <span>{person.contact.email}</span>
@@ -48,8 +59,14 @@ const PersonList = pattern<PersonListInput, PersonListOutput>(() => {
         </div>
       </cf-vstack>
     ),
-    people: people.candidates,
+    people,
   };
+});
+
+/** Lists the people the space and the viewer's home space mention. */
+const PersonList = pattern<PersonListInput, PersonListOutput>(() => {
+  const people = wish<Person>({ query: "#person", scope: [".", "~"] });
+  return PersonListView({ people: people.candidates });
 });
 
 export default PersonList;

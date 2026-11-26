@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import {
@@ -11,6 +10,12 @@ import {
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type { ServerExecutionObserver } from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { HostOccupancy } from "../../src/executor/host.ts";
 import {
   ServingPlane,
@@ -83,9 +88,11 @@ const fakeHost = (
     counters: emptyCounters,
     diagnostics: () => diagnostics,
     collectedMemory: () => ({ heapUsed: 0, external: 0 }),
+    heapProfile: () => Promise.resolve(""),
     runLifecycleVerb: () => Promise.reject(new Error("no verbs")),
     occupancy,
     noteSpaceAclChanged: () => {},
+    failEvent: () => {},
     close: () => {
       host.closes += 1;
       return Promise.resolve();
@@ -241,6 +248,145 @@ describe("serving-port-plane", () => {
         `write ${space} ${alice}`,
         `read ${space} undefined`,
       ]);
+    });
+
+    it("asks the server's thread to advance, store and judge the currency index, and returns what it reports", async () => {
+      const record = {
+        piece: "of:piece",
+        under: ["of:outer"],
+        vouched: true,
+        writes: ["computed:out"],
+        owned: ["of:state"],
+        slices: [{
+          key: "space",
+          vouched: true,
+          reads: [{ space, id: "of:input", scopeKey: "space", derived: false }],
+          vouches: ["computed:out"],
+        }],
+      };
+      const batch = {
+        asOf: 4,
+        seen: [6],
+        epoch: "release-7",
+        records: [record],
+      };
+      const marked = [
+        { piece: "of:piece", slice: "space", seq: 5, under: ["of:outer"] },
+      ];
+      const asked: unknown[] = [];
+      bridge.onRequest("server.advanceCurrency", (params) => {
+        asked.push(params);
+        return marked;
+      });
+      bridge.onRequest("server.storeCurrencyRecords", (params) => {
+        asked.push(params);
+        return {
+          marked,
+          falseClean: ["of:piece"],
+          blocked: [],
+          blockedBy: [],
+          behind: ["of:piece"],
+          unread: [],
+        };
+      });
+      bridge.onRequest("server.judgeCurrencyRoots", (params) => {
+        asked.push(params);
+        return {
+          servable: [{
+            root: "of:argument",
+            piece: "of:piece",
+            origins: ["of:piece"],
+          }],
+          held: [{
+            root: "of:held",
+            piece: "of:reader",
+            readers: ["of:reader"],
+          }],
+          upstream: [{
+            reader: "of:reader",
+            slice: "space",
+            id: "computed:out",
+            scopeKey: "space",
+            piece: "of:producer",
+          }],
+          refused: { marked: 2 },
+          marked: [],
+        };
+      });
+
+      expect(await plane.server.advanceCurrency(space)).toEqual(marked);
+      expect(await plane.server.storeCurrencyRecords(space, batch)).toEqual({
+        marked,
+        falseClean: ["of:piece"],
+        blocked: [],
+        blockedBy: [],
+        behind: ["of:piece"],
+        unread: [],
+      });
+      expect(
+        await plane.server.judgeCurrencyRoots(space, ["of:argument"], {
+          excludePrincipal: alice,
+          epoch: "release-7",
+          running: ["of:running"],
+        }),
+      ).toEqual({
+        servable: [{
+          root: "of:argument",
+          piece: "of:piece",
+          origins: ["of:piece"],
+        }],
+        held: [{
+          root: "of:held",
+          piece: "of:reader",
+          readers: ["of:reader"],
+        }],
+        upstream: [{
+          reader: "of:reader",
+          slice: "space",
+          id: "computed:out",
+          scopeKey: "space",
+          piece: "of:producer",
+        }],
+        refused: { marked: 2 },
+        marked: [],
+      });
+      expect(asked).toEqual([
+        { space },
+        { space, batch },
+        {
+          space,
+          roots: ["of:argument"],
+          excludePrincipal: alice,
+          epoch: "release-7",
+          running: ["of:running"],
+        },
+      ]);
+    });
+
+    it("asks the server's thread to replace the demand a space carries into another, and returns how many rows it refused", async () => {
+      const rows = [{
+        id: "of:far",
+        scope: "space" as const,
+        scopeKey: "space" as const,
+        origin: { space, sessionId: "alice-session" },
+      }];
+      const asked: unknown[] = [];
+      bridge.onRequest("server.setCarriedDemand", (params) => {
+        asked.push(params);
+        return { refused: 1 };
+      });
+
+      expect(
+        await plane.server.setCarriedDemand("did:key:source", space, rows, {
+          excludePrincipal: alice,
+        }),
+      ).toEqual({ refused: 1 });
+      expect(asked).toEqual([{
+        space: "did:key:source",
+        reader: space,
+        rows,
+        excludePrincipal: alice,
+      }]);
     });
 
     it("returns whether a session is live for a principal from the sessions the server reported", async () => {
@@ -476,6 +622,42 @@ describe("serving-port-plane", () => {
       bridge.notify("observer.spaceAclChanged", { space });
       await handled();
       expect(changed).toEqual([space]);
+    });
+
+    it("hands the host each event the server's thread fails, with its reason", async () => {
+      const failed: unknown[] = [];
+      plane.serve(
+        fakeHost(() => "busy", {
+          failEvent: (space, event, reason) =>
+            failed.push({ space, event, reason }),
+        }),
+      );
+      const event = { sidecarId: "of:sidecar", eventId: "evt-1", seq: 2 };
+      bridge.notify("host.failEvent", { space, event, reason: "ended" });
+      await handled();
+      expect(failed).toEqual([{ space, event, reason: "ended" }]);
+    });
+  });
+
+  describe("reportRunNamed()", () => {
+    it("posts what a number on the worker's run beacon stands for", async () => {
+      const named = Promise.withResolvers<unknown>();
+      bridge.onNotice("worker.runNamed", (identity) => named.resolve(identity));
+      const identity = { run: 3, space, action: "total" };
+      plane.reportRunNamed(identity);
+      expect(await named.promise).toEqual(identity);
+    });
+  });
+
+  describe("reportRunsForgotten()", () => {
+    it("posts the numbers on the worker's run beacon whose actions its realm collected", async () => {
+      const forgotten = Promise.withResolvers<unknown>();
+      bridge.onNotice(
+        "worker.runsForgotten",
+        (notice) => forgotten.resolve(notice),
+      );
+      plane.reportRunsForgotten([2, 5]);
+      expect(await forgotten.promise).toEqual({ runs: [2, 5] });
     });
   });
 

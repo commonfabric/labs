@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
@@ -6,6 +5,12 @@ import { openSpace } from "../db.ts";
 import type { DiscoveredSpace } from "../discover.ts";
 import { homeProfileLinks } from "../grouping.ts";
 import { discoverProfiles } from "../profile-discovery.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (

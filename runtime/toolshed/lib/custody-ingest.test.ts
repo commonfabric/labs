@@ -1,15 +1,27 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { parseLink, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import {
   custodyIngest,
   durableSet,
   durableUpdate,
   type VouchedChannel,
 } from "./custody-ingest.ts";
+import {
+  createAclServer,
+  genesisAcl,
+  LoopbackSessionFactory,
+  TestStorageManager,
+} from "@/test/support/memory-acl.ts";
+import { storedLabelEntries } from "../../runner/test/cfc-stored-labels.ts";
 
 const channel: VouchedChannel = {
   channel: "did:key:test-channel",
@@ -50,11 +62,12 @@ describe("custodyIngest", () => {
 
   const ingestMarks = (id: string): unknown[] => {
     const replica = storageManager.open(space).replica as unknown as {
-      getDocument(id: string): {
-        cfc?: { labelMap?: { entries: StoredEntry[] } };
-      } | undefined;
+      getDocument(id: string): { value?: unknown; cfc?: unknown } | undefined;
     };
-    return (replica.getDocument(id)?.cfc?.labelMap?.entries ?? [])
+    return storedLabelEntries<StoredEntry>(
+      replica.getDocument(id)?.cfc,
+      (labelId) => replica.getDocument(labelId),
+    )
       .filter((e) => e.origin === "external-ingest")
       .flatMap((e) => e.label.integrity ?? []);
   };
@@ -203,6 +216,33 @@ describe("custodyIngest", () => {
     // clearing/operator writes are not ingest.
     expect(cell.get()).toEqual({ tokens: null });
     expect(ingestMarks(id).length).toBe(0);
+  });
+
+  it("throws the refusal of a space that does not grant the writer, writing nothing", async () => {
+    // An ACL-enforcing memory server, and a space whose ACL names someone
+    // else, so the commit is refused rather than retried.
+
+    const server = createAclServer(`custody-${crypto.randomUUID()}`);
+    const factory = new LoopbackSessionFactory(server);
+    const owner = await Identity.fromPassphrase("custody-ingest-owner");
+    await genesisAcl(factory, owner, { [owner.did()]: "OWNER" });
+    const refusing = TestStorageManager.overServer({ as: signer }, factory);
+    const outsider = new Runtime({
+      apiUrl: new URL("https://custody-test.invalid"),
+      storageManager: refusing,
+    });
+    try {
+      const cell = outsider.getCell<number>(owner.did(), "custody-refused");
+      await cell.sync();
+      await expect(durableSet(cell, 1)).rejects.toMatchObject({
+        name: "AuthorizationError",
+      });
+      expect(cell.get()).toBeUndefined();
+    } finally {
+      await outsider.dispose();
+      await refusing.close();
+      await server.close();
+    }
   });
 
   it("binds the mark digest to the appended element, and re-mint replaces", async () => {

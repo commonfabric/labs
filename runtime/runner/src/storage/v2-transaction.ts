@@ -4,6 +4,7 @@ import {
   cloneWithValueAtPath,
   debugStr,
   deepFreeze,
+  hashStringOf,
   isDeepFrozen,
   isFabricPlainContainer,
   missingContainerIsArray,
@@ -51,6 +52,8 @@ import {
 } from "../../../memory/v2/path.ts";
 import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
+import { type ArrayEditHunk, shortestEditHunks } from "./array-edit-script.ts";
+import { commitReadActivities } from "./commit-read-activities.ts";
 import { getCommitLocalSeq, getCommitSeq } from "./commit-identity.ts";
 import { createTransactionCommitReceipt } from "./commit-receipt.ts";
 import { diagnosticPrefix, type PendingCommitContext } from "./diagnostics.ts";
@@ -121,6 +124,7 @@ import {
   isReadIgnoredForScheduling,
   isReadMarkedAsAttemptedWrite,
   isServedDerivationTx,
+  isServedWaveRunTx,
   isUiInputBlindWriteTx,
   pendingWriteElisionRead,
   registerCommitRejectionListener,
@@ -271,6 +275,17 @@ type SpaceBranch = {
   space: MemorySpace;
   replica: ReturnType<IStorageManager["open"]>["replica"];
   docs: Map<string, DocumentEntry>;
+};
+
+/**
+ * A document `#document()` answered recently, with the branch, id and scope
+ * that name it, the parts of an address its key holds.
+ */
+type RecentDocument = {
+  branch: SpaceBranch;
+  id: URI;
+  scope: CellScope;
+  doc: DocumentEntry;
 };
 
 type ReadyState = {
@@ -453,10 +468,12 @@ export type PatchDraftCandidate = {
   coversDescendants: boolean;
 
   /**
-   * For a splice that adds or removes an array's tail, the first index it
-   * touches: a candidate at an element index at or past it is subsumed.
+   * For a splice, the index it applies at. The array's splices carry every
+   * element at or past the first of them that differs between the two
+   * documents, so a candidate beneath the array at an element index at or
+   * past it is subsumed.
    */
-  tailSpliceStartIndex?: number;
+  spliceStartIndex?: number;
 };
 
 /**
@@ -591,10 +608,33 @@ const arrayTailIsDense = (
 };
 
 /**
+ * The most removals and additions the diff of an array searches for a
+ * shortest edit script within (`shortestEditHunks()`). The search costs time
+ * proportional to the array's length times this bound.
+ */
+const ARRAY_DIFF_MAX_EDITS = 64;
+
+/**
+ * The most elements a change that keeps an array's length is sent as
+ * per-index replaces of, where a shortest edit script moves elements rather
+ * than changing them. Each replace touches only its own element, so it
+ * conflicts with fewer readers than a splice, which touches the array.
+ */
+const POSITIONAL_REPLACE_LIMIT = 64;
+
+/**
  * Builds the patch candidates that take the value at `path` from `before` to
  * `after`. The caller passes a change: `path` is the array a changed write
  * beneath it is diffed as a change to (`findArrayPatchPath()`), and a value
  * differs wherever a value beneath it does.
+ *
+ * Two arrays without holes are diffed by `arraySpliceHunks()`, and sent as
+ * the splices it returns. Otherwise, and where `positional` is set, they are
+ * diffed index by index (`buildPositionalArrayPatchCandidates()`). The caller
+ * sets `positional` where the commit may not send the array splices
+ * (`V2StorageTransaction.#arraySpliceGate()`), and where a mergeable op's
+ * suppression reaches the array, since the suppression is written against the
+ * per-index diff.
  */
 const buildArrayPatchCandidates = (
   path: readonly string[],
@@ -602,6 +642,7 @@ const buildArrayPatchCandidates = (
   after: FabricValue | undefined,
   beforePresent: boolean = before !== undefined,
   afterPresent: boolean = after !== undefined,
+  positional = false,
 ): PatchDraftCandidate[] => {
   if (!Array.isArray(before) || !Array.isArray(after)) {
     return [
@@ -615,8 +656,199 @@ const buildArrayPatchCandidates = (
     ];
   }
 
-  // Both sides are arrays from here on, so the array slot itself is present
-  // in both states; fallbacks below replace the whole array.
+  if (
+    positional || !arrayTailIsDense(before, 0) || !arrayTailIsDense(after, 0)
+  ) {
+    return buildPositionalArrayPatchCandidates(path, before, after);
+  }
+  const hunks = arraySpliceHunks(before, after);
+  if (hunks === undefined) {
+    return buildPositionalArrayPatchCandidates(path, before, after);
+  }
+
+  // Each splice applies to the array the ones before it left, so its index is
+  // its run's start shifted by what those splices added and removed. Each is
+  // marked: it was diffed under a read that pins the array, and stands for the
+  // per-index writes of the same change (`PatchOp`'s `pinned`).
+  const pointer = encodePointer(path);
+  let shift = 0;
+  return hunks.map((hunk) => {
+    const index = hunk.start + shift;
+    shift += hunk.add - hunk.remove;
+    return {
+      patch: {
+        op: "splice",
+        path: pointer,
+        index,
+        remove: hunk.remove,
+        add: after.slice(hunk.addStart, hunk.addStart + hunk.add),
+        pinned: true,
+      },
+      path,
+      coversDescendants: false,
+      spliceStartIndex: index,
+    };
+  });
+};
+
+/**
+ * Returns the runs a change from `before` to `after`, two arrays without
+ * holes, is sent as, one splice each, or `undefined` where it is sent as a
+ * per-index diff instead.
+ *
+ * The runs are those of a shortest edit script, found within
+ * `ARRAY_DIFF_MAX_EDITS` edits between the arrays' common prefix and suffix.
+ * Where none is that short, the change goes index by index: one run spanning
+ * everything between the prefix and the suffix would carry every element
+ * there, changed or not, which can be many times the bytes of the elements
+ * the per-index diff carries. Splices carry the elements the runs add, where
+ * the per-index diff carries every element that changed or shifted, and the
+ * change is sent as splices only where they carry fewer, none of them one the
+ * per-index diff leaves in place.
+ *
+ * A change to the array's length is sent as splices on that condition alone.
+ * The per-index diff of one ends in a splice at the array's path too, so
+ * every reader beneath the array conflicts with it either way.
+ *
+ * A change that keeps the length is sent as splices only where the per-index
+ * diff would also replace more than `POSITIONAL_REPLACE_LIMIT` elements. Its
+ * per-index diff is replaces alone, each touching its own element, which
+ * conflict with fewer readers than a splice, which touches the array. That
+ * is decided first, by a count that stops past the limit, so a sparse edit of
+ * a long array hashes nothing.
+ */
+const arraySpliceHunks = (
+  before: readonly FabricValue[],
+  after: readonly FabricValue[],
+): ArrayEditHunk[] | undefined => {
+  let prefix = 0;
+  const shorter = Math.min(before.length, after.length);
+  while (prefix < shorter && valueEqual(before[prefix]!, after[prefix]!)) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    prefix + suffix < shorter &&
+    valueEqual(
+      before[before.length - 1 - suffix]!,
+      after[after.length - 1 - suffix]!,
+    )
+  ) {
+    suffix += 1;
+  }
+  const sameLength = before.length === after.length;
+  if (
+    sameLength &&
+    countChangedIndices(
+        before,
+        after,
+        prefix,
+        before.length - suffix,
+        POSITIONAL_REPLACE_LIMIT + 1,
+      ) <= POSITIONAL_REPLACE_LIMIT
+  ) {
+    return undefined;
+  }
+
+  const between: ArrayEditHunk = {
+    start: prefix,
+    remove: before.length - prefix - suffix,
+    addStart: prefix,
+    add: after.length - prefix - suffix,
+  };
+  let runs: ArrayEditHunk[] | undefined;
+  if (between.remove === 0 || between.add === 0) {
+    runs = [between];
+  } else {
+    // Every pair of elements between the prefix and the suffix may be
+    // compared, so each is keyed once by the content hash `valueEqual()`
+    // compares containers by.
+    const beforeKeys = before.slice(prefix, prefix + between.remove)
+      .map((value) => hashStringOf(value));
+    const afterKeys = after.slice(prefix, prefix + between.add)
+      .map((value) => hashStringOf(value));
+    runs = shortestEditHunks(
+      between.remove,
+      between.add,
+      (beforeIndex, afterIndex) =>
+        beforeKeys[beforeIndex] === afterKeys[afterIndex],
+      ARRAY_DIFF_MAX_EDITS,
+    )?.map((hunk) => ({
+      ...hunk,
+      start: hunk.start + prefix,
+      addStart: hunk.addStart + prefix,
+    }));
+  }
+  if (runs === undefined) {
+    return undefined;
+  }
+
+  // Where the length holds, a script of substitutions alone replaces the
+  // elements the per-index diff does, and nothing is gained.
+  if (sameLength && runs.every((hunk) => hunk.remove === hunk.add)) {
+    return undefined;
+  }
+  // A shortest script can remove an element and add it back where it was,
+  // the same value at the same index, which the per-index diff leaves out.
+  // An element can be any size, so a count of elements says nothing of what
+  // carrying it costs, and the change goes index by index.
+  if (
+    runs.some((hunk) => {
+      for (
+        let index = hunk.addStart;
+        index < hunk.addStart + hunk.add;
+        index++
+      ) {
+        if (index < shorter && valueEqual(before[index]!, after[index]!)) {
+          return true;
+        }
+      }
+      return false;
+    })
+  ) {
+    return undefined;
+  }
+  const carried = runs.reduce((total, hunk) => total + hunk.add, 0);
+  const replaced = countChangedIndices(before, after, prefix, shorter) +
+    after.length - shorter;
+  return carried < replaced ? runs : undefined;
+};
+
+/**
+ * Counts the indices from `start` up to `end` at which `before` and `after`
+ * hold different values: the elements a per-index diff replaces there. The
+ * count stops once it reaches `stopAt`.
+ */
+const countChangedIndices = (
+  before: readonly FabricValue[],
+  after: readonly FabricValue[],
+  start: number,
+  end: number,
+  stopAt = Infinity,
+): number => {
+  let changed = 0;
+  for (let index = start; index < end && changed < stopAt; index += 1) {
+    if (!valueEqual(before[index]!, after[index]!)) {
+      changed += 1;
+    }
+  }
+  return changed;
+};
+
+/**
+ * Builds the patch candidates that take the array `before` to the array
+ * `after` index by index: a `replace` at each index both hold whose value
+ * changed, and a splice that adds or removes the tail. A change to which
+ * indices hold a value, or a tail with a hole in it, is sent as the whole
+ * array instead.
+ */
+const buildPositionalArrayPatchCandidates = (
+  path: readonly string[],
+  before: readonly FabricValue[],
+  after: readonly FabricValue[],
+): PatchDraftCandidate[] => {
+  // Both sides are arrays, so the array slot itself is present in both
+  // states; fallbacks below replace the whole array.
   const overlappingLength = Math.min(before.length, after.length);
   for (let index = 0; index < overlappingLength; index += 1) {
     if ((index in before) !== (index in after)) {
@@ -662,7 +894,7 @@ const buildArrayPatchCandidates = (
       },
       path,
       coversDescendants: false,
-      tailSpliceStartIndex: before.length,
+      spliceStartIndex: before.length,
     });
   } else if (after.length < before.length) {
     candidates.push({
@@ -675,7 +907,7 @@ const buildArrayPatchCandidates = (
       },
       path,
       coversDescendants: false,
-      tailSpliceStartIndex: after.length,
+      spliceStartIndex: after.length,
     });
   }
 
@@ -771,10 +1003,10 @@ const isPrefixPath = (
 
 /**
  * The ops a document's commit sends, chosen from its patch candidates. A
- * covering candidate is dropped when a tail splice subsumes it, or when a
+ * covering candidate is dropped when a splice subsumes it, or when a
  * covering candidate already kept sits at or above its path, shorter paths
  * being kept first. A non-covering candidate is dropped when a kept covering
- * candidate or a tail splice covers it. And either kind is dropped when
+ * candidate or a splice covers it. And either kind is dropped when
  * `suppress` names it, since a mergeable op carries that change instead.
  *
  * Every one of those checks asks which of a set of paths prefix a candidate's
@@ -790,26 +1022,26 @@ export const selectPatchOps = (
   nonCoverCandidates: readonly PatchDraftCandidate[],
   suppress: readonly OpSuppression[],
 ): PatchOp[] => {
-  // The first index each tail splice touches, by the pointer of its array.
-  const tailSpliceStartsByPointer = new Map<string, number[]>();
-  for (const { path, tailSpliceStartIndex } of nonCoverCandidates) {
-    if (tailSpliceStartIndex === undefined) continue;
+  // The index each splice applies at, by the pointer of its array.
+  const spliceStartsByPointer = new Map<string, number[]>();
+  for (const { path, spliceStartIndex } of nonCoverCandidates) {
+    if (spliceStartIndex === undefined) continue;
     const pointer = encodePointer(path);
-    const starts = tailSpliceStartsByPointer.get(pointer);
+    const starts = spliceStartsByPointer.get(pointer);
     if (starts === undefined) {
-      tailSpliceStartsByPointer.set(pointer, [tailSpliceStartIndex]);
+      spliceStartsByPointer.set(pointer, [spliceStartIndex]);
     } else {
-      starts.push(tailSpliceStartIndex);
+      starts.push(spliceStartIndex);
     }
   }
-  // A tail splice subsumes only what sits strictly beneath it, at an element
-  // index at or past its start, so a candidate's own pointer, the last of its
+  // A splice subsumes only what sits strictly beneath it, at an element index
+  // at or past its start, so a candidate's own pointer, the last of its
   // prefixes, is not looked up.
-  const isSubsumedByAnyTailSplice = (
+  const isSubsumedByAnySplice = (
     candidatePath: readonly string[],
   ): boolean =>
     prefixPointers(candidatePath).slice(0, -1).some((pointer, length) =>
-      tailSpliceStartsByPointer.get(pointer)?.some((start) => {
+      spliceStartsByPointer.get(pointer)?.some((start) => {
         const childSegment = candidatePath[length]!;
         return isArrayIndexPropertyName(childSegment) &&
           Number(childSegment) >= start;
@@ -817,7 +1049,7 @@ export const selectPatchOps = (
     );
 
   const retainedCoverCandidates = fullCoverCandidates
-    .filter((candidate) => !isSubsumedByAnyTailSplice(candidate.path))
+    .filter((candidate) => !isSubsumedByAnySplice(candidate.path))
     .sort((left, right) => left.path.length - right.path.length);
   // Shortest first, so a candidate overlaps one already kept exactly when
   // that one's path is a prefix of its own.
@@ -834,7 +1066,7 @@ export const selectPatchOps = (
   }
 
   const retainedNonCoverCandidates = nonCoverCandidates.filter((detail) =>
-    !isUnderCover(detail.path) && !isSubsumedByAnyTailSplice(detail.path)
+    !isUnderCover(detail.path) && !isSubsumedByAnySplice(detail.path)
   );
 
   // Drop the candidates the append op replaces: the whole-array op at the
@@ -1094,6 +1326,10 @@ export class V2StorageTransaction implements IStorageTransaction {
   #branches = new Map<MemorySpace, SpaceBranch>();
   #readActivities: IReadActivity[] = [];
   #potentiallyExternalReadActivities: IReadActivity[] = [];
+  // How many times `#potentiallyExternalReadActivities` gained a record or
+  // was emptied, and how many of its leading records are frozen.
+  #potentiallyExternalReadRevision = 0;
+  #frozenReadActivityRecords = 0;
 
   /**
    * Per-transaction monotonic activity clock, shared between read activities
@@ -1191,13 +1427,14 @@ export class V2StorageTransaction implements IStorageTransaction {
   #writtenSpaces: MemorySpace[] = [];
 
   #readOnlySource?: string;
-  #lastDocument?: {
-    branch: SpaceBranch;
-    id: URI;
-    type: MediaType;
-    scope: CellScope;
-    doc: DocumentEntry;
-  };
+  #lastDocument?: RecentDocument;
+  #previousDocument?: RecentDocument;
+
+  /**
+   * Where `write()` and `writeBatch()` report each write that arrives without
+   * the write chokepoint's mark: every sink `reportUnmarkedWrites()` added.
+   */
+  #unmarkedWriteSinks: ((address: IMemorySpaceAddress) => void)[] = [];
 
   /**
    * Complete the transaction, keeping its result and releasing the state that
@@ -1228,9 +1465,12 @@ export class V2StorageTransaction implements IStorageTransaction {
     this.#branches.clear();
     this.#readActivities.length = 0;
     this.#potentiallyExternalReadActivities.length = 0;
+    this.#potentiallyExternalReadRevision++;
+    this.#frozenReadActivityRecords = 0;
     this.#writeAttemptLog.length = 0;
     this.#reactivityLogCache = undefined;
     this.#lastDocument = undefined;
+    this.#previousDocument = undefined;
   }
 
   readonly #storage: IStorageManager;
@@ -1331,6 +1571,18 @@ export class V2StorageTransaction implements IStorageTransaction {
   /** @inheritDoc */
   getPotentiallyExternalReadActivities(): readonly IReadActivity[] {
     return this.#potentiallyExternalReadActivities;
+  }
+
+  /** @inheritDoc */
+  freezeReadActivityRecords(): number {
+    const records = this.#potentiallyExternalReadActivities;
+    for (
+      let index = this.#frozenReadActivityRecords;
+      index < records.length;
+      index++
+    ) Object.freeze(records[index]);
+    this.#frozenReadActivityRecords = records.length;
+    return this.#potentiallyExternalReadRevision;
   }
 
   getWriteAttemptLog(): readonly IWriteAttempt[] {
@@ -1651,6 +1903,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
 
     const operations: NativeStorageCommitOperation[] = [];
+    const splicesArray = this.#arraySpliceGate(space);
     // Unconfirmed schema documents whose staged write nets to no visible
     // change (#mustDeliverSchemaDoc; the visible copy sits on a layer the
     // wire never carries, such as a client speculation overlay entry).
@@ -1768,6 +2021,12 @@ export class V2StorageTransaction implements IStorageTransaction {
           doc,
           base,
           mergeable.suppress,
+          // A document with a text change goes index by index: the change
+          // travels as an `apply-op`, an operation of its own on the
+          // document, and the store admits a marked splice only where its
+          // document has no other operation in the commit.
+          (arrayPath) =>
+            textChanges === undefined && splicesArray(id, scope, arrayPath),
           patchedValue,
         );
         if (mergeable.ops.length > 0) {
@@ -2071,7 +2330,8 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const branch = this.#branch(address.space);
     const { doc } = this.#document(branch, address);
-    if (readStatsActive && !hasInlineCellScheme(address.id)) {
+    const inline = hasInlineCellScheme(address.id);
+    if (readStatsActive && !inline) {
       recordDocumentRead(this, doc);
     }
     // The one place a read chooses which root it is reading. A materialized
@@ -2092,20 +2352,28 @@ export class V2StorageTransaction implements IStorageTransaction {
     // `set()` call only — CFC boundary-commit reads run after the tx is unmarked
     // and keep their preconditions.
     const skipCommitPrecondition = isUiInputBlindWriteTx(this);
-    const { space: _, ...memoryAddress } = address;
 
-    if (!hasInlineCellScheme(address.id)) {
-      const readActivity = {
-        space: address.space,
-        scope: normalizeCellScope(address.scope),
-        id: address.id,
-        path: toDocumentPath(address.path),
-        meta: skipCommitPrecondition
-          ? { ...readMeta, ...ignoreReadForCommit }
-          : readMeta,
-        ...(options?.nonRecursive === true ? { nonRecursive: true } : {}),
-        journalIndex: this.#activityClock++,
-      };
+    if (!inline) {
+      const space = address.space;
+      const scope = normalizeCellScope(address.scope);
+      const id = address.id;
+      const path = toDocumentPath(address.path);
+      const meta = skipCommitPrecondition
+        ? Object.freeze({ ...readMeta, ...ignoreReadForCommit })
+        : readMeta;
+      // Every read builds this record, so each arm is a whole literal: a
+      // spread in an object literal copies its source member by member.
+      const readActivity: IReadActivity = options?.nonRecursive === true
+        ? {
+          space,
+          scope,
+          id,
+          path,
+          meta,
+          nonRecursive: true,
+          journalIndex: this.#activityClock++,
+        }
+        : { space, scope, id, path, meta, journalIndex: this.#activityClock++ };
       // A sealed record is frozen with metadata that has the scheduler
       // ignore the read and marks no attempted write, so the log never lists
       // it and stands across it. Any other record's metadata can be replaced
@@ -2115,13 +2383,14 @@ export class V2StorageTransaction implements IStorageTransaction {
       if (!sealed) this.#invalidateReactivityLog();
     }
     if (options?.trackReadWithoutLoad === true) {
-      if (!hasInlineCellScheme(address.id) && !skipCommitPrecondition) {
+      if (!inline && !skipCommitPrecondition) {
         doc.validated = true;
       }
       return { ok: { address, value: undefined } };
     }
 
-    if (usesLocalReads(this) && !hasInlineCellScheme(address.id)) {
+    const { space: _, ...memoryAddress } = address;
+    if (usesLocalReads(this) && !inline) {
       // `patchDetails` is keyed by each write's pointer.
       const patchDetails = doc.patchDetails;
       const written = this.#readEpoch === undefined &&
@@ -2145,7 +2414,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     if (isMutableTransactionReadAllowed(readMeta)) {
       if (
-        !hasInlineCellScheme(address.id) &&
+        !inline &&
         !doc.validated &&
         !skipCommitPrecondition
       ) {
@@ -2186,7 +2455,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (
       !skipCommitPrecondition &&
       isInternalVerifierRead(readMeta) &&
-      !hasInlineCellScheme(address.id) &&
+      !inline &&
       // Content-addressed documents are EXEMPT from durable serving:
       // their content is identical on every layer (the replica refuses
       // a cid: doc whose content does not hash to its id), so the
@@ -2257,7 +2526,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const result = readAttestation(current, memoryAddress);
     if (
-      !hasInlineCellScheme(address.id) &&
+      !inline &&
       !doc.validated &&
       !skipCommitPrecondition
     ) {
@@ -2379,7 +2648,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     const readMeta = options?.meta ?? EMPTY_META;
     const skipCommitPrecondition = isUiInputBlindWriteTx(this);
     const activityMeta = skipCommitPrecondition
-      ? { ...readMeta, ...ignoreReadForCommit }
+      ? Object.freeze({ ...readMeta, ...ignoreReadForCommit })
       : readMeta;
     const scope = normalizeCellScope(address.scope);
     if (options?.nonRecursive === true) {
@@ -2426,6 +2695,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         address,
         options?.delete === true ? undefined : value,
       );
+      for (const sink of this.#unmarkedWriteSinks) sink(address);
     }
     return this.#writeWithinBranch(
       ready.ok,
@@ -2436,9 +2706,16 @@ export class V2StorageTransaction implements IStorageTransaction {
     );
   }
 
+  /** @inheritDoc */
+  reportUnmarkedWrites(sink: (address: IMemorySpaceAddress) => void): void {
+    this.#unmarkedWriteSinks.push(sink);
+  }
+
   writeBatch(
     writes: Iterable<ITransactionWriteRequest>,
+    options?: IWriteOptions,
   ): Result<Unit, WriterError | WriteError> {
+    const marked = passedWriteChokepoint(options);
     let run: ITransactionWriteRequest[] = [];
     let runKey: string | undefined;
 
@@ -2451,14 +2728,21 @@ export class V2StorageTransaction implements IStorageTransaction {
       if (ready.error) {
         return { error: ready.error };
       }
-      // A batch request carries no options, so it carries no mark either. The
-      // whole run is checked before any of it is applied.
+      // A batch request carries no options, so it carries no mark, and the
+      // whole run is checked before any of it is applied. The batch's own
+      // mark says only that the chokepoint saw each write, which is what an
+      // unmarked batch's writes are reported for lacking.
       for (const write of run) {
         this.#refuseUnmarkedMemberChange(
           ready.ok,
           write.address,
           write.delete === true ? undefined : write.value,
         );
+      }
+      if (!marked) {
+        for (const sink of this.#unmarkedWriteSinks) {
+          for (const write of run) sink(write.address);
+        }
       }
       const result = this.#writeBatchRun(address.space, ready.ok, run);
       run = [];
@@ -3208,7 +3492,17 @@ export class V2StorageTransaction implements IStorageTransaction {
       return { error: validation.error };
     }
 
-    const promise = this.#runSplitCommits(commits, options);
+    // A later space's writes reach its replica only once the server has
+    // answered for the spaces before it, and until then a read of that space
+    // does not see them. The storage manager tracks the commit until the
+    // last space's writes are in its replica, for a reader that must see all
+    // of them: the event that runs next (scheduler-v2 §7.5).
+    const applied = Promise.withResolvers<void>();
+    if (commits.length > 1) {
+      this.#storage.trackMultiSpaceCommitApplying?.(applied.promise);
+    }
+    const promise = this.#runSplitCommits(commits, applied.resolve, options);
+    void promise.then(() => applied.resolve(), () => applied.resolve());
     this.#state = { status: "pending", promise };
     try {
       const result = await promise;
@@ -3265,8 +3559,14 @@ export class V2StorageTransaction implements IStorageTransaction {
     return ordered;
   }
 
+  /**
+   * Commits each of `commits` to its space in turn, stopping at the first
+   * failure, and calls `handedOver` once the last one's writes are in its
+   * replica.
+   */
   async #runSplitCommits(
     commits: { space: MemorySpace; native: NativeStorageCommit }[],
+    handedOver: () => void,
     options?: NativeCommitOptions,
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     for (let i = 0; i < commits.length; i++) {
@@ -3295,7 +3595,10 @@ export class V2StorageTransaction implements IStorageTransaction {
       // space and everything after it are left uncommitted.
       try {
         endLocalReadValidationStretch();
-        const result = await commitNative(native, this, options);
+        // The replica takes the writes before the call first yields.
+        const committed = commitNative(native, this, options);
+        if (i === commits.length - 1) handedOver();
+        const result = await committed;
         if (result.error) {
           multiSpaceCommitLogger.error(
             "multi-space-commit-failed",
@@ -3682,6 +3985,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       Object.freeze(read);
     } else {
       this.#potentiallyExternalReadActivities.push(read);
+      this.#potentiallyExternalReadRevision++;
     }
     this.#readActivities.push(read);
     return sealed;
@@ -3734,13 +4038,23 @@ export class V2StorageTransaction implements IStorageTransaction {
     address: Pick<IMemoryAddress, "id" | "type" | "scope">,
   ): { doc: DocumentEntry } {
     const scope = normalizeCellScope(address.scope);
+    const last = this.#lastDocument;
     if (
-      this.#lastDocument?.branch === branch &&
-      this.#lastDocument.id === address.id &&
-      this.#lastDocument.type === (address.type ?? DOCUMENT_MIME) &&
-      this.#lastDocument.scope === scope
+      last?.branch === branch && last.id === address.id && last.scope === scope
     ) {
-      return { doc: this.#lastDocument.doc };
+      return { doc: last.doc };
+    }
+    // A read through links alternates between the document holding a link and
+    // the one it reaches, so the document answered before the last one is
+    // kept as well.
+    const previous = this.#previousDocument;
+    if (
+      previous?.branch === branch && previous.id === address.id &&
+      previous.scope === scope
+    ) {
+      this.#previousDocument = last;
+      this.#lastDocument = previous;
+      return { doc: previous.doc };
     }
 
     const key = this.#docKey(address);
@@ -3753,13 +4067,8 @@ export class V2StorageTransaction implements IStorageTransaction {
       };
       branch.docs.set(key, doc);
     }
-    this.#lastDocument = {
-      branch,
-      id: address.id,
-      type: address.type ?? DOCUMENT_MIME,
-      scope,
-      doc,
-    };
+    this.#previousDocument = last;
+    this.#lastDocument = { branch, id: address.id, scope, doc };
     return { doc };
   }
 
@@ -3793,11 +4102,11 @@ export class V2StorageTransaction implements IStorageTransaction {
     );
     // The runner's explicit-instance read, transaction layer (stage A): a
     // per-instance run's read of a scoped instance the replica has NEVER
-    // seen kicks an instance-named load — the serving replica only ever
-    // receives the SERVICE's instances through its own watches (the
-    // memory server resolves a root's scoped links against the loopback
-    // session), so a demander's instance arrives only when a read names
-    // it. The read itself stays absent; the read is logged under that
+    // seen kicks an instance-named load — the serving replica receives a
+    // demander's instances only through a watch root that names one, and
+    // through the links the memory server follows from such a root, so an
+    // instance that neither path reaches arrives only when a read names it.
+    // The read itself stays absent; the read is logged under that
     // instance, so the reader re-runs when the doc lands. Reserved once
     // per (space, instance, id) per manager (`shouldPullDoc`), like the
     // link-target kick in `Runtime.ensureLinkedDocLoaded`. Never on the
@@ -4110,6 +4419,63 @@ export class V2StorageTransaction implements IStorageTransaction {
   }
 
   /**
+   * Returns whether a change to the array at `arrayPath` of a document may go
+   * as edit-script splices in the commit this transaction sends to `space`.
+   *
+   * A splice names positions, and the store applies it to whatever array it
+   * holds when the commit lands. So the commit must pin the array: carry a
+   * recursive read of it or of a path above it, which makes the store refuse
+   * the commit where anything beneath the array moved since, and the splices
+   * land on exactly the array they were diffed from. The reads are the
+   * commit's own (`commitReadActivities()`), collected once, on the first
+   * question, as the set of paths each document is read recursively at, so
+   * each question probes the array's path and the paths above it. Abandoning
+   * a mergeable intent while the commit is built only adds reads to the
+   * commit, so working them out before that never claims a read the commit
+   * leaves out.
+   *
+   * The splices go marked (`PatchOp`'s `pinned`), so only to a server that
+   * advertises `markedSplicesV1` (`ISpaceReplica.markedSplices()`). A server
+   * that predates marked splices reads a splice as overwriting nothing, and
+   * would let a delayed handler's write land over the change; it gets the
+   * per-index form.
+   *
+   * A transaction a serving loop runs in a wave sends none
+   * (`isServedWaveRunTx()`): the wave batch carries no read set the store
+   * checks, and the wave drops an event handler's patches one by one, which
+   * it cannot do to part of a splice.
+   */
+  #arraySpliceGate(
+    space: MemorySpace,
+  ): (id: URI, scope: CellScope, arrayPath: readonly string[]) => boolean {
+    if (isServedWaveRunTx(this)) return () => false;
+    if (this.#branches.get(space)?.replica.markedSplices?.() !== true) {
+      return () => false;
+    }
+    let pinning: Map<string, Set<string>> | undefined;
+    return (id, scope, arrayPath) => {
+      if (pinning === undefined) {
+        pinning = new Map();
+        for (
+          const read of commitReadActivities(space, this, this.#readActivities)
+        ) {
+          if (read.nonRecursive === true) continue;
+          const key = this.#docKey(read);
+          const paths = pinning.get(key) ?? new Set<string>();
+          paths.add(encodePointer(read.path));
+          pinning.set(key, paths);
+        }
+      }
+      const paths = pinning.get(this.#docKey({ id, scope }));
+      if (paths === undefined) return false;
+      for (let length = 0; length <= arrayPath.length; length += 1) {
+        if (paths.has(encodePointer(arrayPath.slice(0, length)))) return true;
+      }
+      return false;
+    };
+  }
+
+  /**
    * Builds the patch operation carrying a document's writes as a diff of
    * `patchedValue`, its working value unless the caller holds some writes back,
    * against `base`, leaving out the candidates `suppress` names. The
@@ -4117,6 +4483,11 @@ export class V2StorageTransaction implements IStorageTransaction {
    * there is no patch to send: `base` or `patchedValue` is absent, or nothing
    * differs. No patch expresses a write to the document root, so `doc` must
    * hold none (see `#writesDocumentRoot()`).
+   *
+   * A change to an array goes as edit-script splices only where
+   * `splicesArray` allows it (`#arraySpliceGate()`) and no op in `suppress`
+   * reaches the array. Otherwise it goes index by index, which keeps each
+   * written index's value however the array moved.
    */
   #buildPatchOperation(
     id: URI,
@@ -4125,6 +4496,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     doc: WritableDocumentEntry,
     base: FabricValue | undefined,
     suppress: readonly OpSuppression[],
+    splicesArray: (arrayPath: readonly string[]) => boolean,
     patchedValue: FabricValue | undefined = doc.current.value,
   ): Extract<NativeStorageCommitOperation, { op: "patch" }> | null {
     if (base === undefined || patchedValue === undefined) {
@@ -4227,6 +4599,10 @@ export class V2StorageTransaction implements IStorageTransaction {
           hasValueAtPath(patchedValue, arrayPath, {
             allowArrayLength: true,
           }),
+          !splicesArray(arrayPath) ||
+            suppress.some((suppression) =>
+              pathsOverlap(suppression.path, arrayPath)
+            ),
         )
       ) {
         if (candidate.coversDescendants) {
@@ -4280,7 +4656,10 @@ export class V2StorageTransaction implements IStorageTransaction {
       scope,
       id,
       path: toDocumentPath([]),
-      meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+      meta: Object.freeze({
+        ...writeDestinationRead,
+        ...ignoreReadForScheduling,
+      }),
       journalIndex: this.#activityClock++,
     });
     doc.validated = true;

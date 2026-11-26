@@ -221,39 +221,44 @@ address printed. `cf profile show` prints the address and name `#profile`
 resolves to. Both take `-i`/`-a` and target the identity's home space; there is
 no `--space`.
 
-| Operation          | Command                                                                                                                                                           |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Type check         | `deno task cf check pattern.tsx --no-run`                                                                                                                         |
-| Test pattern       | `deno task cf test pattern.test.tsx`                                                                                                                              |
-| Deploy new         | `deno task cf piece new pattern.tsx --test pattern.test.tsx --root . --repository REPO -i key -a url -s space`                                                    |
-| Attach a data file | `deno task cf piece new pattern.tsx --test pattern.test.tsx --datafile data/cities.json ...`                                                                      |
-| Update existing    | `deno task cf piece setsrc pattern.tsx --test pattern.test.tsx --root . --repository REPO --cell ID -i key -a url -s space`                                       |
-| Follow an origin   | `deno task cf piece follow --cell ID system:system/profile-home/profile-home.tsx ...` (point a detached piece at an origin and adopt it; releases follow on open) |
-| Inspect state      | `deno task cf piece inspect --cell ID ...`                                                                                                                        |
-| Get field          | `deno task cf cell get --cell ID fieldPath ...`                                                                                                                   |
-| Filter array       | `deno task cf cell get --cell ID items --filter '.active == true' ...`                                                                                            |
-| Project fields     | `deno task cf cell get --cell ID items --select id,title ...`                                                                                                     |
-| Read an address    | `deno task cf cell get --cell ID --select 'topic@,topic.title' ...`                                                                                               |
-| Read addresses     | `deno task cf cell get --cell ID items --schema '{"type":"array","items":{"$link":true}}' ...`                                                                    |
-| Step + get         | `deno task cf cell get --cell ID fieldPath --step ...`                                                                                                            |
-| Set field          | `echo '{"data":...}' \| deno task cf cell set --cell ID path ...`                                                                                                 |
-| Call handler       | `deno task cf piece call --cell ID handlerName ...`                                                                                                               |
-| Shape a result     | `deno task cf piece call --cell ID addTopic ... -- --select topic.title`                                                                                          |
-| List verbs         | `deno task cf piece verbs --cell ID --json ...` (`--all` adds wrapper/deprecated; `hidden` counts them)                                                           |
-| Trigger recompute  | `deno task cf piece step --cell ID ...`                                                                                                                           |
-| Mint a session     | `(umask 077 && set -C && s="$(deno task cf invocation-session new)" && echo "$s" > '<run session file>')` (once per run; a fresh path each run)                   |
-| Carry the session  | `export CF_INVOCATION_SESSION="$(cat '<run session file>')"` (in every shell that passes `--invocation`; a call naming an id without it is refused)               |
-| Replayable call    | `deno task cf piece call --cell ID --invocation my-id-1 handlerName ...` (same pair retries settle on the original outcome)                                       |
-| Detached call      | `deno task cf piece call --cell ID --no-wait --invocation my-id-1 handlerName ...` (exits at commit with `receipt` address)                                       |
-| Collect a receipt  | `deno task cf cell get --cell <receipt> ...` (the envelope's `receipt` string, later, from any process)                                                           |
-| Create a profile   | `deno task cf profile create "Ada Lovelace" -i key -a url` (the shell's create form, from the CLI; prints the address)                                            |
-| Show the profile   | `deno task cf profile show -i key -a url` (the address and name `#profile` resolves to, as JSON)                                                                  |
-| List pieces        | `deno task cf piece ls -i key -a url -s space` (registry only — a handler-created piece appears only if sent to `addPiece`)                                       |
-| Describe a piece   | `deno task cf piece describe --cell ID ...` (name, purpose, state, inputs, verbs; `--json`, `--all`)                                                              |
-| List slugs         | `deno task cf piece slugs ...`                                                                                                                                    |
-| Search piece data  | `deno task cf piece search <query> ...` (registered pieces only)                                                                                                  |
-| Visualize          | `deno task cf piece map ...`                                                                                                                                      |
-| Rehearse an update | `deno task cf space clone <did> --from <snapshot> --to <dir>` (then `verify` / `reset`)                                                                           |
+| Operation          | Command                                                                                                                                                                                                                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Type check         | `deno task cf check pattern.tsx --no-run`                                                                                                                                                                                                                                                         |
+| Test pattern       | `deno task cf test pattern.test.tsx`                                                                                                                                                                                                                                                              |
+| Deploy new         | `deno task cf piece new pattern.tsx --test pattern.test.tsx --root . --repository REPO -i key -a url -s space`                                                                                                                                                                                    |
+| Attach a data file | `deno task cf piece new pattern.tsx --test pattern.test.tsx --datafile data/cities.json ...`                                                                                                                                                                                                      |
+| Deploy from index  | `deno task cf piece new --from-index ID --pattern-index-url URL ... --json` (`{"pieceId","name"?}`; built as `run_pattern` builds it)                                                                                                                                                             |
+| Join the index     | `pbpaste \| deno task cf index join -i key` (the invite link on stdin; once per machine)                                                                                                                                                                                                          |
+| Share to index     | `deno task cf pattern share pattern.tsx --json -i key -a url -s space` (anonymous; privacy check, may rewrite files; `outcome` says what happened)                                                                                                                                                |
+| Undo a deploy      | `deno task cf pattern history pattern.tsx -i key`, `cf pattern rollback pattern.tsx <version>`, then `cf piece setsrc` to run it (each deploy of your own file is kept once joined to an index that keeps versions; a piece following an origin keeps none, and a plain `setsrc` would detach it) |
+| Your patterns      | `deno task cf pattern ls -i key` (listing state, findings to fix, what moves each on)                                                                                                                                                                                                             |
+| Update existing    | `deno task cf piece setsrc pattern.tsx --test pattern.test.tsx --root . --repository REPO --cell ID -i key -a url -s space`                                                                                                                                                                       |
+| Follow an origin   | `deno task cf piece follow --cell ID system:system/profile-home/profile-home.tsx ...` (point a detached piece at an origin and adopt it; releases follow on open)                                                                                                                                 |
+| Inspect state      | `deno task cf piece inspect --cell ID ...`                                                                                                                                                                                                                                                        |
+| Get field          | `deno task cf cell get --cell ID fieldPath ...`                                                                                                                                                                                                                                                   |
+| Filter array       | `deno task cf cell get --cell ID items --filter '.active == true' ...`                                                                                                                                                                                                                            |
+| Project fields     | `deno task cf cell get --cell ID items --select id,title ...`                                                                                                                                                                                                                                     |
+| Read an address    | `deno task cf cell get --cell ID --select 'topic@,topic.title' ...`                                                                                                                                                                                                                               |
+| Read addresses     | `deno task cf cell get --cell ID items --schema '{"type":"array","items":{"$link":true}}' ...`                                                                                                                                                                                                    |
+| Step + get         | `deno task cf cell get --cell ID fieldPath --step ...`                                                                                                                                                                                                                                            |
+| Set field          | `echo '{"data":...}' \| deno task cf cell set --cell ID path ...`                                                                                                                                                                                                                                 |
+| Call handler       | `deno task cf piece call --cell ID handlerName ...`                                                                                                                                                                                                                                               |
+| Shape a result     | `deno task cf piece call --cell ID addTopic ... -- --select topic.title`                                                                                                                                                                                                                          |
+| List verbs         | `deno task cf piece verbs --cell ID --json ...` (`--all` adds wrapper/deprecated; `hidden` counts them)                                                                                                                                                                                           |
+| Trigger recompute  | `deno task cf piece step --cell ID ...`                                                                                                                                                                                                                                                           |
+| Mint a session     | `(umask 077 && set -C && s="$(deno task cf invocation-session new)" && echo "$s" > '<run session file>')` (once per run; a fresh path each run)                                                                                                                                                   |
+| Carry the session  | `export CF_INVOCATION_SESSION="$(cat '<run session file>')"` (in every shell that passes `--invocation`; a call naming an id without it is refused)                                                                                                                                               |
+| Replayable call    | `deno task cf piece call --cell ID --invocation my-id-1 handlerName ...` (same pair retries settle on the original outcome)                                                                                                                                                                       |
+| Detached call      | `deno task cf piece call --cell ID --no-wait --invocation my-id-1 handlerName ...` (exits at commit with `receipt` address)                                                                                                                                                                       |
+| Collect a receipt  | `deno task cf cell get --cell <receipt> ...` (the envelope's `receipt` string, later, from any process)                                                                                                                                                                                           |
+| Create a profile   | `deno task cf profile create "Ada Lovelace" -i key -a url` (the shell's create form, from the CLI; prints the address)                                                                                                                                                                            |
+| Show the profile   | `deno task cf profile show -i key -a url` (the address and name `#profile` resolves to, as JSON)                                                                                                                                                                                                  |
+| List pieces        | `deno task cf piece ls -i key -a url -s space` (registry only — a handler-created piece appears only if sent to `addPiece`)                                                                                                                                                                       |
+| Describe a piece   | `deno task cf piece describe --cell ID ...` (name, purpose, state, inputs, verbs; `--json`, `--all`)                                                                                                                                                                                              |
+| List slugs         | `deno task cf piece slugs ...`                                                                                                                                                                                                                                                                    |
+| Search piece data  | `deno task cf piece search <query> ...` (registered pieces only)                                                                                                                                                                                                                                  |
+| Visualize          | `deno task cf piece map ...`                                                                                                                                                                                                                                                                      |
+| Rehearse an update | `deno task cf space clone <did> --from <snapshot> --to <dir>` (then `verify` / `reset`)                                                                                                                                                                                                           |
 
 ## Check Command Flags
 
@@ -309,9 +314,11 @@ every authored test entry. Each `setsrc` describes a complete new source
 revision, so omitting the flags drops those test roots from that revision.
 
 A file that is not code — a fixture, a lookup table, a list of names — ships and
-is recovered with the source. Its bytes are stored verbatim: never parsed,
-type-checked, compiled, or importable, and the pattern reads one with
-`dataFile("./data/cities.json")` from `commonfabric`. That call is the
+is recovered with the source, byte for byte. It is never parsed, type-checked,
+compiled, or importable. The pattern reads a text file with
+`dataFile("./data/cities.json")` from `commonfabric`, and an image, a font, or a
+sound with `dataFile.url()` as a `data:` URL, or every image, font, and sound
+directly inside a directory with `dataFile.urls(directory)`. Each call is the
 declaration, and its path resolves against the module that reads it, the way an
 import specifier does. Store the file where the call points and `new`, `setsrc`,
 `check`, `test`, and `dev` all attach it, the way they already follow what the
@@ -321,11 +328,12 @@ module read it.
 `--datafile <path>` attaches a file the source cannot name: one read by a
 computed path, or one that ships with a program that does not read it. It adds
 to what the source declares rather than replacing it. A data file must be UTF-8
-text and sit inside the deployment root, which the CLI infers to cover the main
-entry, every test entry, and every data file unless `--root` says otherwise.
-Like `--test`, the flag is repeatable and defines part of the revision, so
-repeat the complete set on every `setsrc`. Changing a data file alone still
-produces a new source revision.
+text, or an image, a font, or a sound read with `dataFile.url()`, and sit inside
+the deployment root, which the CLI infers to cover the main entry, every test
+entry, and every data file unless `--root` says otherwise. Like `--test`, the
+flag is repeatable and defines part of the revision, so repeat the complete set
+on every `setsrc`. Changing a data file alone still produces a new source
+revision.
 
 `setsrc` normally rejects incompatible argument/result schema changes and
 retained links whose durable contracts no longer fit. For an intentional

@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   collectedMemory,
@@ -23,6 +23,31 @@ describe("collected-memory", () => {
     const after = collectedMemory();
     expect(during.external - after.external).toBeGreaterThanOrEqual(SIZE);
     expect(after.heapUsed).toBeGreaterThan(0);
+  });
+
+  it("leaves `gc()` out of reach of a worker's own realm and of a SES compartment in it", async () => {
+    // A serving worker starts after the toolshed exposes the collector, and
+    // runs a pattern's code in such a compartment.
+    exposeGarbageCollector();
+    const worker = new Worker(
+      new URL("./collected-memory-reach-worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    try {
+      const seen = await new Promise<unknown>((resolve, reject) => {
+        worker.onmessage = (event) => resolve(event.data);
+        worker.onerror = (event) => {
+          event.preventDefault();
+          reject(new Error(event.message));
+        };
+      });
+      expect(seen).toEqual({
+        realm: "undefined",
+        compartment: ["undefined", "undefined", "undefined"],
+      });
+    } finally {
+      worker.terminate();
+    }
   });
 
   it("throws in a process that never exposed the collector", async () => {

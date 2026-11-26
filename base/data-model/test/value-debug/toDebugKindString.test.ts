@@ -1,13 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { toDebugKindString } from "@";
 import { FabricError, FabricMap } from "@/fabric-instances";
-import {
-  FabricBytes,
-  FabricEpochNsec,
-  FabricRegExp,
-} from "@/fabric-primitives";
+import { FabricBytes, FabricEpochNsec } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("toDebugKindString()", () => {
   it("renders `null` and `undefined` literally", () => {
@@ -47,8 +43,6 @@ describe("toDebugKindString()", () => {
       .toBe("FabricPrimitive (FabricEpochNsec)");
     expect(toDebugKindString(new FabricBytes(new Uint8Array([1, 2, 3]))))
       .toBe("FabricPrimitive (FabricBytes)");
-    expect(toDebugKindString(new FabricRegExp(/abc/g)))
-      .toBe("FabricPrimitive (FabricRegExp)");
   });
 
   it("renders a non-`FabricSpecialObject` instance with its constructor name", () => {

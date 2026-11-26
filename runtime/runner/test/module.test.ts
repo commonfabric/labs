@@ -2,7 +2,6 @@ import {
   resetContentAddressedSchemasConfig,
   setContentAddressedSchemasConfig,
 } from "../src/schema-doc-config.ts";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type AssertRawPart,
@@ -10,6 +9,12 @@ import {
   JSONSchemaObj,
 } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   type Cell,
   type Frame,

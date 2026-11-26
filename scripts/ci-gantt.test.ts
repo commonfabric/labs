@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 
 import { maxOf } from "@commonfabric/collections/math";
+import { test } from "@commonfabric/test-support/test";
 
 const SCRIPT = new URL("./ci-gantt.ts", import.meta.url).href;
 const START = Date.parse("2026-07-20T10:00:00Z");
@@ -149,7 +150,7 @@ function attemptDuration(
   return { x: Number(match[1]), y: Number(match[2]) };
 }
 
-Deno.test("single-run CI Gantt draws every rerun attempt on one row", async () => {
+test("single-run CI Gantt draws every rerun attempt on one row", async () => {
   const svg = await render({
     runs: [
       inputRun(42, [
@@ -206,7 +207,7 @@ Deno.test("single-run CI Gantt draws every rerun attempt on one row", async () =
   assertStringIncludes(svg, "failed attempts end in ×");
 });
 
-Deno.test("CI Gantt light theme paints a light SVG", async () => {
+test("CI Gantt light theme paints a light SVG", async () => {
   const svg = await render({
     runs: [inputRun(42, [job("Test", 1, 60, 120)])],
   }, "default");
@@ -216,7 +217,7 @@ Deno.test("CI Gantt light theme paints a light SVG", async () => {
   assertEquals(svg.includes('fill="#0d0e11"'), false);
 });
 
-Deno.test("CI Gantt rejects a rerun whose jobs carry no attempt", async () => {
+test("CI Gantt rejects a rerun whose jobs carry no attempt", async () => {
   const collapsed: Partial<TestJob> = { ...job("Retried job", 1, 60, 120) };
   delete collapsed.attempt;
   const rerun = inputRun(42, [job("Retried job", 2, 60, 120)]);
@@ -239,7 +240,7 @@ Deno.test("CI Gantt rejects a rerun whose jobs carry no attempt", async () => {
   assertStringIncludes(drawn.svg, "Only job");
 });
 
-Deno.test("multi-run CI Gantt keeps one aggregate bar per job", async () => {
+test("multi-run CI Gantt keeps one aggregate bar per job", async () => {
   const svg = await render({
     runs: [
       inputRun(42, [

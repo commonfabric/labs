@@ -4,9 +4,11 @@ import {
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
+import { ASSETS_ATTRIBUTE } from "../src/assets.ts";
 import {
   connectFabric,
   type FabricClient,
@@ -33,6 +35,25 @@ function handOffPort(): MessagePort {
     }),
   );
   return channel.port1;
+}
+
+/**
+ * Hands the guest a port whose `postMessage()` throws, as a port does given
+ * what it cannot carry. Returns the host's end, and a function that mends the
+ * guest's.
+ */
+function handOffBrokenPort(): { host: MessagePort; mend(): void } {
+  const channel = new MessageChannel();
+  const postMessage = stub(channel.port2, "postMessage", () => {
+    throw new DOMException("The port cannot carry this.", "DataCloneError");
+  });
+  globalThis.dispatchEvent(
+    new MessageEvent("message", {
+      data: GUEST_PORT_HANDOFF,
+      ports: [channel.port2],
+    }),
+  );
+  return { host: channel.port1, mend: () => postMessage.restore() };
 }
 
 function event(subscription: string, value?: FabricValue): BridgeHostMessage {
@@ -1286,6 +1307,242 @@ describe("guest", () => {
       } finally {
         fabric.disconnect();
       }
+    });
+
+    it("rejects `pushAll()` given members that are not an array, and sends nothing", async () => {
+      const fabric = connectFabric();
+      try {
+        const cell = fabric.cell<number[]>("list");
+        await expect(Reflect.apply(cell.pushAll, cell, ["members"])).rejects
+          .toThrow(new TypeError("`pushAll()` requires an array of members."));
+
+        const host = handOffPort();
+        void cell.pull();
+        expect(await receive(host)).toMatchObject({ operation: "pull" });
+      } finally {
+        fabric.disconnect();
+      }
+    });
+
+    it("rejects `pushAll()` given members it cannot copy, and sends nothing", async () => {
+      const fabric = connectFabric();
+      try {
+        const cell = fabric.cell<FabricValue[]>("list");
+        const cyclic: Record<string, FabricValue> = {};
+        cyclic.self = cyclic;
+        await expect(cell.pushAll([cyclic])).rejects.toThrow(
+          "Cannot deep-clone circular reference",
+        );
+
+        const host = handOffPort();
+        void cell.pull();
+        expect(await receive(host)).toMatchObject({ operation: "pull" });
+      } finally {
+        fabric.disconnect();
+      }
+    });
+
+    describe("a write it cannot encode", () => {
+      const unencodable = Object.fromEntries([["constructor", 1]]);
+
+      it("leaves a resource's cell holding an `operation-failed` error naming the resource", async () => {
+        const fabric = connectFabric();
+        try {
+          const cell = fabric.cell<FabricValue>("record");
+          await expect(cell.set(unencodable)).rejects.toThrow(
+            "Cannot encode an object with a key this runtime reserves",
+          );
+
+          expect(cell.getSnapshot()).toMatchObject({
+            status: "error",
+            error: {
+              name: "FabricBridgeError",
+              code: "operation-failed",
+              resource: "record",
+            },
+          });
+        } finally {
+          fabric.disconnect();
+        }
+      });
+
+      it("leaves a resolved cell holding an `operation-failed` error naming no resource", async () => {
+        const fabric = connectFabric();
+        try {
+          const cell = fabric.resolvedCell<FabricValue>({
+            handle: "cell-1",
+            hasValue: true,
+            operations: ["get", "pull", "set"],
+            value: 1,
+          });
+          await expect(cell.set(unencodable)).rejects.toThrow(
+            "Cannot encode an object with a key this runtime reserves",
+          );
+
+          expect(cell.getSnapshot()).toMatchObject({
+            status: "error",
+            error: { code: "operation-failed", resource: undefined },
+          });
+        } finally {
+          fabric.disconnect();
+        }
+      });
+    });
+
+    it("rejects a request with the error its port raised sending it", async () => {
+      const fabric = connectFabric();
+      const port = handOffBrokenPort();
+      try {
+        await expect(fabric.call("service", "run")).rejects.toThrow(
+          new DOMException("The port cannot carry this.", "DataCloneError"),
+        );
+      } finally {
+        port.mend();
+        fabric.disconnect();
+        port.host.close();
+      }
+    });
+
+    it("ignores a port message it cannot decode, or that is not the host's", async () => {
+      const fabric = connectFabric();
+      try {
+        const host = handOffPort();
+        const pulling = fabric.cell<number>("count").pull();
+        const request = await receive(host);
+
+        host.postMessage("not a message");
+        send(host, response(request.id + 1, 2));
+        host.postMessage(realmFromFabricValue({ hello: "world" }));
+        send(host, response(request.id, 1));
+
+        expect(await pulling).toBe(1);
+      } finally {
+        fabric.disconnect();
+      }
+    });
+
+    describe("asset()", () => {
+      // The browser test loads a real document, where the host's writer and
+      // this reader meet. Here a stand-in document hands over the element's
+      // text, which is what the reader takes from it.
+
+      /** The bytes `GLAZE` carries: the signature a PNG file opens with. */
+      const GLAZE_BYTES = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+      const GLAZE = "data:image/png;base64,iVBORw0KGgo=";
+      const LABEL =
+        "data:image/svg+xml;charset=utf-8;base64,PHN2Zz7inJM8L3N2Zz4=";
+
+      /**
+       * Runs `body` with a client of a document that carries `assets` as the
+       * host writes them, or that carries no record at all for `undefined`.
+       */
+      async function withClient(
+        assets: Record<string, string> | undefined,
+        body: (fabric: FabricClient) => void | Promise<void>,
+      ): Promise<void> {
+        const original = Reflect.get(globalThis, "document");
+        Reflect.set(globalThis, "document", {
+          readyState: "loading",
+          querySelector: (selector: string) =>
+            assets !== undefined && selector === `script[${ASSETS_ATTRIBUTE}]`
+              ? { textContent: JSON.stringify(assets) }
+              : null,
+        });
+        const fabric = connectFabric();
+        try {
+          await body(fabric);
+        } finally {
+          fabric.disconnect();
+          Reflect.set(globalThis, "document", original);
+        }
+      }
+
+      it("returns the media type, the size of the decoded bytes, and the URL", async () => {
+        await withClient({ glaze: GLAZE, label: LABEL }, (fabric) => {
+          const glaze = fabric.asset("glaze");
+          expect(glaze.mediaType).toBe("image/png");
+          expect(glaze.size).toBe(8);
+          expect(glaze.url).toBe(GLAZE);
+          const label = fabric.asset("label");
+          expect(label.mediaType).toBe("image/svg+xml;charset=utf-8");
+          expect(label.size).toBe(14);
+        });
+      });
+
+      it("returns the size of bytes ending in each length of padding", async () => {
+        const assets = {
+          none: "data:audio/wav;base64,AAAA",
+          one: "data:audio/wav;base64,AAA=",
+          two: "data:audio/wav;base64,AA==",
+          empty: "data:audio/wav;base64,",
+        };
+        await withClient(assets, (fabric) => {
+          expect(
+            Object.keys(assets).map((name) => [
+              fabric.asset(name).size,
+              fabric.asset(name).bytes().length,
+            ]),
+          ).toEqual([[3, 3], [2, 2], [1, 1], [0, 0]]);
+        });
+      });
+
+      it("decodes the bytes, returning a fresh copy on each call", async () => {
+        await withClient({ glaze: GLAZE }, (fabric) => {
+          const glaze = fabric.asset("glaze");
+          const first = glaze.bytes();
+          first[0] = 0;
+          expect([...glaze.bytes()]).toEqual(GLAZE_BYTES);
+          expect(glaze.bytes()).not.toBe(glaze.bytes());
+        });
+      });
+
+      it("returns the bytes as a `Blob` of the asset's media type", async () => {
+        await withClient({ glaze: GLAZE }, async (fabric) => {
+          const blob = fabric.asset("glaze").blob();
+          expect(blob.type).toBe("image/png");
+          expect([...new Uint8Array(await blob.arrayBuffer())]).toEqual(
+            GLAZE_BYTES,
+          );
+        });
+      });
+
+      it("returns the bytes read as UTF-8 as its text", async () => {
+        await withClient({ label: LABEL }, (fabric) => {
+          expect(fabric.asset("label").text()).toBe("<svg>✓</svg>");
+        });
+      });
+
+      it("throws for a name the document carries no asset for, listing the names it carries", async () => {
+        await withClient({ glaze: GLAZE, label: LABEL }, (fabric) => {
+          expect(() => fabric.asset("logo")).toThrow(
+            'This document carries no asset named `"logo"`; it carries ' +
+              "`glaze`, `label`.",
+          );
+          expect(() => fabric.asset("toString")).toThrow(
+            'no asset named `"toString"`',
+          );
+        });
+      });
+
+      it("throws for every name when the document carries no assets", async () => {
+        await withClient(undefined, (fabric) => {
+          expect(() => fabric.asset("glaze")).toThrow(
+            'This document carries no asset named `"glaze"`; it carries none.',
+          );
+        });
+      });
+
+      it("throws when the document carries a record that is not one of assets", async () => {
+        await withClient(
+          { glaze: "https://example.com/glaze.png" },
+          (fabric) => {
+            expect(() => fabric.asset("glaze")).toThrow(TypeError);
+            expect(() => fabric.asset("glaze")).toThrow(
+              "The asset `glaze` is not a base64 `data:` URL",
+            );
+          },
+        );
+      });
     });
   });
 

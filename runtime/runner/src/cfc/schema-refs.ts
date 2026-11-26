@@ -96,8 +96,8 @@ const EMPTY_REF_SUMMARY: SchemaRefSummary = {
 // under different documents.
 const schemaRefSummaryCache = new WeakMap<object, SchemaRefSummary>();
 const definitionIndexCache = new WeakMap<object, DefinitionIndex>();
-const prunedRootSchemaCache = new WeakMap<object, JSONSchema>();
-const prunedNestedSchemaCache = new WeakMap<object, JSONSchema>();
+const prunedRootSchemaCache = new WeakMap<object, JSONSchemaObj>();
+const prunedNestedSchemaCache = new WeakMap<object, JSONSchemaObj>();
 
 // Caching resolveCfcSchemaRef also makes its result identity-STABLE per
 // (fullSchema, ref), which lets downstream identity-keyed hash/traverse caches
@@ -485,25 +485,6 @@ const hasLocalDefinitionRef = (schema: JSONSchema): boolean =>
 // keyed on a resolution's root hold for a resolution rooted at the view.
 const inheritedDefsViews = new WeakMap<object, WeakMap<object, JSONSchema>>();
 
-const memoizedInheritedDefsView = (
-  schema: JSONSchemaObj,
-  key: object,
-  mint: () => JSONSchema,
-): JSONSchema => {
-  if (!isDeepFrozen(schema)) return mint();
-  let byMap = inheritedDefsViews.get(schema);
-  if (byMap === undefined) {
-    byMap = new WeakMap();
-    inheritedDefsViews.set(schema, byMap);
-  }
-  let view = byMap.get(key);
-  if (view === undefined) {
-    view = isDeepFrozen(key) ? deepFreeze(mint()) : mint();
-    byMap.set(key, view);
-  }
-  return view;
-};
-
 // The document `cfcSchemaDocumentOf()` minted for a deep-frozen definition
 // map, and the one it hands out for no map at all.
 const definitionDocuments = new WeakMap<object, JSONSchemaObj>();
@@ -561,17 +542,24 @@ export const cfcSchemaWithInheritedDefs = (
 ): JSONSchema => {
   if (
     !isObjectNotArray(inheritedDefinitions) ||
-    !canInheritDefs(schema, inheritedDefinitions) ||
-    (isDeepFrozen(schema) && !hasLocalDefinitionRef(schema))
+    !canInheritDefs(schema, inheritedDefinitions)
   ) {
     return schema;
   }
-  const definitions = inheritedDefinitions;
-  return memoizedInheritedDefsView(
-    schema,
-    definitions,
-    () => ({ ...schema, $defs: definitions }),
-  );
+  if (!isDeepFrozen(schema)) return { ...schema, $defs: inheritedDefinitions };
+  if (!hasLocalDefinitionRef(schema)) return schema;
+  let byMap = inheritedDefsViews.get(schema);
+  if (byMap === undefined) {
+    byMap = new WeakMap();
+    inheritedDefsViews.set(schema, byMap);
+  }
+  let view = byMap.get(inheritedDefinitions);
+  if (view === undefined) {
+    view = { ...schema, $defs: inheritedDefinitions };
+    if (isDeepFrozen(inheritedDefinitions)) deepFreeze(view);
+    byMap.set(inheritedDefinitions, view);
+  }
+  return view;
 };
 
 // Views `definitionBodyWithDefs()` minted for a deep-frozen definition body
@@ -736,10 +724,18 @@ export const selectReferencedCfcSchemaDefs = (
 const pruneCfcSchemaDefinitionsInternal = (
   schema: JSONSchema,
   atRoot: boolean,
-): JSONSchema => {
+): JSONSchema =>
   // A boolean schema, and anything a schema cannot be, has no definitions to
   // prune and is returned as it arrived.
-  if (!isObjectOrArray(schema)) return schema;
+  isObjectOrArray(schema)
+    ? pruneCfcSchemaObjectDefinitions(schema, atRoot)
+    : schema;
+
+/** `pruneCfcSchemaDefinitionsInternal()` for a schema object. */
+const pruneCfcSchemaObjectDefinitions = (
+  schema: JSONSchemaObj,
+  atRoot: boolean,
+): JSONSchemaObj => {
   const cacheable = isDeepFrozen(schema);
   const cache = atRoot ? prunedRootSchemaCache : prunedNestedSchemaCache;
   if (cacheable) {
@@ -910,11 +906,10 @@ const canonicalizeCfcSchemaDocumentUncached = (
     if (renamed.has(name)) continue;
     definitions.set(name, rename(root.get(name)!));
   }
-  const pruned = pruneCfcSchemaDefinitions({
+  const pruned = pruneCfcSchemaObjectDefinitions({
     ...(rename(body) as JSONSchemaObj),
     $defs: Object.fromEntries(definitions),
-  });
-  if (!isObjectNotArray(pruned)) return pruned;
+  }, true);
 
   // A definition the author named stays whether or not anything refers to
   // it, pruned below the root as any other, with what it refers to.

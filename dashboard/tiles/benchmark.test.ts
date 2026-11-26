@@ -18,13 +18,13 @@ import {
   assertThrows,
 } from "@std/assert";
 import { expect } from "@std/expect";
-import { beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import type { Ctx, TileView } from "../types.ts";
 import { BENCH_TREND_BUCKET_MS, REPO } from "../config.ts";
 import {
   BenchmarkHistoryStore,
+  type BenchmarkStats,
   type CachedBenchmarkRun,
 } from "../benchmark-history-cache.ts";
 import {
@@ -38,6 +38,7 @@ import {
   benchmarkRerunHandoff,
   type BenchmarkSnapshot,
   benchmarkTrend,
+  benchmarkTilesResponse,
   benchmarkTrendRuns,
   benchPage,
   describeBenchmarkProgress,
@@ -60,6 +61,8 @@ import {
 } from "../ci-job-history.ts";
 import { PERFORMANCE_VIEW_STYLES } from "../performance-views.ts";
 import { artifactZip, bytes, makeZip } from "../test/artifact-zip.ts";
+import { runList } from "../test/run-list.ts";
+import { beforeEach, describe, it, test } from "@commonfabric/test-support/test";
 
 // The history store falls back to the system temporary directory when no cache
 // directory is named. The package's test task preloads a module that names a
@@ -86,7 +89,7 @@ Deno.env.delete("GITHUB_TOKEN");
 // The tiles hold the run list they read, and read only its top again while
 // they hold it. The fixtures of different tests are unrelated lists, so every
 // test starts from a tile holding no runs.
-Deno.test.beforeEach(forgetBenchmarkRunsForTest);
+beforeEach(forgetBenchmarkRunsForTest);
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -124,6 +127,7 @@ const benchZip = (json: string) => artifactZip("results.json", json);
 interface GhRun {
   id: number;
   head_branch: string | null;
+  head_sha: string;
   run_attempt: number;
   status: string;
   created_at: string;
@@ -146,6 +150,7 @@ const ghRun = (
 ): GhRun => ({
   id,
   head_branch: "main",
+  head_sha: `c${id}`,
   run_attempt: runAttempt,
   status: "completed",
   created_at: new Date(at).toISOString(),
@@ -217,7 +222,10 @@ function serve(api: Api): (url: URL) => Response {
       );
       const size = Number(url.searchParams.get("per_page") ?? 30);
       const from = (Number(url.searchParams.get("page") ?? 1) - 1) * size;
-      return Response.json({ workflow_runs: runs.slice(from, from + size) });
+      return Response.json({
+        total_count: runs.length,
+        workflow_runs: runs.slice(from, from + size),
+      });
     }
     const runId = url.pathname.match(/\/actions\/runs\/(\d+)\/artifacts$/)?.[1];
     if (runId) {
@@ -365,19 +373,26 @@ async function withTotals(
 // the tests
 //
 
-Deno.test("benchmark: no token -> gray, and nothing is fetched", async () => {
+test("benchmark: no token -> gray, and nothing is fetched", async () => {
   await withApi({ throws: new Error("no request expected") }, async (calls) => {
     const v = await benchmark.collect(ctx({}));
     assertEquals(v.status, "unknown");
     assertEquals(v.value, "—");
     assertEquals(v.sub, "set GH_TOKEN");
     assertEquals(v.href, "/bench?view=runtime&repo=labs");
-    assertEquals(v.hint, "metrics ↗");
+    assertEquals(v.hint, "metrics ↗ · as JSON at /bench/tiles.json");
     assertEquals(calls, []);
+    const [tile] = (await (await benchmarkTilesResponse()).json()).tiles;
+    expect(tile).toMatchObject({
+      status: "unknown",
+      headline: "—",
+      sub: "set GH_TOKEN",
+      processors: [],
+    });
   });
 });
 
-Deno.test("dashboard and /bench benchmark refreshes keep separate request scopes", async () => {
+test("dashboard and /bench benchmark refreshes keep separate request scopes", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-scope-" });
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   Deno.env.set("DASHBOARD_CACHE_DIR", directory);
@@ -446,7 +461,7 @@ Deno.test("dashboard and /bench benchmark refreshes keep separate request scopes
     releaseDashboard(new Response("unavailable", { status: 503 }));
     await dashboardResult;
     await performanceStarted;
-    releasePerformance(Response.json({ workflow_runs: [] }));
+    releasePerformance(Response.json(runList([])));
     const events = await progressText;
     assertStringIncludes(events, '"phase":"complete"');
     assertEquals(events.includes('"phase":"error"'), false);
@@ -457,7 +472,7 @@ Deno.test("dashboard and /bench benchmark refreshes keep separate request scopes
   } finally {
     dashboardReleased = true;
     releaseDashboard(new Response("unavailable", { status: 503 }));
-    releasePerformance(Response.json({ workflow_runs: [] }));
+    releasePerformance(Response.json(runList([])));
     await dashboardResult?.catch(() => {});
     globalThis.fetch = originalFetch;
     if (previousCacheDirectory === undefined) {
@@ -467,7 +482,7 @@ Deno.test("dashboard and /bench benchmark refreshes keep separate request scopes
   }
 });
 
-Deno.test("benchmark: GITHUB_TOKEN stands in for GH_TOKEN", async () => {
+test("benchmark: GITHUB_TOKEN stands in for GH_TOKEN", async () => {
   await withApi({ pages: {} }, async (calls) => {
     const v = await benchmark.collect(ctx({ GITHUB_TOKEN: "t" }));
     assertEquals(v.sub, "no benchmark runs"); // it got past the token gate and asked
@@ -479,7 +494,7 @@ Deno.test("benchmark: GITHUB_TOKEN stands in for GH_TOKEN", async () => {
   });
 });
 
-Deno.test("benchmark: a fresh disk cache prevents artifact rediscovery after a restart", async () => {
+test("benchmark: a fresh disk cache prevents artifact rediscovery after a restart", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-restart-" });
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   const originalFetch = globalThis.fetch;
@@ -493,7 +508,7 @@ Deno.test("benchmark: a fresh disk cache prevents artifact rediscovery after a r
       return Promise.resolve(serve({})(url));
     }
     if (url.pathname.endsWith("/actions/workflows/benchmarks.yml/runs")) {
-      return Promise.resolve(Response.json({ workflow_runs: [] }));
+      return Promise.resolve(Response.json(runList([])));
     }
     throw new Error(`unexpected request ${url.pathname}`);
   }) as typeof fetch;
@@ -523,7 +538,7 @@ Deno.test("benchmark: a fresh disk cache prevents artifact rediscovery after a r
   }
 });
 
-Deno.test("fresh runtime history serves the page and update check without discovery", async () => {
+test("fresh runtime history serves the page and update check without discovery", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   const originalFetch = globalThis.fetch;
@@ -571,7 +586,7 @@ Deno.test("fresh runtime history serves the page and update check without discov
   }
 });
 
-Deno.test("benchmark: a startup collection waits for the run list, then times it", async () => {
+test("benchmark: a startup collection waits for the run list, then times it", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-startup-" });
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   const originalFetch = globalThis.fetch;
@@ -619,17 +634,15 @@ Deno.test("benchmark: a startup collection waits for the run list, then times it
     await Promise.resolve();
     assertEquals(settled, false);
 
-    releaseDiscovery(Response.json({
-      workflow_runs: [
-        ghRun(81_004, Date.now() - HOUR),
-        ghRun(81_003, Date.now() - DAY),
-      ],
-    }));
+    releaseDiscovery(Response.json(runList([
+      ghRun(81_004, Date.now() - HOUR),
+      ghRun(81_003, Date.now() - DAY),
+    ])));
     const view = await observed;
     assertStringIncludes(view.value ?? "", "new"); // two runs is under a week, so the trend reads "new"
     assertEquals(view.status, "good");
   } finally {
-    releaseDiscovery(Response.json({ workflow_runs: [] }));
+    releaseDiscovery(Response.json(runList([])));
     await collection?.catch(() => {});
     globalThis.fetch = originalFetch;
     if (previousCacheDirectory === undefined) {
@@ -639,7 +652,7 @@ Deno.test("benchmark: a startup collection waits for the run list, then times it
   }
 });
 
-Deno.test("benchmark: a future refresh marker cannot suppress discovery", async () => {
+test("benchmark: a future refresh marker cannot suppress discovery", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-future-" });
   const file = `${directory}/fabric-wall-benchmark-history`;
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
@@ -656,7 +669,7 @@ Deno.test("benchmark: a future refresh marker cannot suppress discovery", async 
     if (url.pathname === "/rate_limit") {
       return Promise.resolve(serve({})(url));
     }
-    return Promise.resolve(Response.json({ workflow_runs: [] }));
+    return Promise.resolve(Response.json(runList([])));
   }) as typeof fetch;
 
   try {
@@ -676,7 +689,7 @@ Deno.test("benchmark: a future refresh marker cannot suppress discovery", async 
   }
 });
 
-Deno.test("/bench requires an explicit performance view", () => {
+test("/bench requires an explicit performance view", () => {
   const missing = new URL("http://x/bench?days=5");
   const res = benchmark.routes![0].handler(
     new Request(missing),
@@ -696,7 +709,7 @@ Deno.test("/bench requires an explicit performance view", () => {
   );
 });
 
-Deno.test("/bench?view=runtime serves the runtime history page", async () => {
+test("/bench?view=runtime serves the runtime history page", async () => {
   const url = new URL("http://x/bench?view=runtime");
   const res = await benchmark.routes![0].handler(new Request(url), url);
   assertEquals(res.headers.get("content-type"), "text/html; charset=utf-8");
@@ -715,7 +728,7 @@ Deno.test("/bench?view=runtime serves the runtime history page", async () => {
   assert(!fragment.includes('<form class="controls"'));
 });
 
-Deno.test("/bench CI progress route rejects an unknown collection", async () => {
+test("/bench CI progress route rejects an unknown collection", async () => {
   const route = benchmark.routes![2];
   const url = new URL("http://x/bench/ci-progress?id=missing");
   const response = await route.handler(new Request(url), url);
@@ -723,7 +736,7 @@ Deno.test("/bench CI progress route rejects an unknown collection", async () => 
   assertEquals(response.status, 404);
 });
 
-Deno.test("/bench update check returns an uncached runtime snapshot version", async () => {
+test("/bench update check returns an uncached runtime snapshot version", async () => {
   const route = benchmark.routes![1];
   const url = new URL("http://x/bench/check?view=runtime");
   const response = await route.handler(new Request(url), url);
@@ -733,7 +746,7 @@ Deno.test("/bench update check returns an uncached runtime snapshot version", as
   assertEquals(response.headers.get("cache-control"), "no-store");
 });
 
-Deno.test("/bench update check requires an explicit supported view", async () => {
+test("/bench update check requires an explicit supported view", async () => {
   const route = benchmark.routes![1];
   for (const query of ["", "?view=summary", "?view=gantt"]) {
     const url = new URL(`http://x/bench/check${query}`);
@@ -742,7 +755,7 @@ Deno.test("/bench update check requires an explicit supported view", async () =>
   }
 });
 
-Deno.test("runtime history shows live artifact progress and keeps collection running", async () => {
+test("runtime history shows live artifact progress and keeps collection running", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-progress-" });
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   Deno.env.set("DASHBOARD_CACHE_DIR", directory);
@@ -763,9 +776,7 @@ Deno.test("runtime history shows live artifact progress and keeps collection run
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.pathname === "/rate_limit") return Promise.resolve(serve({})(url));
     if (url.pathname.endsWith("/actions/workflows/benchmarks.yml/runs")) {
-      return Promise.resolve(Response.json({
-        workflow_runs: [ghRun(runId, BASE)],
-      }));
+      return Promise.resolve(Response.json(runList([ghRun(runId, BASE)])));
     }
     if (url.pathname.endsWith(`/actions/runs/${runId}/artifacts`)) {
       artifactRequested();
@@ -835,7 +846,7 @@ Deno.test("runtime history shows live artifact progress and keeps collection run
   }
 });
 
-Deno.test("runtime history describes each phase of a collection in its progress panel", () => {
+test("runtime history describes each phase of a collection in its progress panel", () => {
   const fetching: BenchmarkFetchProgress = {
     id: "runtime-phases",
     phase: "fetching",
@@ -877,7 +888,7 @@ Deno.test("runtime history describes each phase of a collection in its progress 
   );
 });
 
-Deno.test("/bench before any data shows an idle progress panel", async () => {
+test("/bench before any data shows an idle progress panel", async () => {
   const isolated = await import(
     `./benchmark.ts?idle=${crypto.randomUUID()}`
   );
@@ -913,7 +924,7 @@ Deno.test("/bench before any data shows an idle progress panel", async () => {
   );
 });
 
-Deno.test("/bench?view=ci serves CI job history through the same drill-down", async () => {
+test("/bench?view=ci serves CI job history through the same drill-down", async () => {
   const cacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   Deno.env.set(
     "DASHBOARD_CACHE_DIR",
@@ -935,7 +946,7 @@ Deno.test("/bench?view=ci serves CI job history through the same drill-down", as
   }
 });
 
-Deno.test("benchmark: paging stops at the 45-day cutoff, and an out-of-window run is not sampled", async () => {
+test("benchmark: paging stops at the 45-day cutoff, and an out-of-window run is not sampled", async () => {
   // One full page whose oldest run is past the window: the reading stops there
   // rather than asking for page 2. The run that succeeded is out of the window.
   const page1 = [
@@ -955,7 +966,7 @@ Deno.test("benchmark: paging stops at the 45-day cutoff, and an out-of-window ru
     // outage the failures make.
     assertMatch(v.sub ?? "", /^last good \d+ days ago · 99 runs failed$/);
     assertEquals(v.href, "/bench?view=runtime&repo=labs");
-    assertEquals(v.hint, "metrics ↗");
+    assertEquals(v.hint, "metrics ↗ · as JSON at /bench/tiles.json");
     // The newest twenty, then the first hundred, which reaches the run past
     // the cutoff. The second hundred was never asked for.
     assertEquals(runListCalls(calls), [
@@ -974,7 +985,7 @@ Deno.test("benchmark: paging stops at the 45-day cutoff, and an out-of-window ru
   });
 });
 
-Deno.test("benchmark: the end of the run list ends the paging", async () => {
+test("benchmark: the end of the run list ends the paging", async () => {
   using time = new FakeTime();
   const page1 = Array.from(
     { length: 100 },
@@ -983,14 +994,12 @@ Deno.test("benchmark: the end of the run list ends the paging", async () => {
   await withApi({ pages: { 1: page1 } }, async (calls) => {
     const v = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
     assertEquals(v.sub, "last 100 runs failed"); // every run in the window failed
-    // A full page still inside the window is followed. The page after it,
-    // which starts at the last run read, holds only that run, so the list
-    // ends there.
+    // A full page still inside the window is followed. GitHub counts 100
+    // runs in the list, so the page that reaches the hundredth ends it.
     assertEquals(runListCalls(calls), [
       `${runsPath}?per_page=20&page=1`,
       mainRecheck,
       `${runsPath}?per_page=100&page=1`,
-      `${runsPath}?per_page=99&page=2`,
     ]);
 
     // The next collection reads the top of the list, which reaches the runs
@@ -1006,7 +1015,7 @@ Deno.test("benchmark: the end of the run list ends the paging", async () => {
   });
 });
 
-Deno.test("benchmark: the tile turns orange when the benchmark index trends up", async () => {
+test("benchmark: the tile turns orange when the benchmark index trends up", async () => {
   // Eight successful days whose one benchmark climbs from 5 to 12 ms.
   const at = (d: number) => SAMPLED_BASE - (7 - d) * DAY;
   await withTotals(
@@ -1021,7 +1030,7 @@ Deno.test("benchmark: the tile turns orange when the benchmark index trends up",
   );
 });
 
-Deno.test("benchmark: a falling benchmark index stays green", async () => {
+test("benchmark: a falling benchmark index stays green", async () => {
   // Eight successful days whose one benchmark drops from 12 to 5 ms.
   const at = (d: number) => SAMPLED_BASE - (7 - d) * DAY;
   await withTotals(
@@ -1034,7 +1043,7 @@ Deno.test("benchmark: a falling benchmark index stays green", async () => {
   );
 });
 
-Deno.test("benchmark: a big regression in one benchmark of many barely moves the index", async () => {
+test("benchmark: a big regression in one benchmark of many barely moves the index", async () => {
   // Eight days, forty benchmarks. One quintuples over the window; the other 39 are
   // flat. Each weighs the same in log space, so 5x in one of 40 is only 5^(1/40) ≈
   // 4% on the index — under the orange threshold, so the tile stays green. (With the
@@ -1065,7 +1074,7 @@ Deno.test("benchmark: a big regression in one benchmark of many barely moves the
   });
 });
 
-Deno.test("benchmark: the trend reads the recent window only, not the whole history", async () => {
+test("benchmark: the trend reads the recent window only, not the whole history", async () => {
   // Forty daily runs, one benchmark. It doubled over the first twenty days, then
   // held flat for the last twenty. The whole history rose, but the tile trends only
   // the recent window (the last 20 runs here), which is flat, so it stays green —
@@ -1130,7 +1139,7 @@ async function withCalibratedRuns(
   );
 }
 
-Deno.test("benchmark: a run on a slower host reads as the host, not as a rise", async () => {
+test("benchmark: a run on a slower host reads as the host, not as a rise", async () => {
   // Everything the run measured is a quarter slower, the calibration included.
   // No commit slows arithmetic that calls nothing; the host does. Dividing the
   // calibration out of each step leaves the index where it was.
@@ -1141,7 +1150,7 @@ Deno.test("benchmark: a run on a slower host reads as the host, not as a rise", 
   });
 });
 
-Deno.test("benchmark: a rise the machine did not cause reads at its full size", async () => {
+test("benchmark: a rise the machine did not cause reads at its full size", async () => {
   // The same quarter, this time on the product benchmarks alone while the
   // calibration holds. That is the repository getting slower, and the index
   // says so.
@@ -1152,7 +1161,7 @@ Deno.test("benchmark: a rise the machine did not cause reads at its full size", 
   });
 });
 
-Deno.test("benchmark: a machine that sped up leaves the repository where it was", async () => {
+test("benchmark: a machine that sped up leaves the repository where it was", async () => {
   // The host got a fifth faster and took the product benchmarks with it. The
   // calibration moved by the same fifth, so the index does not read a win the
   // repository did not earn.
@@ -1163,7 +1172,7 @@ Deno.test("benchmark: a machine that sped up leaves the repository where it was"
   });
 });
 
-Deno.test("benchmark: the calibration is the ruler, not one of the benchmarks", async () => {
+test("benchmark: the calibration is the ruler, not one of the benchmarks", async () => {
   // Three product benchmarks and two calibration ones. The count line and the
   // drill-down's rows both read the three.
   const artifacts: Api["artifacts"] = {};
@@ -1199,7 +1208,7 @@ Deno.test("benchmark: the calibration is the ruler, not one of the benchmarks", 
   );
 });
 
-Deno.test("benchmark: runs from before the calibration read uncorrected", async () => {
+test("benchmark: runs from before the calibration read uncorrected", async () => {
   // The calibration lands at the sixth run, and the host slows by a fifth at
   // the eighth. Two things move the product benchmark: a real quarter at the
   // sixth run, which no calibration is there to judge, and the host's fifth at
@@ -1239,7 +1248,7 @@ Deno.test("benchmark: runs from before the calibration read uncorrected", async 
   );
 });
 
-Deno.test("benchmark: runs inside one trend bucket are one sample, newest kept", () => {
+test("benchmark: runs inside one trend bucket are one sample, newest kept", () => {
   const run = (at: number) => ({ at });
   const base = Math.floor(SAMPLED_BASE / BENCH_TREND_BUCKET_MS) *
     BENCH_TREND_BUCKET_MS;
@@ -1259,7 +1268,7 @@ Deno.test("benchmark: runs inside one trend bucket are one sample, newest kept",
   );
 });
 
-Deno.test("benchmark: the headline considers CPUs measured in the last 12 hours", () => {
+test("benchmark: the headline considers CPUs measured in the last 12 hours", () => {
   const now = Date.UTC(2026, 7, 17, 12);
   const hours = (count: number) => count * HOUR;
   const stale = { name: "stale", points: [{ at: now - hours(12) - 1 }] };
@@ -1276,7 +1285,7 @@ Deno.test("benchmark: the headline considers CPUs measured in the last 12 hours"
   );
 });
 
-Deno.test("benchmark: the tile reports when every CPU measurement is stale", async () => {
+test("benchmark: the tile reports when every CPU measurement is stale", async () => {
   using time = new FakeTime();
   const measurements = Array.from({ length: 8 }, (_, day) => ({
     id: 95_000 + day,
@@ -1307,7 +1316,7 @@ Deno.test("benchmark: the tile reports when every CPU measurement is stale", asy
   });
 });
 
-Deno.test("benchmark: a stale failure keeps the latest measured CPU's trend", async () => {
+test("benchmark: a stale failure keeps the latest measured CPU's trend", async () => {
   const measurements = [
     ...Array.from({ length: 8 }, (_, day) => ({
       cpu: "retired CPU",
@@ -1351,7 +1360,7 @@ Deno.test("benchmark: a stale failure keeps the latest measured CPU's trend", as
   }
 });
 
-Deno.test("benchmark: a red run's measurements still reach the trend", async () => {
+test("benchmark: a red run's measurements still reach the trend", async () => {
   // Eight daily runs whose one benchmark climbs. Three of them are red, because
   // `deno bench` exits non-zero when any single benchmark throws — having
   // already written a complete report of every other one. Dropping those three
@@ -1390,7 +1399,7 @@ Deno.test("benchmark: a red run's measurements still reach the trend", async () 
   );
 });
 
-Deno.test("benchmark: a regression above the floor moves the trend", async () => {
+test("benchmark: a regression above the floor moves the trend", async () => {
   // Twenty-four daily runs of one benchmark whose fastest sample never moves
   // while its 75th percentile steps up by 45% halfway through: the shape of a
   // change that leaves the best case alone and makes some fraction of the runs
@@ -1430,7 +1439,7 @@ Deno.test("benchmark: a regression above the floor moves the trend", async () =>
   );
 });
 
-Deno.test("benchmark: a stalled sample does not move the trend", async () => {
+test("benchmark: a stalled sample does not move the trend", async () => {
   // Twenty-four daily runs of one benchmark whose 75th percentile never moves,
   // so nothing about the code being measured changed over the window. From the
   // halfway point each run also carries one stalled sample, which shows up as a
@@ -1471,7 +1480,7 @@ Deno.test("benchmark: a stalled sample does not move the trend", async () => {
   );
 });
 
-Deno.test("benchmark: a run still in flight is not sampled", async () => {
+test("benchmark: a run still in flight is not sampled", async () => {
   // A conclusion of null is not a color, it is an absence: the run has not
   // finished and has no artifact to read. Only completed runs are sampled.
   const id = 11_700;
@@ -1501,7 +1510,7 @@ Deno.test("benchmark: a run still in flight is not sampled", async () => {
   });
 });
 
-Deno.test("benchmark: returns a failed view after the run list settles", async () => {
+test("benchmark: returns a failed view after the run list settles", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "benchmark-settled-view-",
   });
@@ -1564,19 +1573,17 @@ Deno.test("benchmark: returns a failed view after the run list settles", async (
     collection = active;
     await runsRequested;
 
-    releaseRuns(Response.json({
-      workflow_runs: [
-        failedRun,
-        ...cachedRuns.toReversed().map((run) => ghRun(run.runId, run.at)),
-      ],
-    }));
+    releaseRuns(Response.json(runList([
+      failedRun,
+      ...cachedRuns.toReversed().map((run) => ghRun(run.runId, run.at)),
+    ])));
     const final = await active;
     expect(final.status).toBe("bad");
     expect(final.value?.replace(/<[^>]*>/g, "")).toMatch(
       /^failed \(was ▲[\d.]+[%×]\)$/,
     );
   } finally {
-    releaseRuns(Response.json({ workflow_runs: [] }));
+    releaseRuns(Response.json(runList([])));
     await collection?.catch(() => {});
     globalThis.fetch = originalFetch;
     if (previousCacheDirectory === undefined) {
@@ -1586,7 +1593,7 @@ Deno.test("benchmark: returns a failed view after the run list settles", async (
   }
 });
 
-Deno.test("benchmark: shows the failure and cached trend when the most recent completed run failed", async () => {
+test("benchmark: shows the failure and cached trend when the most recent completed run failed", async () => {
   const at = (d: number) => SAMPLED_BASE - (6 - d) * DAY;
   // Seven daily measurements, then a failed run with no artifact.
   await withTotals([
@@ -1603,7 +1610,7 @@ Deno.test("benchmark: shows the failure and cached trend when the most recent co
   });
 });
 
-Deno.test("benchmark: consecutive failures are counted on the tile", async () => {
+test("benchmark: consecutive failures are counted on the tile", async () => {
   const at = (d: number) => SAMPLED_BASE - (6 - d) * DAY;
   // Seven good days, then three failures in a row.
   await withTotals([
@@ -1622,7 +1629,7 @@ Deno.test("benchmark: consecutive failures are counted on the tile", async () =>
   });
 });
 
-Deno.test("benchmark: a failure outranks a rising trend", async () => {
+test("benchmark: a failure outranks a rising trend", async () => {
   // Eight days whose one benchmark climbs from 5 to 12 ms, which alone reads orange,
   // and then a failed run.
   const at = (d: number) => SAMPLED_BASE - (7 - d) * DAY;
@@ -1639,7 +1646,7 @@ Deno.test("benchmark: a failure outranks a rising trend", async () => {
   });
 });
 
-Deno.test("benchmark: a cancelled run ends the count of consecutive failures", async () => {
+test("benchmark: a cancelled run ends the count of consecutive failures", async () => {
   const at = (d: number) => SAMPLED_BASE - (7 - d) * DAY;
   // Two failures with a cancelled run between them: only the newest failure can be
   // counted, because the cancelled run neither failed nor succeeded.
@@ -1655,7 +1662,7 @@ Deno.test("benchmark: a cancelled run ends the count of consecutive failures", a
   });
 });
 
-Deno.test("benchmark: the failure line dates the outage and counts the failures", () => {
+test("benchmark: the failure line dates the outage and counts the failures", () => {
   const now = BASE + 3 * DAY;
   const good = ghRun(1, BASE, "success");
   const failures = [ghRun(3, BASE + 2 * DAY, "failure"), ghRun(2, BASE + DAY, "failure")];
@@ -1682,7 +1689,7 @@ Deno.test("benchmark: the failure line dates the outage and counts the failures"
   );
 });
 
-Deno.test("benchmark: a collection reads the run list every time and the artifacts only when a run is new", async () => {
+test("benchmark: a collection reads the run list every time and the artifacts only when a run is new", async () => {
   // The tile collects every minute to keep up with the run state. The artifact
   // history behind it moves with the runs, so a collection that finds the same
   // sampled runs downloads nothing.
@@ -1737,7 +1744,7 @@ Deno.test("benchmark: a collection reads the run list every time and the artifac
   }
 });
 
-Deno.test("benchmark: a run under way shows on the tile before there is any history", async () => {
+test("benchmark: a run under way shows on the tile before there is any history", async () => {
   // Nothing has been collected yet, so the tile has no chart and no verdict. The
   // run list still says a run is going, and that is worth showing.
   const directory = await Deno.makeTempDir({ prefix: "benchmark-cold-badge-" });
@@ -1764,7 +1771,7 @@ Deno.test("benchmark: a run under way shows on the tile before there is any hist
   }
 });
 
-Deno.test("benchmark: the rerun hand-off picks its target from the newest completed run", () => {
+test("benchmark: the rerun hand-off picks its target from the newest completed run", () => {
   const workflow = `https://github.com/${REPO}/actions/workflows/benchmarks.yml`;
   const failed = ghRun(3, BASE, "failure");
   const inFlight = { ...ghRun(4, BASE + HOUR), status: "in_progress", conclusion: null };
@@ -1783,7 +1790,7 @@ Deno.test("benchmark: the rerun hand-off picks its target from the newest comple
   );
 });
 
-Deno.test("benchmark: the drill-down closes with a rerun hand-off to the failed run", async () => {
+test("benchmark: the drill-down closes with a rerun hand-off to the failed run", async () => {
   const at = (d: number) => SAMPLED_BASE - (7 - d) * DAY;
   await withTotals([
     ...Array.from({ length: 7 }, (_, d) => ({ id: 9_240 + d, at: at(d), total: 5e6 })),
@@ -1809,7 +1816,7 @@ Deno.test("benchmark: the drill-down closes with a rerun hand-off to the failed 
   });
 });
 
-Deno.test("benchmark: a run under way is a badge, not a verdict", async () => {
+test("benchmark: a run under way is a badge, not a verdict", async () => {
   using time = new FakeTime();
   const at = (d: number) => SAMPLED_BASE - (7 - d) * DAY;
   const artifacts: Api["artifacts"] = {};
@@ -1839,7 +1846,7 @@ Deno.test("benchmark: a run under way is a badge, not a verdict", async () => {
   });
 });
 
-Deno.test("benchmark: a cancelled most-recent run is not a failure", async () => {
+test("benchmark: a cancelled most-recent run is not a failure", async () => {
   const at = (d: number) => SAMPLED_BASE - (6 - d) * DAY;
   await withTotals([
     ...Array.from({ length: 7 }, (_, d) => ({ id: 9_400 + d, at: at(d), total: d === 6 ? 7e6 : 5e6 })),
@@ -1851,7 +1858,7 @@ Deno.test("benchmark: a cancelled most-recent run is not a failure", async () =>
   });
 });
 
-Deno.test("benchmark: adding a benchmark is not read as a rise", async () => {
+test("benchmark: adding a benchmark is not read as a rise", async () => {
   // Two weeks of daily runs, all benchmarks flat. A second benchmark is added on
   // day 7. It is in only one run of each adjacent pair at that step, so it drops out
   // of the ratio and the index does not step — no reset needed, the tile stays flat.
@@ -1885,7 +1892,7 @@ Deno.test("benchmark: adding a benchmark is not read as a rise", async () => {
   });
 });
 
-Deno.test("benchmark: a run that finished green but produced no valid data reads red", async () => {
+test("benchmark: a run that finished green but produced no valid data reads red", async () => {
   // Seven good days, then a run that passes CI but whose artifact carries no
   // usable measurement.
   const at = (d: number) => d === 7
@@ -1915,7 +1922,7 @@ Deno.test("benchmark: a run that finished green but produced no valid data reads
   });
 });
 
-Deno.test("benchmark: unusable artifacts gray out cold, then a blipped read is retried and recovers", async () => {
+test("benchmark: unusable artifacts gray out cold, then a blipped read is retried and recovers", async () => {
   // Five successful runs in five different windows, each with an artifact unusable
   // a different way. On a cold cache the sum has nothing to read, so the tile grays
   // out rather than inventing a number. The split is whether the answer can change
@@ -2021,7 +2028,7 @@ Deno.test("benchmark: unusable artifacts gray out cold, then a blipped read is r
   }
 });
 
-Deno.test("benchmark: a failed newer attempt stays stale and reports an error", async () => {
+test("benchmark: a failed newer attempt stays stale and reports an error", async () => {
   using time = new FakeTime();
   const firstRun = ghRun(40_101, BASE - DAY);
   const secondRun = ghRun(40_102, BASE);
@@ -2124,7 +2131,7 @@ Deno.test("benchmark: a failed newer attempt stays stale and reports an error", 
   }
 });
 
-Deno.test("benchmark: a collection keeps one artifact per bucket, and a later one reads it from the cache", async (t) => {
+test("benchmark: a collection keeps one artifact per bucket, and a later one reads it from the cache", async (t) => {
   // The second step reads the run results the first step fetched and cached, so
   // the two run in order within one test.
 
@@ -2196,7 +2203,7 @@ Deno.test("benchmark: a collection keeps one artifact per bucket, and a later on
   });
 });
 
-Deno.test("sampleBenchmarkRuns keeps the newest successful run in each bucket", () => {
+test("sampleBenchmarkRuns keeps the newest successful run in each bucket", () => {
   const at = (d: number) => SAMPLED_BASE - (11 - d) * DAY;
   const winner = ghRun(512, at(11));
   const staleTwin = ghRun(599, at(11) - COLLECTION_BUCKET / 2);
@@ -2288,7 +2295,7 @@ const page = async (query: string): Promise<string> => {
     .text();
 };
 
-Deno.test("benchmark: the tile indexes every benchmark equally; the drill-down keeps them apart", async () => {
+test("benchmark: the tile indexes every benchmark equally; the drill-down keeps them apart", async () => {
   await withApi(await fillVaried(), async () => {
     const v = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
     // The index rises: `steep` (×20) and `fivefold` (×5) outweigh `quarter` (×¼) in
@@ -2305,7 +2312,7 @@ Deno.test("benchmark: the tile indexes every benchmark equally; the drill-down k
   });
 });
 
-Deno.test("benchmark: stale CPU trends stay out of the headline while their lines remain", async () => {
+test("benchmark: stale CPU trends stay out of the headline while their lines remain", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-cpus-" });
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   Deno.env.set("DASHBOARD_CACHE_DIR", directory);
@@ -2587,7 +2594,7 @@ Deno.test("benchmark: stale CPU trends stay out of the headline while their line
   }
 });
 
-Deno.test("generated CPU colors fail when no candidate is available", () => {
+test("generated CPU colors fail when no candidate is available", () => {
   assertThrows(
     () =>
       availableGeneratedCpuColor(
@@ -2600,7 +2607,7 @@ Deno.test("generated CPU colors fail when no candidate is available", () => {
   );
 });
 
-Deno.test("benchmark: CPU-less reports are not pooled", async () => {
+test("benchmark: CPU-less reports are not pooled", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "benchmark-no-cpu-",
   });
@@ -2658,7 +2665,7 @@ Deno.test("benchmark: CPU-less reports are not pooled", async () => {
   }
 });
 
-Deno.test("benchmark: CPU-less cached runs are fetched again", async () => {
+test("benchmark: CPU-less cached runs are fetched again", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "benchmark-cpu-migration-",
   });
@@ -2732,7 +2739,7 @@ Deno.test("benchmark: CPU-less cached runs are fetched again", async () => {
   }
 });
 
-Deno.test("/bench: grouped by source file, each benchmark colored by its own trend", async () => {
+test("/bench: grouped by source file, each benchmark colored by its own trend", async () => {
   await collectVaried();
   const html = await page("?stat=p99&sort=file");
   assertEquals(
@@ -2846,7 +2853,7 @@ Deno.test("/bench: grouped by source file, each benchmark colored by its own tre
   assert(!html.includes("body.hide-green section:not("));
 });
 
-Deno.test("/bench?sort=trend: a flat list, biggest rise first, showing the full key", async () => {
+test("/bench?sort=trend: a flat list, biggest rise first, showing the full key", async () => {
   await collectVaried();
   const html = await page("?stat=p99&sort=trend");
   // The " > " between a benchmark's file and its name is html-escaped on the page.
@@ -2868,7 +2875,7 @@ Deno.test("/bench?sort=trend: a flat list, biggest rise first, showing the full 
   );
 });
 
-Deno.test("/bench?sort=duration lists the longest displayed benchmark first", async () => {
+test("/bench?sort=duration lists the longest displayed benchmark first", async () => {
   await collectVaried();
   const html = await page("?stat=p99&sort=duration");
   assertEquals(rows(html).map((row) => row.name).slice(0, 3), [
@@ -2882,7 +2889,7 @@ Deno.test("/bench?sort=duration lists the longest displayed benchmark first", as
   );
 });
 
-Deno.test("/bench history windows keep about the same chart point count", () => {
+test("/bench history windows keep about the same chart point count", () => {
   const now = 45 * DAY;
   const step = 5 * 60_000;
   const points = Array.from(
@@ -2906,7 +2913,7 @@ Deno.test("/bench history windows keep about the same chart point count", () => 
   );
 });
 
-Deno.test("representative benchmark CPU prefers coverage, recency, then name", () => {
+test("representative benchmark CPU prefers coverage, recency, then name", () => {
   const series = (cpu: string, sampleCount: number, points: number[]) => ({
     cpu,
     sampleCount,
@@ -2936,7 +2943,7 @@ Deno.test("representative benchmark CPU prefers coverage, recency, then name", (
   assertEquals(representativeBenchmarkCpu([]), undefined);
 });
 
-Deno.test("benchmark collection retains enough runs for the shortest history window", () => {
+test("benchmark collection retains enough runs for the shortest history window", () => {
   const now = 45 * DAY;
   const step = 5 * 60_000;
   const runs = Array.from(
@@ -2959,7 +2966,7 @@ Deno.test("benchmark collection retains enough runs for the shortest history win
   );
 });
 
-Deno.test("/bench: the measurement selector changes what is plotted", async () => {
+test("/bench: the measurement selector changes what is plotted", async () => {
   await collectVaried();
   const mean = rows(await page("?stat=mean"));
   assertEquals(mean.find((r) => r.name === "hot/steep")?.value, "10ms"); // the mean, half the p99
@@ -2996,7 +3003,7 @@ Deno.test("/bench: the measurement selector changes what is plotted", async () =
   );
 });
 
-Deno.test("/bench runtime graphs ignore two values at each end when twenty are shown", async () => {
+test("/bench runtime graphs ignore two values at each end when twenty are shown", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-scale-" });
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   const values = [
@@ -3074,7 +3081,7 @@ Deno.test("/bench runtime graphs ignore two values at each end when twenty are s
   }
 });
 
-Deno.test("/bench: the history slider selects and clamps the displayed days", async () => {
+test("/bench: the history slider selects and clamps the displayed days", async () => {
   await collectVaried();
   const short = await page("?days=1");
   assertStringIncludes(
@@ -3111,7 +3118,7 @@ Deno.test("/bench: the history slider selects and clamps the displayed days", as
   assert(!stale.includes('class="brow'));
 });
 
-Deno.test("/bench: the page names the repo and workflow it read", async () => {
+test("/bench: the page names the repo and workflow it read", async () => {
   const html = await page("");
   assertStringIncludes(html, `${REPO} · benchmarks.yml`);
   assertStringIncludes(
@@ -3120,21 +3127,21 @@ Deno.test("/bench: the page names the repo and workflow it read", async () => {
   );
 });
 
-Deno.test("/bench runtime preserves the selected CI repository across its links", () => {
-  const html = benchPage("p75", "duration", 9, BASE, "loom");
+test("/bench runtime preserves the selected CI repository across its links", () => {
+  const html = benchPage("p75", "duration", 9, BASE, "cfs");
 
-  assertStringIncludes(html, '<input type="hidden" name="repo" value="loom">');
+  assertStringIncludes(html, '<input type="hidden" name="repo" value="cfs">');
   assertStringIncludes(
     html,
-    'href="/bench?view=ci&amp;repo=loom&amp;days=9&amp;sort=duration&amp;stat=p75">CI duration history</a>',
+    'href="/bench?view=ci&amp;repo=cfs&amp;days=9&amp;sort=duration&amp;stat=p75">CI duration history</a>',
   );
   assertStringIncludes(
     html,
-    'href="/bench?view=gantt&amp;repo=loom&amp;days=9&amp;sort=duration&amp;stat=p75">CI run Gantt</a>',
+    'href="/bench?view=gantt&amp;repo=cfs&amp;days=9&amp;sort=duration&amp;stat=p75">CI run Gantt</a>',
   );
 });
 
-Deno.test("benchmark: an unreachable source grays out with a calm reason, and never reads red", async () => {
+test("benchmark: an unreachable source grays out with a calm reason, and never reads red", async () => {
   await withApi({
     throws: new TypeError(
       "error sending request for url (https://api.github.com/...)",
@@ -3148,7 +3155,7 @@ Deno.test("benchmark: an unreachable source grays out with a calm reason, and ne
   });
 });
 
-Deno.test("benchmark: a rejected token grays out as an auth failure", async () => {
+test("benchmark: a rejected token grays out as an auth failure", async () => {
   await withApi({ status: 401 }, async () => {
     const v = await benchmark.collect(ctx({ GH_TOKEN: "wrong" }));
     assertEquals(v.status, "unknown");
@@ -3156,7 +3163,7 @@ Deno.test("benchmark: a rejected token grays out as an auth failure", async () =
   });
 });
 
-Deno.test("benchmark: a failed fetch keeps a stale cached trend grayed", async () => {
+test("benchmark: a failed fetch keeps a stale cached trend grayed", async () => {
   using time = new FakeTime();
   // Cache two runs older than the headline window, then make the source unreachable.
   // The tile keeps the cached trend and chart gray with the reason.
@@ -3188,6 +3195,12 @@ Deno.test("benchmark: a failed fetch keeps a stale cached trend grayed", async (
     assertEquals(online.status, "unknown");
     assertEquals(online.value, "—");
     assertEquals(online.sub, "no recent benchmark data");
+    const served = async () =>
+      (await (await isolated.benchmarkTilesResponse()).json()).tiles[0];
+    expect(await served()).toMatchObject({
+      status: "unknown",
+      sub: "no recent benchmark data",
+    });
 
     // The source becomes unreachable on the next collection.
     time.tick(NEXT_COLLECTION_MS);
@@ -3200,6 +3213,17 @@ Deno.test("benchmark: a failed fetch keeps a stale cached trend grayed", async (
     assertEquals(offline.sub, "source unreachable");
     assertStringIncludes(offline.value ?? "", "new");
     assertStringIncludes(offline.extra ?? "", "<svg");
+    // The JSON serves what the board shows, not a status worked out again from
+    // the last run list that could be read.
+    expect(await served()).toMatchObject({
+      status: "unknown",
+      headline: "new",
+      sub: "source unreachable",
+    });
+    // The commits come from the last run list that could be read.
+    expect((await served()).processors[0].points.map(
+      (point: { commit: string | null }) => point.commit,
+    )).toEqual(["c7701", "c7702"]);
   } finally {
     globalThis.fetch = originalFetch;
     if (previousCacheDirectory === undefined) {
@@ -3209,7 +3233,7 @@ Deno.test("benchmark: a failed fetch keeps a stale cached trend grayed", async (
   }
 });
 
-Deno.test("benchmark: the tile reads the workflow's current run list, not a lagging filtered one", async () => {
+test("benchmark: the tile reads the workflow's current run list, not a lagging filtered one", async () => {
   // GitHub answers a run list filtered by branch, event, status, or creation
   // time from an index that can be days behind the unfiltered list. Here such
   // a list ends a day back, while the unfiltered one carries a newer run that
@@ -3256,7 +3280,7 @@ Deno.test("benchmark: the tile reads the workflow's current run list, not a lagg
   });
 });
 
-Deno.test("benchmark: a failed fetch with no cached history grays to a dash", async () => {
+test("benchmark: a failed fetch with no cached history grays to a dash", async () => {
   // Nothing cached yet and the source is unreachable: there is no trend to keep, so
   // the tile shows a bare gray dash with the reason.
   const directory = await Deno.makeTempDir({ prefix: "benchmark-offline-cold-" });
@@ -3285,7 +3309,7 @@ Deno.test("benchmark: a failed fetch with no cached history grays to a dash", as
   }
 });
 
-Deno.test("benchmark: a fresh marker then an unreachable direct read grays with the reason", async () => {
+test("benchmark: a fresh marker then an unreachable direct read grays with the reason", async () => {
   // A fresh refresh marker makes the collection short-circuit, so the tile reads the
   // run list directly for itself — and when that direct read is unreachable, it grays
   // with the reason rather than throwing.
@@ -3321,7 +3345,7 @@ Deno.test("benchmark: a fresh marker then an unreachable direct read grays with 
   }
 });
 
-Deno.test("benchmark: the drill-down keeps one-sample benchmarks", async () => {
+test("benchmark: the drill-down keeps one-sample benchmarks", async () => {
   // Each run reports a different benchmark. The tile still indexes both runs.
   // The drill-down shows each benchmark's one sample as a point.
   const runs = [ghRun(802, BASE), ghRun(801, BASE - DAY)];
@@ -3353,7 +3377,7 @@ Deno.test("benchmark: the drill-down keeps one-sample benchmarks", async () => {
   });
 });
 
-Deno.test("benchmark: trend classification — flat or falling good, a rise warn, a steep rise bad", () => {
+test("benchmark: trend classification — flat or falling good, a rise warn, a steep rise bad", () => {
   const t = (v: number[]) => v.map((_, i) => i * DAY);
   const st = (v: number[]) => trendStatus(trendPct(t(v), v));
   assertEquals(st([100, 101, 99, 100, 100, 101, 99, 100]), "good");
@@ -3362,7 +3386,7 @@ Deno.test("benchmark: trend classification — flat or falling good, a rise warn
   assertEquals(st([100, 120, 140, 160, 180, 200, 240]), "bad");
 });
 
-Deno.test("benchmark: a lone spike is not a level, so the trend stays flat", () => {
+test("benchmark: a lone spike is not a level, so the trend stays flat", () => {
   // Seven days, three samples each, all at 100 apart from one spike of 10000 in
   // the middle of day 3. One sample cannot carry a level of its own, so the
   // series reads as the single level it is.
@@ -3395,7 +3419,7 @@ function steppedSeries(
   return { times, values };
 }
 
-Deno.test("benchmark: the same rise reads the same wherever it falls in the window", () => {
+test("benchmark: the same rise reads the same wherever it falls in the window", () => {
   // The old fit ran a line through the samples and reported its rise across the
   // window, so a step read large in the middle and almost vanished at either
   // end. The size of the step is what it is wherever it landed.
@@ -3410,7 +3434,7 @@ Deno.test("benchmark: the same rise reads the same wherever it falls in the wind
   }
 });
 
-Deno.test("benchmark: a rise in the newest samples is reported at its full size", () => {
+test("benchmark: a rise in the newest samples is reported at its full size", () => {
   // The freshest regression is the one worth catching soonest, and it has the
   // fewest samples behind it.
   const { times, values } = steppedSeries(18, 100, 130);
@@ -3422,7 +3446,7 @@ Deno.test("benchmark: a rise in the newest samples is reported at its full size"
   assertEquals(trendStatus(pct), "bad");
 });
 
-Deno.test("benchmark: a fall reads as a fall of its own size", () => {
+test("benchmark: a fall reads as a fall of its own size", () => {
   const { times, values } = steppedSeries(10, 125, 100);
   const pct = trendPct(times, values);
   assert(
@@ -3432,13 +3456,13 @@ Deno.test("benchmark: a fall reads as a fall of its own size", () => {
   assertEquals(trendStatus(pct), "good");
 });
 
-Deno.test("benchmark: a series that only wobbles reads flat", () => {
+test("benchmark: a series that only wobbles reads flat", () => {
   const { times, values } = steppedSeries(21, 100, 100);
   assertEquals(trendPct(times, values), 0);
   assertEquals(trendStatus(trendPct(times, values)), "good");
 });
 
-Deno.test("benchmark: more samples than the fit reads are grouped, and the rise survives", () => {
+test("benchmark: more samples than the fit reads are grouped, and the rise survives", () => {
   // A 45-day window holds several hundred runs, more than the fit reads
   // directly, so they are grouped into equal-sized runs first. A step three
   // quarters of the way along still reports at its own size afterwards, and the
@@ -3456,7 +3480,7 @@ Deno.test("benchmark: more samples than the fit reads are grouped, and the rise 
   assertEquals(trendStatus(pct), "warn");
 });
 
-Deno.test("benchmark: a steady climb reads as the whole of its rise", () => {
+test("benchmark: a steady climb reads as the whole of its rise", () => {
   // No step to find, so the straight line describes the series and reports
   // its rise from the first sample to the last.
   const times: number[] = [], values: number[] = [];
@@ -3471,7 +3495,7 @@ Deno.test("benchmark: a steady climb reads as the whole of its rise", () => {
   );
 });
 
-Deno.test("benchmark: fewer than a week of days claims no trend", () => {
+test("benchmark: fewer than a week of days claims no trend", () => {
   assertEquals(trendPct([0, DAY, 2 * DAY], [100, 500, 2_000]), 0);
   assertEquals(
     benchmarkTrend(
@@ -3482,7 +3506,7 @@ Deno.test("benchmark: fewer than a week of days claims no trend", () => {
   );
 });
 
-Deno.test("benchmark: an even number of days takes the mean of the two middle slopes", () => {
+test("benchmark: an even number of days takes the mean of the two middle slopes", () => {
   // Eight days doubling each day: every pairwise slope is ln 2, so the median of
   // the even-sized list is ln 2 too, and seven days of it is a 128-fold rise.
   const v = [1, 2, 4, 8, 16, 32, 64, 128];
@@ -3491,7 +3515,7 @@ Deno.test("benchmark: an even number of days takes the mean of the two middle sl
   assertEquals(trendStatus(pct), "bad");
 });
 
-Deno.test("benchmark: formatNs picks a readable unit", () => {
+test("benchmark: formatNs picks a readable unit", () => {
   assertEquals(formatNs(500), "500ns");
   assertEquals(formatNs(1_500), "1.5µs");
   assertEquals(formatNs(50_000), "50µs");
@@ -3502,7 +3526,7 @@ Deno.test("benchmark: formatNs picks a readable unit", () => {
   assertEquals(formatNs(Infinity), "—");
 });
 
-Deno.test("benchmark: the trend thresholds", () => {
+test("benchmark: the trend thresholds", () => {
   assertEquals(trendStatus(0.05), "good"); // exactly at UP_PCT
   assertEquals(trendStatus(0.051), "warn");
   assertEquals(trendStatus(0.20), "warn"); // exactly at RAPID_PCT
@@ -3510,7 +3534,7 @@ Deno.test("benchmark: the trend thresholds", () => {
   assertEquals(trendStatus(-1), "good");
 });
 
-Deno.test("benchmark routes serve the Gantt and both progress endpoints", async () => {
+test("benchmark routes serve the Gantt and both progress endpoints", async () => {
   const gantt = new URL("http://x/bench?view=gantt");
   const ganttResponse = await benchmark.routes![0].handler(
     new Request(gantt),
@@ -3536,7 +3560,7 @@ Deno.test("benchmark routes serve the Gantt and both progress endpoints", async 
   assertEquals(progressResponse.status, 400);
 });
 
-Deno.test("benchmark defaults a missing workflow run attempt to one", async () => {
+test("benchmark defaults a missing workflow run attempt to one", async () => {
   const runId = 80_001;
   const run = {
     id: runId,
@@ -3555,7 +3579,7 @@ Deno.test("benchmark defaults a missing workflow run attempt to one", async () =
   });
 });
 
-Deno.test("benchmark reads the unfiltered run list and keeps only main's runs", async () => {
+test("benchmark reads the unfiltered run list and keeps only main's runs", async () => {
   const main = ghRun(80_011, BASE);
   const branch = { ...ghRun(80_012, BASE + HOUR), head_branch: "feature" };
   // The list filtered to main lags, and has not caught up with main's run.
@@ -3577,7 +3601,7 @@ Deno.test("benchmark reads the unfiltered run list and keeps only main's runs", 
   });
 });
 
-Deno.test("runtime benchmark progress removes failed listeners and closes cleanly", async () => {
+test("runtime benchmark progress removes failed listeners and closes cleanly", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-progress-" });
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   const originalFetch = globalThis.fetch;
@@ -3632,7 +3656,7 @@ Deno.test("runtime benchmark progress removes failed listeners and closes cleanl
     await reader.read();
     await reader.cancel();
 
-    resolveRuns(Response.json({ workflow_runs: [] }));
+    resolveRuns(Response.json(runList([])));
     assertStringIncludes(await completion, '"phase":"complete"');
     assertEquals(listenerCalls, 2);
     assertStringIncludes(
@@ -3640,7 +3664,7 @@ Deno.test("runtime benchmark progress removes failed listeners and closes cleanl
       '"phase":"complete"',
     );
   } finally {
-    resolveRuns(Response.json({ workflow_runs: [] }));
+    resolveRuns(Response.json(runList([])));
     globalThis.fetch = originalFetch;
     if (previousCacheDirectory === undefined) {
       Deno.env.delete("DASHBOARD_CACHE_DIR");
@@ -3649,7 +3673,7 @@ Deno.test("runtime benchmark progress removes failed listeners and closes cleanl
   }
 });
 
-Deno.test("runtime benchmark progress ignores duplicate terminal updates", async () => {
+test("runtime benchmark progress ignores duplicate terminal updates", async () => {
   const progress: BenchmarkFetchProgress = {
     id: "duplicate-terminal",
     phase: "complete",
@@ -3681,7 +3705,7 @@ Deno.test("runtime benchmark progress ignores duplicate terminal updates", async
   assertEquals(unsubscribed, true);
 });
 
-Deno.test("runtime history reconstructs unmanifested cache data before asking for a token", async () => {
+test("runtime history reconstructs unmanifested cache data before asking for a token", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-cache-" });
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   Deno.env.set("DASHBOARD_CACHE_DIR", directory);
@@ -3733,7 +3757,7 @@ Deno.test("runtime history reconstructs unmanifested cache data before asking fo
   }
 });
 
-Deno.test("empty runtime history asks for a token to collect data", async () => {
+test("empty runtime history asks for a token to collect data", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-cache-" });
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   Deno.env.set("DASHBOARD_CACHE_DIR", directory);
@@ -3757,13 +3781,17 @@ Deno.test("empty runtime history asks for a token to collect data", async () => 
   }
 });
 
-Deno.test("benchmark: a failed drill-down cache write does not gray the tile", async () => {
+test("benchmark: a failed drill-down cache write does not gray the tile", async () => {
   // The artifact was read and its metrics held in memory before the cache write
   // failed, so the tile still totals them; only the persistence to disk failed.
+  // The collection writes three times: the run it read, the history it
+  // assembled, and the mark that the drill-down was refreshed. Whichever
+  // fails, the drill-down is not taken for refreshed, so a page that asks
+  // for it starts another refresh.
   const archive = await benchZip(report([
     bench("runtime/a/write.bench.ts", null, "write", timings(1_000)), // avg 500
   ]));
-  for (const failedRename of [1, 2]) {
+  for (const failedRename of [1, 2, 3]) {
     const directory = await Deno.makeTempDir({ prefix: "benchmark-write-" });
     const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
     const originalFetch = globalThis.fetch;
@@ -3804,10 +3832,18 @@ Deno.test("benchmark: a failed drill-down cache write does not gray the tile", a
           : rename(oldpath, newpath);
       }) as typeof Deno.rename;
 
-      const view = await isolated.benchmark.collect(ctx({ GH_TOKEN: "token" }));
+      const tokenContext = ctx({ GH_TOKEN: "token" });
+      const view = await isolated.benchmark.collect(tokenContext);
       assertEquals(view.status, "good"); // the in-memory total is unaffected
       assertStringIncludes(view.value ?? "", "new"); // a single run: the trend reads "new"
       assertEquals(renames, failedRename); // the write was attempted and failed
+
+      const check = await isolated.benchmarkHistoryCheckResponse(tokenContext);
+      const { progress } = await check.json();
+      assert(progress, "the drill-down was taken for refreshed");
+      await isolated.benchmarkHistoryProgressResponse(
+        new URL(`http://x/bench/runtime-progress?id=${progress.id}`),
+      ).text();
 
     } finally {
       Deno.rename = rename;
@@ -3820,7 +3856,7 @@ Deno.test("benchmark: a failed drill-down cache write does not gray the tile", a
   }
 });
 
-Deno.test("a queued runtime history refresh reuses a dashboard refresh that just completed", async () => {
+test("a queued runtime history refresh reuses a dashboard refresh that just completed", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-queue-" });
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   const originalFetch = globalThis.fetch;
@@ -3857,13 +3893,13 @@ Deno.test("a queued runtime history refresh reuses a dashboard refresh that just
       new URL(`http://x/bench/runtime-progress?id=${id}`),
     ).text();
 
-    resolveRuns(Response.json({ workflow_runs: [] }));
+    resolveRuns(Response.json(runList([])));
     await dashboard;
     assertStringIncludes(await completion, '"phase":"complete"');
     assertEquals(workflowRequests, 1);
     assertEquals(rateRequests, 0);
   } finally {
-    resolveRuns(Response.json({ workflow_runs: [] }));
+    resolveRuns(Response.json(runList([])));
     await dashboard?.catch(() => {});
     globalThis.fetch = originalFetch;
     if (previousCacheDirectory === undefined) {
@@ -3873,7 +3909,7 @@ Deno.test("a queued runtime history refresh reuses a dashboard refresh that just
   }
 });
 
-Deno.test("a queued dashboard refresh checks that the drill-down covers its runs", async () => {
+test("a queued dashboard refresh checks that the drill-down covers its runs", async () => {
   using time = new FakeTime();
   const directory = await Deno.makeTempDir({
     prefix: "benchmark-queued-dashboard-",
@@ -3987,7 +4023,7 @@ Deno.test("a queued dashboard refresh checks that the drill-down covers its runs
   }
 });
 
-Deno.test("runtime history reports a recent failed collection without starting another", async () => {
+test("runtime history reports a recent failed collection without starting another", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-failure-" });
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   const originalFetch = globalThis.fetch;
@@ -4667,6 +4703,351 @@ describe("the /bench snapshot", () => {
       expect(chartedAttempts(after)).toEqual([`${unplaced.runId}.1`]);
       await check();
       expect(isolated.benchmarkSnapshotForTest()).toBe(after);
+    });
+  });
+});
+
+describe("the benchmark JSON endpoints", () => {
+  beforeEach(forgetBenchmarkRunsForTest);
+
+  const work = "runtime/a/json.bench.ts > work";
+  const calibration = `${CALIBRATION_FILE} > integer arithmetic`;
+  const SLOWER_CPU = "Intel Xeon Platinum 8370C";
+  // Every statistic of a benchmark at one value.
+  const stats = (p75: number): BenchmarkStats => ({
+    min: p75,
+    avg: p75,
+    max: p75,
+    p75,
+    p99: p75,
+    p995: p75,
+    p999: p75,
+  });
+
+  // Twenty daily runs on each of two processors, the second processor's two
+  // hours before the first's, so run `idBase + 2 * day` is the second
+  // processor's and the next id is the first's. The repository's work gets
+  // half again slower on the first processor from day ten, with the machine
+  // unchanged, and its run on day three, or the run `failing` names, fails
+  // having measured. The second processor's host gets a quarter slower from
+  // day twelve, the calibration with it, so its index stays flat.
+  async function twoProcessors(
+    idBase: number,
+    failing = idBase + 7,
+  ): Promise<Api> {
+    const artifacts: Api["artifacts"] = {};
+    const zips: Api["zips"] = {};
+    const runs: GhRun[] = [];
+    for (let day = 0; day < 20; day++) {
+      const at = SAMPLED_BASE - (19 - day) * DAY;
+      const days = [
+        {
+          id: idBase + 2 * day + 1,
+          at,
+          cpu: TEST_CPU,
+          product: day >= 10 ? 1.5 : 1,
+          host: 1,
+        },
+        {
+          id: idBase + 2 * day,
+          at: at - 2 * HOUR,
+          cpu: SLOWER_CPU,
+          product: day >= 12 ? 1.25 : 1,
+          host: day >= 12 ? 1.25 : 1,
+        },
+      ];
+      for (const { id, at, cpu, product, host } of days) {
+        runs.push(ghRun(id, at, id === failing ? "failure" : "success"));
+        artifacts[id] = [{ id: id * 10, name: "bench-results", expired: false }];
+        zips[id * 10] = await benchZip(report([
+          bench("runtime/a/json.bench.ts", null, "work", timings(5e6 * product)),
+          bench(CALIBRATION_FILE, null, "integer arithmetic", timings(1e6 * host)),
+        ], "", cpu));
+      }
+    }
+    runs.sort((a, b) => b.id - a.id);
+    return { pages: { 1: runs }, artifacts, zips };
+  }
+
+  async function served(path: string): Promise<Response> {
+    const url = new URL(path, "http://x");
+    const route = benchmark.routes?.find((route) =>
+      route.path === url.pathname
+    );
+    if (!route) throw new Error(`no route serves ${url.pathname}`);
+    return await route.handler(new Request(url), url);
+  }
+
+  const json = async (path: string) => await (await served(path)).json();
+
+  it("serves what each tile reads and the index behind it, step by step", async () => {
+    await withApi(await twoProcessors(961_000), async () => {
+      const [all] = await Promise.all([
+        benchmark.collect(ctx({ GH_TOKEN: "t" })),
+        keyBenchmarks.collect(ctx({ GH_TOKEN: "t" })),
+      ]);
+      const body = await json("/bench/tiles.json");
+      expect(body.tiles.map((tile: { label: string }) => tile.label))
+        .toEqual(["all benchmarks", "key benchmarks"]);
+      const [allTile, keyTile] = body.tiles;
+      expect(allTile.status).toBe(all.status);
+      expect(allTile.headline).toBe(all.value);
+      expect(allTile.headline).toBe("▲50%");
+      expect(allTile.benchmarks).toBe(1);
+      expect(allTile.headlineProcessor).toBe(TEST_CPU);
+
+      // Processors come in name order.
+      const [rising, steady] = allTile.processors;
+      expect(steady.processor).toBe(SLOWER_CPU);
+      expect(steady.trend.label).toBe("flat");
+      expect(steady.headlineCandidate).toBe(true);
+      expect(steady.steps).toEqual([]);
+      // The host slowed on day twelve, and the index divided it out.
+      const slowed = steady.points[12];
+      expect(slowed.runId).toBe(961_024);
+      expect(slowed.productRatio).toBeCloseTo(1.25);
+      expect(slowed.calibrationRatio).toBeCloseTo(1.25);
+      expect(slowed.index).toBeCloseTo(1);
+
+      expect(rising.processor).toBe(TEST_CPU);
+      expect(rising.trend.label).toBe("▲50%");
+      expect(rising.window.runs).toBe(20);
+      expect(rising.points[0]).toMatchObject({
+        runId: 961_001,
+        runAttempt: 1,
+        commit: "c961001",
+        index: 1,
+        productRatio: null,
+        calibrationRatio: null,
+      });
+      expect(rising.steps).toHaveLength(1);
+      const [step] = rising.steps;
+      expect(step.ratio).toBeCloseTo(1.5);
+      // The index has divided the calibration out already.
+      expect(step).not.toHaveProperty("calibrationRatio");
+      expect(step.before).toMatchObject({
+        runId: 961_019,
+        commit: "c961019",
+        levelRuns: 10,
+      });
+      expect(step.after).toMatchObject({
+        runId: 961_021,
+        commit: "c961021",
+        levelRuns: 10,
+      });
+
+      // The fixtures carry neither key benchmark, so the key tile measures
+      // nothing and says so.
+      expect(keyTile).toMatchObject({
+        status: "bad",
+        headline: "failed",
+        sub: "no benchmark data",
+        processors: [],
+        headlineProcessor: null,
+      });
+    });
+  });
+
+  it("serves every sampled run with its commit, conclusion, processor and calibration", async () => {
+    await withApi(await twoProcessors(962_000), async () => {
+      await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      const body = await json("/bench/runs.json?match=json.bench");
+      expect(body.runs).toHaveLength(40);
+      expect(body.runs[0].runId).toBe(962_000);
+      const failed = body.runs.find((run: { runId: number }) =>
+        run.runId === 962_007
+      );
+      expect(failed).toMatchObject({
+        runAttempt: 1,
+        commit: "c962007",
+        conclusion: "failure",
+        url: `https://github.com/${REPO}/actions/runs/962007/attempts/1`,
+        processor: TEST_CPU,
+        benchmarks: { [work]: timings(5e6) },
+      });
+      expect(failed.calibration.benchmarks).toBe(1);
+      expect(failed.calibration.p75).toBeCloseTo(0.8e6);
+      expect(body.runs.at(-1).conclusion).toBe("success");
+
+      // A filter names benchmarks, calibration ones included, and leaves the
+      // rest out.
+      const calibrated = await json(
+        "/bench/runs.json?match=nothing&match=integer",
+      );
+      expect(Object.keys(calibrated.runs[0].benchmarks)).toEqual([calibration]);
+      const keyOnly = await json("/bench/runs.json?key=1");
+      expect(keyOnly.runs[0].benchmarks).toEqual({});
+      expect(keyOnly.runs[0].calibration).not.toBeNull();
+      const every = await json("/bench/runs.json?match=");
+      expect(Object.keys(every.runs[0].benchmarks).sort()).toEqual([
+        calibration,
+        work,
+      ]);
+      const unnamed = await served("/bench/runs.json");
+      expect(unnamed.status).toBe(400);
+      expect(await unnamed.text()).toContain("match=");
+    });
+  });
+
+  it("serves each benchmark's level changes with the commits either side", async () => {
+    await withApi(await twoProcessors(963_000), async () => {
+      await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      const body = await json("/bench/steps.json?match=json.bench");
+      expect(body.stat).toBe("p75");
+      expect(body.steps).toHaveLength(2);
+      const [code, host] = body.steps;
+      expect(code).toMatchObject({ benchmark: work, processor: TEST_CPU });
+      expect(code.ratio).toBeCloseTo(1.5);
+      expect(code.calibrationRatio).toBeCloseTo(1);
+      expect(code.before.commit).toBe("c963019");
+      expect(code.after.commit).toBe("c963021");
+      // The second processor's step is its host's: the calibration moved by
+      // as much.
+      expect(host).toMatchObject({ benchmark: work, processor: SLOWER_CPU });
+      expect(host.ratio).toBeCloseTo(1.25);
+      expect(host.calibrationRatio).toBeCloseTo(1.25);
+      expect(host.before.runId).toBe(963_022);
+      expect(host.after.runId).toBe(963_024);
+
+      expect((await json("/bench/steps.json?match=nothing")).steps)
+        .toEqual([]);
+      expect((await served("/bench/steps.json")).status).toBe(400);
+      // A host's step shows in its calibration benchmarks too, and the key
+      // filter leaves them out.
+      const everyStep = await json("/bench/steps.json?match=");
+      expect(everyStep.steps.map((step: { benchmark: string }) =>
+        step.benchmark
+      )).toContain(calibration);
+      expect((await json("/bench/steps.json?key=1")).steps).toEqual([]);
+      const unknown = await served("/bench/steps.json?stat=median");
+      expect(unknown.status).toBe(400);
+      expect(await unknown.text()).toContain("min, avg, p75");
+    });
+  });
+
+  it("serves a failed tile's reading with the trend it had", async () => {
+    // The first processor's newest run, on day nineteen, fails.
+    await withApi(await twoProcessors(965_000, 965_039), async () => {
+      const tile = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      const [allTile] = (await json("/bench/tiles.json")).tiles;
+      expect(allTile).toMatchObject({
+        status: "bad",
+        headline: tile.valueLabel,
+        sub: tile.sub,
+        headlineProcessor: TEST_CPU,
+      });
+      expect(allTile.headline).toBe("failed (was ▲50%)");
+      expect(allTile.processors).toHaveLength(2);
+    });
+  });
+
+  it("serves no conclusion for a run whose list names a later attempt", async () => {
+    // The cache holds the first attempt. The list shows a second one, whose
+    // artifact cannot be read, so the cache keeps serving the first.
+    const cached: CachedBenchmarkRun = {
+      runId: 966_000,
+      runAttempt: 1,
+      at: SAMPLED_BASE - DAY,
+      cpu: TEST_CPU,
+      metrics: new Map([[work, stats(5e6)]]),
+    };
+    await withCache([cached], [cached], async (isolated) => {
+      await withApi({
+        pages: { 1: [ghRun(cached.runId, cached.at, "success", 2)] },
+        artifacts: { [cached.runId]: 500 },
+      }, async () => {
+        await isolated.benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      });
+      const [run] = (await (await isolated.benchmarkRunsResponse(
+        new URL("http://x/bench/runs.json?match=json.bench"),
+      )).json()).runs;
+      expect(run).toMatchObject({
+        runId: cached.runId,
+        runAttempt: 1,
+        commit: `c${cached.runId}`,
+        conclusion: null,
+      });
+    });
+  });
+
+  it("serves the indices gray, and runs without commits, until the tiles have collected", async () => {
+    // Twenty-four daily runs carrying no calibration, twice as slow from the
+    // thirteenth.
+    const runs = Array.from({ length: 24 }, (_, day): CachedBenchmarkRun => ({
+      runId: 964_000 + day,
+      runAttempt: 1,
+      at: SAMPLED_BASE - (23 - day) * DAY,
+      cpu: TEST_CPU,
+      metrics: new Map([[work, stats(day >= 12 ? 1e7 : 5e6)]]),
+    }));
+    // A processor last measured four weeks ago.
+    const old = Array.from({ length: 3 }, (_, day): CachedBenchmarkRun => ({
+      runId: 963_900 + day,
+      runAttempt: 1,
+      at: SAMPLED_BASE - (30 - day) * DAY,
+      cpu: SLOWER_CPU,
+      metrics: new Map([[work, stats(5e6)]]),
+    }));
+    const cached = [...old, ...runs];
+    await withCache(cached, cached, async (isolated) => {
+      const response = await isolated.benchmarkTilesResponse();
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      const body = await response.json();
+      expect(body.refreshedAt).not.toBeNull();
+      const [allTile] = body.tiles;
+      expect(allTile).toMatchObject({
+        status: "unknown",
+        sub: "not collected yet",
+        headlineProcessor: TEST_CPU,
+      });
+      const [processor, stale] = allTile.processors;
+      expect(processor).toMatchObject({
+        processor: TEST_CPU,
+        headlineCandidate: true,
+        // The trend reads the last twenty runs, since fewer fall in its
+        // fourteen days.
+        window: { runs: 20, from: new Date(runs[4].at).toISOString() },
+      });
+      expect(stale).toMatchObject({
+        processor: SLOWER_CPU,
+        headlineCandidate: false,
+      });
+      expect(processor.points.map(
+        (point: { commit: string | null }) => point.commit,
+      )).toEqual(Array(24).fill(null));
+      expect(processor.steps).toEqual([{
+        ratio: 2,
+        before: {
+          runId: 964_011,
+          runAttempt: 1,
+          at: new Date(runs[11].at).toISOString(),
+          commit: null,
+          levelRuns: 12,
+        },
+        after: {
+          runId: 964_012,
+          runAttempt: 1,
+          at: new Date(runs[12].at).toISOString(),
+          commit: null,
+          levelRuns: 12,
+        },
+      }]);
+
+      const [run] = (await (await isolated.benchmarkRunsResponse(
+        new URL("http://x/bench/runs.json?match=json.bench"),
+      )).json()).runs;
+      expect(run).toMatchObject({
+        runId: old[0].runId,
+        commit: null,
+        conclusion: null,
+        calibration: null,
+        benchmarks: { [work]: stats(5e6) },
+      });
+      // With no calibration on either side, a step has no calibration ratio.
+      const [step] = (await (await isolated.benchmarkStepsResponse(
+        new URL("http://x/bench/steps.json?match=json.bench"),
+      )).json()).steps;
+      expect(step).toMatchObject({ ratio: 2, calibrationRatio: null });
     });
   });
 });

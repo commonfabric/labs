@@ -1564,8 +1564,8 @@ export function markdownHeadingNodes(
   headings: readonly StructureNode[],
   lineToDiff: Map<number, number>,
   hunkEnd: number,
-  diffLineStarts: number[],
-  rawLines: string[],
+  diffLineStarts: readonly number[],
+  rawLines: readonly string[],
 ): StructureNode[] {
   const shown: { node: StructureNode; diffLine: number }[] = [];
   for (const node of headings) {

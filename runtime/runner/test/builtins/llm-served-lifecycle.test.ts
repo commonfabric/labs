@@ -1,9 +1,9 @@
 /** Exercises request acceptance, withdrawal, and refusal without model I/O. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
 import {
@@ -727,6 +727,35 @@ describe("llm-served-lifecycle", () => {
             ? { answer: "A-result" }
             : "A-result",
         });
+      } finally {
+        await f.close();
+      }
+    });
+
+    it(`records no ${name} request hash in a refused request's ending`, async () => {
+      // A served request that is never sent ends with its refusal as the
+      // error, and records no request hash, which would carry the request's
+      // labels into the node's next request: that run finds no answer and
+      // stages its request again.
+
+      const f = await fixture(name);
+      const refusal = {
+        name: "StorageTransactionAborted",
+        message: "Staged request refused",
+        reason: "Staged request refused",
+      } as const;
+      try {
+        const tx = f.runtime.edit();
+        f.stage(tx, "refused prompt");
+        tx.abort(refusal);
+        tx.abandonStagedWork(refusal);
+        await f.runtime.settled();
+
+        expect(f.output.get()).toMatchObject({
+          pending: false,
+          error: `${name} request was refused before it started`,
+        });
+        expect(f.output.key("requestHash").get()).toBeUndefined();
       } finally {
         await f.close();
       }

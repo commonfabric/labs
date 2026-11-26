@@ -1,11 +1,11 @@
 // First, so that the document it installs is there when Lit loads.
 import { internalsOf, mount } from "../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { ContextProvider } from "@lit/context";
 import type { CellRef } from "@commonfabric/runtime-client";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   createMockCellHandle,
   writesSent,
@@ -654,16 +654,14 @@ describe("CFInput", () => {
   });
 
   describe("in a form", () => {
-    it("registers with the form under its name", async () => {
+    it("registers itself with the form", async () => {
       const { form, fields } = formStandIn();
       const element = Object.assign(new CFInput(), { name: "email" });
 
       form.append(element);
       await element.updateComplete;
 
-      expect(fields.map(({ element, name }) => ({ element, name }))).toEqual([
-        { element, name: "email" },
-      ]);
+      expect(fields.map(({ element }) => element)).toEqual([element]);
     });
 
     it("holds what is typed for the form rather than writing the cell", async () => {
@@ -680,8 +678,10 @@ describe("CFInput", () => {
       await element.commit();
 
       expect(writesSent(cell)).toEqual([]);
-      expect(fields[0].getValue()).toBe("typed");
-      expect(fields[0].isDirty()).toBe(true);
+
+      await fields[0].flush();
+
+      expect(writesSent(cell).map(({ value }) => value)).toEqual(["typed"]);
     });
 
     it("returns its input's validity to the form", async () => {

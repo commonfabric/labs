@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
@@ -11,9 +10,10 @@ import {
   FabricKeyPair,
 } from "@commonfabric/data-model/fabric-primitives";
 import type { FabricValue } from "@commonfabric/data-model";
-import type { DID } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import { toValuePath } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { AUTHOR_CLAIM_SCHEMA, observeAuthorship } from "@/authorship.ts";
 import { CellHandle } from "@/cell-handle.ts";
@@ -36,7 +36,7 @@ import type {
   RuntimeTransport,
   RuntimeTransportEvents,
 } from "@/client/transport.ts";
-import { $conn, type RuntimeClient } from "@/runtime-client.ts";
+import { $conn, RuntimeClient } from "@/runtime-client.ts";
 
 /**
  * Transport that records everything sent and auto-acknowledges every request
@@ -132,6 +132,34 @@ class ThrowingTransport extends EventEmitter<RuntimeTransportEvents>
   dispose(): Promise<void> {
     return Promise.resolve();
   }
+}
+
+/** The request of `type` that `transport` holds, unanswered. */
+function heldRequest(
+  transport: FakeTransport,
+  type: RequestType,
+): IPCClientMessage {
+  const held = transport.sent.findLast(
+    (message): message is IPCClientMessage =>
+      "msgId" in message && message.data.type === type,
+  );
+  if (held === undefined) throw new Error(`No ${type} request was sent.`);
+  return held;
+}
+
+/**
+ * Replaces `console.error` for the life of the returned object, resolving
+ * `logged` with the arguments of its first call.
+ */
+function captureConsoleError() {
+  const { promise: logged, resolve } = Promise.withResolvers<unknown[]>();
+  const errorStub = stub(console, "error", (...args: unknown[]) => {
+    resolve(args);
+  });
+  return {
+    logged,
+    [Symbol.dispose]: () => errorStub.restore(),
+  };
 }
 
 describe("connection", () => {
@@ -255,6 +283,23 @@ describe("connection", () => {
         failureCount: 1,
         recovery: "explicit-retry",
       },
+    } as const;
+
+    transport.emit("message", notification);
+
+    expect(messages).toEqual([notification]);
+    await connection.dispose();
+  });
+
+  it("routes a space's seq advancing", async () => {
+    const transport = new FakeTransport();
+    const connection = await initializedConnection(transport);
+    const messages: unknown[] = [];
+    connection.on("spaceseqadvanced", (message) => messages.push(message));
+    const notification = {
+      type: NotificationType.SpaceSeqAdvanced,
+      space: "did:key:z6Mk-connection-seq",
+      seq: 12,
     } as const;
 
     transport.emit("message", notification);
@@ -633,11 +678,11 @@ describe("connection", () => {
     });
 
     it("reports a message whose author the worker reported as undefined while its handle upgraded to labels as unknown, not from the author's former label", async () => {
-      // A handle upgrading a value-only subscription to a label-aware one
-      // leaves the cell's subscription until the worker answers the
-      // unsubscribe, so an update the worker sends in between reaches it in
-      // no form; the label it held from before is not the worker's read.
-      const transport = new FakeTransport([RequestType.CellUnsubscribe], {
+      // The worker's subscription carries labels, which the handle that
+      // opened it asked for, so a handle on it asking for them later hears
+      // the label it holds as the worker's read, until the worker reports the
+      // cell as holding nothing.
+      const transport = new FakeTransport([], {
         [RequestType.CellGetCfcLabel]: { cfcLabel: undefined },
         [RequestType.CellResolveAsCell]: { cell: ref },
       });
@@ -665,14 +710,180 @@ describe("connection", () => {
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(upgraded.heard[0]).toEqual({
-        cfcLabel: profileLabel,
-        current: false,
-      });
+      expect(upgraded.heard).toEqual([
+        { cfcLabel: profileLabel, current: true },
+        { cfcLabel: profileLabel, current: false },
+      ]);
       expect(states).toEqual(["unknown"]);
       cancel();
       upgraded.cancel();
       valueOnlyCancel();
+      await connection.dispose();
+    });
+
+    it("opens the worker's subscription again for a handle that asks for more than it carries, and only then", async () => {
+      const transport = new FakeTransport();
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      const requests = () =>
+        transport.sent.flatMap((message) =>
+          "msgId" in message &&
+            (message.data.type === RequestType.CellSubscribe ||
+              message.data.type === RequestType.CellUnsubscribe)
+            ? [message.data]
+            : []
+        ).map((request) => ({
+          type: request.type,
+          includeCfcLabel: "includeCfcLabel" in request &&
+            request.includeCfcLabel === true,
+          includeWrittenPrincipal: "includeWrittenPrincipal" in request &&
+            request.includeWrittenPrincipal === true,
+        }));
+      const valueOnlyCancel = new CellHandle<string>(runtime, ref).subscribe(
+        () => {},
+        { onRefused: () => {} },
+      );
+      const labeled = listen(new CellHandle<string>(runtime, ref));
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("alice") }),
+      );
+      const heardBefore = [...labeled.heard];
+      const principalCancel = new CellHandle<string>(runtime, ref).subscribe(
+        () => {},
+        { includeWrittenPrincipal: true, onRefused: () => {} },
+      );
+      const sentBefore = requests().length;
+      const plainCancel = new CellHandle<string>(runtime, ref).subscribe(
+        () => {},
+        { includeCfcLabel: true, onRefused: () => {} },
+      );
+
+      expect(requests().length).toBe(sentBefore);
+      expect(requests()).toEqual([
+        {
+          type: RequestType.CellSubscribe,
+          includeCfcLabel: false,
+          includeWrittenPrincipal: false,
+        },
+        {
+          type: RequestType.CellUnsubscribe,
+          includeCfcLabel: false,
+          includeWrittenPrincipal: false,
+        },
+        {
+          type: RequestType.CellSubscribe,
+          includeCfcLabel: true,
+          includeWrittenPrincipal: false,
+        },
+        {
+          type: RequestType.CellUnsubscribe,
+          includeCfcLabel: false,
+          includeWrittenPrincipal: false,
+        },
+        {
+          type: RequestType.CellSubscribe,
+          includeCfcLabel: true,
+          includeWrittenPrincipal: true,
+        },
+      ]);
+      // Reopened, the subscription delivers nothing the worker read until it
+      // delivers again.
+      expect(labeled.heard).toEqual([
+        ...heardBefore,
+        { cfcLabel: label("alice"), current: false },
+      ]);
+      plainCancel();
+      principalCancel();
+      labeled.cancel();
+      valueOnlyCancel();
+      await connection.dispose();
+    });
+
+    it("keeps a subscription opened again whose first opening the worker failed", async () => {
+      const transport = new FakeTransport([RequestType.CellSubscribe]);
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      using errors = stub(console, "error", () => {});
+      const valueOnlyCancel = new CellHandle<string>(runtime, ref).subscribe(
+        () => {},
+        { onRefused: () => {} },
+      );
+      const labeled = listen(new CellHandle<string>(runtime, ref));
+      const [first, second] = transport.sent.flatMap((message) =>
+        "msgId" in message && message.data.type === RequestType.CellSubscribe
+          ? [message.msgId]
+          : []
+      );
+      transport.emit("message", { msgId: first, error: "refused" });
+      transport.emit("message", { msgId: second, data: { value: true } });
+      // The failure reaches the connection through settled promises, so one
+      // zero-delay turn lets it arrive.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("alice") }),
+      );
+
+      expect(errors.calls.length).toBe(1);
+      expect(labeled.heard.at(-1)).toEqual({
+        cfcLabel: label("alice"),
+        current: true,
+      });
+      expect(connection.getSubscriptionDiagnostics().totals.activeInstances)
+        .toBe(2);
+      labeled.cancel();
+      valueOnlyCancel();
+      await connection.dispose();
+    });
+
+    it("holds no handle's label current from an update sent before its subscription carried the principal, and seeds none from it", async () => {
+      const transport = new FakeTransport();
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      /** Subscribes asking for the principal, keeping what each delivery says. */
+      const listenForPrincipal = (cell: CellHandle<string>) => {
+        const heard: Array<
+          { current: boolean | undefined; principal: string | undefined }
+        > = [];
+        const cancel = cell.subscribe((_value, _label, delivery) => {
+          heard.push({
+            current: delivery?.cfcLabelCurrent,
+            principal: delivery?.writtenPrincipal,
+          });
+        }, { includeWrittenPrincipal: true, onRefused: () => {} });
+        return { heard, cancel };
+      };
+      const labeled = listen(new CellHandle<string>(runtime, ref));
+      const first = listenForPrincipal(new CellHandle<string>(runtime, ref));
+      // Sent by the worker before the subscription was opened again.
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("alice") }),
+      );
+
+      const seeded = listenForPrincipal(new CellHandle<string>(runtime, ref));
+      expect(labeled.heard.at(-1)?.current).toBe(false);
+      expect(seeded.heard).toEqual([{ current: false, principal: undefined }]);
+
+      transport.emit(
+        "message",
+        posted({
+          value: "by alice",
+          cfcLabel: label("alice"),
+          writtenPrincipal: "did:key:alice",
+        }),
+      );
+
+      expect([first, seeded].map(({ heard }) => heard.at(-1))).toEqual([
+        { current: true, principal: "did:key:alice" },
+        { current: true, principal: "did:key:alice" },
+      ]);
+      expect(labeled.heard.at(-1)?.current).toBe(true);
+      seeded.cancel();
+      first.cancel();
+      labeled.cancel();
       await connection.dispose();
     });
 
@@ -840,7 +1051,48 @@ describe("connection", () => {
     });
   });
 
+  it("throws for a request other than initialize or attach before either", () => {
+    const transport = new FakeTransport();
+    const connection = new RuntimeConnection(transport);
+    expect(() => connection.request({ type: RequestType.Idle })).toThrow(
+      "RuntimeConnection is uninitialized.",
+    );
+    expect(transport.sent).toEqual([]);
+  });
+
+  it("warns of a message that is neither a notification nor a response while alive", async () => {
+    const transport = new FakeTransport();
+    await using _connection = await initializedConnection(transport);
+    using warn = stub(console, "warn");
+    transport.emit("message", { type: "no-such-notification" } as never);
+    expect(warn.calls.map((call) => call.args)).toEqual([[
+      "[RuntimeClient] Invalid response:",
+      { type: "no-such-notification" },
+    ]]);
+  });
+
   describe("RuntimeConnection disposal", () => {
+    it("completes teardown when the worker responds to dispose with an error", async () => {
+      const transport = new FakeTransport([RequestType.Dispose]);
+      const connection = await initializedConnection(transport);
+      const disposing = connection.dispose();
+      transport.emit("message", {
+        msgId: heldRequest(transport, RequestType.Dispose).msgId,
+        error: "flush failed",
+      });
+      await disposing;
+      expect(transport.disposeCalls).toBe(1);
+    });
+
+    it("disposes the connection at the end of an `await using` scope", async () => {
+      const transport = new FakeTransport();
+      {
+        await using _connection = await initializedConnection(transport);
+        expect(transport.disposeCalls).toBe(0);
+      }
+      expect(transport.disposeCalls).toBe(1);
+    });
+
     it("settles in-flight requests as cancellation on dispose", async () => {
       const transport = new FakeTransport([RequestType.Idle]);
       const connection = await initializedConnection(transport);
@@ -1106,6 +1358,36 @@ describe("connection", () => {
         session.detach();
         await connection.dispose();
       }
+    });
+
+    it("logs a failed cancellation of a failed mount", async () => {
+      const transport = new FakeTransport([
+        RequestType.VDomMount,
+        RequestType.VDomUnmount,
+      ]);
+      await using connection = await initializedConnection(transport);
+      const session = connection.attachVDom(() => {});
+      const mounting = session.mount(41, {
+        id: "of:mount-cleanup-failure",
+        space: "did:key:test",
+        scope: "space",
+        path: [],
+      });
+      const rejected = expect(mounting).rejects.toThrow("mount refused");
+      transport.emit("message", {
+        msgId: heldRequest(transport, RequestType.VDomMount).msgId,
+        error: "mount refused",
+      });
+      await rejected;
+      using errors = captureConsoleError();
+      transport.emit("message", {
+        msgId: heldRequest(transport, RequestType.VDomUnmount).msgId,
+        error: "unmount refused",
+      });
+      const [message, cause] = await errors.logged;
+      expect(message).toBe("[RuntimeClient] Mount cleanup failed:");
+      expect(cause).toEqual(new Error("unmount refused"));
+      session.detach();
     });
 
     it("mounts, unmounts, and routes batch notifications via the session", async () => {
@@ -1416,6 +1698,73 @@ describe("connection", () => {
       } finally {
         globalThis.clearInterval = originalClearInterval;
       }
+    });
+  });
+
+  describe("RuntimeConnection subscriptions", () => {
+    const ref: CellRef = {
+      id: "of:connection-subscription-cell" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: [],
+    };
+    const identity = Identity.fromPassphrase("connection-subscriptions");
+
+    async function clientOver(transport: FakeTransport) {
+      const signer = await identity;
+      return await RuntimeClient.initialize(transport, {
+        apiUrl: new URL("http://localhost:9/"),
+        identity: signer,
+        spaceDid: signer.did(),
+      });
+    }
+
+    const subscribeRequests = (transport: FakeTransport) =>
+      transport.sent.filter((message) =>
+        "msgId" in message && message.data.type === RequestType.CellSubscribe
+      );
+
+    it("logs a subscription the worker fails, and subscribes afresh for the next handle", async () => {
+      const transport = new FakeTransport([RequestType.CellSubscribe]);
+      await using client = await clientOver(transport);
+      client.getCellFromRef(ref).subscribe(() => {}, { onRefused: () => {} });
+      expect(subscribeRequests(transport)).toHaveLength(1);
+      using errors = captureConsoleError();
+      transport.emit("message", {
+        msgId: heldRequest(transport, RequestType.CellSubscribe).msgId,
+        error: "subscribe refused",
+      });
+      const [message, cause] = await errors.logged;
+      expect(message).toBe("[RuntimeClient] Subscription failed:");
+      expect(cause).toEqual(new Error("subscribe refused"));
+
+      client.getCellFromRef(ref).subscribe(() => {}, { onRefused: () => {} });
+      expect(subscribeRequests(transport)).toHaveLength(2);
+    });
+
+    it("shares one worker subscription between handles while it stands", async () => {
+      const transport = new FakeTransport([RequestType.CellSubscribe]);
+      await using client = await clientOver(transport);
+      client.getCellFromRef(ref).subscribe(() => {}, { onRefused: () => {} });
+      client.getCellFromRef(ref).subscribe(() => {}, { onRefused: () => {} });
+      expect(subscribeRequests(transport)).toHaveLength(1);
+    });
+
+    it("logs an unsubscription the worker fails", async () => {
+      const transport = new FakeTransport([RequestType.CellUnsubscribe]);
+      await using client = await clientOver(transport);
+      const cancel = client.getCellFromRef(ref).subscribe(() => {}, {
+        onRefused: () => {},
+      });
+      cancel();
+      using errors = captureConsoleError();
+      transport.emit("message", {
+        msgId: heldRequest(transport, RequestType.CellUnsubscribe).msgId,
+        error: "unsubscribe refused",
+      });
+      const [message, cause] = await errors.logged;
+      expect(message).toBe("[RuntimeClient] Unsubscription failed:");
+      expect(cause).toEqual(new Error("unsubscribe refused"));
     });
   });
 

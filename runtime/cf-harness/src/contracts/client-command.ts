@@ -202,7 +202,7 @@ export const HARNESS_COMMAND_ID_PATTERN =
  * Largest invocation `args`, as UTF-8 bytes of their JSON text. A larger
  * request is refused before it is delivered, so nothing executes.
  */
-export const HARNESS_COMMAND_ARGS_MAX_BYTES = 16 * 1024;
+export const HARNESS_COMMAND_ARGS_MAX_BYTES = 2 * 1024 * 1024;
 
 /**
  * Largest command response body an outcome retains, as UTF-8 bytes of the

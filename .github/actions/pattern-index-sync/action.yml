@@ -1,0 +1,173 @@
+name: "Pattern index sync"
+description: >-
+  Publish the newest version of each pattern entry file in this repository to
+  the Common Fabric pattern index, one lineage per file, under the brand of the
+  repository's GitHub owner. Runs as two steps in two jobs: `plan` compiles,
+  holding no credential, and `publish` publishes, compiling nothing. README.md
+  beside this file says how to adopt it.
+
+inputs:
+  step:
+    description: >-
+      `plan` in a job without `id-token: write`; `publish` in a later job
+      with it, after the plan job.
+    required: true
+  include:
+    description: >-
+      plan: globs, one per line and relative to the repository root, naming
+      the files that may be pattern entries. A file is an entry when it also
+      has a top-level default export and is not a test.
+    default: ""
+  exclude:
+    description: "plan: globs, one per line, removing files `include` named."
+    default: ""
+  program-root:
+    description: >-
+      plan: the directory, relative to the repository root, that program file
+      names are written against. Every file an entry imports must lie inside
+      it, and it must lie inside the repository.
+    default: ""
+  moves-table:
+    description: >-
+      plan: where the repository records how its patterns moved, relative to
+      its root: a JSON object, or a module exporting `MOVED_PATTERN_KEYS`,
+      mapping former paths to current ones below `program-root`. A moved file
+      continues its old path's lineage. Empty: no moves are followed. A path
+      named here that holds no table fails the plan.
+    default: ""
+  labs-path:
+    description: >-
+      A Labs checkout to run from, relative to the repository root: for a
+      repository that vendors Labs, its vendored copy, so patterns compile
+      against the Labs they were written for. Empty runs the copy of Labs
+      this action was fetched with.
+    default: ""
+  index-url:
+    description: "publish: the pattern index; empty for the one Common Fabric runs."
+    default: ""
+  setup-deno:
+    description: >-
+      Install the Deno version the Labs checkout pins. Pass false when an
+      earlier step already put that Deno on PATH.
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    # Inputs reach every script through the environment, never through `${{ }}`
+    # inside `run:`, so no input can become shell syntax.
+    - name: 🔍 Find the Labs checkout
+      id: labs
+      shell: bash
+      env:
+        STEP: ${{ inputs.step }}
+        LABS_PATH: ${{ inputs.labs-path }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        case "$STEP" in
+          plan|publish) ;;
+          *) echo "::error::step must be plan or publish, not '$STEP'."; exit 1 ;;
+        esac
+        if [ -n "$LABS_PATH" ]; then
+          labs="$GITHUB_WORKSPACE/$LABS_PATH"
+        else
+          # A `uses:` reference fetches the whole repository the action lives
+          # in, so this action's Labs is three directories up.
+          labs="$(cd "$ACTION_PATH/../../.." && pwd)"
+        fi
+        if [ ! -f "$labs/runtime/pattern-index/sync-publish.ts" ]; then
+          echo "::error::$labs has no runtime/pattern-index/sync-publish.ts; labs-path must name a Labs checkout recent enough to sync."
+          exit 1
+        fi
+        version="$(sed -n 's/^deno = "\([^"]*\)"$/\1/p' "$labs/mise.toml")"
+        if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          echo "::error::$labs/mise.toml pins no exact Deno version (a line deno = \"x.y.z\"); found '$version'."
+          exit 1
+        fi
+        echo "dir=$labs" >> "$GITHUB_OUTPUT"
+        echo "deno=$version" >> "$GITHUB_OUTPUT"
+
+    # The publish step speaks for the brand, so it runs only for the default
+    # branch: a manual run started on another branch publishes nothing.
+    - name: 🚧 Require the default branch
+      if: inputs.step == 'publish'
+      shell: bash
+      env:
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        if [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+          echo "::error::The publish step runs only on refs/heads/$DEFAULT_BRANCH, not $GITHUB_REF."
+          exit 1
+        fi
+
+    # No cache: in the publish job a cache the plan job could have written
+    # would be code the plan job chose.
+    - name: 🦕 Install Deno ${{ steps.labs.outputs.deno }}
+      if: inputs.setup-deno == 'true'
+      uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+      with:
+        deno-version: ${{ steps.labs.outputs.deno }}
+
+    - name: 🏗️ Compile the pattern entries
+      if: inputs.step == 'plan'
+      shell: bash
+      working-directory: ${{ steps.labs.outputs.dir }}
+      env:
+        INCLUDE: ${{ inputs.include }}
+        EXCLUDE: ${{ inputs.exclude }}
+        PROGRAM_ROOT: ${{ inputs.program-root }}
+        MOVES_TABLE: ${{ inputs.moves-table }}
+        PLAN: ${{ runner.temp }}/pattern-index-plan/plan.json
+      run: |
+        if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+          echo "::error::The plan step evaluates the repository's code, so its job must not grant id-token: write."
+          exit 1
+        fi
+        args=(--repo-root "$GITHUB_WORKSPACE" --program-root "$PROGRAM_ROOT"
+          --out "$PLAN" --summary "$GITHUB_STEP_SUMMARY")
+        if [ -n "$MOVES_TABLE" ]; then
+          args+=(--moves-table "$MOVES_TABLE")
+        fi
+        while IFS= read -r glob; do
+          [ -n "$glob" ] && args+=(--include "$glob")
+        done <<< "$INCLUDE"
+        while IFS= read -r glob; do
+          [ -n "$glob" ] && args+=(--exclude "$glob")
+        done <<< "$EXCLUDE"
+        mkdir -p "$(dirname "$PLAN")"
+        deno run --frozen \
+          --allow-read --allow-write --allow-env --allow-net --allow-ffi \
+          --allow-run=git \
+          runtime/pattern-index/sync-plan.ts "${args[@]}"
+
+    - name: 📤 Upload the plan
+      if: inputs.step == 'plan'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: pattern-index-plan
+        path: ${{ runner.temp }}/pattern-index-plan/plan.json
+        retention-days: 1
+
+    - name: 📥 Download the plan
+      if: inputs.step == 'publish'
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: pattern-index-plan
+        path: ${{ runner.temp }}/pattern-index-plan
+
+    - name: 🚀 Publish what changed
+      if: inputs.step == 'publish'
+      shell: bash
+      working-directory: ${{ steps.labs.outputs.dir }}
+      env:
+        INDEX_URL: ${{ inputs.index-url }}
+        REPOSITORY: ${{ github.repository }}
+        COMMIT: ${{ github.sha }}
+        PLAN: ${{ runner.temp }}/pattern-index-plan/plan.json
+      run: |
+        args=(--plan "$PLAN" --repository "$REPOSITORY" --commit "$COMMIT"
+          --summary "$GITHUB_STEP_SUMMARY")
+        [ -n "$INDEX_URL" ] && args+=(--index-url "$INDEX_URL")
+        deno run --frozen \
+          --allow-read --allow-write --allow-env --allow-net \
+          runtime/pattern-index/sync-publish.ts "${args[@]}"

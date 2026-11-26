@@ -5,7 +5,6 @@
  * the run resolved before its first model turn.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import type { FabricValue } from "@commonfabric/data-model";
 import { expect } from "@std/expect";
@@ -16,6 +15,7 @@ import {
   computeEntryIdentity,
   ensureCompilerStack,
 } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { CfHarnessEngine } from "../src/engine.ts";
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";
@@ -158,11 +158,7 @@ const stubIndex = (): IndexStub => {
     return Promise.resolve(
       new Response(
         JSON.stringify(
-          fn === "searchPatterns"
-            ? { results: [SEARCH_HIT] }
-            : fn === "listPatterns"
-            ? { patterns: [], eventTypes: {} }
-            : PATTERN_RECORD,
+          fn === "searchPatterns" ? { results: [SEARCH_HIT] } : PATTERN_RECORD,
         ),
         { status: 200 },
       ),
@@ -469,9 +465,7 @@ describe("prompt-loop pattern references", () => {
                   return Promise.resolve(
                     new Response(
                       JSON.stringify(
-                        fn === "listPatterns"
-                          ? { patterns: [], eventTypes: {} }
-                          : inspected
+                        inspected
                           ? {
                             ...PATTERN_RECORD,
                             patternId,
@@ -596,7 +590,7 @@ describe("prompt-loop pattern references", () => {
         leads: inspected ? [] : [{ pattern: { patternId } }],
       });
       expect(indexCalls).toEqual(
-        inspected ? ["getPattern"] : ["searchPatterns", "listPatterns"],
+        inspected ? ["getPattern"] : ["searchPatterns"],
       );
       expect(researchTurns).toBe(2);
     });
@@ -662,11 +656,7 @@ Use this as available evidence; do not assume it is mandatory.`,
 
     expect(result.subagentRuns).toBe(1);
     expect(result.childPrompt).toContain(SEARCH_HIT.patternId);
-    expect(result.indexCalls).toEqual([
-      "searchPatterns",
-      "listPatterns",
-      "getPattern",
-    ]);
+    expect(result.indexCalls).toEqual(["searchPatterns", "getPattern"]);
   });
 
   it("rehydrates an earlier search after the parent loop resumes", async () => {
@@ -675,11 +665,7 @@ Use this as available evidence; do not assume it is mandatory.`,
     expect(result.subagentRuns).toBe(1);
     expect(result.childPrompt).toContain(SEARCH_HIT.patternId);
     expect(result.delegateOutput.patternRefRefusals).toBeUndefined();
-    expect(result.indexCalls).toEqual([
-      "searchPatterns",
-      "listPatterns",
-      "getPattern",
-    ]);
+    expect(result.indexCalls).toEqual(["searchPatterns", "getPattern"]);
   });
 
   it("ignores malformed persisted search output while restoring later hits", async () => {
@@ -688,11 +674,7 @@ Use this as available evidence; do not assume it is mandatory.`,
     expect(result.subagentRuns).toBe(1);
     expect(result.childPrompt).toContain(SEARCH_HIT.patternId);
     expect(result.delegateOutput.patternRefRefusals).toBeUndefined();
-    expect(result.indexCalls).toEqual([
-      "searchPatterns",
-      "listPatterns",
-      "getPattern",
-    ]);
+    expect(result.indexCalls).toEqual(["searchPatterns", "getPattern"]);
   });
 
   it("rehydrates a pattern the task attached, which no turn searched for", async () => {

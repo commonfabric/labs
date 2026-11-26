@@ -10,17 +10,29 @@
  * this class is for.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { cloneIfNecessary, deepFreeze, isValidDeepFrozenFabricValue } from "@";
-import { CODEC, NULL_LIVE_ENVIRONMENT, ProblematicValue } from "@/codec-common";
+import {
+  CODEC,
+  CODEC_TYPE_TAGS,
+  NULL_LIVE_ENVIRONMENT,
+  ProblematicValue,
+  UnknownValue,
+} from "@/codec-common";
+import {
+  jsonFromFabricValue,
+  newDefaultJsonCodecEngine,
+  newDefaultRealmCodecEngine,
+  realmFromFabricValue,
+} from "@/codecs.ts";
 import {
   BaseFabricInstance,
   DEEP_FREEZE,
   IS_DEEP_FROZEN,
 } from "@/fabric-bases";
 import { subFreeze, subIsDeepFrozen } from "../fabric-instances/fixtures.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("ProblematicValue", () => {
   it("is an instance of `BaseFabricInstance`", () => {
@@ -310,6 +322,12 @@ describe("ProblematicValue", () => {
         it("returns `false` for state that is not an object", () => {
           expect(ProblematicValue[CODEC].canDecode("nope")).toBe(false);
         });
+
+        it("returns `false` for a record holding a key it does not read", () => {
+          expect(ProblematicValue[CODEC].canDecode(
+            { tag: "Weird@7", state: 1, error: "oops", extra: 1 },
+          )).toBe(false);
+        });
       });
 
       describe("decode()", () => {
@@ -336,6 +354,57 @@ describe("ProblematicValue", () => {
 
           expect(result.wireTypeTag).toBe("Weird@7");
           expect(result.state).toBe(undefined);
+        });
+      });
+
+      describe("under an engine", () => {
+        // A state this codec refuses is reported like any other, as a
+        // `ProblematicValue` recording `Problematic@1` as its tag and the
+        // record as its state. That one encodes under `Problematic@1` in
+        // turn, its state the refused record, and so round-trips.
+
+        const STATE = Object.freeze({
+          tag: "Weird@7",
+          state: 1,
+          error: "oops",
+          extra: 1,
+        });
+
+        it("decodes JSON whose state holds a key it does not read to a `ProblematicValue` preserving the record, which round-trips", () => {
+          const text = jsonFromFabricValue(
+            new UnknownValue(CODEC_TYPE_TAGS.Problematic, STATE),
+          );
+          const engine = newDefaultJsonCodecEngine({ lenient: true });
+          const decoded = engine.decode(text, NULL_LIVE_ENVIRONMENT);
+
+          expect(decoded).toBeInstanceOf(ProblematicValue);
+          expect((decoded as ProblematicValue).wireTypeTag)
+            .toBe(CODEC_TYPE_TAGS.Problematic);
+          expect((decoded as ProblematicValue).state).toStrictEqual(STATE);
+
+          const reencoded = jsonFromFabricValue(decoded);
+          const again = engine.decode(reencoded, NULL_LIVE_ENVIRONMENT);
+          expect(again).toBeInstanceOf(ProblematicValue);
+          expect((again as ProblematicValue).wireTypeTag)
+            .toBe(CODEC_TYPE_TAGS.Problematic);
+          expect((again as ProblematicValue).state).toStrictEqual(STATE);
+          expect(jsonFromFabricValue(again)).toBe(reencoded);
+          expect(() =>
+            newDefaultJsonCodecEngine().decode(text, NULL_LIVE_ENVIRONMENT)
+          ).toThrow();
+        });
+
+        it("decodes a realm form whose state holds a key it does not read to a `ProblematicValue` preserving the record", () => {
+          const realm = realmFromFabricValue(
+            new UnknownValue(CODEC_TYPE_TAGS.Problematic, STATE),
+          );
+          const decoded = newDefaultRealmCodecEngine({ lenient: true })
+            .decode(realm, NULL_LIVE_ENVIRONMENT);
+
+          expect(decoded).toBeInstanceOf(ProblematicValue);
+          expect((decoded as ProblematicValue).wireTypeTag)
+            .toBe(CODEC_TYPE_TAGS.Problematic);
+          expect((decoded as ProblematicValue).state).toStrictEqual(STATE);
         });
       });
     });

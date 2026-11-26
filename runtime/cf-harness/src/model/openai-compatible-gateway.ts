@@ -491,7 +491,6 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
       request.transcript,
       request.model,
       this.providerId,
-      GATEWAY_RESPONSES_LABEL,
       undefined,
       // `--resume-run X --model other` is allowed here (the CLI pins the
       // provider on resume, not the model), so a continuation from the old

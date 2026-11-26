@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { getLogger } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   decodeMemoryBoundary,
@@ -9,6 +9,7 @@ import {
   getMemoryProtocolFlags,
   MEMORY_PROTOCOL,
 } from "../v2.ts";
+import { createClientInfo } from "../v2/client-info.ts";
 import {
   connect,
   connectionError,
@@ -194,6 +195,33 @@ describe("connect()", () => {
         expect(transport.hellos).toBe(0);
       });
     }
+  });
+
+  describe("with `client`", () => {
+    it("returns a connected client given metadata that parses", async () => {
+      const transport = new ScriptedHandshakes(["ok"]);
+      const client = await connect({
+        transport,
+        client: createClientInfo({ application: "shell", gitSha: null }),
+      });
+      try {
+        expect(client.connectionState).toBe("connected");
+      } finally {
+        await client.close();
+      }
+    });
+
+    it("throws a `TypeError`, sending nothing, given metadata that does not parse", async () => {
+      const transport = new ScriptedHandshakes(["ok"]);
+      await expect(connect({
+        transport,
+        client: {
+          ...createClientInfo({ application: "shell", gitSha: null }),
+          instanceId: "not an instance id",
+        },
+      })).rejects.toThrow(new TypeError("Invalid memory client metadata"));
+      expect(transport.hellos).toBe(0);
+    });
   });
 
   it("rejects when its only handshake is lost, without `firstHandshakeAttempts`", async () => {

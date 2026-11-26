@@ -48,8 +48,10 @@ import ProfileHome, {
   type ProfileHomeOutput,
 } from "../../../system/profile-home/profile-home.tsx";
 import {
+  createOwnPrivateInbox,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
+  ensurePrivateInboxOnly,
   type OfferEvent,
   pointProfilesAtPrivateInbox,
   type PrivateInboxHolder,
@@ -370,12 +372,21 @@ export default pattern<MainInput, MainOutput>((
     outgoingNotices,
   },
 ) => {
+  const ownPrivateInbox = new Writable<PrivateInboxHolder>({}).for(
+    "ownPrivateInbox",
+  );
   const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([]).for(
     "retainedPrivateInboxes",
   );
   const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({}).for(
     "privateInboxRefusal",
   );
+  const pointProfiles = pointProfilesAtPrivateInbox({
+    privateInbox,
+    retainedPrivateInboxes,
+    // deno-lint-ignore no-explicit-any
+    profiles: profiles as any,
+  });
   const senderProfile = Writable.of<StandInProfile>({ name: "Sender" });
   const chats = FabriChatManagerCore({
     myProfile: senderProfile,
@@ -421,14 +432,23 @@ export default pattern<MainInput, MainOutput>((
     changeSharedSpaceMembership: changeSharedSpaceMembership({ catalog }),
     ensurePrivateInbox: ensurePrivateInbox({
       privateInbox,
+      ownPrivateInbox,
       retainedPrivateInboxes,
       privateInboxRefusal,
       // deno-lint-ignore no-explicit-any
       profiles: profiles as any,
-      pointProfiles: pointProfilesAtPrivateInbox({
-        privateInbox,
-        // deno-lint-ignore no-explicit-any
-        profiles: profiles as any,
+      pointProfiles,
+      createOwn: createOwnPrivateInbox({
+        ownPrivateInbox,
+        ensure: ensurePrivateInboxOnly({
+          privateInbox,
+          ownPrivateInbox,
+          retainedPrivateInboxes,
+          privateInboxRefusal,
+          // deno-lint-ignore no-explicit-any
+          profiles: profiles as any,
+          pointProfiles,
+        }),
       }),
     }),
     createProfile: createProfile({ profiles }),

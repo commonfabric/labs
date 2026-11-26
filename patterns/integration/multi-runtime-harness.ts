@@ -54,6 +54,7 @@ import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import {
   experimentalOptionsFromEnv,
   getPatternEnvironment,
+  PATTERN_COVERAGE_MULTI_RUNTIME_TEST_NAME,
   type PatternCoverageData,
   type PatternEnvironment,
   setPatternEnvironment,
@@ -112,6 +113,24 @@ export type MultiRuntimeCfcOptions = Pick<
 
 export type { PieceAddress, TrustedUiDescriptor };
 export type { CommitRejection, RuntimeDiagnosticsSnapshot };
+
+/**
+ * One entry of a stored label map, its label resolved. The clauses and atoms
+ * are left unchecked, for a test to narrow to the atoms it asserts on.
+ */
+export interface StoredLabelEntry {
+  /** The path the label applies at. */
+  path: string[];
+
+  /** What produced the entry, such as `declared` or `link`. */
+  origin?: string;
+
+  /** The observation class the entry records. */
+  observes?: string;
+
+  /** The label, read out of its label document when stored by reference. */
+  label: { confidentiality?: unknown[]; integrity?: unknown[] };
+}
 
 export interface MultiRuntimeSessionSpec {
   /** Explicit host policy for this session and, for the first session, creation. */
@@ -319,6 +338,21 @@ export function systemPatternsRoute(): PatternsRoute {
 }
 
 /**
+ * A function that runs `build` on its first call and returns the promise that
+ * call made, on that call and every later one.
+ *
+ * A test file whose tests share a scenario's setup makes the setup one of
+ * these, called by the tests that read it. A lane that runs one test of a file
+ * registers the others as ignored, and runs every `beforeAll` in the file
+ * whatever it chose, so a scenario set up in a `beforeAll` costs every such
+ * lane the whole file's setup.
+ */
+export function once<T>(build: () => Promise<T>): () => Promise<T> {
+  let built: Promise<T> | undefined;
+  return () => built ??= build();
+}
+
+/**
  * Whether a harness runs the server-execution ON posture, given what its first
  * session's `cfc.experimental.serverExecution` asks for: that, else the
  * canonical environment mapping, else the first-party default, as the
@@ -438,7 +472,7 @@ class WorkerClient {
       if (data) collector.ingest(data as unknown as PatternCoverageData);
       await writePatternCoverageLcov(collector, join(directory, coverageFile), {
         root: PATTERNS_ROOT,
-        testName: "multi-runtime integration",
+        testName: PATTERN_COVERAGE_MULTI_RUNTIME_TEST_NAME,
       });
     }
     await this.call("dispose");
@@ -730,6 +764,21 @@ export class MultiRuntimeSession {
       value?: FabricValue;
       error?: string;
     };
+  }
+
+  /**
+   * The label-map entries stored for the document at an explicit storage
+   * address, each label resolved, so a label the envelope holds by reference
+   * to its `cid:` label document reads the same as one held inline. Empty
+   * when the document stores no envelope.
+   */
+  async storedLabelEntries(
+    address: { id: string; space: string; scope?: FabricValue },
+  ): Promise<StoredLabelEntry[]> {
+    return await this.#client.call(
+      "storedLabelEntries",
+      address,
+    ) as unknown as StoredLabelEntry[];
   }
 
   /**

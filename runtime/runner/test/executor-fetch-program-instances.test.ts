@@ -1,7 +1,6 @@
 /** Exercises scoped program resolution through a service-identity execution host. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import {
@@ -11,6 +10,8 @@ import {
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 
 import type { ProgramResult } from "../src/builtins/fetch-program.ts";
 import type { Cell } from "../src/cell.ts";
@@ -20,6 +21,12 @@ import type { MemorySpace } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { waitUntil } from "./support/wait-until.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase(
   "fetch program instances space",

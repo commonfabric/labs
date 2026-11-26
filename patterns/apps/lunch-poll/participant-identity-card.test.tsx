@@ -18,24 +18,10 @@ import {
   type User,
 } from "./main.tsx";
 import {
-  findNode,
+  findNodeByProp,
   hasText,
-  propsOf,
-  readValue,
+  propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-
-// Find a rendered node by a prop value. Walking the tree pulls the join
-// surface's UI-only computeds (hasProfile, joinHint), which no direct
-// handler/output read reaches otherwise.
-const findByProp = (
-  root: unknown,
-  prop: string,
-  expected: unknown,
-): unknown | undefined =>
-  findNode(root, (node) => {
-    const props = propsOf(node);
-    return props !== undefined && readValue(props[prop]) === expected;
-  });
 
 export default pattern(() => {
   // Lane 1 — no profile resolved: the card shows the create/pick surface and
@@ -106,17 +92,11 @@ export default pattern(() => {
 
   // === Actions ===
 
-  const action_join_as_alex = action(() => {
-    alexCard.joinAs.send({});
-  });
   const action_join_again = action(() => {
     alexCard.joinAs.send({});
   });
   const action_join_as_other_alex = action(() => {
     otherAlexCard.joinAs.send({});
-  });
-  const action_other_alex_claims_host = action(() => {
-    otherAlexCard.claimHost.send({});
   });
   const action_rename_alex = action(() => {
     alexName.set("Alexandra");
@@ -147,8 +127,8 @@ export default pattern(() => {
 
   const assert_setup_surface_without_profile = assert(() => {
     const ui = noProfileCard[UI];
-    return findByProp(ui, "data-profile-setup", true) !== undefined &&
-      findByProp(ui, "id", "lp-join-button") === undefined &&
+    return findNodeByProp(ui, "data-profile-setup", true) !== undefined &&
+      findNodeByProp(ui, "id", "lp-join-button") === undefined &&
       hasText(ui, "First to join becomes the host.");
   });
 
@@ -179,9 +159,9 @@ export default pattern(() => {
   // so, and a headless join in that window is refused loudly as before.
   const assert_doc_late_button_waits = assert(() => {
     const ui = docLateCard[UI];
-    const button = findByProp(ui, "id", "lp-join-button");
+    const button = findNodeByProp(ui, "id", "lp-join-button");
     return button !== undefined &&
-      readValue(propsOf(button)?.disabled) === true &&
+      propValue(button, "disabled") === true &&
       hasText(ui, "Loading your profile…") &&
       !hasText(ui, "Join as Doc");
   });
@@ -196,11 +176,11 @@ export default pattern(() => {
   // headless caller reading `joinMessage` must not be told otherwise.
   const assert_doc_late_heals_on_screen_only = assert(() => {
     const ui = docLateCard[UI];
-    const button = findByProp(ui, "id", "lp-join-button");
+    const button = findNodeByProp(ui, "id", "lp-join-button");
     return button !== undefined &&
-      readValue(propsOf(button)?.disabled) !== true &&
+      propValue(button, "disabled") !== true &&
       hasText(ui, "Join as Doc") &&
-      findByProp(ui, "data-join-message", true) === undefined &&
+      findNodeByProp(ui, "data-join-message", true) === undefined &&
       docLateCard.joinMessage === JOIN_NEEDS_PROFILE &&
       docLateCard.isJoined === false &&
       (docLateUsers.get() ?? []).length === 0;
@@ -213,7 +193,7 @@ export default pattern(() => {
   const assert_offers_join_with_profile = assert(() => {
     const ui = alexCard[UI];
     return hasText(ui, "Join as Alex") &&
-      findByProp(ui, "data-profile-identity", "canonical") !== undefined;
+      findNodeByProp(ui, "data-profile-identity", "canonical") !== undefined;
   });
 
   const assert_joined_and_hosts = assert(() => {
@@ -281,13 +261,14 @@ export default pattern(() => {
       { action: action_doc_late_join },
       { assertion: assert_doc_late_joined },
       { assertion: assert_offers_join_with_profile },
-      { action: action_join_as_alex },
+      // The card's own button, as a person joins.
+      { press: alexCard[UI], control: "Join as Alex" },
       { assertion: assert_joined_and_hosts },
       { action: action_join_again },
       { assertion: assert_join_is_idempotent },
       { action: action_join_as_other_alex },
       { assertion: assert_same_name_two_people },
-      { action: action_other_alex_claims_host },
+      { press: otherAlexCard[UI], control: "Take over hosting" },
       { assertion: assert_host_transferred },
       { action: action_rename_alex },
       { assertion: assert_rename_keeps_identity },

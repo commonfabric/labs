@@ -2,7 +2,15 @@ import {
   Browser,
   installPresentationInteractions,
   type Page,
+  waitForCondition,
+  withWaitForConditionTimeout,
 } from "@commonfabric/integration";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   assert,
   assertEquals,
@@ -10,9 +18,9 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import {
   armSenderEcho,
+  type CfInputProbe,
   CLICK_TARGET_ATTR,
   clickCfButton,
   clickCfButtonsConcurrently,
@@ -20,8 +28,12 @@ import {
   clickTrustedAction,
   collectBrowserLoadSummary,
   fillCfInput,
+  fillFailureMessage,
   installSenderEchoProbe,
+  PRESENT_IDS_MAX,
+  readCfInputProbe,
   readSenderEchoReport,
+  readTrustedActionProbe,
   submitViaEnter,
   waitForSettledText,
 } from "./cfc-browser-helpers.ts";
@@ -66,6 +78,49 @@ describe("CFC browser helpers", () => {
 
   afterAll(async () => {
     await browser.close();
+  });
+
+  it("records submitted text before the control clears it", async () => {
+    await page.evaluate(() => {
+      document.body.replaceChildren();
+      const host = document.createElement("div");
+      host.dataset.uiAction = "ChatStart";
+      Object.assign(host, { value: "did:key:counterpart" });
+      const root = host.attachShadow({ mode: "open" });
+      const button = document.createElement("button");
+      button.dataset.cfButton = "";
+      button.textContent = "Chat";
+      root.append(button);
+      host.addEventListener("click", () => {
+        Object.assign(host, { value: "" });
+      });
+      document.body.append(host);
+      Object.assign(globalThis, {
+        commonfabric: { viewSettled: () => Promise.resolve() },
+      });
+    });
+    await clickTrustedAction(page, "ChatStart");
+    const probe = await readTrustedActionProbe(page, "ChatStart");
+    expect(probe.lastClick?.trusted).toBe(true);
+    expect(
+      probe.lastClick?.path.find(({ dataset }) =>
+        dataset.uiAction === "ChatStart"
+      )?.value,
+    ).toBe("did:key:counterpart");
+    expect(
+      probe.lastClick?.path.find(({ tagName }) => tagName === "button")?.value,
+    ).toBe("");
+    expect(
+      probe.lastClick?.path.find(({ tagName }) => tagName === "body")?.value,
+    ).toBeUndefined();
+    expect(
+      await page.evaluate(() =>
+        Reflect.get(
+          document.querySelector('[data-ui-action="ChatStart"]')!,
+          "value",
+        )
+      ),
+    ).toBe("");
   });
 
   it("reports the main-thread half when the worker never answers", async () => {
@@ -1588,6 +1643,114 @@ describe("CFC browser helpers", () => {
     assertEquals(value, "Bob");
   });
 
+  /**
+   * Puts a cf input with the id `id` in `target`'s page, on a view that is
+   * settled whenever asked.
+   */
+  const addSettledInput = (target: Page, id: string) =>
+    target.evaluate((inputId: string) => {
+      const host = document.createElement("div");
+      host.id = inputId;
+      Object.assign(host.style, {
+        display: "block",
+        height: "40px",
+        width: "240px",
+      });
+      const root = host.attachShadow({ mode: "open" });
+      const input = document.createElement("input");
+      Object.assign(input.style, {
+        display: "block",
+        height: "32px",
+        width: "200px",
+      });
+      root.append(input);
+      document.body.append(host);
+      (globalThis as typeof globalThis & {
+        commonfabric: { viewSettled: () => Promise<void> };
+      }).commonfabric = { viewSettled: () => Promise.resolve() };
+    }, { args: [id] });
+
+  /** The value of the cf input `id` names in `target`'s page. */
+  const inputValue = (target: Page, id: string) =>
+    target.evaluate(
+      (inputId: string) =>
+        document.getElementById(inputId)?.shadowRoot?.querySelector("input")
+          ?.value,
+      { args: [id] },
+    );
+
+  it("fills a cf input in a tab behind another", async () => {
+    // A tab behind another is not rendered and gets no animation frames, so a
+    // fill that waited on frames there would wait out the safety net, which
+    // is shortened here so that such a fill fails in seconds.
+    const behind = await browser.newPage();
+    const front = await browser.newPage();
+    try {
+      assertEquals(
+        await behind.evaluate(() => document.visibilityState),
+        "hidden",
+        "the tab behind should not be rendering",
+      );
+      await addSettledInput(behind, "behind-tab-input");
+
+      await withWaitForConditionTimeout(
+        10_000,
+        () => fillCfInput(behind, "#behind-tab-input", "Bob"),
+      );
+
+      expect(await inputValue(behind, "behind-tab-input")).toBe("Bob");
+    } finally {
+      await front.close();
+      await behind.close();
+    }
+  });
+
+  it("fills a cf input in a tab put behind another while the fill waits on a frame", async () => {
+    // The page holds back the fill's first frame request, as a page hidden
+    // before its next frame does, and the tab is then put behind another. A
+    // fill that waited for that frame would wait out the shortened net.
+    const behind = await browser.newPage();
+    let front: Page | undefined;
+    try {
+      await addSettledInput(behind, "hidden-mid-wait-input");
+      await behind.evaluate(() => {
+        const scope = globalThis as unknown as {
+          __cfFillDiag?: Record<string, { phase: string }>;
+          __frameHeld: boolean;
+          __requestFrame: typeof requestAnimationFrame;
+        };
+        scope.__frameHeld = false;
+        scope.__requestFrame = globalThis.requestAnimationFrame;
+        globalThis.requestAnimationFrame = (callback) => {
+          const phase = scope.__cfFillDiag?.["#hidden-mid-wait-input"]?.phase;
+          if (phase === "awaiting-frame" && !scope.__frameHeld) {
+            scope.__frameHeld = true;
+            return 0;
+          }
+          return scope.__requestFrame.call(globalThis, callback);
+        };
+      });
+
+      await withWaitForConditionTimeout(10_000, async () => {
+        const filled = fillCfInput(behind, "#hidden-mid-wait-input", "Bob");
+        await waitForCondition(
+          behind,
+          () => (globalThis as unknown as { __frameHeld: boolean }).__frameHeld,
+        );
+        front = await browser.newPage();
+        await filled;
+      });
+
+      expect(await inputValue(behind, "hidden-mid-wait-input")).toBe("Bob");
+      expect(await behind.evaluate(() => document.visibilityState)).toBe(
+        "hidden",
+      );
+    } finally {
+      await front?.close();
+      await behind.close();
+    }
+  });
+
   it("fills the live input when a commit replaces the one it typed into", async () => {
     await page.evaluate(() => {
       const host = document.createElement("div") as HTMLDivElement & {
@@ -3068,5 +3231,319 @@ describe("CFC browser helpers", () => {
     } finally {
       await echoPage.close();
     }
+  });
+  describe("a fill's failure report", () => {
+    it("lists the ids the page holds, through shadow roots, where nothing matches", async () => {
+      const probePage = await browser.newPage();
+      try {
+        await probePage.evaluate(() => {
+          const light = document.createElement("div");
+          light.id = "b-light";
+          const host = document.createElement("div");
+          host.id = "a-host";
+          const root = host.attachShadow({ mode: "open" });
+          const shadowed = document.createElement("span");
+          shadowed.id = "c-shadowed";
+          const nestedHost = document.createElement("div");
+          const nestedRoot = nestedHost.attachShadow({ mode: "open" });
+          const nested = document.createElement("span");
+          nested.id = "d-nested";
+          nestedRoot.append(nested);
+          // A second element under an id already listed, and one with none.
+          const repeated = document.createElement("span");
+          repeated.id = "b-light";
+          root.append(shadowed, nestedHost, repeated);
+          document.body.replaceChildren(
+            light,
+            host,
+            document.createElement("p"),
+          );
+          // A fill's ledger and a connection with nothing pending, so the
+          // probe reports both.
+          const scope = globalThis as unknown as {
+            __cfFillDiag: Record<string, unknown>;
+            commonfabric: { rt: { getPendingRequests: () => unknown[] } };
+          };
+          scope.__cfFillDiag = { "#absent-input": { phase: "no-element" } };
+          scope.commonfabric = { rt: { getPendingRequests: () => [] } };
+        });
+
+        const probe = await readCfInputProbe(probePage, "#absent-input");
+
+        expect(probe.found).toBe(false);
+        expect(probe.presentIds).toEqual([
+          "a-host",
+          "b-light",
+          "c-shadowed",
+          "d-nested",
+        ]);
+        expect(probe.presentIdCount).toBe(4);
+        // A cut of a long probe keeps its first lines, so the ids and the fill
+        // ledger come ahead of the IPC counts.
+        const keys = Object.keys(probe);
+        expect(keys.indexOf("presentIdCount")).toBeLessThan(
+          keys.indexOf("visibilityState"),
+        );
+        expect(keys.indexOf("visibilityState")).toBeLessThan(
+          keys.indexOf("hasFocus"),
+        );
+        expect(keys.indexOf("hasFocus")).toBeLessThan(keys.indexOf("fill"));
+        expect(keys.indexOf("fill")).toBeLessThan(keys.indexOf("pendingIpc"));
+      } finally {
+        await probePage.close();
+      }
+    });
+
+    it("lists the first `PRESENT_IDS_MAX` ids in sorted order, and counts every id", async () => {
+      const probePage = await browser.newPage();
+      try {
+        const total = PRESENT_IDS_MAX + 50;
+        await probePage.evaluate((count: number) => {
+          const elements = [];
+          // Appended in reverse, so the order reported is the sort's.
+          for (let i = count - 1; i >= 0; i--) {
+            const element = document.createElement("span");
+            element.id = `id-${String(i).padStart(3, "0")}`;
+            elements.push(element);
+          }
+          document.body.replaceChildren(...elements);
+        }, { args: [total] });
+
+        const probe = await readCfInputProbe(probePage, "#absent-input");
+
+        expect(probe.presentIds).toEqual(
+          Array.from(
+            { length: PRESENT_IDS_MAX },
+            (_, i) => `id-${String(i).padStart(3, "0")}`,
+          ),
+        );
+        expect(probe.presentIdCount).toBe(total);
+      } finally {
+        await probePage.close();
+      }
+    });
+
+    /** A probe of a field nothing matches, with `fields` beside it. */
+    const absentProbe = (fields: Partial<CfInputProbe>): CfInputProbe => ({
+      selector: "#absent-input",
+      found: false,
+      value: "",
+      disabled: false,
+      readOnly: false,
+      visible: false,
+      hostTagName: "",
+      ...fields,
+    });
+
+    it("keeps the end of a probe longer than `long` keeps", () => {
+      const probe = absentProbe({
+        completedIpc: Object.fromEntries(
+          Array.from({ length: 80 }, (_, i) => [`ipc/kind-${i}`, {
+            count: i,
+            maxMs: i,
+          }]),
+        ),
+        subscriptionTotals: { activeInstances: 17 },
+      });
+
+      const message = fillFailureMessage("#absent-input", "Grace", probe);
+
+      expect(message).toContain("activeInstances");
+    });
+
+    it("keeps every console entry of a probe longer than `xlong` keeps", () => {
+      // Every part at its bound or past it, and each entry's text as many
+      // lines as the page's 400-character cut allows. The probe part is then
+      // longer than `xlong` keeps, so what the report needs most from it
+      // survives only by coming first, in the order `readCfInputProbe` builds
+      // it: the ids and their count, then the fill ledger, ahead of the IPC
+      // counts.
+      const entryText = (i: number) =>
+        `entry ${i}` + "\n.".repeat(195) +
+        (i === 39 ? "\nthe last console line" : "");
+      const probe = absentProbe({
+        presentIds: Array.from(
+          { length: PRESENT_IDS_MAX },
+          (_, i) => `id-${String(i).padStart(3, "0")}`,
+        ),
+        presentIdCount: PRESENT_IDS_MAX + 7,
+        fill: { attempts: 601, phase: "no-element" },
+        pendingIpc: Array.from(
+          { length: 50 },
+          (_, i) => ({ type: `request-${i}`, ageMs: i }),
+        ),
+        completedIpc: Object.fromEntries(
+          Array.from({ length: 300 }, (_, i) => [`ipc/kind-${i}`, {
+            count: i,
+            maxMs: i,
+          }]),
+        ),
+        consoleTail: Array.from(
+          { length: 40 },
+          (_, i) => ({ t: i, method: "log", text: entryText(i) }),
+        ),
+      });
+
+      const message = fillFailureMessage("#absent-input", "Grace", probe);
+
+      expect(message).toContain("entry 0");
+      expect(message).toContain("the last console line");
+      expect(message).toContain("found: false");
+      expect(message).toContain('"id-000"');
+      expect(message).toContain(
+        `"id-${String(PRESENT_IDS_MAX - 1).padStart(3, "0")}"`,
+      );
+      expect(message).toContain(`presentIdCount: ${PRESENT_IDS_MAX + 7}`);
+      expect(message).toContain('phase: "no-element"');
+    });
+
+    it("says no probe was read where reading it failed", () => {
+      const message = fillFailureMessage("#absent-input", "Grace", undefined);
+
+      expect(message).toContain("No probe of the page could be read.");
+      expect(message).not.toContain("undefined");
+    });
+
+    it("says the page kept no console tail where the probe holds none", () => {
+      const message = fillFailureMessage(
+        "#absent-input",
+        "Grace",
+        absentProbe({}),
+      );
+
+      expect(message).toContain("The page kept no console tail.");
+      expect(message).not.toContain("undefined");
+    });
+
+    it("reports whether the page is shown and focused", async () => {
+      // A second tab in front hides the first, which then renders no frames.
+      const behind = await browser.newPage();
+      const front = await browser.newPage();
+      try {
+        const hidden = await readCfInputProbe(behind, "#absent-input");
+        const shown = await readCfInputProbe(front, "#absent-input");
+
+        expect([hidden.visibilityState, hidden.hasFocus]).toEqual([
+          "hidden",
+          false,
+        ]);
+        expect([shown.visibilityState, shown.hasFocus]).toEqual([
+          "visible",
+          true,
+        ]);
+      } finally {
+        await front.close();
+        await behind.close();
+      }
+    });
+
+    it("names the frame wait in the ledger while a fill waits on frames", async () => {
+      // The page records the fill's phase as of each frame request it makes.
+      await page.evaluate(() => {
+        const host = document.createElement("div");
+        host.id = "frame-phase-input";
+        Object.assign(host.style, {
+          display: "block",
+          height: "40px",
+          width: "240px",
+        });
+        const root = host.attachShadow({ mode: "open" });
+        const input = document.createElement("input");
+        Object.assign(input.style, {
+          display: "block",
+          height: "32px",
+          width: "200px",
+        });
+        root.append(input);
+        document.body.append(host);
+        const scope = globalThis as unknown as {
+          commonfabric: { viewSettled: () => Promise<void> };
+          __cfFillDiag?: Record<string, { phase: string }>;
+          __framePhases: string[];
+          __requestFrame: typeof requestAnimationFrame;
+        };
+        scope.commonfabric = { viewSettled: () => Promise.resolve() };
+        scope.__framePhases = [];
+        scope.__requestFrame = globalThis.requestAnimationFrame;
+        globalThis.requestAnimationFrame = (callback) => {
+          const phase = scope.__cfFillDiag?.["#frame-phase-input"]?.phase;
+          if (phase !== undefined) scope.__framePhases.push(phase);
+          return scope.__requestFrame.call(globalThis, callback);
+        };
+      });
+
+      await fillCfInput(page, "#frame-phase-input", "Bob");
+      const phases = await page.evaluate(() => {
+        const scope = globalThis as unknown as {
+          __framePhases: string[];
+          __requestFrame: typeof requestAnimationFrame;
+        };
+        globalThis.requestAnimationFrame = scope.__requestFrame;
+        return scope.__framePhases;
+      });
+
+      expect(phases[0]).toBe("awaiting-frame");
+    });
+
+    it("dates a fill's first attempt and its latest, and starts the count again for the next fill", async () => {
+      type Ledger = {
+        attempts: number;
+        firstAttemptAt: number;
+        lastAttemptAt: number;
+      };
+      const ledger = () =>
+        page.evaluate(() =>
+          (globalThis as typeof globalThis & {
+            __cfFillDiag: Record<string, Ledger>;
+          }).__cfFillDiag["#late-ledger-input"]
+        );
+      await page.evaluate(() => {
+        let settleCalls = 0;
+        (globalThis as typeof globalThis & {
+          commonfabric: { viewSettled: () => Promise<void> };
+        }).commonfabric = {
+          viewSettled: () => {
+            // The field renders on the second settle, so the first attempt
+            // finds nothing and a second one fills it. The first attempt
+            // changes no DOM, so the second comes from the waiter's 500 ms
+            // backstop, which is what dates the latest attempt after the
+            // first.
+            settleCalls++;
+            if (
+              settleCalls === 2 && !document.querySelector("#late-ledger-input")
+            ) {
+              const host = document.createElement("div");
+              host.id = "late-ledger-input";
+              Object.assign(host.style, {
+                display: "block",
+                height: "40px",
+                width: "240px",
+              });
+              const root = host.attachShadow({ mode: "open" });
+              const input = document.createElement("input");
+              Object.assign(input.style, {
+                display: "block",
+                height: "32px",
+                width: "200px",
+              });
+              root.append(input);
+              document.body.append(host);
+            }
+            return Promise.resolve();
+          },
+        };
+      });
+
+      await fillCfInput(page, "#late-ledger-input", "Bob");
+      const first = await ledger();
+      await fillCfInput(page, "#late-ledger-input", "Carol");
+      const second = await ledger();
+
+      expect(first.attempts).toBeGreaterThan(1);
+      expect(first.lastAttemptAt).toBeGreaterThan(first.firstAttemptAt);
+      expect(second.attempts).toBe(1);
+      expect(second.firstAttemptAt).toBe(second.lastAttemptAt);
+      expect(second.firstAttemptAt).toBeGreaterThanOrEqual(first.lastAttemptAt);
+    });
   });
 });

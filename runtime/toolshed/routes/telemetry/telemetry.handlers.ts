@@ -7,6 +7,14 @@ const MAX_TELEMETRY_BYTES = 1024 * 1024; // 1MB
 
 export type TelemetrySignal = "traces" | "metrics";
 
+/** Where `forwardOtlp()` relays a payload, and whether it relays at all. */
+export interface OtlpForwarding {
+  enabled: boolean;
+  /** The collector's OTLP/HTTP base URL. */
+  endpoint: string;
+  fetch: typeof fetch;
+}
+
 /**
  * Forward a browser OTLP payload to toolshed's local collector.
  *
@@ -22,9 +30,14 @@ export type TelemetrySignal = "traces" | "metrics";
 export async function forwardOtlp(
   c: Context,
   signal: TelemetrySignal,
+  forwarding: OtlpForwarding = {
+    enabled: env.OTEL_ENABLED,
+    endpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT,
+    fetch,
+  },
 ): Promise<Response> {
   // When telemetry is disabled, accept-and-drop: 204 No Content, no forwarding.
-  if (!env.OTEL_ENABLED) {
+  if (!forwarding.enabled) {
     return c.body(null, 204);
   }
 
@@ -71,13 +84,11 @@ export async function forwardOtlp(
   }
 
   const contentType = c.req.header("content-type") ?? "application/json";
-  const endpoint = `${
-    env.OTEL_EXPORTER_OTLP_ENDPOINT.replace(/\/$/, "")
-  }/v1/${signal}`;
+  const endpoint = `${forwarding.endpoint.replace(/\/$/, "")}/v1/${signal}`;
 
   // Fire-and-forget: return 202 immediately so collector latency never affects
   // the app. Any forwarding failure is logged, never thrown.
-  fetch(endpoint, {
+  forwarding.fetch(endpoint, {
     method: "POST",
     headers: { "content-type": contentType },
     body,

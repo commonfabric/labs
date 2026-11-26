@@ -1,11 +1,3 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  it,
-} from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 
@@ -13,6 +5,14 @@ import { Identity } from "@commonfabric/identity";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger, resetAllLoggerCounts } from "@commonfabric/logger";
 import { RequestType } from "@commonfabric/runtime-client";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { Browser } from "../browser.ts";
 import type { Page } from "../page.ts";
@@ -30,7 +30,11 @@ import {
   login,
   waitForShellReady,
 } from "../shell-utils.ts";
-import { describeConditionWaitFailure, waitForCondition } from "../utils.ts";
+import {
+  describeConditionWaitFailure,
+  waitForCondition,
+  withWaitForConditionTimeout,
+} from "../utils.ts";
 
 // What the toolshed answers with when its fetch to the shell dev server fails.
 const PROXY_FAILURE_TEXT =
@@ -350,28 +354,15 @@ async function rejectionMessage(work: Promise<unknown>): Promise<string> {
   throw new Error("Expected the call to throw, and it returned instead.");
 }
 
-/** The variable the wait reads its safety net's length from. */
-const NET_VARIABLE = "CF_WAIT_FOR_CONDITION_TIMEOUT_MS";
-
 // The stuck-condition safety net is five minutes, which no test can sit
 // through. This drives it through the environment variable the wait reads for
 // exactly that, and returns the message it gave up with. Everything past the
 // first line of that message is what the wait assembles, which nothing else
 // exercises.
-async function shortNetRejectionMessage(
+function shortNetRejectionMessage(
   work: () => Promise<unknown>,
 ): Promise<string> {
-  // Put back whatever the run was started with, rather than removing it:
-  // somebody running this file with a net of their own chose that, and a
-  // test that dropped it would change every wait after itself.
-  const before = Deno.env.get(NET_VARIABLE);
-  Deno.env.set(NET_VARIABLE, "1500");
-  try {
-    return await rejectionMessage(work());
-  } finally {
-    if (before === undefined) Deno.env.delete(NET_VARIABLE);
-    else Deno.env.set(NET_VARIABLE, before);
-  }
+  return withWaitForConditionTimeout(1500, () => rejectionMessage(work()));
 }
 
 describe("shell-failure-reports", () => {
@@ -432,6 +423,73 @@ describe("shell-failure-reports", () => {
       expect(probe.app).toBe(true);
       expect(probe.view).toEqual({ builtin: "home" });
       expect(probe.identityDid).toBe("did:key:zBootedShellFixture");
+    });
+
+    it("reports a pending creation before the shell publishes a runtime", async () => {
+      await load("/booted-shell");
+      await page.evaluate(() => {
+        Object.assign(globalThis.app, {
+          accessForTestingOnly: {
+            rt: { status: 1 },
+            runtimeGeneration: 2,
+          },
+        });
+      });
+
+      const probe = await readShellPageProbe(page);
+      expect(probe.runtime).toBe(false);
+      expect(probe.runtimeTask).toEqual({ status: 1, generation: 2 });
+      expect(describeShellPage(probe)).toContain(
+        "runtime creation task: status 1, generation 2",
+      );
+      expect(describeShellPage(probe)).not.toContain("runtime creation error:");
+    });
+
+    it("reports a creation rejection before the shell publishes a runtime", async () => {
+      await load("/booted-shell");
+      await page.evaluate(() => {
+        Object.assign(globalThis.app, {
+          accessForTestingOnly: {
+            rt: { status: 3 },
+            runtimeTaskError: new Error("worker module could not initialize"),
+            runtimeGeneration: 2,
+          },
+        });
+      });
+
+      const probe = await readShellPageProbe(page);
+      expect(probe.runtime).toBe(false);
+      expect(probe.runtimeTask).toEqual({
+        status: 3,
+        generation: 2,
+        error: "Error: worker module could not initialize",
+      });
+      const report = describeShellPage(probe);
+      expect(report).toContain("runtime creation task: status 3, generation 2");
+      expect(report).toContain(
+        "runtime creation error: Error: worker module could not initialize",
+      );
+      expect(report).not.toContain("runtime creation task: status 1");
+    });
+
+    it("reports a task getter's failure without losing the rest of the page", async () => {
+      await load("/booted-shell");
+      await page.evaluate(() => {
+        Object.defineProperty(globalThis.app, "accessForTestingOnly", {
+          get() {
+            throw new Error("task cannot be read");
+          },
+        });
+      });
+
+      const probe = await readShellPageProbe(page);
+      expect(probe.runtimeTask).toBeUndefined();
+      expect(probe.runtimeTaskError).toBe("Error: task cannot be read");
+      const report = describeShellPage(probe);
+      expect(report).toContain(
+        "runtime creation task: reading it threw: Error: task cannot be read",
+      );
+      expect(report).toContain("did:key:zBootedShellFixture");
     });
 
     it("returns the requests the page's runtime is still waiting on", async () => {

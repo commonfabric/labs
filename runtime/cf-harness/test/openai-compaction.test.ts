@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
+import { expect } from "@std/expect";
 import { OpenAICompatibleGatewayClient } from "../src/gateway/openai-client.ts";
 import {
   compactThresholdForBudget,
@@ -10,6 +11,7 @@ import {
 } from "../src/model/responses-protocol.ts";
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 const GATEWAY = "https://gateway.test";
 const PROVIDER = "openai-compatible-gateway";
@@ -76,7 +78,7 @@ const registry = (models: Array<Record<string, unknown>>) => ({
 // Threshold policy
 //
 
-Deno.test("the threshold is 75% of the input budget, not of context window", () => {
+test("the threshold is 75% of the input budget, not of context window", () => {
   // gpt-5.6 family: 1,050,000 total - 128,000 output = 922,000 input.
   assertEquals(compactThresholdForBudget(1_050_000, 128_000), 691_500);
   // The 400k models are the trap: 75% of contextWindow is 300,000, which is
@@ -85,7 +87,7 @@ Deno.test("the threshold is 75% of the input budget, not of context window", () 
   assert(204_000 < 400_000 - 128_000, "threshold must sit under the input cap");
 });
 
-Deno.test("an unknown budget yields no threshold rather than a guess", () => {
+test("an unknown budget yields no threshold rather than a guess", () => {
   assertEquals(compactThresholdForBudget(undefined, 128_000), undefined);
   assertEquals(compactThresholdForBudget(1_050_000, undefined), undefined);
   // Degenerate registry data must not produce a negative or zero threshold.
@@ -93,7 +95,7 @@ Deno.test("an unknown budget yields no threshold rather than a guess", () => {
   assertEquals(compactThresholdForBudget(1_000, 2_000), undefined);
 });
 
-Deno.test("listModels primes the compaction budget", async () => {
+test("listModels primes the compaction budget", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [
     registry([{
@@ -114,7 +116,7 @@ Deno.test("listModels primes the compaction budget", async () => {
   }]);
 });
 
-Deno.test("a per-request threshold overrides, and 0 disables", async () => {
+test("a per-request threshold overrides, and 0 disables", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [
     registry([{
@@ -139,7 +141,7 @@ Deno.test("a per-request threshold overrides, and 0 disables", async () => {
 // Retention and pruning
 //
 
-Deno.test("a compaction item is retained rather than dropped", async () => {
+test("a compaction item is retained rather than dropped", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [
     completed([
@@ -217,12 +219,11 @@ const compactedTranscript = (): HarnessTranscriptMessage[] => [
   },
 ];
 
-Deno.test("pruning drops superseded turns but keeps tool pairs intact", async () => {
+test("pruning drops superseded turns but keeps tool pairs intact", async () => {
   const { instructions, input } = await toResponsesInput(
     compactedTranscript(),
     MODEL,
     PROVIDER,
-    "gateway Responses",
     undefined,
     "drop",
   );
@@ -253,12 +254,11 @@ Deno.test("pruning drops superseded turns but keeps tool pairs intact", async ()
   assert(JSON.stringify(input).includes("late contents"));
 });
 
-Deno.test("the boundary's compaction item is emitted exactly once", async () => {
+test("the boundary's compaction item is emitted exactly once", async () => {
   const { input } = await toResponsesInput(
     compactedTranscript(),
     MODEL,
     PROVIDER,
-    "gateway Responses",
     undefined,
     "drop",
   );
@@ -267,7 +267,7 @@ Deno.test("the boundary's compaction item is emitted exactly once", async () => 
   assertEquals(input.filter((i) => i.type === "reasoning").length, 1);
 });
 
-Deno.test("a transcript with no compaction is unchanged", async () => {
+test("a transcript with no compaction is unchanged", async () => {
   const plain: HarnessTranscriptMessage[] = [
     { role: "system", content: "Be careful." },
     { role: "user", content: "Go." },
@@ -277,7 +277,6 @@ Deno.test("a transcript with no compaction is unchanged", async () => {
     plain,
     MODEL,
     PROVIDER,
-    "gateway Responses",
     undefined,
     "drop",
   );
@@ -285,7 +284,7 @@ Deno.test("a transcript with no compaction is unchanged", async () => {
   assertEquals(input.length, 2);
 });
 
-Deno.test("a compaction from another model is not replayed", async () => {
+test("a compaction from another model is not replayed", async () => {
   const foreign = compactedTranscript();
   const boundary = foreign[4] as {
     providerContinuation: { state: { sourceModel: string } };
@@ -296,7 +295,6 @@ Deno.test("a compaction from another model is not replayed", async () => {
     foreign,
     MODEL,
     PROVIDER,
-    "gateway Responses",
     undefined,
     "drop",
   );
@@ -332,7 +330,7 @@ const toolHeavyTranscript = (): HarnessTranscriptMessage[] => [
   },
 ];
 
-Deno.test("the default accounts for the rendered Responses input", async () => {
+test("the default accounts for the rendered Responses input", async () => {
   const captured: Captured[] = [];
   // Nothing primes the catalog here: this is what a normal run does. Budget
   // discovery cannot be gated on transcript text because the rendered input
@@ -354,7 +352,7 @@ Deno.test("the default accounts for the rendered Responses input", async () => {
   }]);
 });
 
-Deno.test("multibyte input uses the UTF-8 byte discovery floor", async () => {
+test("multibyte input uses the UTF-8 byte discovery floor", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [
     registry([{
@@ -378,7 +376,7 @@ Deno.test("multibyte input uses the UTF-8 byte discovery floor", async () => {
   }]);
 });
 
-Deno.test("successful discovery is attempted once, then reused", async () => {
+test("successful discovery is attempted once, then reused", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [
     registry([{
@@ -395,7 +393,7 @@ Deno.test("successful discovery is attempted once, then reused", async () => {
   assertEquals(listCalls, 1, "discovery must not repeat per turn");
 });
 
-Deno.test("successful discovery is cached for an unlisted model", async () => {
+test("successful discovery is cached for an unlisted model", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [
     registry([{
@@ -415,7 +413,7 @@ Deno.test("successful discovery is cached for an unlisted model", async () => {
   assertEquals(captured[2].body.context_management, undefined);
 });
 
-Deno.test("small turns pay no discovery round trip", async () => {
+test("small turns pay no discovery round trip", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [completed([])]);
 
@@ -426,7 +424,7 @@ Deno.test("small turns pay no discovery round trip", async () => {
   assertEquals(captured[0].body.context_management, undefined);
 });
 
-Deno.test("an explicit threshold avoids registry discovery", async () => {
+test("an explicit threshold avoids registry discovery", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [completed([])]);
 
@@ -440,7 +438,7 @@ Deno.test("an explicit threshold avoids registry discovery", async () => {
   }]);
 });
 
-Deno.test("a later turn retries after an unreachable registry", async () => {
+test("a later turn retries after an unreachable registry", async () => {
   const captured: Captured[] = [];
   let registryCalls = 0;
   const client = new OpenAICompatibleGatewayModelClient(
@@ -508,7 +506,7 @@ Deno.test("a later turn retries after an unreachable registry", async () => {
 // Unsupported paths must fail loudly rather than ignore the option.
 //
 
-Deno.test("a positive threshold on a chat-routed model is rejected", async () => {
+test("a positive threshold on a chat-routed model is rejected", async () => {
   const client = clientWith([], [completed([])]);
   await assertRejects(
     () =>
@@ -521,7 +519,7 @@ Deno.test("a positive threshold on a chat-routed model is rejected", async () =>
   );
 });
 
-Deno.test("a positive threshold with native tools is rejected", async () => {
+test("a positive threshold with native tools is rejected", async () => {
   const client = clientWith([], [completed([])]);
   await assertRejects(
     () =>
@@ -534,7 +532,7 @@ Deno.test("a positive threshold with native tools is rejected", async () => {
   );
 });
 
-Deno.test("0 stays harmless on unsupported paths", async () => {
+test("0 stays harmless on unsupported paths", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [{
     choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
@@ -548,7 +546,7 @@ Deno.test("0 stays harmless on unsupported paths", async () => {
   assertEquals(captured[0].url, `${GATEWAY}/v1/chat/completions`);
 });
 
-Deno.test("continuationOutput replays nothing from a continuation of an unknown version or with no source model", () => {
+test("continuationOutput replays nothing from a continuation of an unknown version or with no source model", () => {
   for (
     const state of [
       { version: 3, sourceModel: "gpt-test", output: [] },
@@ -560,4 +558,100 @@ Deno.test("continuationOutput replays nothing from a continuation of an unknown 
       [],
     );
   }
+});
+
+describe("openai-compatible-gateway", () => {
+  describe("OpenAICompatibleGatewayModelClient", () => {
+    describe("complete() budget discovery floor", () => {
+      // The floor is 200,000 UTF-8 bytes of rendered input, counted without
+      // encoding it. Each case sits just above or just below it.
+
+      const discoveredUrls = async (
+        overrides: Partial<HarnessModelTurnRequest>,
+      ): Promise<string[]> => {
+        const urls: string[] = [];
+        const client = new OpenAICompatibleGatewayModelClient(
+          new OpenAICompatibleGatewayClient({
+            baseUrl: GATEWAY,
+            authMode: "none",
+            fetchFn: (input) => {
+              const path = new URL(String(input)).pathname;
+              urls.push(path);
+              return Promise.resolve(Response.json(
+                path === "/v1/models"
+                  ? registry([{
+                    id: MODEL,
+                    capabilities: {
+                      contextWindow: 1_050_000,
+                      maxOutputTokens: 128_000,
+                    },
+                  }])
+                  : completed([]),
+              ));
+            },
+          }),
+        );
+        await client.complete(turn(overrides));
+        return urls;
+      };
+
+      const userText = (content: string): HarnessTranscriptMessage[] => [
+        { role: "user", content },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{
+            id: "call-empty",
+            type: "function",
+            function: { name: "read_file", arguments: "{}" },
+          }],
+        },
+        {
+          role: "tool",
+          toolCallId: "call-empty",
+          toolName: "read_file",
+          content: "",
+        },
+      ];
+
+      it("counts two bytes for each two-byte character", async () => {
+        expect(
+          await discoveredUrls({ transcript: userText("é".repeat(100_000)) }),
+        ).toEqual(["/v1/models", "/v1/responses"]);
+        expect(
+          await discoveredUrls({ transcript: userText("é".repeat(99_000)) }),
+        ).toEqual(["/v1/responses"]);
+      });
+
+      it("counts four bytes for each character outside the BMP", async () => {
+        // Each emoji is two UTF-16 code units but one four-byte character.
+        expect(
+          await discoveredUrls({ transcript: userText("😀".repeat(50_000)) }),
+        ).toEqual(["/v1/models", "/v1/responses"]);
+        expect(
+          await discoveredUrls({ transcript: userText("😀".repeat(49_000)) }),
+        ).toEqual(["/v1/responses"]);
+      });
+
+      it("counts the property names of tool schemas", async () => {
+        const schemaTool = (propertyName: string) => ({
+          toolId: "write_file",
+          title: "Write file",
+          description: "Write a file",
+          effectClass: "write" as const,
+          inputSchema: {
+            type: "object" as const,
+            properties: { [propertyName]: { type: "string" as const } },
+          },
+        });
+
+        expect(
+          await discoveredUrls({ tools: [schemaTool("k".repeat(200_000))] }),
+        ).toEqual(["/v1/models", "/v1/responses"]);
+        expect(
+          await discoveredUrls({ tools: [schemaTool("k".repeat(190_000))] }),
+        ).toEqual(["/v1/responses"]);
+      });
+    });
+  });
 });

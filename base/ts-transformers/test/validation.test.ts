@@ -9,6 +9,7 @@ import { validateSource } from "./utils.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { collect, hasKeyPathRead, parseModule } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function getErrors(diagnostics: readonly TransformationDiagnostic[]) {
   return diagnostics.filter((d) => d.severity === "error");
@@ -50,7 +51,7 @@ function assertHasErrorType(
   );
 }
 
-Deno.test("Cast Validation", async (t) => {
+test("Cast Validation", async (t) => {
   await t.step("errors on double cast 'as unknown as'", async () => {
     const source = `
       import { Reactive } from "commonfabric";
@@ -375,7 +376,7 @@ Deno.test("Cast Validation", async (t) => {
   });
 });
 
-Deno.test("Empty Array .of() Validation", async (t) => {
+test("Empty Array .of() Validation", async (t) => {
   const errorCases = [
     {
       name: "errors on Cell.of([])",
@@ -458,7 +459,7 @@ Deno.test("Empty Array .of() Validation", async (t) => {
   }
 });
 
-Deno.test("Pattern Context Validation - Restricted Contexts", async (t) => {
+test("Pattern Context Validation - Restricted Contexts", async (t) => {
   await t.step(
     "allows property access in JSX (transformer handles it)",
     async () => {
@@ -772,7 +773,7 @@ Deno.test("Pattern Context Validation - Restricted Contexts", async (t) => {
   });
 });
 
-Deno.test(
+test(
   "Pattern Context Validation - Destructuring and Structural Traversal",
   async (t) => {
     await t.step(
@@ -936,7 +937,7 @@ Deno.test(
   },
 );
 
-Deno.test("Pattern Context Validation - Statement Boundaries", async (t) => {
+test("Pattern Context Validation - Statement Boundaries", async (t) => {
   await t.step(
     "errors on let declaration in top-level pattern body",
     async () => {
@@ -1250,7 +1251,7 @@ Deno.test("Pattern Context Validation - Statement Boundaries", async (t) => {
   );
 });
 
-Deno.test(
+test(
   "Pattern Context Validation - Lowerable Non-JSX Expression Sites",
   async (t) => {
     await t.step(
@@ -1400,7 +1401,7 @@ Deno.test(
   },
 );
 
-Deno.test("Pattern Context Validation - Destructuring Defaults", async (t) => {
+test("Pattern Context Validation - Destructuring Defaults", async (t) => {
   await t.step(
     "errors on non-static default initializer destructuring",
     async () => {
@@ -1464,7 +1465,7 @@ Deno.test("Pattern Context Validation - Destructuring Defaults", async (t) => {
   );
 });
 
-Deno.test("Pattern Context Validation - Receiver Method Calls", async (t) => {
+test("Pattern Context Validation - Receiver Method Calls", async (t) => {
   await t.step(
     "allows top-level object-property receiver method call in pattern body",
     async () => {
@@ -1774,7 +1775,7 @@ Deno.test("Pattern Context Validation - Receiver Method Calls", async (t) => {
   );
 });
 
-Deno.test("Pattern Context Validation - Safe Wrappers", async (t) => {
+test("Pattern Context Validation - Safe Wrappers", async (t) => {
   await t.step("allows reading opaques inside computed()", async () => {
     const source = `      import { pattern, computed, h } from "commonfabric";
 
@@ -2014,7 +2015,7 @@ Deno.test("Pattern Context Validation - Safe Wrappers", async (t) => {
   );
 });
 
-Deno.test("Computed local reactive alias validation", async (t) => {
+test("Computed local reactive alias validation", async (t) => {
   await t.step(
     "errors on truthiness checks of locally created computed results",
     async () => {
@@ -2108,7 +2109,7 @@ Deno.test("Computed local reactive alias validation", async (t) => {
   );
 });
 
-Deno.test("Diagnostic output format", async (t) => {
+test("Diagnostic output format", async (t) => {
   await t.step("includes source location information", async () => {
     const source = `
       import { Reactive } from "commonfabric";
@@ -2133,7 +2134,7 @@ Deno.test("Diagnostic output format", async (t) => {
   });
 });
 
-Deno.test("Pattern Context Validation - Function Creation", async (t) => {
+test("Pattern Context Validation - Function Creation", async (t) => {
   await t.step("errors on arrow function in pattern body", async () => {
     const source = `      import { pattern, h } from "commonfabric";
 
@@ -2560,7 +2561,7 @@ Deno.test("Pattern Context Validation - Function Creation", async (t) => {
   );
 });
 
-Deno.test("Pattern Context Validation - Object Members", async (t) => {
+test("Pattern Context Validation - Object Members", async (t) => {
   const memberErrors = (diagnostics: readonly TransformationDiagnostic[]) =>
     getErrors(diagnostics).filter((e) =>
       e.type === "pattern-context:object-member"
@@ -2968,7 +2969,7 @@ Deno.test("Pattern Context Validation - Object Members", async (t) => {
   );
 });
 
-Deno.test("Pattern Context Validation - Builder Placement", async (t) => {
+test("Pattern Context Validation - Builder Placement", async (t) => {
   await t.step("errors on lift() inside pattern body", async () => {
     const source = `      import { pattern, lift, h } from "commonfabric";
 
@@ -3163,7 +3164,7 @@ Deno.test("Pattern Context Validation - Builder Placement", async (t) => {
   });
 });
 
-Deno.test("Reactive .get() Validation", async (t) => {
+test("Reactive .get() Validation", async (t) => {
   await t.step(
     "errors on .get() called on computed result",
     async () => {
@@ -4011,7 +4012,7 @@ Deno.test("Reactive .get() Validation", async (t) => {
   );
 });
 
-Deno.test("Pattern Context Validation - Fallback Array Methods", async (t) => {
+test("Pattern Context Validation - Fallback Array Methods", async (t) => {
   await t.step(
     "allows .map() after ?? [] fallback with reactive left side",
     async () => {
@@ -4253,7 +4254,7 @@ Deno.test("Pattern Context Validation - Fallback Array Methods", async (t) => {
   );
 });
 
-Deno.test("Pattern Result Schema Inference", async (t) => {
+test("Pattern Result Schema Inference", async (t) => {
   await t.step(
     "errors when pattern return type infers as any (one type arg)",
     async () => {
@@ -4360,7 +4361,7 @@ Deno.test("Pattern Result Schema Inference", async (t) => {
   );
 });
 
-Deno.test("Standalone Function Validation", async (t) => {
+test("Standalone Function Validation", async (t) => {
   await t.step(
     "errors on computed() inside standalone function",
     async () => {
@@ -4695,7 +4696,7 @@ Deno.test("Standalone Function Validation", async (t) => {
   );
 });
 
-Deno.test("SES Callback Self-Containment Validation", async (t) => {
+test("SES Callback Self-Containment Validation", async (t) => {
   await t.step(
     "errors when computed callback captures enclosing helper function",
     async () => {
@@ -4925,7 +4926,7 @@ Deno.test("SES Callback Self-Containment Validation", async (t) => {
   );
 });
 
-Deno.test("Inline reactive-root access diagnostic", async (t) => {
+test("Inline reactive-root access diagnostic", async (t) => {
   await t.step(
     "does not flag identity-preserving methods on reactive-origin calls",
     async () => {
@@ -4984,7 +4985,7 @@ Deno.test("Inline reactive-root access diagnostic", async (t) => {
   );
 });
 
-Deno.test("Inline reactive-root chain rewrite", async (t) => {
+test("Inline reactive-root chain rewrite", async (t) => {
   await t.step(
     "preserves cast wrappers around the call when rewriting one-line chains",
     async () => {
@@ -5025,7 +5026,7 @@ Deno.test("Inline reactive-root chain rewrite", async (t) => {
   );
 });
 
-Deno.test("Module-extracted reactive callback bodies (CT-1587)", async (t) => {
+test("Module-extracted reactive callback bodies (CT-1587)", async (t) => {
   await t.step(
     "lowers property access on opaque roots inside computed() bodies",
     async () => {
@@ -5067,7 +5068,7 @@ Deno.test("Module-extracted reactive callback bodies (CT-1587)", async (t) => {
   );
 });
 
-Deno.test("Paren-Invariance Twins", async (t) => {
+test("Paren-Invariance Twins", async (t) => {
   // Target-language spec §5.7: parentheses around a site are spelling and do
   // not change its classification. Each step validates a bare/parenthesized
   // source pair: the bare spelling must match the expected diagnostic types
@@ -5298,4 +5299,111 @@ Deno.test("Paren-Invariance Twins", async (t) => {
     `;
     await assertTwins(bare, paren, []);
   });
+});
+
+test("JSX Prop Name Validation", async (t) => {
+  const misnamed = (diagnostics: readonly TransformationDiagnostic[]) =>
+    diagnostics.filter((d) =>
+      d.type === "jsx:misnamed-prop" && d.severity === "error"
+    );
+  const inPattern = (jsx: string) =>
+    [
+      "/// <cts-enable />",
+      'import { pattern, UI } from "commonfabric";',
+      "export default pattern<{ open: boolean }>(({ open }) => ({",
+      `  [UI]: (${jsx}),`,
+      "}));",
+    ].join("\n");
+
+  await t.step(
+    "refuses a hyphenated prop on an element and names the property to write",
+    async () => {
+      const { diagnostics } = await validateSource(
+        inPattern('<cf-resizable-panel default-size={28} min-size="20" />'),
+        { types: COMMONFABRIC_TYPES },
+      );
+      const errors = misnamed(diagnostics);
+      assertEquals(errors.length, 2);
+      assertStringIncludes(
+        errors[0]!.message,
+        "Rename it to `defaultSize` (`default-size=` → `defaultSize=`)",
+      );
+      assertStringIncludes(errors[1]!.message, "Rename it to `minSize`");
+    },
+  );
+
+  await t.step(
+    "says so when the element declares no camel-case property either",
+    async () => {
+      const { diagnostics } = await validateSource(
+        inPattern('<cf-button no-such-prop="x" />'),
+        { types: COMMONFABRIC_TYPES },
+      );
+      const errors = misnamed(diagnostics);
+      assertEquals(errors.length, 1);
+      assertStringIncludes(errors[0]!.message, "declares no `noSuchProp` prop");
+      assertStringIncludes(errors[0]!.message, "`data-no-such-prop`");
+    },
+  );
+
+  await t.step(
+    "finds a hyphenated prop inside a nested JSX expression",
+    async () => {
+      const { diagnostics } = await validateSource(
+        inPattern(
+          '<div>{open ? <cf-input timing-strategy="immediate" /> : null}</div>',
+        ),
+        { types: COMMONFABRIC_TYPES },
+      );
+      assertEquals(misnamed(diagnostics).length, 1);
+    },
+  );
+
+  await t.step(
+    "leaves a component's props and a namespaced name alone",
+    async () => {
+      const { diagnostics } = await validateSource(
+        [
+          "/// <cts-enable />",
+          'import { pattern, UI } from "commonfabric";',
+          'const Badge = (props: { "badge-tone"?: string }) => <span>{props["badge-tone"]}</span>;',
+          "export default pattern<{ open: boolean }>(() => ({",
+          '  [UI]: <div><Badge badge-tone="warm" /><svg xlink:title-text="t" /></div>,',
+          "}));",
+        ].join("\n"),
+        { types: COMMONFABRIC_TYPES },
+      );
+      assertEquals(misnamed(diagnostics), []);
+    },
+  );
+
+  await t.step(
+    "reports a hyphenated prop as a warning over stored source",
+    async () => {
+      const { diagnostics } = await validateSource(
+        inPattern("<cf-resizable-panel default-size={28} />"),
+        { types: COMMONFABRIC_TYPES, storedSource: true },
+      );
+      assertEquals(
+        diagnostics
+          .filter((d) => d.type === "jsx:misnamed-prop")
+          .map((d) => d.severity),
+        ["warning"],
+      );
+    },
+  );
+
+  await t.step(
+    "accepts events, data-* and aria-* names, and property names",
+    async () => {
+      const { diagnostics } = await validateSource(
+        inPattern(
+          '<cf-resizable-panel defaultSize={28} data-id="a" aria-label="List" ' +
+            "oncf-change={() => {}} />",
+        ),
+        { types: COMMONFABRIC_TYPES },
+      );
+      assertEquals(misnamed(diagnostics), []);
+    },
+  );
 });

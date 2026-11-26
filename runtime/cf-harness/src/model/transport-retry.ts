@@ -10,6 +10,11 @@
  * unbounded loop is this schedule. Every attempt, retried or not, is recorded
  * where the client records attempts, and an attempt that is followed by
  * another says so and says why.
+ *
+ * One attempt is issued again outside the schedule: a request whose access
+ * token the provider refused (a 401) is issued once more with a refreshed
+ * token, with no backoff and without using one of the schedule's attempts.
+ * Its record names that reason, `credential_refused`, with a delay of zero.
  */
 
 /**
@@ -23,13 +28,25 @@ export type HarnessTransientFailureKind =
   | "provider_error";
 
 /**
- * What an attempt record carries when the attempt failed transiently and the
- * client issues another: the kind of failure, and the backoff before the next
- * attempt starts.
+ * Why a client issued another attempt: a transient failure, or the provider
+ * refusing the access token (a 401), after which the request is issued once
+ * more with a refreshed token. A refusal is outside the retry schedule: it
+ * waits out no backoff and is not counted against the schedule's attempts.
+ */
+export type HarnessModelAttemptRetryKind =
+  | HarnessTransientFailureKind
+  | "credential_refused";
+
+/**
+ * What an attempt record carries when the client issues another attempt: why,
+ * and the wait before the next attempt starts. For a transient failure the
+ * wait is the schedule's backoff. For a refused access token
+ * (`credential_refused`) it is zero, because the request is issued again as
+ * soon as the token has been refreshed.
  */
 export interface HarnessModelAttemptRetry {
-  /** Which transient failure the attempt ended in. */
-  kind: HarnessTransientFailureKind;
+  /** What the attempt ended in that another attempt follows. */
+  kind: HarnessModelAttemptRetryKind;
 
   /** Milliseconds waited before the next attempt. */
   delayMs: number;
@@ -150,7 +167,7 @@ export class TransportRetrySchedule {
   retryAfter(
     attempt: number,
     kind: HarnessTransientFailureKind | undefined,
-  ): HarnessModelAttemptRetry | undefined {
+  ): { kind: HarnessTransientFailureKind; delayMs: number } | undefined {
     if (kind === undefined || attempt >= this.#maxAttempts) return undefined;
     return { kind, delayMs: this.delayMsBefore(attempt + 1) };
   }

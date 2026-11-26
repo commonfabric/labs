@@ -6,11 +6,8 @@ import { yieldToEventLoop } from "@commonfabric/async/sleep";
 import type {
   CompilerHost,
   CompilerOptions,
-  FileReference,
   ModuleResolutionHost,
   ResolvedModuleWithFailedLookupLocations,
-  ResolvedProjectReference,
-  ResolvedTypeReferenceDirectiveWithFailedLookupLocations,
   ScriptTarget,
   SourceFile,
   StringLiteralLike,
@@ -102,13 +99,7 @@ class VirtualFs implements ModuleResolutionHost {
     this.#debug = !!debug;
   }
 
-  writeFile(fileName: unknown, content: unknown) {
-    if (typeof fileName !== "string") {
-      throw new Error("file name not string:" + typeof fileName);
-    }
-    if (typeof content !== "string") {
-      throw new Error("content not string:" + typeof content);
-    }
+  writeFile(fileName: string, content: string) {
     vfsLogger.debug(
       "vfs",
       () => `writeFile - ${fileName} (${content.length} chars)`,
@@ -119,10 +110,6 @@ class VirtualFs implements ModuleResolutionHost {
   getCurrentDirectory(): string {
     vfsLogger.debug("vfs", () => "getCurrentDirectory - returning /");
     return "/";
-  }
-
-  getDirectories(_path: string): string[] {
-    throw new Error("getDirectories() not implemented.");
   }
 
   fileExists(fileName: string): boolean {
@@ -187,21 +174,6 @@ class TypeScriptHost extends VirtualFs implements CompilerHost {
 
   getDefaultLibLocation(): string {
     return VFS_TYPES_DIR;
-  }
-
-  getEnvironmentVariable(_name: string): string | undefined {
-    return undefined;
-  }
-
-  resolveTypeReferenceDirectiveReferences?<T extends FileReference | string>(
-    _typeDirectiveReferences: readonly T[],
-    _containingFile: string,
-    _redirectedReference: ResolvedProjectReference | undefined,
-    _options: CompilerOptions,
-    _containingSourceFile: SourceFile | undefined,
-    _reusedNames: readonly T[] | undefined,
-  ): readonly ResolvedTypeReferenceDirectiveWithFailedLookupLocations[] {
-    throw new Error("ResolveTypeReferenceDirectiveReferences");
   }
 
   getCanonicalFileName(fileName: string): string {
@@ -816,19 +788,7 @@ export class TypeScriptCompiler {
 }
 
 function validateSource(artifact: Program) {
-  let entryFound = false;
-  for (const { name } of artifact.files) {
-    if (name === artifact.main) {
-      entryFound = true;
-    }
-    // Sources must be root paths, unless they are type files,
-    // which could be included for runtime dependencies,
-    // e.g. `@commonfabric/builder.d.ts`
-    if (name[0] !== "/" && !name.endsWith(".d.ts")) {
-      //throw new Error(`File "${name}" must have a "/" root.`);
-    }
-  }
-  if (!entryFound) {
+  if (!artifact.files.some(({ name }) => name === artifact.main)) {
     throw new Error(`No main module "${artifact.main}" in source.`);
   }
 }

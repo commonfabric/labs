@@ -2,9 +2,9 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import { describe, it } from "@commonfabric/test-support/test";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 
 const fixtures = new URL("./fixtures/memory-tls/", import.meta.url);

@@ -1,9 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { fromFileUrl, toFileUrl } from "@std/path";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import { Identity } from "@commonfabric/identity";
+import { isPlainObject } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import { type ACL, aclDocId } from "../acl.ts";
 import {
   createInviteCredentials,
@@ -11,11 +12,15 @@ import {
   inviteCodeVerifier,
   type InviteProfileSuggestion,
   SPACE_INVITE_CAPABILITY,
+  SPACE_INVITES_REVISION_DOC_ID,
   SpaceInviteError,
 } from "../space-invites.ts";
-import * as Engine from "../v2/engine.ts";
+import { resetServerExecutionConfig, setServerExecutionConfig } from "../v2.ts";
 import { snapshotSpaceStore } from "../v2/dump.ts";
+import * as Engine from "../v2/engine.ts";
+import { ExecutionLeaseCycle } from "../v2/execution-lease.ts";
 import {
+  applyInvite,
   executeInvite,
   type InviteOperation,
   parseInviteOperation,
@@ -45,8 +50,10 @@ async function fixture() {
       },
     });
   acl({ [owner]: "OWNER" });
+  const execute = (operation: InviteOperation, principal: string = owner) =>
+    executeInvite(engine, { host, space, principal, now, ...operation });
   const run = (operation: InviteOperation, principal: string = owner) =>
-    executeInvite(engine, { host, space, principal, now, ...operation }).result;
+    execute(operation, principal).result;
   const create = (
     options: {
       maxUses?: number;
@@ -78,6 +85,9 @@ async function fixture() {
     second,
     url,
     acl,
+    execute,
+    apply: (operation: InviteOperation, principal: string = owner) =>
+      applyInvite(engine, { host, space, principal, now, ...operation }),
     run,
     create,
     advance(ms: number) {
@@ -109,6 +119,16 @@ function previewRows(f: Awaited<ReturnType<typeof fixture>>) {
   return f.engine.database.prepare(
     "SELECT inviteId FROM space_invite_previews",
   ).all<{ inviteId: string }>();
+}
+
+/** The revision the ledger's revision document holds, `0` before its first. */
+function revisionOf(f: Awaited<ReturnType<typeof fixture>>): number {
+  const held = Engine.read(f.engine, { id: SPACE_INVITES_REVISION_DOC_ID })
+    ?.value;
+  expect(held === undefined || isPlainObject(held)).toBe(true);
+  return isPlainObject(held) && typeof held.revision === "number"
+    ? held.revision
+    : 0;
 }
 
 function unavailable(fn: () => unknown) {
@@ -585,6 +605,34 @@ describe("invites", () => {
       expect(f.run({ operation: "redeem", body: replacement }, f.guest))
         .toMatchObject({ outcome: "redeemed", currentAccess: "READ" });
       expect(f.run({ operation: "receipts", body: {} })).toHaveLength(3);
+    } finally {
+      await f.close();
+    }
+  });
+  it("lists the receipts of the one invitation it is asked for, and every receipt when asked for none", async () => {
+    const f = await fixture();
+    try {
+      const shared = f.create({ maxUses: 2 });
+      const single = f.create();
+      f.run({ operation: "redeem", body: shared }, f.guest);
+      f.run({ operation: "redeem", body: shared }, f.second);
+      f.run({ operation: "redeem", body: single }, f.guest);
+
+      const one = f.run({
+        operation: "receipts",
+        body: { inviteId: shared.inviteId },
+      });
+      const every = f.run({ operation: "receipts", body: {} });
+
+      expect(one).toHaveLength(2);
+      expect(one).toEqual(expect.arrayContaining([
+        { inviteId: shared.inviteId, did: f.guest },
+        { inviteId: shared.inviteId, did: f.second },
+      ]));
+      expect(every).toHaveLength(3);
+      expect(every).toEqual(expect.arrayContaining([
+        { inviteId: single.inviteId, did: f.guest },
+      ]));
     } finally {
       await f.close();
     }
@@ -1080,6 +1128,7 @@ describe("invites", () => {
         [f.owner]: "OWNER",
       });
       expect(f.run({ operation: "receipts", body: {} })).toEqual([]);
+      expect(revisionOf(f)).toBe(1);
       f.engine.database.exec("DROP TRIGGER abort_receipt");
       // Reuse the rolled-back revision with a different grant. Stale staged
       // cache entries must not turn this committed WRITE into the failed READ.
@@ -1217,7 +1266,12 @@ describe("invites", () => {
     try {
       const invite = f.create({ maxUses: 2 });
       f.run({ operation: "redeem", body: invite }, f.guest);
-      expect(Engine.listEntityIds(f.engine)).toEqual([aclDocId(space)]);
+      expect(Engine.listEntityIds(f.engine)).toEqual([
+        aclDocId(space),
+        SPACE_INVITES_REVISION_DOC_ID,
+      ]);
+      expect(Engine.read(f.engine, { id: SPACE_INVITES_REVISION_DOC_ID }))
+        .toEqual({ value: { revision: 2 } });
       const columns = f.engine.database.prepare(
         "PRAGMA table_info(space_invite_redemptions)",
       ).all<{ name: string }>().map((row) => row.name);
@@ -1293,5 +1347,211 @@ describe("invites", () => {
     } finally {
       await f.close();
     }
+  });
+  describe("the ledger's revision document", () => {
+    it("moves with each invitation made or withdrawn and each new receipt, and with nothing that leaves the ledger as it was", async () => {
+      const f = await fixture();
+      try {
+        expect(revisionOf(f)).toBe(0);
+        const invite = f.create({ maxUses: 3 });
+        expect(revisionOf(f)).toBe(1);
+        f.run({ operation: "create", body: invite.request });
+        f.run({ operation: "list", body: {} });
+        f.run({ operation: "receipts", body: {} });
+        expect(revisionOf(f)).toBe(1);
+        f.run({ operation: "redeem", body: invite }, f.guest);
+        expect(revisionOf(f)).toBe(2);
+        f.run({ operation: "redeem", body: invite }, f.guest);
+        expect(revisionOf(f)).toBe(2);
+        f.acl({ [f.owner]: "OWNER", [f.guest]: "READ", [f.second]: "WRITE" });
+        const capable = f.execute(
+          { operation: "redeem", body: invite },
+          f.second,
+        );
+        expect(capable.commit).toBeUndefined();
+        expect(revisionOf(f)).toBe(3);
+        const stranger = (await Identity.generate()).did();
+        const { code: wrongCode } = createInviteCredentials();
+        unavailable(() =>
+          f.run({
+            operation: "redeem",
+            body: { inviteId: invite.inviteId, code: wrongCode },
+          }, stranger)
+        );
+        expect(revisionOf(f)).toBe(3);
+        f.run({ operation: "revoke", body: { inviteId: invite.inviteId } });
+        expect(revisionOf(f)).toBe(4);
+        f.run({ operation: "revoke", body: { inviteId: invite.inviteId } });
+        expect(revisionOf(f)).toBe(4);
+        f.create({ ttlSeconds: 60 });
+        expect(revisionOf(f)).toBe(5);
+        f.advance(61_000);
+        expect(f.run({ operation: "list", body: {} })).toEqual([]);
+        expect(revisionOf(f)).toBe(5);
+      } finally {
+        await f.close();
+      }
+    });
+    it("writes the revision in a system commit of its own, after a redemption's ACL-only grant", async () => {
+      const f = await fixture();
+      try {
+        const invite = f.create();
+        const { commit, revision } = f.execute(
+          { operation: "redeem", body: invite },
+          f.guest,
+        );
+        expect(commit?.revisions.map(({ id }) => id)).toEqual([
+          aclDocId(space),
+        ]);
+        expect(revision?.revisions.map(({ id }) => id)).toEqual([
+          SPACE_INVITES_REVISION_DOC_ID,
+        ]);
+        expect(revision?.seq).toBe((commit?.seq ?? 0) + 1);
+        expect(Engine.commitClassOfSeq(f.engine, revision?.seq ?? 0)).toBe(
+          "system",
+        );
+        expect(Engine.read(f.engine, { id: SPACE_INVITES_REVISION_DOC_ID }))
+          .toEqual({ value: { revision: 2 } });
+      } finally {
+        await f.close();
+      }
+    });
+    it("moves when a refused preview or redemption retires an invitation whose issuer no longer owns the space", async () => {
+      const f = await fixture();
+      try {
+        const previewed = f.create();
+        const redeemed = f.create();
+        f.acl({ [f.second]: "OWNER", [f.owner]: "WRITE" });
+        const preview = f.apply(
+          { operation: "preview", body: previewed },
+          f.guest,
+        );
+        expect(preview).toMatchObject({ failure: "invite-unavailable" });
+        expect(preview.revision?.revisions.map(({ id }) => id)).toEqual([
+          SPACE_INVITES_REVISION_DOC_ID,
+        ]);
+        expect(revisionOf(f)).toBe(3);
+        unavailable(() =>
+          f.run({ operation: "redeem", body: redeemed }, f.guest)
+        );
+        expect(revisionOf(f)).toBe(4);
+        unavailable(() =>
+          f.run({ operation: "preview", body: previewed }, f.guest)
+        );
+        expect(revisionOf(f)).toBe(4);
+        expect(f.run({ operation: "list", body: {} }, f.second)).toEqual([]);
+      } finally {
+        await f.close();
+      }
+    });
+    it("throws for a write to the document in any commit but a system one", async () => {
+      // A derived commit is admitted only under server execution, from the
+      // holder of the space's lease.
+
+      const f = await fixture();
+      setServerExecutionConfig(true);
+      try {
+        f.create();
+        const holder = "service:invite-revision-holder";
+        const lease = new ExecutionLeaseCycle({
+          leases: f.engine.executionLeases,
+          space,
+          holder,
+        });
+        expect(await lease.acquire()).toBe(true);
+        const derivedThrough = Engine.applyCommit(f.engine, {
+          sessionId: crypto.randomUUID(),
+          space,
+          principal: f.owner,
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{ op: "set", id: "of:authored", value: { value: 1 } }],
+          },
+        }).seq;
+        const writes = [
+          {
+            op: "set" as const,
+            id: SPACE_INVITES_REVISION_DOC_ID,
+            value: { value: { revision: 7 } },
+          },
+          { op: "delete" as const, id: SPACE_INVITES_REVISION_DOC_ID },
+        ];
+        for (const operation of writes) {
+          const commit = {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [operation],
+          };
+          expect(() =>
+            Engine.applyCommit(f.engine, {
+              sessionId: crypto.randomUUID(),
+              space,
+              principal: f.owner,
+              commit,
+            })
+          ).toThrow("only the invitation service writes it");
+          expect(() =>
+            Engine.applyCommit(f.engine, {
+              sessionId: holder,
+              space,
+              commitClass: "derived",
+              holder,
+              consequenceOf: ["event:1"],
+              derivedThrough,
+              commit,
+            })
+          ).toThrow("only the invitation service writes it");
+        }
+        expect(revisionOf(f)).toBe(1);
+      } finally {
+        resetServerExecutionConfig();
+        await f.close();
+      }
+    });
+  });
+  describe("parseInviteOperation()", () => {
+    const inviteId = "A".repeat(22);
+
+    it("returns `null` for a body that is not a record", () => {
+      for (const body of [null, "", [], 7]) {
+        expect(parseInviteOperation("list", body)).toBeNull();
+        expect(parseInviteOperation("revoke", body)).toBeNull();
+      }
+    });
+    it("returns `null` for an operation it does not name", () => {
+      expect(parseInviteOperation("delete", { inviteId })).toBeNull();
+      expect(parseInviteOperation(undefined, {})).toBeNull();
+    });
+    it("returns a revocation naming exactly one invitation", () => {
+      expect(parseInviteOperation("revoke", { inviteId })).toEqual({
+        operation: "revoke",
+        body: { inviteId },
+      });
+      expect(parseInviteOperation("revoke", {})).toBeNull();
+      expect(parseInviteOperation("revoke", { inviteId: 7 })).toBeNull();
+      expect(parseInviteOperation("revoke", { inviteId, code: "B" }))
+        .toBeNull();
+    });
+    it("returns a receipts query for every invitation or for one", () => {
+      expect(parseInviteOperation("receipts", {})).toEqual({
+        operation: "receipts",
+        body: {},
+      });
+      expect(parseInviteOperation("receipts", { inviteId })).toEqual({
+        operation: "receipts",
+        body: { inviteId },
+      });
+      expect(parseInviteOperation("receipts", { inviteId: 7 })).toBeNull();
+      expect(parseInviteOperation("receipts", { inviteId, did: "x" }))
+        .toBeNull();
+    });
+    it("returns a listing only for an empty body", () => {
+      expect(parseInviteOperation("list", {})).toEqual({
+        operation: "list",
+        body: {},
+      });
+      expect(parseInviteOperation("list", { inviteId })).toBeNull();
+    });
   });
 });

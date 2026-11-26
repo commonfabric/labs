@@ -890,9 +890,9 @@ input contains only the caller-supplied fields and whose closure invokes the
 original pattern with `entries`.
 
 - [ ] Migrate `patterns/examples/cfc-agent-prompt-injection-demo/main.tsx`.
-- [ ] Migrate `patterns/apps/deep-research/deep-research.tsx`.
+- [ ] Migrate `patterns/apps/deep-research/main.tsx`.
 - [ ] Migrate `patterns/system/notes/note.tsx`.
-- [ ] Migrate `patterns/apps/shopping-list/shopping-list.tsx`.
+- [ ] Migrate `patterns/apps/shopping-list/main.tsx`.
 - [ ] Migrate the affected files under `patterns/system/`, including
   default app, knowledge graph, omnibox, quick capture, space overview,
   suggestion, suggestion history, and summary index.
@@ -903,9 +903,6 @@ original pattern with `entries`.
   present when this stage begins.
 - [ ] Update `patterns/index.md` only where generated summaries or
   public examples change.
-- [ ] Update `patterns/dev/test/source-coverage/commonfabric-stub.test.ts`
-  so source coverage models the new public API while retaining an explicitly
-  named legacy fixture if needed.
 - [ ] Verify every wrapper remains readable at the call site and does not expose
   captured values in the public tool schema.
 - [ ] Run a final source inventory and classify every remaining hit as API,

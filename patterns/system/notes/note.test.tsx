@@ -537,5 +537,12 @@ export default pattern(() => {
     linkTarget,
     backlinkNote,
     backlinkTarget,
+    // With server execution on, a navigation an action's event makes is a
+    // cascade hop, which the client does not enact ahead of the server, and
+    // the runtime warns `optimistic-navigate-skipped`. Creating a note opens
+    // it, and a note with a parent creates it through the notebook's
+    // `createNote`, a cascade hop however the test sends the first event. The
+    // flag is a boolean, so it cannot be pinned to that warning.
+    allowConsoleWarnings: true,
   };
 });

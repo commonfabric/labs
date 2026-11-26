@@ -30,15 +30,13 @@ export function transformHandlerJsxAttribute(
 
   const attribute = node;
   const initializer = attribute.initializer;
-  if (!initializer || !ts.isJsxExpression(initializer)) {
+  if (
+    !initializer || !ts.isJsxExpression(initializer) || !initializer.expression
+  ) {
     return undefined;
   }
 
   const expression = initializer.expression;
-  if (!expression) {
-    return undefined;
-  }
-
   const callback = unwrapArrowFunction(expression);
   if (!callback) {
     return undefined;

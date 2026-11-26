@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { type FavoriteAddress, favoriteKey } from "@commonfabric/home-schemas";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const space = "did:key:test-space";
 const id = "of:piece-1";

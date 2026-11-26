@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -13,19 +12,21 @@ import {
   publish,
   SHARD_CHUNK,
   type StoreAccess,
-  writeToken,
 } from "./test-selection-publish.ts";
 import {
   AliasResolver,
   buildObjectBody,
   coverageRecords,
   gunzipToText,
+  objectUrl,
   parseManifest,
+  RECORD_SCHEMA_VERSION,
   type RunContext,
   serializeRecordLine,
   testIdentityKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   emptyAggregate,
   Fold,
@@ -47,6 +48,8 @@ import {
   laneMeasurementName,
 } from "./lane-measurement.ts";
 import { sampleManifest } from "./test-selection/testing.ts";
+import { rollupManifestName, rollupPrefix } from "./test-records-compact.ts";
+import { ciSubmissionsPrefix } from "./test-records-config.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import { join } from "@std/path";
 
@@ -312,20 +315,107 @@ describe("test-selection-publish", () => {
   });
 
   describe("liveStore()", () => {
-    it("asks Cloud Storage to decode an aggregate before Deno reads it", async () => {
+    /**
+     * A store whose every request is answered by `answer`, recording each
+     * request it was asked.
+     */
+    function answering(
+      answer: (request: Request) => Response | Promise<Response>,
+      token: () => string | undefined = () => "a token",
+    ) {
       const requests: Request[] = [];
       const fetchImpl = (
         input: string | URL | Request,
         init?: RequestInit,
       ): Promise<Response> => {
-        requests.push(new Request(input, init));
-        return Promise.resolve(new Response('{"complete":true}'));
+        const request = new Request(input, init);
+        requests.push(request);
+        return Promise.resolve(answer(request));
       };
-      const store = liveStore("bucket", fetchImpl);
+      return { store: liveStore("bucket", fetchImpl, token), requests };
+    }
+
+    it("asks Cloud Storage to decode an aggregate before Deno reads it", async () => {
+      const { store, requests } = answering(() =>
+        new Response('{"complete":true}')
+      );
 
       expect(await store.readText("state.json.gz")).toBe('{"complete":true}');
       expect(requests.length).toBe(1);
       expect(requests[0]!.headers.get("accept-encoding")).toBe("identity");
+    });
+
+    it("lists the names under a prefix through the fetch it is given", async () => {
+      const { store, requests } = answering(() =>
+        Response.json({ items: [{ name: "a/1" }, { name: "a/2" }] })
+      );
+      expect(await store.list("a/")).toEqual(["a/1", "a/2"]);
+      expect(new URL(requests[0]!.url).searchParams.get("prefix")).toBe("a/");
+    });
+
+    it("reads a stored report through the fetch it is given", async () => {
+      const body = object("c1", "pass", "2026-08-20T01:00:00.000Z");
+      const { store, requests } = answering(() => new Response(body));
+      const report = await store.read("a/1");
+      expect(report.objectName).toBe("a/1");
+      expect(report.records.map((record) => record.outcome)).toEqual(["pass"]);
+      expect(requests[0]!.url).toBe(objectUrl("bucket", "a/1"));
+    });
+
+    it("throws where the store will not give the text of an object", async () => {
+      const { store } = answering(() =>
+        new Response("missing", { status: 404 })
+      );
+      await expect(store.readText("state.json.gz")).rejects.toThrow(
+        "HTTP 404",
+      );
+    });
+
+    it("creates an object with the credential it is given", async () => {
+      const { store, requests } = answering(() => new Response("{}"));
+      await store.create("selection/v1/m.json.gz", new Uint8Array([1, 2]));
+      expect(requests.map((request) => request.method)).toEqual(["POST"]);
+      expect(requests[0]!.headers.get("authorization")).toBe(
+        "Bearer a token",
+      );
+      expect(await requests[0]!.text()).toContain(
+        '"name":"selection/v1/m.json.gz"',
+      );
+    });
+
+    it("creates nothing, and throws, without a credential", async () => {
+      const { store, requests } = answering(
+        () => new Response("{}"),
+        () => undefined,
+      );
+      expect(store.token()).toBeUndefined();
+      await expect(store.create("m.json.gz", new Uint8Array([1])))
+        .rejects.toThrow("no write credential");
+      expect(requests).toEqual([]);
+    });
+
+    it("names a day's rollup shards from its rollup manifest", async () => {
+      const shard = "0000-of-0001.ndjson";
+      const { store, requests } = answering(() =>
+        Response.json({
+          schema: RECORD_SCHEMA_VERSION,
+          day: DAY,
+          shards: [shard],
+        })
+      );
+      expect(await store.rollupShards(DAY)).toEqual([
+        `${rollupPrefix(DAY)}${shard}`,
+      ]);
+      expect(requests[0]!.url).toBe(
+        objectUrl("bucket", rollupManifestName(DAY)),
+      );
+    });
+
+    it("reads a day whose rollup manifest cannot be reached as a day with no rollup", async () => {
+      const { store } = answering(() => {
+        throw new TypeError("network unreachable");
+      });
+      expect(await store.rollupShards(DAY)).toBeUndefined();
     });
   });
 });
@@ -557,7 +647,14 @@ describe("publish()", () => {
     // An absent aggregate is either a genuine first run or one that went
     // missing, and an incremental run cannot tell the two apart.
     const { store, created } = fakeStore(seed());
-    expect(await publish(["--days", "1"], store, NOW, suites, noPrevious))
+    expect(
+      await publish(["--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
+    )
       .toBe(1);
     expect(created.size).toBe(0);
   });
@@ -565,13 +662,12 @@ describe("publish()", () => {
   it("writes a manifest and a state from a bootstrap", async () => {
     const { store, created } = fakeStore(seed());
     expect(
-      await publish(
-        ["--bootstrap", "--days", "1"],
+      await publish(["--bootstrap", "--days", "1"], {
         store,
-        NOW,
-        suites,
-        noPrevious,
-      ),
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     )
       .toBe(0);
     const names = [...created.keys()];
@@ -621,13 +717,13 @@ describe("publish()", () => {
       [{ line: "record", test: gate, outcome: "pass", durationMs: 3 }],
     );
     const { store, created } = fakeStore(objects);
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      () => Promise.resolve([measured, coverageGateSuite([measured])]),
-      noPrevious,
-    );
+      now: NOW,
+      topology: () =>
+        Promise.resolve([measured, coverageGateSuite([measured])]),
+      previousManifest: noPrevious,
+    });
     const manifest = await publishedManifest(created);
     expect(
       manifest.entries.filter((entry) => entry.suite === "coverage-gate")
@@ -643,13 +739,12 @@ describe("publish()", () => {
     const objects = seed();
     objects[CI(DAY, "3")] = laneObject("c3", "2026-08-20T03:00:00.000Z");
     const { store, created } = fakeStore(objects);
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      suites,
-      noPrevious,
-    );
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     const manifest = await publishedManifest(created);
     expect(manifest.calibration.setupCost).toEqual({ fuse: 14.8 });
     // The lane spent 92 seconds on a batch of one unit whose own tests
@@ -667,13 +762,12 @@ describe("publish()", () => {
       hooks: 7.5,
     });
     const { store, created } = fakeStore(objects);
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      suites,
-      noPrevious,
-    );
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     const manifest = await publishedManifest(created);
     expect(
       manifest.calibration.suites["workspace-unit"]?.unitHooks?.[
@@ -711,13 +805,12 @@ describe("publish()", () => {
     });
     const { store, created } = fakeStore(objects);
     const said = await saying(() =>
-      publish(
-        ["--bootstrap", "--days", "1"],
+      publish(["--bootstrap", "--days", "1"], {
         store,
-        NOW,
-        suites,
-        () => Promise.resolve(previous),
-      )
+        now: NOW,
+        topology: suites,
+        previousManifest: () => Promise.resolve(previous),
+      })
     );
     expect((await publishedManifest(created)).health).toEqual({
       suites: {
@@ -752,7 +845,12 @@ describe("publish()", () => {
     });
     const { store, created } = fakeStore(objects);
     const said = await saying(() =>
-      publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--bootstrap", "--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain(
       "test selection: the cost model is broken: workspace-unit: a lane " +
@@ -773,7 +871,12 @@ describe("publish()", () => {
     });
     const { store, created } = fakeStore(objects);
     const said = await saying(() =>
-      publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--bootstrap", "--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     const manifest = await publishedManifest(created);
     expect(manifest.calibration.suites).toEqual({
@@ -795,7 +898,12 @@ describe("publish()", () => {
     });
     const { store } = fakeStore(objects);
     const said = await saying(() =>
-      publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--bootstrap", "--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain(
       "holds 1 suite(s) and 1 capability setup(s), and 1 of those suite(s) " +
@@ -818,13 +926,12 @@ describe("publish()", () => {
       );
     });
     const { store, created } = fakeStore(objects);
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      suites,
-      noPrevious,
-    );
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     const name = [...created.keys()].find((one) => one.includes("/manifest-"))!;
     const manifest = parseManifest(await gunzipToText(created.get(name)!));
     expect(manifest).toBeDefined();
@@ -839,7 +946,12 @@ describe("publish()", () => {
     // carrying the empty map says none of that on its own.
     const { store } = fakeStore(seed());
     const said = await saying(() =>
-      publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--bootstrap", "--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain("the cost model holds 0 suite(s) and 0 capability");
     expect(said).toContain("no suite has a measured cost in the last 7 day(s)");
@@ -855,7 +967,12 @@ describe("publish()", () => {
     });
     const { store } = fakeStore(objects);
     const said = await saying(() =>
-      publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--bootstrap", "--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain("no suite has a measured cost in the last 7 day(s)");
     expect(said).toContain("5 lane measurement(s) this run read");
@@ -872,7 +989,12 @@ describe("publish()", () => {
     });
     const { store } = fakeStore(objects);
     const said = await saying(() =>
-      publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--bootstrap", "--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain("holds 0 suite(s) and 1 capability setup(s)");
     expect(said).toContain("no suite has a measured cost");
@@ -883,7 +1005,12 @@ describe("publish()", () => {
     objects[CI(DAY, "3")] = laneObject("c3", "2026-08-20T03:00:00.000Z");
     const { store } = fakeStore(objects);
     const said = await saying(() =>
-      publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--bootstrap", "--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain("the cost model holds 1 suite(s) and 1 capability");
     expect(said).not.toContain("overruns");
@@ -891,13 +1018,12 @@ describe("publish()", () => {
 
   it("publishes an empty cost model when no lane has measured one", async () => {
     const { store, created } = fakeStore(seed());
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      suites,
-      noPrevious,
-    );
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     const manifest = await publishedManifest(created);
     expect(manifest.calibration.setupCost).toEqual({});
     expect(manifest.calibration.suites).toEqual({});
@@ -912,13 +1038,12 @@ describe("publish()", () => {
     console.log = (line: string) => lines.push(line);
     const { store, created } = fakeStore(seed());
     try {
-      await publish(
-        ["--bootstrap", "--days", "1"],
+      await publish(["--bootstrap", "--days", "1"], {
         store,
-        NOW,
-        () => Promise.resolve([]),
-        noPrevious,
-      );
+        now: NOW,
+        topology: () => Promise.resolve([]),
+        previousManifest: noPrevious,
+      });
     } finally {
       console.log = log;
     }
@@ -959,13 +1084,12 @@ describe("publish()", () => {
       ),
     };
     const { store, created } = fakeStore(objects);
-    await publish(
-      ["--bootstrap", "--days", "60"],
+    await publish(["--bootstrap", "--days", "60"], {
       store,
-      NOW,
-      needsFile,
-      noPrevious,
-    );
+      now: NOW,
+      topology: needsFile,
+      previousManifest: noPrevious,
+    });
     expect(await newestManifest(created)).toEqual([
       "space > reads",
       "space > writes",
@@ -977,7 +1101,12 @@ describe("publish()", () => {
       "main",
       UNIT,
     );
-    await publish(["--days", "1"], store, LATER, needsFile, noPrevious);
+    await publish(["--days", "1"], {
+      store,
+      now: LATER,
+      topology: needsFile,
+      previousManifest: noPrevious,
+    });
     expect(await newestManifest(created)).toEqual([
       "space > reads",
       "space > writes",
@@ -999,14 +1128,18 @@ describe("publish()", () => {
       ),
     };
     const { store, created } = fakeStore(objects);
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      needsFile,
-      noPrevious,
-    );
-    await publish(["--days", "1"], store, LATER, needsFile, noPrevious);
+      now: NOW,
+      topology: needsFile,
+      previousManifest: noPrevious,
+    });
+    await publish(["--days", "1"], {
+      store,
+      now: LATER,
+      topology: needsFile,
+      previousManifest: noPrevious,
+    });
     expect(await newestManifest(created)).toEqual(["space > writes"]);
   });
 
@@ -1026,16 +1159,20 @@ describe("publish()", () => {
       ),
     };
     const { store, created } = fakeStore(objects);
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      needsFile,
-      noPrevious,
-    );
+      now: NOW,
+      topology: needsFile,
+      previousManifest: noPrevious,
+    });
     expect(await newestManifest(created)).toEqual(["space > writes"]);
     const lines = await saying(() =>
-      publish(["--days", "1"], store, LATER, lostUnit, noPrevious)
+      publish(["--days", "1"], {
+        store,
+        now: LATER,
+        topology: lostUnit,
+        previousManifest: noPrevious,
+      })
     );
     expect(await newestManifest(created)).toEqual([]);
     expect(lines).toContain("no suite claims 1 identities");
@@ -1052,15 +1189,19 @@ describe("publish()", () => {
       [CI(DAY, "1")]: object("c1", "pass", "2026-08-20T01:00:00.000Z"),
     };
     const { store, created } = fakeStore(objects);
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      suites,
-      noPrevious,
-    );
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     expect(await newestManifest(created)).toEqual(["space > writes"]);
-    await publish(["--days", "1"], store, LATER, suites, noPrevious);
+    await publish(["--days", "1"], {
+      store,
+      now: LATER,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     expect(await newestManifest(created)).toEqual(["space > writes"]);
   });
 
@@ -1079,15 +1220,19 @@ describe("publish()", () => {
       ),
     };
     const { store, created } = fakeStore(objects);
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      needsFile,
-      noPrevious,
-    );
+      now: NOW,
+      topology: needsFile,
+      previousManifest: noPrevious,
+    });
     objects[CI(DAY, "2")] = object("c2", "pass", "2026-08-20T02:00:00.000Z");
-    await publish(["--days", "1"], store, LATER, needsFile, noPrevious);
+    await publish(["--days", "1"], {
+      store,
+      now: LATER,
+      topology: needsFile,
+      previousManifest: noPrevious,
+    });
     expect(await newestManifest(created)).toEqual(["space > writes"]);
   });
 
@@ -1095,11 +1240,10 @@ describe("publish()", () => {
     // A lane reads it to say why a test is absent. Without it the test
     // looks merely unrecorded, which is reported and never failed on.
     const { store, created } = fakeStore(seed());
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      () =>
+      now: NOW,
+      topology: () =>
         Promise.resolve([{
           ...TOPOLOGY[0]!,
           variant: "server-execution",
@@ -1110,8 +1254,8 @@ describe("publish()", () => {
             reason: "the ON arm cannot run it yet",
           }],
         }]),
-      noPrevious,
-    );
+      previousManifest: noPrevious,
+    });
     const manifestName = [...created.keys()].find((name) =>
       name.includes("/manifest-")
     );
@@ -1137,17 +1281,16 @@ describe("publish()", () => {
     console.log = (line: string) => lines.push(line);
     const { store } = fakeStore(seed());
     try {
-      await publish(
-        ["--bootstrap", "--days", "1"],
+      await publish(["--bootstrap", "--days", "1"], {
         store,
-        NOW,
-        () =>
+        now: NOW,
+        topology: () =>
           Promise.resolve([{
             ...TOPOLOGY[0]!,
             locate: () => ({ level: "suite" as const }),
           }]),
-        noPrevious,
-      );
+        previousManifest: noPrevious,
+      });
     } finally {
       console.log = log;
     }
@@ -1158,13 +1301,12 @@ describe("publish()", () => {
 
   it("folds from the state it left rather than the objects again", async () => {
     const { store, created } = fakeStore(seed());
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      suites,
-      noPrevious,
-    );
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     const first = created.size;
     const readObjects: string[] = [];
     const watched: StoreAccess = {
@@ -1174,7 +1316,14 @@ describe("publish()", () => {
         return store.read(name);
       },
     };
-    expect(await publish(["--days", "1"], watched, NOW, suites, noPrevious))
+    expect(
+      await publish(["--days", "1"], {
+        store: watched,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
+    )
       .toBe(0);
     expect(readObjects).toEqual([]);
     expect(created.size).toBeGreaterThan(first);
@@ -1189,20 +1338,26 @@ describe("publish()", () => {
           ? Promise.reject(new Error("unreachable"))
           : store.list(prefix),
     };
-    expect(await publish(["--days", "1"], broken, NOW, suites, noPrevious))
+    expect(
+      await publish(["--days", "1"], {
+        store: broken,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
+    )
       .toBe(1);
     expect(created.size).toBe(0);
   });
 
   it("refuses to publish from a window it could only partly read", async () => {
     const { store, created } = fakeStore(seed());
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      suites,
-      noPrevious,
-    );
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     const after = created.size;
     const broken: StoreAccess = {
       ...store,
@@ -1212,20 +1367,26 @@ describe("publish()", () => {
           ? store.list(prefix)
           : Promise.resolve([CI(DAY, "9")]),
     };
-    expect(await publish(["--days", "1"], broken, NOW, suites, noPrevious))
+    expect(
+      await publish(["--days", "1"], {
+        store: broken,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
+    )
       .toBe(1);
     expect(created.size).toBe(after);
   });
 
   it("creates nothing at all for a dry run", async () => {
     const { store, created } = fakeStore(seed());
-    const code = await publish(
-      ["--bootstrap", "--days", "1", "--dry-run"],
+    const code = await publish(["--bootstrap", "--days", "1", "--dry-run"], {
       store,
-      NOW,
-      suites,
-      noPrevious,
-    );
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     expect(code).toBe(0);
     expect(created.size).toBe(0);
   });
@@ -1233,13 +1394,12 @@ describe("publish()", () => {
   it("creates nothing without a credential", async () => {
     const { store, created } = fakeStore(seed());
     const anonymous: StoreAccess = { ...store, token: () => undefined };
-    const code = await publish(
-      ["--bootstrap", "--days", "1"],
-      anonymous,
-      NOW,
-      suites,
-      noPrevious,
-    );
+    const code = await publish(["--bootstrap", "--days", "1"], {
+      store: anonymous,
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     expect(created.size).toBe(0);
     expect(code).toBe(0);
   });
@@ -1249,13 +1409,14 @@ describe("publish()", () => {
     async function staged() {
       const dir = await Deno.makeTempDir();
       const { store, created } = fakeStore(seed());
-      const code = await publish(
-        ["--bootstrap", "--days", "1", "--dry-run", "--out", dir],
-        store,
-        NOW,
-        suites,
-        noPrevious,
-      );
+      const code = await publish([
+        "--bootstrap",
+        "--days",
+        "1",
+        "--dry-run",
+        "--out",
+        dir,
+      ], { store, now: NOW, topology: suites, previousManifest: noPrevious });
       expect(code).toBe(0);
       expect(created.size).toBe(0);
       return {
@@ -1269,7 +1430,7 @@ describe("publish()", () => {
       const { dir, manifest, state } = await staged();
       const { store, created } = fakeStore({});
       try {
-        expect(await publish(["--create", dir], store)).toBe(0);
+        expect(await publish(["--create", dir], { store })).toBe(0);
       } finally {
         await Deno.remove(dir, { recursive: true });
       }
@@ -1296,7 +1457,7 @@ describe("publish()", () => {
       const { store, created } = fakeStore({});
       try {
         await Deno.writeTextFile(join(dir, "manifest.json"), "{}");
-        expect(await publish(["--create", dir], store)).toBe(1);
+        expect(await publish(["--create", dir], { store })).toBe(1);
       } finally {
         await Deno.remove(dir, { recursive: true });
       }
@@ -1308,7 +1469,7 @@ describe("publish()", () => {
       const { store, created } = fakeStore({});
       try {
         await Deno.writeTextFile(join(dir, "state.json"), "[]");
-        expect(await publish(["--create", dir], store)).toBe(1);
+        expect(await publish(["--create", dir], { store })).toBe(1);
       } finally {
         await Deno.remove(dir, { recursive: true });
       }
@@ -1320,7 +1481,7 @@ describe("publish()", () => {
       const { store, created } = fakeStore({});
       const anonymous: StoreAccess = { ...store, token: () => undefined };
       try {
-        expect(await publish(["--create", dir], anonymous)).toBe(0);
+        expect(await publish(["--create", dir], { store: anonymous })).toBe(0);
       } finally {
         await Deno.remove(dir, { recursive: true });
       }
@@ -1330,7 +1491,14 @@ describe("publish()", () => {
 
   it("reports a malformed command line rather than publishing", async () => {
     const { store, created } = fakeStore(seed());
-    expect(await publish(["--nonsense"], store, NOW, suites, noPrevious)).toBe(
+    expect(
+      await publish(["--nonsense"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
+    ).toBe(
       2,
     );
     expect(created.size).toBe(0);
@@ -1344,13 +1512,14 @@ describe("publish() --out", () => {
     const out = await Deno.makeTempDir();
     try {
       const { store, created } = fakeStore(seed());
-      const code = await publish(
-        ["--bootstrap", "--days", "1", "--dry-run", "--out", out],
-        store,
-        NOW,
-        suites,
-        noPrevious,
-      );
+      const code = await publish([
+        "--bootstrap",
+        "--days",
+        "1",
+        "--dry-run",
+        "--out",
+        out,
+      ], { store, now: NOW, topology: suites, previousManifest: noPrevious });
       expect(code).toBe(0);
       // A dry run creates nothing in the store, and the directory is how
       // the run's answer is looked at instead.
@@ -1379,10 +1548,7 @@ describe("publish() --out", () => {
       expect(
         await publish(
           ["--bootstrap", "--days", "1", "--dry-run", "--out", out],
-          store,
-          NOW,
-          suites,
-          noPrevious,
+          { store, now: NOW, topology: suites, previousManifest: noPrevious },
         ),
       ).toBe(0);
       expect((await Deno.stat(join(out, "manifest.json"))).isFile).toBe(true);
@@ -1411,13 +1577,12 @@ describe("publish() over a day that has been compacted", () => {
       },
     };
     expect(
-      await publish(
-        ["--bootstrap", "--days", "1"],
-        watched,
-        NOW,
-        suites,
-        noPrevious,
-      ),
+      await publish(["--bootstrap", "--days", "1"], {
+        store: watched,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     )
       .toBe(0);
     expect(read).toEqual([ROLLUP]);
@@ -1430,13 +1595,12 @@ describe("publish() over a day that has been compacted", () => {
       ...seed(),
       [ROLLUP]: object("c3", "fail", "2026-08-20T03:00:00.000Z"),
     }, { [DAY]: [ROLLUP] });
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      suites,
-      noPrevious,
-    );
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     const asked: string[] = [];
     const watched: StoreAccess = {
       ...store,
@@ -1445,7 +1609,14 @@ describe("publish() over a day that has been compacted", () => {
         return store.rollupShards(day);
       },
     };
-    expect(await publish(["--days", "1"], watched, NOW, suites, noPrevious))
+    expect(
+      await publish(["--days", "1"], {
+        store: watched,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
+    )
       .toBe(0);
     expect(asked).toEqual([]);
   });
@@ -1467,13 +1638,12 @@ describe("publish() over a day that has been compacted", () => {
     // the older one is a day the aggregate has never seen, and the next
     // run's window starts on it.
     expect(
-      await publish(
-        ["--bootstrap", "--days", "1"],
+      await publish(["--bootstrap", "--days", "1"], {
         store,
-        new Date("2026-08-18T12:00:00.000Z"),
-        suites,
-        noPrevious,
-      ),
+        now: new Date("2026-08-18T12:00:00.000Z"),
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     )
       .toBe(0);
     const read: string[] = [];
@@ -1484,7 +1654,14 @@ describe("publish() over a day that has been compacted", () => {
         return store.read(name);
       },
     };
-    expect(await publish(["--days", "2"], watched, NOW, suites, noPrevious))
+    expect(
+      await publish(["--days", "2"], {
+        store: watched,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
+    )
       .toBe(0);
     expect(read).toContain(olderRollup);
     expect(read).not.toContain(CI(older, "9"));
@@ -1495,13 +1672,12 @@ describe("publish() over a day that has been compacted", () => {
     // nothing in one of this format says by how much, so the pair that
     // has raw objects in the aggregate keeps taking raw ones.
     const { store } = fakeStore(seed());
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      suites,
-      noPrevious,
-    );
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     const read: string[] = [];
     const asked: string[] = [];
     const later: StoreAccess = {
@@ -1517,7 +1693,14 @@ describe("publish() over a day that has been compacted", () => {
         return store.read(name);
       },
     };
-    expect(await publish(["--days", "1"], later, NOW, suites, noPrevious))
+    expect(
+      await publish(["--days", "1"], {
+        store: later,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
+    )
       .toBe(0);
     expect(read).not.toContain(ROLLUP);
     // Nor was the store asked: the aggregate already answers for the pair.
@@ -1537,13 +1720,12 @@ describe("publish() over a day that has been compacted", () => {
       [ROLLUP]: object("c2", "pass", "2026-08-20T01:00:00.000Z"),
     }, { [EARLIER]: [broken], [DAY]: [ROLLUP] });
     expect(
-      await publish(
-        ["--bootstrap", "--days", "2"],
+      await publish(["--bootstrap", "--days", "2"], {
         store,
-        NOW,
-        suites,
-        noPrevious,
-      ),
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     ).toBe(0);
     const written = [...created.keys()].find((name) =>
       name.startsWith(statePrefix())
@@ -1564,13 +1746,12 @@ describe("publish() over a day that has been compacted", () => {
       [ROLLUP]: object("c2", "pass", "2026-08-20T01:00:00.000Z"),
     }, { [DAY]: [ROLLUP] });
     expect(
-      await publish(
-        ["--bootstrap", "--days", "2"],
+      await publish(["--bootstrap", "--days", "2"], {
         store,
-        NOW,
-        suites,
-        noPrevious,
-      ),
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     ).toBe(0);
     const written = [...created.keys()].find((name) =>
       name.startsWith(statePrefix())
@@ -1602,13 +1783,12 @@ describe("publish() over a day that has been compacted", () => {
       },
     };
     expect(
-      await publish(
-        ["--bootstrap", "--days", "2"],
-        watched,
-        NOW,
-        suites,
-        noPrevious,
-      ),
+      await publish(["--bootstrap", "--days", "2"], {
+        store: watched,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     ).toBe(0);
     expect(happened).toEqual([
       `asked ${EARLIER}`,
@@ -1637,13 +1817,12 @@ describe("publish() over a day that has been compacted", () => {
       },
     };
     expect(
-      await publish(
-        ["--bootstrap", "--days", "1"],
-        watched,
-        NOW,
-        suites,
-        noPrevious,
-      ),
+      await publish(["--bootstrap", "--days", "1"], {
+        store: watched,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     )
       .toBe(0);
     expect(read).toContain(ROLLUP);
@@ -1692,13 +1871,12 @@ describe("publish() over a day that has been compacted", () => {
     // day is read the long way instead.
     const { objects, broken, created } = withBrokenRollup();
     expect(
-      await publish(
-        ["--bootstrap", "--days", "1"],
-        broken,
-        NOW,
-        suites,
-        noPrevious,
-      ),
+      await publish(["--bootstrap", "--days", "1"], {
+        store: broken,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     )
       .toBe(0);
     const stateName = [...created.keys()].find((name) =>
@@ -1726,13 +1904,12 @@ describe("publish() over a day that has been compacted", () => {
     const { broken } = withBrokenRollup();
     const said = await saying(
       () =>
-        publish(
-          ["--bootstrap", "--days", "1"],
-          broken,
-          NOW,
-          suites,
-          noPrevious,
-        ),
+        publish(["--bootstrap", "--days", "1"], {
+          store: broken,
+          now: NOW,
+          topology: suites,
+          previousManifest: noPrevious,
+        }),
       "warn",
     );
     expect(said).toContain("that shard is gone");
@@ -1776,13 +1953,12 @@ describe("publish() over a day that has been compacted", () => {
       whole.add(shards.map((shard) => reportFromText(shard, objects[shard]!)));
       const { store, created } = fakeStore(objects, { [DAY]: shards });
       expect(
-        await publish(
-          ["--bootstrap", "--days", "1"],
+        await publish(["--bootstrap", "--days", "1"], {
           store,
-          NOW,
-          suites,
-          noPrevious,
-        ),
+          now: NOW,
+          topology: suites,
+          previousManifest: noPrevious,
+        }),
       )
         .toBe(0);
       const stateName = [...created.keys()].find((name) =>
@@ -1835,13 +2011,12 @@ describe("publish() over a day that has been compacted", () => {
       },
     };
     expect(
-      await publish(
-        ["--bootstrap", "--days", "1"],
-        watched,
-        NOW,
-        suites,
-        noPrevious,
-      ),
+      await publish(["--bootstrap", "--days", "1"], {
+        store: watched,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     )
       .toBe(0);
     expect(read).toEqual(shards);
@@ -1883,7 +2058,12 @@ describe("publish() over an aggregate holding tests the tree has lost", () => {
   it("stops carrying the deleted test and keeps the silent one", async () => {
     const { store, created } = fakeStore({ ...seed(), [STATE]: carrying() });
     expect(
-      await publish(["--days", "1"], store, NOW, needsFile, noPrevious),
+      await publish(["--days", "1"], {
+        store,
+        now: NOW,
+        topology: needsFile,
+        previousManifest: noPrevious,
+      }),
     ).toBe(0);
     const written = [...created.keys()].find((name) =>
       name.includes("/state/")
@@ -1899,7 +2079,12 @@ describe("publish() over an aggregate holding tests the tree has lost", () => {
   it("says which identities left the tree and which are still recording", async () => {
     const { store } = fakeStore({ ...seed(), [STATE]: carrying() });
     const said = await saying(() =>
-      publish(["--days", "1"], store, NOW, needsFile, noPrevious)
+      publish(["--days", "1"], {
+        store,
+        now: NOW,
+        topology: needsFile,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain("1 identities have left the tree");
     // The seeded runs record no file either, so they are unplaced and
@@ -1907,6 +2092,131 @@ describe("publish() over an aggregate holding tests the tree has lost", () => {
     expect(said).toContain(
       "no suite claims 2 identities the aggregate still carries",
     );
+  });
+});
+
+describe("publish() over an aggregate holding a test renamed in its file", () => {
+  const NOW = new Date("2026-08-20T12:00:00.000Z");
+  const STATE = stateObjectName("2026-08-19", "0");
+  const RENAMED = JSON.stringify(["unit", "memory", "space > erases"]);
+  const FLAKY = JSON.stringify(["unit", "memory", "space > reads"]);
+  const WRITES = JSON.stringify(["unit", "memory", "space > writes"]);
+
+  /** A state that disagrees with itself in one run of every ten. */
+  function flaky(...ordersOnMain: string[]): IdentityState {
+    return {
+      ...emptyState(),
+      runsByDay: { "2026-08-19": 100 },
+      failuresByDay: { "2026-08-19": 10 },
+      flakesByDay: { "2026-08-19": 10 },
+      ordersOnMain,
+    };
+  }
+
+  /**
+   * An aggregate carrying two flaky tests of one file, of which `main`
+   * last recorded one a day before the other.
+   */
+  function carrying(renamed = flaky("2026-08-18")): string {
+    return JSON.stringify({
+      schema: MANIFEST_SCHEMA_VERSION,
+      day: "2026-08-19",
+      catchRule: NEW_REAL_TEST_FAILURE_RULE,
+      folded: [],
+      compacted: [],
+      states: {
+        [RENAMED]: renamed,
+        [FLAKY]: flaky("2026-08-18", "2026-08-19"),
+      },
+      files: { [RENAMED]: UNIT, [FLAKY]: UNIT },
+    });
+  }
+
+  /** One run of `main` in today's order recording a test of the file. */
+  function seeded(commit: string, at: string, name: string): string {
+    return buildObjectBody(
+      { ...ciContext(`report-${commit}`, commit, at), shuffleSeed: 20260820 },
+      [{
+        line: "record",
+        test: { k: "unit", s: "memory", n: name },
+        outcome: "pass",
+        durationMs: 40,
+        file: UNIT,
+      }],
+    );
+  }
+
+  /** `main` running the file today, which no longer holds the first. */
+  function today(renamed?: IdentityState): Record<string, string> {
+    return {
+      [STATE]: carrying(renamed),
+      [CI(DAY, "1")]: seeded(
+        "c1",
+        "2026-08-20T01:00:00.000Z",
+        "space > writes",
+      ),
+      [CI(DAY, "2")]: seeded("c2", "2026-08-20T02:00:00.000Z", "space > reads"),
+    };
+  }
+
+  it("lists and withholds the flaky test main runs, not the renamed one", async () => {
+    const { store, created } = fakeStore(today());
+    expect(
+      await publish(["--days", "1"], {
+        store,
+        now: NOW,
+        topology: needsFile,
+        previousManifest: noPrevious,
+      }),
+    ).toBe(0);
+    const manifest = await publishedManifest(created);
+    expect(manifest.entries.map((entry) => testIdentityKey(entry.test)))
+      .toEqual([FLAKY, WRITES]);
+    expect(manifest.withheld.map((entry) => testIdentityKey(entry.test)))
+      .toEqual([FLAKY]);
+    // Its history is kept: a branch ran it inside the window, and `main`
+    // running it again is what brings it back.
+    const written = [...created.keys()].find((name) =>
+      name.includes("/state/")
+    )!;
+    const after = parseAggregate(await gunzipToText(created.get(written)!))!;
+    expect(after.states[RENAMED]!.flakesByDay).toEqual({ "2026-08-19": 10 });
+  });
+
+  it("says how many tests main has stopped recording", async () => {
+    const { store } = fakeStore(today());
+    const said = await saying(() =>
+      publish(["--days", "1"], {
+        store,
+        now: NOW,
+        topology: needsFile,
+        previousManifest: noPrevious,
+      })
+    );
+    expect(said).toContain("main has stopped recording 1 identities");
+    expect(said).toContain("unit:memory 1");
+  });
+
+  it("drops the renamed test once nothing records it, and counts it once", async () => {
+    const { store, created } = fakeStore(
+      today({ ...emptyState(), ordersOnMain: ["2026-08-18"] }),
+    );
+    const said = await saying(() =>
+      publish(["--days", "1"], {
+        store,
+        now: NOW,
+        topology: needsFile,
+        previousManifest: noPrevious,
+      })
+    );
+    expect(said).toContain("1 identities have left the tree");
+    expect(said).not.toMatch(/main has stopped recording \d+ identities/);
+    const written = [...created.keys()].find((name) =>
+      name.includes("/state/")
+    )!;
+    const after = parseAggregate(await gunzipToText(created.get(written)!))!;
+    expect(Object.keys(after.states)).not.toContain(RENAMED);
+    expect(Object.keys(after.states)).toContain(FLAKY);
   });
 });
 
@@ -1920,13 +2230,12 @@ describe("publish() over a topology two suites read the same way", () => {
     // holds these twice over rather than not at all.
     const { store, created } = fakeStore(seed());
     const said = await saying(() =>
-      publish(
-        ["--bootstrap", "--days", "1"],
+      publish(["--bootstrap", "--days", "1"], {
         store,
-        NOW,
-        twoSuites,
-        noPrevious,
-      )
+        now: NOW,
+        topology: twoSuites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain("1 identities are claimed by more than one suite");
     expect(said).toContain("unit:memory 1");
@@ -1941,13 +2250,12 @@ describe("publish() over an aggregate it cannot make sense of", () => {
 
   it("refuses rather than starting again from nothing", async () => {
     const { store, created } = fakeStore(seed());
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      suites,
-      noPrevious,
-    );
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     const state = [...created.keys()].find((name) => name.includes("/state/"))!;
     const after = created.size;
     const broken: StoreAccess = {
@@ -1957,7 +2265,14 @@ describe("publish() over an aggregate it cannot make sense of", () => {
           ? Promise.resolve('{"schema":1,"nonsense":true}')
           : store.readText(name),
     };
-    expect(await publish(["--days", "1"], broken, NOW, suites, noPrevious))
+    expect(
+      await publish(["--days", "1"], {
+        store: broken,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
+    )
       .toBe(1);
     expect(created.size).toBe(after);
   });
@@ -2007,7 +2322,12 @@ describe("publish() over a state written further ahead than it reads", () => {
     // The two lines the recovery procedure reads a run's log for: which
     // state it could not use, and which it took instead.
     const said = await saying(() =>
-      publish(["--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain(`passing over ${over}: it is written in shape`);
     expect(said).toContain(`folding onto ${behind}`);
@@ -2027,7 +2347,13 @@ describe("publish() over a state written further ahead than it reads", () => {
       [stateObjectName("2026-08-20", "1")]: carrying(AHEAD, "2026-08-20"),
     });
     const said = await saying(
-      () => publish(["--days", "1"], store, NOW, suites, noPrevious),
+      () =>
+        publish(["--days", "1"], {
+          store,
+          now: NOW,
+          topology: suites,
+          previousManifest: noPrevious,
+        }),
       "warn",
     );
     expect(said).toContain(
@@ -2060,7 +2386,12 @@ describe("publish() over a state written further ahead than it reads", () => {
       [garbage]: "{not json at all",
     });
     const said = await saying(() =>
-      publish(["--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain(
       `passing over ${garbage}: it is not an aggregate this publisher`,
@@ -2092,7 +2423,13 @@ describe("publish() over a state written further ahead than it reads", () => {
           : store.readText(name),
     };
     const said = await saying(
-      () => publish(["--days", "1"], refusing, NOW, suites, noPrevious),
+      () =>
+        publish(["--days", "1"], {
+          store: refusing,
+          now: NOW,
+          topology: suites,
+          previousManifest: noPrevious,
+        }),
       "warn",
     );
     expect(said).toContain(`reading ${missing} failed`);
@@ -2108,7 +2445,13 @@ describe("publish() over a state written further ahead than it reads", () => {
       [`${statePrefix()}/notes.json.gz`]: "{}",
     });
     const said = await saying(
-      () => publish(["--days", "1"], store, NOW, suites, noPrevious),
+      () =>
+        publish(["--days", "1"], {
+          store,
+          now: NOW,
+          topology: suites,
+          previousManifest: noPrevious,
+        }),
       "warn",
     );
     expect(said).toContain("no aggregate exists yet");
@@ -2126,7 +2469,13 @@ describe("publish() over a state written further ahead than it reads", () => {
       [stateObjectName("2026-08-20", "1")]: carrying(AHEAD, "2026-08-20"),
     });
     const said = await saying(
-      () => publish(["--days", "1"], store, NOW, suites, noPrevious),
+      () =>
+        publish(["--days", "1"], {
+          store,
+          now: NOW,
+          topology: suites,
+          previousManifest: noPrevious,
+        }),
       "warn",
     );
     expect(said).toContain(
@@ -2145,7 +2494,14 @@ describe("publish() over a state written further ahead than it reads", () => {
       ),
       [stateObjectName("2026-08-20", "1")]: carrying(AHEAD, "2026-08-20"),
     });
-    expect(await publish(["--days", "3"], store, NOW, suites, noPrevious))
+    expect(
+      await publish(["--days", "3"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
+    )
       .toBe(0);
     const entry = (await publishedManifest(created)).entries.find((one) =>
       testIdentityKey(one.test) === KEPT
@@ -2193,7 +2549,12 @@ describe("publish() --bootstrap over a store that holds a state", () => {
     });
     const said = await saying(
       () =>
-        publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious),
+        publish(["--bootstrap", "--days", "1"], {
+          store,
+          now: NOW,
+          topology: suites,
+          previousManifest: noPrevious,
+        }),
       "warn",
     );
     expect(said).toContain(
@@ -2214,7 +2575,12 @@ describe("publish() --bootstrap over a store that holds a state", () => {
     });
     const said = await saying(
       () =>
-        publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious),
+        publish(["--bootstrap", "--days", "1"], {
+          store,
+          now: NOW,
+          topology: suites,
+          previousManifest: noPrevious,
+        }),
       "warn",
     );
     expect(said).toContain("Run without --bootstrap to fold onto it.");
@@ -2235,14 +2601,26 @@ describe("publish() --bootstrap over a store that holds a state", () => {
     });
     const said = await saying(
       () =>
-        publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious),
+        publish(["--bootstrap", "--days", "1"], {
+          store,
+          now: NOW,
+          topology: suites,
+          previousManifest: noPrevious,
+        }),
       "warn",
     );
     expect(said).toContain("with --days 16 to reach it");
     expect(created.size).toBe(0);
     // And the window it names is one an incremental run folds onto it
     // with, keeping the three new real test failures it holds.
-    expect(await publish(["--days", "16"], store, NOW, suites, noPrevious))
+    expect(
+      await publish(["--days", "16"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
+    )
       .toBe(0);
     const entry = (await publishedManifest(created)).entries.find((one) =>
       testIdentityKey(one.test) === KEPT
@@ -2256,7 +2634,12 @@ describe("publish() --bootstrap over a store that holds a state", () => {
       [stateObjectName("2026-08-20", "1")]: "{not json at all",
     });
     const said = await saying(() =>
-      publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--bootstrap", "--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain("no stored aggregate can be read by any publisher");
     expect((await publishedManifest(created)).entries[0]!.inputs.catches)
@@ -2274,7 +2657,12 @@ describe("publish() --bootstrap over a store that holds a state", () => {
     });
     const said = await saying(
       () =>
-        publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious),
+        publish(["--bootstrap", "--days", "1"], {
+          store,
+          now: NOW,
+          topology: suites,
+          previousManifest: noPrevious,
+        }),
       "warn",
     );
     expect(said).toContain("deploy a publisher that reads shape");
@@ -2291,13 +2679,12 @@ describe("publish() --bootstrap over a store that holds a state", () => {
       readText: () => Promise.reject(new Error("HTTP 503")),
     };
     expect(
-      await publish(
-        ["--bootstrap", "--days", "1"],
-        refusing,
-        NOW,
-        suites,
-        noPrevious,
-      ),
+      await publish(["--bootstrap", "--days", "1"], {
+        store: refusing,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     ).toBe(1);
     expect(created.size).toBe(0);
   });
@@ -2325,13 +2712,12 @@ describe("publish() over days it has read and closed", () => {
   it("keeps the names of a week of objects and of the first day", async () => {
     const { store: held, created } = store();
     expect(
-      await publish(
-        ["--bootstrap", "--days", "11"],
-        held,
-        new Date("2026-08-20T12:00:00.000Z"),
-        suites,
-        noPrevious,
-      ),
+      await publish(["--bootstrap", "--days", "11"], {
+        store: held,
+        now: new Date("2026-08-20T12:00:00.000Z"),
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     ).toBe(0);
     const state = await newestState(created);
     expect(state.closed).toBe("2026/08/13");
@@ -2345,23 +2731,21 @@ describe("publish() over days it has read and closed", () => {
 
   it("counts a closed day once, however wide a later window is", async () => {
     const { store: held, created } = store();
-    await publish(
-      ["--bootstrap", "--days", "11"],
-      held,
-      new Date("2026-08-20T12:00:00.000Z"),
-      suites,
-      noPrevious,
-    );
+    await publish(["--bootstrap", "--days", "11"], {
+      store: held,
+      now: new Date("2026-08-20T12:00:00.000Z"),
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     const once = (await publishedManifest(created)).entries[0]!.inputs.catches;
     expect(once).toBe(NEW_REAL_TEST_FAILURE_WEIGHT_MAIN * 2);
     expect(
-      await publish(
-        ["--days", "20"],
-        held,
-        new Date("2026-08-20T13:00:00.000Z"),
-        suites,
-        noPrevious,
-      ),
+      await publish(["--days", "20"], {
+        store: held,
+        now: new Date("2026-08-20T13:00:00.000Z"),
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     ).toBe(0);
     const manifest = await newestPublished(created);
     expect(manifest.entries[0]!.inputs.catches).toBe(once);
@@ -2372,24 +2756,22 @@ describe("publish() over days it has read and closed", () => {
       [CI(FIRST, "8")]: object("c8", "fail", "2026-08-10T01:00:00.000Z"),
     };
     const { store: held, created } = fakeStore(objects);
-    await publish(
-      ["--bootstrap", "--days", "1"],
-      held,
-      new Date("2026-08-10T01:30:00.000Z"),
-      suites,
-      noPrevious,
-    );
+    await publish(["--bootstrap", "--days", "1"], {
+      store: held,
+      now: new Date("2026-08-10T01:30:00.000Z"),
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     // The fix of the tenth's breakage lands after the run that read the
     // tenth, and the next run comes three days later.
     objects[CI(FIRST, "9")] = object("c9", "pass", "2026-08-10T02:00:00.000Z");
     expect(
-      await publish(
-        [],
-        held,
-        new Date("2026-08-13T12:00:00.000Z"),
-        suites,
-        noPrevious,
-      ),
+      await publish([], {
+        store: held,
+        now: new Date("2026-08-13T12:00:00.000Z"),
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     ).toBe(0);
     const manifest = await newestPublished(created);
     expect(manifest.entries[0]!.inputs.catches).toBe(
@@ -2401,21 +2783,19 @@ describe("publish() over days it has read and closed", () => {
     // A publisher stopped for nine days catches up on the run after, so no
     // day is left unread behind the days it folds.
     const { store: held, created } = store();
-    await publish(
-      ["--bootstrap", "--days", "1"],
-      held,
-      new Date("2026-08-10T12:00:00.000Z"),
-      suites,
-      noPrevious,
-    );
+    await publish(["--bootstrap", "--days", "1"], {
+      store: held,
+      now: new Date("2026-08-10T12:00:00.000Z"),
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     const said = await saying(() =>
-      publish(
-        [],
-        held,
-        new Date("2026-08-20T12:00:00.000Z"),
-        suites,
-        noPrevious,
-      )
+      publish([], {
+        store: held,
+        now: new Date("2026-08-20T12:00:00.000Z"),
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain(
       "reading from 2026/08/10, the last day the aggregate read",
@@ -2430,20 +2810,18 @@ describe("publish() over days it has read and closed", () => {
     // A narrower window would leave days unread behind the ones it
     // folds, which a later run could fold only after them.
     const { store: held, created } = store();
-    await publish(
-      ["--bootstrap", "--days", "1"],
-      held,
-      new Date("2026-08-10T12:00:00.000Z"),
-      suites,
-      noPrevious,
-    );
-    await publish(
-      ["--days", "1"],
-      held,
-      new Date("2026-08-20T12:00:00.000Z"),
-      suites,
-      noPrevious,
-    );
+    await publish(["--bootstrap", "--days", "1"], {
+      store: held,
+      now: new Date("2026-08-10T12:00:00.000Z"),
+      topology: suites,
+      previousManifest: noPrevious,
+    });
+    await publish(["--days", "1"], {
+      store: held,
+      now: new Date("2026-08-20T12:00:00.000Z"),
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     expect((await newestState(created)).closed).toBe("2026/08/13");
   });
 
@@ -2454,37 +2832,34 @@ describe("publish() over days it has read and closed", () => {
       [CI("2026/08/12", "1")]: object("c0", "pass", "2026-08-12T01:00:00.000Z"),
     };
     const { store: held, created } = fakeStore(objects);
-    await publish(
-      ["--bootstrap", "--days", "1"],
-      held,
-      new Date("2026-08-12T12:00:00.000Z"),
-      suites,
-      noPrevious,
-    );
+    await publish(["--bootstrap", "--days", "1"], {
+      store: held,
+      now: new Date("2026-08-12T12:00:00.000Z"),
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     objects[CI("2026/08/15", "1")] = object(
       "c2",
       "fail",
       "2026-08-15T01:00:00.000Z",
     );
-    await publish(
-      [],
-      held,
-      new Date("2026-08-15T12:00:00.000Z"),
-      suites,
-      noPrevious,
-    );
+    await publish([], {
+      store: held,
+      now: new Date("2026-08-15T12:00:00.000Z"),
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     objects[CI("2026/08/12", "2")] = object(
       "c1",
       "pass",
       "2026-08-12T02:00:00.000Z",
     );
-    await publish(
-      [],
-      held,
-      new Date("2026-08-16T12:00:00.000Z"),
-      suites,
-      noPrevious,
-    );
+    await publish([], {
+      store: held,
+      now: new Date("2026-08-16T12:00:00.000Z"),
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     expect((await newestPublished(created)).entries[0]!.inputs.catches)
       .toBe(0);
   });
@@ -2551,7 +2926,12 @@ describe("publish() over an aggregate other new real test failure rules credited
       }),
     });
     const said = await saying(() =>
-      publish(["--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain("so this run folds every day from 2026-08-18 again");
     expect(await newRealTestFailuresOf(created)).toBe(
@@ -2562,7 +2942,12 @@ describe("publish() over an aggregate other new real test failure rules credited
   it("folds every day the aggregate holds again", async () => {
     const { store, created } = storeWith();
     const said = await saying(() =>
-      publish(["--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain(
       `${STATE} credited its new real test failures under other rules, ` +
@@ -2584,7 +2969,12 @@ describe("publish() over an aggregate other new real test failure rules credited
   it("folds onto an aggregate the rules in force credited", async () => {
     const { store, created } = storeWith(NEW_REAL_TEST_FAILURE_RULE);
     const said = await saying(() =>
-      publish(["--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).not.toContain(
       "credited its new real test failures under other rules",
@@ -2595,79 +2985,161 @@ describe("publish() over an aggregate other new real test failure rules credited
   });
 });
 
-describe("writeToken()", () => {
-  const NAME = "TEST_RECORDS_GCS_TOKEN";
-
-  /** Runs with the variable set as given, and puts back what was there. */
-  function withToken<T>(value: string | undefined, body: () => T): T {
-    const before = Deno.env.get(NAME);
-    if (value === undefined) Deno.env.delete(NAME);
-    else Deno.env.set(NAME, value);
-    try {
-      return body();
-    } finally {
-      if (before === undefined) Deno.env.delete(NAME);
-      else Deno.env.set(NAME, before);
-    }
-  }
-
-  it("is the federated token the workflow was given", () => {
-    expect(withToken("ya29.a0", writeToken)).toBe("ya29.a0");
-  });
-
-  it("is nothing when the variable is unset", () => {
-    expect(withToken(undefined, writeToken)).toBeUndefined();
-  });
-
-  it("is nothing when the variable is set to empty", () => {
-    // A step that failed to mint one leaves the variable set and empty.
-    // Read as a token it would reach the store and be refused there.
-    expect(withToken("", writeToken)).toBeUndefined();
-  });
-});
-
 describe("publish() over a store that answers badly", () => {
   const NOW = new Date("2026-08-20T12:00:00.000Z");
 
   it("refuses when the aggregate object will not read", async () => {
     const { store, created } = fakeStore(seed());
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      suites,
-      noPrevious,
-    );
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     const after = created.size;
     const broken: StoreAccess = {
       ...store,
       readText: () => Promise.reject(new Error("that object is gone")),
     };
-    expect(await publish(["--days", "1"], broken, NOW, suites, noPrevious))
+    expect(
+      await publish(["--days", "1"], {
+        store: broken,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
+    )
       .toBe(1);
     expect(created.size).toBe(after);
   });
 
-  it("refuses when the submissions cannot be listed", async () => {
+  /**
+   * Publishes once, then again over a store whose listings of the areas
+   * `unlisted` names fail, and returns the second run's code, what it
+   * warned, and whether it created anything.
+   */
+  async function unlisting(unlisted: (prefix: string) => boolean) {
     const { store, created } = fakeStore(seed());
-    await publish(
-      ["--bootstrap", "--days", "1"],
+    await publish(["--bootstrap", "--days", "1"], {
       store,
-      NOW,
-      suites,
-      noPrevious,
-    );
+      now: NOW,
+      topology: suites,
+      previousManifest: noPrevious,
+    });
     const after = created.size;
     const broken: StoreAccess = {
       ...store,
       list: (prefix) =>
-        prefix.includes("/submissions/")
+        unlisted(prefix)
           ? Promise.reject(new Error("the store is unreachable"))
           : store.list(prefix),
     };
-    expect(await publish(["--days", "1"], broken, NOW, suites, noPrevious))
-      .toBe(1);
-    expect(created.size).toBe(after);
+    let code: number | undefined;
+    const warned = await saying(async () => {
+      code = await publish(["--days", "1"], {
+        store: broken,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      });
+    }, "warn");
+    return { code, warned, createdAny: created.size !== after };
+  }
+
+  it("refuses when the submissions cannot be listed", async () => {
+    const { code, warned, createdAny } = await unlisting((prefix) =>
+      prefix.startsWith(`${ciSubmissionsPrefix()}/`)
+    );
+    expect(code).toBe(1);
+    expect(warned).toContain(
+      "listing the submissions failed: Error: the store is unreachable",
+    );
+    expect(warned).toContain("refusing to publish from part of the window");
+    expect(createdAny).toBe(false);
+  });
+
+  it("refuses when the local submissions cannot be listed", async () => {
+    const { code, warned, createdAny } = await unlisting((prefix) =>
+      prefix.includes("/submissions/local/")
+    );
+    expect(code).toBe(1);
+    expect(warned).toContain(
+      "listing the submissions failed: Error: the store is unreachable",
+    );
+    expect(createdAny).toBe(false);
+  });
+});
+
+describe("publish() over a test the alias file has renamed", () => {
+  const OLD = { k: "unit", s: "memory", n: "space > writes" };
+  const NEW = { k: "unit", s: "memory", n: "space > records a write" };
+  const renamed = () =>
+    Promise.resolve(
+      new AliasResolver([{ date: "2026-08-21", from: OLD, to: NEW }]),
+    );
+
+  it("moves the history the aggregate holds under the old name, and says so", async () => {
+    const { store, created } = fakeStore(seed());
+    await publish(["--bootstrap", "--days", "1"], {
+      store,
+      now: new Date("2026-08-20T12:00:00.000Z"),
+      topology: suites,
+      previousManifest: noPrevious,
+    });
+    const said = await saying(() =>
+      publish(["--days", "1"], {
+        store,
+        now: new Date("2026-08-21T12:00:00.000Z"),
+        topology: suites,
+        previousManifest: noPrevious,
+        aliases: renamed,
+      })
+    );
+    expect(said).toContain(
+      "moved the history of 1 identities to the names the alias file gives " +
+        "them",
+    );
+    expect((await newestPublished(created)).entries.map(({ test }) => test))
+      .toEqual([NEW]);
+  });
+
+  it("reads the records themselves under the new name, and moves no history", async () => {
+    const { store, created } = fakeStore(seed());
+    let code: number | undefined;
+    const said = await saying(async () => {
+      code = await publish(["--bootstrap", "--days", "1"], {
+        store,
+        now: new Date("2026-08-20T12:00:00.000Z"),
+        topology: suites,
+        previousManifest: noPrevious,
+        aliases: renamed,
+      });
+    });
+    expect(code).toBe(0);
+    expect(said).not.toContain("moved the history");
+    expect((await publishedManifest(created)).entries.map(({ test }) => test))
+      .toEqual([NEW]);
+  });
+});
+
+describe("publish() over a test that disagrees with itself", () => {
+  it("withholds it, and says how many it withholds and why", async () => {
+    // The same commit failed and then passed, which is a flake.
+    const { store, created } = fakeStore({
+      [CI(DAY, "1")]: object("c1", "fail", "2026-08-20T01:00:00.000Z"),
+      [CI(DAY, "2")]: object("c1", "pass", "2026-08-20T02:00:00.000Z"),
+    });
+    const said = await saying(() =>
+      publish(["--bootstrap", "--days", "1"], {
+        store,
+        now: new Date("2026-08-20T12:00:00.000Z"),
+        topology: suites,
+        previousManifest: noPrevious,
+      })
+    );
+    expect(said).toContain("test selection: 1 withheld as flaky");
+    expect((await publishedManifest(created)).withheld.map((e) => e.reason))
+      .toEqual(["flaky"]);
   });
 });
 
@@ -2694,13 +3166,12 @@ describe("publish() reporting what measured sets cost", () => {
     });
     const { store } = fakeStore(objects);
     const said = await saying(() =>
-      publish(
-        ["--bootstrap", "--days", "1"],
+      publish(["--bootstrap", "--days", "1"], {
         store,
-        NOW,
-        measuring,
-        noPrevious,
-      )
+        now: NOW,
+        topology: measuring,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain(
       "test selection: workspace-unit/runtime/memory costs 52s with " +
@@ -2713,13 +3184,12 @@ describe("publish() reporting what measured sets cost", () => {
     objects[CI(DAY, "3")] = laneObject("c3", "2026-08-20T03:00:00.000Z");
     const { store } = fakeStore(objects);
     const said = await saying(() =>
-      publish(
-        ["--bootstrap", "--days", "1"],
+      publish(["--bootstrap", "--days", "1"], {
         store,
-        NOW,
-        measuring,
-        noPrevious,
-      )
+        now: NOW,
+        topology: measuring,
+        previousManifest: noPrevious,
+      })
     );
     expect(said).toContain(
       "test selection: What 1 measured set(s) or exclusion-list entries " +
@@ -2750,13 +3220,12 @@ describe("publish() reporting what no lane can hold", () => {
     console.log = (...parts: unknown[]) => said.push(parts.join(" "));
     try {
       expect(
-        await publish(
-          ["--bootstrap", "--days", "1"],
+        await publish(["--bootstrap", "--days", "1"], {
           store,
-          NOW,
-          suites,
-          noPrevious,
-        ),
+          now: NOW,
+          topology: suites,
+          previousManifest: noPrevious,
+        }),
       )
         .toBe(0);
     } finally {
@@ -2796,7 +3265,12 @@ describe("publish() reporting what no lane can hold", () => {
     }
     const { store, created } = fakeStore(objects);
     const said = await saying(() =>
-      publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious)
+      publish(["--bootstrap", "--days", "1"], {
+        store,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      })
     );
     const named = said.split("\n").filter((line) =>
       line.includes("test selection: unschedulable,")
@@ -2844,13 +3318,12 @@ describe("the baselines a publish carries", () => {
     // published without them would lose them for good.
     const { store, created } = fakeStore(seed());
     expect(
-      await publish(
-        ["--bootstrap", "--days", "1"],
+      await publish(["--bootstrap", "--days", "1"], {
         store,
-        new Date("2026-08-20T12:00:00.000Z"),
-        suites,
-        () => Promise.reject(new Error("the store is down")),
-      ),
+        now: new Date("2026-08-20T12:00:00.000Z"),
+        topology: suites,
+        previousManifest: () => Promise.reject(new Error("the store is down")),
+      }),
     ).toBe(1);
     expect(created.size).toBe(0);
   });
@@ -2875,13 +3348,13 @@ describe("the baselines a publish carries", () => {
       uncoveredLines: 41,
     };
     expect(
-      await publish(
-        ["--bootstrap", "--days", "1"],
+      await publish(["--bootstrap", "--days", "1"], {
         store,
-        new Date("2026-08-20T12:00:00.000Z"),
-        suites,
-        () => Promise.resolve(sampleManifest({ coverageBaselines: [carried] })),
-      ),
+        now: new Date("2026-08-20T12:00:00.000Z"),
+        topology: suites,
+        previousManifest: () =>
+          Promise.resolve(sampleManifest({ coverageBaselines: [carried] })),
+      }),
     ).toBe(0);
     expect((await publishedManifest(created)).coverageBaselines).toEqual([
       {
@@ -2926,13 +3399,12 @@ describe("publish() over a day read from its raw objects", () => {
       [LOCAL(DAY, "ianh")]: localObject("c9", at),
     });
     expect(
-      await publish(
-        ["--bootstrap", "--days", "1"],
+      await publish(["--bootstrap", "--days", "1"], {
         store,
-        NOW,
-        suites,
-        noPrevious,
-      ),
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+      }),
     ).toBe(0);
     const written = [...created.keys()].find((name) =>
       name.startsWith(statePrefix())

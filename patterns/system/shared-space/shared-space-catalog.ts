@@ -3,9 +3,11 @@
  * route; explicit membership choices compare the revision the user observed,
  * and so does a removal, and a deletion mark, which records that a space is
  * gone for everyone. A retitle refreshes an entry's display title and
- * nothing else. Registration also records which of the person's profiles
- * acts in the space, once, beside the catalog. Handler results describe the
- * action, while the catalog and those records carry membership.
+ * nothing else, and a notice mark records which notice that a space changed
+ * the person's host last acted on. Registration also records which of the
+ * person's profiles acts in the space, once, beside the catalog. Handler
+ * results describe the action, while the catalog and those records carry
+ * membership.
  */
 
 import {
@@ -66,10 +68,30 @@ export interface SharedSpaceOfferReceipt {
 /** Why a registration did not record the profile it named. */
 export type SharedSpaceProfileConflict = "profile" | "unknown-profile";
 
-/** A collection keyed by space DID and receipts keyed by sender and offer ID. */
+/**
+ * A collection keyed by space DID, receipts keyed by sender and offer ID,
+ * and notice marks keyed the same way.
+ */
 export interface SharedSpaceCatalog {
   entries: Record<string, SharedSpaceEntry>;
   offers: Record<string, SharedSpaceOfferReceipt>;
+
+  /**
+   * The `sharedAt` of the notice from each sender and `id` that a space
+   * changed which the person's host last acted on, absent until one is
+   * marked.
+   */
+  notices?: Record<string, number>;
+}
+
+/**
+ * A notice that a space changed, as the share inbox held it, which
+ * {@link markSharedSpaceNoticeIn} marks as acted on.
+ */
+export interface SharedSpaceNoticeMark {
+  from: string;
+  id: string;
+  sharedAt: number;
 }
 
 /**
@@ -265,6 +287,13 @@ export function isSharedSpaceCatalog(
       (entry.since === undefined || admissionTime(entry.since))
     )
   ) return false;
+  if (
+    value.notices !== undefined &&
+    !(plainObject(value.notices) &&
+      Object.entries(value.notices).every(([key, sharedAt]) =>
+        isNoticeKey(key) && admissionTime(sharedAt)
+      ))
+  ) return false;
   const entries = value.entries;
   return Object.entries(value.offers).every(([key, receipt]) => {
     if (
@@ -327,6 +356,23 @@ function plainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" &&
     (Object.getPrototypeOf(value) === Object.prototype ||
       Object.getPrototypeOf(value) === null);
+}
+
+/**
+ * Whether `key` is the key a notice mark is filed under: the one
+ * {@link sharedSpaceOfferKey} makes of a sender DID and an `id` an offer may
+ * carry.
+ */
+function isNoticeKey(key: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(key);
+  } catch {
+    return false;
+  }
+  return Array.isArray(parsed) && parsed.length === 2 &&
+    isWellFormedDID(parsed[0]) && boundedString(parsed[1], 320) &&
+    JSON.stringify(parsed) === key;
 }
 
 /** Whether a text value fits its wire contract. */
@@ -801,6 +847,39 @@ export function retitleSharedSpaceIn(
 }
 
 /**
+ * Whether `value` is a notice mark {@link markSharedSpaceNoticeIn} takes: a
+ * sender DID, an `id` an offer may carry, and a `sharedAt` that is a
+ * nonnegative integer.
+ */
+export function isSharedSpaceNoticeMark(
+  value: unknown,
+): value is SharedSpaceNoticeMark {
+  return plainObject(value) && isWellFormedDID(value.from) &&
+    boundedString(value.id, 320) && admissionTime(value.sharedAt);
+}
+
+/**
+ * Marks the notice `mark` names as acted on, under its sender and `id`,
+ * replacing the `sharedAt` an earlier one from them left there. The catalog
+ * is written only where the mark it holds differs, and nothing else in it is
+ * written.
+ *
+ * @throws When `mark` is not a notice mark, as {@link isSharedSpaceNoticeMark}
+ *   reads one, or the catalog is unavailable or malformed.
+ */
+export function markSharedSpaceNoticeIn(
+  catalog: Writable<SharedSpaceCatalogStorage>,
+  mark: SharedSpaceNoticeMark,
+): void {
+  if (!isSharedSpaceNoticeMark(mark)) {
+    throw new TypeError("Invalid shared-space notice mark.");
+  }
+  const key = sharedSpaceOfferKey(mark.from, mark.id);
+  if (readSharedSpaceCatalog(catalog).notices?.[key] === mark.sharedAt) return;
+  catalog.key("notices", key).set(mark.sharedAt);
+}
+
+/**
  * Applies {@link retitleSharedSpaceIn} for a caller with no handler of its own
  * in Home. The caller's word is the title, as it is for a registration's: Home
  * does not read the space's root.
@@ -847,37 +926,52 @@ export const removeSharedSpace = handler<
 >(
   eventSchema,
   toSchema<SharedSpaceCatalogState>(),
-  (removal, { catalog }) => {
-    if (
-      !plainObject(removal) || !isWellFormedDID(removal.space) ||
-      !boundedString(removal.expectedRevision, 320)
-    ) {
-      throw new TypeError("Invalid shared-space removal.");
-    }
-    const stored = readSharedSpaceCatalog(catalog);
-    const current = stored.entries[removal.space];
-    if (!current) return { status: "conflict", reason: "missing" };
-    if (current.revision !== removal.expectedRevision) {
-      return { status: "conflict", reason: "revision" };
-    }
-    if (
-      Object.values(stored.offers).some((receipt) =>
-        receipt.space === removal.space
-      )
-    ) return { status: "conflict", reason: "offer" };
-    // Writing the entries without this one deletes its slot and leaves the
-    // others unwritten. `undefined` written at the slot itself would be stored
-    // as its value, which the validating reader refuses.
-    catalog.key("entries").set(
-      Object.fromEntries(
-        Object.entries(stored.entries).filter(([space]) =>
-          space !== removal.space
-        ),
-      ),
-    );
-    return { status: "removed", space: removal.space };
-  },
+  (removal, { catalog }) => removeSharedSpaceIn(catalog, removal),
 );
+
+/**
+ * Removes the entry for `removal.space` from `catalog`, under the conditions
+ * {@link removeSharedSpace} states, staging its write in the transaction of
+ * the handler that calls it. Returns `conflict` without writing when the space
+ * has no entry, the observed revision is not the current one, or an offer
+ * receipt names the space.
+ *
+ * @throws When `removal` names no well-formed space or revision, or `catalog`
+ *   holds something other than a valid catalog.
+ */
+export function removeSharedSpaceIn(
+  catalog: Writable<SharedSpaceCatalogStorage>,
+  removal: SharedSpaceRemoval,
+): SharedSpaceRemovalResult {
+  if (
+    !plainObject(removal) || !isWellFormedDID(removal.space) ||
+    !boundedString(removal.expectedRevision, 320)
+  ) {
+    throw new TypeError("Invalid shared-space removal.");
+  }
+  const stored = readSharedSpaceCatalog(catalog);
+  const current = stored.entries[removal.space];
+  if (!current) return { status: "conflict", reason: "missing" };
+  if (current.revision !== removal.expectedRevision) {
+    return { status: "conflict", reason: "revision" };
+  }
+  if (
+    Object.values(stored.offers).some((receipt) =>
+      receipt.space === removal.space
+    )
+  ) return { status: "conflict", reason: "offer" };
+  // Writing the entries without this one deletes its slot and leaves the
+  // others unwritten. `undefined` written at the slot itself would be stored
+  // as its value, which the validating reader refuses.
+  catalog.key("entries").set(
+    Object.fromEntries(
+      Object.entries(stored.entries).filter(([space]) =>
+        space !== removal.space
+      ),
+    ),
+  );
+  return { status: "removed", space: removal.space };
+}
 
 /**
  * Home's records of the profile acting in each social space, with their

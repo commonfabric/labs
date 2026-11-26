@@ -9,9 +9,12 @@ import {
 } from "../../../ast/mod.ts";
 import { getCellKind } from "../../cell-type.ts";
 import { unwrapParentheses } from "../../../utils/expression.ts";
-import { classifyOpaquePathTerminalCall } from "../../opaque-roots.ts";
 import { createLiftAppliedCall } from "../../builtins/lift-applied.ts";
 import { createReactiveWrapperForExpression } from "../rewrite-helpers.ts";
+import {
+  getCalleeReceiver,
+  getGetCallReceiver,
+} from "../../call-root-support.ts";
 import { rewriteHelperOwnedExpression } from "./helper-owned-expression.ts";
 
 function isZeroArgInlineIifeCall(
@@ -40,46 +43,6 @@ function getZeroArgInlineIifeCallee(
   return ts.isArrowFunction(callee) || ts.isFunctionExpression(callee)
     ? callee
     : undefined;
-}
-
-function isZeroArgGetCall(expression: ts.CallExpression): boolean {
-  if (expression.arguments.length !== 0) {
-    return false;
-  }
-
-  if (classifyOpaquePathTerminalCall(expression) === "get") {
-    return true;
-  }
-
-  const callee = expression.expression;
-  return (
-    ts.isPropertyAccessExpression(callee) ||
-    ts.isElementAccessExpression(callee)
-  ) &&
-    (
-      ts.isPropertyAccessExpression(callee)
-        ? callee.name.text === "get"
-        : ts.isStringLiteralLike(callee.argumentExpression) &&
-          callee.argumentExpression.text === "get"
-    );
-}
-
-function getZeroArgGetReceiver(
-  expression: ts.CallExpression,
-): ts.Expression | undefined {
-  if (!isZeroArgGetCall(expression)) {
-    return undefined;
-  }
-
-  const callee = expression.expression;
-  if (
-    !ts.isPropertyAccessExpression(callee) &&
-    !ts.isElementAccessExpression(callee)
-  ) {
-    return undefined;
-  }
-
-  return callee.expression;
 }
 
 function isDeclaredInside(
@@ -131,14 +94,12 @@ function collectUnsafeIifeGetReceivers(
       return;
     }
 
-    if (
-      syntheticComputeDepth === 0 &&
-      ts.isCallExpression(node) &&
-      isZeroArgGetCall(node)
-    ) {
-      const receiver = getZeroArgGetReceiver(node);
+    const receiver = syntheticComputeDepth === 0 &&
+        ts.isCallExpression(node) && node.arguments.length === 0
+      ? getGetCallReceiver(node)
+      : undefined;
+    if (receiver) {
       if (
-        receiver &&
         !isDeclaredInside(receiver, iifeCallee, context) &&
         !receivers.includes(receiver)
       ) {
@@ -196,66 +157,35 @@ function shouldFilterNestedLocalsForCallWrapper(
     return true;
   }
 
-  const sinkCall = classifyArrayMethodResultSinkCall(
-    expression,
-    context.checker,
-  );
-  if (sinkCall?.sink === "join") {
-    const callee = expression.expression;
-    if (
-      !ts.isPropertyAccessExpression(callee) &&
-      !ts.isElementAccessExpression(callee)
-    ) {
-      return false;
-    }
-
-    const receiverAnalysis = analyze(callee.expression);
-    return receiverAnalysis.containsReactive;
-  }
-
-  const sinkReceiverChain = classifyArrayMethodResultSinkReceiverChainCall(
-    expression,
-    context.checker,
-  );
-  if (!sinkReceiverChain || sinkReceiverChain.sinkCall.sink !== "join") {
+  const isJoinSink = classifyArrayMethodResultSinkCall(
+        expression,
+        context.checker,
+      )?.sink === "join" ||
+    classifyArrayMethodResultSinkReceiverChainCall(
+        expression,
+        context.checker,
+      )?.sinkCall.sink === "join";
+  if (!isJoinSink) {
     return false;
   }
 
-  const callee = expression.expression;
-  if (
-    !ts.isPropertyAccessExpression(callee) &&
-    !ts.isElementAccessExpression(callee)
-  ) {
-    return false;
-  }
-
-  const receiverAnalysis = analyze(callee.expression);
-  return receiverAnalysis.containsReactive;
+  const receiver = getCalleeReceiver(expression);
+  return receiver !== undefined && analyze(receiver).containsReactive;
 }
 
 function isCellGetTerminalCall(
   expression: ts.CallExpression,
   context: Parameters<Emitter>[0]["context"],
 ): boolean {
-  if (classifyOpaquePathTerminalCall(expression) !== "get") {
+  const receiver = getGetCallReceiver(expression);
+  if (!receiver) {
     return false;
   }
 
-  const callee = expression.expression;
-  if (
-    !ts.isPropertyAccessExpression(callee) &&
-    !ts.isElementAccessExpression(callee)
-  ) {
-    return false;
-  }
-
-  try {
-    const receiverType = context.checker.getTypeAtLocation(callee.expression);
-    const cellKind = getCellKind(receiverType, context.checker);
-    return cellKind !== undefined;
-  } catch {
-    return false;
-  }
+  return getCellKind(
+    context.checker.getTypeAtLocation(receiver),
+    context.checker,
+  ) !== undefined;
 }
 
 export const emitCallExpression: Emitter = ({
@@ -265,7 +195,6 @@ export const emitCallExpression: Emitter = ({
   analysis,
   analyze,
   rewriteChildren,
-  inSafeContext,
   reactiveContextKind,
   preferInputBoundWrappers,
 }) => {
@@ -322,8 +251,7 @@ export const emitCallExpression: Emitter = ({
     let changed = rewrittenCallee !== expression.expression;
 
     expression.arguments.forEach((argument, index) => {
-      const updated = !inSafeContext &&
-          reactiveContextKind === "pattern"
+      const updated = reactiveContextKind === "pattern"
         ? rewriteHelperOwnedExpression({
           expression: argument,
           containerLabel: getConditionalHelperArgLabel(
@@ -348,11 +276,6 @@ export const emitCallExpression: Emitter = ({
       expression.typeArguments,
       rewrittenArgs,
     );
-  }
-
-  // Skip lift-applied wrapping in safe contexts - they don't need it
-  if (inSafeContext) {
-    return undefined;
   }
 
   // Preserve authored zero-arg IIFEs so the existing inner expression-site
@@ -388,8 +311,6 @@ export const emitCallExpression: Emitter = ({
     }
     return rewritten !== expression ? rewritten : undefined;
   }
-
-  if (dataFlows.length === 0) return undefined;
 
   return createReactiveWrapperForExpression(
     expression,

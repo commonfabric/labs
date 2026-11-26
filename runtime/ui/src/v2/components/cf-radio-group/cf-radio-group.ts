@@ -5,7 +5,7 @@
  *
  * @tag cf-radio-group
  *
- * @attribute {string} name - The name for all radio buttons in the group
+ * @attribute {string} name - The name of the radios the group renders from `items`
  * @attribute {string} value - The currently selected radio button value
  * @attribute {boolean} disabled - Whether all radio buttons in the group are disabled
  * @attribute {string} orientation - Layout orientation: "vertical" (default) or "horizontal"
@@ -44,7 +44,7 @@
  * />
  *
  * <!-- Using slotted cf-radio elements (for custom rendering) -->
- * <cf-radio-group name="size" value="medium">
+ * <cf-radio-group value="medium">
  *   <cf-radio value="small">Small</cf-radio>
  *   <cf-radio value="medium">Medium</cf-radio>
  *   <cf-radio value="large">Large</cf-radio>
@@ -53,9 +53,10 @@
  *
  * @accessibility
  * - Uses role="radiogroup" for proper screen reader support
- * - Keyboard navigation with arrow keys (Up/Down for vertical, Left/Right for horizontal)
- * - Manages focus and selection state for radio buttons
- * - Automatically assigns group name to child radios if not specified
+ * - One Tab stop: Tab enters the group on the checked radio, or on the first
+ *   enabled radio while none is checked, and a second Tab leaves it
+ * - The arrow keys move focus and selection to the next or previous enabled
+ *   radio, wrapping at the ends
  *
  * @methods
  * - getValue() - Get the currently selected radio value
@@ -69,6 +70,7 @@ import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createCellController } from "../../core/cell-controller.ts";
+import type { CFRadio } from "../cf-radio/cf-radio.ts";
 import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
 import { radioGroupStyles } from "./styles.ts";
 
@@ -95,25 +97,10 @@ export class CFRadioGroup extends BaseElement {
   static override styles = unsafeCSS(radioGroupStyles);
 
   /** Cell controller for value binding */
-  private _cellController = createCellController<unknown>(this, {
+  #cellController = createCellController<unknown>(this, {
     timing: { strategy: "immediate" }, // Radio changes should be immediate
-    onChange: (newValue, oldValue) => {
-      // Sync selection to DOM (for slotted radios)
-      this.updateRadioSelection();
-
-      // Emit change events
-      this.emit("cf-change", {
-        value: newValue,
-        oldValue,
-        items: this.items,
-      });
-
-      this.emit("change", {
-        value: newValue,
-        oldValue,
-        items: this.items,
-      });
-    },
+    onChange: (newValue, oldValue) =>
+      this.#selectionChanged(newValue, oldValue),
   });
 
   static override properties = {
@@ -132,6 +119,9 @@ export class CFRadioGroup extends BaseElement {
   declare items: RadioItem[];
   declare value: CellHandle<unknown> | unknown;
 
+  /** Radios the group disabled, which it enables again once it is enabled. */
+  #disabledRadios = new WeakSet<CFRadio>();
+
   constructor() {
     super();
     this.name = "";
@@ -147,15 +137,17 @@ export class CFRadioGroup extends BaseElement {
     this.setAttribute("role", "radiogroup");
 
     // Add event listeners for slotted cf-radio elements
-    this.addEventListener("radio-click", this.handleRadioClick);
-    this.addEventListener("keydown", this.handleKeydown);
+    this.addEventListener("radio-click", this.#handleRadioClick);
+    this.addEventListener("radio-state", this.#updateTabStops);
+    this.addEventListener("keydown", this.#handleKeydown);
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
     // Clean up event listeners
-    this.removeEventListener("radio-click", this.handleRadioClick);
-    this.removeEventListener("keydown", this.handleKeydown);
+    this.removeEventListener("radio-click", this.#handleRadioClick);
+    this.removeEventListener("radio-state", this.#updateTabStops);
+    this.removeEventListener("keydown", this.#handleKeydown);
   }
 
   /**
@@ -165,35 +157,17 @@ export class CFRadioGroup extends BaseElement {
   @property({ attribute: false })
   accessor theme: CFTheme | undefined = undefined;
 
-  override firstUpdated() {
-    // Initialize cell controller binding
-    this._cellController.bind(this.value);
-
-    // Update slotted radios if present
-    this.updateRadioNames();
-    this.updateRadioSelection();
-    this.updateRadioDisabled();
-  }
-
   override willUpdate(changedProperties: Map<string, unknown>) {
     super.willUpdate(changedProperties);
 
     // If the value property itself changed (e.g., switched to a different cell)
     if (changedProperties.has("value")) {
-      this._cellController.bind(this.value);
+      this.#cellController.bind(this.value);
     }
   }
 
   override updated(changedProperties: PropertyValues) {
-    if (changedProperties.has("name")) {
-      this.updateRadioNames();
-    }
-    if (changedProperties.has("value") || changedProperties.has("items")) {
-      this.updateRadioSelection();
-    }
-    if (changedProperties.has("disabled")) {
-      this.updateRadioDisabled();
-    }
+    this.#syncRadios();
     if (changedProperties.has("theme")) {
       applyThemeToElement(this, this.theme);
     }
@@ -204,7 +178,7 @@ export class CFRadioGroup extends BaseElement {
     if (this.items && this.items.length > 0) {
       return html`
         <div class="radio-group" part="group">
-          ${this.items.map((item, index) => this._renderItem(item, index))}
+          ${this.items.map((item, index) => this.#renderItem(item, index))}
         </div>
       `;
     }
@@ -212,13 +186,13 @@ export class CFRadioGroup extends BaseElement {
     // Otherwise, use slot for cf-radio children
     return html`
       <div class="radio-group" part="group">
-        <slot @slotchange="${this.handleSlotChange}"></slot>
+        <slot @slotchange="${this.#syncRadios}"></slot>
       </div>
     `;
   }
 
-  private _renderItem(item: RadioItem, index: number) {
-    const currentValue = this.getCurrentValue();
+  #renderItem(item: RadioItem, index: number) {
+    const currentValue = this.#getCurrentValue();
     const isChecked = areLinksSame(currentValue, item.value);
     const isDisabled = this.disabled || item.disabled;
     const itemId = `radio-${this.name || "group"}-${index}`;
@@ -234,11 +208,11 @@ export class CFRadioGroup extends BaseElement {
         <input
           type="radio"
           id="${itemId}"
-          name="${this.name || `radio-group-${this._uniqueId}`}"
+          name="${this.name || `radio-group-${this.#uniqueId}`}"
           .checked="${isChecked}"
           ?disabled="${isDisabled}"
-          @change="${() => this._handleItemChange(item)}"
-          @keydown="${this._handleItemKeydown}"
+          @change="${() => this.#handleItemChange(item)}"
+          @keydown="${this.#handleItemKeydown}"
           part="radio"
         />
         <span class="radio-indicator" part="indicator">
@@ -249,196 +223,141 @@ export class CFRadioGroup extends BaseElement {
     `;
   }
 
-  private _uniqueId = Math.random().toString(36).substring(2, 9);
+  #uniqueId = Math.random().toString(36).substring(2, 9);
 
-  private _handleItemChange(item: RadioItem) {
+  #handleItemChange(item: RadioItem) {
     if (this.disabled || item.disabled) return;
-    this._cellController.setValue(item.value);
+    this.#select(item.value);
   }
 
-  private _handleItemKeydown = (event: KeyboardEvent) => {
-    const inputs = Array.from(
-      this.shadowRoot?.querySelectorAll('input[type="radio"]') || [],
-    ) as HTMLInputElement[];
-    const enabledInputs = inputs.filter((input) => !input.disabled);
-
-    if (enabledInputs.length === 0) return;
-
-    const currentIndex = enabledInputs.findIndex(
-      (input) => input === event.target,
-    );
-    let nextIndex = currentIndex;
-
-    const isHorizontal = this.orientation === "horizontal";
-    const nextKey = isHorizontal ? "ArrowRight" : "ArrowDown";
-    const prevKey = isHorizontal ? "ArrowLeft" : "ArrowUp";
-
-    switch (event.key) {
-      case nextKey:
-      case (isHorizontal ? "ArrowDown" : "ArrowRight"):
-        event.preventDefault();
-        nextIndex = currentIndex === -1
-          ? 0
-          : (currentIndex + 1) % enabledInputs.length;
-        break;
-      case prevKey:
-      case (isHorizontal ? "ArrowUp" : "ArrowLeft"):
-        event.preventDefault();
-        nextIndex = currentIndex === -1
-          ? enabledInputs.length - 1
-          : (currentIndex - 1 + enabledInputs.length) % enabledInputs.length;
-        break;
-      default:
-        return;
-    }
-
-    // Focus and select the next radio
-    const nextInput = enabledInputs[nextIndex];
-    if (nextInput) {
-      nextInput.focus();
-      nextInput.click();
-    }
+  #handleItemKeydown = (event: KeyboardEvent) => {
+    const inputs = this.shadowRoot?.querySelectorAll<HTMLInputElement>(
+      'input[type="radio"]',
+    ) ?? [];
+    this.#arrowTo(event, Array.from(inputs).filter((input) => !input.disabled));
   };
 
-  private handleSlotChange = () => {
-    this.updateRadioNames();
-    this.updateRadioSelection();
-    this.updateRadioDisabled();
-  };
-
-  private getRadios(): NodeListOf<Element> {
-    return this.querySelectorAll("cf-radio");
-  }
-
-  private updateRadioNames(): void {
-    if (!this.name) return;
-
-    const radios = this.getRadios();
-    radios.forEach((radio) => {
-      if (!radio.hasAttribute("name")) {
-        radio.setAttribute("name", this.name);
+  /**
+   * Brings the slotted radios in line with the group: checks the one holding
+   * the group's value, and disables them all while the group is disabled.
+   */
+  #syncRadios(): void {
+    const currentValue = this.#getCurrentValue();
+    for (const radio of this.querySelectorAll("cf-radio")) {
+      radio.checked = areLinksSame(radio.value, currentValue);
+      if (this.disabled && !radio.disabled) {
+        radio.disabled = true;
+        this.#disabledRadios.add(radio);
+      } else if (!this.disabled && this.#disabledRadios.delete(radio)) {
+        radio.disabled = false;
       }
-    });
-  }
-
-  private updateRadioSelection(): void {
-    const radios = this.getRadios();
-    const currentValue = this.getCurrentValue();
-
-    radios.forEach((radio) => {
-      const radioValue = radio.getAttribute("value");
-      const isSelected = areLinksSame(radioValue, currentValue);
-      if (isSelected) {
-        radio.setAttribute("checked", "");
-        (radio as any).checked = true;
-      } else {
-        radio.removeAttribute("checked");
-        (radio as any).checked = false;
-      }
-    });
-  }
-
-  private updateRadioDisabled(): void {
-    const radios = this.getRadios();
-    radios.forEach((radio) => {
-      if (this.disabled) {
-        radio.setAttribute("disabled", "");
-        (radio as any).disabled = true;
-      } else if (!radio.hasAttribute("disabled")) {
-        // Only enable if the radio itself doesn't have disabled attribute
-        (radio as any).disabled = false;
-      }
-    });
-  }
-
-  private handleRadioClick = (event: Event): void => {
-    const customEvent = event as CustomEvent;
-    const radio = customEvent.detail.radio;
-
-    if (radio && radio.getAttribute("value")) {
-      this._cellController.setValue(radio.getAttribute("value"));
     }
+    this.#updateTabStops();
+  }
+
+  /**
+   * Makes one radio the group's Tab stop, the checked radio if it is enabled
+   * and otherwise the first enabled radio, and takes the others out of the Tab
+   * order, where the arrow keys reach them.
+   */
+  #updateTabStops = (): void => {
+    const radios = Array.from(this.querySelectorAll("cf-radio"));
+    const enabled = radios.filter((radio) => !radio.disabled);
+    const stop = enabled.find((radio) => radio.checked) ?? enabled[0];
+    for (const radio of radios) radio.tabIndex = radio === stop ? 0 : -1;
   };
 
-  private handleKeydown = (event: KeyboardEvent): void => {
+  #handleRadioClick = (event: CustomEvent<{ radio: CFRadio }>): void => {
+    const { value } = event.detail.radio;
+    if (value) this.#select(value);
+  };
+
+  #handleKeydown = (event: KeyboardEvent): void => {
     // Only handle for slotted radios
     if (this.items && this.items.length > 0) return;
 
-    const radios = Array.from(this.getRadios()) as HTMLElement[];
-    const enabledRadios = radios.filter(
-      (radio) => !radio.hasAttribute("disabled"),
-    );
-
-    if (enabledRadios.length === 0) return;
-
-    const currentIndex = enabledRadios.findIndex(
-      (radio) => radio === document.activeElement,
-    );
-    let nextIndex = currentIndex;
-
-    const isHorizontal = this.orientation === "horizontal";
-    const nextKey = isHorizontal ? "ArrowRight" : "ArrowDown";
-    const prevKey = isHorizontal ? "ArrowLeft" : "ArrowUp";
-
-    switch (event.key) {
-      case nextKey:
-      case (isHorizontal ? "ArrowDown" : "ArrowRight"):
-        event.preventDefault();
-        nextIndex = currentIndex === -1
-          ? 0
-          : (currentIndex + 1) % enabledRadios.length;
-        break;
-      case prevKey:
-      case (isHorizontal ? "ArrowUp" : "ArrowLeft"):
-        event.preventDefault();
-        nextIndex = currentIndex === -1
-          ? enabledRadios.length - 1
-          : (currentIndex - 1 + enabledRadios.length) % enabledRadios.length;
-        break;
-      default:
-        return;
-    }
-
-    // Focus and select the next radio
-    const nextRadio = enabledRadios[nextIndex];
-    if (nextRadio) {
-      nextRadio.focus();
-      // Trigger click to select the radio
-      nextRadio.click();
-    }
+    const radios = Array.from(this.querySelectorAll("cf-radio"));
+    this.#arrowTo(event, radios.filter((radio) => !radio.disabled));
   };
+
+  /**
+   * Focuses and selects the enabled radio after the event's target for Down
+   * and Right, or the one before it for Up and Left, wrapping at either end.
+   * From a target that is none of them, it goes to the first or the last.
+   */
+  #arrowTo(event: KeyboardEvent, enabled: readonly HTMLElement[]): void {
+    const step = event.key === "ArrowDown" || event.key === "ArrowRight"
+      ? 1
+      : event.key === "ArrowUp" || event.key === "ArrowLeft"
+      ? -1
+      : 0;
+    if (step === 0 || enabled.length === 0) return;
+
+    event.preventDefault();
+    const current = enabled.findIndex((radio) => radio === event.target);
+    const from = current === -1 && step === -1 ? 0 : current;
+    const next = enabled[(from + step + enabled.length) % enabled.length];
+    next.focus();
+    next.click();
+  }
+
+  /**
+   * Selects `value`: a bound cell is written through the controller, and
+   * otherwise the group holds `value` itself.
+   */
+  #select(value: unknown): void {
+    if (this.#cellController.hasCell()) {
+      this.#cellController.setValue(value);
+      return;
+    }
+    const oldValue = this.#getCurrentValue();
+    this.value = value;
+    // #selectionChanged() reads the controller now, before willUpdate binds it.
+    this.#cellController.bind(value);
+    this.#selectionChanged(value, oldValue);
+  }
+
+  /**
+   * Checks the slotted radio holding the selection, if any, and announces the
+   * selection.
+   */
+  #selectionChanged(value: unknown, oldValue: unknown): void {
+    this.#syncRadios();
+    this.emit("cf-change", { value, oldValue, items: this.items });
+    this.emit("change", { value, oldValue, items: this.items });
+  }
 
   /**
    * Get the current value from the cell controller
    */
-  private getCurrentValue(): unknown {
-    return this._cellController.getValue();
+  #getCurrentValue(): unknown {
+    return this.#cellController.getValue();
   }
 
   /**
    * Get the currently selected radio value
    */
   getValue(): unknown {
-    return this.getCurrentValue();
+    return this.#getCurrentValue();
   }
 
   /**
    * Set the selected radio by value
    */
   setValue(value: unknown): void {
-    this._cellController.setValue(value);
+    this.#select(value);
   }
 
   /**
    * Clear the selection
    */
   clear(): void {
-    this._cellController.setValue(undefined);
+    this.#select(undefined);
   }
 }
 
 /** Simple value equality for comparing radio values (strings, numbers, etc.) */
-function areLinksSame(a: any, b: any): boolean {
+function areLinksSame(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (a == null || b == null) return a === b;
   // Compare stringified values for attribute-based comparisons

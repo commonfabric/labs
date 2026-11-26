@@ -766,7 +766,6 @@ function scheduleAhead(): void {
 /** Runs one frame: queues the notes coming due, then draws. */
 function frame(): void {
   animationFrame = undefined;
-  if (disposed) return;
   try {
     scheduleAhead();
     draw();
@@ -1477,11 +1476,10 @@ function publishPointer(event: PointerEvent): void {
 }
 
 /**
- * Joins the room unless already in it, and tells it everything this guest
- * publishes. A new membership starts with no presses of its own.
+ * Joins the room, which this guest is not in, and tells it everything this
+ * guest publishes. A new membership starts with no presses of its own.
  */
 function joinRoom(): void {
-  if (leaveRoom || roomStatus === "unsupported" || disposed) return;
   roomStatus = "joining";
   publishedName = undefined;
   publishedColor = undefined;
@@ -1581,7 +1579,6 @@ async function follow(peerId: string): Promise<void> {
   if (!ready()) return;
   audio ??= createAudioEngine();
   await audio.context.resume();
-  if (disposed) return;
   if (audio.context.state !== "running") {
     throw new Error("The browser has not started audio. Try again.");
   }
@@ -1741,7 +1738,6 @@ function disarmClear(): void {
  * for, the audio context, and the bridge.
  */
 function teardown(): void {
-  if (disposed) return;
   disposed = true;
   abort.abort();
   stops.forEach((stop) => stop());
@@ -1892,7 +1888,6 @@ void (async () => {
     if (!authorId) {
       throw new Error("The per-user settings have no resolved identity.");
     }
-    if (disposed) return;
     hydrated = true;
     adoptInput();
   } catch (cause) {

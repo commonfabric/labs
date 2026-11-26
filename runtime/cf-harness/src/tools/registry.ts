@@ -2,6 +2,7 @@ import type {
   BuiltinToolId,
   HarnessToolDescriptor,
 } from "../contracts/tool-descriptor.ts";
+import type { BuiltinToolInputMap, BuiltinToolOutputMap } from "../engine.ts";
 import type { SandboxRuntimeDescription } from "../sandbox/types.ts";
 import { acquireSkillTool } from "./acquire-skill.ts";
 import { assignSlugTool } from "./assign-slug.ts";
@@ -10,8 +11,17 @@ import {
   loomComposeTool,
   loomInspectTool,
 } from "./loom-authoring.ts";
-import { LOOM_COMMAND_TOOLS } from "./loom-commands.ts";
-import { LOOM_RETRIEVAL_TOOLS } from "./loom-retrieval.ts";
+import { listCommandsTool, runCommandTool } from "./loom-commands.ts";
+import {
+  loomCalendarListTool,
+  loomContextTool,
+  loomPageDiscoverTool,
+  loomPageInspectTool,
+  loomPageReadTool,
+  loomPeopleTool,
+  loomProfileTool,
+  loomSearchTool,
+} from "./loom-retrieval.ts";
 import { bashTool } from "./bash.ts";
 import { browserTool } from "./browser.ts";
 import { callVerbTool } from "./call-verb.ts";
@@ -38,47 +48,63 @@ import { viewImageTool } from "./view-image.ts";
 import { writeFileTool } from "./write-file.ts";
 import type { HarnessToolDefinition, HarnessToolRun } from "./types.ts";
 
-export const BUILTIN_TOOLS = [
-  bashTool,
-  browserTool,
-  readFileTool,
-  viewImageTool,
-  webFetchTool,
-  readSkillResourceTool,
-  runSkillScriptTool,
-  editFileTool,
-  writeFileTool,
-  delegateTaskTool,
-  runPatternTool,
-  readPieceSourceTool,
-  revisePieceTool,
-  assignSlugTool,
-  resolvePieceTool,
-  describeHandleTool,
-  callVerbTool,
-  readValueTool,
-  finishTaskTool,
-  weaverActionTool,
-  searchPatternsTool,
-  recordFeedbackTool,
-  searchSkillsTool,
-  acquireSkillTool,
-  researchTool,
-  loomComposeTool,
-  loomInspectTool,
-  loomAuthoringContextTool,
-  ...LOOM_RETRIEVAL_TOOLS,
-  ...LOOM_COMMAND_TOOLS,
-  reportProgressTool,
-  submitResultTool,
-] as const;
+/** Each builtin tool under its id, typed with that id's input and output. */
+export type BuiltinToolTable = {
+  readonly [TToolId in BuiltinToolId]: HarnessToolDefinition<
+    BuiltinToolInputMap[TToolId],
+    BuiltinToolOutputMap[TToolId]
+  >;
+};
 
-export const BUILTIN_TOOL_REGISTRY = new Map<
-  BuiltinToolId,
-  HarnessToolDefinition
->(
-  BUILTIN_TOOLS.map((tool) => [tool.descriptor.toolId, tool]),
-);
+const BUILTIN_TOOL_TABLE: BuiltinToolTable = {
+  bash: bashTool,
+  browser: browserTool,
+  read_file: readFileTool,
+  view_image: viewImageTool,
+  web_fetch: webFetchTool,
+  read_skill_resource: readSkillResourceTool,
+  run_skill_script: runSkillScriptTool,
+  edit_file: editFileTool,
+  write_file: writeFileTool,
+  delegate_task: delegateTaskTool,
+  run_pattern: runPatternTool,
+  read_piece_source: readPieceSourceTool,
+  revise_piece: revisePieceTool,
+  assign_slug: assignSlugTool,
+  resolve_piece: resolvePieceTool,
+  describe_handle: describeHandleTool,
+  call_verb: callVerbTool,
+  read_value: readValueTool,
+  finish_task: finishTaskTool,
+  weaver_action: weaverActionTool,
+  search_patterns: searchPatternsTool,
+  record_feedback: recordFeedbackTool,
+  search_skills: searchSkillsTool,
+  acquire_skill: acquireSkillTool,
+  research: researchTool,
+  loom_compose: loomComposeTool,
+  loom_inspect: loomInspectTool,
+  loom_authoring_context: loomAuthoringContextTool,
+  loom_search: loomSearchTool,
+  loom_page_discover: loomPageDiscoverTool,
+  loom_page_inspect: loomPageInspectTool,
+  loom_page_read: loomPageReadTool,
+  loom_people: loomPeopleTool,
+  loom_calendar_list: loomCalendarListTool,
+  loom_context: loomContextTool,
+  loom_profile: loomProfileTool,
+  list_commands: listCommandsTool,
+  run_command: runCommandTool,
+  report_progress: reportProgressTool,
+  submit_result: submitResultTool,
+};
+
+/** The builtin tools, in the order they are offered. */
+export const BUILTIN_TOOLS = Object.values(BUILTIN_TOOL_TABLE);
+
+/** Each builtin tool under the id the table registers it with. */
+export const BUILTIN_TOOL_REGISTRY: ReadonlyMap<string, HarnessToolDefinition> =
+  new Map(Object.entries(BUILTIN_TOOL_TABLE));
 
 /**
  * The builtin tool registered under `toolId`, or `undefined` when no tool
@@ -88,8 +114,18 @@ export const BUILTIN_TOOL_REGISTRY = new Map<
  */
 export const getBuiltinTool = (
   toolId: string,
-): HarnessToolDefinition | undefined =>
-  BUILTIN_TOOL_REGISTRY.get(toolId as BuiltinToolId);
+): HarnessToolDefinition | undefined => BUILTIN_TOOL_REGISTRY.get(toolId);
+
+/**
+ * The builtin tool registered under `toolId`, typed with that id's input and
+ * output; `undefined` only for a name an untyped caller passed.
+ */
+export const getTypedBuiltinTool = <TToolId extends BuiltinToolId>(
+  toolId: TToolId,
+): BuiltinToolTable[TToolId] | undefined =>
+  Object.hasOwn(BUILTIN_TOOL_TABLE, toolId)
+    ? BUILTIN_TOOL_TABLE[toolId]
+    : undefined;
 
 /**
  * The descriptor of `tool` that a run on `runtime` offers the model, given

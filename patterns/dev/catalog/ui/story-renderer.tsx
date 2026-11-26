@@ -81,141 +81,96 @@ type CatalogStory = {
   controls?: VNode;
 } | null;
 
+type StoryFactory = (input: Record<string, never>) => CatalogStory;
+
+/** Every story the catalog can show, by the id its sidebar lists it under. */
+function storyTable(): Record<string, StoryFactory> {
+  return {
+    button: ButtonStory,
+    checkbox: CheckboxStory,
+    "code-editor": CodeEditorStory,
+    input: InputStory,
+    picker: PickerStory,
+    select: SelectStory,
+    slider: SliderStory,
+    switch: SwitchStory,
+    toggle: ToggleStory,
+    "toggle-group": ToggleGroupStory,
+    card: CardStory,
+    "list-item": ListItemStory,
+    modal: ModalStory,
+    progress: ProgressStory,
+    vstack: VStackStory,
+    hstack: HStackStory,
+    vgroup: VGroupStory,
+    hgroup: HGroupStory,
+    "hover-card": HoverCardStory,
+    "hover-reveal": HoverRevealStory,
+    vscroll: VScrollStory,
+    hscroll: HScrollStory,
+    textarea: TextareaStory,
+    "message-input": MessageInputStory,
+    "submit-input": SubmitInputStory,
+    toolbar: ToolbarStory,
+    heading: HeadingStory,
+    text: TextStory,
+    label: LabelStory,
+    field: FieldStory,
+    chip: ChipStory,
+    badge: BadgeStory,
+    "empty-state": EmptyStateStory,
+    avatar: AvatarStory,
+    "profile-badge": ProfileBadgeStory,
+    alert: AlertStory,
+    separator: SeparatorStory,
+    markdown: MarkdownStory,
+    svg: SvgStory,
+    loader: LoaderStory,
+    skeleton: SkeletonStory,
+    collapsible: CollapsibleStory,
+    "tab-list": TabListStory,
+    "tab-bar": TabBarStory,
+    tabs: TabsStory,
+    chart: ChartStory,
+    note: NoteStory,
+    render: RenderStory,
+    "kitchen-sink": KitchenSinkStory,
+    chat: ChatStory,
+    calendar: CalendarStory,
+    radio: RadioStory,
+    autocomplete: AutocompleteStory,
+    table: TableStory,
+    kbd: KbdStory,
+    "copy-button": CopyButtonStory,
+    tags: TagsStory,
+    grid: GridStory,
+    "vignette-recipe": VignetteRecipeStory,
+    "vignette-finance": VignetteFinanceStory,
+    "vignette-mobile-app": VignetteMobileAppStory,
+    toast: ToastStory,
+    "style-tokens": StyleTokensStory,
+    "theme-sampler": ThemeSamplerStory,
+  };
+}
+
+/** The ids of every story the catalog can show. */
+export function storyIds(): string[] {
+  return Object.keys(storyTable());
+}
+
 export default pattern<StoryRendererInput, StoryRendererOutput>(
   ({ selected }) => {
+    // A pattern made inside a computed is named after the computed and the
+    // call's place in the run, which is the same whichever story is picked, so
+    // each story is named after its id instead: otherwise every story would
+    // share one result and one set of cells. The factory's return type does not
+    // offer `.for()`, hence the cast.
     const story = computed<CatalogStory>(() => {
-      switch (selected) {
-        case "button":
-          return ButtonStory({});
-        case "checkbox":
-          return CheckboxStory({});
-        case "code-editor":
-          return CodeEditorStory({});
-        case "input":
-          return InputStory({});
-        case "picker":
-          return PickerStory({});
-        case "select":
-          return SelectStory({});
-        case "slider":
-          return SliderStory({});
-        case "switch":
-          return SwitchStory({});
-        case "toggle":
-          return ToggleStory({});
-        case "toggle-group":
-          return ToggleGroupStory({});
-        case "card":
-          return CardStory({});
-        case "list-item":
-          return ListItemStory({});
-        case "modal":
-          return ModalStory({});
-        case "progress":
-          return ProgressStory({});
-        case "vstack":
-          return VStackStory({});
-        case "hstack":
-          return HStackStory({});
-        case "vgroup":
-          return VGroupStory({});
-        case "hgroup":
-          return HGroupStory({});
-        case "hover-card":
-          return HoverCardStory({});
-        case "hover-reveal":
-          return HoverRevealStory({});
-        case "vscroll":
-          return VScrollStory({});
-        case "hscroll":
-          return HScrollStory({});
-        case "textarea":
-          return TextareaStory({});
-        case "message-input":
-          return MessageInputStory({});
-        case "submit-input":
-          return SubmitInputStory({});
-        case "toolbar":
-          return ToolbarStory({});
-        case "heading":
-          return HeadingStory({});
-        case "text":
-          return TextStory({});
-        case "label":
-          return LabelStory({});
-        case "field":
-          return FieldStory({});
-        case "chip":
-          return ChipStory({});
-        case "badge":
-          return BadgeStory({});
-        case "empty-state":
-          return EmptyStateStory({});
-        case "avatar":
-          return AvatarStory({});
-        case "profile-badge":
-          return ProfileBadgeStory({});
-        case "alert":
-          return AlertStory({});
-        case "separator":
-          return SeparatorStory({});
-        case "markdown":
-          return MarkdownStory({});
-        case "svg":
-          return SvgStory({});
-        case "loader":
-          return LoaderStory({});
-        case "skeleton":
-          return SkeletonStory({});
-        case "collapsible":
-          return CollapsibleStory({});
-        case "tab-list":
-          return TabListStory({});
-        case "tab-bar":
-          return TabBarStory({});
-        case "tabs":
-          return TabsStory({});
-        case "chart":
-          return ChartStory({});
-        case "note":
-          return NoteStory({});
-        case "render":
-          return RenderStory({});
-        case "kitchen-sink":
-          return KitchenSinkStory({});
-        case "chat":
-          return ChatStory({});
-        case "calendar":
-          return CalendarStory({});
-        case "radio":
-          return RadioStory({});
-        case "autocomplete":
-          return AutocompleteStory({});
-        case "table":
-          return TableStory({});
-        case "kbd":
-          return KbdStory({});
-        case "copy-button":
-          return CopyButtonStory({});
-        case "tags":
-          return TagsStory({});
-        case "grid":
-          return GridStory({});
-        case "vignette-recipe":
-          return VignetteRecipeStory({});
-        case "vignette-finance":
-          return VignetteFinanceStory({});
-        case "vignette-mobile-app":
-          return VignetteMobileAppStory({});
-        case "toast":
-          return ToastStory({});
-        case "style-tokens":
-          return StyleTokensStory({});
-        case "theme-sampler":
-          return ThemeSamplerStory({});
-        default:
-          return null;
-      }
+      const stories = storyTable();
+      return Object.hasOwn(stories, selected)
+        // deno-lint-ignore no-explicit-any
+        ? (stories[selected]({}) as any).for(selected)
+        : null;
     });
 
     return {

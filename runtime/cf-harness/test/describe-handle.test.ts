@@ -5,7 +5,6 @@
  * handle table or from what the referent declares in the session's fabric.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
@@ -13,7 +12,15 @@ import { createSession, Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
+import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { normalize } from "@std/path/posix";
 import { join } from "@std/path";
 import { createFileSystemHarnessArtifactStore } from "../src/artifacts.ts";
@@ -1289,6 +1296,62 @@ describe("describe_handle", () => {
       expect(output.path).toBeUndefined();
       expect(output.hasSchema).toBe(true);
       expect(output.schema).toEqual(DOUBLED_SCHEMA);
+    });
+
+    it("reports a piece's shape without verbs when its pattern cannot be loaded", async () => {
+      // The verbs come from the piece's compiled pattern, the shape from the
+      // schema its document records, so a pattern this session cannot load
+      // costs the reply its verbs and nothing else.
+      const resultRef = await createPiece();
+      const minted = await mintAddressHandle(
+        createHarnessHandleTable("run-describe"),
+        resultRef,
+      );
+      const describe = () =>
+        describeHandleTool.invoke(
+          contextWith(minted.table, session),
+          { token: minted.token },
+        );
+      expect((await describe()).verbs).toEqual([]);
+
+      const piece = runtime.getCellFromLink(
+        parseLLMFriendlyLink(resultRef, session.pieces.getSpace()),
+      );
+      await runtime.editWithRetry((tx) => {
+        piece.withTx(tx).setMetaRaw(
+          "patternIdentity",
+          { identity: "unloadable-pattern-identity", symbol: "default" },
+          rawMetaWriteAuthorization,
+        );
+      });
+      await runtime.idle();
+
+      const output = await describe();
+      expect(output.hasSchema).toBe(true);
+      expect(output.verbs).toBeUndefined();
+    });
+
+    it("reports a held address as shapeless when its document cannot be loaded", async () => {
+      // A load that fails answers what a run without a session answers: the
+      // recorded schema, here none, rather than a failed call.
+      const resultRef = await createPiece();
+      const minted = await mintAddressHandle(
+        createHarnessHandleTable("run-describe"),
+        resultRef,
+      );
+      Object.assign(storageManager, {
+        syncCell: () =>
+          Promise.reject(new Error("the replica dropped the connection")),
+      });
+
+      const output = await describeHandleTool.invoke(
+        contextWith(minted.table, session),
+        { token: minted.token },
+      );
+
+      expect(output.known).toBe(true);
+      expect(output.hasSchema).toBe(false);
+      expect(JSON.stringify(output)).not.toContain("dropped the connection");
     });
 
     it("reports an address the session's space does not hold as shapeless", async () => {

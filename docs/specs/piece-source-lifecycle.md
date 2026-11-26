@@ -87,7 +87,7 @@ otherwise complete first-time creation command into an unimplemented command.
 
 ## Last updated
 
-2026-11-01
+2026-11-13
 
 ## Terms
 
@@ -493,7 +493,7 @@ storage schema to use these exact TypeScript field names.
 | Active origin | No origin, a `system:` ref, a stable mutable fabric-entity URL, or a content-addressed fabric pattern URL with an export symbol | **Partial**: `patternSource` stores the active origin string. Explicit history actions can clear it, restore an earlier origin, or accept one a person typed. Fabric origin creation and the stored export selector remain required |
 | Revision head | The stable identifier of the latest accepted source and origin state | **Partial**: the last valid `pieceSourceHistory` entry is the guarded head. It is not yet mirrored in the complete source-state schema |
 | Source revision log | Ordered records of every accepted source and origin state, with a durable reference to each immutable authored-program manifest | **Partial**: source-backed direct Piece API creation, lifecycle-aware edits, detach, revert, repoint, provenance repair, and origin updates append guarded records. Each record links to an existing source-document closure that is verified in the lifecycle write transaction. Programmatically constructed patterns without retained source, other creation paths, and immutable authored-program manifests remain required |
-| Last reconciliation | What following the active origin last did — followed, could not reach it, did not land the write that adopts what it offered, or refused what it offered — with when, why, and the identity the origin offered | **Partial**: reconciliation records the outcome, its time, the offered identity, a refusal's reason, and for a `system:` origin the release time confirmed for the running source on the piece, and an accepted transition clears it. An origin of a kind nothing follows yet records that, which is a state of its own rather than an absence. Reaching the same conclusion twice rewrites nothing |
+| Last reconciliation | What following the active origin last did — followed, could not reach it, did not land the write that adopts what it offered, or refused what it offered — with when, why, and the identity the origin offered | **Partial**: reconciliation records the outcome, its time, the offered identity, a refusal's reason, and for a `system:` origin the release time confirmed for the running source on the piece, and an accepted transition clears it. An origin of a kind nothing follows yet records that, which is a state of its own rather than an absence. Reaching the same conclusion twice rewrites nothing, and creating a piece from an origin records that it follows it |
 | Descriptive repository | Optional locator shown by tooling; never followed | Implemented as `patternRepository` metadata |
 | Creator | The DID of the principal the piece was created for, which a field a later release adds with a placeholder `ownerPrincipal` is bound to ([cfc-protected-initialization.md](cfc-protected-initialization.md), "Attribution of an initialized value") | **Partial**: `creator` metadata on the piece result cell, written by the creating setup, or at the next source transition of a piece from before the record: for a space root, the owner its space's access list names, for any other piece the one owner its owner-protected fields name; admitted by no other write, and behind the `pieceCreatorRecord` experimental option until its ruling merges |
 
@@ -853,12 +853,61 @@ accesses, so its policy does not have to be repeated on the unchanged consumer
 contract. Capability-kind and scope checks still apply. Changed handle contracts
 require the full producer-contract proof.
 
+A link the piece already holds, to a document that carries no contract of its
+own and whose whole value is a link, stands for the link that document holds.
+Pushing a piece onto an input list stores such a row, linked from the list and
+linking to the piece, and the producer contract proved for the list's link is
+the piece's: the one found by following rows to the first document that carries
+a contract. A row is a whole document: a link to a place inside one is not
+followed, since the path to that place could cross a link partway. A row's value
+is read only where stored-argument validation would read it, in the input
+document's own space and scope and storing no confidentiality label, and only in
+a document that belongs to no piece. Following ends without a contract at a row
+that is not such a document, an absent one, a document that holds anything but a
+link, a document already visited, and after eight rows, and the link is then
+proved as a link to a document with no contract is. A producer reached through
+rows is held to the destination's scope cap as the first document is. Where that
+producer is a piece's input, its contract is recovered through the piece's
+result, which is read under the same rule as a row: a result in another space or
+scope, or one storing a confidentiality label, is not read, and the contract is
+then unproven.
+
+Rows are followed for a retained link and not for a new binding. A row can be
+pointed at another producer after the binding is made, so a contract recovered
+through it is not one the binding keeps, and a new binding takes the linked
+document's own contract or none. Before the proof, each row and the documents
+its producer's contract is recovered from are loaded, so a replica that has
+pulled none of them reaches the verdict one that holds them all does. The
+evidence a confirmation is held to names the document the contract came from
+and the contract, so pointing a row at another producer makes an earlier
+confirmation stale.
+
 Retaining a handle proves continuity of the consumer contract, not a historical
 producer-contract check: writes that bypass `PiecesController.link`, such as
 `setRawUntyped` and `cf cell set`, can omit that check, and the producer schema
 can change after the link is stored. The retained-handle rule relies on
 producer enforcement at access and commit time for payload and flow-policy
 constraints rather than re-proving their subset relation during the update.
+
+A committed link to a document that carries no contract of its own, such as an
+element pushed onto an input array, is held to the piece's prior input contract
+at the link's path: the candidate's contract there must accept everything that
+contract admits. One case is judged under the piece-evolution policy instead, as
+the same value written inline in the input is. The link sits at a position the
+candidate reads as a value, and the document is in the input document's own
+space and scope, stores no confidentiality label, and is present in the
+validating transaction. A link the
+document holds leads to more of the same: it sits at a position the candidate
+reads as a value, and reaches a document that meets these conditions in turn and
+carries no contract of its own, as a pushed comment whose author is an earlier
+comment's author does. Stored-argument validation reads such a document in
+full, so a stored value the candidate cannot read still refuses the update. A
+handle, a document in another space or scope, a labeled document, a document
+that belongs to a piece, and a document that links to anything else keep the
+proof without the policy. Deciding this reads what validation reads and no more:
+each document on the way is read one hop at a time, a labeled document's value
+and a piece's are not read, and a position whose handle wrappers the candidate
+cannot settle is not taken for a value.
 
 Whether an automatic origin update runs these comparisons turns on one
 question: did anything gate the release that produced the candidate?
@@ -1315,6 +1364,15 @@ is the batch lane's,
    candidate value even when it is unchanged, and advance the revision head.
 7. Start the accepted pattern on the existing piece result cell.
 
+An open of a nested instance starts the instances that enclose it first, and
+an open that follows the opened piece's origin follows each of their recorded
+origins the same way before starting it (`startWithInputSources()` in
+`runtime/runner/src/ensure-piece-running.ts`), so the opened piece never
+derives from source an enclosing piece's origin has already replaced. A
+serving runtime's start of a piece a demand reaches does the same, its follows
+running beside the serving loop's cycles
+([serving-loop.md §3e](server-side-execution/serving-loop.md#3e-pattern-updates)).
+
 A piece that is already running when it is opened keeps its reactive nodes
 through step 7. The runner's pattern watcher re-instantiates it on the accepted
 pattern, and the open waits for the watcher to finish. Where the
@@ -1486,11 +1544,21 @@ revision — a refused candidate was never accepted, and the revision log record
 only what the piece adopted. An accepted transition clears it, because the
 piece has left the state it describes. A reconciliation that reaches the same
 conclusion again rewrites nothing, so opening a piece that is up to date stays
-a read.
+a read. Creating a piece from an origin is its first reconciliation: the
+transaction that creates it records it as following that origin, naming the
+pattern it was created running, so the first follow that finds the origin
+offering that pattern writes nothing either, and the piece's result document
+gets no revision after its creation for it.
 
 A refused candidate is worth surfacing beyond the panel, because a piece
 nobody opens says nothing at all and the owner of the origin is usually not
-the owner of the piece. How that reaches a person is open design work.
+the owner of the piece. How that reaches a person is open design work. One
+place says it. When the piece's program has no handler for the stream
+an event is sent to — a stream only the refused candidate defines, say — the
+drop's reason names the candidate's identity and the refusal's reason, and
+points at this record for the rest. It names no more than that: a served
+drop's reason is written into the stream's dropped-event notice, and what the
+attempt reported is whatever error the refusal raised.
 
 Reconciliation is triggered by starting the piece — which a user's open does
 for most pieces on a client that runs them, the runtime does for the surfaces
@@ -1688,7 +1756,7 @@ rejected without offering confirmation.
 | See whether a piece is actually following its origin | **Partial** | Reconciliation records its last outcome, time, offered identity, and reason as durable state on the piece, and any accepted transition clears that record because the piece has left the state it describes. The source panel reads it and distinguishes up-to-date, unknown, could-not-reach, not-yet-applied, refused, detached, and an origin nothing can follow; a state that has not established what the origin holds offers to ask it now, which records its outcome and writes no revision when the origin offers what the piece runs, and a refusal over a contract mismatch also offers to take the source without the comparison. Distinguishing runtime rebuilds from authored source changes, and saying whether a revert can reuse a historical executable identity, remain required. |
 | Point a piece at an origin it has never followed | **Partial** | The source panel asks for a `system:` ref or fabric URL in a dialog raised over it, and `PieceController.changeSource({ kind: "repoint" })` classifies what is entered, refuses one carrying credentials, refuses a piece that names itself, resolves it, and applies its source with a repoint revision. The dialog answers what it asked: a failure is reported in it with the URL still in the field, an incompatible candidate is named there and its submit becomes the override, and dismissing the dialog discards both rather than leaving them on the panel. The piece is left as it was in either case. A detached piece gains an origin the same way, and so does one whose current pattern cannot be loaded: the candidate cannot be compared with what the piece ran, which is reported as the incompatibility, and the override adopts the origin's source, recording the displaced identity where the space retains no source for it. A piece with recorded history whose current source is unavailable is still refused, and so is a candidate the stored argument does not satisfy. On a deployment that serves piece lifecycle verbs, `cf piece follow` sends the same repoint as the served `follow` verb, and `cf piece setsrc --origin` records an origin with an edit ([`server-pattern-lifecycle.md`](../features/server-pattern-lifecycle.md)). The stored export selector remains required. |
 | Repoint to a `system:` ref, mutable fabric entity URL, or immutable fabric URL previously used | **Partial** | **Follow this source again** resolves a selected historical origin now, applies its current source, retains the origin, and appends a repoint revision. Cross-space fabric origins read their verified source closure from the source space and compile it into the destination. An incompatibility confirmation applies the exact candidate that produced the warning. Fabric origin creation outside the clone flow, full normalization and policy enforcement, origin-chain guards, and running subscriptions remain required. |
-| Record every previous source and origin | **Partial** | `pieceSourceHistory` is an append-only list guarded by its last revision identifier, current pattern, and active origin. Each entry records the pattern, origin, operation, selected historical revision, and a link that retains a source-document closure verified in the same transaction. Direct Piece API creation records its detached initial source, including when the program was fetched from a URL. Recovery from an unavailable legacy source records its displaced executable identity outside restorable history rather than inventing a broken revision. Other creation paths, complete authored-program manifests, runtime fingerprints, program digests, causes, and origin revision identifiers remain required. |
+| Record every previous source and origin | **Partial** | `pieceSourceHistory` is an append-only list guarded by its last revision identifier, current pattern, and active origin. Each entry records the pattern, origin, operation, selected historical revision, and a link that retains a source-document closure verified in the same transaction. Beside the history, the `pieceSourceDelegations` meta member records, for the pattern the piece runs, the closed writer delegations of its modules, and every delegation edge the piece's history recorded, with the history positions it was recorded at, which a module closes along only where they do not increase; every transition writes it for the next pattern: a source update adds the edges it derives and closes the next pattern's modules over them, and any other transition carries the edges and closes the next pattern's modules over them, so a module the next pattern keeps or brings back keeps its grant and a new one gets none. A runtime starting or swapping the piece to that pattern registers the closed delegations whose module is in the closure it verifies ([module-loading.md](module-loading.md)). Direct Piece API creation records its detached initial source, including when the program was fetched from a URL. Recovery from an unavailable legacy source records its displaced executable identity outside restorable history rather than inventing a broken revision. Other creation paths, complete authored-program manifests, runtime fingerprints, program digests, causes, and origin revision identifiers remain required. |
 
 The implementation evidence for this table is concentrated in:
 

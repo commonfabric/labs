@@ -33,19 +33,21 @@ import type {
   PatternIndexClient,
   PatternIndexPublishRequest,
 } from "@commonfabric/pattern-index/client";
+import type { MemorySpace, RuntimeProgram } from "@commonfabric/runner";
 import {
-  compileAndSavePattern,
-  type MemorySpace,
-  PatternManager,
-  type Runtime,
-  type RuntimeProgram,
-} from "@commonfabric/runner";
-import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+  type CompiledPattern,
+  compileLocalPattern,
+  durableEntryIdentity,
+  patternDocMetadata,
+  publishRequestFor as indexPublishRequestFor,
+  type PublishRuntime,
+} from "@commonfabric/pattern-index/publish";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+
+export { durableEntryIdentity };
 import { createHarnessPatternIndexClientFactory } from "../src/pattern-index/factory.ts";
 import { createHarnessFabricSessionFactory } from "../src/fabric-session.ts";
-import { patternIndexDependencies } from "../src/pattern-index/composition.ts";
 import { patternIndexDeclaredType } from "../src/tools/search-patterns.ts";
 
 /** Where the atoms live, relative to the repository root. */
@@ -86,29 +88,6 @@ export interface SeedEntry {
   priorPatternId?: string;
 }
 
-/** A doc comment's text with its leading `/**`, ` * ` and `*\/` removed. */
-const docCommentBody = (source: string): string | undefined => {
-  const match = source.match(/^\s*\/\*\*([\s\S]*?)\*\//);
-  if (match === null) return undefined;
-  return match[1]
-    .split("\n")
-    .map((line) => line.replace(/^\s*\* ?/, ""))
-    .join("\n")
-    .trim();
-};
-
-/** The comma-separated values of an `@tag` line, folded onto one line. */
-const tagValues = (body: string, tag: string): readonly string[] => {
-  const match = body.match(
-    new RegExp(`@${tag}\\s+([\\s\\S]*?)(?=\\n\\s*@|$)`),
-  );
-  if (match === null) return [];
-  return match[1]
-    .split(",")
-    .map((value) => value.replace(/\s+/g, " ").trim())
-    .filter((value) => value.length > 0);
-};
-
 /**
  * What the index should advertise about the atom in `source`.
  *
@@ -121,19 +100,13 @@ export const seedMetadataFromSource = (
   name: string,
   source: string,
 ): SeedMetadata => {
-  const body = docCommentBody(source);
-  if (body === undefined) {
+  if (!/^\s*\/\*\*/.test(source)) {
     throw new Error(`${name} has no leading doc comment to describe it`);
   }
-  // Anchored at a line start including the first, so a comment that opens
-  // straight into a tag yields no prose rather than the tag's own text.
-  const prose = body.split(/(?:^|\n)\s*@/)[0];
-  const description = prose.split(/\n\s*\n/)[0].replace(/\s+/g, " ").trim();
-  if (description === "") {
+  const { description, hashtags, keywords } = patternDocMetadata(source);
+  if (description === undefined) {
     throw new Error(`${name}'s doc comment opens with no description`);
   }
-  const hashtags = tagValues(body, "hashtags");
-  const keywords = tagValues(body, "keywords");
   if (hashtags.length === 0) {
     throw new Error(`${name}'s doc comment declares no @hashtags`);
   }
@@ -161,35 +134,28 @@ export const seedSourcePaths = async (
 export const publishRequestFor = (
   entry: SeedEntry,
 ): PatternIndexPublishRequest => ({
-  patternId: entry.patternId,
-  program: {
-    main: entry.program.main,
-    files: entry.program.files.map((file) => ({
-      name: file.name,
-      contents: file.contents,
-    })),
-    ...(entry.program.mainExport !== undefined
-      ? { mainExport: entry.program.mainExport }
+  ...indexPublishRequestFor({
+    patternId: entry.patternId,
+    program: entry.program,
+    description: entry.metadata.description,
+    hashtags: entry.metadata.hashtags,
+    keywords: entry.metadata.keywords,
+    ...(entry.argumentSchema !== undefined
+      ? { argumentSchema: entry.argumentSchema }
       : {}),
-  },
-  description: entry.metadata.description,
-  hashtags: entry.metadata.hashtags,
-  keywords: entry.metadata.keywords,
+    ...(entry.resultSchema !== undefined
+      ? { resultSchema: entry.resultSchema }
+      : {}),
+    ...(entry.priorPatternId !== undefined
+      ? { priorPatternId: entry.priorPatternId }
+      : {}),
+  }),
   // What a session looking for this atom would be asking for. The atom was
   // not written to answer one request, so its own description is the honest
   // stand-in: it is the same claim, in the same words the index ranks on.
+  // Deployments with listing drop both fields.
   directQuery: entry.metadata.description,
   discoverable: true,
-  ...(entry.argumentSchema !== undefined
-    ? { argumentSchema: entry.argumentSchema as never }
-    : {}),
-  ...(entry.resultSchema !== undefined
-    ? { resultSchema: entry.resultSchema as never }
-    : {}),
-  ...(entry.priorPatternId !== undefined
-    ? { priorPatternId: entry.priorPatternId }
-    : {}),
-  dependencies: patternIndexDependencies(entry.program.files),
 });
 
 /** Where the published generations of each atom are recorded, from root. */
@@ -311,14 +277,7 @@ export interface SeedDeps {
 }
 
 /** One compiled atom, in the terms the index stores it under. */
-export interface CompiledAtom {
-  /** Absent when the compile produced no durable identity. */
-  patternId?: string;
-
-  program: RuntimeProgram;
-  argumentSchema?: unknown;
-  resultSchema?: unknown;
-}
+export type CompiledAtom = CompiledPattern;
 
 export interface SeedOptions {
   dryRun: boolean;
@@ -436,19 +395,6 @@ export const resolveSettings = (
 });
 
 /**
- * The identity an entry may be published under, or `undefined` for one that
- * could never be loaded by anything else. A keyless identity names a pattern
- * only within the session that minted it — the same refusal `run_pattern`
- * makes on its own publish path.
- */
-export const durableEntryIdentity = (
-  identity: string | undefined,
-): string | undefined =>
-  identity !== undefined && !PatternManager.isKeylessPatternIdentity(identity)
-    ? identity
-    : undefined;
-
-/**
  * Assembles and compiles one atom in `space`, answering what the index needs.
  *
  * Takes the runtime and space rather than a session, so a compile can be
@@ -456,32 +402,16 @@ export const durableEntryIdentity = (
  * decides it is the source and the compiler, not what the runtime is
  * connected to.
  */
-export const compileAtom = async (
+export const compileAtom = (
   runtime: SeedRuntime,
   space: MemorySpace,
   path: string,
   root: string,
-): Promise<CompiledAtom> => {
-  const program = await resolveLocalProgram(
-    (resolver) => runtime.harness.resolve(resolver),
-    { main: path, root },
-  );
-  const pattern = await compileAndSavePattern(runtime as Runtime, program, {
-    space,
-  });
-  const identity = runtime.patternManager.getArtifactEntryRef(pattern)
-    ?.identity;
-  const patternId = durableEntryIdentity(identity);
-  return {
-    ...(patternId !== undefined ? { patternId } : {}),
-    program,
-    argumentSchema: pattern.argumentSchema,
-    resultSchema: pattern.resultSchema,
-  };
-};
+): Promise<CompiledAtom> =>
+  compileLocalPattern(runtime, space, { main: path, root });
 
 /** The part of a `Runtime` a seed compile uses. */
-export type SeedRuntime = Pick<Runtime, "harness" | "patternManager">;
+export type SeedRuntime = PublishRuntime;
 
 /**
  * The atoms whose source is not formatted as the repository formats it.

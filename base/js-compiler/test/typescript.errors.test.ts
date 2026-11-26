@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts, { type DiagnosticMessageChain } from "typescript";
 import {
@@ -9,6 +8,7 @@ import {
   formatTransformerDiagnostic,
 } from "../typescript/diagnostics/errors.ts";
 import { Checker } from "../typescript/diagnostics/mod.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // errors.ts keeps a local mirror of `ts.flattenDiagnosticMessageText` so the
 // module stays free of typescript value imports (it is boot-eager in the
@@ -64,6 +64,21 @@ describe("CompilationError message flattening", () => {
     });
     expect(plain.type).toBe("MODULE_NOT_FOUND");
     expect(plain.message).toBe("Cannot find module './missing.ts'.");
+  });
+
+  it("rebuilds an error from the fields an earlier one held", () => {
+    const details = {
+      diagnostic: chainDiagnostic("Cannot find module './missing.ts'."),
+    };
+    const fields = { ...new CompilationError(details) };
+
+    const rebuilt = new CompilationError(fields);
+
+    expect({ ...rebuilt }).toEqual(fields);
+    expect(rebuilt.type).toBe("MODULE_NOT_FOUND");
+    expect(new CompilerError([fields]).message).toBe(
+      new CompilerError([details]).message,
+    );
   });
 
   it("applies a message transformer over the flattened text", () => {

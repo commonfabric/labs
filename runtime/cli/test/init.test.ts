@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { exists } from "@std/fs/exists";
 import { argv, cf, checkStderr } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("cli init", () => {
   it("Initializes workspace", async () => {

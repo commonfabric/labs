@@ -1,4 +1,3 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { copy } from "@std/fs";
 import { fromFileUrl } from "@std/path";
@@ -30,6 +29,7 @@ import { emptyTotals as emptyMeasurementTotals } from "../scripts/measure-runs.t
 import observedStatus from "./support/measurement-console-status.json" with {
   type: "json",
 };
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURE_ROOT = fromFileUrl(
   new URL("./support/measure-runs/runs", import.meta.url),
@@ -2118,6 +2118,68 @@ describe("run-measurement-batch", () => {
         }
       } finally {
         await Deno.remove(artifactRoot, { recursive: true });
+      }
+    });
+
+    it("reports a run state that does not parse as unread", async () => {
+      const artifactRoot = await Deno.makeTempDir();
+      try {
+        await Deno.mkdir(`${artifactRoot}/turn-1`);
+        await Deno.writeTextFile(`${artifactRoot}/turn-1/run-state.json`, "{");
+        const console_ = startFakeConsole({
+          streams: [completedStream()],
+          artifactRoot,
+        });
+        try {
+          const result = await runTask(
+            await ConsoleClient.open(console_.url),
+            { id: "one", text: "same task" },
+            () => {},
+            { ...RUN_TASK_OPTIONS, artifactRoot },
+          );
+          expect(result.runId).toBeUndefined();
+          expect(result.measurementUnread).toContain(
+            "the run lookup could not read turn-1/run-state.json could not be read:",
+          );
+        } finally {
+          await console_.close();
+        }
+      } finally {
+        await Deno.remove(artifactRoot, { recursive: true });
+      }
+    });
+
+    it("reports no run, rather than an unread one, for a turn directory holding no run state or a file named after the turn", async () => {
+      for (
+        const layout of [
+          (root: string) => Deno.mkdir(`${root}/turn-1`),
+          (root: string) => Deno.writeTextFile(`${root}/turn-1`, ""),
+        ]
+      ) {
+        const artifactRoot = await Deno.makeTempDir();
+        try {
+          await layout(artifactRoot);
+          const console_ = startFakeConsole({
+            streams: [completedStream()],
+            artifactRoot,
+          });
+          try {
+            const result = await runTask(
+              await ConsoleClient.open(console_.url),
+              { id: "one", text: "same task" },
+              () => {},
+              { ...RUN_TASK_OPTIONS, artifactRoot },
+            );
+            expect(result.runId).toBeUndefined();
+            expect(result.measurementUnread).toBe(
+              "no root run turn-1 created after 2026-08-28T21:00:00.000Z exists for this console turn",
+            );
+          } finally {
+            await console_.close();
+          }
+        } finally {
+          await Deno.remove(artifactRoot, { recursive: true });
+        }
       }
     });
 

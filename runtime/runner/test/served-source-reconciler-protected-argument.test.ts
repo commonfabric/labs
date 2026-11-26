@@ -6,13 +6,14 @@
 
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { isPlainObject } from "@commonfabric/js-values/types";
 import { read } from "@commonfabric/memory/v2/engine";
 import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { describe, it } from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
@@ -26,6 +27,13 @@ import {
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { TEST_SESSION_OPEN_AUDIENCE } from "./memory-v2-test-utils.ts";
 import { awaitAdmitted } from "./support/serving-waits.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up. A cold origin update drives the host
+// across a disk-store reopen.
+useRealClock();
 
 const route = "/api/patterns/system/guarded-note.tsx";
 const origin = systemPatternSource("system/guarded-note.tsx");

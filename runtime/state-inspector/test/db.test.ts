@@ -10,6 +10,7 @@ import { openSpace } from "../db.ts";
 import { reconstructDocument } from "../reconstruct.ts";
 import { listEntityModels } from "../model.ts";
 import { summarizeSpace } from "../queries.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // NOTE: no `scope_key` column on `revision` — the legacy schema.
 const LEGACY_SCHEMA = `
@@ -64,7 +65,7 @@ function seed(path: string) {
   db.close();
 }
 
-Deno.test("scope_key shim: a DB without scope_key still inspects", async () => {
+test("scope_key shim: a DB without scope_key still inspects", async () => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-db-" });
   const dbPath = `${dir}/legacy.sqlite`;
   try {
@@ -98,7 +99,7 @@ Deno.test("scope_key shim: a DB without scope_key still inspects", async () => {
   }
 });
 
-Deno.test("scope_key shim: a DB whose head predates the current-op migration still summarizes", async () => {
+test("scope_key shim: a DB whose head predates the current-op migration still summarizes", async () => {
   // The summary looks for a deletion tombstone through the ACL document's
   // head, which on this DB has no `op`. Its ACL document's payload does not
   // decode, and holds no tombstone.
@@ -135,7 +136,7 @@ Deno.test("scope_key shim: a DB whose head predates the current-op migration sti
   }
 });
 
-Deno.test("statements: a read issued per entity is prepared once per space", async () => {
+test("statements: a read issued per entity is prepared once per space", async () => {
   // A statement prepared per call stays alive until the database closes, so a
   // space-wide walk that prepares per entity holds millions of them.
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-db-" });
@@ -167,7 +168,7 @@ Deno.test("statements: a read issued per entity is prepared once per space", asy
   }
 });
 
-Deno.test("statements: a read after close is refused with an error", async () => {
+test("statements: a read after close is refused with an error", async () => {
   // The cached statements are finalized on close, and using one after that
   // crashes the process. The space refuses the read before it gets there.
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-db-" });
@@ -188,7 +189,7 @@ Deno.test("statements: a read after close is refused with an error", async () =>
   }
 });
 
-Deno.test("scope_key shim: the head table is shimmed, with op only where it exists", async () => {
+test("scope_key shim: the head table is shimmed, with op only where it exists", async () => {
   const dir = await Deno.makeTempDir();
   try {
     const dbPath = `${dir}/legacy.sqlite`;

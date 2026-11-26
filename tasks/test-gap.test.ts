@@ -1,10 +1,15 @@
 import { expect } from "@std/expect";
 import { exists } from "@std/fs";
 import { dirname, fromFileUrl, join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import type { TestIdentity } from "@commonfabric/test-support/records";
 import { shuffleNotice } from "@commonfabric/test-support/shuffle";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   CAPABILITIES,
   type Capability,
@@ -20,13 +25,13 @@ import { testTitle } from "./test-summary.ts";
 import type { Suite } from "./test-topology.ts";
 import {
   afterSummaryLines,
-  defaultBase,
   describeGap,
   type Gap,
   GAP_SECONDS,
   gapOf,
   type GapRun,
   localChanges,
+  machineLacks,
   main,
   parseGapArgs,
   runGap,
@@ -201,27 +206,6 @@ describe("test-gap", () => {
     });
   });
 
-  describe("defaultBase()", () => {
-    let root: string;
-
-    beforeEach(async () => {
-      root = await repository({ "a.ts": "" });
-    });
-
-    afterEach(async () => {
-      await Deno.remove(root, { recursive: true });
-    });
-
-    it("returns `origin/main` where the checkout has no `upstream/main`", async () => {
-      expect(await defaultBase(root)).toBe("origin/main");
-    });
-
-    it("returns `upstream/main` where the checkout has one", async () => {
-      await git(root, "update-ref", "refs/remotes/upstream/main", "HEAD");
-      expect(await defaultBase(root)).toBe("upstream/main");
-    });
-  });
-
   describe("localChanges()", () => {
     it("returns what was committed since the base, what is uncommitted, and what is new", async () => {
       const root = await repository({
@@ -240,6 +224,20 @@ describe("test-gap", () => {
           "committed.ts",
           "edited.ts",
           "new.ts",
+        ]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("returns both paths of a file the change moved, as a lane lists them", async () => {
+      const root = await repository({ "declared/kept.ts": "a line\n" });
+      try {
+        await git(root, "mv", "declared/kept.ts", "moved.ts");
+        await git(root, "commit", "-q", "-m", "move");
+        expect([...await localChanges(root, "base")].sort()).toEqual([
+          "declared/kept.ts",
+          "moved.ts",
         ]);
       } finally {
         await Deno.remove(root, { recursive: true });
@@ -432,6 +430,48 @@ describe("test-gap", () => {
     });
   });
 
+  describe("snapshotTree() reading the index's times", () => {
+    it("throws, and leaves nothing behind, where the index's times cannot be read", async () => {
+      const root = await repository({ "tracked.ts": "1" });
+      const under = await Deno.makeTempDir({ prefix: "test-gap-under-" });
+      try {
+        await expect(
+          snapshotTree(
+            root,
+            under,
+            () => Promise.resolve({ atime: null, mtime: new Date() }),
+          ),
+        ).rejects.toThrow(/^cannot read when .*index was written$/);
+        expect([...Deno.readDirSync(under)]).toEqual([]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+        await Deno.remove(under, { recursive: true });
+      }
+    });
+  });
+
+  describe("Snapshot", () => {
+    describe("instance members", () => {
+      describe("remove()", () => {
+        it("removes the directory, and throws what failed, where the worktree cannot be removed", async () => {
+          const root = await repository({ "tracked.ts": "1" });
+          try {
+            const snapshot = await snapshotTree(root);
+            // A locked worktree is one a single `--force` does not remove.
+            await git(root, "worktree", "lock", snapshot.tree);
+            await expect(snapshot.remove()).rejects.toThrow(
+              `cannot remove ${dirname(snapshot.tree)}: Error: cannot ` +
+                "remove the snapshot",
+            );
+            expect(await exists(dirname(snapshot.tree))).toBe(false);
+          } finally {
+            await Deno.remove(root, { recursive: true });
+          }
+        });
+      });
+    });
+  });
+
   describe("gapOf()", () => {
     const near = entry("near > runs", "near.test.ts", { score: 0.1 });
     const shared = entry("shared > runs", "shared.test.ts");
@@ -564,6 +604,44 @@ describe("test-gap", () => {
         budgetSeconds: 600,
       });
       expect(result.projectedSeconds).toBeCloseTo(20 + near.cost);
+    });
+  });
+
+  describe("machineLacks()", () => {
+    /** A capability `id` whose `missing` says `reason`. */
+    function lacking(id: CapabilityId, reason?: string): Capability {
+      return {
+        id,
+        description: id,
+        missing: () => Promise.resolve(reason),
+        open: () =>
+          Promise.resolve({ env: {}, close: () => Promise.resolve() }),
+      };
+    }
+
+    it("returns what each capability says the machine lacks, and nothing for the rest", async () => {
+      const seen: string[] = [];
+      const registry = new Map<CapabilityId, Capability>([
+        ["fuse", lacking("fuse", "no FUSE")],
+        ["jq", lacking("jq")],
+        ["cf", {
+          id: "cf",
+          description: "cf",
+          open: () =>
+            Promise.resolve({ env: {}, close: () => Promise.resolve() }),
+        }],
+        ["browser", {
+          ...lacking("browser"),
+          missing: ({ root }) => {
+            seen.push(root);
+            return Promise.resolve(undefined);
+          },
+        }],
+      ]);
+      expect([...await machineLacks(registry, "/repo")]).toEqual([
+        ["fuse", "no FUSE"],
+      ]);
+      expect(seen).toEqual(["/repo"]);
     });
   });
 
@@ -887,6 +965,97 @@ describe("test-gap", () => {
       });
     });
 
+    it("returns a failure naming a command that failed having recorded no failing test", async () => {
+      const passingThenFailing: Suite = {
+        ...bakery(units, {}, []),
+        async command(asked, context) {
+          const invocations = await bakery(units, {}, []).command(
+            asked,
+            context,
+          );
+          return invocations.map((invocation) => ({
+            ...invocation,
+            command: [
+              ...invocation.command.slice(0, -1),
+              `${invocation.command.at(-1)}; Deno.exit(1);`,
+            ],
+          }));
+        },
+      };
+      const result = await run(["good.test.ts"], {}, passingThenFailing);
+      expect(result.ok).toBe(false);
+      expect(outcomes(result)).toEqual(["pass unit/bakery: good > passes"]);
+      expect(result.summary.commands).toEqual([{
+        label: "bakery",
+        reason: "1 command(s) failed having recorded no failing test",
+      }]);
+      await expectKept(result.kept);
+    });
+
+    it("names the records whose surface the suite does not declare", async () => {
+      const undeclared: Suite = {
+        ...bakery(units, {}, []),
+        recordSurfaces: [{ kind: "unit", scope: "pastry" }],
+      };
+      await run(["good.test.ts"], {}, undeclared);
+      const said = printed.join("\n");
+      expect(said).toContain(
+        "These records name a surface the suite that ran them does not " +
+          "declare",
+      );
+      expect(said).toContain('- ["unit","bakery","good > passes"]');
+    });
+
+    describe("a run whose capability cannot be closed", () => {
+      /** `CAPABILITIES` with `cf` opening alone and failing to close. */
+      function stuck(): Map<CapabilityId, Capability> {
+        const registry = new Map<CapabilityId, Capability>(CAPABILITIES);
+        registry.set("cf", {
+          id: "cf",
+          description: "a stand-in that cannot be closed",
+          open: () =>
+            Promise.resolve({
+              env: {},
+              close: () => Promise.reject(new Error("stuck")),
+            }),
+        });
+        return registry;
+      }
+
+      it("returns what it could not close among what it left behind", async () => {
+        const result = await run(
+          ["good.test.ts"],
+          {},
+          bakery(units, {}, ["cf"]),
+          new LaneStop(),
+          stuck(),
+        );
+        expect(result.ok).toBe(true);
+        expect(result.leftovers).toEqual([
+          "could not close what the run opened: Error: cf failed to close: stuck",
+        ]);
+        expect(result.kept).toBeUndefined();
+        expect(printed).not.toContain(
+          "test-gap: could not close what the run opened: Error: cf failed " +
+            "to close: stuck",
+        );
+      });
+
+      it("prints what it could not close where a batch throws", async () => {
+        const throwing: Suite = {
+          ...bakery(units, {}, ["cf"]),
+          command: () => Promise.reject(new Error("no runner")),
+        };
+        await expect(
+          run(["good.test.ts"], {}, throwing, new LaneStop(), stuck()),
+        ).rejects.toThrow("no runner");
+        expect(printed).toContain(
+          "test-gap: could not close what the run opened: Error: cf failed " +
+            "to close: stuck",
+        );
+      });
+    });
+
     it("spools its tests' records and none of the lane's own measurements", async () => {
       await run(["good.test.ts"], {});
       expect(await spooled()).toEqual(["good > passes"]);
@@ -929,6 +1098,31 @@ describe("test-gap", () => {
       );
       expect(lines.join("\n")).toContain(
         "far.test.ts (bakery; 2 steps from the change; 0 tests)",
+      );
+    });
+
+    it("returns a unit holding a changed file as touched by the change", () => {
+      const lines = describeGap(
+        {
+          reached: 1,
+          covered: 0,
+          chosen: [{
+            suite: "bakery",
+            unit: "near.test.ts",
+            hops: 0,
+            selections: [],
+            partly: false,
+          }],
+          over: [],
+          apart: [],
+          projectedSeconds: 30,
+          budgetSeconds: 60,
+        },
+        1,
+        "upstream/main",
+      );
+      expect(lines).toContain(
+        "  near.test.ts (bakery; touched by the change; 0 tests)",
       );
     });
 
@@ -1125,6 +1319,43 @@ describe("test-gap", () => {
       expect(printed.some((line) => line.includes(" test summary "))).toBe(
         false,
       );
+    });
+
+    it("measures the change against `upstream/main` where it is given no base", async () => {
+      await git(root, "update-ref", "refs/remotes/upstream/main", "base");
+      expect(await command(["--dry-run"])).toBe(0);
+      expect(printed[0]).toContain(
+        "the change touches 1 file(s) against refs/remotes/upstream/main",
+      );
+    });
+
+    it("prints a failure too flaky to judge a change by after the summary, and passes", async () => {
+      const passed = await main(["--base", "base", "--seconds", "5000"], root, {
+        manifest: () =>
+          Promise.resolve({
+            manifest: sampleManifest({
+              entries: [reachedTest, apartTest],
+              withheld: [{
+                test: reachedTest.test,
+                suite: "bakery",
+                reason: "flaky",
+              }],
+            }),
+          }),
+        topology: () =>
+          Promise.resolve([bakery(units, { "reached > runs": "fail" }, [])]),
+        recording: () => Promise.resolve({ mode: "join", dir: spool }),
+        stop: () => new LaneStop(),
+      });
+      expect(passed).toBe(0);
+      const held = printed.indexOf(
+        "Failed, and held back from pull requests as too flaky to judge a " +
+          "change by, so not failing this run:",
+      );
+      expect(held).toBeGreaterThan(
+        printed.findIndex((line) => line.includes(" test summary ")),
+      );
+      expect(printed[held + 1]).toBe("  unit/bakery: reached > runs");
     });
 
     it("refuses to plan where the manifest store could not be read", async () => {

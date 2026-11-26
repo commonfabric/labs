@@ -6,7 +6,7 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
 

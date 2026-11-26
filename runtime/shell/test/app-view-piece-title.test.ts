@@ -2,7 +2,6 @@
 // graph reaches @commonfabric/ui, whose components extend a bare HTMLElement as
 // they load, so it can only load once the test has installed one.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { DID } from "@commonfabric/identity";
 import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
@@ -16,6 +15,7 @@ import {
   type CellRef,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { installBrowserGlobals } from "./browser-globals.ts";
 import { templateBindings } from "./lit-template-markup.ts";

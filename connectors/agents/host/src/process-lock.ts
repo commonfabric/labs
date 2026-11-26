@@ -3,10 +3,22 @@ import { agentTargetKey } from "./target-state.ts";
 
 const heldPaths = new Set<string>();
 
+/** The facts about the running platform a lock path is checked against. */
+export interface ProcessLockPlatform {
+  os: typeof Deno.build.os;
+  uid: () => number | null;
+}
+
+const RUNNING_PLATFORM: ProcessLockPlatform = {
+  os: Deno.build.os,
+  uid: () => Deno.uid(),
+};
+
 function validatePrivateInfo(
   info: Deno.FileInfo,
   path: string,
   kind: "directory" | "file",
+  platform: ProcessLockPlatform,
 ): void {
   if (info.isSymlink) {
     throw new Error(`process lock ${kind} cannot be a symbolic link: ${path}`);
@@ -14,8 +26,8 @@ function validatePrivateInfo(
   if (kind === "directory" ? !info.isDirectory : !info.isFile) {
     throw new Error(`process lock ${kind} is not a ${kind}: ${path}`);
   }
-  if (Deno.build.os === "windows") return;
-  if (info.uid !== null && info.uid !== Deno.uid()) {
+  if (platform.os === "windows") return;
+  if (info.uid !== null && info.uid !== platform.uid()) {
     throw new Error(`process lock ${kind} has a different owner: ${path}`);
   }
   if (info.mode !== null && (info.mode & 0o077) !== 0) {
@@ -25,12 +37,18 @@ function validatePrivateInfo(
   }
 }
 
-async function ensurePrivateDirectory(path: string): Promise<void> {
+async function ensurePrivateDirectory(
+  path: string,
+  platform: ProcessLockPlatform,
+): Promise<void> {
   await Deno.mkdir(path, { recursive: true, mode: 0o700 });
-  validatePrivateInfo(await Deno.lstat(path), path, "directory");
+  validatePrivateInfo(await Deno.lstat(path), path, "directory", platform);
 }
 
-async function openPrivateLockFile(path: string): Promise<Deno.FsFile> {
+async function openPrivateLockFile(
+  path: string,
+  platform: ProcessLockPlatform,
+): Promise<Deno.FsFile> {
   let prior: Deno.FileInfo;
   try {
     prior = await Deno.lstat(path);
@@ -43,13 +61,13 @@ async function openPrivateLockFile(path: string): Promise<Deno.FsFile> {
       mode: 0o600,
     });
   }
-  validatePrivateInfo(prior, path, "file");
+  validatePrivateInfo(prior, path, "file", platform);
   const file = await Deno.open(path, { read: true, write: true });
   try {
     const actual = await file.stat();
-    validatePrivateInfo(actual, path, "file");
+    validatePrivateInfo(actual, path, "file", platform);
     if (
-      Deno.build.os !== "windows" && prior.dev !== null &&
+      platform.os !== "windows" && prior.dev !== null &&
       actual.dev !== null && prior.ino !== null && actual.ino !== null &&
       (prior.dev !== actual.dev || prior.ino !== actual.ino)
     ) {
@@ -66,6 +84,7 @@ export type ProcessLockEnvReader = (key: string) => string | undefined;
 
 export function defaultAgentsHostLockDirectory(
   readEnv: ProcessLockEnvReader = (key) => Deno.env.get(key),
+  platform: ProcessLockPlatform = RUNNING_PLATFORM,
 ): string {
   const configured = readEnv("CF_AGENTS_HOST_LOCK_DIR");
   if (configured?.trim()) return resolve(configured.trim());
@@ -79,7 +98,7 @@ export function defaultAgentsHostLockDirectory(
     );
   }
 
-  if (Deno.build.os === "windows") {
+  if (platform.os === "windows") {
     const windowsBase = readEnv("LOCALAPPDATA") ?? readEnv("TEMP") ??
       readEnv("TMP");
     if (!windowsBase?.trim()) {
@@ -93,7 +112,7 @@ export function defaultAgentsHostLockDirectory(
   const temporaryDirectory = readEnv("TMPDIR")?.trim() || "/tmp";
   return join(
     resolve(temporaryDirectory),
-    `commonfabric-agents-host-${Deno.uid()}`,
+    `commonfabric-agents-host-${platform.uid()}`,
   );
 }
 
@@ -117,7 +136,31 @@ export class AgentsHostProcessLock {
     this.#path = path;
   }
 
-  static async acquire(path: string): Promise<AgentsHostProcessLock> {
+  /**
+   * Acquiring a lock as if on the platform `platform` states, which a test
+   * chooses.
+   */
+  static get accessForTestingOnly(): {
+    acquire(
+      path: string,
+      platform: ProcessLockPlatform,
+    ): Promise<AgentsHostProcessLock>;
+  } {
+    return {
+      acquire: (path, platform) =>
+        AgentsHostProcessLock.#acquire(path, platform),
+    };
+  }
+
+  /** Acquires the lock at `path`, or rejects when another host holds it. */
+  static acquire(path: string): Promise<AgentsHostProcessLock> {
+    return AgentsHostProcessLock.#acquire(path, RUNNING_PLATFORM);
+  }
+
+  static async #acquire(
+    path: string,
+    platform: ProcessLockPlatform,
+  ): Promise<AgentsHostProcessLock> {
     const normalizedPath = resolve(path);
     if (heldPaths.has(normalizedPath)) {
       throw new Error(
@@ -127,8 +170,8 @@ export class AgentsHostProcessLock {
     heldPaths.add(normalizedPath);
     let file: Deno.FsFile | undefined;
     try {
-      await ensurePrivateDirectory(dirname(normalizedPath));
-      file = await openPrivateLockFile(normalizedPath);
+      await ensurePrivateDirectory(dirname(normalizedPath), platform);
+      file = await openPrivateLockFile(normalizedPath, platform);
       if (!(await file.tryLock(true))) {
         throw new Error(
           `another agent host holds the process lock: ${normalizedPath}`,

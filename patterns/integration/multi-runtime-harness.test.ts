@@ -4,10 +4,10 @@
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { MultiRuntimeHarness } from "./multi-runtime-harness.ts";
 
 const PROGRAM_PATH = join(

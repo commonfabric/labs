@@ -21,15 +21,15 @@ import {
   Writable,
 } from "commonfabric";
 
-import AnnotationManager from "../../apps/annotation-manager/annotation-manager.tsx";
+import AnnotationManager from "../../apps/annotation-manager/main.tsx";
 import Aside from "../../examples/aside/aside.tsx";
-import Bookmarks from "../../apps/bookmarks/bookmarks.tsx";
+import Bookmarks from "../../apps/bookmarks/main.tsx";
 import Chatbot from "../../system/chatbot/chatbot.tsx";
-import Cheeseboard from "../../apps/cheeseboard/cheeseboard.tsx";
+import Cheeseboard from "../../apps/cheeseboard/main.tsx";
 import FormDemo from "../../examples/form-demo/form-demo.tsx";
 import GroupChatLobby from "../../examples/group-chat-lobby/group-chat-lobby.tsx";
 import GroupChatRoom from "../../examples/group-chat-room/group-chat-room.tsx";
-import ImageAnalysis from "../../apps/image-analysis/image-analysis.tsx";
+import ImageAnalysis from "../../apps/image-analysis/main.tsx";
 import LinkPreview from "../../examples/link-preview/link-preview.tsx";
 import MobileAppDemo from "../../examples/mobile-app-demo/mobile-app-demo.tsx";
 import NestedMapIfElseTest from "../nested-map-ifelse-test/nested-map-ifelse-test.tsx";

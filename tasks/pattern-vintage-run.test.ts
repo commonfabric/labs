@@ -1,13 +1,19 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { exists } from "@std/fs";
 import { Identity } from "@commonfabric/identity";
 import { recordsSpooledBy } from "@commonfabric/test-support/records";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import {
   AUTO,
   AUTO_GENERATIONS_KEPT,
   collectVintages,
   PINNED,
+  relativeToRepo,
   reportUncovered,
 } from "./pattern-vintage-lib.ts";
 import {
@@ -609,6 +615,43 @@ describe("the vintage gate, end to end", () => {
 
     expect(replayed).toBe(1);
     expect(failures).toEqual([]);
+  });
+
+  it("reports each fixture, then each of its targets, as its replay begins", async () => {
+    // A fixture that fails before reaching its targets still reports itself.
+    await captureMissing(
+      roots,
+      [TEST_KEY],
+      new Date("2026-07-29T12:00:00.000Z"),
+    );
+    const emptyDir = `${roots.vintagesRoot}/${KEY}/${PINNED}`;
+    await Deno.mkdir(emptyDir, { recursive: true });
+    await Deno.writeFile(
+      `${emptyDir}/2026-07-29T12-00-00.000Z-neverwritten.sqlite`,
+      new Uint8Array(),
+    );
+    const lines: string[] = [];
+
+    const { vintages, perVintage } = await replayAll(roots, {
+      progress: (line) => lines.push(line),
+    });
+
+    // Walked in path order, so the captured fixture comes first.
+    expect(vintages.map((vintage) => vintage.testKey)).toEqual([TEST_KEY, KEY]);
+    expect(perVintage.map((outcome) => outcome.failed)).toEqual([false, true]);
+    const { targets } = perVintage[0];
+    expect(targets).toBeGreaterThan(0);
+    const fixtureLine = (index: number) =>
+      `fixture ${index + 1}/2: ${
+        relativeToRepo(vintages[index].path, roots.repoRoot)
+      }`;
+    const targetLines = Array.from({ length: targets }, (_, index) => {
+      const counted = `${index + 1}/${targets}`;
+      return expect.stringMatching(
+        new RegExp(`^  target ${counted}: /patterns/\\S+\\.tsx \\(\\S+\\)$`),
+      );
+    });
+    expect(lines).toEqual([fixtureLine(0), ...targetLines, fixtureLine(1)]);
   });
 
   it("spools no records for a caller that did not ask for them", async () => {

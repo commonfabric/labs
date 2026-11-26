@@ -9,7 +9,7 @@ import env from "@/env.ts";
 export const CACHE_DIR = `${env.CACHE_DIR}/llm-api-cache`;
 
 export interface CacheItem {
-  messages: BuiltInLLMMessage[]; //Array<{ role: string; content: string }>;
+  messages: readonly BuiltInLLMMessage[];
   object?: Record<string, unknown>;
   model?: string;
   system?: string;

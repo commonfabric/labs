@@ -73,10 +73,8 @@ export const findSyncSchemaRef = (value: unknown): string | undefined => {
         if (ref !== undefined) {
           return ref;
         }
-        for (const key in payload) {
-          if (key !== "schema" && Object.hasOwn(payload, key)) {
-            pending.push(payload[key]);
-          }
+        for (const key of Object.keys(payload)) {
+          if (key !== "schema") pending.push(payload[key]);
         }
         continue;
       }
@@ -97,17 +95,10 @@ export const findSyncSchemaRef = (value: unknown): string | undefined => {
       }
       // Every alias child — the schema value included — is walked as data,
       // mirroring the mapper's view of the alias record.
-      for (const key in legacyAlias) {
-        if (Object.hasOwn(legacyAlias, key)) {
-          pending.push(legacyAlias[key]);
-        }
-      }
+      for (const child of Object.values(legacyAlias)) pending.push(child);
     }
 
-    for (const key in current) {
-      if (!Object.hasOwn(current, key)) {
-        continue;
-      }
+    for (const key of Object.keys(current)) {
       if (key === "$alias" && hasLegacyAlias) {
         continue;
       }
@@ -157,11 +148,7 @@ export const containsSyncSchemaRefString = (value: unknown): boolean => {
     if (!isPlainObject(current)) {
       continue;
     }
-    for (const key in current) {
-      if (Object.hasOwn(current, key)) {
-        pending.push(current[key]);
-      }
-    }
+    for (const child of Object.values(current)) pending.push(child);
   }
 
   return false;

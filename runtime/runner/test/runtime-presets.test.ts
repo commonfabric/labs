@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 /**
@@ -20,12 +19,15 @@ import { stub } from "@std/testing/mock";
  *    dropped or mis-mapped.
  */
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   adoptServerExperimentalOptions,
   EXPERIMENTAL_ENV_VARS,
   EXPERIMENTAL_FLAG_AUTHORITY,
   experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
+  FOLLOWED_POSTURE_ENV,
   MAX_ENFORCEMENT_CFC_OPTIONS,
   MAX_ENFORCEMENT_SINK_CEILINGS,
   parseServerExperimentalOptions,
@@ -160,6 +162,15 @@ const MINIMAL_TREATMENT: Record<RuntimeOptionKey, MinimalTreatment> = {
   // The same factory shares these among the serving runtimes it builds.
   compileTurns: { treat: "absent" },
   moduleCompiler: { treat: "absent" },
+  runBeacon: { treat: "absent" },
+  // The toolshed a deployment-facing runtime talks to maintains a space's
+  // collections; a single-process runtime has no server and maintains its
+  // own.
+  indexedCollectionMaintenance: {
+    treat: "pinned-in",
+    presets: DEPLOYMENT_FACING,
+    value: "none",
+  },
 };
 
 describe("runtimePresets conformance", () => {
@@ -446,6 +457,82 @@ describe("runtimePresets conformance", () => {
       expect(warnings.length).toBe(1);
       expect(String(warnings[0][0])).toContain("EXPERIMENTAL_MODERN_CELL_REP");
     });
+  });
+
+  describe("experimentalOptionsWithFollowedPosture", () => {
+    /** A host's published posture, every flag it names declared. */
+    const published = {
+      serverExecution: false,
+      modernCellRep: true,
+      readerSchemaPrecedence: true,
+      agentBuiltin: true,
+      syncCidReferences: true,
+    };
+
+    it("reads the environment alone when it follows no posture", () => {
+      const env: Record<string, string> = {
+        EXPERIMENTAL_SERVER_EXECUTION: "true",
+      };
+      expect(experimentalOptionsWithFollowedPosture((name) => env[name]))
+        .toEqual({ serverExecution: true });
+      expect(experimentalOptionsWithFollowedPosture(() => undefined))
+        .toEqual({});
+    });
+
+    it("takes each server-authoritative flag the followed posture publishes, and no client one", () => {
+      const env: Record<string, string> = {
+        [FOLLOWED_POSTURE_ENV]: JSON.stringify(published),
+      };
+      expect(experimentalOptionsWithFollowedPosture((name) => env[name]))
+        .toEqual({
+          serverExecution: false,
+          modernCellRep: true,
+          readerSchemaPrecedence: true,
+          agentBuiltin: true,
+        });
+    });
+
+    it("keeps an explicit environment value over the followed posture's", () => {
+      const env: Record<string, string> = {
+        [FOLLOWED_POSTURE_ENV]: JSON.stringify(published),
+        EXPERIMENTAL_SERVER_EXECUTION: "true",
+      };
+      expect(
+        experimentalOptionsWithFollowedPosture((name) => env[name])
+          .serverExecution,
+      ).toBe(true);
+    });
+
+    it("adopts nothing from a followed posture of null, as a deployment publishes before its runtime exists", () => {
+      const env: Record<string, string> = {
+        [FOLLOWED_POSTURE_ENV]: "null",
+        EXPERIMENTAL_MODERN_CELL_REP: "true",
+      };
+      expect(experimentalOptionsWithFollowedPosture((name) => env[name]))
+        .toEqual({ modernCellRep: true });
+    });
+
+    it("takes the legacy false for readerSchemaPrecedence and agentBuiltin from a followed posture silent on them", () => {
+      const env: Record<string, string> = {
+        [FOLLOWED_POSTURE_ENV]: JSON.stringify({ serverExecution: false }),
+      };
+      expect(experimentalOptionsWithFollowedPosture((name) => env[name]))
+        .toEqual({
+          serverExecution: false,
+          readerSchemaPrecedence: false,
+          agentBuiltin: false,
+        });
+    });
+
+    for (const raw of ["{ not json", "[]", '"on"', "", "true"]) {
+      it(`throws, naming the variable, for a followed posture of ${JSON.stringify(raw)}`, () => {
+        expect(() =>
+          experimentalOptionsWithFollowedPosture((name) =>
+            name === FOLLOWED_POSTURE_ENV ? raw : undefined
+          )
+        ).toThrow(FOLLOWED_POSTURE_ENV);
+      });
+    }
   });
 
   describe("experimental flag authority", () => {

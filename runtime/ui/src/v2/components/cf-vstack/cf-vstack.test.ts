@@ -3,9 +3,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { layoutSpacingUtilityStyles } from "../../styles/layout-spacing.ts";
 import { CFVStack } from "./index.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Extracts the class info object passed to classMap in render().

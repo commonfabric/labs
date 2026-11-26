@@ -170,10 +170,10 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
    * logical length first would mean walking and unwrapping every entry a
    * second time, for a number this pass arrives at anyway.
    *
-   * The result is still sized up front, at the entry count. That is exact
-   * whenever the array has no holes, which is the ordinary case, and an
-   * underestimate otherwise -- growing from there beats growing from empty,
-   * and a short array of holes is common enough to be worth not pessimizing.
+   * An array whose entries decode unchanged is already the result, with the
+   * frozenness this act owes. The first changed entry or hole run allocates a
+   * result at the entry count and copies the unchanged prefix. Its final
+   * length includes the holes each run stands for.
    *
    * A run's count is validated, wire data being untrusted. Left unchecked it
    * is added to the write index directly, so a string concatenates onto it
@@ -184,9 +184,10 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
   #decodeArray(
     data: readonly JsonCodecValue[],
   ): FabricValue {
-    const result: FabricValue[] = new Array(data.length);
+    let result: FabricValue[] | undefined;
     let targetIndex = 0;
-    for (const entry of data) {
+    for (let index = 0; index < data.length; index++) {
+      const entry = data[index]!;
       const entryDecoded = JsonDecodeAct.#unwrapTag(entry);
       if (
         entryDecoded !== null && entryDecoded.tag === CODEC_META_TAGS.hole
@@ -199,9 +200,22 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
             debugStr`hole: expected a positive integer count, got $quote${count}`,
           );
         }
+        if (result === undefined) {
+          result = new Array(data.length);
+          for (let prior = 0; prior < index; prior++) {
+            result[prior] = data[prior]!;
+          }
+        }
         targetIndex += count;
       } else {
-        result[targetIndex] = this.decodeValue(entry);
+        const decoded = this.decodeValue(entry);
+        if (result === undefined && !Object.is(decoded, entry)) {
+          result = new Array(data.length);
+          for (let prior = 0; prior < index; prior++) {
+            result[prior] = data[prior]!;
+          }
+        }
+        if (result !== undefined) result[targetIndex] = decoded;
         targetIndex++;
       }
     }
@@ -221,20 +235,22 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
       );
     }
 
+    if (result === undefined) return data;
     result.length = targetIndex;
     return this.freezeUnlessMutable(result);
   }
 
   /**
-   * Plain objects: recursively decode values, and freeze unless mutable. Any
-   * `/`-prefixed key
-   * is reserved per spec — return `ProblematicValue` on first occurrence rather
-   * than silently round-tripping the object.
+   * Plain objects: recursively decode values, copying on the first change
+   * and freezing the copy unless mutable. With no change, the parsed object
+   * already has the frozenness this act owes. Any `/`-prefixed key is reserved
+   * per spec — return `ProblematicValue` on first occurrence rather than
+   * silently round-tripping the object.
    */
   #decodePlainObject(
     data: Record<string, JsonCodecValue>,
   ): FabricValue {
-    const result: Record<string, FabricValue> = {};
+    let result: Record<string, FabricValue> | undefined;
     // `for...in` reads the keys off the object's own enumeration cache, where
     // `Object.entries()` would allocate a pair per key of every object
     // decoded.
@@ -263,9 +279,11 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
       if (isUnsafeObjectKey(key)) {
         return this.reportReservedKey(key, data);
       }
-      result[key] = this.decodeValue(data[key]!);
+      const value = data[key]!;
+      const decoded = this.decodeValue(value);
+      if (!Object.is(decoded, value)) (result ??= { ...data })[key] = decoded;
     }
-    return this.freezeUnlessMutable(result);
+    return result === undefined ? data : this.freezeUnlessMutable(result);
   }
 
   static {
@@ -292,7 +310,7 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
       return null;
     }
 
-    // `#isEncodedInstance()` guaranteed a single-property object, so this
+    // `isEncodedInstance()` guaranteed a single-property object, so this
     // destructures that one entry.
     const [key, value] = Object.entries(data)[0]!;
     return { tag: key.slice(1), state: value };

@@ -13,13 +13,20 @@
  * the stored schema. A stored `false`, a stored `unknown`, a reader typed
  * `unknown`, and the strict rollback keep the stored schema at the read's
  * entry. A link into another space carries its stored schema across
- * recomposed, and the entry resolves against it the same way.
+ * recomposed, and the entry resolves against it the same way. A handle from
+ * `resolveAsCell()` comes from link resolution rather than from a read, and
+ * carries the stored schema whatever the reader declared.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import "@commonfabric/test-support/equal-ignoring-symbols";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
@@ -38,6 +45,7 @@ import { rendererVDOMSchema } from "../src/schemas.ts";
 import { UI } from "../src/shared.ts";
 import type { CellLinkRefPayload } from "../src/sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { resolvedSchema } from "./schema-ref-helpers.ts";
 
 const signer = await Identity.fromPassphrase("stored link schema precedence");
 const space = signer.did();
@@ -441,6 +449,142 @@ describe("stored-link-schema-precedence", () => {
         )
         .get() as unknown as Cell<Row>;
       expect(projectionOf(handle.get())).toEqual({ title: "cruller" });
+    });
+
+    describe("a handle from `resolveAsCell()`", () => {
+      // A handle from `resolveAsCell()` comes from link resolution rather than
+      // from a read of the target: it carries the nearest stored schema that
+      // constrains, whatever the caller's schema declares, and a read of it
+      // starts from that schema. Unless a case says otherwise, the row it
+      // reaches lacks a field only the stored schema requires.
+
+      /** The element slot of a one-row holder over a row holding `value`. */
+      const rowSlot = (value: Record<string, string>): Cell<Row> => {
+        const row = runtime.getCell(
+          space,
+          `row-${seq}-resolved`,
+          undefined,
+          tx,
+        );
+        row.setRaw(value);
+        const holder = runtime.getCell<Holder>(
+          space,
+          `holder-${seq}-resolved`,
+          holderSchema,
+          tx,
+        );
+        holder.setRaw({ rows: [linkCarrying(row, wideStoredSchema)] } as never);
+        return holder.key("rows").key(0);
+      };
+
+      const narrowRowSlot = () => rowSlot({ title: "cruller" });
+
+      /** The schema `cell` carries, its `cid:` references resolved. */
+      const schemaOf = (cell: Cell<unknown>) =>
+        resolvedSchema(cell.getAsNormalizedFullLink().schema);
+
+      it("reads `undefined` for a shaped reader where a keyed read returns the row", () => {
+        const slot = narrowRowSlot();
+
+        expect(projectionOf(slot.get())).toEqual({ title: "cruller" });
+        expect(slot.resolveAsCell().get()).toBeUndefined();
+      });
+
+      it("carries the stored schema for a shaped reader where an `asCell` read of the same slot keeps the reader's", () => {
+        const slot = narrowRowSlot();
+        const minted = slot.asSchema({ ...rowSchema, asCell: ["cell"] })
+          .get() as unknown as Cell<Row>;
+
+        expect(schemaOf(minted)).toEqual(rowSchema);
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
+
+      it("carries the stored schema for a reader with no schema", () => {
+        const slot = narrowRowSlot().asSchema(undefined);
+
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
+
+      it("carries the stored schema for a `true` reader", () => {
+        const slot = narrowRowSlot().asSchema(true);
+
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
+
+      it("carries the stored schema for an empty reader", () => {
+        const slot = narrowRowSlot().asSchema({});
+
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
+
+      it("carries the stored schema for a reader that is only an `asCell` wrapper", () => {
+        const slot = narrowRowSlot().asSchema({ asCell: ["cell"] });
+
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
+
+      it("carries the stored schema for a reader typed `unknown`", () => {
+        const slot = narrowRowSlot().asSchema({ type: "unknown" });
+
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
+
+      it("carries the stored schema for a `false` reader, and reads the whole row through it", () => {
+        // A reader that selects nothing reads nothing by key, and its handle
+        // reads everything the stored schema accepts.
+
+        const slot = rowSlot({ title: "cruller", glaze: "maple" })
+          .asSchema(false);
+
+        expect(slot.get()).toBeUndefined();
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+        expect(projectionOf(slot.resolveAsCell().get())).toEqual({
+          title: "cruller",
+          glaze: "maple",
+        });
+      });
+
+      it("keeps a caller's schema that declares a stream over a stored schema that only declares one", () => {
+        // The one shape of caller's schema the handle keeps: the stored
+        // schema here is a stream's declaration and nothing else.
+
+        const typedStream = {
+          ...rowSchema,
+          asCell: ["stream"],
+        } as const satisfies JSONSchema;
+        const slot = holderOverLinkCarrying({ asCell: ["stream"] }).key("rows")
+          .key(0).asSchema(typedStream);
+
+        expect(schemaOf(slot.resolveAsCell())).toEqual(typedStream);
+      });
+
+      it("carries the stored schema for a row-typed cell reached through `asSchemaFromLinks()`", () => {
+        // The holder is reached through a link whose stored schema types its
+        // rows by the reader's row schema, so `asSchemaFromLinks()` types the
+        // holder by it, and the element's caller schema is the row schema
+        // rather than the element link's own.
+
+        const row = runtime.getCell(space, `row-${seq}-chained`, undefined, tx);
+        row.setRaw({ title: "cruller" });
+        const holder = runtime.getCell(
+          space,
+          `holder-${seq}-chained`,
+          undefined,
+          tx,
+        );
+        holder.setRaw({ rows: [linkCarrying(row, wideStoredSchema)] } as never);
+        const outer = runtime.getCell(
+          space,
+          `outer-${seq}-chained`,
+          undefined,
+          tx,
+        );
+        outer.setRaw({ holder: linkCarrying(holder, holderSchema) } as never);
+        const slot = outer.key("holder").asSchemaFromLinks().key("rows").key(0);
+
+        expect(schemaOf(slot)).toEqual(rowSchema);
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
     });
 
     describe("a stored schema that is nothing but a default", () => {

@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import "./cf-render/index.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Host-embedding contract seam 5 (docs/features/host-embedding.md §5): every
 // cf-* component's index.ts guards its customElements.define with

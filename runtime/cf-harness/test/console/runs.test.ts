@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { CFC_CONCEPT_KIND, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { IFCLabel } from "@commonfabric/runner/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import { consoleRunLens, summarizeConsoleRun } from "../../console/runs.ts";
 import { ownerConsoleDisplay } from "../../console/display-ceiling.ts";
 import {
@@ -13,11 +13,11 @@ import {
   listConsoleRuns,
   readConsoleRun,
   readConsoleRunArtifact,
-  readConsoleRunFamilyGraph,
   readConsoleRunFlow,
   readConsoleToolOutput,
 } from "../../console/run-store.ts";
 import { writeRunRootFixture } from "./run-root-fixture.ts";
+import { readsDespiteMode } from "../support/reads-despite-mode.ts";
 import { createHarnessRunState } from "../../src/run-state.ts";
 import {
   createHarnessHandleTable,
@@ -274,6 +274,42 @@ describe("console/runs", () => {
         buildTranscript(),
       );
       expect(summary.pieceSlugs).toEqual(["books"]);
+    });
+
+    it("carries a subagent's parent and depth, and the failure a run recorded", () => {
+      const summary = summarizeConsoleRun({
+        ...runState("r1.subagent.1", "2026-01-01T00:00:01.000Z"),
+        lineage: {
+          role: "subagent",
+          rootRunId: "r1",
+          parentRunId: "r1",
+          parentToolCallId: "call-1",
+          depth: 1,
+        },
+        primaryFailure: {
+          type: "cf-harness.failure-record",
+          kind: "missing_binary",
+          source: "tool_call",
+          detail: "deno: not found",
+          at: "2026-01-01T00:00:01.000Z",
+        },
+      }, []);
+      expect(summary).toMatchObject({
+        parentRunId: "r1",
+        parentToolCallId: "call-1",
+        depth: 1,
+        failure: { kind: "missing_binary", detail: "deno: not found" },
+      });
+
+      // A continuation is no child, and a run that recorded no failure names
+      // none.
+      const continued = summarizeConsoleRun({
+        ...runState("r2", "2026-01-01T00:00:01.000Z"),
+        lineage: { role: "continuation", rootRunId: "r1", parentRunId: "r1" },
+      }, []);
+      expect(continued.parentRunId).toBeUndefined();
+      expect(continued.depth).toBeUndefined();
+      expect(continued.failure).toBeUndefined();
     });
   });
 
@@ -646,18 +682,6 @@ describe("console/runs", () => {
             node.runId
           ),
         ).toEqual([fixture.child]);
-        const graph =
-          (await readConsoleRunFamilyGraph(found.artifactRoot, "asked"))!;
-        expect(
-          graph.nodes.filter((node) => node.kind === "pattern").map((node) =>
-            node.patternId
-          ),
-        ).toEqual(["selected-parent", "selected-child"]);
-        expect(
-          graph.nodes.filter((node) => node.kind === "cell").map((node) =>
-            node.address
-          ),
-        ).toEqual(["/of:fid1:selected"]);
         for (const runId of ["asked", fixture.child]) {
           const root = (await findConsoleRunRoot(fixture.roots, runId))!;
           expect(
@@ -1198,6 +1222,254 @@ describe("console/runs", () => {
         expect(
           await readConsoleRunArtifact(root, "r1", "secret.json"),
         ).toBeUndefined();
+      });
+    });
+
+    it("reads no artifact or tool output the run did not write", async () => {
+      await withArtifactRoot(async (root) => {
+        await writeRun(root, "r1", "2026-01-01T00:00:01.000Z");
+        // A name the run is known to write, which this run never wrote.
+        expect(
+          await readConsoleRunArtifact(root, "r1", "policy-trace.json"),
+        ).toBeUndefined();
+        expect(
+          await readConsoleToolOutput(root, "r1", "absent.json"),
+        ).toBeUndefined();
+      });
+    });
+
+    it("leaves out of the list a run whose transcript is not a list, and lists the rest", async () => {
+      await withArtifactRoot(async (root) => {
+        await writeRun(root, "kept", "2026-01-01T00:00:01.000Z");
+        await writeRun(root, "garbled", "2026-01-01T00:00:02.000Z");
+        await Deno.writeTextFile(
+          join(root, "garbled", "transcript.json"),
+          JSON.stringify({ not: "a transcript" }),
+        );
+        expect((await listConsoleRuns(root)).map((run) => run.runId))
+          .toEqual(["kept"]);
+      });
+    });
+
+    describe("readConsoleRunFlow()", () => {
+      it("returns no map for a run the root does not hold", async () => {
+        await withArtifactRoot(async (root) => {
+          await writeRun(root, "r1", "2026-01-01T00:00:01.000Z");
+          expect(await readConsoleRunFlow(root, "absent")).toBeUndefined();
+          expect(await readConsoleRunFlow(root, "r1")).toBeDefined();
+        });
+      });
+
+      it("returns the CFC posture the run's fabric session ran under", async () => {
+        await withArtifactRoot(async (root) => {
+          await writeRun(root, "bare", "2026-01-01T00:00:01.000Z");
+          await writeRun(root, "postured", "2026-01-01T00:00:01.000Z");
+          await writeRun(root, "unnamed", "2026-01-01T00:00:01.000Z");
+          for (
+            const [runId, fabricSessionCfc] of [
+              ["postured", {
+                enforcementMode: "enforce-strict",
+                flowLabels: "persist",
+                posture: "max-enforcement",
+              }],
+              ["unnamed", {
+                enforcementMode: "enforce-explicit",
+                flowLabels: "observe",
+              }],
+            ] as const
+          ) {
+            await Deno.writeTextFile(
+              join(root, runId, "run-state.json"),
+              JSON.stringify({
+                ...runState(runId, "2026-01-01T00:00:01.000Z"),
+                fabricSessionCfc,
+              }),
+            );
+          }
+          expect((await readConsoleRunFlow(root, "postured"))?.cfc).toEqual({
+            enforcementMode: "enforce-strict",
+            flowLabels: "persist",
+            posture: "max-enforcement",
+          });
+          expect((await readConsoleRunFlow(root, "unnamed"))?.cfc).toEqual({
+            enforcementMode: "enforce-explicit",
+            flowLabels: "observe",
+          });
+          expect((await readConsoleRunFlow(root, "bare"))?.cfc)
+            .toBeUndefined();
+        });
+      });
+
+      it({
+        name: "returns a family of one for a run whose root cannot be listed",
+        // A privileged process lists the root whatever its mode says.
+        ignore: readsDespiteMode(),
+        fn: async () => {
+          await withArtifactRoot(async (root) => {
+            await writeRun(root, "r1", "2026-01-01T00:00:01.000Z");
+            await writeRun(root, "r1.subagent.1", "2026-01-01T00:00:01.000Z");
+            await Deno.writeTextFile(
+              join(root, "r1", "transcript.json"),
+              JSON.stringify([
+                { role: "user", content: "build it" },
+                call("c1", "delegate_task", { goal: "author" }),
+                result("c1", "delegate_task", {
+                  subagent: {
+                    childRunId: "r1.subagent.1",
+                    status: "completed",
+                  },
+                }),
+              ]),
+            );
+            const delegated = async () =>
+              (await readConsoleRunFlow(root, "r1"))?.turns[0].nodes[0];
+            expect((await delegated())?.children.map((node) => node.runId))
+              .toContain("r1.subagent.1");
+            // Searchable, so the run's own files read, but not listable, so
+            // neither its children nor its neighbours can be found.
+            await Deno.chmod(root, 0o300);
+            try {
+              const delegate = await delegated();
+              expect(delegate?.label).toBe("delegate_task");
+              expect(delegate?.children).toEqual([]);
+            } finally {
+              await Deno.chmod(root, 0o700);
+            }
+          });
+        },
+      });
+    });
+
+    describe("neighbouring handle tables", () => {
+      /** A run whose table holds `entries`, which need not be a list. */
+      const writeNeighbour = async (
+        root: string,
+        runId: string,
+        entries: unknown,
+      ): Promise<void> => {
+        await Deno.mkdir(join(root, runId), { recursive: true });
+        await Deno.writeTextFile(
+          join(root, runId, "run-state.json"),
+          JSON.stringify({
+            ...runState(runId, "2026-01-01T00:00:01.000Z"),
+            handleTable: {
+              type: HARNESS_HANDLE_TABLE_TYPE,
+              version: 1,
+              salt: runId,
+              entries,
+            },
+          }),
+        );
+      };
+
+      it("resolves a token through a later neighbour's table when an earlier one's is not a list, or the run wrote no state", async () => {
+        await withArtifactRoot(async (root) => {
+          const token = "cfh:a:abcd2";
+          await Deno.mkdir(join(root, "r1"), { recursive: true });
+          await Deno.writeTextFile(
+            join(root, "r1", "run-state.json"),
+            JSON.stringify(runState("r1", "2026-01-01T00:00:01.000Z")),
+          );
+          await Deno.writeTextFile(
+            join(root, "r1", "transcript.json"),
+            JSON.stringify([
+              { role: "user", content: `use ${token}` },
+            ]),
+          );
+          await writeNeighbour(root, "a-garbled", { not: "a list" });
+          await Deno.mkdir(join(root, "b-stateless"));
+          await writeNeighbour(root, "c-neighbour", [{
+            token,
+            kind: "address",
+            ref: "/of:fid1:neighbour",
+            addressKey: "/of:fid1:neighbour",
+          }]);
+
+          const detail = await readConsoleRun(root, "r1");
+          expect(
+            detail?.handles.find((handle) => handle.token === token)?.ref,
+          ).toBe("/of:fid1:neighbour");
+        });
+      });
+
+      it("resolves no token through a neighbour's table that holds a malformed entry beside a valid one", async () => {
+        await withArtifactRoot(async (root) => {
+          const mixed = "cfh:a:abcd3";
+          const valid = "cfh:a:abcd4";
+          await Deno.mkdir(join(root, "r1"), { recursive: true });
+          await Deno.writeTextFile(
+            join(root, "r1", "run-state.json"),
+            JSON.stringify(runState("r1", "2026-01-01T00:00:01.000Z")),
+          );
+          await Deno.writeTextFile(
+            join(root, "r1", "transcript.json"),
+            JSON.stringify([
+              { role: "user", content: `use ${mixed} and ${valid}` },
+            ]),
+          );
+          // The valid entry comes first, so a reader that stopped at the
+          // malformed one would already have taken it.
+          await writeNeighbour(root, "a-mixed", [{
+            token: mixed,
+            kind: "address",
+            ref: "/of:fid1:mixed",
+            addressKey: "/of:fid1:mixed",
+          }, null]);
+          await writeNeighbour(root, "b-neighbour", [{
+            token: valid,
+            kind: "address",
+            ref: "/of:fid1:valid",
+            addressKey: "/of:fid1:valid",
+          }]);
+
+          const handles = (await readConsoleRun(root, "r1"))?.handles ?? [];
+          expect(handles.find((handle) => handle.token === mixed)?.ref)
+            .toBeUndefined();
+          expect(handles.find((handle) => handle.token === valid)?.ref)
+            .toBe("/of:fid1:valid");
+        });
+      });
+
+      it("reads a run whose own table is not one as a run that minted no handles", async () => {
+        await withArtifactRoot(async (root) => {
+          /** A well-formed entry for `token`. */
+          const entry = (token: string) => ({
+            token,
+            kind: "address",
+            ref: `/of:fid1:${token.slice(-1)}`,
+            addressKey: `/of:fid1:${token.slice(-1)}`,
+          });
+          // A well-formed entry, once in a table with a malformed entry
+          // beside it and once in a valid one.
+          const runs = [
+            { runId: "garbled", token: "cfh:a:abcd5", entries: [null] },
+            { runId: "sound", token: "cfh:a:abcd6", entries: [] },
+          ];
+          for (const { runId, token, entries } of runs) {
+            await writeNeighbour(root, runId, [entry(token), ...entries]);
+            await Deno.writeTextFile(
+              join(root, runId, "transcript.json"),
+              JSON.stringify([{ role: "user", content: `use ${token}` }]),
+            );
+          }
+
+          const garbled = await readConsoleRun(root, "garbled");
+          expect(garbled?.runState.handleTable).toBeUndefined();
+          expect(
+            garbled?.handles.find((handle) => handle.token === "cfh:a:abcd5")
+              ?.ref,
+          ).toBeUndefined();
+          expect(await readConsoleRunFlow(root, "garbled")).toBeDefined();
+
+          const sound = await readConsoleRun(root, "sound");
+          expect(sound?.runState.handleTable?.entries).toEqual([
+            entry("cfh:a:abcd6"),
+          ]);
+          expect(
+            sound?.handles.find((handle) => handle.token === "cfh:a:abcd6")
+              ?.ref,
+          ).toBe("/of:fid1:6");
+        });
       });
     });
   });

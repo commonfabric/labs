@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { discoverGitCheckoutDirectories } from "../src/checkout-discovery.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("discoverGitCheckoutDirectories", () => {
   it("finds worktrees and does not descend into a checkout", async () => {
@@ -65,6 +65,57 @@ describe("discoverGitCheckoutDirectories", () => {
       ).rejects.toThrow(
         `checkout search root is not a directory: ${file}`,
       );
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("does not count a .git that names no Git directory", async () => {
+    const directory = await Deno.makeTempDir();
+    try {
+      const real = join(directory, "real");
+      await Deno.mkdir(join(real, ".git"), { recursive: true });
+      await Deno.writeTextFile(join(real, ".git", "HEAD"), "ref: main");
+      const symlinked = join(directory, "symlinked");
+      await Deno.mkdir(symlinked);
+      await Deno.symlink(join(real, ".git"), join(symlinked, ".git"));
+      const unlabelled = join(directory, "unlabelled");
+      await Deno.mkdir(unlabelled);
+      await Deno.writeTextFile(join(unlabelled, ".git"), "not a gitdir line");
+      await Deno.mkdir(join(directory, "headless", ".git"), {
+        recursive: true,
+      });
+      const validated: string[] = [];
+      expect(
+        await discoverGitCheckoutDirectories(
+          [directory],
+          undefined,
+          (candidate) => {
+            validated.push(candidate);
+            return Promise.resolve(true);
+          },
+        ),
+      ).toEqual([real]);
+      expect(validated).toEqual([real]);
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("reports a gitdir it cannot inspect", async () => {
+    const directory = await Deno.makeTempDir();
+    try {
+      await Deno.writeTextFile(
+        join(directory, ".git"),
+        `gitdir: ${"x".repeat(300)}`,
+      );
+      const failure = await discoverGitCheckoutDirectories(
+        [directory],
+        undefined,
+        () => Promise.resolve(true),
+      ).then(() => undefined, (error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).not.toBeInstanceOf(Deno.errors.NotFound);
     } finally {
       await Deno.remove(directory, { recursive: true });
     }

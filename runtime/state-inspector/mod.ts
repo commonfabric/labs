@@ -22,6 +22,7 @@ export * from "./scopes.ts";
 export * from "./identity.ts";
 export * from "./churn.ts";
 export * from "./conflicts.ts";
+export * from "./currency.ts";
 export * from "./oracle.ts";
 export * from "./clone.ts";
 export * from "./compaction.ts";

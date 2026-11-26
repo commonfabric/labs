@@ -71,7 +71,9 @@ type ViewerCell = Writable<ViewerState | Default<typeof EMPTY_VIEWER>>;
 // tasks/pattern-compat-accepted-breaks.ts.
 export type JoinEvent = void;
 
-const join = handler<JoinEvent, {
+// Adds the viewer's live profile cell to the shared roster once, keyed on the
+// cell rather than the name, and records that the viewer has joined.
+export const join = handler<JoinEvent, {
   roster: RosterCell;
   viewer: ViewerCell;
   profile: ParticipantProfileCell | undefined;

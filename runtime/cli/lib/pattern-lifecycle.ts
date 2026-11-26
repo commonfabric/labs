@@ -8,8 +8,7 @@
  * whom the server admits only as a writer of the space.
  */
 
-import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
-import { isFabricPlainObject } from "@commonfabric/data-model";
+import type { FabricPlainObject } from "@commonfabric/api";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { PatternLifecycleVerb } from "@commonfabric/memory/v2";
 import type { RuntimeProgram } from "@commonfabric/runner";
@@ -153,12 +152,9 @@ async function call<T>(
   verb: PatternLifecycleVerb,
   { space, ...payload }: Record<string, unknown> & { space: MemorySpace },
 ): Promise<T> {
-  // Through JSON, so the arguments are plain data: what JSON decodes to is a
-  // fabric value.
-  const body: FabricValue = JSON.parse(JSON.stringify(payload));
-  if (!isFabricPlainObject(body)) {
-    throw new Error(`The \`${verb}\` arguments are not a JSON object`);
-  }
+  // Through JSON, so the arguments are plain data: what JSON decodes an
+  // object to is a plain fabric object.
+  const body: FabricPlainObject = JSON.parse(JSON.stringify(payload));
   try {
     return await config.session(space, verb, body) as T;
   } catch (error) {
@@ -210,7 +206,9 @@ async function refuseUntakenScope(
 }
 
 /**
- * Create a piece in `space` from `program`, set up and not started here,
+ * Create a piece in `space` from `program`, or from a `pattern` the space
+ * already holds (a request-key retry names the one its receipt recorded),
+ * set up and not started here,
  * with its name in the setup transaction and registration through the
  * default pattern action after setup commits. Missing roots or handlers retain
  * the created piece and report failed registration for a request-key retry.
@@ -220,19 +218,25 @@ async function refuseUntakenScope(
  */
 export async function instantiatePieceOnServer(
   config: LifecycleClientConfig,
-  input: {
-    space: MemorySpace;
+  input:
+    & {
+      space: MemorySpace;
 
-    /** Stable key reused when a creation result is uncertain. */
-    requestKey?: string;
-    program: RuntimeProgram;
-    argument?: object;
-    repository?: string;
-    slug?: string;
-    force?: boolean;
-    register?: boolean;
-    start?: boolean;
-  },
+      /** Stable key reused when a creation result is uncertain. */
+      requestKey?: string;
+    }
+    & (
+      | { program: RuntimeProgram; pattern?: undefined }
+      | { pattern: PatternRef; program?: undefined }
+    )
+    & {
+      argument?: object;
+      repository?: string;
+      slug?: string;
+      force?: boolean;
+      register?: boolean;
+      start?: boolean;
+    },
 ): Promise<{
   pieceId: string;
   pattern: PatternRef;
@@ -251,7 +255,9 @@ export async function instantiatePieceOnServer(
   return await call(config, "instantiate", {
     space: input.space,
     ...(input.requestKey === undefined ? {} : { requestKey: input.requestKey }),
-    program: wireProgram(input.program),
+    ...(input.program === undefined
+      ? { pattern: input.pattern }
+      : { program: wireProgram(input.program) }),
     ...(input.argument === undefined ? {} : { argument: input.argument }),
     ...(input.repository === undefined ? {} : { repository: input.repository }),
     ...(input.slug === undefined ? {} : { slug: input.slug }),

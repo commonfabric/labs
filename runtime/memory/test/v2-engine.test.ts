@@ -12,6 +12,7 @@ import {
   entityRefFromString,
   LINK_V1_TAG,
 } from "@commonfabric/data-model/cell-rep";
+import { test } from "@commonfabric/test-support/test";
 import { Database } from "@db/sqlite";
 
 import {
@@ -36,6 +37,7 @@ import {
   open,
   ProtocolError,
   read,
+  runAtomicCommit,
 } from "../v2/engine.ts";
 
 const createEngine = async (): Promise<{
@@ -93,7 +95,7 @@ const toEntityDocument = (
   return document as EntityDocument;
 };
 
-Deno.test("memory v2 engine reserves sync schema reference strings", async () => {
+test("memory v2 engine reserves sync schema reference strings", async () => {
   const { engine, path } = await createEngine();
   const id = "entity:reserved-sync-schema-ref";
   const reservedRef = "schema-ref@2:sha256:user-controlled";
@@ -337,7 +339,7 @@ Deno.test("memory v2 engine reserves sync schema reference strings", async () =>
   }
 });
 
-Deno.test("memory v2 engine replays stateful entities across set and delete revisions", async () => {
+test("memory v2 engine replays stateful entities across set and delete revisions", async () => {
   const { engine, path } = await createEngine();
   const reservedRef = "schema-ref@2:sha256:harmless-position";
   const id = "entity:stateful-replay";
@@ -398,7 +400,7 @@ Deno.test("memory v2 engine replays stateful entities across set and delete revi
   }
 });
 
-Deno.test("memory v2 engine validates clean moves against snapshot-backed pre-state", async () => {
+test("memory v2 engine validates clean moves against snapshot-backed pre-state", async () => {
   const { engine, path } = await createEngineWithOptions({
     snapshotInterval: 1,
   });
@@ -506,7 +508,7 @@ Deno.test("memory v2 engine validates clean moves against snapshot-backed pre-st
   }
 });
 
-Deno.test("memory v2 engine reserves request CAS schema reference strings", async () => {
+test("memory v2 engine reserves request CAS schema reference strings", async () => {
   const { engine, path } = await createEngine();
   const reservedRef = "schema-cas@1:sha256:user-controlled";
   try {
@@ -543,7 +545,7 @@ Deno.test("memory v2 engine reserves request CAS schema reference strings", asyn
   }
 });
 
-Deno.test("memory v2 engine lists live space-scoped entity identifiers", async () => {
+test("memory v2 engine lists live space-scoped entity identifiers", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -635,7 +637,7 @@ Deno.test("memory v2 engine lists live space-scoped entity identifiers", async (
   }
 });
 
-Deno.test("memory v2 engine stores independent scoped instances for the same id", async () => {
+test("memory v2 engine stores independent scoped instances for the same id", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -726,7 +728,7 @@ Deno.test("memory v2 engine stores independent scoped instances for the same id"
   }
 });
 
-Deno.test("memory v2 engine binds session scoped instances to the principal", async () => {
+test("memory v2 engine binds session scoped instances to the principal", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -783,7 +785,7 @@ Deno.test("memory v2 engine binds session scoped instances to the principal", as
   }
 });
 
-Deno.test("memory v2 engine encodes user and session scoped principal keys symmetrically", async () => {
+test("memory v2 engine encodes user and session scoped principal keys symmetrically", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -858,7 +860,7 @@ Deno.test("memory v2 engine encodes user and session scoped principal keys symme
   }
 });
 
-Deno.test("memory v2 engine requires principal context for user and session scoped reads", async () => {
+test("memory v2 engine requires principal context for user and session scoped reads", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -893,7 +895,91 @@ Deno.test("memory v2 engine requires principal context for user and session scop
   }
 });
 
-Deno.test("memory v2 engine migrates pre-scope entity tables to space scope", async () => {
+test("memory v2 engine points commits at shared metadata records when the store requires them", async () => {
+  // A store whose `commit` table requires invocation and authorization
+  // references gets one shared empty record of each, which every commit
+  // names.
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  const legacyDb = new Database(path, { create: true });
+  try {
+    legacyDb.exec(`
+      CREATE TABLE "commit" (
+        seq                INTEGER NOT NULL PRIMARY KEY,
+        branch             TEXT    NOT NULL DEFAULT '',
+        session_id         TEXT    NOT NULL,
+        local_seq          INTEGER NOT NULL,
+        invocation_ref     TEXT    NOT NULL,
+        authorization_ref  TEXT    NOT NULL,
+        original           JSON    NOT NULL,
+        resolution         JSON    NOT NULL,
+        created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+  } finally {
+    legacyDb.close();
+  }
+
+  const engine = await open({ url: toFileUrl(path) });
+  try {
+    for (const localSeq of [1, 2]) {
+      applyCommit(engine, {
+        sessionId: "session:required-metadata",
+        commit: {
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: "entity:required-metadata",
+            value: { value: { localSeq } },
+          }],
+        },
+      });
+    }
+
+    const rows = engine.database.prepare(`
+      SELECT c.invocation_ref, c.authorization_ref,
+        i.ref AS invocation, a.ref AS authorization
+      FROM "commit" c
+      LEFT JOIN invocation i ON i.ref = c.invocation_ref
+      LEFT JOIN authorization a ON a.ref = c.authorization_ref
+      ORDER BY c.seq
+    `).all() as Array<Record<string, string | null>>;
+    assertEquals(rows.length, 2);
+    for (const row of rows) {
+      assertEquals(typeof row.invocation_ref, "string");
+      assertEquals(typeof row.authorization_ref, "string");
+      assertEquals(row.invocation, row.invocation_ref);
+      assertEquals(row.authorization, row.authorization_ref);
+    }
+    assertEquals(rows[1], rows[0]);
+    assertEquals(read(engine, { id: "entity:required-metadata" })?.value, {
+      localSeq: 2,
+    });
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+test("memory v2 engine refuses an atomic commit inside an open transaction", async () => {
+  const { engine, path } = await createEngine();
+  try {
+    assertThrows(
+      () =>
+        engine.database.transaction(() =>
+          runAtomicCommit(engine, () => undefined)
+        ).immediate(),
+      ProtocolError,
+      "atomic service operations cannot nest transactions",
+    );
+    assertEquals(runAtomicCommit(engine, () => "ran"), "ran");
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+test("memory v2 engine migrates pre-scope entity tables to space scope", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const url = toFileUrl(path);
   const legacyDb = new Database(path, { create: true });
@@ -1019,7 +1105,7 @@ Deno.test("memory v2 engine migrates pre-scope entity tables to space scope", as
   }
 });
 
-Deno.test("memory v2 engine backfills current head operations", async () => {
+test("memory v2 engine backfills current head operations", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const url = toFileUrl(path);
   let engine = await open({ url });
@@ -1188,7 +1274,7 @@ Deno.test("memory v2 engine backfills current head operations", async () => {
   }
 });
 
-Deno.test("memory v2 engine conflicts are scoped by declared scope", async () => {
+test("memory v2 engine conflicts are scoped by declared scope", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -1277,7 +1363,7 @@ Deno.test("memory v2 engine conflicts are scoped by declared scope", async () =>
   }
 });
 
-Deno.test("memory v2 engine: stale-read ConflictError carries every conflicted entity and previews them in the message", async () => {
+test("memory v2 engine: stale-read ConflictError carries every conflicted entity and previews them in the message", async () => {
   // The message preview is a compatibility surface for transports that retain
   // only standard Error fields. The structured array includes every stale instance.
 
@@ -1376,7 +1462,7 @@ Deno.test("memory v2 engine: stale-read ConflictError carries every conflicted e
   }
 });
 
-Deno.test("memory v2 engine: leaf-only commit conflict — disjoint-key writers merge, same-key/container readers still conflict", async () => {
+test("memory v2 engine: leaf-only commit conflict — disjoint-key writers merge, same-key/container readers still conflict", async () => {
   const { engine, path } = await createEngine();
   const sessionId = "session:alice";
   const principal = "did:key:alice";
@@ -1511,7 +1597,7 @@ Deno.test("memory v2 engine: leaf-only commit conflict — disjoint-key writers 
   }
 });
 
-Deno.test("memory v2 engine: nonRecursive shape read conflicts with key add but not a disjoint deep-value write", async () => {
+test("memory v2 engine: nonRecursive shape read conflicts with key add but not a disjoint deep-value write", async () => {
   const { engine, path } = await createEngine();
   const sessionId = "session:alice";
   const principal = "did:key:alice";
@@ -1659,7 +1745,7 @@ Deno.test("memory v2 engine: nonRecursive shape read conflicts with key add but 
   }
 });
 
-Deno.test("memory v2 engine: nonRecursive shape read conflicts with array move and splice patches", async () => {
+test("memory v2 engine: nonRecursive shape read conflicts with array move and splice patches", async () => {
   // A non-recursive (keyset / shape) read is matched against a patch via the
   // parent-injecting `touchedPathsForPatch` (patchOverlapsNonRecursiveRead). The
   // add/remove arms are covered above; this pins the `move` and `splice` arms —
@@ -1795,7 +1881,7 @@ Deno.test("memory v2 engine: nonRecursive shape read conflicts with array move a
   }
 });
 
-Deno.test("memory v2 engine: leaf-only matcher does NOT conflict on a synthetic indexed-array add (intentional; runner never emits one)", async () => {
+test("memory v2 engine: leaf-only matcher does NOT conflict on a synthetic indexed-array add (intentional; runner never emits one)", async () => {
   // DIVERGENCE MARKER. The recursive commit matcher is leaf-only, so an indexed
   // array `add` (which the engine accepts but the runner never produces) touches
   // ONLY the added index — it does not conflict a reader of a sibling index.
@@ -1883,7 +1969,7 @@ Deno.test("memory v2 engine: leaf-only matcher does NOT conflict on a synthetic 
   }
 });
 
-Deno.test("memory v2 engine: leaf-only matcher conflicts conservatively with array splice and whole-array replace (the shapes the runner DOES emit)", async () => {
+test("memory v2 engine: leaf-only matcher conflicts conservatively with array splice and whole-array replace (the shapes the runner DOES emit)", async () => {
   // The runner encodes every array length change as a `splice` on the array path
   // or a whole-array `replace` (never an indexed add/remove). Both carry the
   // ARRAY's own path, which the leaf-only matcher treats as touching every index
@@ -2014,7 +2100,7 @@ Deno.test("memory v2 engine: leaf-only matcher conflicts conservatively with arr
   }
 });
 
-Deno.test("memory v2 engine persists set and delete commits as seq revisions", async () => {
+test("memory v2 engine persists set and delete commits as seq revisions", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -2163,7 +2249,7 @@ Deno.test("memory v2 engine persists set and delete commits as seq revisions", a
   }
 });
 
-Deno.test("memory v2 engine preserves source-only entity documents", async () => {
+test("memory v2 engine preserves source-only entity documents", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -2192,7 +2278,7 @@ Deno.test("memory v2 engine preserves source-only entity documents", async () =>
   }
 });
 
-Deno.test("memory v2 engine ignores supplied transact invocation metadata", async () => {
+test("memory v2 engine ignores supplied transact invocation metadata", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -2250,7 +2336,7 @@ Deno.test("memory v2 engine ignores supplied transact invocation metadata", asyn
   }
 });
 
-Deno.test("memory v2 engine preserves root objects whose data includes value siblings", async () => {
+test("memory v2 engine preserves root objects whose data includes value siblings", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -2283,7 +2369,7 @@ Deno.test("memory v2 engine preserves root objects whose data includes value sib
   }
 });
 
-Deno.test("memory v2 engine replays patch revisions for current and point-in-time reads", async () => {
+test("memory v2 engine replays patch revisions for current and point-in-time reads", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -2375,7 +2461,7 @@ Deno.test("memory v2 engine replays patch revisions for current and point-in-tim
   }
 });
 
-Deno.test("memory v2 engine materializes snapshots and reuses them for later reads", async () => {
+test("memory v2 engine materializes snapshots and reuses them for later reads", async () => {
   const { engine, path } = await createEngineWithOptions({
     snapshotInterval: 2,
   });
@@ -2475,7 +2561,7 @@ Deno.test("memory v2 engine materializes snapshots and reuses them for later rea
   }
 });
 
-Deno.test("memory v2 engine compacts old snapshots beyond retention", async () => {
+test("memory v2 engine compacts old snapshots beyond retention", async () => {
   const { engine, path } = await createEngineWithOptions({
     snapshotInterval: 1,
     snapshotRetention: 2,
@@ -2546,7 +2632,7 @@ Deno.test("memory v2 engine compacts old snapshots beyond retention", async () =
   }
 });
 
-Deno.test("memory v2 engine rejects stale confirmed reads and allows non-overlapping ones", async () => {
+test("memory v2 engine rejects stale confirmed reads and allows non-overlapping ones", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -2654,7 +2740,7 @@ Deno.test("memory v2 engine rejects stale confirmed reads and allows non-overlap
   }
 });
 
-Deno.test("memory v2 engine resolves pending reads and rejects stale pending reads", async () => {
+test("memory v2 engine resolves pending reads and rejects stale pending reads", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -2806,7 +2892,7 @@ Deno.test("memory v2 engine resolves pending reads and rejects stale pending rea
   }
 });
 
-Deno.test("memory v2 engine: array pending reads scan at the highest layer and require every layer to resolve", async () => {
+test("memory v2 engine: array pending reads scan at the highest layer and require every layer to resolve", async () => {
   // CT-1872 1c: an array localSeq names every pending layer the read sat on.
   // Non-highest elements impose resolution ONLY (the dependency must have an
   // accepted commit row) — staleness is based at the HIGHEST element, so a
@@ -3038,7 +3124,7 @@ Deno.test("memory v2 engine: array pending reads scan at the highest layer and r
   }
 });
 
-Deno.test("memory v2 engine: full-stack dependency recording rejects a fabricated composite an under-declared commit smuggles through", async () => {
+test("memory v2 engine: full-stack dependency recording rejects a fabricated composite an under-declared commit smuggles through", async () => {
   // CT-1872 1c, end to end at the engine: a fabricated composite must die on
   // the resolution edge, because no staleness scan can catch it.
   //
@@ -3208,7 +3294,7 @@ Deno.test("memory v2 engine: full-stack dependency recording rejects a fabricate
   }
 });
 
-Deno.test("memory v2 engine reconstructs state across delete boundaries", async () => {
+test("memory v2 engine reconstructs state across delete boundaries", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -3290,7 +3376,7 @@ Deno.test("memory v2 engine reconstructs state across delete boundaries", async 
   }
 });
 
-Deno.test("memory v2 engine supports branch inheritance, divergence, and deletion", async () => {
+test("memory v2 engine supports branch inheritance, divergence, and deletion", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -3455,7 +3541,7 @@ Deno.test("memory v2 engine supports branch inheritance, divergence, and deletio
   }
 });
 
-Deno.test("memory v2 engine rejects branch reads before createdSeq", async () => {
+test("memory v2 engine rejects branch reads before createdSeq", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -3491,7 +3577,7 @@ Deno.test("memory v2 engine rejects branch reads before createdSeq", async () =>
   }
 });
 
-Deno.test("memory v2 engine persists fabric patch values at the storage boundary", async () => {
+test("memory v2 engine persists fabric patch values at the storage boundary", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -3550,7 +3636,7 @@ Deno.test("memory v2 engine persists fabric patch values at the storage boundary
   }
 });
 
-Deno.test("memory v2 engine: nonRecursive shape read conflicts with a mergeable create-from-absent (createsKey) but not an append to an existing array", async () => {
+test("memory v2 engine: nonRecursive shape read conflicts with a mergeable create-from-absent (createsKey) but not an append to an existing array", async () => {
   const { engine, path } = await createEngine();
   const sessionId = "session:alice";
   const principal = "did:key:alice";
@@ -3725,7 +3811,7 @@ Deno.test("memory v2 engine: nonRecursive shape read conflicts with a mergeable 
   }
 });
 
-Deno.test("read forwards an explicit scopeKey to readState (protocol.md §2's read row — the exported wrapper must not drop it)", async () => {
+test("read forwards an explicit scopeKey to readState (protocol.md §2's read row — the exported wrapper must not drop it)", async () => {
   const { engine, path } = await createEngine();
   try {
     // Alice's session writes her user-scoped instance.
@@ -3761,12 +3847,11 @@ Deno.test("read forwards an explicit scopeKey to readState (protocol.md §2's re
   }
 });
 
-Deno.test("memory v2 engine reads a branch head another connection advanced", async () => {
-  // A connection that read a branch's head serves later reads from what it
-  // read, and a commit through another connection to the same store moves
-  // that head: the serving loop's worker and the memory server beside it
-  // are two such connections. The read after the other's commit sees the
-  // document that commit wrote.
+test("memory v2 engine reads a branch head another connection advanced", async () => {
+  // A commit through another connection to the same store moves a branch's
+  // head: the serving loop's worker and the memory server beside it are two
+  // such connections. The read after the other's commit sees the document
+  // that commit wrote.
   const { engine, path } = await createEngine();
   const other = await open({ url: toFileUrl(path) });
   const commit = (target: Engine, n: number) =>
@@ -3796,7 +3881,7 @@ Deno.test("memory v2 engine reads a branch head another connection advanced", as
   }
 });
 
-Deno.test("memory v2 engine data version moves for another connection's commits and not for its own", async () => {
+test("memory v2 engine data version moves for another connection's commits and not for its own", async () => {
   const { engine, path } = await createEngine();
   const other = await open({ url: toFileUrl(path) });
   const commit = (target: Engine, localSeq: number) =>

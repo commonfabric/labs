@@ -1,23 +1,30 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
-import type { ServerExecutionObserver } from "@commonfabric/memory/v2/server";
+import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import type {
+  Server,
+  ServerExecutionObserver,
+} from "@commonfabric/memory/v2/server";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   ExecutorHost,
   type ExecutorHostOptions,
   type HostOccupancy,
   type LifecycleVerb,
 } from "../../src/executor/host.ts";
+import { runEventKey } from "../../src/executor/run-beacon.ts";
 import { inServingContext } from "../../src/executor/serving-context.ts";
 import { servingRuntimeFactory } from "../../src/executor/serving-runtime.ts";
 import { SpaceServer } from "../../src/executor/space-server.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
+import { DelegationStore } from "../../src/storage/delegation-store.ts";
 import {
   EmulatedStorageManager,
+  loopbackSessionOpenAuth,
   newLoopbackServer,
 } from "../../src/storage/v2-emulate.ts";
 
@@ -35,6 +42,7 @@ function newHost(
   options: Partial<ExecutorHostOptions> = {},
 ): {
   host: ExecutorHost;
+  server: Server;
   builds: MemorySpace[][];
   close: () => Promise<void>;
 } {
@@ -74,12 +82,36 @@ function newHost(
   });
   return {
     host,
+    server,
     builds,
     close: async () => {
       await host.close();
       await server.close();
     },
   };
+}
+
+/**
+ * Opens a session on `space` signed by `signer`, over a connection `server`
+ * takes as one from this process when `inProcess` is `true` and as one from
+ * another process otherwise, and returns its client once the open has been
+ * answered. With `demand: false` the session declares that it is not demand.
+ */
+async function openSession(
+  server: Server,
+  signer: Identity,
+  { inProcess, demand }: { inProcess: boolean; demand?: boolean },
+): Promise<MemoryV2Client.Client> {
+  const client = await MemoryV2Client.connect({
+    transport: MemoryV2Client.loopback(server, { inProcess }),
+    ...(demand === undefined ? {} : { demand }),
+  });
+  await client.mount(
+    space,
+    {},
+    loopbackSessionOpenAuth(new DelegationStore(), space, signer),
+  );
+  return client;
 }
 
 /** A verb that writes nothing and returns `receipt`, recording its runtime. */
@@ -140,6 +172,91 @@ describe("ExecutorHost", () => {
         await server.close();
       }
       expect(builds).toStrictEqual([true]);
+    });
+
+    it("activates a space when a session signed by the service identity opens on it from another process", async () => {
+      // A local toolshed signs with the key its operator's CLI also uses,
+      // so the owner's own client sessions carry the service principal.
+
+      const settled = defer<string>();
+      const { host, server, close } = newHost({
+        onActivationSettled: (_space, outcome) => settled.resolve(outcome),
+      });
+      try {
+        const client = await openSession(server, service, {
+          inProcess: false,
+        });
+        try {
+          // The host decides as the open is answered, so a space it left
+          // alone shows here rather than as an activation never reported.
+          expect(host.occupancy).toBe("busy");
+          expect(await settled.promise).toBe("active");
+          expect(host.spaceServer(space)?.active).toBe(true);
+        } finally {
+          await client.close();
+        }
+      } finally {
+        await close();
+      }
+    });
+
+    it("leaves a space unactivated when a session signed by the service identity opens on it from this process", async () => {
+      // The serving runtime's own loopback sessions are not client demand.
+
+      const { host, server, close } = newHost();
+      try {
+        const client = await openSession(server, service, { inProcess: true });
+        try {
+          expect(host.occupancy).toBe("vacant");
+          expect(host.spaceServer(space)).toBeUndefined();
+        } finally {
+          await client.close();
+        }
+      } finally {
+        await close();
+      }
+    });
+
+    it("leaves a space unactivated when a session signed by the service identity from another process declares it is not demand", async () => {
+      // A toolshed's webhook runtime reaches its own memory server over the
+      // network, signed with the service key, and nobody waits on it.
+
+      const { host, server, close } = newHost();
+      try {
+        const client = await openSession(server, service, {
+          inProcess: false,
+          demand: false,
+        });
+        try {
+          expect(host.occupancy).toBe("vacant");
+          expect(host.spaceServer(space)).toBeUndefined();
+        } finally {
+          await client.close();
+        }
+      } finally {
+        await close();
+      }
+    });
+
+    it("leaves a space unactivated when a session signed by another identity declares it is not demand", async () => {
+      // A client that only copies a space's documents declares that no one
+      // waits on what the server would derive for it.
+
+      const { host, server, close } = newHost();
+      try {
+        const client = await openSession(server, owner, {
+          inProcess: false,
+          demand: false,
+        });
+        try {
+          expect(host.occupancy).toBe("vacant");
+          expect(host.spaceServer(space)).toBeUndefined();
+        } finally {
+          await client.close();
+        }
+      } finally {
+        await close();
+      }
     });
 
     it("keeps reporting the occupancy after its observer throws", async () => {
@@ -221,6 +338,38 @@ describe("ExecutorHost", () => {
         expect(ranOn[1]).toBe(ranOn[0]);
         expect(ranOn[2]).not.toBe(ranOn[0]);
         expect(host.spaceServer(space)).not.toBe(first);
+      } finally {
+        await close();
+      }
+    });
+  });
+
+  describe("failEvent()", () => {
+    /** The stream entry a served handler's run in these cases handled. */
+    const event = { sidecarId: "of:sidecar", eventId: "evt-held", seq: 2 };
+
+    it("keeps an event failed for a space with no tenure through a tenure that does not find it", async () => {
+      const { host, close } = newHost();
+      try {
+        host.failEvent(space, event, "ended");
+        await host.runLifecycleVerb(space, probeVerb("activate", []));
+        await host.spaceServer(space)!.park("test-park");
+
+        expect([...host.accessForTestingOnly.failedEvents.get(space)!.keys()])
+          .toEqual([runEventKey(event)]);
+      } finally {
+        await close();
+      }
+    });
+
+    it("keeps no map of a space's failed events once a tenure that holds an empty one ends", async () => {
+      const { host, close } = newHost();
+      try {
+        await host.runLifecycleVerb(space, probeVerb("activate", []));
+        expect(host.accessForTestingOnly.failedEvents.get(space)?.size).toBe(0);
+
+        await host.spaceServer(space)!.park("test-park");
+        expect(host.accessForTestingOnly.failedEvents.has(space)).toBe(false);
       } finally {
         await close();
       }

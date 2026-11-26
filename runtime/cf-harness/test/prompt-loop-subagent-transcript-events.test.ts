@@ -5,7 +5,6 @@
  * activity feed carries both loops in the order they happened.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -21,6 +20,7 @@ import type {
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 class FakeSandboxRuntime implements SandboxRuntime {
   describe(): SandboxRuntimeDescription {
@@ -200,5 +200,66 @@ describe("prompt-loop subagent transcript events", () => {
     );
     expect(lastChildIndex).toBeGreaterThanOrEqual(0);
     expect(delegateResultIndex).toBeGreaterThan(lastChildIndex);
+  });
+
+  describe("when the feed refuses the child's first message", () => {
+    /**
+     * Runs a parent that delegates once, with a feed that refuses the first
+     * child message it is handed, before the child's loop reaches a model.
+     * `abort`, when given, is the owner canceling the run as the feed fails.
+     */
+    const runWithRefusingFeed = (abort?: AbortController) => {
+      const engine = new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId: "run-subagent-feed-refusal",
+        model: "gpt-5.4",
+      });
+      const loop = new CfHarnessPromptLoop({
+        apiKey: "test-key",
+        engine,
+        maxModelTurns: 4,
+        fetchFn: scriptedFetch([
+          toolCallTurn("call-delegate", "delegate_task", {
+            goal: GOAL,
+            maxModelTurns: 4,
+          }),
+          finalTurn("Parent done."),
+        ]),
+      });
+      let refused = false;
+      const run = loop.runPrompt({
+        prompt: "Delegate the inspection.",
+        promptSlotBinding: directPromptSlotBinding,
+        ...(abort !== undefined ? { signal: abort.signal } : {}),
+        onTranscriptEvent: (event) => {
+          if (event.subagent === undefined || refused) return;
+          refused = true;
+          abort?.abort(new Error("owner canceled the run"));
+          throw new Error("feed closed");
+        },
+      });
+      return { engine, run };
+    };
+
+    it("records the child as canceled when the owner canceled the run", async () => {
+      const abort = new AbortController();
+      const { engine, run } = runWithRefusingFeed(abort);
+
+      await expect(run).rejects.toThrow("owner canceled the run");
+      const [child] = engine.getRunState().subagentRuns ?? [];
+      expect(child?.status).toBe("canceled");
+      expect(child?.runState?.status).toBe("canceled");
+    });
+
+    it("records the child as failed when nobody canceled the run", async () => {
+      const { engine, run } = runWithRefusingFeed();
+
+      const result = await run;
+      expect(result.finalAssistantText).toBe("Parent done.");
+      const [child] = engine.getRunState().subagentRuns ?? [];
+      expect(child?.status).toBe("failed");
+      expect(child?.summary).toBe("Subagent failed: feed closed");
+      expect(child?.runState?.status).toBe("failed");
+    });
   });
 });

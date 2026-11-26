@@ -3,7 +3,6 @@ import {
   comparePeerBuilds,
   normalizeBuildMarker,
 } from "@commonfabric/platform/peer-build";
-import { debugStr } from "@commonfabric/data-model";
 import { defer, type Deferred } from "@commonfabric/async/defer";
 import { getLogger } from "@commonfabric/logger";
 import { unrefTimer } from "@commonfabric/async/sleep";
@@ -29,7 +28,6 @@ import {
   isCustodyAnswerUpdateNotification,
   isErrorNotification,
   isEventIntentOutcomeNotification,
-  isEventNeedsAttentionNotification,
   isIPCRemoteNotification,
   isIPCRemoteResponse,
   isNavigateRequestNotification,
@@ -38,6 +36,7 @@ import {
   isPresenceUpdateNotification,
   isSpaceAccessLostNotification,
   isSpaceAccessRestoredNotification,
+  isSpaceSeqAdvancedNotification,
   isTelemetryNotification,
   isVDomBatchNotification,
   NavigateRequestNotification,
@@ -51,6 +50,7 @@ import {
   SerializedDomEvent,
   SpaceAccessLostNotification,
   SpaceAccessRestoredNotification,
+  SpaceSeqAdvancedNotification,
   TelemetryNotification,
   VDomBatchNotification,
   VDomMountResponse,
@@ -67,8 +67,6 @@ import {
 import { cellRefToKey } from "@/shared/utils.ts";
 
 const ipcLogger = getLogger("runtime-client");
-
-const DEBUG_IPC = false;
 
 interface PendingRequest<T = unknown> {
   msgId: number;
@@ -134,6 +132,27 @@ type SubscriptionCounterName =
 
 type SubscriptionCounterTotals = Record<SubscriptionCounterName, number>;
 
+/** What a worker subscription delivers beside each value. */
+type SubscriptionCarries = {
+  readonly cfcLabel: boolean;
+  readonly writtenPrincipal: boolean;
+};
+
+/**
+ * The worker subscription to a ref key: the handles subscribed under it, and
+ * what it was last opened to deliver beside each value.
+ */
+type WorkerSubscription = {
+  readonly handles: Set<CellHandle>;
+  carries: SubscriptionCarries;
+};
+
+/** What `cell` asks a worker subscription to deliver beside each value. */
+const carriesFor = (cell: CellHandle): SubscriptionCarries => ({
+  cfcLabel: cell.wantsCfcLabel,
+  writtenPrincipal: cell.wantsWrittenPrincipal,
+});
+
 export type CellSubscriptionDiagnostics = SubscriptionCounterTotals & {
   key: string;
   activeInstances: number;
@@ -151,6 +170,7 @@ export type RuntimeConnectionEvents = {
   spaceaccesslost: [SpaceAccessLostNotification];
   spaceaccessrestored: [SpaceAccessRestoredNotification];
   connectionrestored: [ConnectionRestoredNotification];
+  spaceseqadvanced: [SpaceSeqAdvancedNotification];
   telemetry: [TelemetryNotification];
   vdombatch: [VDomBatchNotification];
   pendingwriteschange: [PendingWritesNotification];
@@ -212,7 +232,7 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
   #lifetime = new AbortController();
 
   #transport: RuntimeTransport;
-  #subscribed = new Map<string, Set<CellHandle>>();
+  #subscribed = new Map<string, WorkerSubscription>();
   #subscriptionDiagnostics = new Map<string, SubscriptionCounterTotals>();
   #constructedAt = performance.now();
   #requestTimeline: RequestTimelineEntry[] = [];
@@ -375,12 +395,6 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       this.#requestTimeline.push(entry);
       this.#timelineByMsgId.set(msgId, entry);
     }
-    if (DEBUG_IPC) {
-      console.log(
-        `[IPC(\x1B[1m${message.msgId}\x1B[0m)\x1B[96m=>\x1B[0m]`,
-        message.data,
-      );
-    }
     // The bookkeeping above -- the abort hook and the pending entry -- is
     // registered on the promise below being returned to someone who will hold
     // it until a reply settles it. A synchronous throw from `send()` means no
@@ -435,93 +449,97 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
     return pending;
   }
 
-  async subscribe(
-    cell: CellHandle<any>,
-  ): Promise<void> {
+  /**
+   * Adds `cell` to the handles subscribed under its ref key, opening the
+   * worker's subscription for the first of them. That one subscription
+   * carries the label and the written principal when any of its handles asks
+   * for them: a handle that asks for more than it carries has it opened again
+   * with everything they ask for, and no handle holds a current label until
+   * the worker next delivers. What it carries widens and never narrows while
+   * any handle remains.
+   */
+  subscribe(cell: CellHandle<any>): void {
     const key = cellRefToKey(cell.ref());
-    let instances = this.#subscribed.get(key);
-    if (instances) {
-      if (!instances.has(cell)) {
-        this.#recordSubscriptionDiagnostic(key, "localSubscribes");
-        instances.add(cell);
-        // Copy what an existing subscriber holds (and its label) to the new
-        // one so late subscribers get the initial value, or the refusal that
-        // stands in its place. One that has read nothing yet has nothing to
-        // copy; the new one hears the worker's answer with it.
-        const existingInstance = instances.values().next().value;
-        const existing = existingInstance?.lastRead();
-        if (existing !== undefined && "refused" in existing) {
-          cell[$onCellRefused](existing.refused);
-        } else if (
-          existing !== undefined && "value" in existing &&
-          "unread" in cell.lastRead()
-        ) {
-          // A value seeds only a handle that holds nothing yet: what another
-          // handle holds may be a write it made or a copy it was made with,
-          // which ends no refusal the new one holds.
-          // The copy carries the label the other handle holds, as current as
-          // it is there.
-          cell[$onCellUpdate](existing.value, {
-            cfcLabel: existingInstance?.cfcLabel,
-            current: existingInstance?.cfcLabelCurrent ?? false,
-          });
-        }
-      }
+    const subscription = this.#subscribed.get(key);
+    if (subscription === undefined) {
+      this.#recordSubscriptionDiagnostic(key, "localSubscribes");
+      const opened = { handles: new Set([cell]), carries: carriesFor(cell) };
+      this.#subscribed.set(key, opened);
+      this.#openWorkerSubscription(key, cell.ref(), opened);
       return;
     }
-    this.#recordSubscriptionDiagnostic(key, "localSubscribes");
-    instances = new Set([cell]);
-    this.#subscribed.set(key, instances);
-    this.#recordSubscriptionDiagnostic(key, "backendSubscribes");
-    const _ = await this.request<RequestType.CellSubscribe>({
-      type: RequestType.CellSubscribe,
-      cell: cell.ref(),
-      // First subscriber to a ref key decides label delivery for that backend
-      // subscription (the worker dedups by ref key too). Label-displaying
-      // callers create dedicated handles, so they are that first subscriber.
-      ...(cell.wantsCfcLabel ? { includeCfcLabel: true } : {}),
-    }).catch((error) => {
-      if (!this.#lifetime.signal.aborted) {
-        console.error("[RuntimeClient] Subscription failed:", error);
+    const { handles, carries } = subscription;
+    if (!handles.has(cell)) {
+      this.#recordSubscriptionDiagnostic(key, "localSubscribes");
+      // Copy what an existing subscriber holds (and its label) to the new one
+      // so late subscribers get the initial value, or the refusal that stands
+      // in its place. One that has read nothing yet has nothing to copy; the
+      // new one hears the worker's answer with it.
+      const existingInstance = handles.values().next().value;
+      handles.add(cell);
+      const existing = existingInstance?.lastRead();
+      if (existing !== undefined && "refused" in existing) {
+        cell[$onCellRefused](existing.refused);
+      } else if (
+        existing !== undefined && "value" in existing &&
+        "unread" in cell.lastRead()
+      ) {
+        // A value seeds only a handle that holds nothing yet: what another
+        // handle holds may be a write it made or a copy it was made with,
+        // which ends no refusal the new one holds.
+        // The copy carries the label the other handle holds, as current as
+        // it is there.
+        cell[$onCellUpdate](existing.value, {
+          cfcLabel: existingInstance?.cfcLabel,
+          writtenPrincipal: existingInstance?.writtenPrincipal,
+          current: existingInstance?.cfcLabelCurrent ?? false,
+        });
       }
-      this.#subscribed.delete(key);
-    });
-    return;
+    }
+    const wanted = carriesFor(cell);
+    if (
+      (!wanted.cfcLabel || carries.cfcLabel) &&
+      (!wanted.writtenPrincipal || carries.writtenPrincipal)
+    ) {
+      return;
+    }
+    subscription.carries = {
+      cfcLabel: carries.cfcLabel || wanted.cfcLabel,
+      writtenPrincipal: carries.writtenPrincipal || wanted.writtenPrincipal,
+    };
+    // Off the worker's subscription between the two requests, no handle
+    // hears of a change, so none holds a current label until the worker
+    // delivers one again. The worker handles the requests in the order they
+    // are sent.
+    for (const handle of handles) handle[$onCellUpdateDropped]();
+    this.#closeWorkerSubscription(key, cell.ref());
+    this.#openWorkerSubscription(key, cell.ref(), subscription);
   }
 
-  async unsubscribe(
-    cell: CellHandle<any>,
-  ): Promise<void> {
+  unsubscribe(cell: CellHandle<any>): void {
     const key = cellRefToKey(cell.ref());
-    const instances = this.#subscribed.get(key);
-    if (!instances || !instances.has(cell)) {
+    const subscription = this.#subscribed.get(key);
+    if (!subscription || !subscription.handles.has(cell)) {
       return;
     }
     this.#recordSubscriptionDiagnostic(key, "localUnsubscribes");
-    instances.delete(cell);
-    if (instances.size > 0) {
+    subscription.handles.delete(cell);
+    if (subscription.handles.size > 0) {
       return;
     }
     this.#subscribed.delete(key);
     // After disposal the worker tears down every subscription wholesale, so a
     // per-cell unsubscribe would be redundant.
     if (this.#lifetime.signal.aborted) return;
-    this.#recordSubscriptionDiagnostic(key, "backendUnsubscribes");
-    const _ = await this.request<RequestType.CellUnsubscribe>({
-      type: RequestType.CellUnsubscribe,
-      cell: cell.ref(),
-    }).catch((error) => {
-      if (!this.#lifetime.signal.aborted) {
-        console.error("[RuntimeClient] Unsubscription failed:", error);
-      }
-    });
-    return;
+    this.#closeWorkerSubscription(key, cell.ref());
   }
 
   /** The handles other than `cell` subscribed under its ref key. */
   peersOf(cell: CellHandle<any>): CellHandle[] {
     const subscribed = this.#subscribed.get(cellRefToKey(cell.ref()));
-    return [...subscribed ?? []].filter((instance) => instance !== cell);
+    return [...subscribed?.handles ?? []].filter((instance) =>
+      instance !== cell
+    );
   }
 
   async dispose(): Promise<void> {
@@ -597,7 +615,7 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
     for (const key of [...keys].sort()) {
       const counts = this.#subscriptionDiagnostics.get(key) ??
         this.#emptySubscriptionCounters();
-      const activeInstances = this.#subscribed.get(key)?.size ?? 0;
+      const activeInstances = this.#subscribed.get(key)?.handles.size ?? 0;
       const entry: CellSubscriptionDiagnostics = {
         key,
         ...counts,
@@ -628,11 +646,7 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       if (dead) return;
       if (isTelemetryNotification(message)) {
         this.emit("telemetry", message);
-        // Do not log telemetry events when DEBUG_IPC is enabled
         return;
-      }
-      if (DEBUG_IPC) {
-        console.log(`[IPC\x1B[92m<=\x1B[0m]`, message);
       }
       if (isCellUpdateNotification(message)) {
         this.#handleCellUpdate(message);
@@ -650,6 +664,8 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         this.emit("spaceaccessrestored", message);
       } else if (isConnectionRestoredNotification(message)) {
         this.emit("connectionrestored", message);
+      } else if (isSpaceSeqAdvancedNotification(message)) {
+        this.emit("spaceseqadvanced", message);
       } else if (isVDomBatchNotification(message)) {
         this.emit("vdombatch", message);
       } else if (isPendingWritesNotification(message)) {
@@ -660,12 +676,9 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         this.emit("custodyanswerupdate", message);
       } else if (isPresenceUpdateNotification(message)) {
         this.emit("presenceupdate", message);
-      } else if (isEventNeedsAttentionNotification(message)) {
-        this.emit("eventneedsattention", message);
       } else {
-        console.warn(
-          debugStr`Unknown notification: $quote,long${message}`,
-        );
+        // Only an `EventNeedsAttentionNotification` is left to reach here.
+        this.emit("eventneedsattention", message);
       }
       return;
     }
@@ -699,12 +712,6 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
     }
 
     if ("error" in message && message.error) {
-      if (DEBUG_IPC) {
-        console.log(
-          `[IPC(\x1B[1m${msgId}\x1B[0m)\x1B[91m<=\x1B[0m]`,
-          message.error,
-        );
-      }
       const error = new Error(message.error) as Error & { code?: string };
       if (message.code) {
         error.code = message.code;
@@ -723,18 +730,59 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       pending.deferred.reject(error);
     } else {
       const data = "data" in message ? message.data : undefined;
-      if (DEBUG_IPC) {
-        console.log(
-          `[IPC(\x1B[1m${msgId}\x1B[0m)\x1B[92m<=\x1B[0m]`,
-          data,
-        );
-      }
       pending.deferred.resolve(data);
     }
   };
 
+  /**
+   * Asks the worker to subscribe to `ref` for `subscription`, delivering
+   * what it carries. A subscription whose latest opening the worker fails is
+   * forgotten.
+   */
+  #openWorkerSubscription(
+    key: string,
+    ref: CellRef,
+    subscription: WorkerSubscription,
+  ): void {
+    this.#recordSubscriptionDiagnostic(key, "backendSubscribes");
+    const carries = subscription.carries;
+    const { cfcLabel, writtenPrincipal } = carries;
+    void this.request<RequestType.CellSubscribe>({
+      type: RequestType.CellSubscribe,
+      cell: ref,
+      ...(cfcLabel ? { includeCfcLabel: true } : {}),
+      ...(writtenPrincipal ? { includeWrittenPrincipal: true } : {}),
+    }).catch((error) => {
+      if (!this.#lifetime.signal.aborted) {
+        console.error("[RuntimeClient] Subscription failed:", error);
+      }
+      // A reopening replaces what the subscription carries, so an opening
+      // that has been followed by another no longer names it.
+      if (
+        this.#subscribed.get(key) === subscription &&
+        subscription.carries === carries
+      ) {
+        this.#subscribed.delete(key);
+      }
+    });
+  }
+
+  /** Asks the worker to end its subscription to `ref`. */
+  #closeWorkerSubscription(key: string, ref: CellRef): void {
+    this.#recordSubscriptionDiagnostic(key, "backendUnsubscribes");
+    void this.request<RequestType.CellUnsubscribe>({
+      type: RequestType.CellUnsubscribe,
+      cell: ref,
+    }).catch((error) => {
+      if (!this.#lifetime.signal.aborted) {
+        console.error("[RuntimeClient] Unsubscription failed:", error);
+      }
+    });
+  }
+
   #handleCellUpdate(message: CellUpdateNotification): void {
-    const subscribed = this.#subscribed.get(cellRefToKey(message.cell));
+    const subscription = this.#subscribed.get(cellRefToKey(message.cell));
+    const subscribed = subscription?.handles;
     if (message.refused !== undefined) {
       // What each subscriber held of the cell goes, which an `undefined`
       // value below would leave in place.
@@ -763,15 +811,20 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
 
     // Field presence (not value) signals a label-aware notification, so a
     // label of `undefined` is still delivered and a value-only update never
-    // touches the cached label.
+    // touches the cached label. An update the worker sent before its
+    // subscription carried the principal is not its read of the principal,
+    // so its label is not current for any handle on the subscription.
     const labelUpdate = "cfcLabel" in message
-      ? { cfcLabel: message.cfcLabel, current: true }
+      ? {
+        cfcLabel: message.cfcLabel,
+        writtenPrincipal: message.writtenPrincipal,
+        current: subscription?.carries.writtenPrincipal !== true ||
+          "writtenPrincipal" in message,
+      }
       : undefined;
 
-    if (subscribed && subscribed.size > 0) {
-      for (const instance of subscribed) {
-        instance[$onCellUpdate](value, labelUpdate);
-      }
+    for (const instance of subscribed ?? []) {
+      instance[$onCellUpdate](value, labelUpdate);
     }
   }
 
@@ -810,9 +863,6 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       throw new Error(
         `RuntimeConnection: ${notification.type} sent after disposal`,
       );
-    }
-    if (DEBUG_IPC) {
-      console.log(`[IPC\x1B[96m=>\x1B[0m]`, notification);
     }
     this.#transport.send(notification);
   }

@@ -116,15 +116,12 @@ export function utf8Compare(a: string, b: string): number {
 }
 
 /**
- * Produces a frozen array containing the ordered keys of the given object,
- * in UTF-8 sort order. If the given object is frozen and its keys needed
- * sorting, the result is cached for possible reuse.
+ * Produces an array containing the ordered keys of the given object, in UTF-8
+ * sort order. If the given object is frozen and its keys needed sorting, the
+ * result is frozen and cached, and later calls return the same array.
+ * Otherwise the result is a new array.
  */
 export function utf8SortedKeysOf(value: object): readonly string[] {
-  if (value === null) {
-    throw new TypeError("Value must not be `null`.");
-  }
-
   const cached = sortedKeyCache.get(value);
   if (cached !== undefined) {
     return cached;
@@ -134,25 +131,21 @@ export function utf8SortedKeysOf(value: object): readonly string[] {
   // performs on a short array, and object keys usually arrive already in
   // order.
   const keys = Object.keys(value);
-  let ordered = true;
   for (let at = 1; at < keys.length; at++) {
     if (utf8Compare(keys[at - 1]!, keys[at]!) > 0) {
-      ordered = false;
-      break;
+      // An entry lives as long as its object does, so one is kept only where
+      // it saves a sort. Reading keys already in order again takes one
+      // `Object.keys()` call and the check above, which costs less than
+      // holding a copy of them for the object's whole life.
+      keys.sort(utf8Compare);
+      if (Object.isFrozen(value)) {
+        sortedKeyCache.set(value, Object.freeze(keys));
+      }
+      return keys;
     }
   }
 
-  const sorted = Object.freeze(ordered ? keys : keys.sort(utf8Compare));
-
-  // An entry lives as long as its object does, so one is kept only where it
-  // saves a sort. Reading keys already in order again takes one
-  // `Object.keys()` call and the check above, which costs less than holding a
-  // copy of them for the object's whole life.
-  if (!ordered && Object.isFrozen(value)) {
-    sortedKeyCache.set(value, sorted);
-  }
-
-  return sorted;
+  return keys;
 }
 
 /**
@@ -198,23 +191,3 @@ export const encode = (input: string): Uint8Array<ArrayBuffer> =>
  * @returns The decoded string
  */
 export const decode = (input: Uint8Array): string => decoder.decode(input);
-
-/**
- * Decodes a data file's bytes as the text a source package stores.
- *
- * A source package holds text, so the bytes are decoded as UTF-8 strictly: a
- * file that is not valid UTF-8 is reported by `name` rather than stored with
- * replacement characters in place of the bytes that were read. `ignoreBOM`
- * keeps a leading byte order mark in the result instead of consuming it, since
- * a data file is stored byte for byte and dropping the mark would deploy
- * something other than the authored file. Every reader of a data file decodes
- * it here, so that each one stores and hashes the same text.
- */
-export function decodeDataFile(bytes: Uint8Array, name: string): string {
-  try {
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
-      .decode(bytes);
-  } catch {
-    throw new Error(`Data file \`${name}\` is not valid UTF-8 text.`);
-  }
-}

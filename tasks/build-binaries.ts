@@ -10,6 +10,7 @@ import {
 } from "../runtime/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 import { CONNECTOR_PATTERN_SOURCES } from "../connectors/pattern-sources.ts";
 import { CF_PERMISSION_FLAGS } from "../runtime/cli/lib/cf-permissions.ts";
+import type { TreeSitterGrammar } from "../runtime/cli/lib/view/languages/treesitter/adapter.ts";
 import { treeSitterGrammars } from "../runtime/cli/lib/view/languages/treesitter/grammars.ts";
 import { BASELINES_DIR, isIframeGuestSource } from "./pattern-files.ts";
 import { PACKAGE_ROOTS } from "./package-layout.ts";
@@ -275,6 +276,22 @@ export class BuildConfig {
     return this.#path("runtime", "cli", "lib", "multi-user-test-worker.ts");
   }
 
+  cliParseWorkerPath() {
+    return this.#path("runtime", "cli", "lib", "view", "parseworker.ts");
+  }
+
+  cliProgramWorkerPath() {
+    return this.#path(
+      "runtime",
+      "cli",
+      "lib",
+      "view",
+      "languages",
+      "typescript",
+      "programworker.ts",
+    );
+  }
+
   fusePackagePath() {
     return this.#path("runtime", "fuse");
   }
@@ -303,6 +320,8 @@ export class BuildConfig {
       this.docsCommonPath(),
       this.cliEntryPath(),
       this.cliMultiUserTestWorkerPath(),
+      this.cliParseWorkerPath(),
+      this.cliProgramWorkerPath(),
       this.fusePackagePath(),
       ...COMPILE_FINGERPRINT_INPUTS.map((input) =>
         this.#path(...input.split("/"))
@@ -340,6 +359,12 @@ export class BuildConfig {
           // The worker `cf test` spawns in multi-user mode. The compile does
           // not follow a worker's module, so it is named here.
           this.cliMultiUserTestWorkerPath(),
+          // The worker `cf view` parses a diff's large files in, which the
+          // compile does not follow either.
+          this.cliParseWorkerPath(),
+          // The worker `cf view` builds its TypeScript program in, which the
+          // compile does not follow either.
+          this.cliProgramWorkerPath(),
           // The build metadata `runtime/cli/lib/build-info.ts` reads.
           this.cliEnvPath(),
         ];
@@ -352,8 +377,8 @@ export class BuildConfig {
    * embedded when an embedded module imports it. The toolshed leaves out the
    * files in the pattern trees that it never serves to a runtime: the
    * integration tests with their helpers and fixtures, the recorded
-   * compatibility baselines, the Topics board's command-line client, Deno unit
-   * tests, and iframe guest sources.
+   * compatibility baselines, the Topics board's command-line client, the
+   * test support modules, Deno unit tests, and iframe guest sources.
    * Authored `.test.tsx` pattern tests are served because a program can attach
    * them as source roots. Excluding development-only files also keeps their npm
    * dependencies out of the binary.
@@ -363,6 +388,7 @@ export class BuildConfig {
     const directories = [
       this.#path("patterns", "integration"),
       this.#path("patterns", "apps", "topics", "tools"),
+      this.#path("patterns", "tools", "test-support"),
       this.#path(...BASELINES_DIR.split("/")),
     ];
     const files = this.patternPaths().flatMap((tree) =>
@@ -449,9 +475,20 @@ async function ensureDistDir(config: BuildConfig): Promise<void> {
   }
 }
 
-async function buildShell(
+/** Runs a command to its end, and returns whether it succeeded. */
+export type RunCommand = (
+  command: string,
+  options: Deno.CommandOptions,
+) => Promise<{ success: boolean }>;
+
+/** The {@link RunCommand} that runs the command in a process of its own. */
+const runCommand: RunCommand = (command, options) =>
+  new Deno.Command(command, options).output();
+
+export async function buildShell(
   config: BuildConfig,
   compileCacheVersion: string,
+  run: RunCommand = runCommand,
 ): Promise<void> {
   for (const mode of ["development", "production"]) {
     console.log(`Building shell app in ${mode}...`);
@@ -459,7 +496,7 @@ async function buildShell(
     const toolshedShellFrontend = mode === "production"
       ? config.toolshedShellFrontendPath()
       : config.toolshedShellFrontendPathDev();
-    const { success } = await new Deno.Command(Deno.execPath(), {
+    const { success } = await run(Deno.execPath(), {
       args: [
         "task",
         task,
@@ -474,7 +511,7 @@ async function buildShell(
       env: { CF_COMPILE_CACHE_RUNTIME_VERSION: compileCacheVersion },
       stdout: "inherit",
       stderr: "inherit",
-    }).output();
+    });
     if (!success) {
       throw new Error("Failed to build shell app");
     }
@@ -491,9 +528,12 @@ async function buildShell(
   console.log("Shell app built successfully");
 }
 
-async function buildToolshed(config: BuildConfig): Promise<void> {
+export async function buildToolshed(
+  config: BuildConfig,
+  run: RunCommand = runCommand,
+): Promise<void> {
   console.log("Building toolshed binary...");
-  const { success } = await new Deno.Command(Deno.execPath(), {
+  const { success } = await run(Deno.execPath(), {
     env: {
       OTEL_DENO: "true",
     },
@@ -514,43 +554,19 @@ async function buildToolshed(config: BuildConfig): Promise<void> {
     cwd: config.toolshedProjectPath(),
     stdout: "inherit",
     stderr: "inherit",
-  }).output();
+  });
   if (!success) {
     throw new Error("Failed to build toolshed binary");
   }
   console.log("Toolshed binary built successfully");
 }
 
-async function buildCli(config: BuildConfig): Promise<void> {
+export async function buildCli(
+  config: BuildConfig,
+  run: RunCommand = runCommand,
+): Promise<void> {
   console.log("Building CLI binary...");
-  // Figure out the full list requested by typescript and
-  // friends
-  // Globs don't work for compile(?)
-  const _envs = [
-    "API_URL",
-    "TSC_WATCHFILE",
-    "TSC_NONPOLLING_WATCHER",
-    "TSC_WATCHDIRECTORY",
-    "TSC_WATCH_POLLINGINTERVAL_LOW",
-    "TSC_WATCH_POLLINGINTERVAL_MEDIUM",
-    "TSC_WATCH_POLLINGINTERVAL_HIGH",
-    "TSC_WATCH_POLLINGCHUNKSIZE_LOW",
-    "TSC_WATCH_POLLINGCHUNKSIZE_MEDIUM",
-    "TSC_WATCH_POLLINGCHUNKSIZE_HIGH",
-    "TSC_WATCH_UNCHANGEDPOLLTHRESHOLDS_LOW",
-    "TSC_WATCH_UNCHANGEDPOLLTHRESHOLDS_MEDIUM",
-    "TSC_WATCH_UNCHANGEDPOLLTHRESHOLDS_HIGH",
-    "NODE_INSPECTOR_IPC",
-    "VSCODE_INSPECTOR_OPTIONS",
-    "NODE_ENV",
-    // sqlite3 library requires these
-    "DENO_SQLITE_PATH",
-    "DENO_SQLITE_LOCAL",
-    "DENO_DIR",
-    "HOME",
-    "XDG_CACHE_HOME",
-  ];
-  const { success } = await new Deno.Command(Deno.execPath(), {
+  const { success } = await run(Deno.execPath(), {
     args: [
       ...lockedCompileArgs(config),
       "--output",
@@ -567,7 +583,7 @@ async function buildCli(config: BuildConfig): Promise<void> {
     cwd: config.root,
     stdout: "inherit",
     stderr: "inherit",
-  }).output();
+  });
   if (!success) {
     throw new Error("Failed to build CLI binary");
   }
@@ -593,24 +609,32 @@ export function embedArgs(config: BuildConfig, binary: BinaryName): string[] {
  * never reads, which the `cf` binary leaves out: every directory in the
  * package but the one holding its compiled parser, such as generated C source
  * and native builds. The packages are in Deno's npm cache rather than in the
- * repository.
+ * repository. `grammars` are the grammars the pager loads. Each directory is
+ * listed once, though grammars may share a package.
  */
-export function unusedGrammarDirectories(): string[] {
-  return treeSitterGrammars.flatMap((grammar) => {
-    const parser = path.fromFileUrl(grammar.wasmUrl());
-    let root = path.dirname(parser);
-    while (!existsSync(path.join(root, "package.json"))) {
-      if (path.dirname(root) === root) {
-        throw new Error(`No package holds the ${grammar.id} grammar ${parser}`);
+export function unusedGrammarDirectories(
+  grammars: readonly Pick<TreeSitterGrammar, "id" | "wasmUrl">[] =
+    treeSitterGrammars,
+): string[] {
+  return [
+    ...new Set(grammars.flatMap((grammar) => {
+      const parser = path.fromFileUrl(grammar.wasmUrl());
+      let root = path.dirname(parser);
+      while (!existsSync(path.join(root, "package.json"))) {
+        if (path.dirname(root) === root) {
+          throw new Error(
+            `No package holds the ${grammar.id} grammar ${parser}`,
+          );
+        }
+        root = path.dirname(root);
       }
-      root = path.dirname(root);
-    }
-    const kept = path.relative(root, parser).split(path.SEPARATOR)[0];
-    return Array.from(Deno.readDirSync(root))
-      .filter((entry) => entry.isDirectory && entry.name !== kept)
-      .map((entry) => path.join(root, entry.name))
-      .sort();
-  });
+      const kept = path.relative(root, parser).split(path.SEPARATOR)[0];
+      return Array.from(Deno.readDirSync(root))
+        .filter((entry) => entry.isDirectory && entry.name !== kept)
+        .map((entry) => path.join(root, entry.name))
+        .sort();
+    })),
+  ];
 }
 
 /** Returns the dependency-resolution arguments shared by every binary build. */
@@ -781,10 +805,30 @@ export async function runBuildBinaries(
       // --background re-runs this binary as a detached server child, so the
       // compiled binary needs permission to spawn itself.
       "--allow-run",
-      // V8's default limit of about 4 GB is less than a serving worker can need
-      // on a busy board. The limit applies to each isolate, so a worker gets
-      // its own.
-      "--v8-flags=--max-old-space-size=8192",
+      // The main thread's heap limit, 16 GiB, the same as the toolshed's
+      // `dev` and `production` tasks and `start-local-dev.sh` give it: under
+      // V8's default of about 4 GB, a toolshed's memory server outgrew it on
+      // Estuary (2026-11-16, toolshed 8020). V8 takes the flag over the limit
+      // each serving worker is started with, so the pool holds each worker to
+      // `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB` from its heartbeats instead.
+      // A compiled binary reads no V8 flags when it starts, so this is the
+      // limit every deployment runs with.
+      //
+      // The other two let `perf` on the host name the JavaScript a thread
+      // runs, serving workers' threads included: V8 writes the name and
+      // address of each compiled function to `/tmp/perf-<pid>.map`, and
+      // gives interpreted frames a native frame of their own. A stalled
+      // worker answers nothing, so sampling it from outside is the only way
+      // to see what it runs (2026-11-14, toolshed 8020 on Estuary). The map
+      // grows with each function compiled and is never trimmed; these come
+      // off once that investigation is done.
+      //
+      // `--perf-basic-prof-only-functions` also switches on V8's event log,
+      // which V8 otherwise writes to an `isolate-<address>-<pid>-v8.log` file
+      // in the working directory for each isolate. `--no-logfile-per-isolate`
+      // and `--logfile=+` give each isolate's log an unnamed temporary file
+      // instead, which the system frees when that isolate ends.
+      "--v8-flags=--max-old-space-size=16384,--perf-basic-prof-only-functions,--interpreted-frames-native-stack,--no-logfile-per-isolate,--logfile=+",
     ],
     binaries: requestedBinaries(args),
     cachedOnly: Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED") === "1",

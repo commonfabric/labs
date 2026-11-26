@@ -1,8 +1,8 @@
 /// <reference lib="deno.unstable" />
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import plugin from "./lint-file-url-pathname.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The source text of each `pathname` read the rule reports in `source`. */
 function reported(source: string): string[] {
@@ -48,6 +48,13 @@ describe("lint-file-url-pathname", () => {
       "(toFileUrl(path) satisfies URL).pathname",
       'URL.parse("./x.ts", import.meta.url)!.pathname',
     ]);
+  });
+
+  it("returns nothing for a declaration that binds a file URL whole, or binds nothing", () => {
+    expect(reported(`
+      const url = new URL("../..", import.meta.url);
+      let pathname;
+    `)).toEqual([]);
   });
 
   it("reports `pathname` destructured from a file URL", () => {

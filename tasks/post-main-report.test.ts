@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   coverageRecords,
@@ -16,6 +15,7 @@ import { MAIN_REPORT_MARKER } from "./test-selection/report.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import { coverageGateSuite } from "./test-topology/coverage-gates.ts";
 import type { TestRecord } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { ManifestFetch } from "./test-selection/store.ts";
 import type { RunOutcomes } from "./test-selection/report.ts";
@@ -37,8 +37,8 @@ import {
   recordsInDirectory,
   reportsFromArtifacts,
   runAt,
-  runGit,
   runPartitions,
+  runReporter,
   type StoredRun,
   withdrawReport,
 } from "./post-main-report.ts";
@@ -141,10 +141,11 @@ async function recordsZip(
 /** One run's coverage artifact, carrying the figures a case names. */
 async function coverageZip(
   uncovered: Readonly<Record<string, number>>,
+  sets: Readonly<Record<string, number>> = {},
 ): Promise<Uint8Array> {
   return await recordsZip(coverageRecords({
     groups: new Map(Object.entries(uncovered)),
-    sets: new Map(),
+    sets: new Map(Object.entries(sets)),
     cold: false,
   }));
 }
@@ -279,6 +280,15 @@ interface World {
   /** Uncovered lines per source group, by run id, where a case gives them. */
   uncovered?: Record<number, Record<string, number>>;
 
+  /**
+   * Uncovered lines per measured set, by run id, carried in the coverage
+   * artifact of a run `uncovered` gives figures for.
+   */
+  setsUncovered?: Record<number, Record<string, number>>;
+
+  /** The labels the pull request carries. */
+  labels?: readonly string[];
+
   /** The run whose records artifact refuses to download. */
   unreadable?: number;
 
@@ -382,7 +392,8 @@ async function reporting(
         if (lines === undefined) {
           return new Response("no", { status: 404, statusText: "Not Found" });
         }
-        return new Response(await coverageZip(lines) as BodyInit, {
+        const sets = world.setsUncovered?.[id - 100];
+        return new Response(await coverageZip(lines, sets) as BodyInit, {
           status: 200,
         });
       }
@@ -410,7 +421,10 @@ async function reporting(
       if (world.pullRequest === false) {
         return new Response("no", { status: 404, statusText: "Not Found" });
       }
-      return Response.json({ head: { sha: "b".repeat(40) } });
+      return Response.json({
+        head: { sha: "b".repeat(40) },
+        labels: (world.labels ?? []).map((name) => ({ name })),
+      });
     }
     if (url.includes("/commits/")) {
       const date = world.committed?.[url.slice(url.lastIndexOf("/") + 1)];
@@ -847,6 +861,18 @@ describe("post-main-report", () => {
         expect(view.placed.has(`workspace-unit\t${oven}`)).toBe(true);
       });
 
+      it("is placed in no unit where the tree cannot locate its record", () => {
+        const view = manifestView(
+          manifest,
+          tree,
+          new Set(),
+          new Set(),
+          [{ test: rises }],
+          DEFAULT_RUN,
+        );
+        expect(view.units.has(testIdentityKey(rises))).toBe(false);
+      });
+
       it("is held back with a unit that runs whole and holds a flaky test", () => {
         // `kneads` is withheld and `bakery.test.ts` runs whole, so a new
         // test recorded in it was held back with it.
@@ -907,22 +933,6 @@ describe("post-main-report", () => {
         DEFAULT_RUN,
       );
       expect(view.selected.size).toBe(0);
-    });
-  });
-
-  describe("runGit()", () => {
-    it("gives back what git printed", async () => {
-      expect((await runGit("rev-parse", "HEAD")).trim()).toMatch(
-        /^[0-9a-f]{40}$/,
-      );
-    });
-
-    // A git that failed has not answered the question asked, and standing
-    // in an empty answer would read as a commit with no subject and no
-    // diff.
-    it("throws what git said when git refused", async () => {
-      await expect(runGit("rev-parse", "not-a-ref-in-any-repository"))
-        .rejects.toThrow("git rev-parse not-a-ref-in-any-repository failed");
     });
   });
 
@@ -1326,6 +1336,20 @@ describe("post-main-report", () => {
       }
     });
 
+    it("finds nothing where the first coverage upload cannot be read", async () => {
+      const original = globalThis.fetch;
+      globalThis.fetch = answering(
+        [{ id: 5, name: "test-records-coverage-a1" }],
+        {},
+        [],
+      );
+      try {
+        expect(await firstCoverageAt("abc")).toBeUndefined();
+      } finally {
+        globalThis.fetch = original;
+      }
+    });
+
     it("finds nothing where the run has uploaded no coverage yet", async () => {
       const original = globalThis.fetch;
       globalThis.fetch = answering(
@@ -1628,6 +1652,90 @@ describe("post-main-report", () => {
             "say why.",
         );
       });
+
+      it("says the run did not run the test where the labels ask for no run that can be read", async () => {
+        const written = await reporting(theirs({
+          labels: ["ci: full", "ci: 2x"],
+        }));
+        expect(written[0]!.body).not.toContain("too flaky");
+        expect(written[0]!.body).toContain(
+          "This pull request did not run it, and there is no manifest to " +
+            "say why.",
+        );
+      });
+
+      describe("a measured set whose coverage rose", () => {
+        // The change reaches `runtime/bakery`, whose one measured set
+        // carries 10 uncovered lines at the parent and 40 here.
+
+        const measured: Suite = {
+          ...suites[0]!,
+          measured: [{
+            member: "runtime/bakery",
+            reachedBy: ["runtime/bakery/"],
+            units: [bakeryUnit],
+          }],
+        };
+        const gate = {
+          k: "gate",
+          s: "bakery",
+          n: "coverage-gate workspace-unit",
+        };
+
+        /**
+         * The report where the manifest scores the set's gate in and the
+         * pull request carries `labels`.
+         */
+        const rising = (labels: readonly string[]) =>
+          reporting(theirs({
+            suites: [measured, coverageGateSuite([measured])],
+            labels,
+            manifests: {
+              "2026-09-07T05:30:00.000Z": {
+                manifest: {
+                  ...manifest,
+                  entries: [
+                    ...manifest.entries,
+                    sampleEntry(gate, {
+                      suite: "coverage-gate",
+                      unit: "workspace-unit/runtime/bakery",
+                      score: 0.9,
+                    }),
+                  ],
+                },
+              },
+            },
+            uncovered: {
+              1: { "runtime/bakery": 40 },
+              2: { "runtime/bakery": 10 },
+            },
+            setsUncovered: {
+              1: { "workspace-unit/runtime/bakery": 40 },
+              2: { "workspace-unit/runtime/bakery": 10 },
+            },
+          }));
+
+        it("says the plan chose the set's gate where the run chose by score", async () => {
+          const written = await rising([]);
+          expect(written[0]!.body).toContain(
+            "The plan for the pull request chose this set's gate",
+          );
+          expect(written[0]!.body).not.toContain(
+            "did not choose the set's coverage gate",
+          );
+        });
+
+        it("says the plan did not choose the set's gate where the labels asked for nothing chosen by score", async () => {
+          const written = await rising(["ci: 0x"]);
+          expect(written[0]!.body).toContain(
+            "the plan for its pull request did not choose the set's " +
+              "coverage gate",
+          );
+          expect(written[0]!.body).not.toContain(
+            "The plan for the pull request chose this set's gate",
+          );
+        });
+      });
     });
 
     describe("a test the run did not fail for", () => {
@@ -1877,6 +1985,61 @@ describe("post-main-report", () => {
       expect(written.length).toBe(1);
       expect(written[0]!.body).toContain("https://ci/run/9");
       expect(written[0]!.body).toContain("[unit] bakery: kneads");
+    });
+  });
+
+  describe("runReporter()", () => {
+    /** Runs `body` with `console.log` and `console.error` captured. */
+    async function capturing(body: () => Promise<number>) {
+      const out: string[] = [];
+      const log = console.log;
+      const error = console.error;
+      console.log = (line: string) => out.push(line);
+      console.error = (line: string) => out.push(line);
+      try {
+        return { code: await body(), out };
+      } finally {
+        console.log = log;
+        console.error = error;
+      }
+    }
+
+    it("returns 1 and says the token is required without one", async () => {
+      expect(await capturing(() => runReporter([], undefined))).toEqual({
+        code: 1,
+        out: ["GITHUB_TOKEN is required."],
+      });
+    });
+
+    it("returns 0 and annotates the run when the reporter stops", async () => {
+      Deno.env.set("MAIN_REPORT_RUN_ID", "not-a-run");
+      try {
+        expect(await capturing(() => runReporter([], "token"))).toEqual({
+          code: 0,
+          out: [
+            "::warning title=Run report::Error: MAIN_REPORT_RUN_ID is not a " +
+            "run id: not-a-run",
+          ],
+        });
+      } finally {
+        Deno.env.delete("MAIN_REPORT_RUN_ID");
+      }
+    });
+
+    it("returns 0 and reports on nothing where no event names a run", async () => {
+      const eventPath = Deno.env.get("GITHUB_EVENT_PATH");
+      Deno.env.delete("GITHUB_EVENT_PATH");
+      try {
+        expect(await capturing(() => runReporter(["--dry-run"], "token")))
+          .toEqual({
+            code: 0,
+            out: ["Nothing to report on: no run in the event."],
+          });
+      } finally {
+        if (eventPath !== undefined) {
+          Deno.env.set("GITHUB_EVENT_PATH", eventPath);
+        }
+      }
     });
   });
 

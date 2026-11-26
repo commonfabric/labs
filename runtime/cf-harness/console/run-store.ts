@@ -13,6 +13,7 @@
  */
 
 import { join } from "@std/path";
+import { assertValidHarnessHandleTable } from "../src/handle-table.ts";
 import {
   clauseAlternatives,
   type IFCLabel,
@@ -48,11 +49,10 @@ import {
   type ConsoleTranscriptOmissionsState,
 } from "./steps.ts";
 import {
-  type ConsoleGraph,
-  type ConsoleGraphRunInput,
-  consoleRunFamilyGraph,
-} from "./graph.ts";
-import { type ConsoleFlow, consoleRunFlow } from "./flow.ts";
+  type ConsoleFlow,
+  type ConsoleFlowRunInput,
+  consoleRunFlow,
+} from "./flow.ts";
 import {
   cellLabelsSummaryOf,
   type ConsoleCellLabelIndex,
@@ -102,14 +102,33 @@ export const readJson = async <Value>(
  * Reads a run checkpoint with its required fields and directory identity.
  * Listing, resolution, detail and neighbor tables share this eligibility rule.
  * Optional records retain their writer's schema; this checks the checkpoint's
- * outer shape rather than interpreting those records.
+ * outer shape rather than interpreting those records. The handle table is
+ * the exception, since every reader resolves tokens against it: one that is
+ * not a valid table is dropped, so the run reads as one that minted no
+ * handles, and none of its entries resolves anything, even those well formed.
  */
 const readRunState = async (
   root: string,
   runId: string,
 ): Promise<HarnessRunState | undefined> => {
   const value = await readJson<unknown>(join(root, "run-state.json"));
-  return hasRunStateShape(value, runId) ? value : undefined;
+  if (!hasRunStateShape(value, runId)) {
+    return undefined;
+  }
+  const { handleTable, ...rest } = value;
+  return handleTable === undefined || isValidHandleTable(handleTable)
+    ? value
+    : rest;
+};
+
+/** Whether `table` passes the check a run adopting a table applies. */
+const isValidHandleTable = (table: HarnessHandleTable): boolean => {
+  try {
+    assertValidHarnessHandleTable(table);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 /** Checks checkpoint identity and the required outer fields of its schema. */
@@ -478,8 +497,7 @@ export const listConsoleRuns = async (
 ): Promise<readonly ConsoleListedRun[]> => {
   const summaries: ConsoleListedRun[] = [];
   for (const name of await safeSubdirectories(artifactRoot)) {
-    const root = await runRoot(artifactRoot, name);
-    if (root === undefined) continue;
+    const root = join(artifactRoot, name);
     const runState = await readRunState(root, name);
     if (runState === undefined) continue;
     try {
@@ -626,28 +644,6 @@ export const readConsoleRun = async (
   };
 };
 
-/**
- * The data-flow graph of a run and the `delegate_task` children beneath it.
- *
- * The family rather than the run alone, because that is where the routing
- * lives: a parent commonly names a cell its child produced, and a graph drawn
- * per run shows that cell arriving from nowhere. A subagent run asked for
- * directly graphs its own subtree, which is what someone who opened a child
- * asked to see.
- *
- * Descendants are found by name — the harness ids a child `<parent>.subagent.N`
- * — so this reads one directory listing rather than every run's state.
- */
-export const readConsoleRunFamilyGraph = async (
-  artifactRoot: string,
-  runId: string,
-): Promise<ConsoleGraph | undefined> => {
-  const family = await readConsoleRunFamily(artifactRoot, runId);
-  return family === undefined
-    ? undefined
-    : consoleRunFamilyGraph(family.root, family.descendants);
-};
-
 /** The conversation map of a run and the children beneath it. */
 export const readConsoleRunFlow = async (
   artifactRoot: string,
@@ -674,16 +670,16 @@ export const readConsoleRunFlow = async (
  * A run and its `delegate_task` descendants, each reading its handles against
  * the neighbours' tables as well as its own, and each against its own label
  * snapshot — a child writes its own, so a cell a child produced carries the
- * space's labels in the family graph and in the map. Both are built from this,
- * and neither wants to know how a family is found on disk.
+ * space's labels in the map. The map is built from this, and does not need to
+ * know how a family is found on disk.
  */
 const readConsoleRunFamily = async (
   artifactRoot: string,
   runId: string,
 ): Promise<
   | {
-    root: ConsoleGraphRunInput;
-    descendants: ConsoleGraphRunInput[];
+    root: ConsoleFlowRunInput;
+    descendants: ConsoleFlowRunInput[];
     runState: HarnessRunState;
     cellLabels: ConsoleCellLabelsSummary;
   }
@@ -697,7 +693,7 @@ const readConsoleRunFamily = async (
     runState: root.runState,
     labels: await cellLabelIndex(join(artifactRoot, runId)),
   }];
-  const descendants: ConsoleGraphRunInput[] = [];
+  const descendants: ConsoleFlowRunInput[] = [];
   try {
     for await (const entry of Deno.readDir(artifactRoot)) {
       if (!entry.isDirectory || !entry.name.startsWith(`${runId}.`)) {
@@ -721,7 +717,7 @@ const readConsoleRunFamily = async (
   }
   const neighbours = await neighbouringHandles(artifactRoot);
   // A run's own table wins, so it is appended last.
-  const withNeighbours = (run: ConsoleGraphRunInput): ConsoleGraphRunInput => ({
+  const withNeighbours = (run: ConsoleFlowRunInput): ConsoleFlowRunInput => ({
     ...run,
     handles: [...neighbours, ...run.handles],
   });
@@ -867,25 +863,22 @@ const readNeighbouringHandles = async (
   names: readonly string[],
 ): Promise<ConsoleHandle[]> => {
   const handles: ConsoleHandle[] = [];
-  try {
-    for (const name of names) {
-      const runState = await readRunState(join(artifactRoot, name), name);
-      for (const entryHandle of runState?.handleTable?.entries ?? []) {
-        handles.push({
-          token: entryHandle.token,
-          ref: entryHandle.ref,
-          addressKey: entryHandle.addressKey,
-          introducedAtStep: 0,
-          // A neighbour's entry resolves an address and nothing more; what the
-          // handle was used for, and what its cell is labelled, belong to the
-          // run that used it and are left absent rather than invented here.
-          uses: [],
-          confidentiality: [],
-        });
-      }
+  for (const name of names) {
+    const table = (await readRunState(join(artifactRoot, name), name))
+      ?.handleTable;
+    for (const entryHandle of table?.entries ?? []) {
+      handles.push({
+        token: entryHandle.token,
+        ref: entryHandle.ref,
+        addressKey: entryHandle.addressKey,
+        introducedAtStep: 0,
+        // A neighbour's entry resolves an address and nothing more; what the
+        // handle was used for, and what its cell is labelled, belong to the
+        // run that used it and are left absent rather than invented here.
+        uses: [],
+        confidentiality: [],
+      });
     }
-  } catch {
-    // No neighbours to read is simply no extra resolution.
   }
   return handles;
 };

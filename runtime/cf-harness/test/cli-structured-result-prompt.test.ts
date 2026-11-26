@@ -1,9 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import type { JSONSchema } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   buildCfHarnessBatchSystemPrompt,
   buildCfHarnessOperatorSystemPrompt,
+  buildStructuredResultSchemaPrompt,
 } from "../src/cli.ts";
 import { validateStructuredResultValue } from "../src/structured-result.ts";
 
@@ -23,7 +25,7 @@ describe("cli structured result prompt", () => {
     },
   } as const;
 
-  it("includes the complete schema and closed-object guidance in batch and operator prompts", () => {
+  it("gives closed-object guidance in batch and operator prompts and the complete schema in a message of its own", () => {
     const structuredResult = {
       path: "/tmp/project/result.json",
       sandboxPath: "/workspace/result.json",
@@ -42,11 +44,57 @@ describe("cli structured result prompt", () => {
       }),
     ];
     for (const prompt of prompts) {
-      expect(prompt).toContain(JSON.stringify(schema));
+      expect(prompt).not.toContain(JSON.stringify(schema));
       expect(prompt).toContain(
         "Object schemas are closed by default: include only properties the schema declares unless it explicitly allows additional properties.",
       );
+      expect(prompt).toContain(
+        "The result schema follows these instructions as a message of its own.",
+      );
     }
+    expect(buildStructuredResultSchemaPrompt(structuredResult)).toBe(
+      `Result schema (JSON):\n${JSON.stringify(schema)}`,
+    );
+  });
+
+  it("gives runs that differ only in schema the same system prompt, with the caller's instructions before the result contract", () => {
+    const instructions = "Write the brief.\n\nRead before you write.";
+    const other = {
+      type: "object",
+      properties: { subject: { enum: ["person-1", "person-2"] } },
+    } as const;
+    const resultAt = (schema: JSONSchema) => ({
+      path: "/tmp/project/result.json",
+      sandboxPath: "/workspace/result.json",
+      schema,
+    });
+    const pairs = [
+      [schema, other].map((each) =>
+        buildCfHarnessBatchSystemPrompt({
+          systemPrompt: instructions,
+          structuredResult: resultAt(each),
+        })
+      ),
+      [schema, other].map((each) =>
+        buildCfHarnessOperatorSystemPrompt({
+          workspace: "/tmp/project",
+          focusRoot: "/tmp/project",
+          systemPrompt: instructions,
+          structuredResult: resultAt(each),
+        })
+      ),
+    ];
+    for (const [first, second] of pairs) {
+      expect(second).toBe(first);
+      const end = first.indexOf(instructions) + instructions.length;
+      expect(first.indexOf(instructions)).toBeGreaterThan(0);
+      expect(first.indexOf("Structured result contract:")).toBeGreaterThan(
+        end,
+      );
+    }
+    expect(buildStructuredResultSchemaPrompt(resultAt(other))).not.toBe(
+      buildStructuredResultSchemaPrompt(resultAt(schema)),
+    );
   });
 
   it("advertises only submission when available and files otherwise", () => {
@@ -92,14 +140,13 @@ describe("cli structured result prompt", () => {
     }
   });
 
-  it("includes a boolean schema and omits the contract when no schema is configured", () => {
-    expect(buildCfHarnessBatchSystemPrompt({
-      structuredResult: {
-        path: "/tmp/result.json",
-        sandboxPath: "/workspace/result.json",
-        schema: true,
-      },
-    })).toContain("Result schema (JSON):\ntrue");
+  it("gives a boolean schema its message and omits the contract and the schema when no schema is configured", () => {
+    expect(buildStructuredResultSchemaPrompt({
+      path: "/tmp/result.json",
+      sandboxPath: "/workspace/result.json",
+      schema: true,
+    })).toBe("Result schema (JSON):\ntrue");
+    expect(buildStructuredResultSchemaPrompt(undefined)).toBeUndefined();
     for (
       const prompt of [
         buildCfHarnessBatchSystemPrompt({}),

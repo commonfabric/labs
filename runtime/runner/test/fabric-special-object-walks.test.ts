@@ -30,7 +30,6 @@
  * at all, so they take part only in the walks that touch neither.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
@@ -55,6 +54,12 @@ import {
   type FabricValue,
   isFabricSpecialObject,
 } from "@commonfabric/data-model";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { mergeDefaults } from "../src/schema.ts";
 import { mergeAnyOfMatches } from "../src/traverse.ts";

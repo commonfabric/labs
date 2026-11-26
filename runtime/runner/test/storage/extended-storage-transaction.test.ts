@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
@@ -13,6 +12,12 @@ import {
   ownerReleaseByIntentSignedBytes,
   type SignedOwnerReleaseByIntentRequest,
 } from "@commonfabric/memory/v2/cfc-owner-release-by-intent";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { ACLManager } from "../../src/acl-manager.ts";
 import {
@@ -199,6 +204,77 @@ describe("extended-storage-transaction", () => {
           tx.setCfcClientIdentity(other);
           expect(tx.getCfcState().servingIdentity).toBe(space);
           expect(tx.getCfcState().clientIdentity).toBe(space);
+          tx.abort();
+        });
+      });
+
+      describe("a write made on the storage transaction beneath it", () => {
+        it("is recorded as a write under no identity by every transaction wrapping it, whatever sink was added first", () => {
+          // A sink stays for the life of the storage transaction, so one added
+          // ahead of a wrapper's leaves the wrapper's in place.
+
+          const first = edit();
+          const inner = first.tx;
+          const earlier: string[] = [];
+          inner.reportUnmarkedWrites!((written) =>
+            earlier.push(written.path.join("/"))
+          );
+          const second = new ExtendedStorageTransaction(inner);
+          setCfcImplementationIdentity(second, {
+            kind: "builtin",
+            builtinId: "storage-ext-tx-builtin",
+          });
+          expect(inner.write(address("beneath", ["x"]), 1).error)
+            .toBeUndefined();
+
+          const recorded = {
+            space,
+            id: "of:beneath",
+            scope: "space",
+            path: ["x"],
+          };
+          expect(first.getCfcState().nonBuiltinWrites).toEqual([recorded]);
+          expect(second.getCfcState().nonBuiltinWrites).toEqual([recorded]);
+          expect(earlier).toEqual(["value/x"]);
+          first.abort();
+        });
+
+        it("is recorded when it is made inside the runtime's privileged scope", () => {
+          // The runtime's privileged persistence writes only through the
+          // write chokepoint, so a write the storage transaction takes without
+          // its mark while that scope is open is still no one's.
+
+          const inner = edit().tx;
+          const beneath = address("beneath-privileged", ["y"]);
+          // The storage transaction takes one more write, unmarked, as it
+          // takes the privileged one.
+          const intercepting = new Proxy(inner, {
+            get(target, key) {
+              if (key === "write") {
+                return (...args: Parameters<typeof inner.write>) => {
+                  const result = target.write(...args);
+                  if (args[0].id !== beneath.id) target.write(beneath, 1);
+                  return result;
+                };
+              }
+              const member = Reflect.get(target, key, target);
+              return typeof member === "function"
+                ? member.bind(target)
+                : member;
+            },
+          });
+          const tx = new ExtendedStorageTransaction(intercepting);
+          tx.accessForTestingOnly.privilegedSystemWrite(
+            address("privileged", ["x"]),
+            1,
+          );
+
+          expect(tx.getCfcState().nonBuiltinWrites).toEqual([{
+            space,
+            id: "of:beneath-privileged",
+            scope: "space",
+            path: ["y"],
+          }]);
           tx.abort();
         });
       });
@@ -491,6 +567,37 @@ describe("extended-storage-transaction", () => {
         });
       });
 
+      describe("settledOutcome()", () => {
+        it("returns `undefined` before the transaction settles", () => {
+          const tx = edit();
+          expect(tx.settledOutcome()).toBeUndefined();
+          tx.abort();
+        });
+
+        it("returns `committed` for a commit to storage", async () => {
+          const tx = edit();
+          tx.writeValueOrThrow(link("settled"), 1);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          expect(tx.settledOutcome()).toBe("committed");
+        });
+
+        it("returns `committed` for a commit sealed into a destination, while the status of the transaction it wraps still reads `ready`", async () => {
+          const tx = bare();
+          tx.configureSealDestination({
+            seal: () => Promise.resolve({ ok: {} }),
+          });
+          expect((await tx.commit().settled).error).toBeUndefined();
+          expect(tx.status().status).toBe("ready");
+          expect(tx.settledOutcome()).toBe("committed");
+        });
+
+        it("returns `failed` for an aborted transaction", () => {
+          const tx = edit();
+          tx.abort();
+          expect(tx.settledOutcome()).toBe("failed");
+        });
+      });
+
       describe("getCfcState()", () => {
         it("yields read-only values from a map's entries()", () => {
           const tx = edit();
@@ -761,7 +868,7 @@ describe("extended-storage-transaction", () => {
       });
 
       describe("over a transaction without optional members", () => {
-        it("throws for a gate or a write the transaction cannot carry", () => {
+        it("throws for a gate the transaction cannot carry", () => {
           const tx = edit();
           expect(() =>
             new TransactionWrapper(lacking(tx, "addCommitPrecondition"))
@@ -772,19 +879,6 @@ describe("extended-storage-transaction", () => {
           ).toThrow(
             "storage transaction does not support addCommitPrecondition()",
           );
-          expect(() =>
-            new TransactionWrapper(lacking(tx, "recordTextChanges"))
-              .recordTextChanges(link("text", ["body"]), [{ from: 0 }])
-          ).toThrow("storage transaction does not support recordTextChanges()");
-          expect(() =>
-            new TransactionWrapper(lacking(tx, "recordSqliteWrite"))
-              .recordSqliteWrite(space, {
-                op: "sqlite",
-                db: { id: "of:db", tables: {} },
-                sql: "CREATE TABLE notes (body TEXT)",
-                params: [],
-              })
-          ).toThrow("storage transaction does not support recordSqliteWrite()");
           expect(tx.getCommitPreconditions(space)).toBeUndefined();
           tx.abort();
         });
@@ -882,6 +976,14 @@ describe("extended-storage-transaction", () => {
           new TransactionWrapper(tx).abandonStagedWork(error);
           expect(log).toEqual(["abandoned: gone"]);
           tx.abort();
+        });
+
+        it("reports how the transaction it wraps settled", () => {
+          const tx = edit();
+          const wrapper = new TransactionWrapper(tx);
+          expect(wrapper.settledOutcome()).toBeUndefined();
+          tx.abort();
+          expect(wrapper.settledOutcome()).toBe("failed");
         });
 
         it("registers a verdict callback on the transaction it wraps, unless it duplicates it", () => {

@@ -1,6 +1,5 @@
 import { assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { MIME, URI } from "@commonfabric/memory/interface";
@@ -13,6 +12,13 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type { Server as MemoryV2Server } from "@commonfabric/memory/v2/server";
 import { defer } from "@commonfabric/async/defer";
 import { getLogger } from "@commonfabric/logger";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -695,6 +701,7 @@ describe("Memory v2 storage notifications", () => {
     }>();
     const session = {
       subscribeTermination: () => () => {},
+      subscribeServerSeq: () => () => {},
       watchAddSync: () => {
         watchStarted.resolve();
         return watchResponse.promise;
@@ -745,6 +752,7 @@ describe("Memory v2 storage notifications", () => {
     } as unknown as MemoryV2Client.Client;
     const session = {
       subscribeTermination: () => () => {},
+      subscribeServerSeq: () => () => {},
       watchAddSync: () => Promise.reject(new Error("scripted watch failure")),
     } as unknown as MemoryV2Client.SpaceSession;
     const sessionFactory: SessionFactory = {

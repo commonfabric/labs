@@ -420,8 +420,7 @@ export function isValidFabricConvertibleJsObject(
     case VALUE_TAGS.JsMap:
     case VALUE_TAGS.JsSet:
     case VALUE_TAGS.JsDate:
-    case VALUE_TAGS.JsUint8Array:
-    case VALUE_TAGS.JsRegExp: {
+    case VALUE_TAGS.JsUint8Array: {
       return true;
     }
 

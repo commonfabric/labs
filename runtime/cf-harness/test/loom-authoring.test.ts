@@ -1,7 +1,6 @@
 /** Checks transport attribution and receipt evidence for host Loom commands. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   executeLoomAuthoringCommand,
@@ -11,6 +10,7 @@ import {
   validateLoomAuthoringConfig,
 } from "../src/loom-authoring.ts";
 import type { ProcessRunRequest } from "../src/sandbox/process-runner.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A composition the daemon committed. */
 const receipt = {

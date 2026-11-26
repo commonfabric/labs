@@ -10,7 +10,6 @@ import {
 } from "@std/path";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { CF_PERMISSION_FLAGS } from "./cf-permissions.ts";
-import { cliName } from "./cli-name.ts";
 import {
   type FuseMountFlags,
   type FuseSupervisorFlags,
@@ -44,6 +43,7 @@ export interface FuseBinaryArgsOptions extends FuseSupervisorFlags {
 
 export async function canonicalizeMountLookupPath(
   path: string,
+  realPath: (path: string) => Promise<string> = Deno.realPath,
 ): Promise<string> {
   const resolved = resolve(path);
   const suffix: string[] = [];
@@ -51,8 +51,7 @@ export async function canonicalizeMountLookupPath(
 
   while (true) {
     try {
-      const real = await Deno.realPath(probe);
-      return suffix.length === 0 ? real : join(real, ...suffix.reverse());
+      return join(await realPath(probe), ...suffix.reverse());
     } catch {
       const parent = dirname(probe);
       if (parent === probe) {
@@ -107,9 +106,9 @@ function isFsWriteError(error: unknown): boolean {
     error instanceof Deno.errors.NotSupported;
 }
 
-function isCompiledBinary(): boolean {
-  const exec = Deno.execPath();
-  const base = basename(exec);
+/** Whether `execPath` is a compiled `cf` binary rather than the deno runtime. */
+export function isCompiledBinary(execPath: string): boolean {
+  const base = basename(execPath);
   return base !== "deno" && base !== "deno.exe";
 }
 
@@ -246,11 +245,7 @@ export async function findMountForPath(
   let bestMatchMountpoint: string | null = null;
   for (const candidate of entries) {
     if (!isMountStateAlive(candidate.entry)) {
-      try {
-        await Deno.remove(candidate.path);
-      } catch {
-        // Ignore cleanup failures.
-      }
+      await removeMountStateFile(candidate.path);
       continue;
     }
 
@@ -325,41 +320,31 @@ const F_MNTONNAME_LEN = 1024;
  * `$INODE64` alias is not a dlsym symbol). Returns null if unavailable, so the
  * caller reports "unknown".
  */
-function openGetfsstat():
-  | {
-    fn: (b: Deno.PointerValue, n: number, f: number) => number;
-    close: () => void;
-  }
-  | null {
-  const name = Deno.build.arch === "aarch64"
-    ? "getfsstat"
-    : "getfsstat$INODE64";
+function openGetfsstat(): GetfsstatLibrary | null {
   try {
-    const lib = Deno.dlopen("libSystem.B.dylib", {
-      [name]: { parameters: ["pointer", "i32", "i32"], result: "i32" },
+    return Deno.dlopen("libSystem.B.dylib", {
+      getfsstat: {
+        name: Deno.build.arch === "aarch64" ? "getfsstat" : "getfsstat$INODE64",
+        parameters: ["pointer", "i32", "i32"],
+        result: "i32",
+      },
     });
-    return {
-      fn: lib.symbols[name] as (
-        b: Deno.PointerValue,
-        n: number,
-        f: number,
-      ) => number,
-      close: () => lib.close(),
-    };
   } catch {
     return null;
   }
 }
 
 /**
- * The libc getfsstat signature we depend on. Injectable so the error-mapping
- * path (native failure → null) is testable without a real syscall.
+ * The part of the opened libSystem we depend on: the getfsstat symbol and the
+ * handle's close. Injectable so the error-mapping path (native failure → null)
+ * is testable without a real syscall.
  */
-export type GetfsstatFn = (
-  buf: Deno.PointerValue,
-  bytes: number,
-  flags: number,
-) => number;
+export interface GetfsstatLibrary {
+  symbols: {
+    getfsstat: (buf: Deno.PointerValue, bytes: number, flags: number) => number;
+  };
+  close(): void;
+}
 
 /**
  * Reads the darwin kernel mount table via getfsstat(MNT_NOWAIT) and returns the
@@ -367,15 +352,12 @@ export type GetfsstatFn = (
  * "unknown") if FFI is unavailable or the call fails — never a partial or empty
  * list masquerading as "no mounts" on error.
  */
-export function readDarwinMountpoints(call?: GetfsstatFn): string[] | null {
-  let fn = call;
-  let close = () => {};
-  if (!fn) {
-    const g = openGetfsstat();
-    if (!g) return null;
-    fn = g.fn;
-    close = g.close;
-  }
+export function readDarwinMountpoints(
+  open: () => GetfsstatLibrary | null = openGetfsstat,
+): string[] | null {
+  const lib = open();
+  if (!lib) return null;
+  const fn = lib.symbols.getfsstat;
   try {
     // getfsstat returns -1 on error. Map ANY negative to null → "unknown";
     // never to [] (which would read as "absent" and hide a real mount).
@@ -390,7 +372,7 @@ export function readDarwinMountpoints(call?: GetfsstatFn): string[] | null {
   } catch {
     return null;
   } finally {
-    close();
+    lib.close();
   }
 }
 
@@ -553,15 +535,15 @@ export function fuseSupervisorMod(importMetaUrl: string): string {
 export async function ensureExecShim(
   stateDir = defaultStateDir(),
   importMetaUrl = import.meta.url,
+  execPath = Deno.execPath(),
 ): Promise<string> {
   await Deno.mkdir(stateDir, { recursive: true });
 
-  const compiled = isCompiledBinary();
-  const displayCliName = cliName();
+  const compiled = isCompiledBinary(execPath);
   const stateScopedShimPath = join(
     stateDir,
     `cf-exec-${await hashMountLookupKey(
-      compiled ? Deno.execPath() : cliMod(importMetaUrl),
+      compiled ? execPath : cliMod(importMetaUrl),
     )}`,
   );
   const preferredShimPath = compiled
@@ -572,13 +554,11 @@ export async function ensureExecShim(
   const script = compiled
     ? `#!/usr/bin/env bash
 export CF_EXEC_SHEBANG=1
-export CF_CLI_NAME=${displayCliName}
-exec "${Deno.execPath()}" "$@"
+exec "${execPath}" "$@"
 `
     : `#!/usr/bin/env bash
 export CF_EXEC_SHEBANG=1
-export CF_CLI_NAME=${displayCliName}
-exec "${Deno.execPath()}" run ${CF_PERMISSION_FLAGS.join(" ")} "${
+exec "${execPath}" run ${CF_PERMISSION_FLAGS.join(" ")} "${
       cliMod(importMetaUrl)
     }" "$@"
 `;

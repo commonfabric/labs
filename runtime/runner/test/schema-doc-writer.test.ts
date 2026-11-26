@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { JSONSchemaObj } from "@commonfabric/api";
@@ -24,6 +23,12 @@ import {
   getSyncSchemaTableConfig,
   resetSyncSchemaTableConfig,
 } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { CellLinkRefPayload, URI } from "../src/sigil-types.ts";
 
 describe("schema-doc-writer", () => {

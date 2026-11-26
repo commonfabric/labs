@@ -49,6 +49,22 @@ part way along the path and one a link inside the value leads to, and those of
 each slot holding a link the read followed, which a dereference retains
 (spec §4.6.3).
 
+The ceiling at the root is the one the host declares when it initializes the
+worker (`renderConfidentialityCeiling`), and the worker renders and answers a
+host's reads under it. A host that declares none is given the default display
+ceiling for the principal the runtime acts as (`defaultDisplayCeiling()`),
+which admits that principal's own identity atoms and the prompt-caveat family,
+with author declassification denied, since a display boundary that no authored
+policy covers is fitted against that ceiling (spec §8.10.6). A host that wants
+no ceiling declares `null`, and then nothing it reads is gated and nothing it
+renders is, beyond the authored boundaries around it, whose declassification
+it denies or allows as it declares. The shell's per-profile opt-out
+(`cfcRenderCeiling`, `docs/development/EXPERIMENTAL_OPTIONS.md`) is that
+declaration, with declassification allowed. A
+`WorkerReconciler` built outside the worker, such as the in-process renderer
+and the test VDOM materializer, takes the ceiling it is given and none when it
+is given none.
+
 - A cell child, and a cell mounted as the root, renders as the blocked
   placeholder while the ceiling refuses its read. A text child
   `table.key("row").key("name")`, where `row` links to a document of its own,
@@ -100,27 +116,36 @@ each slot holding a link the read followed, which a dereference retains
   no value for the binding. The placeholder carries nothing read from the
   space, and goes once the read completes and decides the binding again. A
   binding withheld for any other reason leaves the element empty.
-- The binding hands the host a live handle. Each read the host makes through
-  it, and through any cell it opens by address, is answered by the worker's
-  host read gate (`runtime/runtime-client/src/backends/host-read-gate.ts`),
-  which decides it as a render at the root is decided: on the labels the
-  read consumed, under the root ceiling, with the same exchange-rule resolver
-  and membership and module-policy providers. That covers a get, a pull, an
-  initialization that finds a stored value, a subscription, decided again as
-  a render is, a record's field list, and a metadata read. A refused read
-  reaches the host as a refusal, never as an empty value. A read answered
-  once first loads the access lists and policy manifests its decision
-  consults and does not already admit, since nothing would decide it again
-  when one arrived; it waits on the spaces holding them, and one that fails
-  to load leaves the decision to what the replica holds. The gate holds a
-  read to the root ceiling, not to a boundary around the element, which is
-  why a complete or nested-render binding inside a boundary that lowers the
-  ceiling is decided on everything its cell reaches. Two host reads are
-  still answered without the gate, and each is an open gap, since each
-  consumes labels (spec §8.2.4): resolving a cell's links to the address
-  they land on, which is how the profile badge reads its space's root for
-  the seal, and a cell's label view, including one carried on a ref or a
-  link inside a value, which names the paths of its labeled fields.
+- The binding hands the host a live handle. Each read the host makes through it,
+  and through any cell it opens by address, is answered by the worker's host
+  read gate (`runtime/runtime-client/src/backends/host-read-gate.ts`), which
+  decides it as a render at the root is decided: on the labels the read
+  consumed, under the root ceiling, with the same exchange-rule resolver and
+  membership and module-policy providers. That covers a get, a pull, an
+  initialization that finds a stored value, a subscription, decided again as a
+  render is, a record's field list, and a metadata read. A refused read reaches
+  the host as a refusal, never as an empty value. The refusal names the kind of
+  label that refused it, and nothing of the label: one stored at the cell's node
+  or above it (`stored`), one the read consumed below the node or behind a link
+  (`consumed`), the one the cell's schema declares where nothing stored applies
+  (`schema`), or labels that could not be read (`unreadable`). A read reaching a
+  document whose stored envelope this build cannot interpret is refused as
+  `unreadable`, and so is a read under a schema that cannot be walked for its
+  labels, as one nesting a schema that carries its own definitions cannot yet
+  be. The host knows the read it made, and could learn the first three by making
+  narrower reads; the kind tells it whether a label refused the read or a
+  failure to read one did. A read answered once first loads the access lists and
+  policy manifests its decision consults and does not already admit, since
+  nothing would decide it again when one arrived; it waits on the spaces holding
+  them, and one that fails to load leaves the decision to what the replica
+  holds. The gate holds a read to the root ceiling, not to a boundary around the
+  element, which is why a complete or nested-render binding inside a boundary
+  that lowers the ceiling is decided on everything its cell reaches. Two host
+  reads are still answered without the gate, and each is an open gap, since each
+  consumes labels (spec §8.2.4): resolving a cell's links to the address they
+  land on, which is how the profile badge reads its space's root for the seal,
+  and a cell's label view, including one carried on a ref or a link inside a
+  value, which names the paths of its labeled fields.
 
 Each decision is made again when what its read consumed changes, labels
 included, and when the membership those labels name changes, and only a

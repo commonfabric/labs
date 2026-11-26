@@ -231,8 +231,7 @@ const addAttachment = handler<
   { detail: { sourceCell: Writable<any> } },
   { item: DoItem; items: Writable<DoItem[]> }
 >((e, { item, items }) => {
-  const cell = e.detail?.sourceCell;
-  if (!cell) return;
+  const cell = e.detail.sourceCell;
   const currentItems = items.get();
   const idx = currentItems.findIndex((i) => equals(i, item));
   if (idx >= 0) {

@@ -147,16 +147,17 @@ exactly as it does before any runtime exists.
 
 ## The runner clock: retired exemptions and converted waits
 
-The runner preload's `realClockFiles` list names each file that stays on the
-real clock and its reason; [the main
+A runner test file that stays on the real clock calls `useRealClock()` from
+`@commonfabric/test-support/fake-clock` at its top, beside a comment giving its
+reason; [the main
 document](waiting-in-tests.md#the-runner-suite-advancing-the-runtimes-own-timers)
-describes why an entry belongs there. The histories below record entries and
-wall-clock waits that were retired rather than justified. Read them before
-adding a new entry: each of these looked timing- or transport-bound from the
-failure, and was not.
+describes when a file needs it. The histories below record real-clock
+exemptions and wall-clock waits that were retired rather than justified. Read
+them before making another file call `useRealClock()`: each of these looked
+timing- or transport-bound from the failure, and was not.
 
-The list used to carry two more entries, for a reason worth recording because
-it shows what a production deadline costs a test suite. Both held tool-calling
+Two more exemptions were retired for a reason worth recording, because it shows
+what a production deadline costs a test suite. Both held tool-calling
 cases whose delegate runs a child agent against a result schema the model
 supplies in the tool input, so the child could not form its own request until
 that input had settled through the graph, and the round trip carried the
@@ -223,7 +224,7 @@ identifies the condition that cannot clear.
 
 A test that legitimately advances through many windows should say so with
 `clock.tick(ms)` rather than lean on the pump. One whose work logical time
-cannot pace at all belongs in `realClockFiles`.
+cannot pace at all calls `useRealClock()`.
 
 ## The pump waits for the loop to go idle
 
@@ -293,7 +294,7 @@ document](waiting-in-tests.md#the-runtime-client-suite-stays-on-the-real-clock)
 states the working rules; this is the analysis behind them.
 
 Most of its tests need no wait at all, or only a macrotask drain — a
-`setTimeout(fn, 0)` that lets the scheduler's own `queueTask` dispatch land,
+`setTimeout(fn, 0)` that lets the scheduler's own pass land,
 an awaited round-trip, or a sink fire once. Those drains cross one macrotask
 boundary, carry no real-time floor, and stay as they are. The two
 positive-delay sleeps that were not drains have been made event-driven

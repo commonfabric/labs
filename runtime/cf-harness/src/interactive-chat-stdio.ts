@@ -685,7 +685,6 @@ export const runHarnessInteractiveChatNdjsonTransport = async (
     });
   const resolvedService = await service;
 
-  let cleanupError: unknown;
   try {
     for await (const rawLine of options.lines) {
       const line = rawLine.trim();
@@ -706,17 +705,14 @@ export const runHarnessInteractiveChatNdjsonTransport = async (
     }
   } catch (error) {
     transportError = error;
-  } finally {
-    try {
-      await resolvedService.waitForIdle();
-    } catch (error) {
-      cleanupError = error;
-    }
-    try {
-      await options.closeService?.(resolvedService);
-    } catch (error) {
-      cleanupError ??= error;
-    }
+  }
+  // Settles every turn and never rejects, so the service is idle when closed.
+  await resolvedService.waitForIdle();
+  let cleanupError: unknown;
+  try {
+    await options.closeService?.(resolvedService);
+  } catch (error) {
+    cleanupError = error;
   }
   if (transportError !== undefined) {
     throw transportError;
@@ -816,8 +812,34 @@ export const runHarnessInteractiveChatStdio = async (
     await runHarnessInteractiveChatNdjsonTransport({
       lines: decodeUtf8Lines(options.input ?? Deno.stdin.readable),
       createService,
-      closeService: async () => {
-        await sessionStore?.close?.();
+      closeService: async (service) => {
+        // The sessions' Fabric runtimes hold sessions open with the fabric,
+        // so they are released, as the console releases them, before the
+        // store closes. A service the caller supplied is the caller's to
+        // release. The store closes whether or not the release fails, and a
+        // failure of each is reported rather than the second hiding the first.
+        const failures: unknown[] = [];
+        try {
+          if (options.createService === undefined) {
+            await service.releaseFabricRuntimes();
+          }
+        } catch (error) {
+          failures.push(error);
+        }
+        try {
+          await sessionStore?.close?.();
+        } catch (error) {
+          failures.push(error);
+        }
+        if (failures.length > 1) {
+          throw new AggregateError(
+            failures,
+            "the Fabric runtimes failed to release and the session store failed to close",
+          );
+        }
+        if (failures.length === 1) {
+          throw failures[0];
+        }
       },
       writeLine: async (line) => {
         await writer.write(encoder.encode(`${line}\n`));

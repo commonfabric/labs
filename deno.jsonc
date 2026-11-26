@@ -104,7 +104,7 @@
     "topics": "deno run --unstable-lazy-dynamic-imports --allow-net --allow-read --allow-write --allow-env --allow-run ./patterns/apps/topics/tools/topics.ts",
     "agents-host": "deno run -A ./connectors/agents/host/main.ts",
     "github-host": "deno run -A ./connectors/github/host/main.ts",
-    "test": "./tasks/test.ts",
+    "test": "./tasks/workspace-tests.ts",
     // The seed each `deno test` in the workspace shuffles by. Every test
     // task substitutes this task's output into its own `--shuffle`, which
     // is what makes every run of one commit agree on one order.
@@ -124,8 +124,8 @@
     "dashboard": "deno run --allow-net --allow-run=deno --allow-read --allow-write --allow-env dashboard/server.ts",
     "profile": "./scripts/restart-local-dev.sh --inspect-brk",
     "cf-profile": "ROOT=\"$(pwd)\" && cd \"$INIT_CWD\" && deno run -A \"$ROOT/runtime/cli/support/profiling/cf-profile.ts\"",
-    "cf-inspect-brk": "bash -lc 'ROOT=\"$(pwd)\" && cd \"$INIT_CWD\" && CF_CLI_NAME=cf deno run --inspect-brk --allow-net --allow-ffi --allow-read --allow-write --allow-env --allow-run --allow-sys=networkInterfaces,uid \"$ROOT/runtime/cli/mod.ts\" \"$@\"' --",
-    "cf-profile-brk": "bash -lc 'ROOT=\"$(pwd)\" && cd \"$INIT_CWD\" && CF_CLI_NAME=cf deno run --inspect-brk --allow-net --allow-ffi --allow-read --allow-write --allow-env --allow-run --allow-sys=networkInterfaces,uid \"$ROOT/runtime/cli/mod.ts\" \"$@\"' --"
+    "cf-inspect-brk": "bash -lc 'ROOT=\"$(pwd)\" && cd \"$INIT_CWD\" && deno run --inspect-brk --allow-net --allow-ffi --allow-read --allow-write --allow-env --allow-run --allow-sys=networkInterfaces,uid \"$ROOT/runtime/cli/mod.ts\" \"$@\"' --",
+    "cf-profile-brk": "bash -lc 'ROOT=\"$(pwd)\" && cd \"$INIT_CWD\" && deno run --inspect-brk --allow-net --allow-ffi --allow-read --allow-write --allow-env --allow-run --allow-sys=networkInterfaces,uid \"$ROOT/runtime/cli/mod.ts\" \"$@\"' --"
   },
   "compilerOptions": {
     "jsx": "react-jsx",
@@ -185,7 +185,8 @@
       "./tasks/lint-import-list.ts",
       "./tasks/lint-inline-imports.ts",
       "./tasks/lint-self-import.ts",
-      "./tasks/lint-spread-arguments.ts"
+      "./tasks/lint-spread-arguments.ts",
+      "./tasks/lint-test-registration.ts"
     ]
   },
   "fmt": {
@@ -242,12 +243,6 @@
     "@std/jsonc": "jsr:@std/jsonc@^1.0.2",
     "@std/path": "jsr:@std/path@^1.1.6",
     "@std/testing": "jsr:@std/testing@^1.0.19",
-    // Every test file's `@std/testing/bdd` resolves to a module of ours
-    // that re-exports the real one and applies this invocation's skip
-    // list. The real module keeps a specifier of its own, which is the
-    // only thing that imports it.
-    "@std/testing/bdd": "./base/test-support/src/records/bdd.ts",
-    "@std/testing/bdd/real": "jsr:@std/testing@^1.0.19/bdd",
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
     "dagre": "npm:dagre@^0.8.5",
     "hash-wasm": "npm:hash-wasm@^4.12.0",

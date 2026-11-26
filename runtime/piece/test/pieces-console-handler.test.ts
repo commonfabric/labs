@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { assertEquals, assertStrictEquals } from "@std/assert";
 import {
   type Cell,
@@ -8,6 +7,12 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { createSession, Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
 const signer = await Identity.fromPassphrase(
@@ -65,6 +70,9 @@ describe("PiecesController runtime diagnostics", () => {
       getRaw: () => {
         throw failure;
       },
+      sync() {
+        return Promise.resolve(this);
+      },
     } as unknown as Cell<unknown>;
     Object.defineProperty(pieces, "getArgument", {
       configurable: true,
@@ -73,6 +81,12 @@ describe("PiecesController runtime diagnostics", () => {
     const piece = {
       resolveAsCell() {
         return this;
+      },
+      asSchema() {
+        return this;
+      },
+      sync() {
+        return Promise.resolve(this);
       },
     } as unknown as Cell<unknown>;
 
@@ -94,6 +108,12 @@ describe("PiecesController runtime diagnostics", () => {
     const piece = {
       resolveAsCell() {
         return this;
+      },
+      asSchema() {
+        return this;
+      },
+      sync() {
+        return Promise.resolve(this);
       },
     } as unknown as Cell<unknown>;
 
@@ -118,6 +138,9 @@ describe("PiecesController runtime diagnostics", () => {
     });
     const argumentCell = {
       getRaw: () => argumentValue,
+      sync() {
+        return Promise.resolve(this);
+      },
     } as unknown as Cell<unknown>;
     Object.defineProperty(pieces, "getArgument", {
       configurable: true,
@@ -126,6 +149,12 @@ describe("PiecesController runtime diagnostics", () => {
     const piece = {
       resolveAsCell() {
         return this;
+      },
+      asSchema() {
+        return this;
+      },
+      sync() {
+        return Promise.resolve(this);
       },
     } as unknown as Cell<unknown>;
 
@@ -150,6 +179,9 @@ describe("PiecesController runtime diagnostics", () => {
     });
     const argumentCell = {
       getRaw: () => argumentValue,
+      sync() {
+        return Promise.resolve(this);
+      },
     } as unknown as Cell<unknown>;
     Object.defineProperty(pieces, "getArgument", {
       configurable: true,
@@ -158,6 +190,12 @@ describe("PiecesController runtime diagnostics", () => {
     const piece = {
       resolveAsCell() {
         return this;
+      },
+      asSchema() {
+        return this;
+      },
+      sync() {
+        return Promise.resolve(this);
       },
     } as unknown as Cell<unknown>;
 
@@ -202,6 +240,12 @@ describe("PiecesController runtime diagnostics", () => {
     const piece = {
       resolveAsCell() {
         return this;
+      },
+      asSchema() {
+        return this;
+      },
+      sync() {
+        return Promise.resolve(this);
       },
     } as unknown as Cell<unknown>;
 

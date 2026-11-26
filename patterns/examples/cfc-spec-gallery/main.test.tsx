@@ -105,16 +105,12 @@ export default pattern(() => {
     hasText(findNodeById(instance[UI], "gallery-count"), "16 total examples")
   );
   const assert_forward_prepared = assert(() => instance.completedCount === 0);
-  const assert_forward_committed = assert(() =>
-    instance.completedCount === 1 &&
-    instance.lastCompleted === "forward-hotel-note"
-  );
-  const assert_research_captured = assert(() =>
+  const assert_forward_last_completed = assert(() =>
     instance.completedCount === 1 &&
     instance.lastCompleted === "forward-hotel-note"
   );
   const assert_research_prepared = assert(() => instance.completedCount === 1);
-  const assert_research_sent = assert(() =>
+  const assert_research_send_last_completed = assert(() =>
     instance.completedCount === 2 &&
     instance.lastCompleted === "authorize-research-send"
   );
@@ -126,10 +122,6 @@ export default pattern(() => {
     instance.researchCommandInput === RESEARCH_COMMAND &&
     instance.safeLinkSource === SAFE_LINK_SOURCE &&
     instance.forwardSourceNote.includes("Raw inbox context stays in the note.")
-  );
-  const assert_safe_link_prepared = assert(() =>
-    instance.completedCount === 2 &&
-    instance.lastCompleted === "authorize-research-send"
   );
   const assert_safe_link_released = assert(() =>
     instance.completedCount === 3 &&
@@ -165,18 +157,18 @@ export default pattern(() => {
       { action: action_prepare_forward },
       { assertion: assert_forward_prepared },
       { action: action_forward_note },
-      { assertion: assert_forward_committed },
+      { assertion: assert_forward_last_completed },
       { action: action_change_command },
       { action: action_capture_command },
-      { assertion: assert_research_captured },
+      { assertion: assert_forward_last_completed },
       { action: action_prepare_brief },
       { assertion: assert_research_prepared },
       { action: action_authorize_send },
-      { assertion: assert_research_sent },
+      { assertion: assert_research_send_last_completed },
       { action: action_change_source_url },
       { assertion: assert_reports_its_inputs },
       { action: action_prepare_safe_link },
-      { assertion: assert_safe_link_prepared },
+      { assertion: assert_research_send_last_completed },
       { action: action_release_safe_link },
       { assertion: assert_safe_link_released },
       { action: action_membership },

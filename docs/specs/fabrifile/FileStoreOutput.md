@@ -156,8 +156,10 @@ entry's blob always carries the entry's name.
 
 The store adds an entry with the request's fields, `addedAt` from the handler's
 clock, and `addedBy` the adder's profile, `wish({ query: "#profile" })`. An
-adder with no profile is refused, with `code: "not-permitted"`, so that no file
-is stored unattributed. The outcome's `entry` links the new entry.
+adder whose profile the store doesn't have is refused, with
+`code: "not-permitted"`, so that no file is stored unattributed. The reason
+says which of three it is: the adder has no profile, or theirs couldn't be
+read or hasn't loaded yet. The outcome's `entry` links the new entry.
 
 A blob the store's space does not hold is refused, with `code: "no-blob"`.
 Beyond that, the store takes `blob`, `mediaType` and `size` as the request

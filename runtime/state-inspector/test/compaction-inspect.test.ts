@@ -14,6 +14,7 @@ import {
   compactStore,
 } from "@commonfabric/memory/v2/compact";
 import { applyCommit, close, open } from "@commonfabric/memory/v2/engine";
+import { test } from "@commonfabric/test-support/test";
 
 import { main } from "../cli.ts";
 import { openSpace } from "../db.ts";
@@ -28,7 +29,7 @@ const ACL = `of:${SPACE}`;
 const commit = (localSeq: number, operations: unknown[]) =>
   ({ localSeq, reads: { confirmed: [], pending: [] }, operations }) as never;
 
-Deno.test("the commit listing names a compaction run and the payloads it hollowed", async () => {
+test("the commit listing names a compaction run and the payloads it hollowed", async () => {
   const dir = await Deno.makeTempDir({ prefix: "compaction-inspect-" });
   try {
     const store = `${dir}/space.sqlite`;
@@ -189,7 +190,17 @@ Deno.test("the commit listing names a compaction run and the payloads it hollowe
       space.close();
     }
     // The inspector's own CLI prints the same tail.
-    assertEquals(main(["commits", `${dir}/result.sqlite`, "--limit", "5"]), 0);
+    const printed: string[] = [];
+    assertEquals(
+      main(["commits", `${dir}/result.sqlite`, "--limit", "5"], {
+        log: (text) => printed.push(text),
+        error: (text) => printed.push(text),
+      }),
+      0,
+    );
+    expect(printed.join("\n")).toContain(
+      "compaction run 2026-10-12T00:00:00.000Z",
+    );
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

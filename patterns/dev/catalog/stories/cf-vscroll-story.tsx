@@ -37,8 +37,8 @@ export default pattern<VScrollStoryInput, VScrollStoryOutput>(() => {
             Vertical Scrollable Area
           </div>
           <cf-vscroll
-            show-scrollbar={showScrollbar}
-            fade-edges={fadeEdges}
+            showScrollbar={showScrollbar}
+            fadeEdges={fadeEdges}
             style="border: 1px solid #e2e8f0; border-radius: 4px; height: 200px;"
           >
             <cf-vstack gap="2" style="padding: 8px;">

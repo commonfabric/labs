@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { placeCard } from "./placement.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("placement", () => {
   const window = { width: 800, height: 600 };

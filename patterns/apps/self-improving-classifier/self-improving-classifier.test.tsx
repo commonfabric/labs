@@ -16,7 +16,18 @@ import SelfImprovingClassifier, {
   type ClassificationRule,
   type LabeledExample,
   type PendingClassification,
-} from "./self-improving-classifier.tsx";
+} from "./main.tsx";
+
+// With server execution on, the serving loop asks the model to classify the
+// non-matching item; the test states that the request fails. With it off,
+// nothing reads the classification, so no request is made.
+export const llmMocks = [
+  {
+    when: { systemContains: "precise classifier" },
+    error: "The model is unavailable.",
+    repeat: true,
+  },
+];
 
 // Handler to set up a tier 4 rule
 const setupTier4Rule = handler<
@@ -163,8 +174,8 @@ export default pattern(() => {
   });
 
   // After clearing and submitting non-matching item
-  // Non-matching items go to LLM path, not auto-classified
-  // In test environment without LLM, examples should remain empty
+  // Non-matching items go to the LLM path rather than being auto-classified,
+  // and no classification comes back, so examples remain empty
   const assert_examples_still_empty_after_non_match = assert(() => {
     return subject.examples.length === 0;
   });
@@ -207,8 +218,5 @@ export default pattern(() => {
     ],
     // Expose subject for debugging when deployed as piece
     subject,
-    // generateObject has no LLM endpoint in the unit-test environment; the
-    // llm builtin warns ("Invalid URL: '//api/ai/llm/generateObject'").
-    allowConsoleWarnings: true,
   };
 });

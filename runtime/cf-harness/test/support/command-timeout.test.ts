@@ -5,9 +5,9 @@
  * that only checks a child's own exit.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { commandStatusWithTimeout } from "./command-timeout.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The child blocks on a read of a pipe nothing ever writes to, so it cannot

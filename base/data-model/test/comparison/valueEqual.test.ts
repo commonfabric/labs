@@ -18,7 +18,6 @@
  * for those, and so must this, so they pin the absence of an over-correction.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { deepFreeze, type FabricValue, hashStringOf, valueEqual } from "@";
@@ -29,9 +28,9 @@ import {
   FabricDurationDay,
   FabricDurationNsec,
   FabricEpochDay,
-  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("valueEqual()", () => {
   describe("shared and cyclic graphs", () => {
@@ -173,8 +172,6 @@ describe("valueEqual()", () => {
         { nested: [{ value: 0 }] },
         new FabricBytes(new Uint8Array([1])),
         new FabricBytes(new Uint8Array([2])),
-        new FabricRegExp(/a/g),
-        new FabricRegExp(/a/i),
         new FabricEpochDay(1n),
         new FabricEpochDay(2n),
         new FabricDurationNsec(1n),
@@ -437,13 +434,11 @@ describe("valueEqual()", () => {
         .toBe(false);
     });
 
-    it("distinguishes FabricRegExp and FabricEpochDay by content", () => {
-      expect(valueEqual(new FabricRegExp(/a/g), new FabricRegExp(/b/g)))
-        .toBe(false);
-      expect(valueEqual(new FabricRegExp(/a/g), new FabricRegExp(/a/g)))
-        .toBe(true);
+    it("distinguishes FabricEpochDay by content", () => {
       expect(valueEqual(new FabricEpochDay(1n), new FabricEpochDay(2n)))
         .toBe(false);
+      expect(valueEqual(new FabricEpochDay(1n), new FabricEpochDay(1n)))
+        .toBe(true);
     });
 
     it("distinguishes a FabricPrimitive nested inside a plain container", () => {
@@ -568,8 +563,6 @@ describe("valueEqual()", () => {
             new FabricBytes(new Uint8Array([3, 4])),
           ),
         ).toBe(false);
-        expect(valueEqual(new FabricRegExp(/a/g), new FabricRegExp(/a/g)))
-          .toBe(true);
         expect(valueEqual(new FabricEpochDay(7n), new FabricEpochDay(7n)))
           .toBe(true);
         expect(
@@ -592,11 +585,13 @@ describe("valueEqual()", () => {
         expect(
           valueEqual(
             new FabricBytes(new Uint8Array([1])),
-            new FabricRegExp(/a/),
+            new FabricUnavailable("pending"),
           ),
         )
           .toBe(false);
-        expect(valueEqual(new FabricEpochDay(1n), new FabricRegExp(/a/)))
+        expect(
+          valueEqual(new FabricEpochDay(1n), new FabricUnavailable("pending")),
+        )
           .toBe(false);
       });
     });

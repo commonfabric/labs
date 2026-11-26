@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   HarnessInteractiveChatService,
@@ -8,6 +7,7 @@ import type {
   HarnessPromptLoopResult,
   RunHarnessTranscriptOptions,
 } from "../src/prompt-loop.ts";
+import { createHarnessRunState } from "../src/run-state.ts";
 import type {
   HarnessTranscriptMessage,
   HarnessTranscriptSubagentContext,
@@ -16,6 +16,7 @@ import type {
   HarnessChatEventEnvelope,
   HarnessChatStructuredEvent,
 } from "../src/contracts/interactive-chat.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const nextIsoNow = () => {
   let counter = 0;
@@ -272,6 +273,78 @@ describe("interactive-chat subagent events", () => {
     expect(sequences).toEqual(
       sequences.map((_value, index) => sequences[0] + index),
     );
+  });
+
+  it("synthesizes the start of a child that failed before its first message", async () => {
+    const delegateOutput = (profile: string) =>
+      JSON.stringify({
+        type: "cf-harness.delegate-task-output",
+        outputId: "run-1:delegate_task:1",
+        subagent: {
+          status: "failed",
+          manifest: { childRunId: "run-1.subagent.1", profile },
+        },
+      });
+    const runSilentChild = async (profile: string) => {
+      const messages: HarnessTranscriptMessage[] = [delegateCall, {
+        role: "tool",
+        toolCallId: DELEGATE_TOOL_CALL_ID,
+        toolName: "delegate_task",
+        content: delegateOutput(profile),
+      }, parentAnswer];
+      const service = new HarnessInteractiveChatService({
+        createPromptLoop: () => ({
+          runTranscript: async (options) => {
+            const transcript = [...options.transcript];
+            for (const message of messages) {
+              transcript.push(message);
+              await options.onTranscriptEvent?.({
+                message,
+                transcript: [...transcript],
+              });
+            }
+            return {
+              model: "gpt-test",
+              finalAssistantText: parentAnswer.content,
+              transcript,
+              modelTurns: 2,
+              runState: createHarnessRunState({
+                runId: "run-1",
+                cfcEnforcementMode: "disabled",
+                currentDir: "/workspace",
+                now: "2026-05-22T00:00:00.000Z",
+              }),
+            };
+          },
+        }),
+        now: nextIsoNow(),
+      });
+      await service.startSession("req-1", {
+        sessionId: "session-1",
+        workspace: { hostPath: "/workspace" },
+      });
+      await service.startTurn("req-2", {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        input: { text: "Delegate the summary" },
+      });
+      await service.waitForTurn("session-1", "turn-1");
+      return service.events("session-1").map((envelope) => envelope.event)
+        .filter((event) => event.kind.startsWith("subagent_"));
+    };
+
+    const subagent = {
+      parentToolCallId: DELEGATE_TOOL_CALL_ID,
+      childRunId: "run-1.subagent.1",
+      profile: "default",
+      goal: "",
+    };
+    expect(await runSilentChild("default")).toEqual([
+      { kind: "subagent_started", subagent },
+      { kind: "subagent_completed", subagent, status: "failed" },
+    ]);
+    // A manifest naming no known profile is not evidence of a child.
+    expect(await runSilentChild("not-a-profile")).toEqual([]);
   });
 
   it("replays the child's events through list_events", async () => {

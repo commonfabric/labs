@@ -327,11 +327,10 @@ function isCellFunction(
     !ts.isPropertyAccessExpression(callee) ||
     !CELL_FUNCTION_NAMES.has(callee.name.text)
   ) return false;
-  const symbol = checker.getSymbolAtLocation(callee.name);
-  const resolved = symbol && resolveAlias(symbol, checker, new Set());
+  const resolved = getResolvedSymbolAtLocation(callee.name, checker);
   return resolved !== undefined &&
     CELL_FUNCTION_NAMES.has(resolved.getName()) &&
-    (isCommonFabricSymbol(resolved) || isImportedFromCommonFabric(resolved));
+    isCommonFabricSymbol(resolved);
 }
 
 export function detectDirectBuilderCall(
@@ -682,19 +681,11 @@ export function classifyWildcardTraversalCall(
     return undefined;
   }
 
-  if (checker) {
-    const symbol = checker.getSymbolAtLocation(target.name);
-    const resolved = symbol
-      ? (resolveAlias(symbol, checker, new Set()) ?? symbol)
-      : undefined;
-
-    for (const declaration of resolved?.getDeclarations() ?? []) {
-      if (!hasIdentifierName(declaration)) continue;
-
+  const resolved = checker && getResolvedSymbolAtLocation(target.name, checker);
+  if (resolved) {
+    const name = resolved.getName();
+    for (const declaration of resolved.declarations ?? []) {
       const owner = findOwnerName(declaration);
-      if (!owner) continue;
-
-      const name = declaration.name.text;
       if (
         owner === "ObjectConstructor" &&
         WILDCARD_OBJECT_METHOD_NAMES.has(name)
@@ -821,7 +812,6 @@ export function isCallbackReference(
   }
   const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
   if (declaration === undefined) return false;
-  if (ts.isFunctionDeclaration(declaration)) return true;
   // The initializer goes through the wrapper-stripping resolver rather than
   // a node-kind test: an assertion (`as any`), parentheses, or the hardening
   // helper around the function must not hide it. The resolver works on a
@@ -889,17 +879,16 @@ export function classifyArrayMethodCallSite(
   checker: ts.TypeChecker,
   options: ReactiveCollectionProvenanceOptions = {},
 ): ArrayMethodCallSiteInfo | undefined {
+  // `classifyArrayMethodCall()` names a method only for a property or element
+  // access callee, so the access test only narrows `target`.
   const access = classifyArrayMethodCall(call);
-  if (!access) {
-    return undefined;
-  }
-
   const target = stripWrappers(call.expression);
   if (
-    !ts.isPropertyAccessExpression(target) &&
-    !ts.isElementAccessExpression(target)
+    !access ||
+    (!ts.isPropertyAccessExpression(target) &&
+      !ts.isElementAccessExpression(target))
   ) {
-    return { ...access, ownership: "plain" };
+    return undefined;
   }
 
   return {
@@ -1038,45 +1027,23 @@ export function classifyArrayMethodResultSinkCall(
     return undefined;
   }
 
-  if (checker) {
-    const symbol = checker.getSymbolAtLocation(target.name);
-    const resolved = symbol
-      ? (resolveAlias(symbol, checker, new Set()) ?? symbol)
-      : undefined;
-    const declarations = resolved?.getDeclarations() ?? [];
-
-    for (const declaration of declarations) {
-      if (!hasIdentifierName(declaration)) continue;
-
-      const owner = findOwnerName(declaration);
-      if (!owner) continue;
-
-      if (
-        ARRAY_OWNER_NAMES.has(owner) &&
-        declaration.name.text === "join"
-      ) {
-        return {
-          sink: "join",
-          receiverFamily: receiverMethod.family,
-          receiverLowered: receiverMethod.lowered,
-        };
-      }
-    }
-
-    if (declarations.length > 0) {
-      return undefined;
-    }
-  }
-
-  if (target.name.text === "join") {
-    return {
+  // A declared method is a sink when an Array type declares it; with no
+  // declaration to consult, the method name alone decides.
+  const resolved = checker && getResolvedSymbolAtLocation(target.name, checker);
+  const isJoin = resolved?.declarations?.length
+    ? resolved.getName() === "join" &&
+      resolved.declarations.some((declaration) => {
+        const owner = findOwnerName(declaration);
+        return owner !== undefined && ARRAY_OWNER_NAMES.has(owner);
+      })
+    : target.name.text === "join";
+  return isJoin
+    ? {
       sink: "join",
       receiverFamily: receiverMethod.family,
       receiverLowered: receiverMethod.lowered,
-    };
-  }
-
-  return undefined;
+    }
+    : undefined;
 }
 
 export function classifyArrayMethodResultSinkReceiverChainCall(
@@ -1614,9 +1581,11 @@ function resolveExpressionKind(
   const type = checker.getTypeAtLocation(target);
   const signatures = checker.getSignaturesOfType(type, ts.SignatureKind.Call);
   for (const signature of signatures) {
-    const signatureSymbol = getSignatureSymbol(signature);
-    if (!signatureSymbol) continue;
-    const kind = resolveSymbolKind(signatureSymbol, checker, seen);
+    const kind = resolveSymbolKind(
+      getSignatureSymbol(signature),
+      checker,
+      seen,
+    );
     if (kind) {
       cache.set(expression, kind);
       return kind;
@@ -1744,13 +1713,7 @@ function getImplicitReactiveParameterContextKind(
     }
     if (!ts.isParameter(paramNode)) continue;
 
-    let functionNode: ts.Node | undefined = paramNode.parent;
-    while (functionNode && !ts.isFunctionLike(functionNode)) {
-      functionNode = functionNode.parent;
-    }
-    if (!functionNode) continue;
-
-    let candidate: ts.Node | undefined = functionNode.parent;
+    let candidate: ts.Node | undefined = paramNode.parent.parent;
     while (candidate && !ts.isCallExpression(candidate)) {
       candidate = candidate.parent;
     }
@@ -1933,10 +1896,8 @@ function resolveBuilderExpressionKind(
     const type = checker.getTypeAtLocation(target);
     const signatures = checker.getSignaturesOfType(type, ts.SignatureKind.Call);
     for (const signature of signatures) {
-      const signatureSymbol = getSignatureSymbol(signature);
-      if (!signatureSymbol) continue;
       const kind = resolveBuilderSymbolKind(
-        signatureSymbol,
+        getSignatureSymbol(signature),
         checker,
         seen,
         options,
@@ -2021,18 +1982,16 @@ function resolveBuilderSymbolKind(
   }
 
   const resolved = resolveAlias(symbol, checker, seen);
-  if (!resolved) return undefined;
   if (seen.has(resolved)) return undefined;
   seen.add(resolved);
 
-  // Three ways to be one of our builders: declared in the CommonFabric
-  // declarations, imported from them, or ambient. They differ only in how the
-  // symbol got here, not in what it is.
+  // An import of one of our builders resolves to its declaration, so beyond
+  // the import specifier handled above, a builder is declared either in the
+  // CommonFabric declarations or ambiently.
   const name = resolved.getName();
   if (
     BUILDER_SYMBOL_NAMES.has(name) &&
-    (isCommonFabricSymbol(resolved) || isImportedFromCommonFabric(resolved) ||
-      isAmbientSymbol(resolved))
+    (isCommonFabricSymbol(resolved) || isAmbientSymbol(resolved))
   ) {
     return {
       kind: "builder",
@@ -2091,21 +2050,6 @@ function canUseBuilderSignatureFallback(symbol: ts.Symbol): boolean {
   );
 }
 
-function isImportedFromCommonFabric(symbol: ts.Symbol): boolean {
-  return (symbol.declarations ?? []).some((declaration) => {
-    let current: ts.Node | undefined = declaration;
-    while (current) {
-      if (ts.isImportDeclaration(current)) {
-        return ts.isStringLiteral(current.moduleSpecifier) &&
-          (current.moduleSpecifier.text === "commonfabric" ||
-            current.moduleSpecifier.text === "@commonfabric/common");
-      }
-      current = current.parent;
-    }
-    return false;
-  });
-}
-
 function getImportedCommonFabricNamedExport(
   symbol: ts.Symbol,
   allowedNames: ReadonlySet<string>,
@@ -2159,7 +2103,6 @@ function resolveSymbolKind(
   }
 
   const resolved = resolveAlias(symbol, checker, seen);
-  if (!resolved) return undefined;
   if (seen.has(resolved)) return undefined;
   seen.add(resolved);
 
@@ -2202,11 +2145,7 @@ function resolveSymbolKind(
   const namedCallKind = createNamedCallKind(name, resolved);
   if (
     namedCallKind &&
-    (
-      isCommonFabricSymbol(resolved) ||
-      isImportedFromCommonFabric(resolved) ||
-      isAmbientSymbol(resolved)
-    )
+    (isCommonFabricSymbol(resolved) || isAmbientSymbol(resolved))
   ) {
     return namedCallKind;
   }
@@ -2226,10 +2165,6 @@ function createNamedCallKind(
   }
 
   switch (spec.callKind) {
-    case "lift-applied":
-      return symbol
-        ? { kind: "lift-applied", symbol }
-        : { kind: "lift-applied" };
     case "ifElse":
       return symbol ? { kind: "ifElse", symbol } : { kind: "ifElse" };
     case "when":
@@ -2274,16 +2209,20 @@ function resolveAlias(
   symbol: ts.Symbol,
   checker: ts.TypeChecker,
   seen: Set<ts.Symbol>,
-): ts.Symbol | undefined {
+): ts.Symbol {
   let current = symbol;
-  while (true) {
-    if (seen.has(current)) return current;
-    if (!(current.flags & ts.SymbolFlags.Alias)) break;
-    const aliased = checker.getAliasedSymbol(current);
-    if (!aliased) break;
-    current = aliased;
+  while (!seen.has(current) && (current.flags & ts.SymbolFlags.Alias)) {
+    current = checker.getAliasedSymbol(current);
   }
   return current;
+}
+
+function getResolvedSymbolAtLocation(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+): ts.Symbol | undefined {
+  const symbol = checker.getSymbolAtLocation(node);
+  return symbol && resolveAlias(symbol, checker, new Set());
 }
 
 function detectCellMethodFromDeclaration(
@@ -2344,12 +2283,10 @@ function detectCellConstructorExpressionName(
   if (importedName) return importedName;
 
   const resolved = resolveAlias(symbol, checker, new Set());
-  if (!resolved) return undefined;
 
   const name = resolved.getName();
   if (
-    CELL_LIKE_CLASSES.has(name) &&
-    (isCommonFabricSymbol(resolved) || isImportedFromCommonFabric(resolved))
+    CELL_LIKE_CLASSES.has(name) && isCommonFabricSymbol(resolved)
   ) {
     return name;
   }
@@ -2436,15 +2373,13 @@ function hasIdentifierName(
   return !!name && ts.isIdentifier(name);
 }
 
-function getSignatureSymbol(signature: ts.Signature): ts.Symbol | undefined {
+/**
+ * The symbol of the declaration a call signature came from. Every call
+ * signature a type reports carries the declaration it was read from, and the
+ * binder gives every signature declaration a symbol; `symbol` is internal to
+ * TypeScript's `Node`.
+ */
+function getSignatureSymbol(signature: ts.Signature): ts.Symbol {
   // deno-lint-ignore no-explicit-any
-  const sigWithSymbol = signature as any;
-  if (sigWithSymbol.symbol) {
-    return sigWithSymbol.symbol as ts.Symbol;
-  }
-  const declaration = signature.declaration;
-  if (!declaration) return undefined;
-  // deno-lint-ignore no-explicit-any
-  const declWithSymbol = declaration as any;
-  return declWithSymbol.symbol as ts.Symbol | undefined;
+  return (signature.declaration as any).symbol;
 }

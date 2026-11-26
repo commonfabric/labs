@@ -19,14 +19,14 @@ import { hashStringOf } from "@/value-hash";
  * This is the `data-model`-aware equality the storage layer's no-op /
  * change-detection gates need, and the fix for what `deepEqual()` gets wrong:
  * any `FabricSpecialObject` (`FabricPrimitive` leaves like `FabricBytes` /
- * `FabricRegExp` / `FabricEpoch*` / `FabricHash`, and `FabricInstance`
- * wrappers) keeps its state in private `#fields` with zero enumerable
- * own-properties, so `deepEqual()` conflates every distinct same-class instance
- * as equal (the CT-1770 bug). Here object equality is decided by canonical
- * content hash (`hashStringOf()`), which feeds special objects, plain objects,
- * and arrays alike — including the distinctions a naive walk misses (sparse
- * array holes vs a stored `undefined`, a present `undefined` vs an absent key)
- * — so a special object nested arbitrarily deep is still compared by content.
+ * `FabricEpoch*` / `FabricHash`, and `FabricInstance` wrappers) keeps its
+ * state in private `#fields` with zero enumerable own-properties, so
+ * `deepEqual()` conflates every distinct same-class instance as equal (the
+ * CT-1770 bug). Here object equality is decided by canonical content hash
+ * (`hashStringOf()`), which feeds special objects, plain objects, and arrays
+ * alike — including the distinctions a naive walk misses (sparse array holes
+ * vs a stored `undefined`, a present `undefined` vs an absent key) — so a
+ * special object nested arbitrarily deep is still compared by content.
  *
  * (Unlike `deepEqual()` it does not handle non-`Fabric` class instances or
  * non-index properties on arrays: those are not representable as

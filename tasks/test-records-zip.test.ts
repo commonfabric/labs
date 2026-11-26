@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { readZip } from "./test-records-zip.ts";
 import { buildZip } from "./zip-testing.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("test-records-zip", () => {
   describe("readZip()", () => {
@@ -27,6 +27,27 @@ describe("test-records-zip", () => {
     it("throws for bytes with no central directory", async () => {
       await expect(readZip(new Uint8Array(100))).rejects.toThrow(
         "no central directory",
+      );
+    });
+
+    it("throws when the central directory points at something else", async () => {
+      const zip = await buildZip("delivery.sealed", new Uint8Array([1]), 0);
+      // The directory offset sits four bytes before the archive's
+      // trailing comment-length field; aim it at the local header.
+      zip.fill(0, zip.length - 6, zip.length - 2);
+      await expect(readZip(zip)).rejects.toThrow(
+        "malformed zip: central directory entry expected",
+      );
+    });
+
+    it("throws for a compression method other than stored or deflated", async () => {
+      const zip = await buildZip("delivery.sealed", new Uint8Array([1]), 0);
+      // The central directory entry starts 22 + 46 + the name's length
+      // bytes from the end; its method field is 10 bytes into it.
+      const entry = zip.length - 22 - 46 - "delivery.sealed".length;
+      zip[entry + 10] = 12;
+      await expect(readZip(zip)).rejects.toThrow(
+        "unsupported zip compression method 12",
       );
     });
 

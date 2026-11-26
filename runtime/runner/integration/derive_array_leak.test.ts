@@ -32,6 +32,7 @@
  * out. The server reading covers whatever else the server is doing.
  */
 
+import { toCompactDebugString } from "@commonfabric/data-model";
 import { MockDoc } from "@commonfabric/html/mock-doc";
 import { renderInProcess } from "@commonfabric/html/in-process";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -44,6 +45,8 @@ import { uiSchema } from "@commonfabric/runner/schemas";
 import { createTestSpace, env } from "@commonfabric/integration";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { defer, type Deferred } from "@commonfabric/async/defer";
+import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   type CollectedMemory,
@@ -162,7 +165,7 @@ async function runTest() {
     const container = mock.document.getElementById("root");
     if (container === null) throw new Error("The mock document has no root");
     // Runs whenever the counter changes or the view applies a batch.
-    let onChange = () => {};
+    let onChange = (_source: "counter" | "applied") => {};
     const render = renderInProcess(
       container,
       result.asSchema(uiSchema).key(UI),
@@ -170,47 +173,167 @@ async function runTest() {
         document: mock.document,
         setProp: mock.renderOptions.setProp,
         onError: fail,
-        onApplied: () => onChange(),
+        onApplied: () => onChange("applied"),
       },
     );
-    const cancelValueSink = piece.key("value").sink(() => onChange());
+    const cancelValueSink = piece.key("value").sink(() => onChange("counter"));
     try {
       // Sends one click, and waits until the counter is `expected` and the
       // view shows that many elements. Where the server runs the handler,
       // the value arrives from the server, which neither the runtime going
       // idle nor the server confirming this runtime's commits waits for.
       const click = async (
+        cycle: string,
         stream: "increment" | "decrement",
         expected: number,
       ) => {
         if (failure) throw failure;
+        const label =
+          `derive array leak: ${cycle}, ${stream}, expected ${expected}`;
+        let stage = "send";
         const wait = shown = defer();
-        onChange = () => {
+        // Keep only the last notifications for this click, using the reads
+        // already needed to recognize its completion.
+        const notifications: {
+          source: "counter" | "applied";
+          value: number;
+          items: number | undefined;
+        }[] = [];
+        onChange = (source) => {
           const items = mock.document.getElementById("items")
             ?.getElementsByTagName("i").length;
-          if (piece.get().value === expected && items === expected) {
+          const value = piece.get().value;
+          notifications.push({ source, value, items });
+          if (notifications.length > 16) notifications.shift();
+          if (value === expected && items === expected) {
             wait.resolve();
           }
         };
         try {
-          piece.key(stream).send({});
-          await wait.promise;
+          // A live server keeps the event loop open even when this click
+          // cannot finish. Cover each settling stage with the shared net.
+          await withStuckNet(
+            (async () => {
+              piece.key(stream).send({});
+              stage = "counter and view";
+              await wait.promise;
+              shown = undefined;
+              stage = "runtime idle";
+              await runtime.idle();
+              stage = "storage synced";
+              await runtime.storageManager.synced();
+            })(),
+            label,
+          );
+        } catch (error) {
+          // Read diagnostic state only on failure: cell reads can take
+          // document holds and affect the memory this test measures.
+          const readDiagnostic = <T>(read: () => T): T | string => {
+            try {
+              return read();
+            } catch (error) {
+              return `Diagnostic unavailable: ${String(error)}`;
+            }
+          };
+          // Capture demand and pending work before diagnostic cell reads
+          // can start loading documents. Nothing here waits for settlement.
+          const scheduler = readDiagnostic(() => runtime.scheduler.getStats());
+          const schedulerSizes = readDiagnostic(() =>
+            runtime.scheduler.getSizes()
+          );
+          const graph = readDiagnostic(() =>
+            runtime.scheduler.getGraphSnapshot()
+          );
+          const storage = readDiagnostic(() => storageManager.getDiagnostics());
+          const mappedItems = readDiagnostic(() => {
+            // The fixture's second div contains its mapped array. Resolve
+            // that slot to identify the publication its renderer sink reads.
+            const cell = result.asSchema(true).key(UI).key("children").key(1)
+              .key("children").key(0).resolveAsCell();
+            const value = cell.getRawUntyped();
+            return {
+              link: cell.getAsNormalizedFullLink(),
+              length: Array.isArray(value) ? value.length : undefined,
+              value,
+            };
+          });
+          const mapActions = readDiagnostic(() => {
+            if (typeof graph === "string" || typeof mappedItems === "string") {
+              return "Map actions unavailable without graph and mapped items";
+            }
+            const id = mappedItems.link.id;
+            return graph.nodes.filter((node) =>
+              node.id.includes(id) ||
+              [
+                ...node.reads ?? [],
+                ...node.shallowReads ?? [],
+                ...node.writes ?? [],
+              ].some((address) => address.includes(id))
+            ).map((node) => ({
+              ...node,
+              // A list sink also reads each rendered row. Keep its reads
+              // of the list itself in this excerpt; the full graph follows.
+              reads: node.reads?.filter((address) => address.includes(id)),
+              shallowReads: node.shallowReads?.filter((address) =>
+                address.includes(id)
+              ),
+            }));
+          });
+          // Large snapshots are bounded separately so the graph cannot
+          // crowd the map publication or rendered view out of the report.
+          const snapshot = (value: unknown, limit: number) =>
+            toCompactDebugString(value, {
+              maxLength: limit,
+              maxDepth: 12,
+              maxArrayLength: 1000,
+              maxStringLength: 16_384,
+            });
+          // Print before disposal, which can itself wait on the scheduler.
+          console.error(label, {
+            error: failure ?? error,
+            stage,
+            value: readDiagnostic(() => piece.get().value),
+            items: readDiagnostic(() =>
+              mock.document.getElementById("items")
+                ?.getElementsByTagName("i").length
+            ),
+            notifications,
+            scheduler,
+            schedulerSizes,
+            storage,
+          });
+          console.error("Mapped items:", snapshot(mappedItems, 16_384));
+          console.error("Map actions:", snapshot(mapActions, 32_768));
+          console.error(
+            "Rendered view:",
+            snapshot(readDiagnostic(() => container.innerHTML), 16_384),
+          );
+          console.error("Scheduler graph:", snapshot(graph, 262_144));
+          throw failure ?? error;
         } finally {
           shown = undefined;
         }
-        await runtime.idle();
-        await runtime.storageManager.synced();
       };
-      const cycle = async () => {
-        await click("increment", piece.get().stepsPerClick);
-        await click("decrement", 0);
+      const cycle = async (label: string) => {
+        await click(label, "increment", piece.get().stepsPerClick);
+        await click(label, "decrement", 0);
       };
 
-      for (let i = 0; i < WARM_UP_CYCLES; i++) await cycle();
+      console.log("derive array leak: warmup cycles");
+      for (let i = 0; i < WARM_UP_CYCLES; i++) {
+        await cycle(`warmup cycle ${i + 1}/${WARM_UP_CYCLES}`);
+      }
+      console.log("derive array leak: baseline client memory");
       const clientBeforeMB = getClientMemoryMB();
+      console.log("derive array leak: baseline server memory");
       const serverBeforeMB = await getServerMemoryMB();
-      for (let i = 0; i < MEASURED_CYCLES; i++) await cycle();
+      console.log("derive array leak: measured cycles");
+      for (let i = 0; i < MEASURED_CYCLES; i++) {
+        await cycle(`measured cycle ${i + 1}/${MEASURED_CYCLES}`);
+      }
+      console.log("derive array leak: final client memory");
       const clientGrowthMB = getClientMemoryMB() - clientBeforeMB;
+      console.log("derive array leak: final server memory");
       const serverGrowthMB = await getServerMemoryMB() - serverBeforeMB;
       if (failure) throw failure;
 
@@ -238,18 +361,21 @@ async function runTest() {
         );
       }
     } finally {
+      console.log("derive array leak: view cleanup");
       cancelValueSink();
       render.cancel();
     }
   } finally {
+    console.log("derive array leak: runtime disposal");
     await runtime.dispose();
+    console.log("derive array leak: storage close");
     await storageManager.close();
   }
 }
 
 // The test runs without a per-test deadline. See
 // docs/development/waiting-in-tests.md.
-Deno.test({
+test({
   name: "derive array leak test",
   fn: runTest,
   sanitizeResources: false,

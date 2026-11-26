@@ -6,12 +6,12 @@
  * found on any tx layer, since the notification's source is an inner layer.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   isRendererInputTx,
   markRendererInputTx,
 } from "../src/storage/reactivity-log.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("renderer-input tx mark", () => {
   it("marks a tx and every inner layer, and recognizes them", () => {

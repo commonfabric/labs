@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { join } from "@std/path";
@@ -14,12 +13,23 @@ import {
 } from "./test-records.ts";
 import {
   createRunSpool,
+  FRAGMENT_PREFIX,
+  FRAGMENT_SUFFIX,
   FragmentWriter,
   gunzipToText,
   listSpools,
+  listStagingSpools,
   RECORD_SCHEMA_VERSION,
   type RunContext,
+  SPOOL_STAGING_PREFIX,
+  tryAdoptSpool,
 } from "@commonfabric/test-support/records";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const KEY = {
   client_email: "test-records-gh-octocat@proj.iam.gserviceaccount.com",
@@ -141,6 +151,18 @@ describe("test-records", () => {
       } finally {
         await Deno.remove(repo, { recursive: true });
       }
+    });
+
+    it("falls back to unknown facts in a directory that does not exist", async () => {
+      // Git cannot even be started in a missing directory.
+
+      const context = await buildLocalContext(
+        join(root, "absent"),
+        () => undefined,
+      );
+      expect(context.commit).toBe("unknown");
+      expect(context.branch).toBeUndefined();
+      expect(context.dirty).toBe(false);
     });
 
     it("falls back to unknown facts outside a repository", async () => {
@@ -300,6 +322,102 @@ describe("test-records", () => {
       expect(await listSpools(root)).toEqual([]);
     });
 
+    it("warns about the lines it dropped and ships the rest", async () => {
+      const spool = await createRunSpool(root, CONTEXT);
+      const writer = FragmentWriter.open(spool.dir);
+      writer?.append({
+        line: "record",
+        test: { k: "unit", s: "bakery", n: "glaze > sets" },
+        outcome: "pass",
+        durationMs: 3,
+      });
+      writer?.close();
+      await Deno.writeTextFile(
+        join(spool.dir, `${FRAGMENT_PREFIX}torn${FRAGMENT_SUFFIX}`),
+        '{"line":"rec',
+      );
+      spool.close();
+
+      const warned: string[] = [];
+      const warn = console.warn;
+      console.warn = (line: string) => warned.push(line);
+      const requests: { url: string; body: Uint8Array }[] = [];
+      let shipped: boolean;
+      try {
+        shipped = await shipSpool(spool.dir, KEY, () => undefined, {
+          mintToken: () => Promise.resolve("stub-token"),
+          fetchImpl: okFetch(requests),
+        });
+      } finally {
+        console.warn = warn;
+      }
+      expect(shipped).toBe(true);
+      expect(warned).toEqual([
+        `test records: dropped a torn final line in ${FRAGMENT_PREFIX}torn${FRAGMENT_SUFFIX}`,
+      ]);
+      const payload = findGzipStart(requests[0]!.body);
+      const ndjson = await gunzipToText(
+        requests[0]!.body.slice(payload.start, payload.end),
+      );
+      expect(ndjson).toContain('"n":"glaze > sets"');
+    });
+
+    it("treats an object already in the store as shipped and deletes the spool", async () => {
+      const spool = await createRunSpool(root, CONTEXT);
+      spool.close();
+      const warned: string[] = [];
+      const warn = console.warn;
+      console.warn = (line: string) => warned.push(line);
+      let shipped: boolean;
+      try {
+        shipped = await shipSpool(spool.dir, KEY, () => undefined, {
+          mintToken: () => Promise.resolve("stub-token"),
+          fetchImpl: (() =>
+            Promise.resolve(
+              new Response("precondition failed", { status: 412 }),
+            )) as typeof fetch,
+        });
+      } finally {
+        console.warn = warn;
+      }
+      expect(shipped).toBe(true);
+      expect(warned).toEqual([
+        "test records: labs/test-records/submissions/local/octocat/" +
+        "v1/2026/08/17/01SHIPTEST00000000000000-main.ndjson was already " +
+        "in the store; treating it as shipped",
+      ]);
+      expect(await listSpools(root)).toEqual([]);
+    });
+
+    it("leaves the spool in place when the key cannot sign a token", async () => {
+      // With no token minter given, the spool ships under a token the key
+      // itself signs for, and a private key that is not one signs nothing.
+
+      const spool = await createRunSpool(root, CONTEXT);
+      spool.close();
+      const warned: string[] = [];
+      const warn = console.warn;
+      console.warn = (line: string) => warned.push(line);
+      let shipped: boolean;
+      try {
+        shipped = await shipSpool(spool.dir, KEY, () => undefined, {
+          fetchImpl: (() => {
+            throw new Error("nothing must ship");
+          }) as unknown as typeof fetch,
+        });
+      } finally {
+        console.warn = warn;
+      }
+      expect(shipped).toBe(false);
+      expect(warned.length).toBe(1);
+      expect(warned[0]).toMatch(
+        new RegExp(
+          `^test records: shipping ${spool.dir} failed; it stays for a later sweep: `,
+        ),
+      );
+      expect(await listSpools(root)).toEqual([spool.dir]);
+    });
+
     it("leaves the spool in place when the create fails", async () => {
       const spool = await createRunSpool(root, CONTEXT);
       spool.close();
@@ -335,6 +453,74 @@ describe("test-records", () => {
       expect(requests.length).toBe(1);
       expect(await listSpools(root)).toEqual([own.dir]);
       own.close();
+    });
+
+    it("leaves a spool whose owner still holds it", async () => {
+      const live = await createRunSpool(root, CONTEXT);
+      const requests: { url: string; body: Uint8Array }[] = [];
+      try {
+        await sweepSpools(root, KEY, undefined, () => undefined, {
+          mintToken: () => Promise.resolve("stub-token"),
+          fetchImpl: okFetch(requests),
+        });
+        expect(requests).toEqual([]);
+        expect(await listSpools(root)).toEqual([live.dir]);
+      } finally {
+        live.close();
+      }
+    });
+
+    it("deletes an abandoned staging directory and keeps a held one", async () => {
+      const abandoned = join(
+        root,
+        `${SPOOL_STAGING_PREFIX}01ABANDONED000000000000`,
+      );
+      const held = join(root, `${SPOOL_STAGING_PREFIX}01HELD00000000000000000`);
+      await Deno.mkdir(abandoned);
+      await Deno.mkdir(held);
+      const owner = await tryAdoptSpool(held);
+      assert(owner !== undefined);
+      try {
+        await sweepSpools(root, KEY, undefined, () => undefined, {
+          mintToken: () => Promise.resolve("stub-token"),
+          fetchImpl: okFetch([]),
+        });
+        expect(await listStagingSpools(root)).toEqual([held]);
+      } finally {
+        owner.close();
+      }
+    });
+
+    it({
+      name: "warns when an abandoned staging directory cannot be deleted",
+      // Removing an entry needs write permission on the directory holding
+      // it, which the superuser has regardless of the mode.
+      ignore: Deno.build.os === "windows" || Deno.uid() === 0,
+      async fn() {
+        const abandoned = join(
+          root,
+          `${SPOOL_STAGING_PREFIX}01ABANDONED000000000000`,
+        );
+        await Deno.mkdir(abandoned);
+        await Deno.chmod(root, 0o555);
+        const warned: string[] = [];
+        const warn = console.warn;
+        console.warn = (line: string) => warned.push(line);
+        try {
+          await sweepSpools(root, KEY, undefined, () => undefined, {
+            mintToken: () => Promise.resolve("stub-token"),
+            fetchImpl: okFetch([]),
+          });
+        } finally {
+          console.warn = warn;
+          await Deno.chmod(root, 0o755);
+        }
+        expect(warned.length).toBe(1);
+        expect(warned[0]).toMatch(
+          new RegExp(`^test records: deleting abandoned ${abandoned} failed: `),
+        );
+        expect(await listStagingSpools(root)).toEqual([abandoned]);
+      },
     });
   });
 

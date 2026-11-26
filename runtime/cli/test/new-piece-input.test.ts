@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { newPieceFromCommand, piece } from "../commands/piece.ts";
 import { newPiece } from "../lib/piece.ts";
 import { captureStderr } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const CONFIG = {
   apiUrl: "https://cf.dev",
@@ -32,7 +32,7 @@ describe("piece creation input", () => {
           {
             newPiece: (_config, _entry, options) => {
               received = options;
-              return Promise.resolve("fid1:created");
+              return Promise.resolve({ pieceId: "fid1:created" });
             },
           },
         )
@@ -58,7 +58,7 @@ describe("piece creation input", () => {
           {
             newPiece: () => {
               created = true;
-              return Promise.resolve("fid1:unwanted");
+              return Promise.resolve({ pieceId: "fid1:unwanted" });
             },
           },
         )).rejects.toThrow();

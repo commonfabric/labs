@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema } from "@commonfabric/api";
 import { NAME } from "@commonfabric/runner";
@@ -16,6 +15,7 @@ import {
   pieceDescribeLines,
 } from "../commands/piece.ts";
 import { decode } from "@commonfabric/text/utf8";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A result schema shaped as the generator emits a board-like pattern's: an
  * inline root carrying its interface's doc comment, a stream-marked verb
@@ -324,6 +324,31 @@ describe("piece-describe", () => {
       expect(Object.hasOwn(description, "inputs")).toBe(false);
       expect(description.incomplete).toBe("pattern-unavailable");
       expect(description.verbs).toEqual([ADD_ITEM_ROW]);
+    });
+
+    it("documents no purpose or state for a root reference that resolves nowhere, and still reads the other schema", () => {
+      // The result schema's root `$ref` names a definition the schema does
+      // not carry, so following it finds no schema at all. The argument
+      // schema beside it resolves, and is documented as usual.
+      const description = buildPieceDescription({
+        listing: { pattern: null, verbs: [] },
+        compiled: {
+          resultSchema: { $ref: "#/$defs/Missing" },
+          argumentSchema: {
+            $ref: "#/$defs/Input",
+            $defs: {
+              Input: {
+                type: "object",
+                properties: { seed: { type: "string" } },
+              },
+            },
+          },
+        },
+      });
+
+      expect(Object.hasOwn(description, "purpose")).toBe(false);
+      expect(description.state).toEqual([]);
+      expect(description.inputs).toEqual([{ name: "seed", type: "string" }]);
     });
   });
 

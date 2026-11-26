@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   createSettlingTracker,
   markExecuteStart,
@@ -9,6 +8,7 @@ import {
   recordExecuteEnd,
 } from "../src/scheduler/execution.ts";
 import type { Action } from "../src/scheduler/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("scheduler execution planning", () => {
   it("parks debounced invalid dependencies until their scheduled run", () => {

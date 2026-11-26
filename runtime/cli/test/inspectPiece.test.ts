@@ -6,14 +6,19 @@
  * identity, which is what the resolvers read.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { pieceId, setSlugLink } from "@commonfabric/piece";
 import { PiecesController } from "@commonfabric/piece/ops";
-import { type Cell, createBuilder, Runtime } from "@commonfabric/runner";
+import { type Cell, createBuilder, NAME, Runtime } from "@commonfabric/runner";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { inspectPiece } from "../lib/piece.ts";
 
 const CONFIG = {
@@ -59,7 +64,7 @@ describe("inspectPiece()", () => {
       { space: pieces.getSpace(), random: "plain" },
     );
     await runtime.editWithRetry((tx) => {
-      plain.withTx(tx).set({ value: 1 });
+      plain.withTx(tx).set({ [NAME]: "Plain", value: 1 });
       const withTx = board.withTx(tx);
       withTx.set({ names: { "2": member, "3": { plain: true } } });
       withTx.setMetaRaw(
@@ -94,7 +99,16 @@ describe("inspectPiece()", () => {
   });
 
   it("reports the cell a slug points at when the address names no member", async () => {
-    expect((await inspectPiece({ ...CONFIG, piece: "plain" }, held)).id)
-      .toBe("plain");
+    // The cell is no piece, so the report carries no pattern and no
+    // relations.
+
+    expect(await inspectPiece({ ...CONFIG, piece: "plain" }, held)).toEqual({
+      id: "plain",
+      name: "Plain",
+      result: { [NAME]: "Plain", value: 1 },
+      cachedResultFields: [],
+      readingFrom: [],
+      readBy: [],
+    });
   });
 });

@@ -6,13 +6,13 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { BaseFabricSpecialObject } from "@/fabric-bases/BaseFabricSpecialObject.ts";
 import * as valueDebug from "@/value-debug/index.ts";
 
 import { rendererCalls } from "./value-debug-internal-calls.ts";
 import { reportFromFreshRealm } from "./value-debug-internal-worker-client.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The URL of `value-debug`'s own module, for a worker to load. */
 const VALUE_DEBUG_URL =

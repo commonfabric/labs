@@ -37,6 +37,7 @@ import {
 } from "../lib/view/languages/typescript/parse.ts";
 import { languageForFile } from "../lib/view/languages/language.ts";
 import type { Document, StructureNode, TokenClass } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** Every token class a given literal text is assigned across the document. */
 function classesOf(doc: Document, token: string): Set<TokenClass> {
@@ -65,7 +66,7 @@ function labels(doc: Document): string[] {
 // registry: a .md filename highlights as Markdown
 //
 
-Deno.test("registry: a .md filename is highlighted as Markdown", () => {
+test("registry: a .md filename is highlighted as Markdown", () => {
   const lines = languageForFile("README.md").highlightLines(
     "# Heading\n\n```\ncode\n```\n",
     "README.md",
@@ -92,25 +93,49 @@ Deno.test("registry: a .md filename is highlighted as Markdown", () => {
 });
 
 //
-// Highlight refresh: the no-op paths, and an edit that is not (lines 297, 403)
+// Highlight refresh: the no-op paths, and an edit that is not
 //
 
-Deno.test("createHighlighter: update with identical text returns the same lines", () => {
+test("createHighlighter: update with identical text returns the same lines", () => {
   const src = "const a = 1;\nconst b = 2;\n";
   const hl = createHighlighter(src, "m.ts");
   const before = hl.lines;
-  const after = hl.update(src);
-  // diffRange returns null for identical text, so update short-circuits and
-  // hands back the exact same array reference.
-  assertEquals(after, before);
+  // An update with unchanged text hands back the same array, and an edit
+  // recolors.
+  assert(hl.update(src) === before);
+  const edited = `${src}const c = 3;\n`;
+  assert(hl.update(edited) !== before);
+  assertEquals(hl.lines, highlightDocument(edited, "m.ts"));
 });
 
-Deno.test("highlightLineEditLocally: unchanged text returns the original line", () => {
+test("highlightLineEditLocally: unchanged text returns the original line", () => {
   const before = createHighlighter('const value = "same";', "m.ts").lines[0];
   assert(highlightLineEditLocally(before, before.text) === before);
 });
 
-Deno.test("highlightLineEditLocally: editing a called member key refreshes its definition name", () => {
+test("highlightDocument: text in two overlapping recovered statements is drawn once", () => {
+  // The parser recovers from the decorator after `await` with a declaration
+  // list that ends after the expression statement holding `e` begins.
+  const text = "import{}const i=await@dec e";
+  const edited = createHighlighter("import{}const i=await e", "m.ts")
+    .update(text);
+  for (const lines of [highlightDocument(text, "m.ts"), edited]) {
+    assertEquals(lines.map((line) => line.text), [text]);
+    assertEquals(
+      lines[0].spans.slice(-2).map(({ col, text, cls }) => ({
+        col,
+        text,
+        cls,
+      })),
+      [
+        { col: 25, text: " ", cls: "whitespace" },
+        { col: 26, text: "e", cls: "binding" },
+      ],
+    );
+  }
+});
+
+test("highlightLineEditLocally: editing a called member key refreshes its definition name", () => {
   const before = createHighlighter('worker["run"]();', "m.ts").lines[0];
   const after = highlightLineEditLocally(before, 'worker["stop"]();');
   assert(after, "the quoted-string fast path handles the edit");
@@ -148,7 +173,7 @@ function assertIncrementalMatches(
   }
 }
 
-Deno.test("createHighlighter: an edit inside a multi-line template matches a full parse", () => {
+test("createHighlighter: an edit inside a multi-line template matches a full parse", () => {
   // The template literal spans several lines; an edit on a later line of it
   // re-highlights from the statement boundary and matches a full parse.
 
@@ -156,7 +181,7 @@ Deno.test("createHighlighter: an edit inside a multi-line template matches a ful
   assertIncrementalMatches(base, base.replace("line two", "line TWO"));
 });
 
-Deno.test("createHighlighter: an edited multi-line call key has one lookup marker", () => {
+test("createHighlighter: an edited multi-line call key has one lookup marker", () => {
   const base = "worker[`line one\nline two`]();\nconst x = 1;\n";
   const hl = createHighlighter(base, "m.ts");
   const lines = hl.update(base.replace("line two", "line TWO"));
@@ -172,7 +197,7 @@ Deno.test("createHighlighter: an edited multi-line call key has one lookup marke
   );
 });
 
-Deno.test("createHighlighter: editing a statement whose line opens inside an earlier block comment", () => {
+test("createHighlighter: editing a statement whose line opens inside an earlier block comment", () => {
   // The block comment opens on line 0 and its tail `*/` shares line 1 with the
   // `const b` statement. Editing `const b` makes safeStartLine walk back from
   // line 1 to line 0 (the line the comment opened on), since line 1's start is
@@ -186,7 +211,7 @@ Deno.test("createHighlighter: editing a statement whose line opens inside an ear
 // collectTokensInRange skips JSDoc (line 572)
 //
 
-Deno.test("createHighlighter: an edit near a JSDoc comment stays one whole comment", () => {
+test("createHighlighter: an edit near a JSDoc comment stays one whole comment", () => {
   // A JSDoc block with @tags attaches as JSDoc nodes to the function below it.
   // Editing the statement *above* widens the rebuild range down across that
   // function, so collectTokensInRange visits and skips the JSDoc nodes rather
@@ -232,7 +257,7 @@ Deno.test("createHighlighter: an edit near a JSDoc comment stays one whole comme
 // classifyToken: null is a boolean-class literal (line 803)
 //
 
-Deno.test("parse: null, true and false are colored as boolean literals", () => {
+test("parse: null, true and false are colored as boolean literals", () => {
   const doc = parseDocument(
     "const a = null;\nconst b = true;\nconst c = false;\n",
   );
@@ -249,7 +274,7 @@ Deno.test("parse: null, true and false are colored as boolean literals", () => {
 // (property declaration / enum member), 877 (synthetic helper member access).
 //
 
-Deno.test("parse: function, method and interface declaration names are classified", () => {
+test("parse: function, method and interface declaration names are classified", () => {
   const src = [
     "function topFn() { return 1; }",
     "interface IFace { m(): void; p: number; }",
@@ -272,7 +297,7 @@ Deno.test("parse: function, method and interface declaration names are classifie
   assert(classesOf(doc, "Red").has("propertyName"), "enum member");
 });
 
-Deno.test("parse: parameter, binding and shorthand classifications", () => {
+test("parse: parameter, binding and shorthand classifications", () => {
   const src = [
     "function g(arg) { return arg; }",
     "const { destructured } = obj;",
@@ -287,7 +312,7 @@ Deno.test("parse: parameter, binding and shorthand classifications", () => {
   assert(classesOf(doc, "ref").has("identifier"), "shorthand is a reference");
 });
 
-Deno.test("parse: a synthetic name in property-access position is a cfHelper", () => {
+test("parse: a synthetic name in property-access position is a cfHelper", () => {
   // `obj.__cfHandler_1` — the synthetic name is the `.name` of a property
   // access, not a callee and not a builder, so the property-access synthetic
   // branch classifies it as cfHelper.
@@ -299,7 +324,7 @@ Deno.test("parse: a synthetic name in property-access position is a cfHelper", (
   );
 });
 
-Deno.test("parse: a builder reached via property access is a builderCall", () => {
+test("parse: a builder reached via property access is a builderCall", () => {
   // `x.pattern(…)` — property-access callee whose name is a builder.
 
   const doc = parseDocument("const z = obj.lift(fn);\n", "m.ts");
@@ -309,7 +334,7 @@ Deno.test("parse: a builder reached via property access is a builderCall", () =>
   );
 });
 
-Deno.test("parse: a synthetic identifier used as a type name is a cfHelper", () => {
+test("parse: a synthetic identifier used as a type name is a cfHelper", () => {
   // `__cfHelpers.JSONSchema` in type position — isTypePosition true and the
   // name is synthetic, so the type-position synthetic branch fires.
 
@@ -327,7 +352,7 @@ Deno.test("parse: a synthetic identifier used as a type name is a cfHelper", () 
 // isTypePosition branches (lines 913-920)
 //
 
-Deno.test("parse: type parameters, typeof queries and heritage clauses are type positions", () => {
+test("parse: type parameters, typeof queries and heritage clauses are type positions", () => {
   const src = [
     "function gen<T>(x: T): T { return x; }",
     "type Q = typeof someValue;",
@@ -347,7 +372,7 @@ Deno.test("parse: type parameters, typeof queries and heritage clauses are type 
   assert(classesOf(doc, "Other").has("typeName"), "interface extends type");
 });
 
-Deno.test("parse: a generic type parameter declaration name is a typeName", () => {
+test("parse: a generic type parameter declaration name is a typeName", () => {
   // The declared `T` in `gen<T>` has a TypeParameter parent — not a TypeNode —
   // so isTypePosition resolves it through the type-parameter branch.
 
@@ -359,7 +384,7 @@ Deno.test("parse: a generic type parameter declaration name is a typeName", () =
 // comments threaded into the structure tree (mergeByStart, 1214/1216)
 //
 
-Deno.test("parse: comments are merged into the structure tree in source order", () => {
+test("parse: comments are merged into the structure tree in source order", () => {
   // Several comments at the same nesting level batch and merge via mergeByStart.
 
   const src = [
@@ -389,7 +414,7 @@ Deno.test("parse: comments are merged into the structure tree in source order", 
 // genericLabel: ElementAccessExpression (lines 1095-1097)
 //
 
-Deno.test("parse: an element-access expression gets a […] generic label", () => {
+test("parse: an element-access expression gets a […] generic label", () => {
   const doc = parseDocument("const e = arr[index];\n", "m.ts");
   // The element-access node is labeled `arr[…]`.
   assert(
@@ -398,7 +423,7 @@ Deno.test("parse: an element-access expression gets a […] generic label", () =
   );
 });
 
-Deno.test("parse: a named binding registers a definition", () => {
+test("parse: a named binding registers a definition", () => {
   // registerDefinition no-name guard (line 1260): Covered indirectly:
   // registerDefinition is only called when desc.name is set, but the early `if
   // (!desc.name) return` is reached when called for a name. A named binding
@@ -414,7 +439,7 @@ Deno.test("parse: a named binding registers a definition", () => {
 // classify: method / constructor / accessor declarations (1308-1334)
 //
 
-Deno.test("parse: class methods, constructor and accessors become method nodes", () => {
+test("parse: class methods, constructor and accessors become method nodes", () => {
   const src = [
     "class Widget {",
     "  constructor(a) { this.a = a; }",
@@ -441,7 +466,7 @@ Deno.test("parse: class methods, constructor and accessors become method nodes",
 // module declaration (lines 1353-1390)
 //
 
-Deno.test("parse: enums, exports, import-equals and namespaces classify distinctly", () => {
+test("parse: enums, exports, import-equals and namespaces classify distinctly", () => {
   const src = [
     "enum Status { On, Off }",
     "export default someExpr;",
@@ -471,7 +496,7 @@ Deno.test("parse: enums, exports, import-equals and namespaces classify distinct
   assert(doc.definitions.has("NS"), "namespace name is a definition");
 });
 
-Deno.test("parse: an anonymous namespace (string-literal module name) has no name", () => {
+test("parse: an anonymous namespace (string-literal module name) has no name", () => {
   const doc = parseDocument(
     `declare module "ext" { const v: number; }\n`,
     "m.ts",
@@ -488,7 +513,7 @@ Deno.test("parse: an anonymous namespace (string-literal module name) has no nam
 // classify: multi-declarator variable statement & declaration (1400-1408)
 //
 
-Deno.test("parse: a multi-declarator var statement yields a binding node per declaration", () => {
+test("parse: a multi-declarator var statement yields a binding node per declaration", () => {
   const doc = parseDocument("const a = 1, b = 2, c = 3;\n", "m.ts");
   // The statement itself stays generic (null from classify); each declaration
   // is its own binding node.
@@ -504,7 +529,7 @@ Deno.test("parse: a multi-declarator var statement yields a binding node per dec
 // classify: labeled / break / continue / empty / debugger (1435-1450)
 //
 
-Deno.test("parse: labeled statements and jump statements are reachable nodes", () => {
+test("parse: labeled statements and jump statements are reachable nodes", () => {
   const src = [
     "outer: for (;;) { break outer; }",
     "while (true) { continue; }",
@@ -524,7 +549,7 @@ Deno.test("parse: labeled statements and jump statements are reachable nodes", (
 // classify: in-statement-list fallback (lines 1455-1460)
 //
 
-Deno.test("parse: an unusual statement still becomes a reachable statement node", () => {
+test("parse: an unusual statement still becomes a reachable statement node", () => {
   // A `with` statement is not specially handled, so it falls through to the
   // generic in-statement-list branch.
 
@@ -543,7 +568,7 @@ Deno.test("parse: an unusual statement still becomes a reachable statement node"
 // bindingDesc: no initializer (lines 1496-1505)
 //
 
-Deno.test("parse: an uninitialized binding becomes a variable node with no init meta", () => {
+test("parse: an uninitialized binding becomes a variable node with no init meta", () => {
   const doc = parseDocument("let pending: number;\n", "m.ts");
   const node = findNode(doc, (n) => n.name === "pending");
   assert(node, "the uninitialized binding is a node");
@@ -561,7 +586,7 @@ Deno.test("parse: an uninitialized binding becomes a variable node with no init 
 // bindingDesc: schema and plain-object initializers (lines 1534-1543)
 //
 
-Deno.test("parse: a binding whose initializer is a schema object is a schema node", () => {
+test("parse: a binding whose initializer is a schema object is a schema node", () => {
   const src = [
     "const sch = {",
     '    type: "object",',
@@ -579,7 +604,7 @@ Deno.test("parse: a binding whose initializer is a schema object is a schema nod
   assert(node!.meta && node!.meta.kind === "schema", "carries schema meta");
 });
 
-Deno.test("parse: a binding whose initializer is a plain object is an object node", () => {
+test("parse: a binding whose initializer is a plain object is an object node", () => {
   const doc = parseDocument("const cfg = { a: 1, b: 2 };\n", "m.ts");
   const node = findNode(doc, (n) => n.name === "cfg");
   assert(node, "the object binding is a node");
@@ -591,7 +616,7 @@ Deno.test("parse: a binding whose initializer is a plain object is an object nod
 // expressionStatementDesc: a bare arrow expression (1572-1579)
 //
 
-Deno.test("parse: a bare arrow-function expression statement is a closure node", () => {
+test("parse: a bare arrow-function expression statement is a closure node", () => {
   // An expression statement whose expression is an arrow function.
 
   const doc = parseDocument("(x) => x + 1;\n", "m.ts");
@@ -604,7 +629,7 @@ Deno.test("parse: a bare arrow-function expression statement is a closure node",
 // primaryChildren: arrow + reactive call in return position (1620-1626)
 //
 
-Deno.test("parse: a return of an arrow recurses into its body", () => {
+test("parse: a return of an arrow recurses into its body", () => {
   const src = [
     "function maker() {",
     "  return () => {",
@@ -622,7 +647,7 @@ Deno.test("parse: a return of an arrow recurses into its body", () => {
   );
 });
 
-Deno.test("parse: a return of a reactive call recurses into its arguments", () => {
+test("parse: a return of a reactive call recurses into its arguments", () => {
   const src = [
     "function f2() {",
     "  return pattern((input) => input);",
@@ -641,7 +666,7 @@ Deno.test("parse: a return of a reactive call recurses into its arguments", () =
 // controlLabel: every control-flow shape (1667-1674)
 //
 
-Deno.test("parse: every control-flow shape gets its distinct label", () => {
+test("parse: every control-flow shape gets its distinct label", () => {
   const src = [
     "while (cond) { a(); }",
     "do { b(); } while (cond);",
@@ -668,7 +693,7 @@ Deno.test("parse: every control-flow shape gets its distinct label", () => {
 // calleeName: a non-identifier non-property callee (line 1708)
 //
 
-Deno.test("parse: a computed-callee call is labeled by its first source line", () => {
+test("parse: a computed-callee call is labeled by its first source line", () => {
   // `(obj["m"])(…)` — the callee is neither a plain identifier nor a property
   // access, so calleeName falls back to nodeFirstLine.
 
@@ -686,7 +711,7 @@ Deno.test("parse: a computed-callee call is labeled by its first source line", (
 // importMeta: default name + namespace import (lines 1740, 1743)
 //
 
-Deno.test("parse: import metadata captures default, namespace and named bindings", () => {
+test("parse: import metadata captures default, namespace and named bindings", () => {
   const src = [
     `import def from "modA";`,
     `import * as ns from "modB";`,
@@ -716,7 +741,7 @@ Deno.test("parse: import metadata captures default, namespace and named bindings
 // membersOf: method signature + index signature (lines 1792-1804)
 //
 
-Deno.test("parse: interface metadata describes property, method and index members", () => {
+test("parse: interface metadata describes property, method and index members", () => {
   const src = [
     "interface Shape {",
     "  width: number;",
@@ -742,7 +767,7 @@ Deno.test("parse: interface metadata describes property, method and index member
 // object, anyOf/oneOf fallthrough), 1871, 1894-1899 (readSchemaProps/hasProp).
 //
 
-Deno.test("parse: schema metadata describes nested arrays, objects and unions", () => {
+test("parse: schema metadata describes nested arrays, objects and unions", () => {
   const src = [
     "const big = {",
     '  type: "object",',
@@ -775,7 +800,7 @@ Deno.test("parse: schema metadata describes nested arrays, objects and unions", 
   }
 });
 
-Deno.test("parse: an array-rooted schema with no items reports type array", () => {
+test("parse: an array-rooted schema with no items reports type array", () => {
   const src = [
     "const arrSchema = {",
     '  type: "array",',
@@ -789,7 +814,7 @@ Deno.test("parse: an array-rooted schema with no items reports type array", () =
   }
 });
 
-Deno.test("parse: schema fields handle array-without-items, bare object and non-object values", () => {
+test("parse: schema fields handle array-without-items, bare object and non-object values", () => {
   const src = [
     "const edge = {",
     "  ...spreadBase,", // a spread element is not a property assignment
@@ -815,7 +840,7 @@ Deno.test("parse: schema fields handle array-without-items, bare object and non-
   }
 });
 
-Deno.test("parse: a schema with neither type nor properties roots as any", () => {
+test("parse: a schema with neither type nor properties roots as any", () => {
   const src = [
     "const looseSchema = {",
     '  description: "x",',
@@ -833,7 +858,7 @@ Deno.test("parse: a schema with neither type nor properties roots as any", () =>
 // contractMeta + builder schemas / config args (lines 1899-1937)
 //
 
-Deno.test("parse: a builder call records input/output schemas, config args and captures", () => {
+test("parse: a builder call records input/output schemas, config args and captures", () => {
   const src = [
     "const helper = lift<{ a: number }, string>(",
     '  { type: "object", properties: { a: { type: "number" } }, required: ["a"] } as const satisfies __cfHelpers.JSONSchema,',
@@ -872,7 +897,7 @@ Deno.test("parse: a builder call records input/output schemas, config args and c
 // inferExprType branches (lines 2007-2053) & describeInitializer
 //
 
-Deno.test("parse: variable type is inferred from satisfies, casts and literals", () => {
+test("parse: variable type is inferred from satisfies, casts and literals", () => {
   const cases: Array<[string, string, string]> = [
     [
       "sat",
@@ -920,7 +945,7 @@ Deno.test("parse: variable type is inferred from satisfies, casts and literals",
   }
 });
 
-Deno.test("parse: describeInitializer reports closure for a function initializer", () => {
+test("parse: describeInitializer reports closure for a function initializer", () => {
   const doc = parseDocument(
     "const fn = function namedFn() { return 1; };\n",
     "m.ts",
@@ -938,7 +963,7 @@ Deno.test("parse: describeInitializer reports closure for a function initializer
   );
 });
 
-Deno.test("parse: a non-reactive call binding records describeInitializer text", () => {
+test("parse: a non-reactive call binding records describeInitializer text", () => {
   // `const out = compute(x);` is a non-reactive call, so bindingDesc keeps it a
   // variable and variableMeta -> describeInitializer runs over the call.
 
@@ -959,7 +984,7 @@ Deno.test("parse: a non-reactive call binding records describeInitializer text",
 // A reconstruction sanity check over a varied blob
 //
 
-Deno.test("parse: spans reconstruct every line of a varied blob verbatim", () => {
+test("parse: spans reconstruct every line of a varied blob verbatim", () => {
   const src = [
     "enum E { A }",
     "namespace N { const z = 1; }",

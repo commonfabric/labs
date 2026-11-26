@@ -1,11 +1,13 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type {
   Companion,
   ManifestRow,
 } from "@commonfabric/runner/cfc/kernel/manifest";
+import { describe, it } from "@commonfabric/test-support/test";
 
-import type { SpecSnapshot } from "./cfc-spec-snapshot.ts";
+import { fromFileUrl } from "@std/path";
+
+import { SNAPSHOT_PATH, type SpecSnapshot } from "./cfc-spec-snapshot.ts";
 import {
   type CheckInput,
   CITATION_SOURCE,
@@ -13,8 +15,12 @@ import {
   declaresSymbol,
   type Exemption,
   exportedFunctions,
+  gatherInput,
   GOVERNED_SOURCE,
   KERNEL_DIR,
+  readInput,
+  report,
+  show,
   type SourceFile,
   valueImports,
 } from "./check-cfc-correspondence.ts";
@@ -432,6 +438,22 @@ export { le as atomLe };
         expect(collectFindings(input({ kernelFiles: [file] }))).toEqual([]);
       });
 
+      it("reports an exported function carrying two `@spec` headers", () => {
+        const file = kernelFile(
+          atomLeSource.text.replace(
+            " */\nexport function",
+            ` * @spec ${STORE} §8.12.4 canWrite sha256:${HASH_B}\n */\nexport function`,
+          ),
+        );
+        expect(messages(collectFindings(input({ kernelFiles: [file] }))))
+          .toEqual([
+            "the row for `atomLe` names " +
+            "runtime/runner/src/cfc/kernel/store-labels.ts, which exports " +
+            "no such function",
+            "`atomLe()` carries 2 `@spec` headers",
+          ]);
+      });
+
       it("reports a header written for another function", () => {
         const file = kernelFile(
           atomLeSource.text.replace("atomLe sha256", "canWrite sha256"),
@@ -504,6 +526,33 @@ export { le as atomLe };
               "function takes no transaction, reads no dial and calls no " +
               "hook, and a value it needs from outside is declared inside " +
               "the kernel",
+            ],
+          ]);
+      });
+
+      it("reports an import whose specifier does not percent-decode, or separates with a backslash", () => {
+        const file = kernelFile(
+          `import { a } from "./%E0%A4%A.ts";\n` +
+            `import { b } from "./sub\\..\\..\\prepare.ts";\n` +
+            `import { c } from "./label.ts";\n` +
+            atomLeSource.text,
+        );
+        const findings = collectFindings(input({ kernelFiles: [file] }));
+        expect(findings.map((finding) => [finding.line, finding.message]))
+          .toEqual([
+            [
+              1,
+              "imports `./%E0%A4%A.ts`, which is outside the kernel; a " +
+              "kernel function takes no transaction, reads no dial and " +
+              "calls no hook, and a value it needs from outside is declared " +
+              "inside the kernel",
+            ],
+            [
+              2,
+              "imports `./sub\\..\\..\\prepare.ts`, which is outside the " +
+              "kernel; a kernel function takes no transaction, reads no dial " +
+              "and calls no hook, and a value it needs from outside is " +
+              "declared inside the kernel",
             ],
           ]);
       });
@@ -786,6 +835,15 @@ export { le as atomLe };
         ["sevenAlias", null],
       ]);
     });
+
+    it("returns nothing for an `export { … }` name declared other than as a function", () => {
+      const source = [
+        `import { imported } from "./elsewhere.ts";`,
+        "let counter = 0;",
+        "export { imported, counter };",
+      ].join("\n");
+      expect(exportedFunctions(source)).toEqual([]);
+    });
   });
 
   describe("valueImports()", () => {
@@ -875,6 +933,167 @@ export { le as atomLe };
         !tracked.some((path) => pattern.test(path))
       ).map(String);
       expect(idle).toEqual([]);
+    });
+  });
+
+  describe("gatherInput()", () => {
+    // The tree holds the snapshot itself, which sits in the kernel directory
+    // and is not a source file.
+
+    const decidedRow: ManifestRow = {
+      ...cnfRow,
+      decidedToday: [
+        { file: "./cfc/../scheduler.ts", symbol: "schedule" },
+        { file: "./cfc/../scheduler.ts", symbol: "unschedule" },
+        { file: "cfc/gone.ts", symbol: "gone" },
+      ],
+    };
+    const tree: Record<string, string> = {
+      [SNAPSHOT_PATH]: JSON.stringify(snapshot),
+      [`${KERNEL_DIR}store-labels.ts`]: atomLeSource.text,
+      "runtime/memory/v2/cfc-release-authority.ts": "// §8.12\n",
+      "runtime/runner/test/cfc-labels.test.ts": "// SPEC-PENDING\n",
+      "runtime/runner/src/scheduler.ts": "export function schedule() {}\n",
+    };
+    const files = Object.keys(tree);
+    const reader = () => {
+      const reads: string[] = [];
+      const read = (path: string): Promise<string> => {
+        reads.push(path);
+        return path in tree
+          ? Promise.resolve(tree[path])
+          : Promise.reject(new Error(`read ${path}`));
+      };
+      return { reads, read };
+    };
+
+    it("sorts the tree's source files into kernel, citation and marker files", async () => {
+      const gathered = await gatherInput(files, reader().read, [
+        atomLeRow,
+        cnfRow,
+      ]);
+      const paths = (sources: readonly SourceFile[]) =>
+        sources.map((source) => source.path);
+      expect(paths(gathered.kernelFiles)).toEqual([
+        `${KERNEL_DIR}store-labels.ts`,
+      ]);
+      expect(paths(gathered.citationFiles)).toEqual([
+        `${KERNEL_DIR}store-labels.ts`,
+        "runtime/memory/v2/cfc-release-authority.ts",
+      ]);
+      expect(paths(gathered.markerFiles)).toEqual([
+        `${KERNEL_DIR}store-labels.ts`,
+        "runtime/memory/v2/cfc-release-authority.ts",
+        "runtime/runner/test/cfc-labels.test.ts",
+      ]);
+      expect(gathered.kernelFiles[0].text).toBe(atomLeSource.text);
+      expect(gathered.snapshot).toEqual(snapshot);
+      expect(gathered.manifest).toEqual([atomLeRow, cnfRow]);
+      expect(gathered.decidedFiles).toEqual(new Map());
+    });
+
+    it("reads each file a `missing` row's `decidedToday` names once, resolved against `runtime/runner/src/`, and an untracked one as absent", async () => {
+      const { reads, read } = reader();
+      const gathered = await gatherInput(files, read, [atomLeRow, decidedRow]);
+      expect(gathered.decidedFiles).toEqual(
+        new Map([
+          ["./cfc/../scheduler.ts", "export function schedule() {}\n"],
+          ["cfc/gone.ts", undefined],
+        ]),
+      );
+      expect(reads.filter((path) => path.endsWith("scheduler.ts"))).toEqual([
+        "runtime/runner/src/scheduler.ts",
+      ]);
+      expect(reads.filter((path) => path.endsWith("gone.ts"))).toEqual([]);
+    });
+  });
+
+  describe("readInput()", () => {
+    it("reads the committed snapshot and the kernel files of the working tree", async () => {
+      const read = await readInput(fromFileUrl(new URL("..", import.meta.url)));
+      expect(read.snapshot.specsCommit).toMatch(/^[0-9a-f]{40}$/);
+      expect(read.kernelFiles.map((file) => file.path)).toContain(
+        `${KERNEL_DIR}manifest.ts`,
+      );
+      expect(
+        read.kernelFiles.every((file) => file.path.startsWith(KERNEL_DIR)),
+      ).toBe(true);
+    });
+  });
+
+  describe("report()", () => {
+    it("returns the findings, each with its line where it has one, and the procedure, with code 1", () => {
+      const citing: SourceFile = {
+        path: "runtime/runner/src/cfc/prepare.ts",
+        text: "// §8.15.12\n",
+      };
+      expect(
+        report(input({ manifest: [atomLeRow], citationFiles: [citing] })),
+      ).toEqual({
+        text: [
+          "",
+          "CFC correspondence against specs 9e751d58:",
+          "",
+          `  ${KERNEL_DIR}manifest.ts`,
+          "      08-12-store-label-monotonicity.md §8.12.1 defines " +
+          "`isMoreRestrictiveCNF`, which is neither a row nor a companion; " +
+          "decide which it is",
+          "  runtime/runner/src/cfc/prepare.ts:1",
+          "      cites §8.15.12, which the specification at 9e751d58 has no " +
+          "section for",
+          "",
+          "docs/development/cfc-spec-correspondence.md is the procedure. A kernel",
+          "header or manifest row that disagrees with the snapshot is re-derived",
+          "from the specification at the recorded commit, or the snapshot is",
+          "regenerated with `deno task cfc-spec-snapshot` from a specs checkout.",
+          "A citation naming a section the specification does not have is",
+          "corrected, or, where it is written on purpose to something else,",
+          "recorded in EXEMPTIONS in tasks/check-cfc-correspondence.ts with the",
+          "file, the citation and the reason.",
+          "",
+        ].join("\n"),
+        code: 1,
+      });
+    });
+
+    it("returns a count of rows, kernel files and citations, with code 0, when nothing is found", () => {
+      const citing: SourceFile[] = [
+        {
+          path: "runtime/runner/src/cfc/prepare.ts",
+          text: "// §8 and § 8.12\n",
+        },
+        { path: "runtime/runner/src/cfc.ts", text: "// §8.12.1\n" },
+      ];
+      expect(report(input({ citationFiles: citing }))).toEqual({
+        text: "CFC correspondence OK against specs 9e751d58: 2 manifest " +
+          "rows, 1 kernel files, 3 citations in 2 files.",
+        code: 0,
+      });
+    });
+  });
+
+  describe("show()", () => {
+    const recorder = () => {
+      const lines: [string, unknown][] = [];
+      return {
+        lines,
+        sink: {
+          log: (text: unknown) => lines.push(["log", text]),
+          error: (text: unknown) => lines.push(["error", text]),
+        },
+      };
+    };
+
+    it("writes a passing report to standard output and returns 0", () => {
+      const { lines, sink } = recorder();
+      expect(show({ text: "fine", code: 0 }, sink)).toBe(0);
+      expect(lines).toEqual([["log", "fine"]]);
+    });
+
+    it("writes a failing report to standard error and returns its code", () => {
+      const { lines, sink } = recorder();
+      expect(show({ text: "broken", code: 1 }, sink)).toBe(1);
+      expect(lines).toEqual([["error", "broken"]]);
     });
   });
 });

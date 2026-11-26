@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   attestedPrincipalsAt,
@@ -36,7 +35,19 @@ import {
 } from "../src/ops/piece-origin.ts";
 import { installCustomRoot } from "./install-custom-root.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import { readStoredCfcMetadata } from "../../runner/src/cfc/metadata.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../../runner/test/cfc-seed-envelope.ts";
 import { getLogger } from "@commonfabric/logger";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // The routes those refs resolve to. A system pattern is still SERVED at, and
 // its modules still NAMED by, the route path; the `system:` ref is what a
@@ -577,6 +588,89 @@ describe("opening a space root", () => {
     expect(getPatternSetupIdentityRef(repairedRoot)).toEqual(currentRef);
   });
 
+  it("keeps a stale value stamp on the root's result across a re-stage of its setup", async () => {
+    // The re-stage is a repair the runtime starts on its own, which holds
+    // none of the reads that chose the pattern, so it leaves the value entry
+    // of a result it finds unchanged as stored (`runtimeStarted`). The
+    // versions differ only by a comment, so the result is unchanged, and the
+    // re-stage reads no stored name (`reapplyStoredSetup`), so nothing it
+    // reads takes the stamp again.
+
+    const atom = "earlier-attempt-secret";
+    const commented = `${SOURCE_V1}// v2\n`;
+    await setup();
+    const piece = await controller.ensureDefaultPattern();
+    const root = piece.getCell();
+    const originalRef = getPatternIdentityRef(root)!;
+    await controller.stopPiece(root);
+
+    stub.setSource(commented);
+    const currentPattern = await runtime.patternManager.compilePattern(
+      {
+        main: DEFAULT_APP_PATTERN_PATH,
+        files: [{ name: DEFAULT_APP_PATTERN_PATH, contents: commented }],
+      },
+      { space: controller.getSpace() },
+    );
+    const currentRef = runtime.patternManager.getArtifactEntryRef(
+      currentPattern,
+    )!;
+    expect(currentRef).not.toEqual(originalRef);
+    const link = root.getAsNormalizedFullLink();
+    const document = { space: link.space, scope: link.scope, id: link.id };
+    const stamped = await runtime.editWithRetry((tx) => {
+      root.withTx(tx).setMetaRaw(
+        "patternIdentity",
+        currentRef,
+        rawMetaWriteAuthorization,
+      );
+      const stored = tx.readOrThrow({
+        ...document,
+        path: [],
+        type: "application/json",
+      });
+      writeSeedEnvelopeDoc(tx, link.space);
+      seedStoredEnvelope(tx, { ...document, path: [] }, {
+        ...(stored as Record<string, FabricValue>),
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: { confidentiality: [atom] },
+              origin: "derived",
+              observes: "value",
+            }],
+          },
+        },
+      } as FabricValue);
+    });
+    expect(stamped.error).toBeUndefined();
+    const valueStamp = () => {
+      const tx = runtime.edit();
+      try {
+        return (readStoredCfcMetadata(tx, document)?.labelMap.entries ?? [])
+          .filter((entry) =>
+            entry.origin === "derived" && entry.observes === "value"
+          )
+          .flatMap((entry) => entry.label.confidentiality ?? []);
+      } finally {
+        tx.abort("label read");
+      }
+    };
+    expect(valueStamp()).toEqual([atom]);
+
+    await controller.ensureDefaultPattern();
+    await runtime.idle();
+    const repairedRoot = (await controller.getDefaultPattern(false))!;
+    await repairedRoot.pull();
+
+    expect(getPatternSetupIdentityRef(repairedRoot)).toEqual(currentRef);
+    expect(valueStamp()).toEqual([atom]);
+  });
+
   it("repairs argument setup from source after a metadata-only update", async () => {
     const argumentSourceV1 = [
       "import { pattern } from 'commonfabric';",
@@ -622,7 +716,11 @@ describe("opening a space root", () => {
     expect(metadataUpdate.error).toBeUndefined();
     const metadataOnlyRoot = (await controller.getDefaultPattern(false))!;
     expect(getPatternSetupIdentityRef(metadataOnlyRoot)).toEqual(originalRef);
-    expect(controller.getArgument(metadataOnlyRoot).get()).toEqual({});
+    // Once the cells holding the argument document have been collected, the
+    // stop lets a release pass drop it, so the read syncs it first.
+    const metadataOnlyArgument = controller.getArgument(metadataOnlyRoot);
+    await metadataOnlyArgument.sync();
+    expect(metadataOnlyArgument.get()).toEqual({});
 
     const originalLoad = runtime.patternManager.loadPatternByIdentity;
     let blockedCurrentLoad = false;

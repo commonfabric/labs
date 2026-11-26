@@ -14,7 +14,8 @@ export class TestServer {
     this.#manifest = manifest;
   }
 
-  start(port: number) {
+  /** Starts serving on `port`, returning the port it listens on. */
+  start(port: number): number {
     this.#server = Deno.serve(
       { port, hostname: "127.0.0.1", onListen() {} },
       (req: Request) =>
@@ -27,13 +28,8 @@ export class TestServer {
           enableCors: true,
         }),
     );
-    if (!this.#server) throw new Error("Server creation failed");
     this.#server.unref();
-  }
-
-  /** Returns the listening port, if the server is running. */
-  port(): number | undefined {
-    return this.#server?.addr?.port;
+    return this.#server.addr.port;
   }
 
   async stop() {

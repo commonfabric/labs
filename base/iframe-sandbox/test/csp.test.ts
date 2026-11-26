@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { CSP, HOST_ORIGIN } from "../src/csp.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Each directive as the policy states it, so a change to one is a change to
 // this list rather than something a substring match lets through.
@@ -40,6 +40,12 @@ describe("csp", () => {
 
   it("confines connections to the guest's own origin", () => {
     expect(directive("connect-src")).toBe("'self'");
+  });
+
+  it("allows fonts from the host origin, data: URLs and Google Fonts only", () => {
+    expect(directive("font-src")).toBe(
+      `${HOST_ORIGIN} data: https://fonts.gstatic.com`,
+    );
   });
 
   it("names an origin for the host", () => {

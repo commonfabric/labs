@@ -165,6 +165,9 @@ type Member = {
   /** The key of the room the membership is in. */
   roomKey: string;
 
+  /** The room's memberships, this one among them. */
+  room: Map<string, Member>;
+
   connectionId: string;
   sessionId: string;
   principal: string | undefined;
@@ -235,6 +238,7 @@ export class PresenceRooms {
       member = {
         participantId: crypto.randomUUID(),
         roomKey: key,
+        room,
         connectionId: input.connectionId,
         sessionId: input.sessionId,
         principal: input.principal,
@@ -347,8 +351,7 @@ export class PresenceRooms {
    * from its room and tells the room's other members, if it had published.
    */
   #end(member: Member): void {
-    const room = this.#rooms.get(member.roomKey);
-    if (room === undefined) return;
+    const { room } = member;
     room.delete(memberKey(member.connectionId, member.sessionId));
     const members = this.#membersByConnection.get(member.connectionId);
     members?.delete(member);

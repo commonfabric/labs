@@ -375,10 +375,8 @@ than what the list first said, the item says what it does now and why.
       editing a pattern's source changes its identity,
       so each waits for the next edit its pattern gets for a reason of its own,
       and stage 3's sweep names both as the allowed residue.
-      `patterns/dev/gideon-tests/test-cross-piece-client.tsx:71` is not a
-      comment: its handler branches on `innerValue.$stream` and reports "Stream
-      not found" for a stream set up under stage 1. It is a manual fixture that
-      no CI job dispatches; stage 3 rewrites it (see there).
+      `patterns/dev/gideon-tests/test-cross-piece-client.tsx` was the one
+      use that was not a comment; stage 3 covers it (see there).
 - [x] Not foreseen, and landed with stage 1: a stream declared through a
       `$ref` into the schema's own `$defs`, or through a composition whose
       branches agree (`allOf` with
@@ -453,10 +451,10 @@ than what the list first said, the item says what it does now and why.
       `piece.test.ts` that exists to pin the sentinel path. Each should carry
       `schema: { asCell: ["stream"] }` or `isStream: () => true` and return
       `undefined` from `getRaw`.
-- [ ] `patterns/dev/gideon-tests/test-cross-piece-client.tsx` sends without
-      inspecting the stream's value, and its baseline is refreshed with
-      `deno task pattern-compat --update`, the documented remedy for the
-      identity change.
+- [x] `patterns/dev/gideon-tests/test-cross-piece-client.tsx` sends without
+      inspecting the stream's value, its baseline is recorded with
+      `deno task pattern-compat --update`, and
+      `test-cross-piece-client.test.tsx` drives a send through it.
 - [ ] The raw-document fixtures that model older data switch off the
       sentinel: `scripts/topics-export.test.ts` and
       `runtime/runner/test/storage-subscription-filter.bench.ts` seed a

@@ -1,11 +1,35 @@
-import { assert, handler, pattern, TESTS, Writable } from "commonfabric";
 import {
+  assert,
+  handler,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
+import Gallery, {
   DISCLAIMER_EXAMPLE_COUNT,
   DISCLAIMER_RENDERED_EXAMPLE_COUNT,
+  DisclaimerFactCheckBriefExample,
+  DisclaimerPromptRoutingAckExample,
+  DisclaimerSourceProvenanceReviewExample,
   TrustedDisclaimerAckHost,
   TrustedFactCheckGateHost,
   TrustedProvenanceReviewHost,
 } from "./disclaimer-examples.tsx";
+import {
+  childNodes,
+  textContent,
+} from "../../tools/test-support/vnode-helpers.ts";
+
+/** The text of the gallery's card at `index`: the first introduces the
+ * gallery and the second is its catalog. Reached by position, since a search
+ * would also walk every example the gallery renders. */
+const cardText = (view: unknown, index: number): string =>
+  textContent(childNodes(childNodes(view)[0])[index]);
+
+const numbered = (titles: readonly string[]): string =>
+  "Catalog" + titles.map((title, index) => `${index + 1}. ${title}`).join("");
 
 type AckSuite = ReturnType<typeof TrustedDisclaimerAckHost>;
 type ProvenanceSuite = ReturnType<typeof TrustedProvenanceReviewHost>;
@@ -37,6 +61,10 @@ const runLookalikeOnly = handler<void, { suite: AckSuite }>((
 });
 
 export default pattern(() => {
+  const gallery = Gallery({});
+  const promptRouting = DisclaimerPromptRoutingAckExample({});
+  const sourceProvenance = DisclaimerSourceProvenanceReviewExample({});
+  const factCheckBrief = DisclaimerFactCheckBriefExample({});
   const influenceAcknowledged = new Writable("");
   const influenceFakeStatus = new Writable("Lookalike control is idle.");
   const influence = TrustedDisclaimerAckHost({
@@ -135,6 +163,49 @@ export default pattern(() => {
     DISCLAIMER_RENDERED_EXAMPLE_COUNT === DISCLAIMER_EXAMPLE_COUNT
   );
 
+  // An example's content is its text, carrying the label of its kind.
+  const assert_examples_carry_their_content = assert(() =>
+    promptRouting.content ===
+      "Route this note to the verified recipient only." &&
+    sourceProvenance.content ===
+      "Shared source excerpt for the design review." &&
+    factCheckBrief.content === "External brief about launch performance."
+  );
+
+  // Each host goes by the title it is given.
+  const assert_hosts_named_by_title = assert(() =>
+    influence[NAME] === "Influence disclosure ack" &&
+    provenance[NAME] === "Source provenance review" &&
+    factCheck[NAME] === "Fact-check brief gate"
+  );
+
+  // The catalog lists each example under the name it goes by, so reading it
+  // reads every example's name.
+  const assert_gallery_catalog = assert(() =>
+    gallery[NAME] === "Disclaimer Example Gallery" &&
+    gallery.exampleCount === DISCLAIMER_EXAMPLE_COUNT &&
+    gallery.renderedExampleCount === DISCLAIMER_EXAMPLE_COUNT &&
+    cardText(gallery[UI], 0).includes(
+      "The gallery currently exposes 14 example patterns.",
+    ) &&
+    cardText(gallery[UI], 1) === numbered([
+        "Prompt routing ack",
+        "AI-generated content disclaimer",
+        "Medical-style information disclaimer",
+        "Influence disclosure ack",
+        "Redacted summary disclaimer",
+        "Confidential source disclaimer",
+        "Public-post disclaimer",
+        "Source provenance review",
+        "Citation provenance review",
+        "Public-post provenance review",
+        "Fact-check brief gate",
+        "Fact-check release gate",
+        "Fact-check claims gate",
+        "Lookalike disclaimer host",
+      ])
+  );
+
   return {
     [TESTS]: [
       { action: runAck({ suite: influence }) },
@@ -146,10 +217,16 @@ export default pattern(() => {
       { action: runLookalikeOnly({ suite: lookalike }) },
       { assertion: assert_lookalike_stays_untrusted },
       { assertion: assert_gallery_renders_catalog },
+      { assertion: assert_examples_carry_their_content },
+      { assertion: assert_hosts_named_by_title },
+      { assertion: assert_gallery_catalog },
     ],
     influence,
     provenance,
     factCheck,
     lookalike,
+    promptRouting,
+    sourceProvenance,
+    factCheckBrief,
   };
 });

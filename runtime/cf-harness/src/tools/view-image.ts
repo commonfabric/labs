@@ -160,8 +160,6 @@ export const viewImageTool: HarnessToolDefinition<
           ? "not_a_file"
           : detail.includes("paths must stay within the workspace")
           ? "path_outside_workspace"
-          : detail.includes("path is not a file")
-          ? "not_a_file"
           : detail.includes("path is empty") ||
               detail.includes("path is too large") ||
               detail.includes("supported image type")

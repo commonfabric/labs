@@ -26,11 +26,16 @@
 //   swallowed by the fire-and-forget start path (the piece silently
 //   running against stale setup was the filed hazard).
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   createDocumentReadiness,
   DocumentPending,
@@ -265,6 +270,54 @@ describe("stage P2-F per-(action × instance) run supply", () => {
     expect(derivationStamps[0].scopeKeyIdentity?.principal).toBe(
       alice.principal,
     );
+  });
+
+  it("re-arms a node under the root its latest subscription names, and no longer under the one it named when it joined", async () => {
+    // The scheduler finds the nodes beneath an arrived root in an index the
+    // node registry files a node into when it joins the active set. A
+    // subscription of an action that is already active sets a new identity,
+    // so the index has to follow the identity rather than the joining.
+    runtime.installSealDestination(passThroughDestination(), {
+      runStamper: recordingStamper,
+      runDemanderResolver: () => [],
+    });
+    let invocations = 0;
+    const action = (_tx: IExtendedStorageTransaction) => {
+      invocations += 1;
+    };
+    const subscribeUnder = (rootId: string) =>
+      runtime.scheduler.subscribe(action, {
+        reads: [],
+        shallowReads: [],
+        writes: [],
+      }, {
+        isEffect: true,
+        observationIdentity: {
+          pieceId: `space:${rootId}`,
+          pieceRootId: rootId,
+        },
+      });
+    const firstRoot = "of:p2f-first-root";
+    const secondRoot = "of:p2f-second-root";
+
+    subscribeUnder(firstRoot);
+    await runtime.idle();
+    expect(invocations).toBe(1);
+    expect(runtime.scheduler.invalidateActionsForDemandRoots([firstRoot]))
+      .toBe(1);
+    await runtime.idle();
+
+    subscribeUnder(secondRoot);
+    await runtime.idle();
+    expect(runtime.scheduler.invalidateActionsForDemandRoots([firstRoot]))
+      .toBe(0);
+    expect(runtime.scheduler.invalidateActionsForDemandRoots([secondRoot]))
+      .toBe(1);
+    await runtime.idle();
+
+    runtime.scheduler.unsubscribe(action);
+    expect(runtime.scheduler.invalidateActionsForDemandRoots([secondRoot]))
+      .toBe(0);
   });
 
   it("resolves a NESTED piece's instances through the OUTER root a client demands (Phase 7 demand-root chain): the child's actions run per demanded instance instead of falling to the service identity", async () => {

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
@@ -9,6 +8,12 @@ import {
   type RuntimeProgram,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   createFabricInstantiationRecorder,
   type FabricInstantiationRecord,
@@ -118,6 +123,20 @@ describe("fabric-instantiations", () => {
         keylessInstantiation(recorder.instantiations.keylessSince(0))
           ?.identity,
       ).toBe("keyless:evicted");
+    });
+
+    it("keeps the newest keyless records once more than its bound arrive", () => {
+      // The keyless buffer holds the last 128 session-only roots; the oldest
+      // is the one dropped, so a window still names a keyless record.
+      const recorder = createFabricInstantiationRecorder();
+      for (let i = 0; i <= 128; i++) {
+        recorder.observe(instantiation(`keyless:k${i}`, PIECE_ENTITY));
+      }
+
+      const kept = recorder.instantiations.keylessSince(0);
+      expect(kept).toHaveLength(128);
+      expect(kept[0].identity).toBe("keyless:k1");
+      expect(kept.at(-1)?.identity).toBe("keyless:k128");
     });
 
     it("records nothing for an instantiation whose entity does not reduce", () => {

@@ -36,7 +36,7 @@ export interface WritableModuleTransform {
   >;
 }
 
-export type DragDisposition = "ignore" | "restore" | "commit";
+export type DragDisposition = "restore" | "commit";
 
 export function canBeginDrag(
   active: PointerDragOwner | undefined,
@@ -51,13 +51,11 @@ export function ownsDrag<T extends PointerDragOwner>(
   return active?.pointerId === pointerId;
 }
 
-/** Decides whether a pointer ending restores or commits its owned preview. */
+/** Decides whether the end of a drag restores or commits its preview. */
 export function dragDisposition(
-  active: PointerDragOwner | undefined,
-  pointerId: number,
+  active: PointerDragOwner,
   cancelled: boolean,
 ): DragDisposition {
-  if (!ownsDrag(active, pointerId)) return "ignore";
   return cancelled || !active.moved ? "restore" : "commit";
 }
 

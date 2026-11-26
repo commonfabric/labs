@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
@@ -11,6 +10,7 @@ import {
   parseModule,
 } from "./transformed-ast.ts";
 import { validateSource } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const PRELUDE = `
   import {
@@ -188,6 +188,32 @@ describe("static-key-reads", () => {
         ["__cfHelpers.VIEWS"],
         ["__cfHelpers.UI"],
       ]);
+    });
+
+    it("reads `row[SUGGESTIONS]` in place, with no lift", async () => {
+      const root = await compile(`
+        import {
+          type ReadonlyCell,
+          SUGGESTIONS,
+          type Suggestion,
+        } from "commonfabric";
+
+        interface OffersOutput {
+          [SUGGESTIONS]: ReadonlyCell<Suggestion>[];
+        }
+
+        const Offers = pattern<RowInput, OffersOutput>(() => ({
+          [SUGGESTIONS]: [],
+        }));
+
+        export default pattern<RowInput, OffersOutput>(({ piece }) => {
+          const row = Offers({ piece });
+          return { [SUGGESTIONS]: row[SUGGESTIONS] };
+        });
+      `);
+
+      expect(hoistedLifts(root)).toEqual([]);
+      expect(keyReads(root, "row")).toEqual([["__cfHelpers.SUGGESTIONS"]]);
     });
 
     it("reads a path below `row[VIEWS]` as one key read", async () => {

@@ -2,6 +2,7 @@ import ts from "typescript";
 import { getCellKind } from "@commonfabric/schema-generator/cell-brand";
 import type { ReactiveContextInfo } from "../ast/reactive-context.ts";
 import type { TransformationContext } from "../core/mod.ts";
+import { unwrapExpression } from "../utils/expression.ts";
 import { classifyOpaquePathTerminalCall } from "./opaque-roots.ts";
 
 export type SupportedCallRootKind =
@@ -58,6 +59,30 @@ function hasOpaquePathTerminalReceiverChain(
 }
 
 /**
+ * The receiver the callee of `expression` reads its method off (`cell` in
+ * `cell.get()`, `cell["get"]()` or `(cell.get)()`), or `undefined` when the
+ * callee is not a member access.
+ */
+export function getCalleeReceiver(
+  expression: ts.CallExpression,
+): ts.Expression | undefined {
+  const callee = unwrapExpression(expression.expression);
+  return ts.isPropertyAccessExpression(callee) ||
+      ts.isElementAccessExpression(callee)
+    ? callee.expression
+    : undefined;
+}
+
+/** The receiver of a `.get()` call, or `undefined` for any other call. */
+export function getGetCallReceiver(
+  expression: ts.CallExpression,
+): ts.Expression | undefined {
+  return classifyOpaquePathTerminalCall(expression) === "get"
+    ? getCalleeReceiver(expression)
+    : undefined;
+}
+
+/**
  * True when `expression` is `<receiver>.get()` on a real cell or stream — the
  * receivers for which `.get()` is a value read. Every other receiver either
  * exposes its value directly (`opaque-get:invalid-call` covers those) or has no
@@ -71,27 +96,16 @@ export function isCellReadTerminalCall(
   expression: ts.CallExpression,
   context: TransformationContext,
 ): boolean {
-  if (classifyOpaquePathTerminalCall(expression) !== "get") {
+  const receiver = getGetCallReceiver(expression);
+  if (!receiver) {
     return false;
   }
 
-  const callee = expression.expression;
-  if (
-    !ts.isPropertyAccessExpression(callee) &&
-    !ts.isElementAccessExpression(callee)
-  ) {
-    return false;
-  }
-
-  try {
-    const cellKind = getCellKind(
-      context.checker.getTypeAtLocation(callee.expression),
-      context.checker,
-    );
-    return cellKind === "cell" || cellKind === "stream";
-  } catch {
-    return false;
-  }
+  const cellKind = getCellKind(
+    context.checker.getTypeAtLocation(receiver),
+    context.checker,
+  );
+  return cellKind === "cell" || cellKind === "stream";
 }
 
 export function classifyCallRootPolicy(

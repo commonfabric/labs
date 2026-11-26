@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("ContextualFlowControl.lubSchema combinator descent", () => {
   // Regression guard for joinSchema combinator descent (audit 1.6 / W2.16).

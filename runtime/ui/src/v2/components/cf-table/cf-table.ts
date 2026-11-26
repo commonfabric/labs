@@ -5,7 +5,107 @@ import { BaseElement } from "../../core/base-element.ts";
 // matching the prior phase-1 token migration pattern.
 
 /**
+ * The styles of the table's rows and cells. They are light DOM children of the
+ * table, beyond the reach of its shadow styles, so the table adopts a sheet of
+ * them into the root it is connected in. Their rules reach the rows and cells beneath
+ * the table through any element between them, such as the `display: contents`
+ * span a renderer wraps a list of children in, and stop at the content of a
+ * cell: nothing within a cell takes them, and a `cf-table` within a cell takes
+ * only its own.
+ */
+const ROW_STYLES = `
+  @scope (cf-table) to (:is(th, td) > *) {
+    :is(th, td) {
+      padding: var(--cf-size-md-padding-v, 8px) var(--cf-size-lg-padding-h, 12px);
+      border-bottom: 1px solid var(--border, #e2e8f0);
+      text-align: inherit;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    :scope[size="sm"] :is(th, td) {
+      padding: var(--cf-size-sm-padding-v, 4px) var(--cf-size-md-padding-h, 8px);
+    }
+
+    :scope[size="lg"] :is(th, td) {
+      padding: var(--cf-size-lg-spacing, 12px) var(--cf-size-xl-spacing, 16px);
+    }
+
+    th {
+      font-weight: var(--cf-font-weight-semibold, 600);
+      color: var(--foreground, #0f172a);
+      background-color: var(--muted, #f8fafc);
+    }
+
+    :scope[sticky-header] thead th {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    :scope[striped] tbody tr:nth-of-type(even) {
+      background-color: var(--muted, #f8fafc);
+    }
+
+    :scope[hover] tbody tr:hover {
+      background-color: var(--muted, #f1f5f9);
+    }
+
+    :scope[bordered] :is(th, td) {
+      border: 1px solid var(--border, #e2e8f0);
+    }
+
+    :scope[bordered] thead tr:last-child :is(th, td) {
+      border-bottom-width: 2px;
+    }
+
+    caption {
+      padding: var(--cf-size-md-padding-v, 8px) var(--cf-size-lg-padding-h, 12px);
+      color: var(--muted-foreground, #64748b);
+      text-align: left;
+    }
+
+    :is(th, td).wrap {
+      white-space: normal;
+    }
+
+    :is(th, td).text-left {
+      text-align: left;
+    }
+    :is(th, td).text-center {
+      text-align: center;
+    }
+    :is(th, td).text-right {
+      text-align: right;
+    }
+
+    :is(th, td).align-top {
+      vertical-align: top;
+    }
+    :is(th, td).align-middle {
+      vertical-align: middle;
+    }
+    :is(th, td).align-bottom {
+      vertical-align: bottom;
+    }
+  }
+`;
+
+/**
+ * The sheet holding {@link ROW_STYLES} for each document, adopted by every
+ * root in that document a table is connected in. A root adopts only a sheet
+ * its own document's window made, so a sheet is made for a document when a
+ * table first connects in it.
+ */
+const rowStyleSheets = new WeakMap<Document, CSSStyleSheet>();
+
+/**
  * CFTable - Semantic table component with styling
+ *
+ * Its row and cell styles are adopted into the document or shadow root holding
+ * the table, so they take part in that tree's cascade: a page rule of equal
+ * specificity, such as `td { padding: 0 }`, does not override them as it would
+ * a component's shadow styles, while an inline style does.
  *
  * @element cf-table
  *
@@ -16,9 +116,7 @@ import { BaseElement } from "../../core/base-element.ts";
  * @attr {boolean} sticky-header - Make header sticky
  * @attr {boolean} full-width - Make table full width
  *
- * @slot - Table content (thead, tbody, tfoot)
- *
- * @fires cf-table-sort - Fired when table is sorted with detail: { columnIndex, ascending }
+ * @slot - Table content: a caption, and rows in a thead, tbody, or tfoot
  *
  * @example
  * <cf-table striped hover>
@@ -43,6 +141,12 @@ export class CFTable extends BaseElement {
       overflow: auto;
     }
 
+    .table-wrapper {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
     table {
       border-collapse: collapse;
       caption-side: bottom;
@@ -55,130 +159,22 @@ export class CFTable extends BaseElement {
       width: 100%;
     }
 
-    /* Size variants */
     :host([size="sm"]) table {
       font-size: var(--cf-font-caption-size, 0.75rem);
-    }
-
-    :host([size="sm"]) ::slotted(th),
-    :host([size="sm"]) ::slotted(td) {
-      padding: var(--cf-size-sm-padding-v, 4px) var(--cf-size-md-padding-h, 8px);
-    }
-
-    :host([size="md"]) ::slotted(th),
-    :host([size="md"]) ::slotted(td) {
-      padding: var(--cf-size-md-padding-v, 8px) var(--cf-size-lg-padding-h, 12px);
     }
 
     :host([size="lg"]) table {
       font-size: var(--cf-font-body-large-size, 1rem);
     }
-
-    :host([size="lg"]) ::slotted(th),
-    :host([size="lg"]) ::slotted(td) {
-      padding: var(--cf-size-lg-spacing, 12px) var(--cf-size-xl-spacing, 16px);
-    }
-
-    /* Base cell styles */
-    ::slotted(th),
-    ::slotted(td) {
-      border-bottom: 1px solid var(--border, #e2e8f0);
-      text-align: inherit;
-      vertical-align: middle;
-    }
-
-    ::slotted(th) {
-      font-weight: var(--cf-font-weight-semibold, 600);
-      color: var(--foreground, #0f172a);
-      background-color: var(--muted, #f8fafc);
-    }
-
-    /* Sticky header */
-    :host([sticky-header]) ::slotted(thead) ::slotted(th) {
-      position: sticky;
-      top: 0;
-      z-index: 10;
-      background-color: var(--muted, #f8fafc);
-    }
-
-    /* Striped rows */
-    :host([striped]) ::slotted(tbody) ::slotted(tr:nth-of-type(even)) {
-      background-color: var(--muted, #f8fafc);
-    }
-
-    /* Hover effect */
-    :host([hover]) ::slotted(tbody) ::slotted(tr:hover) {
-      background-color: var(--muted, #f1f5f9);
-    }
-
-    /* Bordered variant */
-    :host([bordered]) ::slotted(th),
-    :host([bordered]) ::slotted(td) {
-      border: 1px solid var(--border, #e2e8f0);
-    }
-
-    /* Remove double borders */
-    :host([bordered]) ::slotted(thead) ::slotted(tr:last-child) ::slotted(th),
-    :host([bordered]) ::slotted(thead) ::slotted(tr:last-child) ::slotted(td) {
-      border-bottom-width: 2px;
-    }
-
-    /* Caption styling */
-    ::slotted(caption) {
-      padding: var(--cf-size-md-padding-v, 8px) var(--cf-size-lg-padding-h, 12px);
-      color: var(--muted-foreground, #64748b);
-      text-align: left;
-    }
-
-    /* Responsive wrapper for overflow */
-    .table-wrapper {
-      width: 100%;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-    }
-
-    /* Ensure minimum width for cells */
-    ::slotted(th),
-    ::slotted(td) {
-      white-space: nowrap;
-    }
-
-    /* Allow wrapping for specific cells if needed */
-    ::slotted(th.wrap),
-    ::slotted(td.wrap) {
-      white-space: normal;
-    }
-
-    /* Alignment utilities */
-    ::slotted(.text-left) {
-      text-align: left;
-    }
-    ::slotted(.text-center) {
-      text-align: center;
-    }
-    ::slotted(.text-right) {
-      text-align: right;
-    }
-
-    /* Vertical alignment */
-    ::slotted(.align-top) {
-      vertical-align: top;
-    }
-    ::slotted(.align-middle) {
-      vertical-align: middle;
-    }
-    ::slotted(.align-bottom) {
-      vertical-align: bottom;
-    }
   `;
 
   static override properties = {
-    striped: { type: Boolean },
-    hover: { type: Boolean },
-    bordered: { type: Boolean },
-    size: { type: String },
-    stickyHeader: { type: Boolean, attribute: "sticky-header" },
-    fullWidth: { type: Boolean, attribute: "full-width" },
+    striped: { type: Boolean, reflect: true },
+    hover: { type: Boolean, reflect: true },
+    bordered: { type: Boolean, reflect: true },
+    size: { type: String, reflect: true },
+    stickyHeader: { type: Boolean, attribute: "sticky-header", reflect: true },
+    fullWidth: { type: Boolean, attribute: "full-width", reflect: true },
   };
 
   declare striped: boolean;
@@ -187,6 +183,13 @@ export class CFTable extends BaseElement {
   declare size: "sm" | "md" | "lg";
   declare stickyHeader: boolean;
   declare fullWidth: boolean;
+
+  /**
+   * The slot for the table's content. The HTML parser moves a `<slot>` that
+   * a template writes inside `<table>` out in front of it, so the table takes
+   * this element as a child value instead.
+   */
+  readonly #slot = document.createElement("slot");
 
   constructor() {
     super();
@@ -198,63 +201,28 @@ export class CFTable extends BaseElement {
     this.fullWidth = false;
   }
 
+  override connectedCallback() {
+    super.connectedCallback();
+    const document = this.ownerDocument;
+    const window = document.defaultView ?? globalThis;
+    const root = this.getRootNode();
+    const styled = root instanceof window.ShadowRoot ? root : document;
+    let sheet = rowStyleSheets.get(document);
+    if (!sheet) {
+      sheet = new window.CSSStyleSheet();
+      sheet.replaceSync(ROW_STYLES);
+      rowStyleSheets.set(document, sheet);
+    }
+    if (!styled.adoptedStyleSheets.includes(sheet)) {
+      styled.adoptedStyleSheets = [...styled.adoptedStyleSheets, sheet];
+    }
+  }
+
   override render() {
     return html`
       <div class="table-wrapper" part="wrapper">
-        <table part="table">
-          <slot></slot>
-        </table>
+        <table part="table">${this.#slot}</table>
       </div>
     `;
-  }
-
-  /**
-   * Get all table rows
-   */
-  getRows(): HTMLTableRowElement[] {
-    return Array.from(this.querySelectorAll("tbody tr"));
-  }
-
-  /**
-   * Get table headers
-   */
-  getHeaders(): HTMLTableCellElement[] {
-    return Array.from(this.querySelectorAll("thead th"));
-  }
-
-  /**
-   * Sort table by column index
-   */
-  sortByColumn(columnIndex: number, ascending: boolean = true) {
-    const tbody = this.querySelector("tbody");
-    if (!tbody) return;
-
-    const rows = this.getRows();
-    const sortedRows = rows.sort((a, b) => {
-      const aCell = a.cells[columnIndex]?.textContent || "";
-      const bCell = b.cells[columnIndex]?.textContent || "";
-
-      // Try to parse as numbers first
-      const aNum = parseFloat(aCell);
-      const bNum = parseFloat(bCell);
-
-      if (!isNaN(aNum) && !isNaN(bNum)) {
-        return ascending ? aNum - bNum : bNum - aNum;
-      }
-
-      // Otherwise sort as strings
-      return ascending
-        ? aCell.localeCompare(bCell)
-        : bCell.localeCompare(aCell);
-    });
-
-    // Reorder rows in DOM
-    sortedRows.forEach((row) => tbody.appendChild(row));
-
-    // Emit sort event
-    this.emit("cf-table-sort", {
-      columnIndex,
-      ascending,
-    });
   }
 }

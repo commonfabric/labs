@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   PIECE_TARGETING_GUIDANCE,
   pieceTargetingContextMessages,
 } from "../src/piece-targeting.ts";
 import { finishTaskTool } from "../src/tools/finish-task.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("piece-targeting", () => {
   it("sends targeting guidance only when pieces are attached", () => {

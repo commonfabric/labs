@@ -15,7 +15,6 @@
  * primitive has, a private field assigned after `super()`.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { FabricPrimitive } from "@";
@@ -25,6 +24,7 @@ import {
   FabricEpochDay,
   fabricPrimitiveClassesByName,
 } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A `BaseFabricPrimitive` subclass defined outside the `data-model`, which has
@@ -159,6 +159,13 @@ describe("BaseFabricPrimitive", () => {
         expect(BaseFabricPrimitive.isInstance("x")).toBe(false);
         expect(BaseFabricPrimitive.isInstance({})).toBe(false);
         expect(BaseFabricPrimitive.isInstance([])).toBe(false);
+      });
+
+      it("returns `false` for a function on a primitive's prototype chain", () => {
+        const fn = Object.setPrototypeOf(() => {}, FabricEpochDay.prototype);
+
+        expect(fn instanceof FabricPrimitive).toBe(true);
+        expect(BaseFabricPrimitive.isInstance(fn)).toBe(false);
       });
 
       it("throws for a `FabricPrimitive` that is not a `BaseFabricPrimitive`", () => {

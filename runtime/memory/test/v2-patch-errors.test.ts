@@ -6,11 +6,19 @@
  * cases where the same input shape produces a value instead.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/api";
+import type { FabricInstance } from "@commonfabric/data-model";
+import {
+  BaseFabricInstance,
+  DEEP_CLONE_CORE,
+  DEEP_FREEZE,
+  IS_DEEP_FROZEN,
+  SHALLOW_UNFROZEN_CLONE,
+} from "@commonfabric/data-model/fabric-bases";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { EntityDocument, PatchOp } from "../v2.ts";
 import {
@@ -51,6 +59,25 @@ const inapplicableToDocument = (
   ops: PatchOp[],
 ): string => messageOf(() => applyPatchToDocument(base, ops));
 
+/** A `FabricInstance` that fails every copy, as a defective class would. */
+class Uncopyable extends BaseFabricInstance {
+  [DEEP_FREEZE](): FabricValue {
+    return Object.freeze(this);
+  }
+
+  [IS_DEEP_FROZEN](): boolean {
+    return Object.isFrozen(this);
+  }
+
+  protected [SHALLOW_UNFROZEN_CLONE](): FabricInstance {
+    throw new TypeError("Uncopyable cannot be copied");
+  }
+
+  [DEEP_CLONE_CORE](): FabricInstance {
+    throw new TypeError("Uncopyable cannot be copied");
+  }
+}
+
 describe("patch", () => {
   describe("replace", () => {
     it("throws given a missing intermediate key", () => {
@@ -70,6 +97,16 @@ describe("patch", () => {
       expect(inapplicable(state, [
         { op: "replace", path: "/a/b", value: 1 },
       ])).toBe("path is not traversable at /a/b");
+    });
+
+    it("rethrows, unconverted, an error the parent raises as it is copied", () => {
+      // A `PatchApplyError` tells the caller the layer cannot apply, so a
+      // defect in the value has to reach it as itself.
+
+      const state = { a: new Uncopyable() };
+      expect(() =>
+        applyPatch(state, [{ op: "replace", path: "/a/b", value: 1 }])
+      ).toThrow(new TypeError("Uncopyable cannot be copied"));
     });
 
     it("throws given an array index that is not a number", () => {

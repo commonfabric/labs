@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { completeOpenAICodexDeviceAuthorization } from "../../src/auth/openai-codex.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("completeOpenAICodexDeviceAuthorization()", () => {
   for (const status of [403, 404]) {
@@ -40,4 +40,29 @@ describe("completeOpenAICodexDeviceAuthorization()", () => {
       expect(waits).toEqual([1_000, 1_000]);
     });
   }
+
+  it("throws when a successful device token response lacks the code verifier", async () => {
+    let exchanges = 0;
+    const result = completeOpenAICodexDeviceAuthorization({
+      device: {
+        deviceAuthId: "device",
+        userCode: "CODE",
+        intervalMs: 1_000,
+        verificationUrl: "https://auth.openai.com/codex/device",
+      },
+      now: () => 0,
+      wait: () => Promise.resolve(),
+      fetchFn: (input) => {
+        if (String(input).endsWith("/oauth/token")) exchanges++;
+        return Promise.resolve(
+          new Response(JSON.stringify({ authorization_code: "code" })),
+        );
+      },
+    });
+
+    await expect(result).rejects.toThrow(
+      "OpenAI Codex device token response is missing required fields",
+    );
+    expect(exchanges).toBe(0);
+  });
 });

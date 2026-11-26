@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchema, JSONValue } from "@commonfabric/api";
 import {
@@ -13,6 +12,7 @@ import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { valueFromDataUri } from "@commonfabric/data-model/codec-data-uri";
 
 import { internSchema } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   bindImmutableCells,
@@ -817,6 +817,34 @@ describe("immutable-cell", () => {
     expect(immutableSnapshot(b.id).value).toEqual({ shared: 42 });
     second.dispose();
     expect(() => immutableSnapshot(b.id)).toThrow("expired");
+  });
+
+  it("disposes a store that never retained anything and refuses it afterwards", () => {
+    const store = new ImmutableCellStore();
+    expect(() => store.get("snapshot:absent")).toThrow(
+      "Unknown immutable cell",
+    );
+    store.dispose();
+    expect(() => store.get("snapshot:absent")).toThrow(
+      "Unknown immutable cell",
+    );
+    expect(() => store.create({ n: 1 })).toThrow("disposed");
+    expect(() => store.createOwned({ n: 1 })).toThrow("disposed");
+    expect(() => store.retainSchema({ type: "number" })).toThrow("disposed");
+  });
+
+  it("keeps an owned snapshot's identifier while another store holds equal content", () => {
+    const owning = new ImmutableCellStore();
+    const holding = new ImmutableCellStore();
+    const source = deepFreeze({ owned: 1 });
+    const owned = owning.createOwned(source);
+    expect(owning.createOwned(deepFreeze({ owned: 1 }))).toBe(owned);
+    const held = holding.create({ owned: 1 });
+    expect(held).toBe(owned);
+    owning.dispose();
+    expect(immutableSnapshot(owned.id).value).toBe(source);
+    holding.dispose();
+    expect(() => immutableSnapshot(owned.id)).toThrow("expired");
   });
 
   it("invalidates all identifiers when their runtime store is disposed", () => {

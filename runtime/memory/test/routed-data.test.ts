@@ -7,12 +7,14 @@ import WebSocket from "ws";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
-import { Identity } from "@commonfabric/identity";
+import { Identity, issueDelegation } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { isPlainObject } from "@commonfabric/js-values/types";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import type { MemorySpace } from "../interface.ts";
 import {
   encodeMemoryBoundary,
@@ -27,11 +29,14 @@ import * as Engine from "../v2/engine.ts";
 import { RoutedEpochStore } from "../v2/routed-epochs.ts";
 import {
   DEFAULT_ROUTED_HOST_LIMITS,
+  outputSizeBreakdown,
   RoutedControlDiagnostics,
   type RoutedHostLimits,
   routedHostLimits,
   routedHostLimitsFor,
   RoutedMemoryHost,
+  safeClose,
+  sendBounded,
   validatedRoutedEncodingFlags,
 } from "../v2/routed-host.ts";
 import { listenRoutedMemory } from "../v2/routed-listener.ts";
@@ -745,7 +750,7 @@ async function frameOrClose(socket: FramedSocket): Promise<unknown> {
   }
 }
 
-Deno.test("redeemed Mode A tickets are single use; control renews and releases authority independently", async () => {
+test("redeemed Mode A tickets are single use; control renews and releases authority independently", async () => {
   const f = await fixture("lifecycle");
   try {
     const session = await f.open();
@@ -810,6 +815,81 @@ Deno.test("redeemed Mode A tickets are single use; control renews and releases a
   } finally {
     await f.close();
   }
+});
+
+describe("routed session.open proof chains", () => {
+  // A client opens a space that owns itself by naming its own key and
+  // presenting the space's delegation as `authorization.proofs`; the router
+  // forwards that shape of `authorization`, and so does the data socket.
+  const chainOpen = async (
+    f: Awaited<ReturnType<typeof fixture>>,
+    authorization: (proof: FabricBytes) => Record<string, unknown>,
+  ) => {
+    const admit = async (identity: Identity) =>
+      (await f.control(
+        6,
+        new RoutedWriter("mvp1").fixed(f.context).blob(f.flags).blob(
+          await f.proof(identity),
+        ).bytes,
+      )).status;
+    assertEquals(await admit(f.outsider), 0);
+    const delegation = await issueDelegation(f.principal, {
+      aud: f.outsider.did(),
+      sub: f.space.did(),
+      cmd: "/memory",
+      pol: [],
+    });
+    // The fixture's requests are plain JSON, so the bytes go as the wire
+    // encodes them.
+    const encoded = JSON.parse(
+      encodeMemoryBoundary(
+        authorization(new FabricBytes(delegation.bytes)) as never,
+      ).slice("fvj1:".length),
+    );
+    f.socket.receive(
+      encodeRoutedFrame(
+        `fvj1:${
+          JSON.stringify({
+            type: "session.open",
+            requestId: "chain",
+            space: f.space.did(),
+            principal: f.outsider.did(),
+            session: {},
+            authorization: encoded,
+          })
+        }`,
+        FRAME_SLOTS,
+      ),
+    );
+  };
+
+  it("opens a session for a key the access list names only through its chain", async () => {
+    const f = await fixture("session-open-proofs");
+    try {
+      expect(f.greeted.flags).toMatchObject({ sessionOpenProofs: true });
+      await chainOpen(f, (proof) => ({ proofs: [proof] }));
+      let answer: Record<string, unknown>;
+      do {
+        answer = decodeRoutedFrame(await f.socket.take(), true, FRAME_SLOTS)
+          .body;
+      } while (answer.requestId !== "chain");
+      expect(answer.ok).toMatchObject({ sessionId: expect.any(String) });
+      expect(f.socket.readyState).toBe(1);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("closes the data socket on an authorization holding more than proofs", async () => {
+    const f = await fixture("session-open-signed-authorization");
+    try {
+      await chainOpen(f, (proof) => ({ proofs: [proof], signature: "x" }));
+      await f.socket.closed.promise;
+      expect(f.link.readyState).toBe(1);
+    } finally {
+      await f.close();
+    }
+  });
 });
 
 describe("routed session reports", () => {
@@ -1299,7 +1379,7 @@ describe("optional routed host quotas", () => {
   });
 });
 
-Deno.test("routed host limits are config over defaults, and must nest", () => {
+test("routed host limits are config over defaults, and must nest", () => {
   assertEquals(routedHostLimits(), DEFAULT_ROUTED_HOST_LIMITS);
   // A session's watch IDs are configuration.
   assertEquals(routedHostLimits().watchesPerSession, 2048);
@@ -1404,7 +1484,7 @@ Deno.test("routed host limits are config over defaults, and must nest", () => {
   }
 });
 
-Deno.test("a request past a capacity limit is denied, and the context goes on", async () => {
+test("a request past a capacity limit is denied, and the context goes on", async () => {
   const watches = (prefix: string, length = 1024) =>
     Array.from(
       { length },
@@ -1490,7 +1570,7 @@ Deno.test("a request past a capacity limit is denied, and the context goes on", 
   }
 });
 
-Deno.test("a request for a session revoked while it was in flight is denied, and the socket goes on", async () => {
+test("a request for a session revoked while it was in flight is denied, and the socket goes on", async () => {
   const f = await fixture("revoked-in-flight");
   try {
     const session = await f.open();
@@ -1585,7 +1665,7 @@ Deno.test("a request for a session revoked while it was in flight is denied, and
   }
 });
 
-Deno.test("more views than a session may hold are refused, and the socket goes on", async () => {
+test("more views than a session may hold are refused, and the socket goes on", async () => {
   setServerExecutionConfig(true);
   const f = await fixture("views");
   try {
@@ -1625,7 +1705,7 @@ Deno.test("more views than a session may hold are refused, and the socket goes o
   }
 });
 
-Deno.test("a session's watch IDs are bounded by configuration, and a mutation past the bound is refused with the socket open", async (t) => {
+test("a session's watch IDs are bounded by configuration, and a mutation past the bound is refused with the socket open", async (t) => {
   const watches = (prefix: string, length: number) =>
     Array.from(
       { length },
@@ -1848,7 +1928,7 @@ Deno.test("a session's watch IDs are bounded by configuration, and a mutation pa
   });
 });
 
-Deno.test("a session's watch mutations, resumptions and close are dispatched one at a time, each once the turn of the one before it has ended", async (t) => {
+test("a session's watch mutations, resumptions and close are dispatched one at a time, each once the turn of the one before it has ended", async (t) => {
   const watches = (prefix: string, length: number) =>
     Array.from(
       { length },
@@ -2056,7 +2136,7 @@ Deno.test("a session's watch mutations, resumptions and close are dispatched one
   });
 });
 
-Deno.test("holdings and views named on a watch add leave a session's counted usage as it was", async () => {
+test("holdings and views named on a watch add leave a session's counted usage as it was", async () => {
   setServerExecutionConfig(true);
   // Two views and four holdings are all the context may hold of each.
   const f = await fixture("add-names-watches", {
@@ -2131,7 +2211,7 @@ Deno.test("holdings and views named on a watch add leave a session's counted usa
   }
 });
 
-Deno.test("a set staged in parts counts toward the context's quotas from its first part", async (t) => {
+test("a set staged in parts counts toward the context's quotas from its first part", async (t) => {
   const watches = (prefix: string, length: number) =>
     Array.from(
       { length },
@@ -2336,7 +2416,7 @@ Deno.test("a set staged in parts counts toward the context's quotas from its fir
   });
 });
 
-Deno.test("holdings and views are counted as lists, and anything else closes the socket", async (t) => {
+test("holdings and views are counted as lists, and anything else closes the socket", async (t) => {
   const holding = (i: number) => ({ id: `of:h${i}`, seq: 0 });
   const holdings = (length: number) =>
     Array.from({ length }, (_, i) => holding(i));
@@ -2438,7 +2518,7 @@ Deno.test("holdings and views are counted as lists, and anything else closes the
   }
 });
 
-Deno.test("the toolshed admits a frame at its configured slot cap and closes on one more", async () => {
+test("the toolshed admits a frame at its configured slot cap and closes on one more", async () => {
   // The hello, flags included, and a session.open are well under 64 slots.
   const f = await fixture("frame-slots", { limits: { frameSlots: 64 } });
   try {
@@ -2493,7 +2573,7 @@ Deno.test("the toolshed admits a frame at its configured slot cap and closes on 
   }
 });
 
-Deno.test("the toolshed accepts and acknowledges a large commit with a null slot cap", async () => {
+test("the toolshed accepts and acknowledges a large commit with a null slot cap", async () => {
   const f = await fixture("disabled-frame-slots", {
     limits: { frameSlots: null },
   });
@@ -2537,7 +2617,7 @@ Deno.test("the toolshed accepts and acknowledges a large commit with a null slot
   }
 });
 
-Deno.test("a refusal that cannot be answered closes only its socket", async () => {
+test("a refusal that cannot be answered closes only its socket", async () => {
   const f = await fixture("refusal-output-bound");
   try {
     await f.open();
@@ -2564,7 +2644,7 @@ Deno.test("a refusal that cannot be answered closes only its socket", async () =
   }
 });
 
-Deno.test("an open whose grant expired in flight is refused for now, a released principal's for good", async () => {
+test("an open whose grant expired in flight is refused for now, a released principal's for good", async () => {
   const clock = { now: Math.floor(Date.now() / 1000) };
   const f = await fixture("grant-crossed", { clock });
   try {
@@ -2621,7 +2701,7 @@ Deno.test("an open whose grant expired in flight is refused for now, a released 
   }
 });
 
-Deno.test("a principal's session limit refuses one open and undoes its reservation", async () => {
+test("a principal's session limit refuses one open and undoes its reservation", async () => {
   const f = await fixture("principal-sessions", {
     limits: { sessionsPerPrincipal: 2 },
   });
@@ -2651,7 +2731,7 @@ Deno.test("a principal's session limit refuses one open and undoes its reservati
   }
 });
 
-Deno.test("a released principal leaves the history once its statement expires", async () => {
+test("a released principal leaves the history once its statement expires", async () => {
   const clock = { now: Math.floor(Date.now() / 1000) };
   const f = await fixture("released-history", {
     clock,
@@ -2688,7 +2768,7 @@ Deno.test("a released principal leaves the history once its statement expires", 
   }
 });
 
-Deno.test("a closed context's tickets leave with it", async () => {
+test("a closed context's tickets leave with it", async () => {
   // Two tickets in all, and the fixture's own was redeemed, so the third
   // passing context is issued one only if the toolshed removed the tickets
   // of the two before it.
@@ -2714,7 +2794,7 @@ Deno.test("a closed context's tickets leave with it", async () => {
   }
 });
 
-Deno.test("a redeemed ticket no longer counts against the ticket limit, however many data sockets a context opens", async () => {
+test("a redeemed ticket no longer counts against the ticket limit, however many data sockets a context opens", async () => {
   // Two tickets in all. The fixture's context redeemed one for its first
   // data socket, and redeems one more for each socket that replaces it.
   const f = await fixture("ticket-redeem", {
@@ -2735,7 +2815,7 @@ Deno.test("a redeemed ticket no longer counts against the ticket limit, however 
   }
 });
 
-Deno.test("two sockets presenting one ticket at once redeem it once", async () => {
+test("two sockets presenting one ticket at once redeem it once", async () => {
   const f = await fixture("ticket-race");
   try {
     const ticket = await f.issueTicket();
@@ -2767,7 +2847,7 @@ Deno.test("two sockets presenting one ticket at once redeem it once", async () =
   }
 });
 
-Deno.test("connections that come and go cannot fill the ledger or refuse a live context's proofs", async () => {
+test("connections that come and go cannot fill the ledger or refuse a live context's proofs", async () => {
   // Before a context's proofs left with it, each passing context's stayed
   // in the ledger until they expired, so cycling connections filled it.
   const f = await fixture("cycling", {
@@ -2806,7 +2886,7 @@ Deno.test("connections that come and go cannot fill the ledger or refuse a live 
   }
 });
 
-Deno.test("a statement serves one live context; after it closes, the router may present it again within its lease, by design", async () => {
+test("a statement serves one live context; after it closes, the router may present it again within its lease, by design", async () => {
   const f = await fixture("one-live-context");
   try {
     const admit = async (ctx: Uint8Array<ArrayBuffer>, statement: Uint8Array) =>
@@ -2834,7 +2914,7 @@ Deno.test("a statement serves one live context; after it closes, the router may 
   }
 });
 
-Deno.test("a released principal's statement cannot admit it again while its context lives", async () => {
+test("a released principal's statement cannot admit it again while its context lives", async () => {
   const f = await fixture("released-statement");
   try {
     const ctx = new Uint8Array(16).fill(64);
@@ -2857,7 +2937,7 @@ Deno.test("a released principal's statement cannot admit it again while its cont
     await f.close();
   }
 });
-Deno.test("one context holds at most its quota of unexpired proofs", async () => {
+test("one context holds at most its quota of unexpired proofs", async () => {
   const f = await fixture("proof-quota", {
     limits: {
       principalsPerContext: 2,
@@ -2888,7 +2968,7 @@ Deno.test("one context holds at most its quota of unexpired proofs", async () =>
   }
 });
 
-Deno.test("a routed toolshed serves either cell representation, and refuses a client at the other", async () => {
+test("a routed toolshed serves either cell representation, and refuses a client at the other", async () => {
   for (const modernCellRep of [false, true]) {
     for (const clientModernCellRep of [false, true]) {
       const f = await fixture(
@@ -2914,7 +2994,7 @@ Deno.test("a routed toolshed serves either cell representation, and refuses a cl
   setModernCellRepConfig(true);
 });
 
-Deno.test("a client without stableExpressionResultIds reaches a data socket, and the toolshed refuses each of its session opens for good", async () => {
+test("a client without stableExpressionResultIds reaches a data socket, and the toolshed refuses each of its session opens for good", async () => {
   // The router no longer refuses the flag's absence: the context, its ticket
   // and the data socket are all granted, and the toolshed answers every
   // `session.open` with the final refusal, which the SDK treats as terminal
@@ -2949,7 +3029,7 @@ Deno.test("a client without stableExpressionResultIds reaches a data socket, and
   }
 });
 
-Deno.test("a routed connection is not sent session/admissible when a grant admits a refused principal", async () => {
+test("a routed connection is not sent session/admissible when a grant admits a refused principal", async () => {
   const f = await fixture("admission-notice");
   try {
     // Both peers advertise the capability, so only the routed connection
@@ -3041,7 +3121,7 @@ Deno.test("a routed connection is not sent session/admissible when a grant admit
   }
 });
 
-Deno.test("omitted views retain their quota across watch replacements and resume", async () => {
+test("omitted views retain their quota across watch replacements and resume", async () => {
   setServerExecutionConfig(true);
   // Sixteen sessions of 64 views fill a context limited to 1,024 watches.
   const f = await fixture("retained-views", {
@@ -3115,7 +3195,7 @@ Deno.test("omitted views retain their quota across watch replacements and resume
   }
 });
 
-Deno.test("rejected view mutations leave no persistent quota reservation", async () => {
+test("rejected view mutations leave no persistent quota reservation", async () => {
   setServerExecutionConfig(true);
   const f = await fixture("rejected-views");
   try {
@@ -3164,7 +3244,7 @@ Deno.test("rejected view mutations leave no persistent quota reservation", async
   }
 });
 
-Deno.test("revocation before a failed resume response cannot restore phantom quotas", async () => {
+test("revocation before a failed resume response cannot restore phantom quotas", async () => {
   setServerExecutionConfig(true);
   const f = await fixture("revoked-resume");
   try {
@@ -3237,7 +3317,7 @@ Deno.test("revocation before a failed resume response cannot restore phantom quo
   }
 });
 
-Deno.test("the private data boundary closes a forged route without affecting the authenticated link", async () => {
+test("the private data boundary closes a forged route without affecting the authenticated link", async () => {
   const f = await fixture("forged-route");
   try {
     const session = await f.open();
@@ -3378,7 +3458,7 @@ describe("private routed stream admission", () => {
   }
 });
 
-Deno.test("a slow private reader exhausts only its bounded output context", async () => {
+test("a slow private reader exhausts only its bounded output context", async () => {
   const f = await fixture("slow-output");
   try {
     const session = await f.open();
@@ -6155,7 +6235,7 @@ describe("routed close diagnostics", () => {
   }
 });
 
-Deno.test("custom transports omit routed capability and reject an unsolicited routed hello", async () => {
+test("custom transports omit routed capability and reject an unsolicited routed hello", async () => {
   const flags = {
     ...getMemoryProtocolFlags(),
     connectionAuth: true,
@@ -6188,7 +6268,7 @@ Deno.test("custom transports omit routed capability and reject an unsolicited ro
   );
 });
 
-Deno.test("SDK pins router metadata across toolshed responses and signs pushed renewals", async () => {
+test("SDK pins router metadata across toolshed responses and signs pushed renewals", async () => {
   const f = await fixture("sdk-renewal");
   const now = Math.floor(Date.now() / 1000);
   let receiver: ((payload: string) => void) | undefined;
@@ -6318,7 +6398,7 @@ Deno.test("SDK pins router metadata across toolshed responses and signs pushed r
   }
 });
 
-Deno.test("a release needs no durable record, and a proof without the ledger closes the host", async () => {
+test("a release needs no durable record, and a proof without the ledger closes the host", async () => {
   const f = await fixture("failed-release");
   try {
     await f.open();
@@ -6347,7 +6427,7 @@ Deno.test("a release needs no durable record, and a proof without the ledger clo
   }
 });
 
-Deno.test("toolshed space control and revocation deny stale ownership and close failed durable custody", async () => {
+test("toolshed space control and revocation deny stale ownership and close failed durable custody", async () => {
   const f = await fixture("space-control");
   try {
     assertEquals(
@@ -6399,7 +6479,7 @@ Deno.test("toolshed space control and revocation deny stale ownership and close 
   }
 });
 
-Deno.test("invalid private endpoints and frame types have no authority; revocation fails closed without a ledger", async () => {
+test("invalid private endpoints and frame types have no authority; revocation fails closed without a ledger", async () => {
   const f = await fixture("private-admission");
   try {
     for (
@@ -6437,7 +6517,7 @@ Deno.test("invalid private endpoints and frame types have no authority; revocati
   }
 });
 
-Deno.test("private TLS listener accepts bounded binary links and rejects HTTP, Origin and extensions", async () => {
+test("private TLS listener accepts bounded binary links and rejects HTTP, Origin and extensions", async () => {
   const f = await fixture("tls-listener");
   const tls = new URL("./fixtures/routed-tls/", import.meta.url);
   const cert = Deno.readTextFileSync(new URL("localhost.crt", tls));
@@ -6591,7 +6671,71 @@ Deno.test("private TLS listener accepts bounded binary links and rejects HTTP, O
   }
 });
 
-Deno.test("quota totals return to zero after sessions, watches and refusals come and go", async () => {
+describe("listenRoutedMemory()", () => {
+  const tls = new URL("./fixtures/routed-tls/", import.meta.url);
+  const listen = async (host: RoutedMemoryHost) => {
+    const certificate = Deno.readTextFileSync(new URL("localhost.crt", tls));
+    const listener = await listenRoutedMemory({
+      hostname: "127.0.0.1",
+      port: 0,
+      certificate,
+      key: Deno.readTextFileSync(new URL("localhost.key", tls)),
+      host,
+    });
+    return { listener, certificate };
+  };
+
+  it("ends a connection from a peer the host no longer accepts before any byte is exchanged", async () => {
+    const f = await fixture("tls-listener-refused-peer");
+    const { listener, certificate } = await listen(f.host);
+    // Each request goes on a client of its own, so on a connection of its
+    // own.
+    const clients = [0, 1].map(() =>
+      Deno.createHttpClient({ caCerts: [certificate] })
+    );
+    try {
+      const url = `https://127.0.0.1:${listener.port}`;
+      const request = (client: Deno.HttpClient) => {
+        const init: RequestInit & { client: Deno.HttpClient } = { client };
+        return fetch(url, init);
+      };
+      const answered = await request(clients[0]);
+      expect(answered.status).toBe(404);
+      await answered.body?.cancel();
+      f.host.close();
+      expect(f.host.acceptsPeer("127.0.0.1")).toBe(false);
+      await expect(request(clients[1])).rejects.toThrow();
+    } finally {
+      for (const client of clients) client.close();
+      await listener.close();
+      await f.close();
+    }
+  });
+
+  it("closes a link socket still open when the listener closes", async () => {
+    const f = await fixture("tls-listener-open-link");
+    const { listener, certificate } = await listen(f.host);
+    const link = new WebSocket(
+      `wss://127.0.0.1:${listener.port}/memory/router-link`,
+      { ca: certificate, perMessageDeflate: false },
+    );
+    link.on("error", () => {});
+    try {
+      await new Promise((resolve) => link.once("message", resolve));
+      const closed = new Promise<number>((resolve) =>
+        link.once("close", resolve)
+      );
+      await listener.close();
+      expect(await closed).toBe(1008);
+      expect(link.readyState).toBe(WebSocket.CLOSED);
+    } finally {
+      link.terminate();
+      await f.close();
+    }
+  });
+});
+
+test("quota totals return to zero after sessions, watches and refusals come and go", async () => {
   const watches = (prefix: string, length: number) =>
     Array.from(
       { length },
@@ -6696,7 +6840,7 @@ Deno.test("quota totals return to zero after sessions, watches and refusals come
   }
 });
 
-Deno.test("quota totals return to zero across socket replacement and context close", async () => {
+test("quota totals return to zero across socket replacement and context close", async () => {
   const f = await fixture("quota-churn-close", {
     limits: {
       sessionsPerContext: 3,
@@ -6836,4 +6980,553 @@ Deno.test("quota totals return to zero across socket replacement and context clo
   } finally {
     await f.close();
   }
+});
+
+describe("routed-host", () => {
+  describe("RoutedMemoryHost", () => {
+    describe("tickets", () => {
+      it("issues a ticket in the place of one that expired unredeemed, at the ticket limit", async () => {
+        // Two tickets in all, and the fixture's own was redeemed.
+        const clock = { now: Math.floor(Date.now() / 1000) };
+        const f = await fixture("ticket-expiry", {
+          clock,
+          limits: { contextsPerLink: 2, tickets: 2 },
+        });
+        const issue = async () =>
+          (await f.control(
+            1,
+            new RoutedWriter("mat1").fixed(f.context).blob(f.flags)
+              .text(f.space.did()).time(1).bytes,
+          )).status;
+        try {
+          expect(await issue()).toBe(0);
+          expect(await issue()).toBe(0);
+          expect(await issue()).toBe(1);
+          // A ticket lives fifteen seconds.
+          clock.now += 14;
+          expect(await issue()).toBe(1);
+          clock.now += 1;
+          expect(await issue()).toBe(0);
+          expect(await issue()).toBe(0);
+          expect(f.link.readyState).toBe(1);
+        } finally {
+          await f.close();
+        }
+      });
+    });
+  });
+
+  describe("RoutedMemoryHost data sockets", () => {
+    /**
+     * A data socket on `f`'s context whose server messages pass through
+     * `intercept`, which returns the messages to send in their place, and a
+     * request helper that returns the next message answering it.
+     */
+    const interceptedSocket = async (
+      f: Awaited<ReturnType<typeof fixture>>,
+      intercept: { messages: (message: ServerMessage) => ServerMessage[] },
+    ) => {
+      const connect = f.server.connectRouted.bind(f.server);
+      let send: ((message: ServerMessage) => void) | undefined;
+      const connected = stub(f.server, "connectRouted", (sender, ...args) => {
+        send = sender;
+        return connect(
+          (message) => {
+            for (const each of intercept.messages(message)) sender(each);
+          },
+          ...args,
+        );
+      });
+      try {
+        const socket = await f.dataSocket(await f.issueTicket());
+        await socket.take();
+        assert(send);
+        let requestNumber = 0;
+        const request = async (body: Record<string, unknown>) => {
+          const requestId = `i${++requestNumber}`;
+          socket.receive(
+            encodeRoutedFrame(
+              `fvj1:${JSON.stringify({ ...body, requestId })}`,
+              FRAME_SLOTS,
+            ),
+          );
+          const answers: Record<string, unknown>[] = [];
+          while (true) {
+            const message =
+              decodeRoutedFrame(await socket.take(), true, FRAME_SLOTS).body;
+            answers.push(message);
+            if (message.requestId === requestId) return answers;
+          }
+        };
+        /** The identifier the next request carries. */
+        const nextRequestId = () => `i${requestNumber + 1}`;
+        return { socket, request, send, nextRequestId };
+      } finally {
+        connected.restore();
+      }
+    };
+
+    /** A sync for one session, its last part unless `more`. */
+    const sync = (more: boolean) => ({
+      type: "sync",
+      fromSeq: 0,
+      toSeq: 1,
+      upserts: [],
+      removes: [],
+      ...(more ? { more: true } : {}),
+    });
+
+    describe("a split sync a response begins", () => {
+      /**
+       * Sends an open whose answer begins a split sync, followed by a part
+       * for the session named by `partSession`, and returns the socket.
+       */
+      const openSplit = async (
+        name: string,
+        partSession: (opened: string) => string,
+      ) => {
+        const f = await fixture(name);
+        const space = f.space.did();
+        const intercept = {
+          messages: (message: ServerMessage): ServerMessage[] => {
+            if (
+              message.type !== "response" || !isPlainObject(message.ok) ||
+              typeof message.ok.sessionId !== "string"
+            ) return [message];
+            const opened = message.ok.sessionId;
+            return [
+              {
+                ...message,
+                ok: { ...message.ok, sync: sync(true) },
+              } as ServerMessage,
+              {
+                type: "session/effect",
+                space,
+                sessionId: partSession(opened),
+                effect: sync(false),
+              } as ServerMessage,
+            ];
+          },
+        };
+        const { socket } = await interceptedSocket(f, intercept);
+        socket.receive(
+          encodeRoutedFrame(
+            `fvj1:${
+              JSON.stringify({
+                type: "session.open",
+                requestId: "split-open",
+                space,
+                principal: f.principal.did(),
+                session: {},
+              })
+            }`,
+            FRAME_SLOTS,
+          ),
+        );
+        return { f, socket };
+      };
+
+      it("sends the parts of the session the response opened", async () => {
+        const { f, socket } = await openSplit(
+          "split-response",
+          (opened) => opened,
+        );
+        try {
+          const response =
+            decodeRoutedFrame(await socket.take(), true, FRAME_SLOTS).body;
+          expect(response).toMatchObject({
+            type: "response",
+            requestId: "split-open",
+            ok: { sync: { more: true } },
+          });
+          const part =
+            decodeRoutedFrame(await socket.take(), true, FRAME_SLOTS).body;
+          expect(part).toMatchObject({
+            type: "session/effect",
+            sessionId: (response.ok as { sessionId: string }).sessionId,
+          });
+          expect(socket.readyState).toBe(WebSocket.OPEN);
+        } finally {
+          await f.close();
+        }
+      });
+
+      it("closes the socket on a part for another session", async () => {
+        const lines: string[] = [];
+        using _info = stub(console, "info", (line: unknown) => {
+          lines.push(String(line));
+        });
+        const { f, socket } = await openSplit(
+          "split-response-other",
+          () => "another-session",
+        );
+        try {
+          // The socket closes rather than delivering the part.
+          const received: unknown[] = [];
+          while (received.at(-1) !== "closed") {
+            received.push(await frameOrClose(socket));
+            expect(received.at(-1)).not.toBe("session/effect");
+          }
+          f.host.close();
+          const closed = lines.map((line) => JSON.parse(line)).filter((
+            entry,
+          ) => entry.verdict === "context-closed");
+          expect(closed.map((entry) => entry.reason)).toEqual([
+            "data-protocol",
+          ]);
+        } finally {
+          await f.close();
+        }
+      });
+    });
+
+    describe("a frame before the hello", () => {
+      it("closes the socket on data that is neither text nor binary", async () => {
+        const f = await fixture("non-frame");
+        try {
+          const { socket } = await f.socketBeforeHello();
+          socket.dispatchEvent(new MessageEvent("message", { data: 7 }));
+          await socket.closed.promise;
+          expect(socket.readyState).toBe(WebSocket.CLOSED);
+          expect(socket.output).toEqual([]);
+        } finally {
+          await f.close();
+        }
+      });
+    });
+
+    describe("a socket that replaces another", () => {
+      it("admits to its connection each principal its context holds, and not one the router released", async () => {
+        const f = await fixture("replace-released");
+        const admit = (proof: Uint8Array) =>
+          new RoutedWriter("mvp1").fixed(f.context).blob(f.flags).blob(proof)
+            .bytes;
+        const connect = f.server.connectRouted.bind(f.server);
+        let connection: ReturnType<typeof connect> | undefined;
+        try {
+          expect((await f.control(6, admit(await f.proof(f.outsider)))).status)
+            .toBe(0);
+          expect(
+            (await f.control(
+              4,
+              new RoutedWriter("mrl1").fixed(f.context).text(f.principal.did())
+                .bytes,
+            )).status,
+          ).toBe(0);
+          using _connected = stub(
+            f.server,
+            "connectRouted",
+            (...args) => connection = connect(...args),
+          );
+          const socket = await f.dataSocket(await f.issueTicket());
+          await socket.take();
+          assert(connection);
+          expect(connection.hasPrincipal(f.outsider.did())).toBe(true);
+          expect(connection.hasPrincipal(f.principal.did())).toBe(false);
+        } finally {
+          await f.close();
+        }
+      });
+    });
+
+    describe("a frame after the socket failed", () => {
+      it("reserves nothing for a request header that arrives once the socket has failed", async () => {
+        const f = await fixture("frame-after-failure");
+        try {
+          const state = f.host.accessForTestingOnly.dataSocket(
+            f.socket as unknown as WebSocket,
+          )!;
+          // The hello's turn has ended, so nothing is reserved.
+          await state.settled;
+          f.socket.receive("not a routed record");
+          await f.socket.closed.promise;
+          expect(state.pendingBytes).toBe(0);
+          f.socket.deliver(
+            encodeRouterHeader({
+              route: { type: "transact", requestId: "late" },
+              bytes: 10,
+              binary: false,
+              requestOrdinal: ++f.socket.requestOrdinal,
+            }),
+          );
+          expect(state.pendingBytes).toBe(0);
+        } finally {
+          await f.close();
+        }
+      });
+    });
+
+    describe("a message the server sends", () => {
+      it("goes out while its socket is open, and nowhere once another socket has taken the context", async () => {
+        const f = await fixture("send-after-replacement");
+        try {
+          const { socket, send } = await interceptedSocket(f, {
+            messages: (message) => [message],
+          });
+          const message = {
+            type: "response",
+            requestId: "unsolicited",
+            ok: {},
+          } as ServerMessage;
+          send(message);
+          expect(
+            decodeRoutedFrame(await socket.take(), true, FRAME_SLOTS).body,
+          ).toEqual(message);
+          // The context moves to a new socket and stays open.
+          const replacement = await f.dataSocket(await f.issueTicket());
+          await replacement.take();
+          await socket.closed.promise;
+          send(message);
+          expect(socket.output).toEqual([]);
+          expect(replacement.readyState).toBe(WebSocket.OPEN);
+        } finally {
+          await f.close();
+        }
+      });
+    });
+
+    describe("quota usage", () => {
+      it("counts nothing for a session revoked before the server refused its watch change", async () => {
+        const quota = 2;
+        const f = await fixture("revoked-mutation", {
+          limits: {
+            sessionsPerContext: 3,
+            sessionsPerRouter: 3,
+            sessionsPerToolshed: 3,
+            sessionsPerPrincipal: 3,
+            watchesPerContext: quota,
+            watchesPerSession: quota,
+            watchesPerRouter: quota,
+            watchesPerToolshed: quota,
+            watchesPerPrincipal: quota,
+          },
+        });
+        const space = f.space.did();
+        const watches = (prefix: string, length: number) =>
+          Array.from({ length }, (_, i) => ({
+            id: `${prefix}${i}`,
+            kind: "graph",
+            query: { roots: [] },
+          }));
+        // The answer to this request is replaced by the session's revocation
+        // and then a refusal, as a server that revoked the session while the
+        // change was in its turn sends them.
+        const revoking: { requestId?: string; sessionId?: string } = {};
+        const intercept = {
+          messages: (message: ServerMessage): ServerMessage[] =>
+            message.type === "response" &&
+              message.requestId === revoking.requestId
+              ? [
+                {
+                  type: "session/revoked",
+                  space,
+                  sessionId: revoking.sessionId!,
+                  reason: "unauthorized",
+                } as ServerMessage,
+                {
+                  type: "response",
+                  requestId: message.requestId,
+                  error: { name: "AuthorizationError", message: "revoked" },
+                } as ServerMessage,
+              ]
+              : [message],
+        };
+        try {
+          const { request, nextRequestId } = await interceptedSocket(
+            f,
+            intercept,
+          );
+          const open = async () =>
+            ((await request({
+              type: "session.open",
+              space,
+              principal: f.principal.did(),
+              session: {},
+            })).at(-1)!.ok as { sessionId: string }).sessionId;
+          const watchSet = async (
+            sessionId: string,
+            set: ReturnType<typeof watches>,
+          ) =>
+            (await request({
+              type: "session.watch.set",
+              space,
+              sessionId,
+              watches: set,
+            })).at(-1)!;
+
+          const revoked = await open();
+          expect((await watchSet(revoked, watches("a", quota))).ok)
+            .toBeDefined();
+          const other = await open();
+          expect((await watchSet(other, watches("b", 1))).error).toBeDefined();
+          revoking.requestId = nextRequestId();
+          revoking.sessionId = revoked;
+          expect((await watchSet(revoked, watches("c", 1))).error)
+            .toBeDefined();
+          // The revoked session's watches no longer count.
+          expect((await watchSet(other, watches("b", quota))).ok)
+            .toBeDefined();
+        } finally {
+          await f.close();
+        }
+      });
+    });
+  });
+
+  describe("RoutedControlDiagnostics", () => {
+    it("schedules no event-loop marker for a frame received after close", () => {
+      const records: Record<string, unknown>[] = [];
+      const progress = new RoutedControlDiagnostics((record) =>
+        records.push(record)
+      );
+      progress.close();
+
+      const entry = progress.receive(1, 3);
+
+      expect(entry).toMatchObject({ sequence: 1, opcode: 3 });
+      expect(progress.accessForTestingOnly.turn).toBeUndefined();
+      progress.finish(entry);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ phase: "close", history: [] });
+    });
+  });
+
+  describe("outputSizeBreakdown()", () => {
+    const response = (ok: unknown) =>
+      ({ type: "response", requestId: "r", ok }) as ServerMessage;
+
+    it("returns the size of each result field, sync document and schema", () => {
+      expect(outputSizeBreakdown(
+        response({
+          a: 1,
+          sync: {
+            upserts: [{ id: "of:a", doc: { value: 1 } }],
+            schemaTable: { h: { type: "object" } },
+          },
+        }),
+        10,
+        null,
+      )).toEqual({
+        status: "measured",
+        fields: [
+          { path: "ok.sync", encodedBytes: expect.any(Number) },
+          { path: "ok.a", encodedBytes: 6 },
+        ],
+        documents: [{
+          path: "ok.sync.upserts.0.doc",
+          encodedBytes: 16,
+          id: "of:a",
+        }],
+        schemas: [{ path: "ok.sync.schemaTable.h", encodedBytes: 22 }],
+        scannedEntries: 4,
+        truncated: false,
+      });
+    });
+
+    it("returns a truncated scan once it has inspected as many entries as a frame holds", () => {
+      expect(outputSizeBreakdown(response({ a: 1, b: 2, c: 3 }), 10, 2))
+        .toMatchObject({
+          status: "measured",
+          fields: [{ path: "ok.a" }, { path: "ok.b" }],
+          scannedEntries: 2,
+          truncated: true,
+        });
+      expect(
+        outputSizeBreakdown(
+          response({ sync: { schemaTable: { h: 1, i: 2, j: 3 } } }),
+          10,
+          3,
+        ),
+      ).toMatchObject({
+        schemas: [
+          { path: "ok.sync.schemaTable.h" },
+          { path: "ok.sync.schemaTable.i" },
+        ],
+        scannedEntries: 3,
+        truncated: true,
+      });
+    });
+
+    it("returns `frame-too-large` for a frame above the raw limit", () => {
+      expect(
+        outputSizeBreakdown(response({ a: 1 }), ROUTED_RAW_LIMIT + 1, null),
+      )
+        .toEqual({ status: "frame-too-large" });
+    });
+
+    it("returns `unavailable` for a result it cannot encode", () => {
+      expect(outputSizeBreakdown(response({ a: () => 1 }), 10, null))
+        .toEqual({ status: "unavailable" });
+    });
+  });
+
+  describe("safeClose()", () => {
+    /** A socket that records what it was asked to do. */
+    const socketWith = (
+      readyState: number,
+      close: () => void = () => {},
+    ) => {
+      const calls: string[] = [];
+      const socket = {
+        readyState,
+        isPaused: true,
+        close: (code: number) => {
+          calls.push(`close ${code}`);
+          close();
+        },
+        resume: () => calls.push("resume"),
+      };
+      return { calls, socket: socket as unknown as WebSocket };
+    };
+
+    it("closes an open socket with 1008", () => {
+      const { calls, socket } = socketWith(WebSocket.OPEN);
+      safeClose(socket);
+      expect(calls).toEqual(["close 1008"]);
+    });
+
+    it("resumes a paused socket that is closing, so it reads the peer's reply", () => {
+      const { calls, socket } = socketWith(WebSocket.CLOSING);
+      safeClose(socket);
+      expect(calls).toEqual(["resume"]);
+    });
+
+    it("returns without throwing when closing the socket throws", () => {
+      const { calls, socket } = socketWith(WebSocket.OPEN, () => {
+        throw new Error("already ended");
+      });
+      expect(() => safeClose(socket)).not.toThrow();
+      expect(calls).toEqual(["close 1008"]);
+    });
+  });
+
+  describe("sendBounded()", () => {
+    /** A socket whose `send` runs `send`, and the close reasons recorded. */
+    const sending = (send: (bytes: unknown) => void) => {
+      const reasons: string[] = [];
+      const socket = { bufferedAmount: 0, send } as unknown as WebSocket;
+      const remember = (reason: string) => reasons.push(reason);
+      return { reasons, socket, remember };
+    };
+
+    it("sends the bytes and records no close reason", () => {
+      const sent: unknown[] = [];
+      const { reasons, socket, remember } = sending((bytes) =>
+        sent.push(bytes)
+      );
+      sendBounded(socket, "frame", null, remember, "data");
+      expect(sent).toEqual(["frame"]);
+      expect(reasons).toEqual([]);
+    });
+
+    it("records `socket-send-failure` and throws what the socket's send throws", () => {
+      const failure = new Error("socket gone");
+      const { reasons, socket, remember } = sending(() => {
+        throw failure;
+      });
+      expect(() => sendBounded(socket, "frame", null, remember, "data"))
+        .toThrow(failure);
+      expect(reasons).toEqual(["socket-send-failure"]);
+    });
+  });
 });

@@ -1,3 +1,9 @@
+/**
+ * A counter with decrement and increment buttons, shown three ways inside a
+ * parent pattern: inline, as a JSX component, and through `cf-render`.
+ * Demonstrates how a pattern instance renders its own UI and what `cf-render`
+ * does with a cell, along with `handler` and `computed` basics.
+ */
 import {
   computed,
   Default,

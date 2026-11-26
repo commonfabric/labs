@@ -213,9 +213,12 @@ function llmMessageProblem(input: unknown): string | undefined {
 }
 
 /**
- * Extract text content from LLMResponse, handling both string and content parts array
+ * Extract the text of a response or a message, handling both string content
+ * and an array of content parts.
  */
-export function extractTextFromLLMResponse(response: LLMResponse): string {
+export function extractTextFromLLMResponse(
+  response: Pick<LLMResponse, "content">,
+): string {
   if (typeof response.content === "string") {
     return response.content;
   }

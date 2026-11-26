@@ -12,11 +12,11 @@
  * any implementation, the one that loses the prose included.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { getResultCellWithSourceSchema } from "../../runner/src/piece-helpers.ts";
 import { executePieceCallable, listPieceCallables } from "../lib/piece.ts";
 import { verbListingJson } from "../commands/piece.ts";

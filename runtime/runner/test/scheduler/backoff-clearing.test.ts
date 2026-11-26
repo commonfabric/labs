@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { SchedulerNode } from "../../src/scheduler/node-record.ts";
 import type { Action } from "../../src/scheduler/types.ts";
@@ -11,6 +10,12 @@ import type {
   IExtendedStorageTransaction,
   SchedulerTestStorageManager,
 } from "../scheduler-test-utils.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** A deadline no case waits out: the cases read gate state, never the clock. */
 const FAR_FUTURE_MS = 60_000;

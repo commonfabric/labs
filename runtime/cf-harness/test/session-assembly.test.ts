@@ -10,7 +10,6 @@
  * surfaces produce rather than as assertions about either one's fields.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   parseCfHarnessCliArgs,
@@ -22,6 +21,7 @@ import {
   type HarnessSessionConfig,
   harnessSessionEngineOptions,
 } from "../src/session-assembly.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 const IDENTITY = "/console/key.pkcs8";
 const SPACE = "parity-space";
@@ -331,7 +331,7 @@ describe("session-assembly", () => {
   });
 });
 
-Deno.test("harnessSessionChatPolicy offers run_skill_script for an exact entry", () => {
+test("harnessSessionChatPolicy offers run_skill_script for an exact entry", () => {
   // An entry is as much the operator allowing a script as the switch is, so
   // it offers the tool too; which script may run is decided at the call.
   const base = {
@@ -364,7 +364,7 @@ Deno.test("harnessSessionChatPolicy offers run_skill_script for an exact entry",
   ).toContain("run_skill_script");
 });
 
-Deno.test("harnessSessionEngineOptions carries every runsc setting to the engine", () => {
+test("harnessSessionEngineOptions carries every runsc setting to the engine", () => {
   // Each value is one the engine would NOT arrive at by itself: the docker
   // runtime is the default kind, `sandbox` the default network mode, `runsc`
   // on the PATH the default binary, and no policy the default policy. A
@@ -419,7 +419,7 @@ Deno.test("harnessSessionEngineOptions carries every runsc setting to the engine
   });
 });
 
-Deno.test("harnessSessionEngineOptions names no sandbox runtime for a session that names none", () => {
+test("harnessSessionEngineOptions names no sandbox runtime for a session that names none", () => {
   // The docker path: a session that says nothing about the runtime hands the
   // engine nothing about it, so the engine's default stays the engine's.
   const options = harnessSessionEngineOptions({

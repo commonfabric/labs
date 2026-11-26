@@ -3,14 +3,21 @@
 /**
  * Test Pattern for Superstition #33
  *
- * Tests whether computed() creates read-only projections vs property access maintaining writability.
+ * Tests whether computed() creates read-only projections vs property access
+ * maintaining writability.
  *
  * Claim:
- * - computed(() => obj.property) creates a read-only projection (writes are ineffective)
+ * - computed(() => obj.property) creates a read-only projection (writes are
+ *   ineffective)
  * - obj.property maintains live Cell reference (writes work)
  *
- * This pattern creates a "source" object with an auth-like structure, then tests
- * updating it via both approaches.
+ * This pattern creates a "source" object with an auth-like structure, then
+ * updates it via both approaches and directly.
+ *
+ * The claim is false: the result of computed(() => obj.property) links to
+ * the property, so a write through it updates the source just as a write
+ * through obj.property does. test-33-computed-projection-writability.test.tsx asserts
+ * this.
  */
 import {
   Cell,
@@ -21,6 +28,7 @@ import {
   pattern,
   toIndentedDebugString,
   UI,
+  type VNode,
 } from "commonfabric";
 
 interface AuthData {
@@ -44,9 +52,9 @@ interface InputSchema {
     }>;
 }
 
-// Pattern output type - describes the inner value, not the cell wrapper
-// The pattern returns OpaqueCell<Source>, so output type is `Source`
 export interface Output {
+  [NAME]: string;
+  [UI]: VNode;
   source: Source;
 }
 
@@ -55,7 +63,6 @@ const updateViaComputed = handler<
   unknown,
   { computedAuth: Cell<AuthData> }
 >((_, { computedAuth }) => {
-  // Try to update the token via the computed projection
   const current = computedAuth.get();
   computedAuth.set({
     ...current,
@@ -64,16 +71,15 @@ const updateViaComputed = handler<
   });
 });
 
-// Handler to update via .key() property access
-const updateViaKey = handler<
+// Handler to update via property access
+const updateViaProperty = handler<
   unknown,
-  { authViaKey: Cell<AuthData> }
->((_, { authViaKey }) => {
-  // Try to update the token via .key() access
-  const current = authViaKey.get();
-  authViaKey.set({
+  { authViaProperty: Cell<AuthData> }
+>((_, { authViaProperty }) => {
+  const current = authViaProperty.get();
+  authViaProperty.set({
     ...current,
-    token: "updated-via-key-" + Date.now(),
+    token: "updated-via-property-" + Date.now(),
     refreshCount: current.refreshCount + 1,
   });
 });
@@ -83,8 +89,7 @@ const updateDirect = handler<
   unknown,
   { source: Cell<Source> }
 >((_, { source }) => {
-  const current = source.get() ||
-    { auth: { token: "", expiresAt: 0, refreshCount: 0 }, name: "" };
+  const current = source.get();
   source.set({
     ...current,
     auth: {
@@ -96,16 +101,13 @@ const updateDirect = handler<
 });
 
 export default pattern<InputSchema, Output>(({ source }) => {
-  // Approach 1: computed() projection - claims to be read-only
-  // Inside computed(), use direct property access (not .get())
+  // Approach 1: a computed() projection, claimed to be read-only
   const computedAuth = computed(() => source.auth);
 
-  // Approach 2: .key() method - claims to maintain writability
-  // Note: .key() returns OpaqueCell which is used in handlers for writes
-  const authViaKey = (source as any).key("auth");
+  // Approach 2: property access, claimed to stay writable
+  const authViaProperty = source.auth;
 
-  // For display - all use direct property access on source
-  // (both computedAuth and source.auth should show the same values)
+  // Both approaches name the same cell, so these show the same values
   const computedToken = computed(() => computedAuth.token);
   const directToken = computed(() => source.auth.token);
 
@@ -136,7 +138,7 @@ export default pattern<InputSchema, Output>(({ source }) => {
               - writes do not update the source
             </li>
             <li>
-              <code>obj.key("property")</code> maintains{" "}
+              <code>obj.property</code> maintains{" "}
               <strong>live Cell reference</strong> - writes work
             </li>
           </ul>
@@ -166,7 +168,7 @@ export default pattern<InputSchema, Output>(({ source }) => {
                 marginBottom: "10px",
               }}
             >
-              computed(() =&gt; source.get().auth)
+              computed(() =&gt; source.auth)
             </code>
             <div style={{ marginBottom: "10px" }}>
               <strong>Token:</strong>
@@ -183,7 +185,7 @@ export default pattern<InputSchema, Output>(({ source }) => {
             </cf-button>
           </div>
 
-          {/* .key() Access */}
+          {/* Property Access */}
           <div
             style={{
               border: "2px solid #27ae60",
@@ -191,7 +193,7 @@ export default pattern<InputSchema, Output>(({ source }) => {
               padding: "15px",
             }}
           >
-            <h3 style={{ color: "#27ae60" }}>2. .key() Access</h3>
+            <h3 style={{ color: "#27ae60" }}>2. Property Access</h3>
             <code
               style={{
                 fontSize: "11px",
@@ -199,7 +201,7 @@ export default pattern<InputSchema, Output>(({ source }) => {
                 marginBottom: "10px",
               }}
             >
-              source.key("auth")
+              source.auth
             </code>
             <div style={{ marginBottom: "10px" }}>
               <strong>Token:</strong>
@@ -211,8 +213,8 @@ export default pattern<InputSchema, Output>(({ source }) => {
             <div style={{ marginBottom: "10px" }}>
               <strong>Refresh Count:</strong> {directRefreshCount}
             </div>
-            <cf-button onClick={updateViaKey({ authViaKey })}>
-              Update via .key()
+            <cf-button onClick={updateViaProperty({ authViaProperty })}>
+              Update via Property
             </cf-button>
           </div>
 
@@ -258,25 +260,21 @@ export default pattern<InputSchema, Output>(({ source }) => {
             border: "1px solid #ffc107",
           }}
         >
-          <h3>Expected Behavior (if superstition is TRUE):</h3>
+          <h3>Observed Behavior (the superstition is FALSE):</h3>
           <ul>
             <li>
               <strong style={{ color: "#e74c3c" }}>Computed:</strong>{" "}
-              Click should NOT update token
+              Click updates the token
             </li>
             <li>
-              <strong style={{ color: "#27ae60" }}>.key():</strong>{" "}
-              Click SHOULD update token
+              <strong style={{ color: "#27ae60" }}>Property:</strong>{" "}
+              Click updates the token
             </li>
             <li>
               <strong style={{ color: "#3498db" }}>Direct:</strong>{" "}
-              Click SHOULD update token (control)
+              Click updates the token (control)
             </li>
           </ul>
-          <p>
-            <strong>Test:</strong>{" "}
-            Click each button, then reload the page. Check if changes persisted.
-          </p>
         </div>
 
         <div

@@ -3,7 +3,6 @@
 import type { Node, NodeChange } from "@xyflow/react";
 import { applyNodeChanges } from "@xyflow/react";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   capturePositionDrafts,
   type PositionDraft,
@@ -11,6 +10,7 @@ import {
   reconcilePositionCommit,
   settlePositionDraft,
 } from "./flow-lifecycle.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 type TestNode = Node<Record<string, never>>;
 

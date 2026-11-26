@@ -6,7 +6,6 @@
  * nothing here waits on a timer.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import { expect } from "@std/expect";
 import type { OpenAICodexOAuthCredential } from "../src/auth/types.ts";
@@ -24,6 +23,7 @@ import {
   type HarnessTransportRetryDelay,
   TransportRetrySchedule,
 } from "../src/model/transport-retry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const credential: OpenAICodexOAuthCredential = {
   type: "oauth",
@@ -169,6 +169,20 @@ describe("transport-retry", () => {
       using time = new FakeTime();
       let resolved = false;
       const waiting = abortableDelay(50).then(() => {
+        resolved = true;
+      });
+      await time.tickAsync(49);
+      expect(resolved).toBe(false);
+      await time.tickAsync(1);
+      await waiting;
+      expect(resolved).toBe(true);
+    });
+
+    it("resolves once the timer fires while its signal stays unaborted", async () => {
+      using time = new FakeTime();
+      const controller = new AbortController();
+      let resolved = false;
+      const waiting = abortableDelay(50, controller.signal).then(() => {
         resolved = true;
       });
       await time.tickAsync(49);

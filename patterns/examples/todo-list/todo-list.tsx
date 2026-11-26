@@ -69,13 +69,10 @@ export const TodoItemPiece = pattern<
   };
 });
 
-const CompletedTodoItem = pattern<
-  { item: TodoItem },
-  { [UI]: VNode; [NAME]: string; summary: string }
->(({ item }) => {
+const CompletedTodoItem = pattern<{ item: TodoItem }, { [UI]: VNode }>((
+  { item },
+) => {
   return {
-    [NAME]: computed(() => item.title),
-    summary: computed(() => item.title),
     [UI]: (
       <cf-card style="opacity: 0.7;">
         <cf-hstack gap="2" align="center">

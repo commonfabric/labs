@@ -1,4 +1,3 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -6,6 +5,7 @@ import {
   resetReaderSchemaPrecedenceConfig,
   setReaderSchemaPrecedenceConfig,
 } from "../src/reader-schema-precedence-config.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 describe("reader-schema-precedence-config", () => {
   afterEach(() => {

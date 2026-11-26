@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   coverageFiguresOf,
   readSpool,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   coverageMetricForGroup,
   measuredSetCoverageMetric,
@@ -33,6 +33,32 @@ describe("recordCoverage()", () => {
       });
     } finally {
       await Deno.remove(spool, { recursive: true });
+    }
+  });
+
+  it("writes nothing to the process's own spool where the environment it is given names none", async () => {
+    // The process's own spool is the one a recording run names, and a
+    // fixture's figures filed there would read as that run's. Where this
+    // process names none, one is named for the case. The group is the
+    // case's own, so figures the run itself records cannot be mistaken
+    // for it.
+    const named = Deno.env.get("CF_TEST_RECORDS_DIR");
+    const spool = named ??
+      await Deno.makeTempDir({ prefix: "coverage-records-" });
+    if (named === undefined) Deno.env.set("CF_TEST_RECORDS_DIR", spool);
+    try {
+      recordCoverage(
+        [[coverageMetricForGroup("coverage-records-fixture"), 7]],
+        false,
+        () => undefined,
+      );
+      const { groups } = coverageFiguresOf((await readSpool(spool)).records);
+      expect(groups.has("coverage-records-fixture")).toBe(false);
+    } finally {
+      if (named === undefined) {
+        Deno.env.delete("CF_TEST_RECORDS_DIR");
+        await Deno.remove(spool, { recursive: true });
+      }
     }
   });
 

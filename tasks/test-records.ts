@@ -244,9 +244,8 @@ export async function shipSpool(
   try {
     const body = buildObjectBody(contents.context, contents.records);
     const gzipped = await gzipText(body);
-    const token = transport.mintToken !== undefined
-      ? await transport.mintToken(key)
-      : await tokenFromKey(key, STORE_WRITE_SCOPE);
+    const token = await (transport.mintToken?.(key) ??
+      tokenFromKey(key, STORE_WRITE_SCOPE));
     const name = `${localSubmissionsPrefix(key.cf_username, env)}/` +
       localObjectName(contents.context);
     const createOptions: Parameters<typeof createObject>[0] = {
@@ -277,7 +276,7 @@ export async function shipSpool(
  * holds its lock — the kernel released it on the owner's death — and ships
  * each one under its own stamped context. Directories with live owners are
  * skipped, which is what makes sweeping safe with any number of parallel
- * runs.
+ * runs. Never throws.
  */
 export async function sweepSpools(
   root: string,
@@ -327,17 +326,13 @@ export async function finishRunRecording(
   } finally {
     recording.spool.close();
   }
-  try {
-    await sweepSpools(
-      recording.spoolRoot,
-      recording.key,
-      recording.spool.dir,
-      env,
-      transport,
-    );
-  } catch (error) {
-    warn(`sweeping ${recording.spoolRoot} failed: ${error}`);
-  }
+  await sweepSpools(
+    recording.spoolRoot,
+    recording.key,
+    recording.spool.dir,
+    env,
+    transport,
+  );
 }
 
 /**

@@ -17,7 +17,8 @@ export interface AgentsHostCliDependencies {
   error: typeof console.error;
 }
 
-const defaultDependencies: AgentsHostCliDependencies = {
+/** The dependencies `runAgentsHostCli()` uses when its caller supplies none. */
+export const defaultAgentsHostCliDependencies: AgentsHostCliDependencies = {
   readEnv: (key) => Deno.env.get(key),
   start: startAgentsHost,
   addSignalListener: Deno.addSignalListener,
@@ -32,7 +33,7 @@ const defaultDependencies: AgentsHostCliDependencies = {
 
 export async function runAgentsHostCli(
   argv: string[] = Deno.args,
-  dependencies: AgentsHostCliDependencies = defaultDependencies,
+  dependencies: AgentsHostCliDependencies = defaultAgentsHostCliDependencies,
 ): Promise<number> {
   let running: RunningAgentsHost | undefined;
   const startupAbort = new AbortController();

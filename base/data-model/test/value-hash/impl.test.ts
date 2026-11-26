@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -9,6 +8,7 @@ import {
   taggedHashStringOf,
 } from "@";
 import { ValueHasher } from "@/value-hash/ValueHasher.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("value-hash/impl", () => {
   describe("hashOf()", () => {
@@ -43,6 +43,14 @@ describe("value-hash/impl", () => {
       expect(() => hashOf(Symbol("nope"))).toThrow(
         "Cannot hash unique (uninterned) symbol",
       );
+    });
+
+    it("throws for a function, which is no `FabricValue`", () => {
+      // Reachable only through an unsound cast, which this stands in for.
+      const fn = (() => 1) as unknown as FabricValue;
+
+      expect(() => hashOf(fn)).toThrow("Cannot hash value");
+      expect(() => hashOf(1)).not.toThrow();
     });
   });
 

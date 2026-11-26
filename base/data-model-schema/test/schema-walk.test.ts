@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { getLogger } from "@commonfabric/logger";
 
@@ -22,6 +21,7 @@ import {
   UNUSED_SINGLE_SUBSCHEMA_KEYS,
   walkSchema,
 } from "@commonfabric/data-model-schema/schema-walk";
+import { describe, it } from "@commonfabric/test-support/test";
 
 interface Edge {
   schema: JSONSchema;
@@ -558,6 +558,35 @@ describe("values that are not schemas", () => {
     );
     expect(element.result).toEqual([]);
     expect(element.warnings[0]).toContain("allOf/0");
+  });
+
+  it("visits nothing from a root that is not a schema", () => {
+    for (const [, value] of NON_SCHEMAS) {
+      const visited: JSONSchema[] = [];
+      expect(
+        forEachSchema(value as JSONSchema, (schema) => {
+          visited.push(schema);
+        }, { visitBooleans: true }),
+      ).toBe(false);
+      expect(visited).toEqual([]);
+    }
+  });
+
+  it("reads only the keys a record holds, not those it inherits", () => {
+    const inherited = { type: "number" } as const;
+    const own = { type: "string" } as const;
+    const properties = Object.create({ inherited }, {
+      own: { value: own, enumerable: true },
+    });
+    const schema = { properties } as JSONSchemaObj;
+
+    expect(edgesOf(schema).map((edge) => edge.key)).toEqual(["own"]);
+    const mapped: JSONSchema[] = [];
+    mapSubschemas(schema, (child) => {
+      mapped.push(child);
+      return child;
+    });
+    expect(mapped).toEqual([own]);
   });
 
   it("still reads a record keyword written as an array, by index", () => {

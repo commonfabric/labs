@@ -1,13 +1,13 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   CacheFile,
   dashboardCacheDirectory,
   dashboardCacheFile,
   replaceFile,
 } from "./history-files.ts";
+import { afterEach, beforeEach, describe, it, test } from "@commonfabric/test-support/test";
 
 function environment(
   values: Record<string, string>,
@@ -15,7 +15,7 @@ function environment(
   return (name) => values[name];
 }
 
-Deno.test("dashboard cache files use fixed names in one configured directory", () => {
+test("dashboard cache files use fixed names in one configured directory", () => {
   const directory = "configured-dashboard-cache";
   const env = environment({
     DASHBOARD_CACHE_DIR: directory,
@@ -53,7 +53,7 @@ Deno.test("dashboard cache files use fixed names in one configured directory", (
   );
 });
 
-Deno.test("dashboard cache files default to the temp directory", () => {
+test("dashboard cache files default to the temp directory", () => {
   const directory = "platform-temp";
   const env = environment({ TMPDIR: directory });
   assertEquals(dashboardCacheDirectory(env), directory);
@@ -63,7 +63,7 @@ Deno.test("dashboard cache files default to the temp directory", () => {
   );
 });
 
-Deno.test("dashboard cache files recognize Windows temp variables", () => {
+test("dashboard cache files recognize Windows temp variables", () => {
   assertEquals(
     dashboardCacheDirectory(environment({ TEMP: "windows-temp" })),
     "windows-temp",
@@ -174,6 +174,13 @@ describe("history-files", () => {
         it("returns `undefined` when there is no file", async () => {
           expect(await new CacheFile<string>(path).read(String))
             .toBeUndefined();
+        });
+
+        it("rejects when the file cannot be opened for a reason other than its absence", async () => {
+          await Deno.writeTextFile(path, "text");
+
+          await expect(new CacheFile<string>(join(path, "child")).read(String))
+            .rejects.toThrow(Deno.errors.NotADirectory);
         });
 
         it("returns the value given to `write()` without decoding, until another instance replaces the file", async () => {

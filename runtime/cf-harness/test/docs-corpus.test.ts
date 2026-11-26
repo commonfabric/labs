@@ -6,7 +6,6 @@
 
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   CFC_HARNESS_ATOM_CLASS,
@@ -18,12 +17,20 @@ import {
   checkoutDocsCorpusRoots,
   checkoutDocsCorpusRootsFrom,
   loadHarnessDocsCorpus,
+  MAX_CORPUS_BYTES,
+  MAX_CORPUS_FILE_BYTES,
   resolveHarnessDocsCorpus,
 } from "../src/docs-corpus/corpus.ts";
 import {
   rankSections,
   splitMarkdownSections,
 } from "../src/docs-corpus/sections.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const document = {
   path: "docs/example.md",
@@ -189,6 +196,82 @@ describe("docs-corpus", () => {
         "guides",
         "guides-2",
       ]);
+    });
+
+    it("returns the sections of a root that is itself a Markdown file", async () => {
+      const file = join(root, "guides", "glazing.md");
+      const corpus = await loadHarnessDocsCorpus([file]);
+
+      expect(corpus.files).toBe(1);
+      expect(corpus.sections.map((section) => section.path)).toEqual([
+        corpus.roots[0].name,
+      ]);
+      expect(corpus.sections[0].heading).toBe("Glazing");
+    });
+
+    it("returns nothing for a root that is a file but not Markdown", async () => {
+      const corpus = await loadHarnessDocsCorpus([join(root, "notes.txt")]);
+
+      expect(corpus.files).toBe(0);
+      expect(corpus.sections).toEqual([]);
+    });
+
+    it("throws for a root that cannot be examined for a reason other than absence", async () => {
+      // A path through a regular file fails as not-a-directory, which is a
+      // misconfiguration to report rather than a tree this host lacks.
+      await expect(
+        loadHarnessDocsCorpus([join(root, "notes.txt", "inner")]),
+      ).rejects.toThrow(Deno.errors.NotADirectory);
+    });
+
+    it("returns the corpus as truncated, without the file that would exceed the byte budget", async () => {
+      const corpus = await loadHarnessDocsCorpus([root]);
+      expect(corpus.truncated).toBe(false);
+
+      // Each file is as large as one document may be, so the budget admits
+      // whole files until the next would carry it past the limit.
+      const admitted = Math.floor(MAX_CORPUS_BYTES / MAX_CORPUS_FILE_BYTES);
+      const large = join(root, "large");
+      await Deno.mkdir(large);
+      const heading = "# Large\n\n";
+      const body = heading +
+        "x".repeat(MAX_CORPUS_FILE_BYTES - heading.length);
+      for (let index = 0; index <= admitted; index += 1) {
+        await Deno.writeTextFile(
+          join(large, `${String(index).padStart(3, "0")}.md`),
+          body,
+        );
+      }
+
+      const full = await loadHarnessDocsCorpus([large]);
+
+      expect(new TextEncoder().encode(body).length).toBe(
+        MAX_CORPUS_FILE_BYTES,
+      );
+      expect(full.truncated).toBe(true);
+      expect(full.files).toBe(admitted);
+    });
+
+    it("leaves out a document one byte over the per-file limit, without truncating the corpus", async () => {
+      const oversize = join(root, "oversize");
+      await Deno.mkdir(oversize);
+      const heading = "# Big\n\n";
+      await Deno.writeTextFile(
+        join(oversize, "big.md"),
+        heading + "x".repeat(MAX_CORPUS_FILE_BYTES + 1 - heading.length),
+      );
+      await Deno.writeTextFile(
+        join(oversize, "small.md"),
+        "# Small\n\nKept.\n",
+      );
+
+      const corpus = await loadHarnessDocsCorpus([oversize]);
+
+      expect(corpus.files).toBe(1);
+      expect(corpus.truncated).toBe(false);
+      expect(corpus.sections.map((section) => section.path)).not.toContain(
+        "oversize/big.md",
+      );
     });
 
     it("returns an empty corpus for a root this host does not carry", async () => {

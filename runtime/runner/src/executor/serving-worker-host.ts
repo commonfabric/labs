@@ -16,11 +16,12 @@ import type {
   AdmittedCommitNotice,
   Server,
 } from "@commonfabric/memory/v2/server";
-import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import type { CollectedMemory } from "../collected-memory.ts";
+import type { ModuleCompilerPool } from "../harness/module-compiler-pool.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import { mergeServingLoopDiagnostics } from "./diagnostics-merge.ts";
+import { compileWorkerLoopDiagnostics } from "./serving-loop-diagnostics.ts";
 import {
   admissionActivates,
   DEFAULT_MAX_PARKED_RUNTIMES,
@@ -30,13 +31,28 @@ import {
   SpaceNotServedError,
   writesSpaceAcl,
 } from "./host.ts";
+import {
+  newRunBeaconBuffer,
+  readRunBeacon,
+  type RunBeaconReading,
+  type RunEvent,
+  runEventKey,
+  type RunIdentity,
+} from "./run-beacon.ts";
 import { ServingPortBridge } from "./serving-port-bridge.ts";
+import {
+  assertServingThreadHeapLimit,
+  type ServingThread,
+  type ServingThreadOptions,
+  startServingThread,
+} from "./serving-thread.ts";
 import type {
   LifecycleVerbDescriptor,
   LifecycleVerbRun,
   ServingLoopDiagnostics,
   ServingWorkerInit,
   ServingWorkerPolicy,
+  WorkerHeartbeat,
 } from "./serving-port-protocol.ts";
 import {
   emptyServingLoopStats,
@@ -53,12 +69,44 @@ const logger = getLogger("serving-worker-host", {
   level: "warn",
 });
 
+/**
+ * How far above a worker's `heapLimitMb` V8's limit on its heap may be before
+ * the pool says that something replaced the limit: V8 adds the young
+ * generation to the limit it is given, 96 MB at the limits measured.
+ */
+const HEAP_LIMIT_SLACK_MB = 512;
+
+/**
+ * How many heartbeats in a row must report a heap of `heapLimitMb` or more
+ * before the pool ends a worker whose V8 limit a process-wide flag replaced.
+ * More than one, since the heap a heartbeat reports includes garbage V8 has
+ * not collected yet, which a worker under its own V8 limit would collect
+ * before failing.
+ */
+const BEATS_PAST_REPLACED_LIMIT = 2;
+
+/**
+ * How many heartbeats in a row must report a heap of `heapLimitMb` or more
+ * before the pool ends a worker whose V8 limit a process-wide flag replaced,
+ * when the pool has such a worker collect its garbage first
+ * (`collectBeforeEnding`) and no collection has brought the heap under the
+ * limit meanwhile: a worker that refuses the collection, or does not answer
+ * it while its heartbeats go on.
+ */
+const BEATS_PAST_LIMIT_UNCOLLECTED = 6;
+
+const MB = 1024 * 1024;
+
+/** `bytes` in whole megabytes, for a log line. */
+const megabytes = (bytes: number): number => Math.round(bytes / MB);
+
 /** How often a worker posts a heartbeat and its watchdog checks for messages. */
 const WATCHDOG_INTERVAL_MS = 10_000;
 
 /**
  * How many whole intervals a worker may pass without a message before its
- * watchdog kills it: at the default interval, a minute of silence.
+ * watchdog kills it, unless `watchdogLimitMs` says otherwise: at the default
+ * interval, a minute of silence.
  */
 const WATCHDOG_SILENT_INTERVALS = 6;
 
@@ -127,6 +175,22 @@ export type ServingWorkerPoolOptions = {
   route?: URL;
 
   /**
+   * The compile workers this process shares, which every serving worker's
+   * runtimes compile in, over their port, in place of a compile worker of
+   * each serving worker's own. Their diagnostics join the workers'. Absent,
+   * each serving worker compiles where its entry module says.
+   */
+  moduleCompiler?: ModuleCompilerPool;
+
+  /**
+   * The compiled-module cache directory every process on the host shares
+   * (`openSharedCompileCache()`), which every serving worker's runtimes read
+   * and put compiled modules in. Absent, each serving worker uses the cache
+   * its entry module gives, if any.
+   */
+  compileCacheDir?: string;
+
+  /**
    * How many workers spaces are placed on at most. A space gets a worker of
    * its own while fewer are placed on; at the cap it joins the worker that
    * serves the fewest spaces, one holding only parked runtimes first. `1`
@@ -143,6 +207,40 @@ export type ServingWorkerPoolOptions = {
   spareWorkers?: number;
 
   /**
+   * The largest each worker's heap may grow, in megabytes: a whole number,
+   * `MIN_SERVING_THREAD_HEAP_LIMIT_MB` or more. A worker that reaches it is
+   * ended alone, at the error that reports it or at its next heartbeat, and
+   * the process goes on. So is one whose heartbeat reports that many
+   * megabytes of buffers outside the heap, which the limit itself does not
+   * bound. What becomes of its spaces is in the class's doc comment: one
+   * that was alone on the worker is left unplaced, and those that shared it
+   * get a worker each. Absent, a worker grows to the process's own heap
+   * limit, and one that reaches it aborts the process.
+   */
+  heapLimitMb?: number;
+
+  /**
+   * Whether the pool has a worker collect its garbage before ending it for a
+   * heap past `heapLimitMb` that V8 does not enforce, because a process-wide
+   * `--max-old-space-size` replaced the worker's limit. The pool then ends
+   * the worker at once if its heap is still past the limit once collected,
+   * and keeps it serving if the collection brings it under. A worker that
+   * refuses the collection, or does not answer it, is still ended, at
+   * {@link BEATS_PAST_LIMIT_UNCOLLECTED} heartbeats in a row past its limit.
+   * Needs `exposeGarbageCollector()` to have run in this process before the
+   * worker started. Default: false, and such a worker is ended at
+   * {@link BEATS_PAST_REPLACED_LIMIT} heartbeats in a row past its limit.
+   */
+  collectBeforeEnding?: boolean;
+
+  /**
+   * Starts a worker's thread. Default: {@link startServingThread}. A test
+   * passes one that starts a stand-in, which a thread with a heap limit
+   * otherwise leaves no room for.
+   */
+  startThread?: typeof startServingThread;
+
+  /**
    * How large the workers' JavaScript heaps may be together, in bytes, as
    * their heartbeats report them, before the pool closes workers that hold
    * only parked runtimes, the longest parked first. Workers serving a space
@@ -152,11 +250,21 @@ export type ServingWorkerPoolOptions = {
 
   /**
    * How often a worker posts a heartbeat and the watchdog checks for
-   * messages; a worker is killed after six such intervals in which it sent
-   * none. Default: ten seconds. A test shortens it, to see a kill in less time
-   * than the test is allowed.
+   * messages. Default: ten seconds. A test shortens it, to see a kill in less
+   * time than the test is allowed.
    */
   watchdogIntervalMs?: number;
+
+  /**
+   * How long a worker may send no message before the watchdog kills it, in
+   * milliseconds: a whole number, no shorter than `watchdogIntervalMs`. The
+   * worker's heartbeat timer runs on its own thread, so a worker silent this
+   * long has not returned to its event loop in that time. Measured in whole
+   * intervals, the first of which only reads the messages, so a kill comes
+   * up to one interval after the limit. Default: six intervals, a minute at
+   * the default interval.
+   */
+  watchdogLimitMs?: number;
 
   /** DIAGNOSTIC (tests): the workers' activation outcomes. */
   onActivationSettled?: (
@@ -185,9 +293,18 @@ export type CollectedWorkerMemory = CollectedMemory & {
   spaces: string[];
 };
 
+/** One worker's sampling heap profile, with the spaces placed on the worker. */
+export type WorkerHeapProfile = {
+  /** The profile's file, or why the worker wrote none. */
+  outcome: { path: string } | { error: string };
+
+  /** The spaces placed on the worker when it was asked; none for a spare. */
+  spaces: string[];
+};
+
 /** One running worker, the bridge serving it, and what is placed on it. */
 type PoolWorker = {
-  worker: Worker;
+  worker: ServingThread;
   bridge: ServingPortBridge;
 
   /** The lease holder this worker's leases name. */
@@ -208,8 +325,35 @@ type PoolWorker = {
   /** The timer that watches this worker for silence. */
   watchdog: ReturnType<typeof setInterval> | undefined;
 
+  /** The worker's run beacon, which the watchdog reads (`run-beacon.ts`). */
+  beacon: SharedArrayBuffer;
+
+  /**
+   * What the numbers on the worker's beacon stand for, as the worker has
+   * posted them: each action it has run and its realm has not collected, and
+   * the last served handler's run for an event, which is the only such run
+   * the beacon can still show.
+   */
+  runs: Map<number, RunIdentity>;
+
+  /** The number of the last served handler's run for an event in `runs`. */
+  lastEventRun: number | undefined;
+
+  /**
+   * The run the watchdog's last check found holding the worker's thread, and
+   * how many checks in a row have found it.
+   */
+  live: { reading: RunBeaconReading; checks: number } | undefined;
+
   /** The spaces placed on this worker; none for a spare. */
   spaces: Set<string>;
+
+  /**
+   * Whether the one space placed on this worker stays its only one: a space
+   * whose last worker reached its heap limit, which no other space shares a
+   * worker with (`ServingWorkerPool`'s `#heapKills`).
+   */
+  alone: boolean;
 
   /** Commits admitted for its spaces before its host served, in order. */
   backlog: AdmittedCommitNotice[];
@@ -222,6 +366,25 @@ type PoolWorker = {
 
   /** The worker's heap as its last heartbeat reported it, in bytes. */
   heapUsed: number;
+
+  /**
+   * Whether V8 limits the worker's heap to well past the pool's
+   * `heapLimitMb`, as a process-wide `--max-old-space-size` does. The pool
+   * then holds the worker to `heapLimitMb` itself, from its heartbeats.
+   */
+  heapLimitReplaced: boolean;
+
+  /**
+   * How many heartbeats in a row have reported a heap of `heapLimitMb` or
+   * more, while `heapLimitReplaced`.
+   */
+  beatsPastLimit: number;
+
+  /**
+   * Whether the pool has asked the worker to collect its garbage, for a heap
+   * past `heapLimitMb`, and the worker has not answered yet.
+   */
+  collecting: boolean;
 
   /**
    * The request that closes the worker's host if it holds nothing, while it
@@ -284,13 +447,36 @@ type WaitingSpace = {
  *
  * A worker counts as failed when it reports an error it did not handle, when
  * its host cannot start, and when it stops sending messages (`#watch()`).
- * Only its own spaces are affected. Once it is gone and the leases it held
+ * Only its own spaces are affected. Each worker marks the run that holds its
+ * thread on a run beacon the pool reads without asking it (`run-beacon.ts`),
+ * and a worker the watchdog ends in a served handler's run has that run's
+ * event failed by the space's next worker rather than run again
+ * (`#onWorkerFailed()`). Once it is gone and the leases it held
  * are released, each of them is placed again if it still has something to
  * serve, after the backoff the host applies to a space whose tenures keep
  * failing, widening until a worker commits a wave for the space. Every
  * worker acquires under a lease-holder component of its own, so a
  * successor's commits never share a replay key with its predecessor's in
  * the engine.
+ *
+ * A worker that reaches its heap limit (`heapLimitMb`) is taken out the same
+ * way, but its spaces are not simply placed again, since a program that grew
+ * a heap to the limit does so again wherever it runs. The limit is the
+ * worker's, so the pool learns which space grew by where it was:
+ *
+ * - A space that was alone on the worker is left unplaced, whatever session
+ *   it has and whatever events its store holds. It is placed again by what
+ *   can change what its program does: a commit admitted afterwards that would
+ *   start a tenure, or a lifecycle verb. Each such placement waits out a
+ *   backoff that widens with every worker the space has had ended, which
+ *   waves committed in between do not reset.
+ * - Spaces that shared the worker are each placed on a worker of their own,
+ *   beyond `maxWorkers` if need be, and no other space joins those workers.
+ *   The space that grew then ends a worker with nothing else on it, and the
+ *   others go on being served. The kill counts as no failure of theirs.
+ *
+ * A space stays on workers of its own until one of them closes with nothing
+ * left to serve.
  */
 export class ServingWorkerPool {
   readonly #options: ServingWorkerPoolOptions;
@@ -314,6 +500,33 @@ export class ServingWorkerPool {
    */
   readonly #failures = new Map<string, number>();
 
+  /**
+   * The spaces whose last worker reached its heap limit, each with how many
+   * workers it has had ended there while alone on them. A space here is
+   * placed on a worker no other space joins. A worker of its own that closes
+   * with nothing left to serve clears it.
+   */
+  readonly #heapKills = new Map<string, number>();
+
+  /**
+   * The spaces left unplaced since a worker they were alone on reached its
+   * heap limit. Only a commit admitted since, or a lifecycle verb, places
+   * one; its next placement clears it.
+   */
+  readonly #heapStopped = new Set<string>();
+
+  /**
+   * The events, by space and then by stream entry (`runEventKey()`), whose
+   * handler's run held the
+   * thread of a worker the pool ended, each with the reason its consequence
+   * states. Each is handed to the worker the space is placed on next
+   * (`#introduce()`), which writes the reason as the event's consequence.
+   */
+  readonly #failedEvents = new Map<
+    string,
+    Map<string, { event: RunEvent; reason: string }>
+  >();
+
   /** Teardowns of workers that failed or were closed, while they run. */
   readonly #teardowns = new Set<Promise<void>>();
 
@@ -336,6 +549,7 @@ export class ServingWorkerPool {
     evicted: 0,
     failed: 0,
     shared: 0,
+    heapLimited: 0,
   };
 
   /** The leases the watchdog released, across every worker it killed. */
@@ -375,6 +589,20 @@ export class ServingWorkerPool {
         `\`spareWorkers\` is ${spareWorkers}; a pool keeps none or more`,
       );
     }
+    if (options.heapLimitMb !== undefined) {
+      assertServingThreadHeapLimit(options.heapLimitMb);
+    }
+    const intervalMs = options.watchdogIntervalMs ?? WATCHDOG_INTERVAL_MS;
+    const limitMs = options.watchdogLimitMs;
+    if (
+      limitMs !== undefined &&
+      (!Number.isSafeInteger(limitMs) || limitMs < intervalMs)
+    ) {
+      throw new Error(
+        `\`watchdogLimitMs\` is ${limitMs}; a worker's silence limit is a ` +
+          `whole number of milliseconds, ${intervalMs} or more`,
+      );
+    }
     this.#options = options;
     this.#maxWorkers = maxWorkers;
     this.#spareWorkers = spareWorkers;
@@ -393,12 +621,21 @@ export class ServingWorkerPool {
     options.server.setServerExecutionObserver({
       commitAdmitted: (notice) => this.#onCommitAdmitted(notice),
       sessionOpened: (space) => this.#onSessionOpened(space),
-      demandChanged: (space, reason, principal, sessionId) => {
+      demandChanged: (
+        space,
+        reason,
+        principal,
+        sessionId,
+        servingOwn,
+        notDemand,
+      ) => {
         this.#servingWorkerOf(space)?.bridge.observer.demandChanged(
           space,
           reason,
           principal,
           sessionId,
+          servingOwn,
+          notDemand,
         );
       },
       viewsChanged: (space, sessionId) => {
@@ -406,6 +643,9 @@ export class ServingWorkerPool {
           space,
           sessionId,
         );
+      },
+      currencyChanged: (space) => {
+        this.#servingWorkerOf(space)?.bridge.observer.currencyChanged(space);
       },
       sessionChanged: (event) => {
         if (replaying && event.kind === "opened") replayed.add(event.space);
@@ -464,7 +704,33 @@ export class ServingWorkerPool {
       else serving += 1;
       if (worker.spaces.size > 0 && worker.occupancy === "parked") parked += 1;
     }
-    stats.workers = { serving, spare, parked, heapUsed, ...this.#counts };
+    stats.workers = {
+      serving,
+      spare,
+      parked,
+      heapUsed,
+      heapStopped: this.#heapStopped.size,
+      running: [...this.#workers].flatMap((worker) => {
+        if (worker.live === undefined) return [];
+        const { reading, checks } = worker.live;
+        const identity = worker.runs.get(reading.run);
+        return [{
+          spaces: [...worker.spaces],
+          ...(identity === undefined ? {} : {
+            space: identity.space,
+            action: identity.action,
+            ...(identity.name === undefined ? {} : { name: identity.name }),
+            ...(identity.piece === undefined ? {} : { piece: identity.piece }),
+            ...(identity.event === undefined
+              ? {}
+              : { eventId: identity.event.eventId }),
+          }),
+          checks,
+          reads: reading.reads,
+        }];
+      }),
+      ...this.#counts,
+    };
     return stats;
   }
 
@@ -483,8 +749,9 @@ export class ServingWorkerPool {
   /**
    * What the workers' realms logged, as of now, once those that are
    * starting serve, taken together with what the realm of each host that
-   * closed in order had logged. A worker that fails takes what its realm
-   * logged with it. Rejects once the pool is closed.
+   * closed in order had logged, and with the latest snapshots of the compile
+   * workers the process shares (`moduleCompiler`). A worker that fails takes
+   * what its realm logged with it. Rejects once the pool is closed.
    */
   async diagnostics(): Promise<ServingLoopDiagnostics> {
     const workers = await this.#startedWorkers();
@@ -496,7 +763,11 @@ export class ServingWorkerPool {
     // in order is in the closed hosts' sum already, with what its realm
     // logged last, and one that failed took what its realm logged with it,
     // as it would have had it failed before it was asked.
+    const compiler = this.#options.moduleCompiler;
     return mergeServingLoopDiagnostics([
+      ...(compiler === undefined
+        ? []
+        : [compileWorkerLoopDiagnostics(compiler)]),
       ...(this.#closedDiagnostics === undefined
         ? []
         : [this.#closedDiagnostics]),
@@ -532,6 +803,30 @@ export class ServingWorkerPool {
       }
     }
     return collected;
+  }
+
+  /**
+   * Has each worker, once those that are starting serve, write the sampling
+   * heap profile of its isolate into `directory`. A worker that left the pool
+   * before it answered is left out; one that could not write is reported with
+   * its error. Rejects once the pool is closed.
+   */
+  async heapProfiles(directory: string): Promise<WorkerHeapProfile[]> {
+    const workers = await this.#startedWorkers();
+    const profiles = await Promise.all(
+      workers.filter((worker) => !worker.gone).map(async (worker) => {
+        const spaces = [...worker.spaces];
+        try {
+          const path = await worker.bridge.requestHeapProfile(directory);
+          return { outcome: { path }, spaces };
+        } catch (error) {
+          return worker.gone
+            ? undefined
+            : { outcome: { error: String(error) }, spaces };
+        }
+      }),
+    );
+    return profiles.filter((profile) => profile !== undefined);
   }
 
   /**
@@ -631,7 +926,7 @@ export class ServingWorkerPool {
     // tear down, leases included.
     if (worker.gone) return;
     this.#forget(worker);
-    await terminateWorker(worker.worker, worker.lifetimeLock);
+    await worker.worker.terminate(worker.lifetimeLock);
     if (!hostClosed) worker.bridge.releaseLeasesOf(worker.holder);
   }
 
@@ -734,8 +1029,8 @@ export class ServingWorkerPool {
   /**
    * The server's `sessionOpened`: a first client session on a space placed
    * nowhere places it, unless another holder has the space's lease
-   * (`#leasedElsewhere()`); one on a placed space is the worker's host's to
-   * weigh.
+   * (`#leasedElsewhere()`) or the space was left unplaced at a heap limit
+   * (`#heapStopped`); one on a placed space is the worker's host's to weigh.
    */
   #onSessionOpened(space: string): void {
     const worker = this.#placements.get(space);
@@ -747,7 +1042,7 @@ export class ServingWorkerPool {
       worker.bridge.observer.sessionOpened(space);
       return;
     }
-    if (!this.#hasClientSessions(space)) return;
+    if (!this.#hasClientSessions(space) || this.#heapStopped.has(space)) return;
     // A space between workers is weighed again once its wait ends.
     const waiting = this.#waiting.get(space);
     if (waiting !== undefined) waiting.sessionsPlace = true;
@@ -759,7 +1054,8 @@ export class ServingWorkerPool {
    * for the space that its tenure is owed. Returns the worker.
    */
   #place(space: string, notices: readonly AdmittedCommitNotice[]): PoolWorker {
-    const worker = this.#workerToPlaceOn();
+    const worker = this.#workerToPlaceOn(space);
+    this.#heapStopped.delete(space);
     worker.spaces.add(space);
     this.#placements.set(space, worker);
     if (worker.serving) this.#introduce(worker, [space], notices);
@@ -769,25 +1065,36 @@ export class ServingWorkerPool {
   }
 
   /**
-   * Helper for `#place()`, which picks the worker a space is placed on next:
+   * Helper for `#place()`, which picks the worker `space` is placed on next:
    * a spare, or a fresh one, while fewer than `maxWorkers` are placed on;
    * at the cap, the placed-on worker with the fewest spaces, one that holds
-   * only parked runtimes first.
+   * only parked runtimes first. A space whose last worker reached its heap
+   * limit gets a spare or a fresh worker whatever the cap, and keeps it to
+   * itself; so a pool at its cap whose workers are all kept that way starts
+   * a fresh one for any other space too.
    */
-  #workerToPlaceOn(): PoolWorker {
+  #workerToPlaceOn(space: string): PoolWorker {
     const usable = [...this.#workers].filter((worker) =>
       worker.retiring === undefined
     );
-    const placedOn = usable.filter((worker) => worker.spaces.size > 0);
-    if (placedOn.length < this.#maxWorkers) {
+    const unplacedOn = (): PoolWorker => {
       const spares = usable.filter((worker) => worker.spaces.size === 0);
       return spares.find((worker) => worker.serving) ?? spares[0] ??
         this.#spawn();
+    };
+    if (this.#heapKills.has(space)) {
+      const own = unplacedOn();
+      own.alone = true;
+      return own;
     }
+    const placedOn = usable.filter((worker) => worker.spaces.size > 0);
+    if (placedOn.length < this.#maxWorkers) return unplacedOn();
+    const joinable = placedOn.filter((worker) => !worker.alone);
+    if (joinable.length === 0) return unplacedOn();
     this.#counts.shared += 1;
     const rank = (worker: PoolWorker) =>
       (worker.occupancy === "parked" ? 0 : 1) + 2 * worker.spaces.size;
-    return placedOn.reduce((best, worker) =>
+    return joinable.reduce((best, worker) =>
       rank(worker) < rank(best) ? worker : best
     );
   }
@@ -822,6 +1129,14 @@ export class ServingWorkerPool {
   ): void {
     const { observer } = worker.bridge;
     for (const space of spaces) {
+      const failed = this.#failedEvents.get(space);
+      if (failed === undefined) continue;
+      this.#failedEvents.delete(space);
+      for (const { event, reason } of failed.values()) {
+        worker.bridge.failEvent(space as MemorySpace, event, reason);
+      }
+    }
+    for (const space of spaces) {
       for (const event of this.#options.server.sessionSnapshot(space)) {
         observer.sessionChanged(event);
       }
@@ -848,10 +1163,17 @@ export class ServingWorkerPool {
     // to the server, whose lease read then matches the holder the worker's
     // host acquires under.
     const processInstanceId = crypto.randomUUID();
-    const worker = new Worker(
+    // The worker reports a failure only after `started` is built below.
+    let onFailed: ServingThreadOptions["onFailed"] = () => {};
+    const worker = (this.#options.startThread ?? startServingThread)(
       this.#options.workerModule ??
         new URL("./serving-worker.ts", import.meta.url),
-      { type: "module", name: "serving-loop" },
+      {
+        ...(this.#options.heapLimitMb === undefined
+          ? {}
+          : { heapLimitMb: this.#options.heapLimitMb }),
+        onFailed: (message, cause) => onFailed(message, cause),
+      },
     );
     const intervalMs = this.#options.watchdogIntervalMs ??
       WATCHDOG_INTERVAL_MS;
@@ -859,7 +1181,7 @@ export class ServingWorkerPool {
       worker,
       bridge: new ServingPortBridge({
         server,
-        port: worker,
+        port: worker.port,
         leaseHolderInstance: processInstanceId,
         // A committed wave is the progress a space whose workers keep
         // failing never makes, as the host's own failure streak counts it:
@@ -872,7 +1194,14 @@ export class ServingWorkerPool {
           );
         },
         onOccupancy: (occupancy) => this.#onOccupancy(started, occupancy),
-        onHeartbeat: (heapUsed) => this.#onHeartbeat(started, heapUsed),
+        onHeartbeat: (heartbeat) => this.#onHeartbeat(started, heartbeat),
+        onRunNamed: (identity) => this.#onRunNamed(started, identity),
+        onRunsForgotten: (runs) => {
+          for (const run of runs) started.runs.delete(run);
+        },
+        ...(this.#options.moduleCompiler === undefined
+          ? {}
+          : { moduleCompiler: this.#options.moduleCompiler }),
         ...(this.#options.onActivationSettled === undefined
           ? {}
           : { onActivationSettled: this.#options.onActivationSettled }),
@@ -886,11 +1215,19 @@ export class ServingWorkerPool {
       gone: false,
       lifetimeLock: undefined,
       watchdog: undefined,
+      beacon: newRunBeaconBuffer(),
+      runs: new Map(),
+      lastEventRun: undefined,
+      live: undefined,
       spaces: new Set(),
+      alone: false,
       backlog: [],
       occupancy: undefined,
       parkedAt: 0,
       heapUsed: 0,
+      heapLimitReplaced: false,
+      beatsPastLimit: 0,
+      collecting: false,
       retiring: undefined,
       sentWhileRetiring: [],
       warmOutstanding: [],
@@ -907,13 +1244,19 @@ export class ServingWorkerPool {
       ensureSpaceRoots: this.#options.ensureSpaceRoots,
       experimental: this.#options.experimental,
       route: this.#options.route?.href,
+      compileOnHost: this.#options.moduleCompiler !== undefined,
+      compileCacheDir: this.#options.compileCacheDir,
+      runBeacon: started.beacon,
     };
-    started.ready = started.bridge.init(init).then(({ lifetimeLock }) => {
+    started.ready = started.bridge.init(init).then((
+      { lifetimeLock, heapSizeLimit },
+    ) => {
       // The worker's answer and its error event can reach this thread in one
       // turn, and the error's handler then runs ahead of this continuation:
       // a worker that failed that way counts toward the backoff, and is not
       // serving.
       if (started.gone) return;
+      started.heapLimitReplaced = this.#checkHeapLimit(heapSizeLimit);
       started.lifetimeLock = lifetimeLock;
       started.serving = true;
       this.#spareFailures = 0;
@@ -924,13 +1267,37 @@ export class ServingWorkerPool {
     started.ready.catch((error) => {
       this.#onWorkerFailed(started, String(error));
     });
-    worker.onerror = (event) => {
-      event.preventDefault();
-      this.#onWorkerFailed(started, event.message);
-    };
+    onFailed = (message, cause) =>
+      this.#onWorkerFailed(started, message, cause);
     this.#workers.add(started);
     this.#counts.started += 1;
     return started;
+  }
+
+  /**
+   * Helper for `#spawn()`, which says whether V8 limits a worker's heap to
+   * well past the `heapLimitMb` it was started with, and logs it when it
+   * does. A process-wide `--max-old-space-size` does that: V8 takes the flag
+   * over the limit a `node:worker_threads` worker is given, so the worker
+   * would grow to the process's limit without reaching the one the pool
+   * counts on. The pool then holds the worker to `heapLimitMb` from its
+   * heartbeats (`#onHeartbeat()`).
+   */
+  #checkHeapLimit(heapSizeLimit: number): boolean {
+    const limitMb = this.#options.heapLimitMb;
+    if (limitMb === undefined) return false;
+    const actualMb = Math.round(heapSizeLimit / (1024 * 1024));
+    if (actualMb <= limitMb + HEAP_LIMIT_SLACK_MB) return false;
+    logger.warn("heap-limit-overridden", () => [
+      `a serving worker's heap is limited to ${actualMb} MB, not the ` +
+      `${limitMb} MB it was started with, by a process-wide ` +
+      "--max-old-space-size; the pool ends it " +
+      (this.#options.collectBeforeEnding
+        ? `once its heap holds ${limitMb} MB or more after a full collection`
+        : `at ${BEATS_PAST_REPLACED_LIMIT} heartbeats in a row that report ` +
+          `${limitMb} MB or more`),
+    ]);
+    return true;
   }
 
   /**
@@ -941,6 +1308,8 @@ export class ServingWorkerPool {
    * timer once on waking, with the worker's messages already queued behind it.
    * The count starts at the worker's first message, since until its modules
    * have loaded a worker has no timer to post from and no lease to release.
+   * Each firing also reads the worker's run beacon, counting the checks in a
+   * row that find the same run holding its thread (`PoolWorker.live`).
    */
   #watch(
     watched: PoolWorker,
@@ -949,6 +1318,13 @@ export class ServingWorkerPool {
     let lastSeen = 0;
     let silentIntervals = 0;
     return setInterval(() => {
+      const reading = readRunBeacon(watched.beacon);
+      watched.live = reading === undefined ? undefined : {
+        reading,
+        checks: watched.live?.reading.epoch === reading.epoch
+          ? watched.live.checks + 1
+          : 1,
+      };
       const seen = watched.bridge.messagesReceived;
       if (seen === 0) return;
       if (seen !== lastSeen) {
@@ -957,13 +1333,32 @@ export class ServingWorkerPool {
         return;
       }
       silentIntervals += 1;
-      if (silentIntervals < WATCHDOG_SILENT_INTERVALS) return;
+      const limitMs = this.#options.watchdogLimitMs ??
+        WATCHDOG_SILENT_INTERVALS * intervalMs;
+      if (silentIntervals * intervalMs < limitMs) return;
       this.#onWorkerFailed(
         watched,
-        `no message in ${silentIntervals} watchdog intervals`,
+        `no message in ${silentIntervals} watchdog intervals ` +
+          `(${(silentIntervals * intervalMs) / 1000} s)`,
         { killed: true },
       );
     }, intervalMs);
+  }
+
+  /**
+   * What a number on a worker's run beacon stands for, as the worker posts
+   * it. A served handler's run for an event replaces the one before it, since
+   * the beacon shows one run at a time and a later run has started once a
+   * later number is posted.
+   */
+  #onRunNamed(worker: PoolWorker, identity: RunIdentity): void {
+    if (identity.event !== undefined) {
+      if (worker.lastEventRun !== undefined) {
+        worker.runs.delete(worker.lastEventRun);
+      }
+      worker.lastEventRun = identity.run;
+    }
+    worker.runs.set(identity.run, identity);
   }
 
   /**
@@ -995,10 +1390,104 @@ export class ServingWorkerPool {
     }
   }
 
-  /** A worker's heartbeat: its heap, which the heap budget adds up. */
-  #onHeartbeat(worker: PoolWorker, heapUsed: number): void {
-    worker.heapUsed = heapUsed;
+  /**
+   * A worker's heartbeat: its heap, which the heap budget adds up. A worker
+   * that says its heap has reached its limit is taken out of the pool as one
+   * that failed: what it was doing then is gone, and a worker that was in a
+   * message's handler takes no further message, though its timers go on
+   * posting heartbeats. The size of its heap does not say so, since the heap
+   * a worker reports can stop short of the limit that ended a handler, pass
+   * it without reaching it, and shrink once the handler is gone. A worker
+   * whose buffers outside the heap come to the limit is taken out the same
+   * way, at the heartbeat that reports them, since nothing else bounds them.
+   * So is a worker whose V8 limit a process-wide flag replaced, since V8
+   * would let it grow to the process's limit: with `collectBeforeEnding`,
+   * once a heartbeat past its limit has it collect its garbage and its heap
+   * is still past the limit after (`#collectPastLimit()`), and otherwise once
+   * {@link BEATS_PAST_REPLACED_LIMIT} heartbeats in a row report a heap of
+   * its limit or more.
+   */
+  #onHeartbeat(worker: PoolWorker, heartbeat: WorkerHeartbeat): void {
+    worker.heapUsed = heartbeat.heapUsed;
+    const limitMb = this.#options.heapLimitMb;
+    const collect = this.#options.collectBeforeEnding === true;
+    const pastLimit = limitMb !== undefined && worker.heapLimitReplaced &&
+      heartbeat.heapUsed >= limitMb * MB;
+    worker.beatsPastLimit = pastLimit ? worker.beatsPastLimit + 1 : 0;
+    const beatsToEnd = collect
+      ? BEATS_PAST_LIMIT_UNCOLLECTED
+      : BEATS_PAST_REPLACED_LIMIT;
+    let reached: string | undefined;
+    if (heartbeat.heapLimitReached) {
+      reached = "its heap reached its limit" +
+        (limitMb === undefined ? "" : ` of ${limitMb} MB`) +
+        `, and holds ${megabytes(heartbeat.heapUsed)} MB now`;
+    } else if (worker.beatsPastLimit >= beatsToEnd) {
+      reached = `its heap holds ${megabytes(heartbeat.heapUsed)} MB at ` +
+        `${beatsToEnd} heartbeats in a row, past the ` +
+        `${limitMb} MB it is limited to, which a process-wide ` +
+        "--max-old-space-size keeps V8 from enforcing" +
+        (collect ? ", and no collection brought it under the limit" : "");
+    } else if (
+      limitMb !== undefined && heartbeat.external >= limitMb * MB
+    ) {
+      reached = "its buffers outside the heap hold " +
+        `${megabytes(heartbeat.external)} MB, at the ${limitMb} MB its heap ` +
+        "is limited to";
+    }
+    if (reached !== undefined) {
+      this.#onWorkerFailed(worker, reached, {
+        killed: true,
+        atHeapLimit: true,
+      });
+      return;
+    }
+    if (pastLimit && collect && !worker.collecting) {
+      this.#collectPastLimit(worker, limitMb);
+    }
     this.#evictParkedWorkers();
+  }
+
+  /**
+   * Helper for `#onHeartbeat()`, which has `worker`, whose heartbeat reported
+   * a heap past its `limitMb` that V8 does not enforce, collect its garbage,
+   * and ends it as one that reached its limit if its heap is still past the
+   * limit once collected. A worker whose collected heap is under the limit
+   * goes on, and its count of heartbeats past the limit starts again. A
+   * refusal is logged, and leaves the worker to that count.
+   */
+  #collectPastLimit(worker: PoolWorker, limitMb: number): void {
+    worker.collecting = true;
+    const before = worker.heapUsed;
+    worker.bridge.requestCollectedMemory().then(({ heapUsed }) => {
+      worker.collecting = false;
+      if (worker.gone) return;
+      worker.heapUsed = heapUsed;
+      if (heapUsed >= limitMb * MB) {
+        this.#onWorkerFailed(
+          worker,
+          `its heap holds ${megabytes(heapUsed)} MB after a full ` +
+            `collection, past the ${limitMb} MB it is limited to, which a ` +
+            "process-wide --max-old-space-size keeps V8 from enforcing",
+          { killed: true, atHeapLimit: true },
+        );
+        return;
+      }
+      worker.beatsPastLimit = 0;
+      logger.warn("heap-collected", () => [
+        `a serving worker past its ${limitMb} MB heap limit holds ` +
+        `${megabytes(heapUsed)} MB after a full collection, down from ` +
+        `${megabytes(before)} MB, and goes on serving`,
+      ]);
+    }, (error) => {
+      worker.collecting = false;
+      if (worker.gone) return;
+      logger.warn("heap-collection-refused", () => [
+        `a serving worker past its ${limitMb} MB heap limit did not collect ` +
+        `its garbage (${String(error)}); it is ended at ` +
+        `${BEATS_PAST_LIMIT_UNCOLLECTED} heartbeats in a row past the limit`,
+      ]);
+    });
   }
 
   /**
@@ -1083,13 +1572,16 @@ export class ServingWorkerPool {
       ]);
       // The host served every space it held until nothing was left, as an
       // idle park says of one tenure.
-      for (const space of worker.spaces) this.#failures.delete(space);
+      for (const space of worker.spaces) {
+        this.#failures.delete(space);
+        this.#heapKills.delete(space);
+      }
       const owed = worker.sentWhileRetiring;
       this.#forget(worker);
       this.#resumeAfter(
         worker,
         owed,
-        terminateWorker(worker.worker, worker.lifetimeLock).then(() => {
+        worker.worker.terminate(worker.lifetimeLock).then(() => {
           worker.bridge.releaseLeasesOf(worker.holder);
         }),
         { failed: false },
@@ -1140,7 +1632,8 @@ export class ServingWorkerPool {
    * something to serve: a commit among `owed` or admitted meanwhile that
    * would start a tenure, a client session that counts toward a placement
    * (`WaitingSpace.sessionsPlace`), or, where the worker failed, events its
-   * store still holds undelivered.
+   * store still holds undelivered. A space left unplaced at a heap limit
+   * (`#heapStopped`) is placed for such a commit alone.
    */
   #resumeAfter(
     worker: PoolWorker,
@@ -1174,8 +1667,10 @@ export class ServingWorkerPool {
           continue;
         }
         if (
-          waiting.notices.length > 0 || undelivered.has(space) ||
-          (waiting.sessionsPlace && this.#hasClientSessions(space))
+          waiting.notices.length > 0 ||
+          (!this.#heapStopped.has(space) &&
+            (undelivered.has(space) ||
+              (waiting.sessionsPlace && this.#hasClientSessions(space))))
         ) {
           this.#place(space, waiting.notices);
         }
@@ -1206,18 +1701,72 @@ export class ServingWorkerPool {
    * So nothing waits for a killed worker's teardown. What its thread still does
    * cannot reach the memory server, whose port to it closed here, and the
    * commits it left in flight name a holder no lease is held under.
+   *
+   * A worker that failed `atHeapLimit` has its spaces dealt with as the
+   * class's doc comment describes.
+   *
+   * The run the worker's beacon shows holding its thread as it is ended is
+   * named in the log line, for a kill by the watchdog and for a thread that
+   * ended itself at its heap limit, whose beacon shows the run it ended in. A
+   * served handler's run for an event has its event failed: the space's next
+   * worker writes the error as the event's consequence, and does not run the
+   * handler for it again (`#introduce()`). A worker ended for the heap a
+   * heartbeat reported names no run, since the heartbeat's timer runs only
+   * between runs, and whatever run the beacon shows started after it.
    */
   #onWorkerFailed(
     worker: PoolWorker,
     message: string,
-    { killed }: { killed: boolean } = { killed: false },
+    { killed = false, atHeapLimit = false }: {
+      killed?: boolean;
+      atHeapLimit?: boolean;
+    } = {},
   ): void {
     if (worker.gone) return;
+    // The watchdog's kill, or a thread that ended itself at its heap limit.
+    const named = (killed && !atHeapLimit) || (!killed && atHeapLimit);
+    const reading = named ? readRunBeacon(worker.beacon) : undefined;
+    const run = reading === undefined
+      ? undefined
+      : worker.runs.get(reading.run);
+    let failedEvent: RunEvent | undefined;
+    if (run?.event !== undefined && worker.spaces.has(run.space)) {
+      failedEvent = run.event;
+      const reason = (killed
+        ? "the handler held its serving worker's thread until the watchdog " +
+          `ended the worker (${message})`
+        : "the handler was running when its serving worker's heap reached " +
+          `its limit (${message})`) +
+        ", and is not run for this event again";
+      const failed = this.#failedEvents.get(run.space) ?? new Map();
+      failed.set(runEventKey(failedEvent), { event: failedEvent, reason });
+      this.#failedEvents.set(run.space, failed);
+    }
+    if (reading !== undefined) {
+      const checks = worker.live?.reading.epoch === reading.epoch
+        ? worker.live.checks
+        : undefined;
+      message += run === undefined
+        ? `, in run ${reading.run}, which the worker had not named`
+        : `, in a run of \`${run.name ?? run.action}\` (action ` +
+          `\`${run.action}\`${
+            run.piece === undefined ? "" : `, piece ${run.piece}`
+          }) in space ${run.space}` +
+          (run.event === undefined ? "" : ` for event ${run.event.eventId}`) +
+          (checks === undefined ? "" : ` that ${checks} checks in a row found`);
+    }
     if (killed) worker.lifetimeLock = undefined;
+    if (atHeapLimit) this.#counts.heapLimited += 1;
+    const spare = worker.spaces.size === 0;
+    // The one space the worker served, which is left unplaced: the commits
+    // the worker was owed or took would only start the same program again.
+    const [stopped] = atHeapLimit && worker.spaces.size === 1
+      ? worker.spaces
+      : [];
     // A commit the worker never took, since its host never served, is owed
     // to the space's next placement like one sent to a host that closed,
     // and so is a warm request the worker took and committed no wave for.
-    const owed = [
+    const owed = stopped !== undefined ? [] : [
       ...new Set([
         ...worker.warmOutstanding,
         ...worker.backlog,
@@ -1228,16 +1777,26 @@ export class ServingWorkerPool {
     );
     this.#forget(worker);
     this.#counts.failed += 1;
-    const terminated = terminateWorker(worker.worker, worker.lifetimeLock)
+    const terminated = worker.worker.terminate(worker.lifetimeLock)
       .then(() => {
         const released = worker.bridge.releaseLeasesOf(worker.holder);
         if (killed) this.#leasesLost += released;
       });
-    const spare = worker.spaces.size === 0;
     let streak: number;
     if (spare) {
       this.#spareFailures += 1;
       streak = this.#spareFailures;
+    } else if (stopped !== undefined) {
+      streak = (this.#heapKills.get(stopped) ?? 0) + 1;
+      this.#heapKills.set(stopped, streak);
+      this.#heapStopped.add(stopped);
+    } else if (atHeapLimit) {
+      // Which of them grew the heap is not known yet, so none is charged
+      // with a failure; each is watched on a worker of its own.
+      streak = 1;
+      for (const space of worker.spaces) {
+        if (!this.#heapKills.has(space)) this.#heapKills.set(space, 0);
+      }
     } else {
       streak = 0;
       for (const space of worker.spaces) {
@@ -1256,7 +1815,19 @@ export class ServingWorkerPool {
       `a serving worker failed (${message}); ` +
         (spare
           ? `starting another spare in ${delayMs}ms`
-          : `placing its ${worker.spaces.size} space(s) again in ${delayMs}ms`),
+          : stopped !== undefined
+          ? `leaving space ${stopped}, the only one it served, unplaced ` +
+            "until a commit or a lifecycle verb names it, and no sooner " +
+            `than in ${delayMs}ms`
+          : atHeapLimit
+          ? `placing its ${worker.spaces.size} spaces ` +
+            `(${[...worker.spaces].join(", ")}) again in ${delayMs}ms, ` +
+            "each on a worker of its own"
+          : `placing its ${worker.spaces.size} space(s) again in ${delayMs}ms`) +
+        (failedEvent === undefined
+          ? ""
+          : `; event ${failedEvent.eventId} takes the error as its ` +
+            "consequence, and its handler is not run for it again"),
     );
     this.#reportWorkerClosed(worker, "failed");
     const { promise: waited, resolve: wake } = Promise.withResolvers<void>();

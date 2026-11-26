@@ -1,7 +1,11 @@
 import { assertEquals } from "@std/assert";
-import type { FabricValue } from "@commonfabric/data-model";
+import {
+  type FabricValue,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import {
+  type ClientMessage,
   decodeMemoryBoundary,
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
@@ -11,6 +15,7 @@ import {
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { parseClientMessage } from "@commonfabric/memory/v2/server";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { newLoopbackServer } from "../src/storage/v2-emulate.ts";
 import type {
@@ -20,6 +25,7 @@ import type {
 import {
   type Options as V2Options,
   type SessionFactory,
+  SpaceReplica,
   StorageManager as V2StorageManager,
 } from "../src/storage/v2.ts";
 
@@ -70,6 +76,19 @@ export const newSharedServer = (options?: {
     ...options,
     audience: TEST_SESSION_OPEN_AUDIENCE,
   });
+
+/**
+ * Has `server` advertise what a server that predates marked splices does: no
+ * `markedSplicesV1`, so that its clients send array changes index by index.
+ * Returns `server`.
+ */
+export const withoutMarkedSplices = (
+  server: MemoryV2Server.Server,
+): MemoryV2Server.Server => {
+  const flags = server.memoryProtocolFlags.bind(server);
+  server.memoryProtocolFlags = () => ({ ...flags(), markedSplicesV1: false });
+  return server;
+};
 
 /**
  * Writes `space`'s deletion tombstone, naming `by`, straight into `engine`,
@@ -125,6 +144,133 @@ export function testPrincipalSessionOpenAuthFactory(
       principal: signer?.did(),
     },
   });
+}
+
+/**
+ * Mounts `space` over `transport`, authorized for `signer` by
+ * `testPrincipalSessionOpenAuthFactory()`, and returns the client and the
+ * session.
+ */
+export async function mountOver(
+  transport: MemoryV2Client.Transport,
+  space: MemorySpace,
+  signer?: Signer,
+  mountOptions: MemoryV2Client.MountOptions = {},
+): Promise<{
+  client: MemoryV2Client.Client;
+  session: MemoryV2Client.SpaceSession;
+}> {
+  const client = await MemoryV2Client.connect({
+    instanceNames: namesInstancesByDefault(),
+    transport,
+  });
+  const session = await client.mount(
+    space,
+    mountOptions,
+    testPrincipalSessionOpenAuthFactory(signer),
+  );
+  return { client, session };
+}
+
+/** The options a `SpaceReplica` is constructed with. */
+type SpaceReplicaOptions = ConstructorParameters<typeof SpaceReplica>[0];
+
+/**
+ * Constructs a replica of `options.space` acting as `options.as`, whose
+ * sessions `options.createSession` opens. An option `options` leaves out
+ * takes its default: no settings, a subscription that ignores what it is
+ * sent, no local session documents, the signer's own identity in the session
+ * `test-replica-session`, route generation 0, no replay dependencies, and a
+ * watch of a document on its own that succeeds without asking the session.
+ */
+export const newSpaceReplica = (
+  options:
+    & Pick<SpaceReplicaOptions, "as" | "space" | "createSession">
+    & Partial<SpaceReplicaOptions>,
+): SpaceReplica =>
+  new SpaceReplica({
+    ...options,
+    settings: options.settings ?? {},
+    subscription: options.subscription ?? { next: () => {} },
+    localSessionDocuments: options.localSessionDocuments ?? (() => false),
+    scopeKeyIdentity: options.scopeKeyIdentity ??
+      (() => ({
+        principal: options.as.did(),
+        sessionId: "test-replica-session",
+      })),
+    routeState: options.routeState ?? { generation: 0 },
+    routeGeneration: options.routeGeneration ?? 0,
+    syncReplayDependencies: options.syncReplayDependencies ??
+      (() => Promise.resolve(undefined)),
+    watchDocument: options.watchDocument ??
+      (() => Promise.resolve({ ok: {} })),
+  });
+
+/**
+ * Holds the responses a client receives to its requests of one type, while
+ * `holding` is set, over the transports `wrap()` returns.
+ */
+export class ResponseHolder {
+  /** Whether responses to the requests wait for `release()`. */
+  holding = false;
+
+  /** How many of the requests the client has sent. */
+  sent = 0;
+
+  readonly #firstSent = Promise.withResolvers<void>();
+  readonly #firstHeld = Promise.withResolvers<void>();
+
+  /** Resolves when the client first sends one of the requests. */
+  readonly firstSent = this.#firstSent.promise;
+
+  /** Resolves when a response is first held. */
+  readonly firstHeld = this.#firstHeld.promise;
+
+  readonly #type: ClientMessage["type"];
+  readonly #requestIds = new Set<string>();
+  #held: (() => void)[] = [];
+
+  /** Constructs an instance holding the responses to requests of `type`. */
+  constructor(type: ClientMessage["type"]) {
+    this.#type = type;
+  }
+
+  /** Delivers the held responses, and holds no more. */
+  release(): void {
+    this.holding = false;
+    for (const deliver of this.#held.splice(0)) deliver();
+  }
+
+  /** Returns `inner` with the responses to the requests held. */
+  wrap(inner: MemoryV2Client.Transport): MemoryV2Client.Transport {
+    return {
+      ...inner,
+      send: (payload) => {
+        const sent = parseClientMessage(payload, { commitLabelTableV1: true });
+        if (sent?.type === this.#type) {
+          this.sent += 1;
+          this.#firstSent.resolve();
+          if ("requestId" in sent) this.#requestIds.add(sent.requestId);
+        }
+        return inner.send(payload);
+      },
+      setReceiver: (next) =>
+        inner.setReceiver((payload) => {
+          const received = decodeMemoryBoundary(payload);
+          if (
+            this.holding && isFabricPlainObject(received) &&
+            received.type === "response" &&
+            typeof received.requestId === "string" &&
+            this.#requestIds.has(received.requestId)
+          ) {
+            this.#held.push(() => next(payload));
+            this.#firstHeld.resolve();
+            return;
+          }
+          next(payload);
+        }),
+    };
+  }
 }
 
 export class NotificationRecorder implements IStorageNotification {

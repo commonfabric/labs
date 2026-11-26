@@ -3,7 +3,6 @@
 // has no default-schema switch), while reads/writes stay unqualified and resolve
 // to the attached db because `main` lacks those tables. (spec 04, Q6->A)
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
@@ -15,6 +14,12 @@ import {
   runQuery,
   runWrite,
 } from "../v2/sqlite/exec.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("sqlite attach layer", () => {
   let db: Database;
@@ -68,6 +73,28 @@ describe("sqlite attach layer", () => {
     ]);
     expect(rows).toEqual([{ v: "1" }]);
     detachDatabase(db, "db_b");
+  });
+
+  it("throws when attaching inside a transaction, and attaches nothing", () => {
+    db.exec("BEGIN");
+    expect(() => attachDatabase(db, "db_tx", path)).toThrow(
+      "attachDatabase must be called outside a transaction",
+    );
+    db.exec("COMMIT");
+    expect(db.prepare("SELECT name FROM pragma_database_list").values())
+      .toEqual([["main"]]);
+  });
+
+  it("throws when detaching inside a transaction, and leaves the alias attached", () => {
+    attachDatabase(db, "db_tx", path);
+    db.exec("BEGIN");
+    expect(() => detachDatabase(db, "db_tx")).toThrow(
+      "detachDatabase must be called outside a transaction",
+    );
+    db.exec("COMMIT");
+    expect(db.prepare("SELECT name FROM pragma_database_list").values())
+      .toEqual([["main"], ["db_tx"]]);
+    detachDatabase(db, "db_tx");
   });
 
   it("rejects an unsafe attach alias", () => {

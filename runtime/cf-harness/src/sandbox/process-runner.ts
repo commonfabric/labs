@@ -47,7 +47,7 @@ export interface ProcessSpawnRequest {
 
 export interface ProcessHandle {
   readonly pid: number;
-  /** Resolves when the process exits. */
+  /** Resolves when the process exits, and never rejects. */
   readonly exited: Promise<{ exitCode: number }>;
   kill(signal?: "SIGTERM" | "SIGKILL"): void;
 }
@@ -66,14 +66,9 @@ const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
 const readStreamText = async (
-  stream: ReadableStream<Uint8Array> | null,
-): Promise<string> => {
-  if (!stream) {
-    return "";
-  }
-  const buffer = await new Response(stream).arrayBuffer();
-  return textDecoder.decode(buffer);
-};
+  stream: ReadableStream<Uint8Array>,
+): Promise<string> =>
+  textDecoder.decode(await new Response(stream).arrayBuffer());
 
 export class DenoProcessRunner implements ProcessRunner {
   spawn(request: ProcessSpawnRequest): ProcessHandle {
@@ -126,7 +121,6 @@ export class DenoProcessRunner implements ProcessRunner {
     // aborts disarms the timeout, so one that comes due while the process
     // ends does not take its place.
     const stop = () => {
-      if (timeoutTriggered) return;
       clearTimeout(timeoutId);
       controller.abort();
     };
@@ -185,17 +179,6 @@ export class DenoProcessRunner implements ProcessRunner {
         stderr,
         exitCode: status.code,
       };
-    } catch (error) {
-      if (
-        timeoutTriggered && error instanceof DOMException &&
-        error.name === "AbortError"
-      ) {
-        throw new ProcessTimeoutError(
-          [request.command, ...request.args].join(" "),
-          request.timeoutMs ?? 0,
-        );
-      }
-      throw error;
     } finally {
       request.signal?.removeEventListener("abort", stop);
       if (timeoutId !== undefined) {

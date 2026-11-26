@@ -2,7 +2,6 @@
  * live halves are exercised by the rehearsal drill
  * (`runtime/cli/integration/topics-restore-drill.sh`). */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   buildRestoreDocument,
@@ -11,10 +10,12 @@ import {
   findLink,
   isAbsentPathError,
   normalizeFid,
+  publishedBoardSources,
   retiredKeys,
   WHOLE_VALUE,
   withoutKeys,
 } from "./topics-rehearsal-lib.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("topics-rehearsal-lib", () => {
   describe("retiredKeys", () => {
@@ -235,19 +236,137 @@ describe("topics-rehearsal-lib", () => {
           title: "t",
           mentionable: link,
           boardCrossrefs: link,
+          boardCrossrefIndex: link,
           boardNames: link,
           myName: link,
         },
         resolved,
       );
       expect(structural).toEqual(["mentionable", "boardCrossrefs"]);
-      // In the raw argument's own order, which is what the walk follows. Both
-      // are retired here because this target declares neither.
-      expect(legacy).toEqual(["boardNames", "myName"]);
+      // In the raw argument's own order, which is what the walk follows. All
+      // three are retired here because this target declares none of them.
+      expect(legacy).toEqual(["boardCrossrefIndex", "boardNames", "myName"]);
       expect(doc.mentionable).toBeUndefined();
       expect(doc.boardCrossrefs).toBeUndefined();
+      expect(doc.boardCrossrefIndex).toBeUndefined();
       expect(doc.boardNames).toBeUndefined();
       expect(doc.myName).toBeUndefined();
+    });
+
+    describe("the board's crossref index", () => {
+      // `boardCrossrefIndex` is declared by some generations of the topic
+      // pattern and published by some generations of the board, and a topic
+      // and its board are updated separately. Each case here is one pairing
+      // of an export, a target and a board.
+
+      const board = ["mentionable", "crossrefs", "crossrefIndex", "namesTable"];
+      const olderBoard = ["mentionable", "crossrefs", "namesTable"];
+      const newerExport = {
+        title: "t",
+        mentionable: link,
+        boardCrossrefs: link,
+        boardCrossrefIndex: link,
+      };
+      const olderExport = {
+        title: "t",
+        mentionable: link,
+        boardCrossrefs: link,
+      };
+
+      it("relinks it for a target that declares it", () => {
+        const { doc, structural, legacy, unpublished } = buildRestoreDocument(
+          newerExport,
+          resolved,
+          { declaredLinks: ["boardCrossrefIndex"], publishedSources: board },
+        );
+        expect(structural).toEqual([
+          "mentionable",
+          "boardCrossrefs",
+          "boardCrossrefIndex",
+        ]);
+        expect(legacy).toEqual([]);
+        expect(unpublished).toEqual([]);
+        expect(doc.boardCrossrefIndex).toBeUndefined();
+      });
+
+      it("relinks it from an export that predates it, onto a target that declares it", () => {
+        // The apply replaces the whole document, so a declared link the
+        // export never named would be erased if nothing put it back.
+
+        const { structural, legacy } = buildRestoreDocument(
+          olderExport,
+          resolved,
+          { declaredLinks: ["boardCrossrefIndex"], publishedSources: board },
+        );
+        expect(structural).toEqual([
+          "mentionable",
+          "boardCrossrefs",
+          "boardCrossrefIndex",
+        ]);
+        expect(legacy).toEqual([]);
+      });
+
+      it("retires it for a target that does not declare it", () => {
+        const { structural, legacy, unpublished } = buildRestoreDocument(
+          newerExport,
+          resolved,
+          { declaredLinks: [], publishedSources: board },
+        );
+        expect(structural).toEqual(["mentionable", "boardCrossrefs"]);
+        expect(legacy).toEqual(["boardCrossrefIndex"]);
+        expect(unpublished).toEqual([]);
+      });
+
+      it("leaves it out where the board publishes no index, whichever export", () => {
+        // A topic that declares the input, on a board that does not publish
+        // `crossrefIndex`: a relink there is refused after the apply, so it
+        // is never attempted, and the other links are still relinked.
+
+        for (const exported of [newerExport, olderExport]) {
+          const { doc, structural, legacy, unpublished } = buildRestoreDocument(
+            exported,
+            resolved,
+            {
+              declaredLinks: ["boardCrossrefIndex"],
+              publishedSources: olderBoard,
+            },
+          );
+          expect(structural).toEqual(["mentionable", "boardCrossrefs"]);
+          expect(unpublished).toEqual(["boardCrossrefIndex"]);
+          expect(legacy).toEqual([]);
+          expect(doc.boardCrossrefIndex).toBeUndefined();
+        }
+      });
+
+      it("decides the same whatever order the raw argument holds its fields in", () => {
+        const target = {
+          declaredLinks: ["boardCrossrefIndex"],
+          publishedSources: olderBoard,
+        };
+        const first = buildRestoreDocument(
+          { boardCrossrefIndex: link, ...olderExport },
+          resolved,
+          target,
+        );
+        const last = buildRestoreDocument(
+          { ...olderExport, boardCrossrefIndex: link },
+          resolved,
+          target,
+        );
+        expect(first.structural).toEqual(["mentionable", "boardCrossrefs"]);
+        expect(last.structural).toEqual(first.structural);
+        expect(first.unpublished).toEqual(["boardCrossrefIndex"]);
+        expect(last.unpublished).toEqual(first.unpublished);
+      });
+
+      it("refuses, before the apply, a link that cannot be retired and whose board path is missing", () => {
+        expect(() =>
+          buildRestoreDocument(newerExport, resolved, {
+            declaredLinks: ["boardCrossrefIndex"],
+            publishedSources: ["mentionable", "crossrefIndex"],
+          })
+        ).toThrow("crossrefs");
+      });
     });
 
     it("relinks a retirable field the target still declares", () => {
@@ -405,7 +524,31 @@ describe("topics-rehearsal-lib", () => {
       expect(
         await declaredRetirableLinks(counted),
       ).toEqual(["boardNames"]);
-      expect(asked).toEqual(["myName", "boardNames"]);
+      expect(asked).toEqual(["myName", "boardNames", "boardCrossrefIndex"]);
+    });
+  });
+
+  describe("publishedBoardSources", () => {
+    it("returns the board paths that answer, asking each once", async () => {
+      const asked: string[] = [];
+      const read = (source: string) => {
+        asked.push(source);
+        return Promise.resolve(
+          source === "mentionable" || source === "crossrefs"
+            ? { "$link": { id: "of:fid1:board" } }
+            : undefined,
+        );
+      };
+      expect(await publishedBoardSources(read)).toEqual([
+        "mentionable",
+        "crossrefs",
+      ]);
+      expect([...asked].sort()).toEqual([
+        "crossrefIndex",
+        "crossrefs",
+        "mentionable",
+        "namesTable",
+      ]);
     });
   });
 

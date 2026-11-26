@@ -31,9 +31,14 @@
  *
  * Those wiring links are `STRUCTURAL_LINK_SOURCES`, which maps each one to
  * the board path it points at: `mentionable` to the board's `mentionable`
- * index and `boardCrossrefs` to its `crossrefs`. A link-valued field absent
- * from that map stops the restore rather than being guessed at, so a wiring
- * input added to the topic pattern announces itself here.
+ * index, `boardCrossrefs` to its `crossrefs`, `boardCrossrefIndex` to its
+ * `crossrefIndex`, and `boardNames` to its `namesTable`. A link-valued field
+ * absent from that map stops the restore rather than being guessed at, so a
+ * wiring input added to the topic pattern announces itself here. The board is
+ * asked which of those paths it publishes before anything is applied, because
+ * a relink to a path it lacks is refused after the apply has replaced the
+ * document: a retirable link the board cannot back is left out and reported
+ * `not restored`, and any other stops the run before the apply.
  *
  * Four honest costs. Comment and link elements are re-written as plain
  * values, so their element entities are minted fresh: content, order,
@@ -69,6 +74,7 @@ import {
   isAbsentPathError,
   normalizeFid,
   PRESERVED_FIELDS,
+  publishedBoardSources,
   retiredKeys,
   STRUCTURAL_LINK_SOURCES,
   type TopicsExport,
@@ -186,11 +192,55 @@ for (const field of PRESERVED_FIELDS) {
   if (live !== undefined) preserved[field] = live;
 }
 
-const { doc: restoreDoc, structural, legacy, carried } = buildRestoreDocument(
-  rawArgument,
-  row.content,
-  { declaredLinks, preserved },
-);
+// What the BOARD publishes, which decides whether a link the target declares
+// can be relinked at all. Asked before the apply, since the relink comes after
+// it and a refusal there would leave the document replaced and the link gone.
+// The read takes no projection: a projected read answers with the position's
+// address whether or not the result holds the key, and the plain read refuses
+// a key the result does not hold, which is the check `cf piece link` makes.
+// Only that refusal answers `undefined`; any other failure stops the run here,
+// before anything is written.
+const boardFid = export_.board?.fid;
+const boardAddr = boardFid === undefined ? undefined : [
+  "--piece",
+  normalizeFid(boardFid),
+  "--space",
+  space,
+  "--api-url",
+  apiUrl,
+];
+const publishedSources = boardAddr === undefined
+  ? undefined
+  : await publishedBoardSources(async (source) => {
+    try {
+      return await cfJson<unknown>([
+        "cell",
+        "get",
+        "-q",
+        ...boardAddr,
+        source,
+      ]);
+    } catch (error) {
+      if (isAbsentPathError(error)) return undefined;
+      throw error;
+    }
+  });
+
+const { doc: restoreDoc, structural, legacy, unpublished, carried } =
+  buildRestoreDocument(
+    rawArgument,
+    row.content,
+    { declaredLinks, preserved, publishedSources },
+  );
+// Said before anything else is decided, so a no-op run and a dry run report
+// it as an applying run does.
+for (const field of unpublished) {
+  console.log(
+    `${field}: not restored (the board publishes no ${
+      STRUCTURAL_LINK_SOURCES[field]
+    })`,
+  );
+}
 for (const field of carried) {
   console.log(
     `${field}: carried forward from the target (${
@@ -203,7 +253,6 @@ for (const [field, wanted] of Object.entries(restoreDoc)) {
   if (!deepEqual(await liveValue(field), wanted)) differing.push(field);
 }
 
-const boardFid = export_.board?.fid;
 // A structural link the export recorded but the live piece has lost is a
 // reason to restore even when every content field already matches.
 const missingLinks: string[] = [];

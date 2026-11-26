@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import {
   createSchedulerTestRuntime,
   disposeSchedulerTestRuntime,
   type SchedulerTestRuntime,
   space,
 } from "./scheduler-test-utils.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 type Item = { label: string };
 

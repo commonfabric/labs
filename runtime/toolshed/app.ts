@@ -1,4 +1,5 @@
 import createApp from "@/lib/create-app.ts";
+import { initOpenTelemetry } from "@/lib/otel.ts";
 import health from "@/routes/health/health.index.ts";
 import telemetry from "@/routes/telemetry/telemetry.index.ts";
 import aiLLM from "@/routes/ai/llm/llm.index.ts";
@@ -27,6 +28,8 @@ import ingestPush from "@/routes/ingest-push/ingest-push.index.ts";
 import meetingRooms from "@/routes/meeting-rooms/meeting-rooms.index.ts";
 import spaceInvites from "@/routes/space-invites/space-invites.index.ts";
 
+// The tracer provider is registered before the app that traces through it.
+initOpenTelemetry();
 const app = createApp();
 
 configureOpenAPI(app);

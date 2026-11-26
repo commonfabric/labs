@@ -44,6 +44,7 @@ import {
   STREAM_ENTRIES_DOC_PREFIX,
   toDirtyKey,
 } from "@commonfabric/memory/v2";
+import type { SessionOverwrite } from "@commonfabric/memory/v2/engine";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type {
   ServedAclChange,
@@ -73,6 +74,7 @@ import {
   pathsOverlap,
 } from "../../../memory/v2/path.ts";
 import { getLogger } from "@commonfabric/logger";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -85,7 +87,11 @@ import {
   getTransactionReadActivities,
   hasPendingWriteElision,
 } from "../storage/transaction-inspection.ts";
-import { markServedDerivationTx } from "../storage/reactivity-log.ts";
+import {
+  markServedDerivationTx,
+  markServedWaveRunTx,
+} from "../storage/reactivity-log.ts";
+import { waveClaimIsWithheld } from "./processed-claim.ts";
 
 const logger = getLogger("wave-accumulator", {
   enabled: true,
@@ -110,9 +116,11 @@ const logger = getLogger("wave-accumulator", {
  *   the watermark-doc advance today; the acked-effect retirement write
  *   when Phase 4 lands the client-effect channel, protocol.md §5 —
  *   declare this kind; stage G's outbox-ROW retirement is an unstamped
- *   engine-table delete on plane (c), never a commit). Conflict class:
- *   non-re-derivable, so a raced bookkeeping PATCH rebases when it
- *   commutes with the concurrent commit (the loop's steady-state
+ *   engine-table delete on plane (c), never a commit). A bookkeeping write
+ *   conflicts with commits past the wave's basis. A scoped-default seed also
+ *   checks for writes its replica had yet to see at seal (`conflictsFor`).
+ *   Conflict class: non-re-derivable, so a raced bookkeeping PATCH rebases
+ *   when it commutes with the concurrent commit (the loop's steady-state
  *   watermark advance is a key-path patch); a write that cannot rebase
  *   — a whole-doc set (the first-ever watermark write materializing
  *   the doc), or a semantic conflict such as a whole-doc authored
@@ -122,9 +130,14 @@ const logger = getLogger("wave-accumulator", {
  *   is re-landed only by the next input batch's advance — on a quiet
  *   space the doc simply lags (while the wave's commit metadata and
  *   the loop's in-memory W, decided before the drop, already carry the
- *   advance — see space-server.ts's bookkeeping-write comment).
- *   Watermark forgery is an accepted authored intrusion — protocol.md
- *   §1's threat model.
+ *   advance — see space-server.ts's bookkeeping-write comment). A
+ *   builtin's ending for a request that never went out
+ *   (builtins.md §2) is not input-driven, and the loop does not land a
+ *   dropped one again: it is written again only when its node runs
+ *   again, which the requeue closure's re-arm of a derivation that read
+ *   it causes, and so does a commit to the node's own cells that it
+ *   reads. Watermark forgery is an accepted authored intrusion —
+ *   protocol.md §1's threat model.
  *
  * The remaining §3d non-re-derivable members — `eventWatermark` advances
  * and effect intents — are produced by Phase 3 events and the stage-G
@@ -331,6 +344,7 @@ export function stampWaveRunContext(
 ): void {
   waveRunContexts.set(tx, context);
   if (context.kind === "derivation") markServedDerivationTx(tx);
+  markServedWaveRunTx(tx);
   // The tx→replica identity seam (server-execution v2 stage A, OW17): the
   // run's demand-supplied identity rides the STORAGE transaction too, so
   // its scoped reads resolve against ITS instance in the replica (one
@@ -453,6 +467,13 @@ const waveSettlements = new WeakMap<
   Promise<WaveSettlement>
 >();
 
+const scopedDefaultSeeds = new WeakSet<IStorageTransaction>();
+
+/** Marks a seed whose writes depend on what its replica saw in the viewer's instance. */
+export function markScopedDefaultSeed(tx: IExtendedStorageTransaction): void {
+  scopedDefaultSeeds.add(tx.tx);
+}
+
 const requiresWaveAcceptance = new WeakSet<IStorageTransaction>();
 
 /** Enrolls local state changes in wave acceptance even without storage writes. */
@@ -500,8 +521,9 @@ export function waveSettlementOf(
 }
 
 /**
- * The addressing/attribution pair on one batched write is the wire-shape
- * module's `DerivedWriteAnnotation` (protocol.md §1, §7): one shared
+ * The addressing/attribution pair on one batched write, with the action
+ * whose run made it, is the wire-shape module's `DerivedWriteAnnotation`
+ * (protocol.md §1, §7): one shared
  * shape for the runner attaching it at seal time and the engine consuming
  * the addressing half at admission — the LD3 direction of one definition,
  * imported by engine and runner alike.
@@ -810,19 +832,20 @@ export interface WaveCommitSink {
   ): Promise<ReadonlyArray<{ read: WaveReadQuery; seq: number }>>;
 
   /**
-   * The value paths that the authored commits of `session` overwrote in a
-   * doc-instance after `sinceSeq` — §3d's supersession of an event
-   * consequence by a later write of the session that fired the event.
-   * Writes that merge into existing content (appends, splices, increments)
-   * overwrite nothing and are not reported. A sink that cannot answer omits
-   * it, and no consequence is superseded.
+   * Where the authored commits of `session` overwrote a doc-instance after
+   * `sinceSeq` — §3d's supersession of an event consequence by a later write
+   * of the session that fired the event. Splices overwrite the indices whose
+   * value they changed, as ranges of an array (`SessionOverwrite`). Writes
+   * that merge into existing content (appends, increments) overwrite nothing
+   * and are not reported. A sink that cannot answer omits it, and no
+   * consequence is superseded.
    */
   sessionOverwritePathsSince?(
     space: MemorySpace,
     doc: { id: string; scope?: CellScope; scopeKey: string },
     sinceSeq: number,
     session: { principal: string; sessionId: string },
-  ): Promise<ReadonlyArray<readonly string[]>>;
+  ): Promise<ReadonlyArray<SessionOverwrite>>;
 
   commitWave(
     batch: WaveSpaceCommit,
@@ -878,6 +901,11 @@ interface WaveContribution {
   index: number;
   context: WaveRunContext;
 
+  /** Whether the processed claim this wave writes for the run, a same-wave
+   * copy of an event, records the outcome withheld
+   * (`waveClaimIsWithheld()`). */
+  claimWithheld?: true;
+
   /** Per-space sealed commits, in the tx's commit order (children first,
    * home last — protocol.md §2b). */
   spaces: SealedSpaceContribution[];
@@ -924,8 +952,8 @@ interface WaveContribution {
   /** Per home doc-instance key: the seq the replica's CONFIRMED view
    * stood at for that instance when this run sealed — the view its
    * writes rest on, which the wave's own basis can be ahead of
-   * (#viewSeqsAtSeal). */
-  viewSeqs: ReadonlyMap<string, number>;
+   * (#viewSeqsAtSeal). Derivations and scoped-default seeds need this view. */
+  viewSeqs: ReadonlyMap<string, number> | undefined;
 }
 
 interface SealedSpaceContribution {
@@ -1113,6 +1141,22 @@ export const warmWritesOf = (
     if (!writes.has(key)) writes.set(key, { id: op.id, scopeKey });
   }
   return [...writes.values()];
+};
+
+/** Whether the value path `path` lies where `overwrite` overwrote: at or
+ * beneath its value path, or at or beneath an element of its array at an
+ * index from its `fromIndex` up to its `toIndex` (`SessionOverwrite`). */
+const overwriteCovers = (
+  overwrite: SessionOverwrite,
+  path: readonly string[],
+): boolean => {
+  if (!("fromIndex" in overwrite)) return isPrefixPath(overwrite, path);
+  const { array, fromIndex, toIndex = Infinity } = overwrite;
+  if (path.length <= array.length || !isPrefixPath(array, path)) return false;
+  const segment = path[array.length]!;
+  if (!isArrayIndexPropertyName(segment)) return false;
+  const index = Number(segment);
+  return index >= fromIndex && index < toIndex;
 };
 
 /** The eventIds of the seq-LESS stream entries one sealed op appends —
@@ -1780,7 +1824,10 @@ export class WaveAccumulator
         outboundAppends: [...pendingAppends],
         spaceAccessChanges: servedAclChanges,
         discoveredScope: assembly.discoveredScope,
-        viewSeqs: this.#viewSeqsAtSeal(assembly.spaces, context),
+        viewSeqs: context.kind === "derivation" || scopedDefaultSeeds.has(tx.tx)
+          ? this.#viewSeqsAtSeal(assembly.spaces, context)
+          : undefined,
+        ...(waveClaimIsWithheld(tx) ? { claimWithheld: true as const } : {}),
       };
       this.#contributions.push(contribution);
       waveSettlements.set(
@@ -2453,8 +2500,9 @@ export class WaveAccumulator
     }
 
     /** Whether `key` conflicts FOR this contribution: the doc moved past
-     * the wave's basis, or — for a pure derivation — past the view its own
-     * seal stood on, with an INTRUSION accounting for the difference.
+     * the wave's basis, or — for a pure derivation or a scoped-default
+     * seed — past the view its own seal stood on, with an INTRUSION
+     * accounting for the difference.
      *
      * The basis and that view differ because the basis is the serverSeq
      * the wave OPENED at, while the runs sealing into it read the
@@ -2478,20 +2526,29 @@ export class WaveAccumulator
      * that read the doc carries it in its basis rows, so the arrival of
      * the commit it missed re-runs it through the ordinary dependency
      * path. One that did not read the doc runs again only if the commits
-     * it lost to left every doc with no value (SupersededOutput). A
-     * non-re-derivable
-     * consequence takes no view check here: its
-     * reads are held to the store ahead of this loop, and one with a stale
-     * read is requeued whole before any doc of its reaches this, so what
-     * arrives here rests on current reads and conflicts on its written
-     * docs against the wave's basis alone. */
+     * it lost to left every doc with no value (SupersededOutput).
+     *
+     * A scoped-default seed also reads the lagging view. It probes a viewer's
+     * instance, finds it absent because the replica has not taken the
+     * viewer's first write, and creates it. Without the check that create
+     * lands over the write. A bookkeeping write is not re-derivable, so a
+     * conflict here goes to the rebase below, and one that cannot rebase,
+     * such as that whole-document create, is dropped and reported to its
+     * writer as a withdrawal it can retry. Other bookkeeping, including
+     * piece starts and compile-cache writes, checks the wave's basis.
+     *
+     * An event-handler consequence takes no view check here: its reads are
+     * held to the store ahead of this loop, and one with a stale read is
+     * requeued whole before any doc of its reaches this, so what arrives
+     * here rests on current reads and conflicts on its written docs against
+     * the wave's basis alone. */
     const conflictsFor = async (
       contribution: WaveContribution,
       key: string,
       doc: { id: string; scope?: CellScope; scopeKey: string },
     ): Promise<boolean> => {
       if (conflicted.has(key)) return true;
-      if (contribution.context.kind !== "derivation") return false;
+      if (contribution.viewSeqs === undefined) return false;
       const held = contribution.viewSeqs.get(key) ?? 0;
       if ((heads.get(key) ?? 0) <= held) return false;
       return await sink.intrusionSince?.(
@@ -2580,7 +2637,9 @@ export class WaveAccumulator
       if (overwritten.length === 0) return undefined;
       const covered = (path: string): boolean => {
         const parsed = parsePointer(path);
-        return overwritten.some((prefix) => isPrefixPath(prefix, parsed));
+        return overwritten.some((overwrite) =>
+          overwriteCovers(overwrite, parsed)
+        );
       };
       const patches = new Set<PatchOp>();
       let whole = true;
@@ -2680,12 +2739,18 @@ export class WaveAccumulator
             // field-level merge for writes that commute with the
             // concurrent commit. A semantic conflict requeues an EVENT
             // contribution whole; a bookkeeping contribution has no
-            // event to requeue and DROPS whole instead — the loop
-            // re-derives its bookkeeping next wave (WaveRunKind doc).
+            // event to requeue and DROPS whole instead — what lands it
+            // again depends on which bookkeeping write it was (WaveRunKind
+            // doc).
+            // A seed can race a write its replica missed before the wave opened.
+            const since = Math.min(
+              this.#basisSeq,
+              contribution.viewSeqs?.get(key) ?? this.#basisSeq,
+            );
             const concurrent = await sink.concurrentWritePaths(
               this.#space,
               doc,
-              this.#basisSeq,
+              since,
             );
             if (
               this.#rebases(
@@ -3744,9 +3809,8 @@ export class WaveAccumulator
     droppedPatches: ReadonlyMap<string, ReadonlySet<PatchOp>>,
   ): DroppedSealedWrites {
     const dropped = new Map<number, "operation" | ReadonlySet<number>>();
-    const home = this.#homeSealed(contribution);
-    if (home === undefined) return dropped;
-    for (const [index, operation] of home.sealed.commit.operations.entries()) {
+    const { operations } = this.#homeCommit(contribution);
+    for (const [index, operation] of operations.entries()) {
       if (operation.op === "sqlite") continue;
       const key = docInstanceKey(
         operation.id,
@@ -3864,22 +3928,23 @@ export class WaveAccumulator
         if (operation.op !== "sqlite") {
           const scoped = operation.scope !== undefined &&
             operation.scope !== "space";
-          if (scoped || context.acting !== undefined) {
-            annotations.push({
-              op: opIndex,
-              ...(scoped
-                ? { scopeKey: this.#scopeKeyFor(operation.scope, context) }
-                : {}),
-              ...(context.acting !== undefined
-                ? {
-                  actingUser: context.acting.user,
-                  ...(context.acting.session !== undefined
-                    ? { actingSession: context.acting.session }
-                    : {}),
-                }
-                : {}),
-            });
-          }
+          // Every write names the action whose run made it, a space-scoped
+          // write of a run that acts as nobody included (protocol.md §1).
+          annotations.push({
+            op: opIndex,
+            ...(scoped
+              ? { scopeKey: this.#scopeKeyFor(operation.scope, context) }
+              : {}),
+            ...(context.acting !== undefined
+              ? {
+                actingUser: context.acting.user,
+                ...(context.acting.session !== undefined
+                  ? { actingSession: context.acting.session }
+                  : {}),
+              }
+              : {}),
+            action: context.actionId,
+          });
         }
       }
       for (const precondition of home.sealed.commit.preconditions ?? []) {
@@ -3961,6 +4026,9 @@ export class WaveAccumulator
     // streamEntry (its re-issued intent dedupes on navigateTo's
     // deterministic nonce at apply), and the effect lands exactly once.
     const survivedEventIds = new Set<string>();
+    // Of those, the runs whose join was foreign to this space, whose entry
+    // records the outcome withheld beside the mark (`processed-claim.ts`).
+    const withheldEventIds = new Set<string>();
     for (const contribution of this.#survivors(requeued, droppedWhole)) {
       if (
         contribution.context.kind === "event-handler" &&
@@ -3968,6 +4036,9 @@ export class WaveAccumulator
         contribution.context.lt1 === true
       ) {
         survivedEventIds.add(contribution.context.eventId);
+        if (contribution.claimWithheld === true) {
+          withheldEventIds.add(contribution.context.eventId);
+        }
       }
     }
     const eventAppends: Array<{ id: string; eventId: string }> = [];
@@ -4061,6 +4132,9 @@ export class WaveAccumulator
             // so the sealed originals stay pristine.
             (list[entryIndex] as { consequenced?: boolean })
               .consequenced = true;
+            if (withheldEventIds.has(entry.eventId)) {
+              (list[entryIndex] as { withheld?: boolean }).withheld = true;
+            }
           }
         }
       }

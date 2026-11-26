@@ -6,10 +6,11 @@ import {
   toCacheEntry,
   toWireUpsert,
 } from "../v2/server-sync.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const IDENTITY = { principal: "did:test:alice", sessionId: "s1" };
 
-Deno.test("memory v2 session cache entries always include scope and instance key", () => {
+test("memory v2 session cache entries always include scope and instance key", () => {
   assertEquals(
     toCacheEntry({
       branch: "",
@@ -68,7 +69,7 @@ Deno.test("memory v2 session cache entries always include scope and instance key
   );
 });
 
-Deno.test("memory v2 wire upserts strip the server-internal instance key", () => {
+test("memory v2 wire upserts strip the server-internal instance key", () => {
   // The wire carries scope NAMES only (protocol.md §1: a client's
   // instances resolve from its session; clients never receive keys), in
   // the pre-instance-keying field order.
@@ -106,7 +107,7 @@ Deno.test("memory v2 wire upserts strip the server-internal instance key", () =>
   );
 });
 
-Deno.test("memory v2 session sync removes include scope", () => {
+test("memory v2 session sync removes include scope", () => {
   const previous = new Map([
     [
       cacheKeyForEntity("", "of:space", "space"),

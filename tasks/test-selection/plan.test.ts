@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { testIdentityKey } from "@commonfabric/test-support/records";
 
@@ -21,8 +20,10 @@ import {
 } from "./plan.ts";
 import type { Calibration, Manifest, ManifestEntry } from "./manifest.ts";
 import type { WithheldReason } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import { sampleEntry, sampleManifest } from "./testing.ts";
 import {
+  FLAKE_EXCLUSION_RATE,
   FULL_LANE_BOUND_SECONDS,
   FULL_LANE_BUDGET_SECONDS,
   LANE_BUDGET_SECONDS,
@@ -667,13 +668,13 @@ describe("plan", () => {
     });
 
     it("moves a leaf up as its lane's share of the suite grows, by what the `describe` around it adds", () => {
-      // The pattern unit suite runs its tests side by side, and its lane is
-      // charged the 100 seconds its longest unit takes. The leaf takes one
-      // second of its own and 45 with the hooks of the `describe` around
-      // it, and costs the lane 16; the stranger takes 50 and costs 20. The
-      // test growing the longest unit to 150 is the densest there is, and
-      // once it is in, the leaf costs 6 and the stranger 10. There is room
-      // left for one of the two, and the leaf is now the denser.
+      // The lane is charged the 100 seconds the suite's longest unit
+      // takes. The leaf takes one second of its own and 45 with the hooks
+      // of the `describe` around it, and costs the lane 16; the stranger
+      // takes 50 and costs 20. The test growing the longest unit to 150 is
+      // the densest there is, and once it is in, the leaf costs 6 and the
+      // stranger 10. There is room left for one of the two, and the leaf
+      // is now the denser.
       const pattern = (
         name: string,
         unit: string,
@@ -707,15 +708,14 @@ describe("plan", () => {
     });
 
     it("moves a suite's shorter tests up once its lane holds a longer one", () => {
-      // The pattern unit suite runs its tests side by side. A mandatory
-      // test puts it in the lane, so taking the long test opens nothing
-      // but its own file. The long test is the densest there is, and
-      // costs the lane 13.9 of the 25.4 seconds the density pass has. The
-      // short test alone would cost nine, and the stranger costs eight,
-      // so the stranger is denser to start with. Once the long test is
-      // in, the short one's own time fits under it and it costs 4.48,
-      // which is denser than the stranger. There is room for one of the
-      // two.
+      // A mandatory test puts the suite in the lane, so taking the long
+      // test opens nothing but its own file. The long test is the densest
+      // there is, and costs the lane 13.9 of the 25.4 seconds the density
+      // pass has. The short test alone would cost nine, and the stranger
+      // costs eight, so the stranger is denser to start with. Once the
+      // long test is in, the short one's own time fits under it and it
+      // costs 4.48, which is denser than the stranger. There is room for
+      // one of the two.
       const pattern = (name: string, cost: number, score = 0.05) =>
         test(name, `${name}.test.tsx`, { suite: "pattern-unit", cost, score });
       const tiny = pattern("tiny", 0.1);
@@ -1089,6 +1089,72 @@ describe("plan", () => {
       );
       expect(result.gates.map((s) => s.reason)).toEqual(["density"]);
       expect(forGate(result)).toHaveLength(15);
+    });
+
+    it("passes over in the density pass a gate that no longer fits once denser tests are placed", () => {
+      // The three tests scoring above the gate leave the density pass three
+      // hundred and two seconds, which hold the gate's three hundred when it
+      // is first weighed. A test of twenty seconds, denser than the gate,
+      // is placed first, and what is left no longer holds the gate. The
+      // exploration pass's share, which comes after, holds it.
+      const members = entries(15, () => ({ cost: 20 }));
+      const above = ["first", "second", "third"].map((name, at) =>
+        sampleEntry({ k: "unit", s: "cellar", n: name }, {
+          unit: `runtime/cellar/${name}.test.ts`,
+          cost: 225,
+          score: 0.99 - at / 100,
+        })
+      );
+      const denser = sampleEntry({ k: "unit", s: "cellar", n: "denser" }, {
+        unit: "runtime/cellar/denser.test.ts",
+        cost: 20,
+        score: 0.5,
+      });
+      const result = run(
+        sampleManifest({ entries: [...members, ...above, denser] }),
+        { gates: [gateOver(members, 0.9)] },
+      );
+      expect(
+        selected(result).find((s) => s.entry.test.n === "denser")?.reason,
+      ).toBe("density");
+      expect(result.gates.map((s) => s.reason)).toEqual(["exploration"]);
+    });
+
+    it("chooses in the density pass a gate whose tests were placed one by one, at what is left to run", () => {
+      // Each test the gate judges is denser than the gate, so the density
+      // pass places all fifteen on their own before the gate reaches the
+      // head of the queue, and the gate then adds nothing to the lanes.
+      const members = entries(15, () => ({ cost: 20, score: 0.5 }));
+      const above = ["first", "second", "third"].map((name, at) =>
+        sampleEntry({ k: "unit", s: "cellar", n: name }, {
+          unit: `runtime/cellar/${name}.test.ts`,
+          cost: 225,
+          score: 0.99 - at / 100,
+        })
+      );
+      const result = run(
+        sampleManifest({ entries: [...members, ...above] }),
+        { gates: [gateOver(members, 0.9)] },
+      );
+      expect(result.gates.map((s) => s.reason)).toEqual(["density"]);
+      expect(forGate(result)).toEqual([]);
+      expect(
+        selected(result).filter((s) => s.entry.test.s === "memory")
+          .map((s) => s.reason),
+      ).toEqual(Array(15).fill("density"));
+    });
+
+    it("never chooses a gate flakier than the exclusion rate", () => {
+      const members = entries(30, () => ({ cost: 20 }));
+      const gate = gateOver(members, 0.9);
+      const result = run(sampleManifest({ entries: members }), {
+        gates: [{
+          ...gate,
+          entry: { ...gate.entry, flakeRate: FLAKE_EXCLUSION_RATE * 2 },
+        }],
+      });
+      expect(result.gates).toEqual([]);
+      expect(forGate(result)).toEqual([]);
     });
 
     it("chooses at no cost a gate whose whole set is already placed", () => {
@@ -2180,6 +2246,22 @@ describe("plan", () => {
         );
         expect(suiteLoad(manifest, "workspace-unit", selections.slice(2)))
           .toBeCloseTo(16, 6);
+      });
+
+      it("throws where a selection it is to charge is another suite's", () => {
+        const manifest = sampleManifest({
+          entries: entries(1),
+          calibration: sideBySide,
+        });
+        const elsewhere = sampleEntry({ k: "unit", s: "ui", n: "renders" }, {
+          suite: "browser",
+        });
+        expect(() =>
+          suiteLoad(manifest, "workspace-unit", [
+            { entry: manifest.entries[0]!, repeats: 1 },
+            { entry: elsewhere, repeats: 1 },
+          ])
+        ).toThrow("workspace-unit was charged for a selection of browser");
       });
 
       it("charges a lane every run of a repeated test in full", () => {

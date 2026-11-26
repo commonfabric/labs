@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("IntersectionFormatter", () => {
   const transformer = new SchemaGenerator();
@@ -250,6 +250,29 @@ describe("IntersectionFormatter", () => {
   });
 
   describe("unsupported intersections", () => {
+    it("throws for a `Map` or a `Set` beside an object", async () => {
+      // Each constituent is formatted, and the collection reaches the check
+      // that refuses it.
+      for (
+        const [collection, message] of [
+          [
+            "Map<string, number>",
+            "Map cannot be used in pattern inputs/outputs",
+          ],
+          ["Set<string>", "Set cannot be used in pattern inputs/outputs"],
+        ]
+      ) {
+        const { type, checker } = await getTypeFromCode(
+          `type Result = ${collection} & { tag: 1 };`,
+          "Result",
+        );
+
+        expect(() => transformer.generateSchema(type, checker)).toThrow(
+          message,
+        );
+      }
+    });
+
     it("should reject an array beside an object", async () => {
       const code = `
         interface Base {

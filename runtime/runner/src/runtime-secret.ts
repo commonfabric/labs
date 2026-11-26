@@ -10,7 +10,7 @@
  * value but this module's own, whose marker is private to it, so no executed
  * code holds a secret.
  * `IExtendedStorageTransaction.ensureRuntimeSecret()` is the one writer: it
- * mints a random value when no trusted one is stored, hands none back, and
+ * mints a random value when no trusted one is stored, returns the secret, and
  * takes the runtime's in-package authorization, so executed code cannot mint
  * a secret in its own transaction and read it there before its label is
  * stored.
@@ -30,8 +30,9 @@
  *
  * A secret is labeled with {@link RUNTIME_SECRET_LABEL}, an atom no reader
  * holds and no ceiling admits. The runtime reads its own secrets with
- * {@link readRuntimeSecret}, as a verifier-internal read that joins nothing
- * to the transaction's flow label.
+ * {@link readRuntimeSecret}, which `ensureRuntimeSecret()` also reads through,
+ * as a verifier-internal read that joins nothing to the transaction's flow
+ * label.
  */
 
 import type { MemorySpace } from "@commonfabric/memory/interface";

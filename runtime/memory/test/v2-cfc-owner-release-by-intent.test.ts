@@ -1,18 +1,25 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import { encodeDagCbor } from "@commonfabric/identity/dag-cbor";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { cfcCanonicalClauseDigest } from "../v2/cfc-clause-identity.ts";
 import {
   clauseDigestsByEntryAt,
+  judgeOwnerReleaseByIntent,
   OWNER_RELEASE_BY_INTENT_PURPOSE,
   ownerReleaseByIntentEnvelopeDigest,
+  OwnerReleaseByIntentError,
   ownerReleaseByIntentRecord,
   ownerReleaseByIntentRecordId,
   type OwnerReleaseByIntentRequest,
@@ -22,6 +29,8 @@ import {
   ownerReleaseByIntentSignedBytes,
   ownerReleaseByIntentSpaceOwner,
   parseOwnerReleaseByIntentRecord,
+  parseOwnerReleaseByIntentRequest,
+  parseSignedOwnerReleaseByIntentRequest,
   type SignedOwnerReleaseByIntentRequest,
   verifyOwnerReleaseByIntentSignature,
 } from "../v2/cfc-owner-release-by-intent.ts";
@@ -122,6 +131,30 @@ describe("cfc-owner-release-by-intent", () => {
         })
       ).toThrow("not one a release can name");
     });
+
+    it("throws on a space or signer that is not a DID, or no envelope digest", () => {
+      expect(() => ownerReleaseByIntentRequest({ ...fields, space: "of:doc" }))
+        .toThrow("its space is not a DID");
+      expect(() => ownerReleaseByIntentRequest({ ...fields, signer: "owner" }))
+        .toThrow("its signer is not a DID");
+      expect(() =>
+        ownerReleaseByIntentRequest({ ...fields, envelopeDigest: "" })
+      )
+        .toThrow("it names no envelope");
+    });
+  });
+
+  describe("ownerReleaseByIntentEnvelopeDigest()", () => {
+    it("returns the digest of `null` for a document holding no envelope, and another for one holding an envelope", () => {
+      const none = ownerReleaseByIntentEnvelopeDigest(undefined);
+      expect(none).toBe(ownerReleaseByIntentEnvelopeDigest(null));
+      expect(ownerReleaseByIntentEnvelopeDigest(envelope([]))).not.toBe(none);
+    });
+
+    it("throws `OwnerReleaseByIntentError` on a value a document cannot store", () => {
+      expect(() => ownerReleaseByIntentEnvelopeDigest({ labelMap: () => 1 }))
+        .toThrow(OwnerReleaseByIntentError);
+    });
   });
 
   describe("verifyOwnerReleaseByIntentSignature()", () => {
@@ -147,6 +180,11 @@ describe("cfc-owner-release-by-intent", () => {
         ...signed,
         request: { ...request, path: ["other"] },
       })).toBe(false);
+    });
+
+    it("returns `false` for a signature that is not base64url", () => {
+      expect(verifyOwnerReleaseByIntentSignature({ request, signature: "A" }))
+        .toBe(false);
     });
 
     it("returns `false` for the same fields signed under another purpose", async () => {
@@ -233,6 +271,144 @@ describe("cfc-owner-release-by-intent", () => {
       ).toEqual([digest(personalSpace(OTHER))]);
       expect(clauseDigestsByEntryAt(byRef, [], () => undefined))
         .toBeUndefined();
+    });
+  });
+
+  describe("parsing", () => {
+    const request = ownerReleaseByIntentRequest({
+      space: OWNER,
+      document: "of:doc",
+      path: [],
+      releasedClauseDigests: ["a"],
+      envelopeDigest: "e",
+      signer: OWNER,
+    });
+    const signed = { request, signature: "c2ln" };
+    const record = ownerReleaseByIntentRecord(signed, "after");
+
+    it("returns each value that has exactly its fields", () => {
+      expect(parseOwnerReleaseByIntentRequest({ ...request })).toEqual(request);
+      expect(parseSignedOwnerReleaseByIntentRequest({ ...signed })).toEqual(
+        signed,
+      );
+      expect(parseOwnerReleaseByIntentRecord({ ...record })).toEqual(record);
+    });
+
+    it("returns `undefined` for a value that is not a record", () => {
+      for (const value of [undefined, "request", [request]]) {
+        expect(parseOwnerReleaseByIntentRequest(value)).toBeUndefined();
+        expect(parseSignedOwnerReleaseByIntentRequest(value)).toBeUndefined();
+        expect(parseOwnerReleaseByIntentRecord(value)).toBeUndefined();
+      }
+    });
+
+    it("returns `undefined` for a record with a field more or a field fewer", () => {
+      const { signer: _, ...unsigned } = request;
+      expect(parseOwnerReleaseByIntentRequest(unsigned)).toBeUndefined();
+      expect(parseOwnerReleaseByIntentRequest({ ...request, note: "x" }))
+        .toBeUndefined();
+      expect(parseSignedOwnerReleaseByIntentRequest({ request }))
+        .toBeUndefined();
+      expect(parseSignedOwnerReleaseByIntentRequest({ ...signed, note: "x" }))
+        .toBeUndefined();
+      const { after: __, ...unfinished } = record;
+      expect(parseOwnerReleaseByIntentRecord(unfinished)).toBeUndefined();
+      expect(parseOwnerReleaseByIntentRecord({ ...record, note: "x" }))
+        .toBeUndefined();
+    });
+  });
+
+  describe("judgeOwnerReleaseByIntent()", () => {
+    // The commits here are built by hand, so each case names exactly the
+    // envelopes the judgment reads.
+
+    const document = "of:doc";
+    const OTHERS = personalSpace(OTHER);
+    const stored = envelope([entry(["rooms"], "declared", [OTHERS])]);
+    const ownerLabel = (path: string[], origin: string) =>
+      envelope([
+        entry(path, origin, [{ type: CFC_ATOM_TYPE.User, subject: OWNER }]),
+      ]);
+
+    /** A commit releasing `OTHERS` at `rooms`, leaving `proposed`. */
+    const commitLeaving = async (
+      proposed: unknown,
+      recordCfc: unknown = ownerLabel([], "declared"),
+    ) => {
+      const signed = await sign(
+        owner,
+        ownerReleaseByIntentRequest({
+          space: OWNER,
+          document,
+          path: ["rooms"],
+          releasedClauseDigests: [digest(OTHERS)],
+          envelopeDigest: ownerReleaseByIntentEnvelopeDigest(stored),
+          signer: OWNER,
+        }),
+      );
+      return judgeOwnerReleaseByIntent({
+        space: OWNER,
+        recordId: ownerReleaseByIntentRecordId(
+          document,
+          ownerReleaseByIntentRequestDigest(signed.request),
+        ),
+        record: ownerReleaseByIntentRecord(
+          signed,
+          ownerReleaseByIntentEnvelopeDigest(proposed),
+        ),
+        recordCfc,
+        recordStored: false,
+        acl: { stored: false },
+        document: { stored, proposed },
+        resolveStoredLabel: () => undefined,
+        resolveProposedLabel: () => undefined,
+      });
+    };
+
+    const verified = {
+      verified: {
+        document,
+        path: ["rooms"],
+        releasedClauseDigests: new Set([digest(OTHERS)]),
+      },
+    };
+
+    it("returns the release for a commit leaving the document no envelope", async () => {
+      expect(await commitLeaving(undefined)).toEqual(verified);
+    });
+
+    it("returns the release for a commit leaving an envelope with no label map", async () => {
+      expect(await commitLeaving({ version: 1, schemaHash })).toEqual(
+        verified,
+      );
+    });
+
+    it("returns a refusal for a commit leaving an envelope that is not a record", async () => {
+      expect(await commitLeaving("envelope")).toEqual({
+        refused:
+          "the envelope the commit leaves holds a label map that is not one",
+      });
+    });
+
+    it("returns a refusal for a record whose owner's clause is not on a declared entry at its root", async () => {
+      for (
+        const recordCfc of [
+          ownerLabel(["rooms"], "declared"),
+          ownerLabel([], "derived"),
+          envelope([{
+            path: "",
+            origin: "declared",
+            label: {
+              confidentiality: [{ type: CFC_ATOM_TYPE.User, subject: OWNER }],
+            },
+          }]),
+        ]
+      ) {
+        expect(await commitLeaving(undefined, recordCfc)).toEqual({
+          refused: "it is not labeled for its owner alone: its root holds no " +
+            "declared `User` clause naming the owner",
+        });
+      }
     });
   });
 

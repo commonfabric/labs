@@ -32,6 +32,7 @@ import type {
 } from "./scheduler-test-utils.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { resolveLink } from "../src/link-resolution.ts";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 describe("idle consults head-event park with a wake timer armed", () => {
   let storageManager: SchedulerTestStorageManager;

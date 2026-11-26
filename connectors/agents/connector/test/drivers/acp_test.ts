@@ -13,6 +13,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import { AcpDriver, type AcpTransport } from "../../src/drivers/acp.ts";
 import type { AgentDriver } from "../../src/types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function fakeTransport(
   overrides: Partial<AcpTransport> = {},
@@ -48,6 +49,12 @@ for line in sys.stdin:
     message = json.loads(line)
     method = message.get("method")
     params = message.get("params", {})
+    if method is None and message.get("id") == "permission":
+        outcome = message["result"]["outcome"]["outcome"]
+        stop = "refusal" if outcome == "cancelled" else "end_turn"
+        print(json.dumps({"jsonrpc": "2.0", "id": pending_prompt, "result": {"stopReason": stop}}), flush=True)
+        pending_prompt = None
+        continue
     if method == "session/cancel":
         if pending_prompt is not None:
             print(json.dumps({"jsonrpc": "2.0", "id": pending_prompt, "result": {"stopReason": "cancelled"}}), flush=True)
@@ -81,6 +88,17 @@ for line in sys.stdin:
         }
     elif method == "session/prompt":
         pending_prompt = message["id"]
+        if params["prompt"][0]["text"] == "ask permission":
+            print(json.dumps({
+                "jsonrpc": "2.0",
+                "id": "permission",
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": params["sessionId"],
+                    "toolCall": {"toolCallId": "tool-1"},
+                    "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}],
+                },
+            }), flush=True)
         continue
     elif method == "session/set_mode":
         result = {}
@@ -91,7 +109,7 @@ for line in sys.stdin:
     print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
 `;
 
-Deno.test("ACP driver enumerates and loads persisted sessions", async () => {
+test("ACP driver enumerates and loads persisted sessions", async () => {
   const calls: string[] = [];
   let notify: ((notification: SessionNotification) => void) | undefined;
   const transport: AcpTransport = {
@@ -177,7 +195,7 @@ Deno.test("ACP driver enumerates and loads persisted sessions", async () => {
   await driver.stop();
 });
 
-Deno.test("ACP controls are discovered and enforced per session", async () => {
+test("ACP controls are discovered and enforced per session", async () => {
   const modeCalls: SetSessionModeRequest[] = [];
   const configCalls: SetSessionConfigOptionRequest[] = [];
   let firstLoads = 0;
@@ -292,7 +310,7 @@ Deno.test("ACP controls are discovered and enforced per session", async () => {
   assertEquals(driver.source.capabilities.setMode, false);
 });
 
-Deno.test("ACP startup stops transports missing required capabilities", async () => {
+test("ACP startup stops transports missing required capabilities", async () => {
   for (
     const agentCapabilities of [
       { loadSession: true },
@@ -325,7 +343,7 @@ Deno.test("ACP startup stops transports missing required capabilities", async ()
   }
 });
 
-Deno.test("ACP driver stops an adapter blocked during initialization", async () => {
+test("ACP driver stops an adapter blocked during initialization", async () => {
   const initializationStarted = Promise.withResolvers<void>();
   const initialization = Promise.withResolvers<InitializeResponse>();
   let observedSignal: AbortSignal | undefined;
@@ -369,7 +387,7 @@ Deno.test("ACP driver stops an adapter blocked during initialization", async () 
   assertEquals(stopCount, 1);
 });
 
-Deno.test("ACP driver serializes overlapping loads of the same session", async () => {
+test("ACP driver serializes overlapping loads of the same session", async () => {
   let notify: ((notification: SessionNotification) => void) | undefined;
   const firstLoadStarted = Promise.withResolvers<void>();
   const releaseFirstLoad = Promise.withResolvers<void>();
@@ -485,7 +503,7 @@ Deno.test("ACP driver serializes overlapping loads of the same session", async (
   await driver.stop();
 });
 
-Deno.test("ACP driver normalizes updates and prunes stale controls", async () => {
+test("ACP driver normalizes updates and prunes stale controls", async () => {
   let notify: ((notification: SessionNotification) => void) | undefined;
   let inventory: ListSessionsResponse["sessions"] = [{
     sessionId: "stale",
@@ -570,7 +588,7 @@ Deno.test("ACP driver normalizes updates and prunes stale controls", async () =>
   );
 });
 
-Deno.test("ACP prompt admission covers resumed and uncertain outcomes", async () => {
+test("ACP prompt admission covers resumed and uncertain outcomes", async () => {
   const promptStarted = Promise.withResolvers<void>();
   const promptResult = Promise.withResolvers<PromptResponse>();
   let promptCalls = 0;
@@ -642,7 +660,7 @@ Deno.test("ACP prompt admission covers resumed and uncertain outcomes", async ()
   assertEquals(resumeCalls, 2);
 });
 
-Deno.test("ACP select controls accept only advertised values", async () => {
+test("ACP select controls accept only advertised values", async () => {
   const configCalls: SetSessionConfigOptionRequest[] = [];
   const transport = fakeTransport({
     listSessions: () =>
@@ -664,6 +682,23 @@ Deno.test("ACP select controls accept only advertised values", async () => {
                 { name: "Careful", value: "careful" },
               ],
             }],
+          },
+          {
+            id: "effort",
+            name: "Effort",
+            type: "select" as const,
+            currentValue: "low",
+            options: [
+              { name: "Low", value: "low" },
+              { name: "High", value: "high" },
+            ],
+          },
+          {
+            id: "broken",
+            name: "Broken",
+            type: "select" as const,
+            currentValue: "only",
+            options: "only",
           },
           {
             id: "mystery",
@@ -711,17 +746,33 @@ Deno.test("ACP select controls accept only advertised values", async () => {
     "unsupported",
   );
   assertEquals(
+    (await driver.setConfigOption("session", "broken", "only")).status,
+    "unsupported",
+  );
+  assertEquals(
+    (await driver.setConfigOption("session", "effort", "medium")).status,
+    "unsupported",
+  );
+  assertEquals(
+    (await driver.setConfigOption("session", "effort", "high")).status,
+    "succeeded",
+  );
+  assertEquals(
     (await driver.setConfigOption("session", "model", "careful")).status,
     "succeeded",
   );
   assertEquals(configCalls, [{
+    sessionId: "session",
+    configId: "effort",
+    value: "high",
+  }, {
     sessionId: "session",
     configId: "model",
     value: "careful",
   }]);
 });
 
-Deno.test("default ACP transport rejects invalid startup order", async () => {
+test("default ACP transport rejects invalid startup order", async () => {
   const driver = new AcpDriver({
     id: "acp:default",
     driver: "acp",
@@ -748,7 +799,7 @@ Deno.test("default ACP transport rejects invalid startup order", async () => {
   );
 });
 
-Deno.test("default ACP transport serves a complete process session", async () => {
+test("default ACP transport serves a complete process session", async () => {
   const directory = await Deno.makeTempDir();
   const server = `${directory}/fake-acp`;
   await Deno.writeTextFile(server, PROCESS_ACP_SERVER);
@@ -785,6 +836,13 @@ Deno.test("default ACP transport serves a complete process session", async () =>
     await active.promise;
     assertEquals((await driver.cancel("process-session")).status, "succeeded");
     assertEquals((await prompt).error?.code, "cancelled");
+
+    // The connector declines every permission request, and this adapter
+    // reports a declined request as a refusal.
+    assertEquals(
+      await driver.prompt("process-session", { text: "ask permission" }),
+      { status: "succeeded", result: { stopReason: "refusal" } },
+    );
 
     await assertRejects(
       () => driver.start(),

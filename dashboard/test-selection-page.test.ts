@@ -3,13 +3,13 @@
  * manifest, and what it says when there is not one.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type Manifest,
   sampleEntry,
   sampleManifest,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   FLAKY_SECTION_ID,
@@ -351,9 +351,10 @@ describe("test-selection-page", () => {
         NOW,
       );
       const summary = page.match(/<dl class="summary">.*?<\/dl>/s)?.[0];
-      expect(summary).toContain("<dt>selected</dt><dd>2.5%</dd>");
-      expect(summary).toContain("<dt>test time</dt><dd>1m 30s of 1h 00m</dd>");
-      expect(summary).toContain("<dt>tests</dt><dd>1 of 2</dd>");
+      expect(summary).toContain("<dt>tests</dt><dd>50% (1 of 2)</dd>");
+      expect(summary).toContain(
+        "<dt>test time</dt><dd>2.5% (1m 30s of 1h 00m)</dd>",
+      );
       // The count of runs the publisher read for this manifest is not a
       // figure about the selection, and the summary leaves it out.
       expect(summary).not.toContain("223");

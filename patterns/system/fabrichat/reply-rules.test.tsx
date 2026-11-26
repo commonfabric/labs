@@ -18,7 +18,9 @@ import {
   VIEWS,
   Writable,
 } from "commonfabric";
+import { FabriChatMessageRow } from "./message-row.tsx";
 import {
+  type ComposerState,
   type MessageRecord,
   type MessagesValue,
   type StoredThreadInfo,
@@ -34,6 +36,7 @@ import {
 } from "./schemas.tsx";
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
+type RowArg = Parameters<typeof FabriChatMessageRow>[0];
 
 // A labeled stand-in for a viewer's `#profile`.
 type TestProfile = AddIntegrity<
@@ -80,6 +83,21 @@ export default pattern(() => {
   const bob = FabriChatRoomCore(
     { myProfile: bobProfile, ...records } as RoomArg,
   );
+  // Bob's view of the long message's row, whose reply control titles no
+  // thread.
+  const bobOnOther = FabriChatMessageRow({
+    message: messages.key(1),
+    myProfile: bobProfile,
+    inThread: false,
+    kind: "group" as const,
+    composer: Writable.of<ComposerState>({}),
+    // Stand-ins for what the room derives; a row's streams read none of it.
+    places: {},
+    cannotWrite: false,
+    rowFacts: {},
+    about: records.about,
+    messages,
+  } as RowArg);
 
   const root = messageOf(messages.key(0));
   const other = messageOf(messages.key(1));
@@ -222,7 +240,7 @@ export default pattern(() => {
         trustedUi: sendGesture,
       },
       // Refused: a title for a thread that has one, a title on a message in no
-      // thread, and a title with no text.
+      // thread, a title with no text, and a title from a row's reply control.
       {
         action: bob.sendMessage,
         event: {
@@ -244,6 +262,11 @@ export default pattern(() => {
           replyTo: { thread: other, shownIn: "thread" },
           threadTitle: "   ",
         },
+        trustedUi: sendGesture,
+      },
+      {
+        action: bobOnOther.replyInThread,
+        event: { body: "Titled from a row", threadTitle: "Lunch" },
         trustedUi: sendGesture,
       },
       // None of them stored anything.
@@ -287,6 +310,7 @@ export default pattern(() => {
       "This thread has a title already; rename it instead.",
       "Only a send in a thread can give the thread a title.",
       "A thread's title needs some text.",
+      "This send can't give a thread a title.",
     ],
   };
 });

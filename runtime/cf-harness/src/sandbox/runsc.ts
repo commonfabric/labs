@@ -575,6 +575,11 @@ export const canonicalHostPath = (label: string, path: string): string => {
   const refuse = (why: string): never => {
     throw new Error(`${label} ${path} ${why}`);
   };
+  /** Refuses the path for passing through `link`, which leads nowhere. */
+  const leadsNowhere = (link: string): never =>
+    refuse(
+      `leads through a symbolic link whose target does not exist (${link})`,
+    );
   // `reached` holds no link and no dot name, so handing it to Deno, which
   // folds `..` out of a spelling before the kernel sees it, changes nothing.
   let reached = "/";
@@ -603,11 +608,7 @@ export const canonicalHostPath = (label: string, path: string): string => {
           })`,
         );
       }
-      if (part.fromLink) {
-        refuse(
-          `leads through a symbolic link whose target does not exist (${next})`,
-        );
-      }
+      if (part.fromLink) leadsNowhere(next);
       rest = [part, ...pending].map((p) => p.name);
       if (rest.some((name) => name === "." || name === "..")) {
         refuse(
@@ -637,11 +638,8 @@ export const canonicalHostPath = (label: string, path: string): string => {
         })`,
       );
     }
-    if (target === "") {
-      refuse(
-        `leads through a symbolic link whose target does not exist (${next})`,
-      );
-    }
+    // Only some systems make a link whose target is empty.
+    if (target === "") leadsNowhere(next);
     if (target.startsWith("/")) reached = "/";
     pending = [...pathParts(target, true), ...pending];
   }
@@ -1882,9 +1880,6 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     }
     const existing = this.#sessions.get(session);
     if (existing !== undefined) return existing;
-    if (this.#closed) {
-      throw new Error("sandbox runtime is closed");
-    }
     if (this.#sessions.size >= RUNSC_MAX_SESSIONS) {
       throw new SandboxSessionUnavailableError(
         `this run already holds ${RUNSC_MAX_SESSIONS} sandbox sessions (${
@@ -1928,8 +1923,6 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       let exitCode: number | undefined;
       handle.exited.then((status) => {
         exitCode = status.exitCode;
-        state.ended = true;
-      }).catch(() => {
         state.ended = true;
       });
       const deadline = Date.now() + this.config.sessionStartTimeoutMs;

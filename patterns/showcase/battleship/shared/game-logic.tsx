@@ -71,15 +71,7 @@ export function areAllShipsSunk(
 
 function canPlaceShip(ship: Ship, occupiedPositions: Set<string>): boolean {
   const coords = getShipCoordinates(ship);
-  for (const c of coords) {
-    if (c.row < 0 || c.row >= BOARD_SIZE || c.col < 0 || c.col >= BOARD_SIZE) {
-      return false;
-    }
-    if (occupiedPositions.has(`${c.row},${c.col}`)) {
-      return false;
-    }
-  }
-  return true;
+  return coords.every((c) => !occupiedPositions.has(`${c.row},${c.col}`));
 }
 
 export function generateRandomShips(): Ship[] {
@@ -155,12 +147,6 @@ export function generateRandomShips(): Ship[] {
             }
           }
         }
-      }
-
-      if (!placed) {
-        console.error(
-          `Could not place ${type} even with fallback - board may be too crowded`,
-        );
       }
     }
   }

@@ -3,7 +3,11 @@
 // The durable store records enough to reconstruct who fought over what:
 //   - `revision` — every write, joinable to `commit.session_id` (the writer).
 //   - `commit.original.reads.confirmed[]` — `ConfirmedRead { id, scope?, branch?,
-//     path, seq, nonRecursive? }`: what each commit READ and at which seq.
+//     path, seq, nonRecursive? }`: what each commit READ and at which seq,
+//     where the row keeps them. A row stored in digest form
+//     (`docs/specs/memory-v2/02-storage.md` §3.3) holds a digest of the whole
+//     submission in their place, and compaction hollows old payloads; the
+//     stale-read scan counts such rows as unchecked (`readSetsNotKept`).
 //
 // Two grounded views:
 //   1. CONTENTION (write-write): entities written by ≥2 distinct sessions, with
@@ -24,13 +28,24 @@
 
 import {
   type CellScope,
+  encodeMemoryBoundary,
   type PatchOp,
   resolveScopeKey,
 } from "@commonfabric/memory/v2";
 import {
+  COMPACTION_SESSION_PREFIX,
+  historyCompactedBelowRow,
+  isLogSeq,
+  type OldestRevisionAttribution,
   patchOverlapsNonRecursiveRead,
   patchOverlapsRead,
+  SELECT_OLDEST_REVISION_ATTRIBUTION,
 } from "@commonfabric/memory/v2/engine";
+import {
+  HOLLOWED_MARKER_PREFIX,
+  isHollowedPayload,
+} from "@commonfabric/memory/v2/compact";
+import { storedReadCounts } from "@commonfabric/memory/v2/stored-commit";
 import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { rowLimit } from "./model.ts";
@@ -79,6 +94,10 @@ export interface ContendedEntity {
 
   /** Lost-update reads (attached by the explorer bundle for multi-user cells). */
   staleReads?: StaleRead[];
+
+  /** Attached with {@link staleReads}: commits the analysis could not check,
+   * see {@link EntityConflicts.readSetsNotKept}. */
+  readSetsNotKept?: number;
 
   /** True once stale-read analysis ran for this cell. `false`/absent on a
    * multi-user cell means analysis was SKIPPED (a cap), not that it's clean —
@@ -231,6 +250,302 @@ export interface EntityConflicts {
 
   /** Stale reads: the reader committed without seeing a prior concurrent write. */
   staleReads: StaleRead[];
+
+  /**
+   * Commits after this entity's first write, on any branch and in any scope,
+   * whose reads the scan could not check: stored with a digest in place of
+   * confirmed reads (02-storage.md §3.3), hollowed by compaction, held in a
+   * payload that does not show them, reading the entity by a read the scan
+   * could not replay or resolve, or reading it at a basis older than what
+   * compaction kept of the instance read. Any of them may have read the
+   * entity stale, so an empty {@link staleReads} shows the entity coherent
+   * only when this is 0.
+   */
+  readSetsNotKept: number;
+}
+
+/**
+ * What the stale-read scan cannot see in a space, gathered once per report by
+ * {@link readCoverage} and shared by every entity's analysis in it.
+ */
+export interface ReadCoverage {
+  /**
+   * Seqs, ascending, of the commits whose confirmed reads the log does not
+   * hold where the scan can see them: stored with a digest of a commit that
+   * had any, hollowed by compaction (whose marker does not say whether the
+   * commit read anything), held in a payload that is not JSON, or in JSON
+   * that does not show a read set whose every read names its entity.
+   */
+  unread: number[];
+
+  /** Seqs, ascending, of compaction runs' own commits. */
+  compactions: number[];
+
+  /** The branches that hold revisions, where an entity's writes are. */
+  branches: string[];
+
+  /**
+   * For each entity some read names with a backslash in its own text (so
+   * every read that names it only by an escaped spelling, which a search of
+   * the payload text for the id would not find), the seqs, ascending, of the
+   * commits holding such a read.
+   */
+  escapedReaders: Map<string, number[]>;
+
+  /**
+   * Seqs of the commits an analysis found reading its entity but could not
+   * check: an undecodable payload, a read missing a field it is replayed by
+   * or holding one of the wrong type, a read whose scope it could not
+   * resolve, or a read at a basis older than what compaction kept of the
+   * instance it read, which may have missed a write that is gone. Each
+   * analysis adds what it finds.
+   */
+  skipped: Set<number>;
+
+  /**
+   * Whether the report analyzes every entity, so that the first time one
+   * needs its first write, {@link firstWrites} is filled for all of them by
+   * one grouped query rather than by a lookup per entity and branch.
+   */
+  everyEntity: boolean;
+
+  /** Each written entity's first write, once {@link everyEntity} fills it. */
+  firstWrites?: Map<string, number>;
+
+  /** The latest compaction commit holding the oldest revision of one of
+   * each entity's instances, once asked for. */
+  squashedAt?: Map<string, number>;
+}
+
+/** The text a codec-encoded payload starts with. */
+const ENCODED_PREFIX = encodeMemoryBoundary({}).slice(0, -"{}".length);
+
+/** SQL for a `"commit"` row's payload without the codec prefix, as JSON
+ * text when it is JSON; it binds {@link BODY_PARAMS}. */
+const BODY_SQL =
+  `CASE WHEN substr(original, 1, ?) = ? THEN substr(original, ?) ELSE original END`;
+const BODY_PARAMS = [
+  ENCODED_PREFIX.length,
+  ENCODED_PREFIX,
+  ENCODED_PREFIX.length + 1,
+] as const;
+
+/** The least text greater than every text that starts with `prefix`. */
+const pastPrefix = (prefix: string): string =>
+  prefix.slice(0, -1) +
+  String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+
+/**
+ * Returns what the stale-read scan cannot see in `space`, from one pass over
+ * the commit log and one over the payloads holding a backslash, each holding
+ * one row at a time. `everyEntity` says the report analyzes every entity;
+ * see {@link ReadCoverage.everyEntity}.
+ */
+export function readCoverage(
+  space: SpaceDb,
+  opts: { everyEntity?: boolean } = {},
+): ReadCoverage {
+  const unread: number[] = [];
+  // The scan sees a commit's reads when its payload shows them as JSON: a
+  // `reads.confirmed` array of objects that each name their entity in text,
+  // by which the entity scans then find them. SQLite passes over those rows
+  // and hands on the rest, whether or not they still name an entity: a
+  // digest, a hollowed payload, text that is not JSON, and JSON shaped like
+  // no commit. A compaction run's own commit records the run, not reads, and
+  // is left out by its session and its `compaction` member. Each test runs
+  // only where the one before it held, so none parses what is not JSON.
+  const rows = space.db
+    .prepare(
+      `SELECT seq, original FROM (
+         SELECT seq, original, session_id, ${BODY_SQL} AS body FROM "commit"
+       )
+       WHERE CASE
+         WHEN substr(original, 1, ?) = ? THEN 1
+         WHEN NOT json_valid(body) THEN 1
+         WHEN session_id >= ? AND session_id < ?
+           AND json_type(body, '$.compaction') = 'object' THEN 0
+         WHEN json_type(body, '$.reads.confirmed') IS NOT 'array' THEN 1
+         ELSE EXISTS (
+           SELECT 1 FROM json_each(body, '$.reads.confirmed')
+           WHERE CASE WHEN type = 'object'
+             THEN json_type(value, '$.id') IS NOT 'text' ELSE 1 END
+         )
+       END
+       ORDER BY seq ASC`,
+    )
+    .iter([
+      ...BODY_PARAMS,
+      HOLLOWED_MARKER_PREFIX.length,
+      HOLLOWED_MARKER_PREFIX,
+      COMPACTION_SESSION_PREFIX,
+      pastPrefix(COMPACTION_SESSION_PREFIX),
+    ]) as Iterable<{ seq: number; original: string }>;
+  for (const { seq, original } of rows) {
+    let decoded: unknown;
+    try {
+      decoded = isHollowedPayload(original)
+        ? undefined
+        : decodeStored(original);
+    } catch {
+      decoded = undefined;
+    }
+    // Of these, only a digest of pending reads alone hides no confirmed read
+    // the audit would replay.
+    const counts = storedReadCounts(decoded);
+    if (!(counts?.kept === false && counts.confirmed === 0)) unread.push(seq);
+  }
+  const compactions = space.db
+    .prepare(
+      `SELECT seq FROM "commit" WHERE session_id >= ? AND session_id < ?
+       ORDER BY seq ASC`,
+    )
+    .all<{ seq: number }>(
+      COMPACTION_SESSION_PREFIX,
+      pastPrefix(COMPACTION_SESSION_PREFIX),
+    )
+    .map(({ seq }) => seq);
+  const branches = space.db
+    .prepare(`SELECT DISTINCT branch FROM revision`)
+    .all<{ branch: string }>()
+    .map(({ branch }) => branch);
+  // JSON spells a string otherwise than as written only with a backslash
+  // escape, so only a read whose own text holds a backslash can name an id
+  // the payload's text does not show. SQLite keeps each read's text as
+  // stored, escapes included, so the test looks at that read alone, never
+  // the whole payload again. Those reads are collected here, in one pass
+  // over the payloads holding a backslash, for every entity's candidate
+  // search; one whose backslash is elsewhere than its id only adds a
+  // candidate the decode then sets aside.
+  const escapedReaders = new Map<string, number[]>();
+  const escaped = space.db
+    .prepare(
+      `SELECT c.seq AS seq, json_extract(r.value, '$.id') AS id
+       FROM (
+         SELECT seq, original, ${BODY_SQL} AS body FROM "commit"
+         WHERE instr(original, char(92)) > 0
+       ) AS c,
+       json_each(
+         CASE
+           WHEN NOT json_valid(c.body) THEN '{}'
+           WHEN json_type(c.body, '$.reads.confirmed') IS NOT 'array'
+             THEN '{}'
+           ELSE c.body
+         END,
+         '$.reads.confirmed'
+       ) AS r
+       WHERE CASE WHEN r.type = 'object'
+         THEN json_type(r.value, '$.id') = 'text'
+           AND instr(r.value, char(92)) > 0
+         ELSE 0 END
+       ORDER BY c.seq ASC`,
+    )
+    .iter([...BODY_PARAMS]) as Iterable<{ seq: number; id: string }>;
+  for (const { seq, id } of escaped) {
+    const seqs = escapedReaders.get(id) ?? [];
+    if (seqs.at(-1) !== seq) seqs.push(seq);
+    escapedReaders.set(id, seqs);
+  }
+  return {
+    unread,
+    compactions,
+    branches,
+    escapedReaders,
+    skipped: new Set(),
+    everyEntity: opts.everyEntity ?? false,
+  };
+}
+
+/** Returns how many commits {@link coverage} cannot see, in all. */
+export function readSetsNotKeptIn(coverage: ReadCoverage): number {
+  const all = new Set(coverage.unread);
+  for (const seq of coverage.skipped) all.add(seq);
+  return all.size;
+}
+
+/**
+ * Returns the seq of the first commit that wrote `id` on any branch, in any
+ * scope, or undefined when none did. The stale-read scan looks for writes
+ * across branches and scopes, so no commit at or before this seq can have
+ * read `id` stale.
+ */
+function firstWriteSeq(
+  space: SpaceDb,
+  coverage: ReadCoverage,
+  id: string,
+): number | undefined {
+  if (coverage.everyEntity) {
+    coverage.firstWrites ??= new Map(
+      space.db
+        .prepare(`SELECT id, min(commit_seq) AS seq FROM revision GROUP BY id`)
+        .all<{ id: string; seq: number }>()
+        .map(({ id, seq }) => [id, seq]),
+    );
+    return coverage.firstWrites.get(id);
+  }
+  const first = space.db.prepare(
+    `SELECT min(commit_seq) AS seq FROM revision WHERE branch = ? AND id = ?`,
+  );
+  let seq: number | undefined;
+  for (const branch of coverage.branches) {
+    const found = first.get<{ seq: number | null }>(branch, id)?.seq;
+    if (found != null && (seq === undefined || found < seq)) seq = found;
+  }
+  return seq;
+}
+
+/**
+ * Returns the latest compaction commit that holds the oldest revision of an
+ * instance of `id`, or undefined when compaction never truncated any
+ * instance of it. Compaction attributes a truncated instance's oldest
+ * surviving revision to its own commit, and the writes before it are gone,
+ * the entity's first write with them.
+ */
+function squashedAt(
+  space: SpaceDb,
+  coverage: ReadCoverage,
+  id: string,
+): number | undefined {
+  if (coverage.compactions.length === 0) return undefined;
+  // The instance's oldest row, as the engine's rule reads it: a row a run
+  // appended above older ones (the ACL document's audit revision) cut
+  // nothing. The compaction commits are bound as one JSON array, so no number
+  // of runs takes the statement past SQLite's limit on bound parameters.
+  coverage.squashedAt ??= new Map(
+    space.db
+      .prepare(
+        `SELECT r.id, max(r.commit_seq) AS seq FROM revision r
+         WHERE r.commit_seq IN (SELECT value FROM json_each(?))
+           AND NOT EXISTS (
+             SELECT 1 FROM revision o
+             WHERE o.branch = r.branch AND o.id = r.id
+               AND o.scope_key = r.scope_key
+               AND (o.seq < r.seq OR (o.seq = r.seq AND o.op_index < r.op_index))
+           )
+         GROUP BY r.id`,
+      )
+      .all<{ id: string; seq: number }>([
+        JSON.stringify(coverage.compactions),
+      ])
+      .map(({ id, seq }) => [id, seq]),
+  );
+  return coverage.squashedAt.get(id);
+}
+
+/** Whether the ascending `seqs` hold `seq`. */
+function holdsSeq(seqs: readonly number[], seq: number): boolean {
+  return countAfter(seqs, seq - 1) - countAfter(seqs, seq) === 1;
+}
+
+/** Returns how many of the ascending `seqs` are greater than `after`. */
+function countAfter(seqs: readonly number[], after: number): number {
+  let low = 0;
+  let high = seqs.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (seqs[mid] <= after) low = mid + 1;
+    else high = mid;
+  }
+  return seqs.length - low;
 }
 
 interface ConfirmedReadRef {
@@ -238,8 +553,32 @@ interface ConfirmedReadRef {
   seq: number;
   scope?: CellScope;
   branch?: string;
-  path?: string[];
+  path: string[];
   nonRecursive?: boolean;
+}
+
+const CELL_SCOPES: ReadonlySet<unknown> = new Set<CellScope>([
+  "space",
+  "user",
+  "session",
+]);
+
+/**
+ * Whether a stored read naming the entity has each field the scan replays
+ * it by, of its type: a basis seq, as the engine's `isLogSeq()` decides (not
+ * negative zero, which the SQLite binding throws on), and a path, which
+ * admission requires (an empty one reads the whole document), and any
+ * branch, scope or shallow flag. The log holds what was stored, not what
+ * admission accepted, and a read without them cannot be checked.
+ */
+function isReplayableRead(read: ConfirmedReadRef): boolean {
+  return isLogSeq(read.seq) &&
+    Array.isArray(read.path) &&
+    read.path.every((part) => typeof part === "string") &&
+    (read.branch === undefined || typeof read.branch === "string") &&
+    (read.scope === undefined || CELL_SCOPES.has(read.scope)) &&
+    (read.nonRecursive === undefined ||
+      typeof read.nonRecursive === "boolean");
 }
 
 interface WriteRow {
@@ -266,10 +605,13 @@ interface WriteRow {
 export function entityConflicts(
   space: SpaceDb,
   id: string,
-  opts: { branch?: string; scope?: string } = {},
+  opts: { branch?: string; scope?: string; coverage?: ReadCoverage } = {},
 ): EntityConflicts {
   const branch = opts.branch ?? "";
   const scope = opts.scope ?? "space";
+  const coverage = opts.coverage ?? readCoverage(space);
+  const squash = squashedAt(space, coverage, id);
+  const skipped = new Set<number>();
 
   // Who wrote this entity, from the branch that OWNS its visible row — a child
   // branch inherits its parent's entities, and local rows only would report no
@@ -315,17 +657,49 @@ export function entityConflicts(
      ORDER BY r.seq ASC, r.op_index ASC`,
   );
 
+  // Whether compaction deleted history of the instance a read names below
+  // its basis, from the instance's oldest row, looked up once per instance.
+  // Only an entity compaction truncated has such an instance.
+  const oldestStmt = squash === undefined
+    ? undefined
+    : space.db.prepare(SELECT_OLDEST_REVISION_ATTRIBUTION);
+  const oldestRows = new Map<string, OldestRevisionAttribution | undefined>();
+  const compactedBelow = (
+    onBranch: string,
+    scopeKey: string,
+    basisSeq: number,
+  ): boolean => {
+    if (oldestStmt === undefined) return false;
+    const key = `${onBranch}\0${scopeKey}`;
+    if (!oldestRows.has(key)) {
+      oldestRows.set(
+        key,
+        oldestStmt.get<OldestRevisionAttribution>({
+          branch: onBranch,
+          id,
+          scope_key: scopeKey,
+        }),
+      );
+    }
+    return historyCompactedBelowRow(oldestRows.get(key), basisSeq);
+  };
+
   // Candidate reader commits: those whose stored ClientCommit mentions this id.
   // (Pre-filter by LIKE to avoid decoding every commit in the space.) The
-  // commit's own `branch` is the default for any read that omits one.
+  // commits whose read names it only by an escaped spelling come from the
+  // coverage pass, bound as one JSON array, so however long the history no
+  // statement runs past SQLite's limit on bound parameters. The commit's own
+  // `branch` is the default for any read that omits one.
   const candidates = space.db
     .prepare(
       `SELECT seq, branch, session_id, original FROM "commit"
-       WHERE original LIKE '%' || ? || '%' ORDER BY seq ASC`,
+       WHERE original LIKE '%' || ? || '%'
+          OR seq IN (SELECT value FROM json_each(?))
+       ORDER BY seq ASC`,
     )
     .all<
       { seq: number; branch: string; session_id: string; original: string }
-    >(id);
+    >([id, JSON.stringify(coverage.escapedReaders.get(id) ?? [])]);
 
   const staleReads: StaleRead[] = [];
   for (const c of candidates) {
@@ -336,13 +710,18 @@ export function entityConflicts(
       };
       reads = (o.reads?.confirmed ?? []).filter((r) => r.id === id);
     } catch {
+      skipped.add(c.seq);
       continue;
     }
     // The reader's identity context, for scope resolution (same as the engine's
     // `scopeContext` = the writer principal/session of the commit).
     const readerScope = parseScope(c.session_id);
     for (const rd of reads) {
-      const readPath = rd.path ?? [];
+      if (!isReplayableRead(rd)) {
+        skipped.add(c.seq);
+        continue;
+      }
+      const readPath = rd.path;
       // An unqualified read defaults to the READER COMMIT'S branch, not the
       // branch being inspected — exactly as the engine's validateConfirmedReads
       // does (`read.branch ?? commitBranch`). Using the inspected branch would
@@ -355,8 +734,14 @@ export function entityConflicts(
           sessionId: readerScope.sessionId,
         });
       } catch {
-        continue; // a user/session read with no principal context — skip
+        // A user/session read with no principal context: unchecked.
+        skipped.add(c.seq);
+        continue;
       }
+      // A read whose basis is older than what compaction kept of its
+      // instance may have missed a write that is gone, by the engine's own
+      // rule; what the scan still finds, it reports.
+      if (compactedBelow(readBranch, readScopeKey, rd.seq)) skipped.add(c.seq);
       const conflict = writesStmt
         .all<WriteRow>(readBranch, id, readScopeKey, rd.seq)
         .find((w) =>
@@ -389,7 +774,34 @@ export function entityConflicts(
     multiUser: writerPrincipals >= 2,
     interleaved: sessionSwitches(writers) >= 2,
     staleReads,
+    readSetsNotKept: unchecked(space, coverage, id, squash, skipped),
   };
+}
+
+/**
+ * Returns how many commits after the first write of `id` its scan could not
+ * check: those {@link coverage} cannot see, and the entity's own `skipped`
+ * ones, which it adds to {@link coverage}. With no write, no read of the
+ * entity can be stale. When compaction squashed its history at `squash`, the
+ * first write is gone with the rest, so every such commit counts.
+ */
+function unchecked(
+  space: SpaceDb,
+  coverage: ReadCoverage,
+  id: string,
+  squash: number | undefined,
+  skipped: ReadonlySet<number>,
+): number {
+  for (const seq of skipped) coverage.skipped.add(seq);
+  // With nothing unchecked there is no cutoff to look up.
+  if (coverage.unread.length === 0 && skipped.size === 0) return 0;
+  const after = squash === undefined ? firstWriteSeq(space, coverage, id) : 0;
+  if (after === undefined) return 0;
+  let count = countAfter(coverage.unread, after);
+  for (const seq of skipped) {
+    if (seq > after && !holdsSeq(coverage.unread, seq)) count++;
+  }
+  return count;
 }
 
 /**

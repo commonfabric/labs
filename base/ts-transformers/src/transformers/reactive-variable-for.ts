@@ -790,27 +790,23 @@ function isReactiveArrayMethodCall(
     return true;
   }
 
+  // A classified array method's callee is always a member access.
   const target = unwrapExpression(call.expression);
-  if (
-    !ts.isPropertyAccessExpression(target) &&
-    !ts.isElementAccessExpression(target)
-  ) {
-    return false;
-  }
-
-  return hasReactiveCollectionProvenance(
-    target.expression,
-    context.checker,
-    {
-      allowTypeBasedRoot: false,
-      allowImplicitReactiveParameters: false,
-      allowReactiveArrayCallbackParameters: false,
-      sameScope: getEnclosingFunctionLikeDeclaration(call),
-      typeRegistry: context.state.typeRegistry,
-      syntheticReactiveCollectionRegistry: context.state
-        .syntheticReactiveCollectionRegistry,
-    },
-  ) || isExplicitReactiveCall(target.expression, context);
+  return (ts.isPropertyAccessExpression(target) ||
+    ts.isElementAccessExpression(target)) &&
+    (hasReactiveCollectionProvenance(
+      target.expression,
+      context.checker,
+      {
+        allowTypeBasedRoot: false,
+        allowImplicitReactiveParameters: false,
+        allowReactiveArrayCallbackParameters: false,
+        sameScope: getEnclosingFunctionLikeDeclaration(call),
+        typeRegistry: context.state.typeRegistry,
+        syntheticReactiveCollectionRegistry: context.state
+          .syntheticReactiveCollectionRegistry,
+      },
+    ) || isExplicitReactiveCall(target.expression, context));
 }
 
 function isExplicitReactiveCall(

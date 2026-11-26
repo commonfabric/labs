@@ -11,7 +11,7 @@ import {
  */
 import type { CellHandle } from "@commonfabric/runtime-client";
 // @ts-types="@types/leaflet"
-import * as L from "leaflet";
+import type * as L from "leaflet";
 import { html, PropertyValues } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
@@ -53,18 +53,15 @@ const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 const TILE_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
-// Keyboard navigation constants
-const PAN_AMOUNT = 100; // pixels to pan per arrow key press
-
-// ResizeObserver debounce delay in milliseconds
-const RESIZE_DEBOUNCE_MS = 150;
-
 /**
  * The inputs through which a person moves the map: a drag, pinch, double
  * click, box zoom, or zoom-control press starts with a pointer press, a wheel
  * zoom with a wheel turn, and keyboard pans and zooms with a key press.
  */
 const USER_INPUT_EVENTS = ["pointerdown", "wheel", "keydown"] as const;
+
+/** The Leaflet module, which cf-map draws its map with. */
+export type Leaflet = typeof L;
 
 /**
  * CFMap - Interactive map component with markers, circles, and polylines
@@ -115,6 +112,8 @@ export class CFMap extends BaseElement {
   declare fitToBounds: boolean;
   declare interactive: boolean;
 
+  #leaflet: Leaflet;
+
   /** The Leaflet map instance. */
   private _map: L.Map | null = null;
 
@@ -132,17 +131,8 @@ export class CFMap extends BaseElement {
   /** The polylines, tracked for cleanup. */
   private _leafletPolylines: L.Polyline[] = [];
 
-  /**
-   * `requestAnimationFrame` id for map initialization, which prevents a race
-   * condition on disconnect.
-   */
-  private _rafId: number | null = null;
-
   /** `ResizeObserver` for automatic map resize when the container changes. */
   private _resizeObserver: ResizeObserver | null = null;
-
-  /** Timeout id for debounced resize handling. */
-  private _resizeTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   /** Whether a programmatic update is in progress; this prevents echo loops. */
   private _isUpdatingFromCell = false;
@@ -207,36 +197,39 @@ export class CFMap extends BaseElement {
     },
   });
 
-  /** Bound keydown handler, held so it can be removed on cleanup. */
-  private _boundHandleKeydown = this._handleKeydown.bind(this);
-
   /** Marks the map's next moves as a person's; see `MoveOwnership`. */
   private _boundMarkUserInput = (): void => {
     this._moves.input();
   };
 
-  constructor() {
+  /** Constructs a map that draws with `leaflet`. */
+  constructor(leaflet: Leaflet) {
     super();
+    this.#leaflet = leaflet;
     this.fitToBounds = false;
     this.interactive = true;
   }
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.addEventListener("keydown", this._boundHandleKeydown);
-    // On the host, in the capture phase, so the mark is set before any
-    // handler inside the shadow root, Leaflet's or cf-map's, moves the map.
+    // On the host, in the capture phase, so the mark is set before
+    // Leaflet's handlers inside the shadow root move the map.
     for (const type of USER_INPUT_EVENTS) {
       this.addEventListener(type, this._boundMarkUserInput, {
         capture: true,
         passive: true,
       });
     }
+    // Connected again, as when it moves in the page, it draws a new map in
+    // place of the one disconnecting removed.
+    if (this.hasUpdated) {
+      this._initializeMap();
+      this._renderFeatures();
+    }
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.removeEventListener("keydown", this._boundHandleKeydown);
     for (const type of USER_INPUT_EVENTS) {
       this.removeEventListener(type, this._boundMarkUserInput, {
         capture: true,
@@ -336,51 +329,6 @@ export class CFMap extends BaseElement {
   }
 
   //
-  // Keyboard Navigation
-  //
-
-  private _handleKeydown(event: KeyboardEvent): void {
-    // Only handle when interactive and map exists and is stable
-    if (!this.interactive || !this._map || !this._isMapStable()) return;
-
-    // Check that the event target is within the map container
-    const mapContainer = this.shadowRoot?.querySelector(".map-container");
-    if (!mapContainer) return;
-
-    // Only handle events when focus is on the map container
-    const target = event.target as Node;
-    if (target !== mapContainer && !mapContainer.contains(target)) return;
-
-    switch (event.key) {
-      case "ArrowUp":
-        event.preventDefault();
-        this._map.panBy([0, -PAN_AMOUNT]);
-        break;
-      case "ArrowDown":
-        event.preventDefault();
-        this._map.panBy([0, PAN_AMOUNT]);
-        break;
-      case "ArrowLeft":
-        event.preventDefault();
-        this._map.panBy([-PAN_AMOUNT, 0]);
-        break;
-      case "ArrowRight":
-        event.preventDefault();
-        this._map.panBy([PAN_AMOUNT, 0]);
-        break;
-      case "+":
-      case "=":
-        event.preventDefault();
-        this._map.zoomIn();
-        break;
-      case "-":
-        event.preventDefault();
-        this._map.zoomOut();
-        break;
-    }
-  }
-
-  //
   // Map State Helpers
   //
 
@@ -426,14 +374,13 @@ export class CFMap extends BaseElement {
     const container = this.shadowRoot?.querySelector(
       ".map-container",
     ) as HTMLElement;
-    if (!container) return;
 
     // Get initial center and zoom
     const initialCenter = this._getCenter();
     const initialZoom = this._getZoom();
 
     // Create map instance
-    this._map = L.map(container, {
+    this._map = this.#leaflet.map(container, {
       center: [initialCenter.lat, initialCenter.lng],
       zoom: initialZoom,
       dragging: this.interactive,
@@ -450,7 +397,7 @@ export class CFMap extends BaseElement {
     });
 
     // Add tile layer with crossOrigin for CORS compatibility
-    const tileLayer = L.tileLayer(TILE_URL, {
+    const tileLayer = this.#leaflet.tileLayer(TILE_URL, {
       attribution: TILE_ATTRIBUTION,
       crossOrigin: true,
     });
@@ -466,44 +413,27 @@ export class CFMap extends BaseElement {
     tileLayer.addTo(this._map);
 
     // Create layer groups
-    this._markerLayer = L.layerGroup().addTo(this._map);
-    this._circleLayer = L.layerGroup().addTo(this._map);
-    this._polylineLayer = L.layerGroup().addTo(this._map);
+    this._markerLayer = this.#leaflet.layerGroup().addTo(this._map);
+    this._circleLayer = this.#leaflet.layerGroup().addTo(this._map);
+    this._polylineLayer = this.#leaflet.layerGroup().addTo(this._map);
 
     // Set up event handlers
-    this._setupMapEventHandlers();
+    this._setupMapEventHandlers(this._map);
 
     // Open on the bound bounds. Binding the bounds controller delivered them
     // before the map existed, so that delivery could not apply them.
     this._updateMapFromBounds(false);
 
-    // Invalidate size after initialization to ensure proper tile loading
-    // This is necessary when the map is rendered in Shadow DOM
-    this._rafId = requestAnimationFrame(() => {
-      this._resizeMap();
-      this._rafId = null;
-    });
-
-    // Set up ResizeObserver to handle container size changes
-    // This handles responsive layouts, tab switching, accordion panels, etc.
-    // Debounce to prevent excessive layout thrashing on every pixel change
-    this._resizeObserver = new ResizeObserver(() => {
-      if (this._resizeTimeoutId !== null) {
-        clearTimeout(this._resizeTimeoutId);
-      }
-      this._resizeTimeoutId = setTimeout(() => {
-        this._resizeMap();
-        this._resizeTimeoutId = null;
-      }, RESIZE_DEBOUNCE_MS);
-    });
+    // Follow the container's size: its first observation, once it is laid
+    // out in the shadow root, and every change after, such as a responsive
+    // layout, a tab switch, or an accordion panel opening.
+    this._resizeObserver = new ResizeObserver(() => this._resizeMap());
     this._resizeObserver.observe(container);
   }
 
-  private _setupMapEventHandlers(): void {
-    if (!this._map) return;
-
+  private _setupMapEventHandlers(map: L.Map): void {
     // Map click event - guard against race condition during zoom animations
-    this._map.on("click", (e: L.LeafletMouseEvent) => {
+    map.on("click", (e: L.LeafletMouseEvent) => {
       // If map is not stable (e.g., during zoom animation), defer the click
       if (!this._isMapStable()) {
         this._pendingClickEvent = e;
@@ -514,7 +444,7 @@ export class CFMap extends BaseElement {
     });
 
     // Handle deferred updates after zoom animations complete
-    this._map.on("zoomend", () => {
+    map.on("zoomend", () => {
       if (!this._isMapStable()) return;
 
       // Process pending click event
@@ -524,10 +454,10 @@ export class CFMap extends BaseElement {
       }
     });
 
-    this._map.on("movestart", () => this._moves.moveStarted());
+    map.on("movestart", () => this._moves.moveStarted());
 
     // Bounds change event (moveend covers both pan and zoom)
-    this._map.on("moveend", () => {
+    map.on("moveend", () => {
       this._reportMove();
       const ended = this._moves.moveEnded();
       // A resize's move, which may land in the middle of a person's, ends
@@ -671,7 +601,7 @@ export class CFMap extends BaseElement {
       return;
     }
 
-    this._setCenter(center);
+    this._setCenter(this._map, center);
   }
 
   private _updateMapZoom(): void {
@@ -686,7 +616,7 @@ export class CFMap extends BaseElement {
       return;
     }
 
-    this._setZoom(zoom);
+    this._setZoom(this._map, zoom);
   }
 
   private _updateMapFromBounds(animate = true): void {
@@ -709,22 +639,20 @@ export class CFMap extends BaseElement {
     }
 
     // A map with no size fits any bounds at zoom 0, so wait for a size
-    if (!this._hasSize()) {
+    if (!this._hasSize(this._map)) {
       this._waitingForSize.bounds(validatedBounds);
       return;
     }
 
-    this._fitMapToCellBounds(validatedBounds, animate);
+    this._fitMapToCellBounds(this._map, validatedBounds, animate);
   }
 
   /** Center the map on a value read from the center cell, without echo. */
-  private _setCenter(center: LatLng): void {
-    if (!this._map) return;
-
+  private _setCenter(map: L.Map, center: LatLng): void {
     this._moves.ownMove();
     this._isUpdatingFromCell = true;
     try {
-      this._map.setView([center.lat, center.lng], this._map.getZoom(), {
+      map.setView([center.lat, center.lng], map.getZoom(), {
         animate: true,
       });
     } finally {
@@ -733,39 +661,38 @@ export class CFMap extends BaseElement {
   }
 
   /** Zoom the map to a value read from the zoom cell, without echo. */
-  private _setZoom(zoom: number): void {
-    if (!this._map) return;
-
+  private _setZoom(map: L.Map, zoom: number): void {
     this._moves.ownMove();
     this._isUpdatingFromCell = true;
     try {
-      this._map.setZoom(zoom, { animate: true });
+      map.setZoom(zoom, { animate: true });
     } finally {
       this._isUpdatingFromCell = false;
     }
   }
 
   /** Fit the map to bounds read from the bounds cell, without echoing them. */
-  private _fitMapToCellBounds(bounds: Bounds, animate: boolean): void {
-    if (!this._map) return;
-
+  private _fitMapToCellBounds(
+    map: L.Map,
+    bounds: Bounds,
+    animate: boolean,
+  ): void {
     this._waitingForSize.viewReplaced();
     this._moves.ownMove();
     this._isUpdatingFromCell = true;
     try {
-      const leafletBounds = L.latLngBounds(
+      const leafletBounds = this.#leaflet.latLngBounds(
         [bounds.south, bounds.west],
         [bounds.north, bounds.east],
       );
-      this._map.fitBounds(leafletBounds, { animate });
+      map.fitBounds(leafletBounds, { animate });
     } finally {
       this._isUpdatingFromCell = false;
     }
   }
 
-  private _hasSize(): boolean {
-    if (!this._map) return false;
-    const size = this._map.getSize();
+  private _hasSize(map: L.Map): boolean {
+    const size = map.getSize();
     return size.x > 0 && size.y > 0;
   }
 
@@ -801,12 +728,12 @@ export class CFMap extends BaseElement {
     this._isUpdatingFromCell = true;
     try {
       this._moves.resize(sizeChanged, () => map.invalidateSize());
-      sized = this._hasSize();
+      sized = this._hasSize(map);
       if (sized) {
         const { bounds, fit } = this._waitingForSize.take();
         // In the order a map mounted with a size applies them: the bound
         // bounds, then the fit to the features.
-        if (bounds !== null) this._fitMapToCellBounds(bounds, false);
+        if (bounds !== null) this._fitMapToCellBounds(map, bounds, false);
         if (fit !== null) this._fitMapToBounds(fit, false);
       }
     } finally {
@@ -827,13 +754,13 @@ export class CFMap extends BaseElement {
     // The next moveend starts the move after this one
     switch (move.kind) {
       case "bounds":
-        this._fitMapToCellBounds(move.bounds, true);
+        this._fitMapToCellBounds(this._map, move.bounds, true);
         return;
       case "center":
-        this._setCenter(move.center);
+        this._setCenter(this._map, move.center);
         return;
       case "zoom":
-        this._setZoom(move.zoom);
+        this._setZoom(this._map, move.zoom);
         return;
       case "fit":
         this._fitMapToBounds(move.source);
@@ -897,16 +824,7 @@ export class CFMap extends BaseElement {
   }
 
   private _renderMarkers(markers: readonly MapMarker[]): void {
-    if (!this._markerLayer) return;
-
-    // Access length inside try-catch since reactive proxies can throw on property access
-    let length: number;
-    try {
-      length = markers.length;
-    } catch {
-      return;
-    }
-    for (let i = 0; i < length; i++) {
+    for (let i = 0; i < markers.length; i++) {
       const index = i;
 
       // Extract all marker properties within try-catch to handle reactive proxy edge cases
@@ -952,13 +870,13 @@ export class CFMap extends BaseElement {
       // Create marker icon - always use divIcon to avoid Leaflet default icon issues in Shadow DOM
       let markerIcon: L.DivIcon;
       if (icon && isEmoji(icon)) {
-        // Create a span element safely to prevent XSS
+        // The icon is the span's text, never parsed as markup
         const span = document.createElement("span");
         span.className = "emoji-marker";
-        span.textContent = icon; // Safe - escapes HTML
+        span.textContent = icon;
 
-        markerIcon = L.divIcon({
-          html: span.outerHTML,
+        markerIcon = this.#leaflet.divIcon({
+          html: span,
           className: "cf-map-emoji-marker",
           iconSize: [32, 32],
           iconAnchor: [16, 32],
@@ -967,7 +885,7 @@ export class CFMap extends BaseElement {
       } else {
         // Default marker icon - SVG pin that works in Shadow DOM
         // (Leaflet's default L.Icon.Default fails in Shadow DOM due to image path resolution)
-        markerIcon = L.divIcon({
+        markerIcon = this.#leaflet.divIcon({
           html:
             `<svg width="25" height="41" viewBox="0 0 25 41" xmlns="http://www.w3.org/2000/svg">
             <path d="M12.5 0C5.6 0 0 5.6 0 12.5c0 2.4.7 4.6 1.9 6.5L12.5 41l10.6-22c1.2-1.9 1.9-4.1 1.9-6.5C25 5.6 19.4 0 12.5 0z" fill="#3b82f6"/>
@@ -981,7 +899,7 @@ export class CFMap extends BaseElement {
       }
 
       // Create Leaflet marker (use validated lat/lng from above)
-      const leafletMarker = L.marker([lat, lng], {
+      const leafletMarker = this.#leaflet.marker([lat, lng], {
         icon: markerIcon,
         draggable: draggable || false,
       });
@@ -1037,16 +955,7 @@ export class CFMap extends BaseElement {
   }
 
   private _renderCircles(circles: readonly MapCircle[]): void {
-    if (!this._circleLayer) return;
-
-    // Access length inside try-catch since reactive proxies can throw on property access
-    let length: number;
-    try {
-      length = circles.length;
-    } catch {
-      return;
-    }
-    for (let i = 0; i < length; i++) {
+    for (let i = 0; i < circles.length; i++) {
       const index = i;
 
       // Extract all circle properties within try-catch
@@ -1091,7 +1000,7 @@ export class CFMap extends BaseElement {
       }
 
       // Create Leaflet circle (use validated lat/lng from above)
-      const leafletCircle = L.circle([lat, lng], {
+      const leafletCircle = this.#leaflet.circle([lat, lng], {
         radius,
         color: color || "#3b82f6",
         fillColor: color || "#3b82f6",
@@ -1123,16 +1032,7 @@ export class CFMap extends BaseElement {
   }
 
   private _renderPolylines(polylines: readonly MapPolyline[]): void {
-    if (!this._polylineLayer) return;
-
-    // Access length inside try-catch since reactive proxies can throw on property access
-    let length: number;
-    try {
-      length = polylines.length;
-    } catch {
-      return;
-    }
-    for (let i = 0; i < length; i++) {
+    for (let i = 0; i < polylines.length; i++) {
       const polyline = polylines[i];
 
       // Skip polylines without valid points array
@@ -1169,7 +1069,7 @@ export class CFMap extends BaseElement {
       // Create Leaflet polyline
       // Note: Polylines are display-only (no click events). Use circles as
       // waypoints if clickable segments are needed.
-      const leafletPolyline = L.polyline(latLngs, {
+      const leafletPolyline = this.#leaflet.polyline(latLngs, {
         color: color || "#3b82f6",
         weight: strokeWidth ?? 3,
         dashArray: dashArray,
@@ -1241,7 +1141,7 @@ export class CFMap extends BaseElement {
     }
 
     // A map with no size has no zoom to fit to, so wait for a size
-    if (!this._hasSize()) {
+    if (!this._hasSize(this._map)) {
       this._waitingForSize.fit(source);
       return;
     }
@@ -1249,8 +1149,8 @@ export class CFMap extends BaseElement {
     const points = featurePoints(this._getValue());
     if (points.length === 0) return;
 
-    const bounds = L.latLngBounds(
-      points.map((point) => L.latLng(point.lat, point.lng)),
+    const bounds = this.#leaflet.latLngBounds(
+      points.map((point) => this.#leaflet.latLng(point.lat, point.lng)),
     );
     this._moves.ownMove();
     this._isUpdatingFromCell = true;
@@ -1268,18 +1168,6 @@ export class CFMap extends BaseElement {
   //
 
   private _cleanup(): void {
-    // Cancel pending RAF to prevent race condition if component disconnects before it fires
-    if (this._rafId !== null) {
-      cancelAnimationFrame(this._rafId);
-      this._rafId = null;
-    }
-
-    // Clear pending resize debounce timeout
-    if (this._resizeTimeoutId !== null) {
-      clearTimeout(this._resizeTimeoutId);
-      this._resizeTimeoutId = null;
-    }
-
     // Disconnect ResizeObserver
     if (this._resizeObserver) {
       this._resizeObserver.disconnect();

@@ -254,7 +254,6 @@ export type FabricConvertibleJsObject =
   | Map<unknown, unknown>
   | Set<unknown>
   | Date
-  | RegExp
   | Uint8Array;
 
 /**

@@ -3,10 +3,16 @@ import { decodeBase64 } from "@std/encoding/base64";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import type { CfcLabelView, CfcSandboxResult } from "@commonfabric/runner/cfc";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
 
 import { createHarnessCfcInvocationContext } from "../src/contracts/cfc-invocation-context.ts";
 import type {
@@ -36,11 +42,6 @@ import { readFileTool } from "../src/tools/read-file.ts";
 import { RESERVED_ARTIFACT_PATH_DETAIL } from "../src/tools/reserved-artifacts.ts";
 import { readSkillResourceTool } from "../src/tools/read-skill-resource.ts";
 import { runSkillScriptTool } from "../src/tools/run-skill-script.ts";
-import {
-  createWebFetchTool,
-  toModelFacingWebFetchOutput,
-} from "../src/tools/web-fetch.ts";
-import { parseIpAddress } from "../src/network-address.ts";
 import { viewImageTool } from "../src/tools/view-image.ts";
 import { writeFileTool } from "../src/tools/write-file.ts";
 import type { HarnessToolContext } from "../src/tools/types.ts";
@@ -65,68 +66,6 @@ import {
 const ONE_PIXEL_PNG = decodeBase64(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p94AAAAASUVORK5CYII=",
 );
-
-const resolvePublicTestHost = () => Promise.resolve(["93.184.216.34"]);
-
-interface FakeHttpConn {
-  conn: Deno.Conn;
-  writes: string[];
-  isClosed: () => boolean;
-}
-
-const createFakeHttpConn = (responseText: string): FakeHttpConn => {
-  const responseBytes = new TextEncoder().encode(responseText);
-  const writes: string[] = [];
-  let offset = 0;
-  let closed = false;
-  const conn = {
-    read(buffer: Uint8Array): Promise<number | null> {
-      if (closed) {
-        return Promise.resolve(null);
-      }
-      if (offset >= responseBytes.byteLength) {
-        return Promise.resolve(null);
-      }
-      const byteCount = Math.min(
-        buffer.byteLength,
-        responseBytes.byteLength - offset,
-      );
-      buffer.set(responseBytes.slice(offset, offset + byteCount));
-      offset += byteCount;
-      return Promise.resolve(byteCount);
-    },
-    write(buffer: Uint8Array): Promise<number> {
-      writes.push(new TextDecoder().decode(buffer));
-      return Promise.resolve(buffer.byteLength);
-    },
-    close(): void {
-      closed = true;
-    },
-  } as unknown as Deno.Conn;
-  return {
-    conn,
-    writes,
-    isClosed: () => closed,
-  };
-};
-
-const installMockDenoConnect = (
-  connect: typeof Deno.connect,
-): () => void => {
-  const originalConnect = Deno.connect;
-  Object.defineProperty(Deno, "connect", {
-    configurable: true,
-    writable: true,
-    value: connect,
-  });
-  return () => {
-    Object.defineProperty(Deno, "connect", {
-      configurable: true,
-      writable: true,
-      value: originalConnect,
-    });
-  };
-};
 
 class FakeSandboxRuntime implements SandboxRuntime {
   readonly calls: Array<
@@ -286,21 +225,6 @@ const createContext = (
             path.startsWith(`${artifactRootHostPath}/`)),
       );
     },
-    doesHostPathIntersectArtifactRoot(path: string) {
-      return Promise.resolve(
-        artifactRootHostPath !== undefined &&
-          (path === artifactRootHostPath ||
-            path.startsWith(`${artifactRootHostPath}/`) ||
-            artifactRootHostPath.startsWith(`${path}/`)),
-      );
-    },
-    hostPathToWorkspacePath(path: string) {
-      return path === workspaceHostPath
-        ? "/workspace"
-        : path.startsWith(`${workspaceHostPath}/`)
-        ? `/workspace${path.slice(workspaceHostPath.length)}`
-        : undefined;
-    },
     setCurrentDir(path: string) {
       currentDir = sandbox.resolvePath(path, currentDir);
     },
@@ -390,7 +314,7 @@ const digestText = async (text: string): Promise<string> => {
   }`;
 };
 
-Deno.test("bash tool executes the command through the sandbox shell runtime", async () => {
+test("bash tool executes the command through the sandbox shell runtime", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "ok\n",
     stderr: "",
@@ -441,7 +365,7 @@ Deno.test("bash tool executes the command through the sandbox shell runtime", as
 // recoverable vs fatal tool-boundary narrowing (D9 / cf-review)
 //
 
-Deno.test("bash tool: a SandboxPathEscapeError on cwd is a recoverable result, not a throw", async () => {
+test("bash tool: a SandboxPathEscapeError on cwd is a recoverable result, not a throw", async () => {
   class PathEscapeSandbox extends FakeSandboxRuntime {
     override resolvePath(path: string, cwd = this.defaultWorkingDirectory()) {
       if (!this.isPathWithinWorkspace(path)) {
@@ -469,7 +393,7 @@ Deno.test("bash tool: a SandboxPathEscapeError on cwd is a recoverable result, n
   assertEquals(output.cwd, "/workspace");
 });
 
-Deno.test("bash tool: a non-escape resolvePath failure stays fatal (rethrows)", async () => {
+test("bash tool: a non-escape resolvePath failure stays fatal (rethrows)", async () => {
   class CorruptResolveSandbox extends FakeSandboxRuntime {
     override resolvePath(): string {
       // NOT a path escape — a corrupt-runtime/invariant failure that must not
@@ -485,7 +409,7 @@ Deno.test("bash tool: a non-escape resolvePath failure stays fatal (rethrows)", 
   );
 });
 
-Deno.test("bash tool: a ProcessTimeoutError from runShell is a recoverable result", async () => {
+test("bash tool: a ProcessTimeoutError from runShell is a recoverable result", async () => {
   class TimeoutRunShellSandbox extends FakeSandboxRuntime {
     override runShell(): Promise<SandboxCommandResult> {
       return Promise.reject(
@@ -505,7 +429,7 @@ Deno.test("bash tool: a ProcessTimeoutError from runShell is a recoverable resul
   assertEquals(output.stderr.includes("process timed out after"), false);
 });
 
-Deno.test("bash tool: a ProcessTimeoutError during CFC-context setup stays fatal", async () => {
+test("bash tool: a ProcessTimeoutError during CFC-context setup stays fatal", async () => {
   const sandbox = new FakeSandboxRuntime();
   const context = createContext(sandbox);
   // The invocation context is built (and run state persisted) BEFORE runShell.
@@ -522,7 +446,7 @@ Deno.test("bash tool: a ProcessTimeoutError during CFC-context setup stays fatal
   assertEquals(sandbox.calls.length, 0);
 });
 
-Deno.test("bash tool preserves currentDir inside a configured Fabric mount", async () => {
+test("bash tool preserves currentDir inside a configured Fabric mount", async () => {
   const sandbox = new MultiRootFakeSandboxRuntime([{
     stdout: "__CF_HARNESS_CWD__run-1:bash:1__/fabric/home",
     stderr: "",
@@ -537,7 +461,7 @@ Deno.test("bash tool preserves currentDir inside a configured Fabric mount", asy
   assertEquals(context.currentDir, "/fabric/home");
 });
 
-Deno.test("bash tool allows curl to localhost through the sandbox shell runtime", async () => {
+test("bash tool allows curl to localhost through the sandbox shell runtime", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "pong\n",
     stderr: "",
@@ -563,7 +487,7 @@ Deno.test("bash tool allows curl to localhost through the sandbox shell runtime"
   }]);
 });
 
-Deno.test("bash tool denies curl to non-localhost targets before sandbox execution", async () => {
+test("bash tool denies curl to non-localhost targets before sandbox execution", async () => {
   const sandbox = new FakeSandboxRuntime();
   const context = createContext(sandbox, "/workspace/old");
   const output = await bashTool.invoke(context, {
@@ -583,765 +507,7 @@ Deno.test("bash tool denies curl to non-localhost targets before sandbox executi
   assertEquals(context.currentDir, "/workspace/new");
 });
 
-Deno.test("web_fetch fetches public HTML, extracts text and links, and strips raw content from model output", async () => {
-  const calls: Array<{ url: string; init?: RequestInit }> = [];
-  const html = [
-    "<!doctype html>",
-    "<title>Example &amp; Test</title>",
-    "<style>.hidden{display:none}</style>",
-    "<script>ignoreMe()</script>",
-    "<h1>Hello <em>world</em></h1>",
-    '<p>Read <a href="/next">next page</a>.</p>',
-  ].join("");
-  const tool = createWebFetchTool({
-    resolveHostAddresses: resolvePublicTestHost,
-    fetchFn: (input, init) => {
-      calls.push({ url: String(input), init });
-      return Promise.resolve(
-        new Response(html, {
-          status: 200,
-          headers: { "content-type": "text/html; charset=utf-8" },
-        }),
-      );
-    },
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  const output = await tool.invoke(context, {
-    url: "https://example.com/start",
-  });
-
-  if (output.type !== "cf-harness.web-fetch-result") {
-    throw new Error("expected web_fetch success");
-  }
-  assertEquals(calls.length, 1);
-  assertEquals(calls[0]?.url, "https://example.com/start");
-  assertEquals(calls[0]?.init?.redirect, "manual");
-  assertEquals(output.outputId, "run-1:web_fetch:1");
-  assertEquals(output.finalUrl, "https://example.com/start");
-  assertEquals(output.title, "Example & Test");
-  assertStringIncludes(output.text, "Hello world");
-  assertStringIncludes(output.text, "Read next page .");
-  assertEquals(output.links, [{
-    text: "next page",
-    href: "https://example.com/next",
-  }]);
-  assertStringIncludes(output.rawContent, "<script>ignoreMe()</script>");
-  assertEquals(output.rawContentDigest, await digestText(html));
-  assertEquals("rawContent" in toModelFacingWebFetchOutput(output), false);
-});
-
-Deno.test("web_fetch blocks localhost targets before fetching", async () => {
-  const calls: string[] = [];
-  const tool = createWebFetchTool({
-    fetchFn: (input) => {
-      calls.push(String(input));
-      return Promise.resolve(new Response("should not fetch"));
-    },
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  const output = await tool.invoke(context, {
-    url: "http://localhost:8000/private",
-  });
-
-  assertEquals(calls, []);
-  assertEquals(output, {
-    type: "cf-harness.web-fetch-error",
-    outputId: "run-1:web_fetch:1",
-    url: "http://localhost:8000/private",
-    code: "blocked_url",
-    message: "web_fetch host localhost is local and is not allowed",
-    fetchedAt: "2026-05-01T17:54:00.000Z",
-  });
-});
-
-Deno.test("web_fetch validates redirect targets before following them", async () => {
-  const tool = createWebFetchTool({
-    resolveHostAddresses: resolvePublicTestHost,
-    fetchFn: () =>
-      Promise.resolve(
-        new Response("", {
-          status: 302,
-          headers: { location: "http://127.0.0.1/admin" },
-        }),
-      ),
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  const output = await tool.invoke(context, {
-    url: "https://example.com/login",
-  });
-
-  assertEquals(output, {
-    type: "cf-harness.web-fetch-error",
-    outputId: "run-1:web_fetch:1",
-    url: "https://example.com/login",
-    code: "blocked_url",
-    message:
-      "web_fetch redirect target denied: web_fetch host 127.0.0.1 is not on the open internet and is not allowed",
-    finalUrl: "https://example.com/login",
-    fetchedAt: "2026-05-01T17:54:00.000Z",
-  });
-});
-
-Deno.test("web_fetch rejects DNS targets that resolve to private addresses before fetching", async () => {
-  const calls: string[] = [];
-  const tool = createWebFetchTool({
-    resolveHostAddresses: () => Promise.resolve(["10.0.0.7"]),
-    fetchFn: (input) => {
-      calls.push(String(input));
-      return Promise.resolve(new Response("should not fetch"));
-    },
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  const output = await tool.invoke(context, {
-    url: "https://public.example/private",
-  });
-
-  assertEquals(calls, []);
-  assertEquals(output, {
-    type: "cf-harness.web-fetch-error",
-    outputId: "run-1:web_fetch:1",
-    url: "https://public.example/private",
-    code: "blocked_url",
-    message:
-      "web_fetch host public.example resolved to 10.0.0.7, which is not on the open internet, and is not allowed",
-    fetchedAt: "2026-05-01T17:54:00.000Z",
-  });
-});
-
-Deno.test("web_fetch rejects a resolved address it cannot read", async () => {
-  const calls: string[] = [];
-  const tool = createWebFetchTool({
-    resolveHostAddresses: () => Promise.resolve(["0x7f.0.0.1"]),
-    fetchFn: (input) => {
-      calls.push(String(input));
-      return Promise.resolve(new Response("should not fetch"));
-    },
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  const output = await tool.invoke(context, {
-    url: "https://odd.example/",
-  });
-
-  assertEquals(calls, []);
-  assertEquals(output, {
-    type: "cf-harness.web-fetch-error",
-    outputId: "run-1:web_fetch:1",
-    url: "https://odd.example/",
-    code: "blocked_url",
-    message:
-      "web_fetch host odd.example resolved to 0x7f.0.0.1, which is not an IP address",
-    fetchedAt: "2026-05-01T17:54:00.000Z",
-  });
-});
-
-Deno.test("web_fetch rejects DNS rebinding between validation and connect", async () => {
-  const resolutions = [["93.184.216.34"], ["10.0.0.7"]];
-  const tool = createWebFetchTool({
-    resolveHostAddresses: () =>
-      Promise.resolve(resolutions.shift() ?? ["93.184.216.34"]),
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  const output = await tool.invoke(context, {
-    url: "https://rebind.example/private",
-  });
-
-  assertEquals(output, {
-    type: "cf-harness.web-fetch-error",
-    outputId: "run-1:web_fetch:1",
-    url: "https://rebind.example/private",
-    code: "blocked_url",
-    message:
-      "web_fetch host rebind.example resolved to 10.0.0.7, which is not on the open internet, and is not allowed",
-    finalUrl: "https://rebind.example/private",
-    fetchedAt: "2026-05-01T17:54:00.000Z",
-  });
-});
-
-Deno.test("web_fetch rejects non-global IP literals before fetching", async () => {
-  const cases = [
-    "http://100.64.0.1/",
-    "http://192.0.2.1/",
-    "http://198.18.0.1/",
-    "http://224.0.0.1/",
-    "http://240.0.0.1/",
-    "http://[::ffff:7f00:1]/",
-    "http://[2001:db8::1]/",
-    "http://[64:ff9b::a00:1]/",
-  ];
-  for (const url of cases) {
-    const calls: string[] = [];
-    const tool = createWebFetchTool({
-      fetchFn: (input) => {
-        calls.push(String(input));
-        return Promise.resolve(new Response("should not fetch"));
-      },
-    });
-    const context = createContext(new FakeSandboxRuntime());
-
-    const output = await tool.invoke(context, { url });
-
-    assertEquals(calls, []);
-    if (output.type !== "cf-harness.web-fetch-error") {
-      throw new Error(`expected web_fetch error for ${url}`);
-    }
-    assertEquals(output.code, "blocked_url");
-    assertStringIncludes(
-      output.message,
-      "is not on the open internet and is not allowed",
-    );
-  }
-});
-
-const localNetwork = (text: string, prefixLength: number) => {
-  const address = parseIpAddress(text);
-  if (address === undefined) {
-    throw new Error(`${text} did not parse`);
-  }
-  return { address, prefixLength };
-};
-
-const TEST_LOCAL_NETWORKS = [
-  localNetwork("2a02:8071:1234:5600::1", 64),
-  localNetwork("81.2.69.142", 24),
-  localNetwork("81.2.70.5", 0),
-];
-
-/**
- * What web_fetch makes of `url` when `host.example` resolves to `resolved`
- * and this device's interfaces are on `TEST_LOCAL_NETWORKS`: the URLs it
- * fetched, and its output.
- */
-const webFetchOnLocalNetworks = async (url: string, resolved: string) => {
-  const calls: string[] = [];
-  const tool = createWebFetchTool({
-    resolveHostAddresses: () => Promise.resolve([resolved]),
-    localNetworks: () => TEST_LOCAL_NETWORKS,
-    fetchFn: (input) => {
-      calls.push(String(input));
-      return Promise.resolve(
-        new Response("fetched", { headers: { "content-type": "text/plain" } }),
-      );
-    },
-  });
-  const output = await tool.invoke(createContext(new FakeSandboxRuntime()), {
-    url,
-  });
-  return { calls, output };
-};
-
-Deno.test("web_fetch rejects public addresses on this device's interface networks", async () => {
-  for (
-    const address of [
-      "2a02:8071:1234:5600::99",
-      "81.2.69.160",
-      "::ffff:81.2.69.160",
-      "81.2.70.5",
-    ]
-  ) {
-    const { calls, output } = await webFetchOnLocalNetworks(
-      "https://host.example/",
-      address,
-    );
-    assertEquals(calls, []);
-    if (output.type !== "cf-harness.web-fetch-error") {
-      throw new Error(`expected web_fetch error for ${address}`);
-    }
-    assertEquals(
-      output.message,
-      `web_fetch host host.example resolved to ${address}, which is not on the open internet, and is not allowed`,
-    );
-  }
-  for (
-    const url of [
-      "https://[2a02:8071:1234:5600::99]/",
-      "https://81.2.69.160/",
-      "https://[::ffff:81.2.69.160]/",
-    ]
-  ) {
-    const host = new URL(url).hostname;
-    const { calls, output } = await webFetchOnLocalNetworks(url, host);
-    assertEquals(calls, []);
-    if (output.type !== "cf-harness.web-fetch-error") {
-      throw new Error(`expected web_fetch error for ${url}`);
-    }
-    assertEquals(
-      output.message,
-      `web_fetch host ${host} is not on the open internet and is not allowed`,
-    );
-  }
-});
-
-Deno.test("web_fetch fetches public addresses outside this device's interface networks", async () => {
-  for (
-    const address of [
-      "2a02:8071:1234:5601::99",
-      "81.2.70.160",
-      "::ffff:81.2.70.160",
-      "81.2.70.6",
-    ]
-  ) {
-    const { calls, output } = await webFetchOnLocalNetworks(
-      "https://host.example/",
-      address,
-    );
-    assertEquals(calls, ["https://host.example/"]);
-    assertEquals(output.type, "cf-harness.web-fetch-result");
-  }
-  for (
-    const url of ["https://[2a02:8071:1234:5601::99]/", "https://81.2.70.160/"]
-  ) {
-    const { calls, output } = await webFetchOnLocalNetworks(
-      url,
-      new URL(url).hostname,
-    );
-    assertEquals(calls, [url]);
-    assertEquals(output.type, "cf-harness.web-fetch-result");
-  }
-});
-
-Deno.test("web_fetch reads this device's interface networks again when it connects", async () => {
-  const networkLists = [[], TEST_LOCAL_NETWORKS];
-  const tool = createWebFetchTool({
-    resolveHostAddresses: () => Promise.resolve(["81.2.69.160"]),
-    localNetworks: () => networkLists.shift() ?? TEST_LOCAL_NETWORKS,
-  });
-
-  const output = await tool.invoke(createContext(new FakeSandboxRuntime()), {
-    url: "https://joined.example/",
-  });
-
-  assertEquals(networkLists, []);
-  assertEquals(output, {
-    type: "cf-harness.web-fetch-error",
-    outputId: "run-1:web_fetch:1",
-    url: "https://joined.example/",
-    code: "blocked_url",
-    message:
-      "web_fetch host joined.example resolved to 81.2.69.160, which is not on the open internet, and is not allowed",
-    finalUrl: "https://joined.example/",
-    fetchedAt: "2026-05-01T17:54:00.000Z",
-  });
-});
-
-Deno.test("web_fetch rejects unsupported content types without returning the body", async () => {
-  let canceled = false;
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode("png bytes"));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  const tool = createWebFetchTool({
-    resolveHostAddresses: resolvePublicTestHost,
-    fetchFn: () =>
-      Promise.resolve(
-        new Response(body, {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-      ),
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  const output = await tool.invoke(context, {
-    url: "https://example.com/image.png",
-  });
-
-  assertEquals(output, {
-    type: "cf-harness.web-fetch-error",
-    outputId: "run-1:web_fetch:1",
-    url: "https://example.com/image.png",
-    code: "unsupported_content_type",
-    message: "web_fetch content-type image/png is not supported",
-    finalUrl: "https://example.com/image.png",
-    status: 200,
-    contentType: "image/png",
-    fetchedAt: "2026-05-01T17:54:00.000Z",
-  });
-  assertEquals(canceled, true);
-});
-
-Deno.test("web_fetch rejects responses without a supported content-type", async () => {
-  const tool = createWebFetchTool({
-    resolveHostAddresses: resolvePublicTestHost,
-    fetchFn: () =>
-      Promise.resolve(
-        new Response(new TextEncoder().encode("headerless text"), {
-          status: 200,
-        }),
-      ),
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  const output = await tool.invoke(context, {
-    url: "https://example.com/headerless",
-  });
-
-  assertEquals(output, {
-    type: "cf-harness.web-fetch-error",
-    outputId: "run-1:web_fetch:1",
-    url: "https://example.com/headerless",
-    code: "unsupported_content_type",
-    message: "web_fetch response did not include a supported text content-type",
-    finalUrl: "https://example.com/headerless",
-    status: 200,
-    fetchedAt: "2026-05-01T17:54:00.000Z",
-  });
-});
-
-Deno.test("web_fetch caps raw bytes and model text independently", async () => {
-  const tool = createWebFetchTool({
-    resolveHostAddresses: resolvePublicTestHost,
-    fetchFn: () =>
-      Promise.resolve(
-        new Response("abcdef", {
-          status: 200,
-          headers: { "content-type": "text/plain" },
-        }),
-      ),
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  const output = await tool.invoke(context, {
-    url: "https://example.com/large.txt",
-    maxBytes: 3,
-    maxTextChars: 2,
-  });
-
-  if (output.type !== "cf-harness.web-fetch-result") {
-    throw new Error("expected web_fetch success");
-  }
-  assertEquals(output.bytes, 3);
-  assertEquals(output.rawContent, "abc");
-  assertEquals(output.rawContentTruncated, true);
-  assertEquals(output.text, "ab");
-  assertEquals(output.textTruncated, true);
-});
-
-Deno.test("web_fetch applies timeout while reading response body", async () => {
-  const encoder = new TextEncoder();
-  const tool = createWebFetchTool({
-    resolveHostAddresses: resolvePublicTestHost,
-    fetchFn: (_input, init) => {
-      const signal = init?.signal;
-      if (!(signal instanceof AbortSignal)) {
-        throw new Error("expected fetch signal");
-      }
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(encoder.encode("partial"));
-        },
-        pull() {
-          return new Promise<void>((resolve) => {
-            signal.addEventListener("abort", () => resolve(), { once: true });
-          });
-        },
-      });
-      return Promise.resolve(
-        new Response(body, {
-          status: 200,
-          headers: { "content-type": "text/plain" },
-        }),
-      );
-    },
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  let watchdog: ReturnType<typeof setTimeout> | undefined;
-  const output = await Promise.race([
-    tool.invoke(context, {
-      url: "https://example.com/slow.txt",
-      timeoutMs: 20,
-    }),
-    new Promise<never>((_, reject) => {
-      watchdog = setTimeout(
-        () => reject(new Error("web_fetch did not time out body read")),
-        1_000,
-      );
-    }),
-  ]).finally(() => {
-    if (watchdog !== undefined) {
-      clearTimeout(watchdog);
-    }
-  });
-
-  assertEquals(output, {
-    type: "cf-harness.web-fetch-error",
-    outputId: "run-1:web_fetch:1",
-    url: "https://example.com/slow.txt",
-    code: "timeout",
-    message: "web_fetch timed out",
-    fetchedAt: "2026-05-01T17:54:00.000Z",
-  });
-});
-
-Deno.test("web_fetch applies timeout while resolving host", async () => {
-  const tool = createWebFetchTool({
-    resolveHostAddresses: () => new Promise(() => {}),
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  let watchdog: ReturnType<typeof setTimeout> | undefined;
-  const output = await Promise.race([
-    tool.invoke(context, {
-      url: "https://slow.example/resolve",
-      timeoutMs: 20,
-    }),
-    new Promise<never>((_, reject) => {
-      watchdog = setTimeout(
-        () => reject(new Error("web_fetch did not time out DNS resolution")),
-        1_000,
-      );
-    }),
-  ]).finally(() => {
-    if (watchdog !== undefined) {
-      clearTimeout(watchdog);
-    }
-  });
-
-  assertEquals(output, {
-    type: "cf-harness.web-fetch-error",
-    outputId: "run-1:web_fetch:1",
-    url: "https://slow.example/resolve",
-    code: "timeout",
-    message: "web_fetch timed out",
-    fetchedAt: "2026-05-01T17:54:00.000Z",
-  });
-});
-
-Deno.test("web_fetch applies timeout while validating redirect target", async () => {
-  const tool = createWebFetchTool({
-    resolveHostAddresses: (hostname) => {
-      if (hostname === "slow.example") {
-        return new Promise(() => {});
-      }
-      return resolvePublicTestHost();
-    },
-    fetchFn: () =>
-      Promise.resolve(
-        new Response("", {
-          status: 302,
-          headers: { location: "https://slow.example/" },
-        }),
-      ),
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  let watchdog: ReturnType<typeof setTimeout> | undefined;
-  const output = await Promise.race([
-    tool.invoke(context, {
-      url: "https://example.com/start",
-      timeoutMs: 20,
-    }),
-    new Promise<never>((_, reject) => {
-      watchdog = setTimeout(
-        () =>
-          reject(
-            new Error("web_fetch did not time out redirect DNS resolution"),
-          ),
-        1_000,
-      );
-    }),
-  ]).finally(() => {
-    if (watchdog !== undefined) {
-      clearTimeout(watchdog);
-    }
-  });
-
-  assertEquals(output, {
-    type: "cf-harness.web-fetch-error",
-    outputId: "run-1:web_fetch:1",
-    url: "https://example.com/start",
-    code: "timeout",
-    message: "web_fetch timed out",
-    fetchedAt: "2026-05-01T17:54:00.000Z",
-  });
-});
-
-Deno.test("web_fetch applies timeout while connecting", async () => {
-  let sawConnectSignal = false;
-  const restoreConnect = installMockDenoConnect(
-    ((options: Deno.ConnectOptions) => {
-      sawConnectSignal = options.signal instanceof AbortSignal;
-      return new Promise(() => {});
-    }) as unknown as typeof Deno.connect,
-  );
-  const tool = createWebFetchTool({
-    resolveHostAddresses: resolvePublicTestHost,
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  try {
-    let watchdog: ReturnType<typeof setTimeout> | undefined;
-    const output = await Promise.race([
-      tool.invoke(context, {
-        url: "http://example.com/connect",
-        timeoutMs: 20,
-      }),
-      new Promise<never>((_, reject) => {
-        watchdog = setTimeout(
-          () => reject(new Error("web_fetch did not time out connect")),
-          1_000,
-        );
-      }),
-    ]).finally(() => {
-      if (watchdog !== undefined) {
-        clearTimeout(watchdog);
-      }
-    });
-
-    assertEquals(sawConnectSignal, true);
-    assertEquals(output, {
-      type: "cf-harness.web-fetch-error",
-      outputId: "run-1:web_fetch:1",
-      url: "http://example.com/connect",
-      code: "timeout",
-      message: "web_fetch timed out",
-      fetchedAt: "2026-05-01T17:54:00.000Z",
-    });
-  } finally {
-    restoreConnect();
-  }
-});
-
-Deno.test("web_fetch applies timeout while writing the request", async () => {
-  let closed = false;
-  const conn = {
-    read(): Promise<number | null> {
-      return Promise.resolve(null);
-    },
-    write(): Promise<number> {
-      return new Promise(() => {});
-    },
-    close(): void {
-      closed = true;
-    },
-  } as unknown as Deno.Conn;
-  const restoreConnect = installMockDenoConnect(
-    (() => Promise.resolve(conn)) as unknown as typeof Deno.connect,
-  );
-  const tool = createWebFetchTool({
-    resolveHostAddresses: resolvePublicTestHost,
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  try {
-    let watchdog: ReturnType<typeof setTimeout> | undefined;
-    const output = await Promise.race([
-      tool.invoke(context, {
-        url: "http://example.com/write",
-        timeoutMs: 20,
-      }),
-      new Promise<never>((_, reject) => {
-        watchdog = setTimeout(
-          () => reject(new Error("web_fetch did not time out request write")),
-          1_000,
-        );
-      }),
-    ]).finally(() => {
-      if (watchdog !== undefined) {
-        clearTimeout(watchdog);
-      }
-    });
-
-    assertEquals(output, {
-      type: "cf-harness.web-fetch-error",
-      outputId: "run-1:web_fetch:1",
-      url: "http://example.com/write",
-      code: "timeout",
-      message: "web_fetch timed out",
-      fetchedAt: "2026-05-01T17:54:00.000Z",
-    });
-    assertEquals(closed, true);
-  } finally {
-    restoreConnect();
-  }
-});
-
-Deno.test("web_fetch rejects oversized chunked size lines", async () => {
-  const fakeConn = createFakeHttpConn([
-    "HTTP/1.1 200 OK\r\n",
-    "Content-Type: text/plain\r\n",
-    "Transfer-Encoding: chunked\r\n",
-    "\r\n",
-    "1".repeat(5000),
-  ].join(""));
-  const restoreConnect = installMockDenoConnect(
-    (() => Promise.resolve(fakeConn.conn)) as unknown as typeof Deno.connect,
-  );
-  const tool = createWebFetchTool({
-    resolveHostAddresses: resolvePublicTestHost,
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  try {
-    const output = await tool.invoke(context, {
-      url: "http://example.com/chunked",
-    });
-
-    if (output.type !== "cf-harness.web-fetch-error") {
-      throw new Error("expected web_fetch error");
-    }
-    assertEquals(output.code, "fetch_failed");
-    assertStringIncludes(output.message, "chunked line exceeded size limit");
-    assertEquals(fakeConn.isClosed(), true);
-  } finally {
-    restoreConnect();
-  }
-});
-
-Deno.test("web_fetch rejects oversized chunked trailers", async () => {
-  const trailers = Array.from(
-    { length: 90 },
-    (_, index) => `X-Trailer-${index}: ${"a".repeat(200)}\r\n`,
-  ).join("");
-  const fakeConn = createFakeHttpConn([
-    "HTTP/1.1 200 OK\r\n",
-    "Content-Type: text/plain\r\n",
-    "Transfer-Encoding: chunked\r\n",
-    "\r\n",
-    "1\r\n",
-    "a\r\n",
-    "0\r\n",
-    trailers,
-    "\r\n",
-  ].join(""));
-  const restoreConnect = installMockDenoConnect(
-    (() => Promise.resolve(fakeConn.conn)) as unknown as typeof Deno.connect,
-  );
-  const tool = createWebFetchTool({
-    resolveHostAddresses: resolvePublicTestHost,
-  });
-  const context = createContext(new FakeSandboxRuntime());
-
-  try {
-    const output = await tool.invoke(context, {
-      url: "http://example.com/chunked-trailers",
-    });
-
-    if (output.type !== "cf-harness.web-fetch-error") {
-      throw new Error("expected web_fetch error");
-    }
-    assertEquals(output.code, "fetch_failed");
-    assertStringIncludes(
-      output.message,
-      "chunked trailers exceeded size limit",
-    );
-    assertEquals(fakeConn.isClosed(), true);
-  } finally {
-    restoreConnect();
-  }
-});
-
-Deno.test("bash tool updates currentDir in enforce mode from observed CFC stdout", async () => {
+test("bash tool updates currentDir in enforce mode from observed CFC stdout", async () => {
   const outputId = createToolOutputId("run-1", "bash", 1);
   const cwdMarker = `__CF_HARNESS_CWD__${outputId}__`;
   const sandbox = new FakeSandboxRuntime([{
@@ -1392,7 +558,7 @@ const createBrowserContext = (
     browserAccess,
   );
 
-Deno.test("browser tool runs one agent-browser action attached to the lease endpoint", async () => {
+test("browser tool runs one agent-browser action attached to the lease endpoint", async () => {
   const hostRunner = new FakeProcessRunner([{
     stdout: '- heading "Example"\n',
     stderr: "",
@@ -1421,7 +587,7 @@ Deno.test("browser tool runs one agent-browser action attached to the lease endp
   }]);
 });
 
-Deno.test("browser tool surfaces success-path stderr as detail", async () => {
+test("browser tool surfaces success-path stderr as detail", async () => {
   const hostRunner = new FakeProcessRunner([{
     stdout: "https://example.com/\n",
     stderr: "warning: slow page\n",
@@ -1442,7 +608,7 @@ Deno.test("browser tool surfaces success-path stderr as detail", async () => {
   });
 });
 
-Deno.test("browser tool refuses an action when the run has no Browser Access lease", async () => {
+test("browser tool refuses an action when the run has no Browser Access lease", async () => {
   const hostRunner = new FakeProcessRunner();
   const context = createBrowserContext(hostRunner, undefined);
 
@@ -1460,7 +626,7 @@ Deno.test("browser tool refuses an action when the run has no Browser Access lea
   });
 });
 
-Deno.test("browser tool refuses an expired Browser Access lease", async () => {
+test("browser tool refuses an expired Browser Access lease", async () => {
   const hostRunner = new FakeProcessRunner();
   const context = createBrowserContext(hostRunner, {
     ...BROWSER_LEASE,
@@ -1480,7 +646,7 @@ Deno.test("browser tool refuses an expired Browser Access lease", async () => {
   });
 });
 
-Deno.test("browser tool refuses a lease whose CDP endpoint is not a local origin", async () => {
+test("browser tool refuses a lease whose CDP endpoint is not a local origin", async () => {
   const hostRunner = new FakeProcessRunner();
   const context = createBrowserContext(hostRunner, {
     ...BROWSER_LEASE,
@@ -1500,7 +666,7 @@ Deno.test("browser tool refuses a lease whose CDP endpoint is not a local origin
   });
 });
 
-Deno.test("browser tool refuses input outside its action vocabulary before touching the host", async () => {
+test("browser tool refuses input outside its action vocabulary before touching the host", async () => {
   const hostRunner = new FakeProcessRunner();
   const context = createBrowserContext(hostRunner, BROWSER_LEASE);
 
@@ -1526,7 +692,7 @@ Deno.test("browser tool refuses input outside its action vocabulary before touch
   });
 });
 
-Deno.test("browser tool defaults and caps host timeouts", async () => {
+test("browser tool defaults and caps host timeouts", async () => {
   const hostRunner = new FakeProcessRunner([
     { stdout: "", stderr: "", exitCode: 0 },
     { stdout: "", stderr: "", exitCode: 0 },
@@ -1545,7 +711,7 @@ Deno.test("browser tool defaults and caps host timeouts", async () => {
   ]);
 });
 
-Deno.test("browser tool caps returned output", async () => {
+test("browser tool caps returned output", async () => {
   const hostRunner = new FakeProcessRunner([{
     stdout: "x".repeat(20_010),
     stderr: "",
@@ -1564,7 +730,7 @@ Deno.test("browser tool caps returned output", async () => {
   });
 });
 
-Deno.test("browser tool reports a nonzero exit as command_failed with the failure text", async () => {
+test("browser tool reports a nonzero exit as command_failed with the failure text", async () => {
   const hostRunner = new FakeProcessRunner([{
     stdout: "",
     stderr: "error: ref @e5 not found\n",
@@ -1586,7 +752,7 @@ Deno.test("browser tool reports a nonzero exit as command_failed with the failur
   });
 });
 
-Deno.test("browser tool falls back to resolving the current dir when no workspace host path is known", async () => {
+test("browser tool falls back to resolving the current dir when no workspace host path is known", async () => {
   const hostRunner = new FakeProcessRunner([{
     stdout: "",
     stderr: "",
@@ -1604,7 +770,7 @@ Deno.test("browser tool falls back to resolving the current dir when no workspac
   assertEquals(hostRunner.calls[0]?.cwd, "/host/resolved");
 });
 
-Deno.test("browser tool reports a missing host mount as host_unavailable", async () => {
+test("browser tool reports a missing host mount as host_unavailable", async () => {
   const hostRunner = new FakeProcessRunner();
   const context = {
     ...createBrowserContext(hostRunner, BROWSER_LEASE),
@@ -1625,7 +791,7 @@ Deno.test("browser tool reports a missing host mount as host_unavailable", async
   });
 });
 
-Deno.test("browser tool reports a spawn failure as host_unavailable", async () => {
+test("browser tool reports a spawn failure as host_unavailable", async () => {
   const hostRunner: ProcessRunner = {
     run() {
       return Promise.reject(new Error("No such file or directory"));
@@ -1643,7 +809,7 @@ Deno.test("browser tool reports a spawn failure as host_unavailable", async () =
   });
 });
 
-Deno.test("browser tool scrubs the lease endpoint from a timeout error", async () => {
+test("browser tool scrubs the lease endpoint from a timeout error", async () => {
   const hostRunner: ProcessRunner = {
     run(request) {
       return Promise.reject(
@@ -1670,7 +836,7 @@ Deno.test("browser tool scrubs the lease endpoint from a timeout error", async (
   });
 });
 
-Deno.test("browser tool scrubs the lease endpoint from what the browser prints", async () => {
+test("browser tool scrubs the lease endpoint from what the browser prints", async () => {
   const hostRunner = new FakeProcessRunner([
     {
       stdout: "connected to http://localhost:9362 for page\n",
@@ -1705,7 +871,7 @@ Deno.test("browser tool scrubs the lease endpoint from what the browser prints",
   });
 });
 
-Deno.test("read_file tool resolves relative paths from the session currentDir", async () => {
+test("read_file tool resolves relative paths from the session currentDir", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "hello",
     stderr: "",
@@ -1760,7 +926,7 @@ Deno.test("read_file tool resolves relative paths from the session currentDir", 
   );
 });
 
-Deno.test("read_file tool preserves CFC result on success", async () => {
+test("read_file tool preserves CFC result on success", async () => {
   const cfcResult = observedCfcResult("released file");
   const sandbox = new FakeSandboxRuntime([{
     stdout: "raw file",
@@ -1781,7 +947,7 @@ Deno.test("read_file tool preserves CFC result on success", async () => {
   });
 });
 
-Deno.test("read_file tool rejects non-integer maxBytes", async () => {
+test("read_file tool rejects non-integer maxBytes", async () => {
   const sandbox = new FakeSandboxRuntime();
 
   await assertRejects(
@@ -1797,7 +963,7 @@ Deno.test("read_file tool rejects non-integer maxBytes", async () => {
   assertEquals(sandbox.calls, []);
 });
 
-Deno.test("read_file tool returns a recoverable file_not_found result", async () => {
+test("read_file tool returns a recoverable file_not_found result", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "",
     stderr: "file not found: /workspace/notes/missing.txt",
@@ -1823,7 +989,7 @@ Deno.test("read_file tool returns a recoverable file_not_found result", async ()
   });
 });
 
-Deno.test("read_file tool returns a recoverable not_a_file result", async () => {
+test("read_file tool returns a recoverable not_a_file result", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "",
     stderr: "not a file: /workspace/notes",
@@ -1849,7 +1015,7 @@ Deno.test("read_file tool returns a recoverable not_a_file result", async () => 
   });
 });
 
-Deno.test("read_file tool returns a recoverable path_outside_workspace result", async () => {
+test("read_file tool returns a recoverable path_outside_workspace result", async () => {
   const sandbox = new StrictFakeSandboxRuntime();
 
   const output = await readFileTool.invoke(createContext(sandbox), {
@@ -1871,7 +1037,7 @@ Deno.test("read_file tool returns a recoverable path_outside_workspace result", 
   assertEquals(sandbox.calls, []);
 });
 
-Deno.test("read_file tool denies reserved artifact paths before shelling out", async () => {
+test("read_file tool denies reserved artifact paths before shelling out", async () => {
   const sandbox = new FakeSandboxRuntime();
   const context = createContext(
     sandbox,
@@ -2051,7 +1217,7 @@ describe("readSkillResourceTool", () => {
   });
 });
 
-Deno.test({
+test({
   name:
     "read_skill_resource reads indexed text resources and records provenance",
   permissions: { read: true, write: true },
@@ -2127,7 +1293,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "read_skill_resource returns metadata only for binary resources",
   permissions: { read: true, write: true },
   async fn() {
@@ -2181,7 +1347,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "read_skill_resource rejects unindexed resources and invalid traversal paths",
   permissions: { read: true, write: true },
@@ -2232,7 +1398,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "read_skill_resource reports digest mismatches while returning call-time content",
   permissions: { read: true, write: true },
@@ -2291,7 +1457,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "run_skill_script executes exact allowlisted Deno scripts with provenance",
   permissions: { read: true, write: true },
@@ -2412,7 +1578,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "run_skill_script rejects Deno scripts with relative imports in v1",
   permissions: { read: true, write: true },
   async fn() {
@@ -2493,7 +1659,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "run_skill_script executes exact allowlisted Bash shebang scripts from stdin",
   permissions: { read: true, write: true },
@@ -2610,7 +1776,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "run_skill_script can execute exact allowlisted scripts through the host runner",
   permissions: { read: true, write: true },
@@ -2791,7 +1957,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "run_skill_script denies authenticated-session in the browser profile default allowlist",
   permissions: { read: true, write: true },
@@ -2894,7 +2060,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "run_skill_script rejects Bash scripts that source relative helpers",
   permissions: { read: true, write: true },
   async fn() {
@@ -2976,7 +2142,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "run_skill_script requires activation, exact allowlist, and run-start digest",
   permissions: { read: true, write: true },
@@ -3138,7 +2304,7 @@ Deno.test({
   },
 });
 
-Deno.test("edit_file applies exact replacements and returns a unified diff", async () => {
+test("edit_file applies exact replacements and returns a unified diff", async () => {
   const original = "one\ntwo\nthree\n";
   const edited = "one\nTWO\nthree\n";
   const sandbox = new FakeSandboxRuntime([
@@ -3206,7 +2372,7 @@ Deno.test("edit_file applies exact replacements and returns a unified diff", asy
   );
 });
 
-Deno.test("edit_file labels write stdin with internal read CFC labels", async () => {
+test("edit_file labels write stdin with internal read CFC labels", async () => {
   const original = "alpha\nbeta\n";
   const edited = "alpha\nBETA\n";
   const readLabel = { confidentiality: ["did:key:file-secret"] };
@@ -3282,7 +2448,7 @@ Deno.test("edit_file labels write stdin with internal read CFC labels", async ()
   );
 });
 
-Deno.test("edit_file omits CFC result when either internal read is unmediated", async () => {
+test("edit_file omits CFC result when either internal read is unmediated", async () => {
   const original = "alpha\nbeta\n";
   const edited = "alpha\nBETA\n";
   const sandbox = new FakeSandboxRuntime([
@@ -3307,7 +2473,7 @@ Deno.test("edit_file omits CFC result when either internal read is unmediated", 
   assertEquals("cfcResult" in output, false);
 });
 
-Deno.test("edit_file returns separate hunks for distant edits", async () => {
+test("edit_file returns separate hunks for distant edits", async () => {
   const original = Array.from(
     { length: 30 },
     (_, index) => `line ${String(index + 1).padStart(2, "0")}\n`,
@@ -3342,7 +2508,7 @@ Deno.test("edit_file returns separate hunks for distant edits", async () => {
   assertEquals(output.diff.match(/^@@ /gm)?.length, 2);
 });
 
-Deno.test("edit_file caps oversized diff output", async () => {
+test("edit_file caps oversized diff output", async () => {
   const original = Array.from(
     { length: 450 },
     (_, index) => `old ${String(index + 1).padStart(3, "0")}\n`,
@@ -3369,7 +2535,7 @@ Deno.test("edit_file caps oversized diff output", async () => {
   assertEquals(output.diff.split("\n").length, 401);
 });
 
-Deno.test("edit_file applies replaceAll edits with expected replacement counts", async () => {
+test("edit_file applies replaceAll edits with expected replacement counts", async () => {
   const original = "red blue red\n";
   const edited = "green blue green\n";
   const sandbox = new FakeSandboxRuntime([
@@ -3397,7 +2563,7 @@ Deno.test("edit_file applies replaceAll edits with expected replacement counts",
   assertEquals(output.editsApplied, 1);
 });
 
-Deno.test("edit_file rejects ambiguous single replacements without writing", async () => {
+test("edit_file rejects ambiguous single replacements without writing", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "name: alpha\nname: beta\n",
     stderr: "",
@@ -3419,7 +2585,7 @@ Deno.test("edit_file rejects ambiguous single replacements without writing", asy
   assertEquals(sandbox.calls.length, 1);
 });
 
-Deno.test("edit_file rejects stale expected digests without writing", async () => {
+test("edit_file rejects stale expected digests without writing", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "hello\n",
     stderr: "",
@@ -3442,7 +2608,7 @@ Deno.test("edit_file rejects stale expected digests without writing", async () =
   assertEquals(sandbox.calls.length, 1);
 });
 
-Deno.test("write_file tool supports append mode and passes content over stdin", async () => {
+test("write_file tool supports append mode and passes content over stdin", async () => {
   const sandbox = new FakeSandboxRuntime();
   const output = await writeFileTool.invoke(createContext(sandbox), {
     path: "notes/log.txt",
@@ -3511,7 +2677,7 @@ Deno.test("write_file tool supports append mode and passes content over stdin", 
   );
 });
 
-Deno.test("write_file tool merges explicit trusted CFC labels with write inputs", async () => {
+test("write_file tool merges explicit trusted CFC labels with write inputs", async () => {
   const sandbox = new FakeSandboxRuntime();
   const trustedLabels: CfcLabelView = {
     version: 1,
@@ -3539,7 +2705,7 @@ Deno.test("write_file tool merges explicit trusted CFC labels with write inputs"
   );
 });
 
-Deno.test("write_file uses the cwd established by an earlier bash call", async () => {
+test("write_file uses the cwd established by an earlier bash call", async () => {
   const sandbox = new FakeSandboxRuntime([
     { stdout: "", stderr: "", exitCode: 0 },
     { stdout: "", stderr: "", exitCode: 0 },
@@ -3599,7 +2765,7 @@ Deno.test("write_file uses the cwd established by an earlier bash call", async (
   );
 });
 
-Deno.test("write_file tool returns a recoverable permission_denied result", async () => {
+test("write_file tool returns a recoverable permission_denied result", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "",
     stderr: "permission denied",
@@ -3626,7 +2792,7 @@ Deno.test("write_file tool returns a recoverable permission_denied result", asyn
   });
 });
 
-Deno.test("write_file tool returns a recoverable path_outside_workspace result", async () => {
+test("write_file tool returns a recoverable path_outside_workspace result", async () => {
   const sandbox = new StrictFakeSandboxRuntime();
 
   const output = await writeFileTool.invoke(createContext(sandbox), {
@@ -3649,7 +2815,7 @@ Deno.test("write_file tool returns a recoverable path_outside_workspace result",
   assertEquals(sandbox.calls, []);
 });
 
-Deno.test("write_file tool denies reserved artifact paths before shelling out", async () => {
+test("write_file tool denies reserved artifact paths before shelling out", async () => {
   const sandbox = new FakeSandboxRuntime();
   const output = await writeFileTool.invoke(
     createContext(
@@ -3682,7 +2848,7 @@ Deno.test("write_file tool denies reserved artifact paths before shelling out", 
   assertEquals(sandbox.calls, []);
 });
 
-Deno.test("view_image tool attaches a workspace image without shelling out", async () => {
+test("view_image tool attaches a workspace image without shelling out", async () => {
   const workspace = await Deno.realPath(await Deno.makeTempDir());
   await Deno.writeFile(join(workspace, "capture.png"), ONE_PIXEL_PNG);
   const sandbox = new FakeSandboxRuntime();
@@ -3712,7 +2878,7 @@ Deno.test("view_image tool attaches a workspace image without shelling out", asy
   assertEquals(sandbox.calls, []);
 });
 
-Deno.test("view_image tool denies reserved artifact paths", async () => {
+test("view_image tool denies reserved artifact paths", async () => {
   const workspace = await Deno.realPath(await Deno.makeTempDir());
   const artifactRoot = join(workspace, ".cf-harness-artifacts");
   await Deno.mkdir(artifactRoot, { recursive: true });
@@ -3757,7 +2923,7 @@ const NO_SESSIONS_REFUSAL_TEXT =
 const INVALID_SESSION_NAME_REFUSAL_TEXT =
   "invalid `session` name: use 1 to 32 characters from letters, digits, `_`, `.` and `-`, starting with a letter or a digit; rerun the command with such a name, or without `session`";
 
-Deno.test("bash tool refuses a session on a runtime without sessions, recoverably", async () => {
+test("bash tool refuses a session on a runtime without sessions, recoverably", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "x\n",
     stderr: "",
@@ -3843,7 +3009,7 @@ const SESSION_REFUSAL_TEXTS: Array<
   ],
 ];
 
-Deno.test("bash tool turns the runtime's session refusal into a recoverable result", async () => {
+test("bash tool turns the runtime's session refusal into a recoverable result", async () => {
   using logged = stub(console, "error");
   const context = createContext(
     new RefusingSessionsRuntime(
@@ -3871,7 +3037,7 @@ Deno.test("bash tool turns the runtime's session refusal into a recoverable resu
   assertEquals(logged.calls.length, 1);
 });
 
-Deno.test("bash tool shows the model its own text for each reason a runtime refuses a session", async () => {
+test("bash tool shows the model its own text for each reason a runtime refuses a session", async () => {
   using _logged = stub(console, "error");
   for (const [reason, text] of SESSION_REFUSAL_TEXTS) {
     const context = createContext(
@@ -3896,7 +3062,7 @@ Deno.test("bash tool shows the model its own text for each reason a runtime refu
   );
 });
 
-Deno.test("bash tool shows the model a refusal of its own for a reason it does not know", async () => {
+test("bash tool shows the model a refusal of its own for a reason it does not know", async () => {
   using _logged = stub(console, "error");
   // A runtime is injected, and tests run unchecked: a reason outside the
   // set, or none, can arrive whatever the type says. The last three are not
@@ -3935,7 +3101,7 @@ Deno.test("bash tool shows the model a refusal of its own for a reason it does n
   }
 });
 
-Deno.test("bash tool logs the runtime's own words about a refused session for the operator", async () => {
+test("bash tool logs the runtime's own words about a refused session for the operator", async () => {
   using logged = stub(console, "error");
   const context = createContext(
     new RefusingSessionsRuntime(
@@ -3986,7 +3152,7 @@ const RAW_IN_LOG_LINE =
   // deno-lint-ignore no-control-regex
   /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/;
 
-Deno.test("bash tool logs the end of a runtime's message longer than 200 characters", async () => {
+test("bash tool logs the end of a runtime's message longer than 200 characters", async () => {
   // The cause is what a runtime's message ends in, so the end is what is
   // looked for.
   const message =
@@ -4002,7 +3168,7 @@ Deno.test("bash tool logs the end of a runtime's message longer than 200 charact
   assertEquals(line.includes("length:"), false);
 });
 
-Deno.test("bash tool logs every line of a runtime's message of more than five lines", async () => {
+test("bash tool logs every line of a runtime's message of more than five lines", async () => {
   const message = [
     "sandbox session could not start:",
     "line 2",
@@ -4019,7 +3185,7 @@ Deno.test("bash tool logs every line of a runtime's message of more than five li
   assertEquals(line.includes("length:"), false);
 });
 
-Deno.test("bash tool cuts a runtime's message at its bound in the log and says so", async () => {
+test("bash tool cuts a runtime's message at its bound in the log and says so", async () => {
   const bound = BASH_SESSION_REFUSAL_LOG_MESSAGE_MAX_LENGTH;
   assertEquals(bound >= 4000, true);
   const kept = `${"k".repeat(bound - 10)}KEPT-TAIL.`;
@@ -4038,7 +3204,7 @@ Deno.test("bash tool cuts a runtime's message at its bound in the log and says s
   assertEquals(cut.length < bound + 500, true);
 });
 
-Deno.test("bash tool logs a runtime's message as one line with nothing in it that drives a terminal", async () => {
+test("bash tool logs a runtime's message as one line with nothing in it that drives a terminal", async () => {
   const message =
     "start\ncf-harness: FORGED LINE\r\x1b[2J\x1b]0;title\x07 c1:\u009b31m nel:\u0085 del:\x7f ls:\u2028 ps:\u2029 rlo:\u202eDESREVER lri:\u2066 end";
 
@@ -4053,7 +3219,7 @@ Deno.test("bash tool logs a runtime's message as one line with nothing in it tha
   assertStringIncludes(line, "rlo:\\u202eDESREVER lri:\\u2066 end");
 });
 
-Deno.test("bash tool escapes what a run id holds that would break the log line", async () => {
+test("bash tool escapes what a run id holds that would break the log line", async () => {
   const line = await loggedSessionRefusal(
     RUNTIME_REFUSAL_MESSAGE,
     "run\ncf-harness: FORGED\u009b\u202e",
@@ -4063,7 +3229,7 @@ Deno.test("bash tool escapes what a run id holds that would break the log line",
   assertStringIncludes(line, "run\\ncf-harness: FORGED\\u009b\\u202e");
 });
 
-Deno.test("bash tool logs nothing of the call's input for a refused session", async () => {
+test("bash tool logs nothing of the call's input for a refused session", async () => {
   using logged = stub(console, "error");
   const runtime = new RefusingSessionsRuntime(
     new SandboxSessionUnavailableError(
@@ -4090,7 +3256,7 @@ Deno.test("bash tool logs nothing of the call's input for a refused session", as
   assertEquals(written.includes("MARKER-IN-CWD"), false);
 });
 
-Deno.test("bash tool names the run and the tool output in the log of a refused session", async () => {
+test("bash tool names the run and the tool output in the log of a refused session", async () => {
   // A run id the output id does not hold, so each is found by itself.
   const line = await loggedSessionRefusal(
     RUNTIME_REFUSAL_MESSAGE,
@@ -4121,7 +3287,7 @@ const countInvocationContexts = (
   return counter;
 };
 
-Deno.test("bash tool hands an accepted session to the runtime", async () => {
+test("bash tool hands an accepted session to the runtime", async () => {
   const sandbox = new SessionsFakeSandboxRuntime([{
     stdout: "built\n",
     stderr: "",
@@ -4147,7 +3313,7 @@ Deno.test("bash tool hands an accepted session to the runtime", async () => {
   assertEquals("session" in sandbox.calls[1].request, false);
 });
 
-Deno.test("bash tool accepts the longest session name the pattern allows", async () => {
+test("bash tool accepts the longest session name the pattern allows", async () => {
   const longest = "a".repeat(32);
   assertEquals(SANDBOX_SESSION_NAME_PATTERN.test(longest), true);
   const sandbox = new SessionsFakeSandboxRuntime();
@@ -4159,7 +3325,7 @@ Deno.test("bash tool accepts the longest session name the pattern allows", async
   assertEquals(sandbox.calls[0]?.request.session, longest);
 });
 
-Deno.test("bash tool refuses a session name that is not an identifier, recoverably", async () => {
+test("bash tool refuses a session name that is not an identifier, recoverably", async () => {
   const refused: Array<[string, unknown]> = [
     ["a path separator", "a/b"],
     ["a path that climbs out", "a/../../x"],
@@ -4195,7 +3361,7 @@ Deno.test("bash tool refuses a session name that is not an identifier, recoverab
   }
 });
 
-Deno.test("bash tool refuses a session before it records an invocation", async () => {
+test("bash tool refuses a session before it records an invocation", async () => {
   // A runtime without sessions: the refusal is the whole of the call.
   const sandbox = new FakeSandboxRuntime();
   const context = createContext(sandbox);

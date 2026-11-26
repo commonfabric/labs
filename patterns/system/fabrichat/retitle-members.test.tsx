@@ -3,7 +3,7 @@
  * member who isn't an OWNER, with WRITE, sets the title of a group room and of
  * a direct room, and every member's view shows it; a reader with READ is
  * refused, with a reason and a code in their own `titleRequests`, and the
- * title stays as it was.
+ * title stays as it was, and so is their title for one of its threads.
  *
  * The test lane doesn't enforce the list, so what this checks is what the room
  * decides from the level `spaceAccess()` reports, not what the memory server
@@ -184,13 +184,23 @@ export const carol = pattern<{ setup: Setup }>(({ setup }) => {
         event: { requestId: "carol-group", title: "Carol's room" },
         trustedUi: retitleGesture,
       },
+      // Nor may she title one of its threads.
+      {
+        action: group[VIEWS].room.setThreadTitle,
+        event: { requestId: "carol-thread", title: "Carol's thread" },
+        trustedUi: retitleGesture,
+      },
       {
         assertion: assert(() => {
           const recorded = group[VIEWS].room.titleRequests["carol-group"];
+          const thread = group[VIEWS].room
+            .threadTitleRequests["carol-thread"];
           return recorded?.status === "refused" &&
             recorded.code === "not-member" &&
             recorded.reason === "You can't write in this chat." &&
-            group[VIEWS].room.about.title === "Weekend plans";
+            group[VIEWS].room.about.title === "Weekend plans" &&
+            thread?.status === "refused" && thread.code === "not-member" &&
+            thread.reason === "You can't write in this chat.";
         }),
       },
       { label: "carol-refused" },

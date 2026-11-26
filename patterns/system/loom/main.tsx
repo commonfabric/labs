@@ -7,6 +7,8 @@ import {
   ifElse,
   NAME,
   pattern,
+  type PerUser,
+  spaceMembers,
   spaceOf,
   type Stream,
   UI,
@@ -16,6 +18,7 @@ import {
 } from "commonfabric";
 import FabriChatRoom from "../fabrichat/room.tsx";
 import { ensureFileStore } from "../fabrifile/store.tsx";
+import { memberSet, type SpaceMember } from "../social-space/member-set.ts";
 import {
   admitPanel,
   assertRemovable,
@@ -42,7 +45,11 @@ import type {
   PrivatePanel,
   ViewerState,
 } from "./schemas.tsx";
-import { addParticipant, rosterProfiles } from "./participants.tsx";
+import {
+  addParticipant,
+  joinAsViewer,
+  rosterProfiles,
+} from "./participants.tsx";
 
 type State = {
   panels: Writable<Writable<Panel>[]>;
@@ -716,6 +723,14 @@ export default pattern<LoomInput, LoomOutput>(
       })
     );
     const roster = computed(() => rosterProfiles(participants));
+    // Only a member may read the space's access list, and a profile lives in
+    // its owner's own space, which may refuse a reader. Both are the reader's
+    // principal's, so the members are derived per user. The binding's name is
+    // its value's cause, the identity of the document that stores it, so
+    // renaming it moves its data.
+    const membersForUser = computed((): PerUser<SpaceMember[]> | undefined =>
+      memberSet(roster, spaceMembers(participants))
+    );
     const room = computed(() => chatRoom.get().room);
     const store = computed(() => fileStore.get().store);
     const viewerPanels = computed(() =>
@@ -733,6 +748,7 @@ export default pattern<LoomInput, LoomOutput>(
     const move = movePanel(state);
     const duplicate = admitPanel({ panels, mode: "duplicate" });
     const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
+    const join = addParticipant({ roster: participants });
     const present = setPresentation(state);
     const hide = hidePanel({ panels, hiddenPanels });
     const unhide = unhidePanel({ hiddenPanels });
@@ -891,7 +907,9 @@ export default pattern<LoomInput, LoomOutput>(
       duplicatePanel: duplicate,
       setPresentation: present,
       participants: roster,
-      addParticipant: addParticipant({ roster: participants }),
+      members: membersForUser,
+      addParticipant: join,
+      joinAsViewer: joinAsViewer({ join, profile: viewerProfile.result }),
       chatRoom: room,
       setChatRoom: setChatRoom({ chatRoom }),
       ensureChatRoom: ensureChatRoom({ chatRoom }),

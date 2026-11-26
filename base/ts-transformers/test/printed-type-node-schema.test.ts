@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { CrossStageState } from "../src/core/mod.ts";
@@ -15,6 +14,7 @@ import {
   patternSchemas,
 } from "./transformed-ast.ts";
 import { transformFiles, transformSource } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const IMPORTS =
   `import { computed, type Default, pattern, Writable, type PerUser } from "commonfabric";
@@ -609,6 +609,20 @@ export default pattern<{ u: unknown }>(({ u }) => ${result});`,
         expect(diagnostics).toEqual([]);
       });
     }
+
+    it("reports `pattern-result:unknown-type` for an `unknown` member of an anonymous class instance keyed by a string starting `__@`", async () => {
+      // The checker escapes a string key starting `__` with one more leading
+      // underscore, which is what tells it apart from a symbol key.
+
+      const { diagnostics } = await transformWithMake(
+        `function makeOdd() { return new (class { v = 1; "__@x": unknown = "u"; })(); }
+export default pattern<Record<string, never>>(() => ({ a: makeOdd() }));`,
+      );
+
+      expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+        .toEqual([{ severity: "error", type: "pattern-result:unknown-type" }]);
+      expect(diagnostics[0]!.message).toContain("a.__@x");
+    });
 
     it("reads a pattern's inferred result holding a type that refers to itself through `typeof`", async () => {
       // The type of `tree` has no name, and holds itself through `typeof`.

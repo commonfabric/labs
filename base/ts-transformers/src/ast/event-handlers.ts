@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { isEventPropName } from "@commonfabric/pattern-contract/jsx-prop-names";
 import { getNodeText } from "./utils.ts";
 
 export function isSafeEventHandlerCall(node: ts.CallExpression): boolean {
@@ -61,7 +62,7 @@ export function isEventHandlerJsxAttribute(
   const attrName = getNodeText(jsxAttribute.name);
 
   // Fast path: conventional "on*" naming
-  if (attrName.startsWith("on")) {
+  if (isEventPropName(attrName)) {
     return true;
   }
 

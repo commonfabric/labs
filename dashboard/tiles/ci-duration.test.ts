@@ -7,7 +7,7 @@
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import type { Ctx, Run } from "../types.ts";
-import { CI_WORKFLOW, LOOM_CI_WORKFLOW, LOOM_REPO, REPO } from "../config.ts";
+import { CI_WORKFLOW, CFS_CI_WORKFLOW, CFS_REPO, REPO } from "../config.ts";
 import type {
   CiGanttInput,
   CiGanttOptions,
@@ -19,7 +19,7 @@ import {
   ciGanttPage,
   commitGanttUrl,
   labsCiDuration,
-  loomCiDuration,
+  cfsCiDuration,
   renderGantt,
   renderGanttRoute,
   weaverCiDuration,
@@ -27,6 +27,7 @@ import {
 import { PERFORMANCE_VIEW_STYLES } from "../performance-views.ts";
 import { collectFromWorkingRuns } from "../test/github-attempts.ts";
 import { STATUS_EDGE, STATUS_WASH } from "../palette.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SVG = new TextEncoder().encode(
   '<svg xmlns="http://www.w3.org/2000/svg"><text>chart</text></svg>',
@@ -212,7 +213,7 @@ function opt(args: string[], flag: string): string | undefined {
   return i < 0 ? undefined : args[i + 1];
 }
 
-Deno.test("the Gantt page shares the performance view selector", async () => {
+test("the Gantt page shares the performance view selector", async () => {
   const url = new URL("http://d/bench?view=gantt");
   const html = ciGanttPage(url);
   assertStringIncludes(
@@ -330,43 +331,43 @@ Deno.test("the Gantt page shares the performance view selector", async () => {
   ) {
     const route = labsCiDuration.routes?.find((route) => route.path === path);
     assert(route);
-    const legacy = new URL(`http://d${path}?repo=loom&limit=12`);
+    const legacy = new URL(`http://d${path}?repo=cfs&limit=12`);
     const response = await route.handler(new Request(legacy), legacy);
     assertEquals(response.status, 308);
     assertEquals(
       response.headers.get("location"),
-      `${target}?repo=loom&limit=12`,
+      `${target}?repo=cfs&limit=12`,
     );
   }
 
-  const loomHtml = ciGanttPage(
+  const cfsHtml = ciGanttPage(
     new URL(
-      "http://d/bench?view=gantt&repo=loom&days=9&sort=duration&stat=p75",
+      "http://d/bench?view=gantt&repo=cfs&days=9&sort=duration&stat=p75",
     ),
   );
-  assertStringIncludes(loomHtml, `${LOOM_REPO} · ${LOOM_CI_WORKFLOW}`);
+  assertStringIncludes(cfsHtml, `${CFS_REPO} · ${CFS_CI_WORKFLOW}`);
   assertStringIncludes(
-    loomHtml,
-    'href="/bench?view=runtime&amp;repo=loom&amp;days=9&amp;sort=duration&amp;stat=p75">Runtime benchmarks</a>',
+    cfsHtml,
+    'href="/bench?view=runtime&amp;repo=cfs&amp;days=9&amp;sort=duration&amp;stat=p75">Runtime benchmarks</a>',
   );
   assertStringIncludes(
-    loomHtml,
-    'href="/bench?view=ci&amp;repo=loom&amp;days=9&amp;sort=duration&amp;stat=p75">CI duration history</a>',
+    cfsHtml,
+    'href="/bench?view=ci&amp;repo=cfs&amp;days=9&amp;sort=duration&amp;stat=p75">CI duration history</a>',
   );
-  assertStringIncludes(loomHtml, '<option value="loom" selected>loom</option>');
+  assertStringIncludes(cfsHtml, '<option value="cfs" selected>cfs</option>');
 });
 
-Deno.test("the commit Gantt page contains only one commit selection", () => {
+test("the commit Gantt page contains only one commit selection", () => {
   const sha = "b".repeat(40);
   const url = new URL(
-    `http://d/ci-gantt?repo=loom&sha=${sha}&limit=2&mainOnly=1&run=701:1&run=702:3`,
+    `http://d/ci-gantt?repo=cfs&sha=${sha}&limit=2&mainOnly=1&run=701:1&run=702:3`,
   );
   const html = ciCommitGanttPage(url);
   assertStringIncludes(html, `<title>CI Gantt · ${sha.slice(0, 7)}</title>`);
-  assertStringIncludes(html, `${LOOM_REPO} · `);
+  assertStringIncludes(html, `${CFS_REPO} · `);
   assertStringIncludes(
     html,
-    `href="https://github.com/${LOOM_REPO}/commit/${sha}"`,
+    `href="https://github.com/${CFS_REPO}/commit/${sha}"`,
   );
   assertStringIncludes(html, 'aria-label="Commit CI Gantt fetch progress"');
   assertStringIncludes(html, "/ci-gantt.svg?");
@@ -390,7 +391,7 @@ Deno.test("the commit Gantt page contains only one commit selection", () => {
   assert(!html.includes('aria-label="Performance view"'));
 
   const empty = ciCommitGanttPage(
-    new URL(`http://d/ci-gantt?repo=loom&sha=${sha}`),
+    new URL(`http://d/ci-gantt?repo=cfs&sha=${sha}`),
   );
   assertStringIncludes(
     empty,
@@ -399,25 +400,25 @@ Deno.test("the commit Gantt page contains only one commit selection", () => {
   assert(!empty.includes("/ci-gantt.svg?"));
 });
 
-Deno.test("the commit Gantt page stars a commit the green branch is at, and no commit it was never at", () => {
+test("the commit Gantt page stars a commit the green branch is at, and no commit it was never at", () => {
   const held = "f".repeat(40);
   const page = (sha: string) =>
     ciCommitGanttPage(
-      new URL(`http://d/ci-gantt?repo=loom&sha=${sha}&run=701:1`),
+      new URL(`http://d/ci-gantt?repo=cfs&sha=${sha}&run=701:1`),
       (repo, asked) =>
-        repo === LOOM_REPO && asked === held
+        repo === CFS_REPO && asked === held
           ? { branch: "main-green", current: true }
           : undefined,
     );
   assertStringIncludes(
     page(held),
-    `${LOOM_REPO} · <span class="green-star" role="img" aria-label="main-green is at this commit" title="main-green is at this commit">★</span><a class="commit"`,
+    `${CFS_REPO} · <span class="green-star" role="img" aria-label="main-green is at this commit" title="main-green is at this commit">★</span><a class="commit"`,
   );
   assertStringIncludes(page(held), "span.green-star{color:var(--status-good)");
   assert(!page("9".repeat(40)).includes(`<span class="green-star"`));
 });
 
-Deno.test("the commit Gantt route reads the green branch of a repository that has one before it serves the page", async () => {
+test("the commit Gantt route reads the green branch of a repository that has one before it serves the page", async () => {
   const at = "e".repeat(40);
   const route = labsCiDuration.routes?.find((route) => route.path === "/ci-gantt");
   assert(route);
@@ -437,11 +438,11 @@ Deno.test("the commit Gantt route reads the green branch of a repository that ha
       return await (await route.handler(new Request(url), url)).text();
     };
     assertStringIncludes(
-      await serve("loom"),
+      await serve("cfs"),
       `aria-label="main-green is at this commit"`,
     );
     assertEquals(requests.map((url) => url.pathname), [
-      `/repos/${LOOM_REPO}/activity`,
+      `/repos/${CFS_REPO}/activity`,
     ]);
     assert(!(await serve("labs")).includes(`<span class="green-star"`));
     assertEquals(requests.length, 1);
@@ -452,7 +453,7 @@ Deno.test("the commit Gantt route reads the green branch of a repository that ha
   }
 });
 
-Deno.test("commit Gantt URL normalization preserves only renderer themes", () => {
+test("commit Gantt URL normalization preserves only renderer themes", () => {
   const selection = `repo=labs&sha=${"e".repeat(40)}&run=42:1`;
   for (const theme of ["dark", "light"]) {
     const normalized = commitGanttUrl(
@@ -469,7 +470,7 @@ Deno.test("commit Gantt URL normalization preserves only renderer themes", () =>
   assertEquals(unknown.searchParams.has("theme"), false);
 });
 
-Deno.test("commit Gantt data routes start the exact selected collection", async () => {
+test("commit Gantt data routes start the exact selected collection", async () => {
   const previousGhToken = Deno.env.get("GH_TOKEN");
   const previousGitHubToken = Deno.env.get("GITHUB_TOKEN");
   const originalError = console.error;
@@ -511,11 +512,11 @@ Deno.test("commit Gantt data routes start the exact selected collection", async 
   }
 });
 
-Deno.test("CI duration tiles link to their repository histories", async () => {
-  assertEquals(loomCiDuration.routes, undefined);
-  const loom = await collectFromWorkingRuns(loomCiDuration, ctx([run({})]));
-  assertEquals(loom.href, "/bench?view=ci&repo=loom");
-  assertEquals(loom.hint, "main run history ↗");
+test("CI duration tiles link to their repository histories", async () => {
+  assertEquals(cfsCiDuration.routes, undefined);
+  const cfs = await collectFromWorkingRuns(cfsCiDuration, ctx([run({})]));
+  assertEquals(cfs.href, "/bench?view=ci&repo=cfs");
+  assertEquals(cfs.hint, "main run history ↗");
   const labs = await collectFromWorkingRuns(labsCiDuration, ctx([run({})]));
   assertEquals(labs.href, "/bench?view=ci&repo=labs");
   assertEquals(labs.hint, "main run history ↗");
@@ -526,14 +527,14 @@ Deno.test("CI duration tiles link to their repository histories", async () => {
     env: () => undefined,
   };
   const coldLabs = await collectFromWorkingRuns(labsCiDuration, unavailable);
-  const coldLoom = await collectFromWorkingRuns(loomCiDuration, unavailable);
+  const coldLoom = await collectFromWorkingRuns(cfsCiDuration, unavailable);
   assertEquals(
     [coldLabs.href, coldLabs.hint, coldLabs.sub],
     ["/bench?view=ci&repo=labs", "main run history ↗", "set GH_TOKEN"],
   );
   assertEquals(
     [coldLoom.href, coldLoom.hint, coldLoom.sub],
-    ["/bench?view=ci&repo=loom", "main run history ↗", "set GH_TOKEN"],
+    ["/bench?view=ci&repo=cfs", "main run history ↗", "set GH_TOKEN"],
   );
 
   // Weaver has no history view to open, so its tile is not a link.
@@ -546,7 +547,7 @@ Deno.test("CI duration tiles link to their repository histories", async () => {
   );
 });
 
-Deno.test("/bench/gantt.svg: a successful render returns SVG uncached", async () => {
+test("/bench/gantt.svg: a successful render returns SVG uncached", async () => {
   const { res, args, input, leftover, requested } = await gantt("?limit=30");
   assertEquals(res.status, 200);
   assertEquals(res.headers.get("content-type"), "image/svg+xml");
@@ -580,7 +581,7 @@ Deno.test("/bench/gantt.svg: a successful render returns SVG uncached", async ()
   assertEquals(opt(light.args, "--theme"), "default");
 });
 
-Deno.test("/bench/gantt.svg includes chart labels without server fonts", async () => {
+test("/bench/gantt.svg includes chart labels without server fonts", async () => {
   const response = await renderGantt(
     new URLSearchParams("limit=1&mainOnly=1"),
     provideGantt(() => [
@@ -621,7 +622,7 @@ Deno.test("/bench/gantt.svg includes chart labels without server fonts", async (
   assertStringIncludes(svg, ">runs</text>");
 });
 
-Deno.test("/bench/gantt.svg finishes collection but skips an abandoned render", async () => {
+test("/bench/gantt.svg finishes collection but skips an abandoned render", async () => {
   const controller = new AbortController();
   controller.abort();
   const request = new Request("http://d/bench/gantt.svg?limit=12", {
@@ -665,7 +666,7 @@ Deno.test("/bench/gantt.svg finishes collection but skips an abandoned render", 
   }
 });
 
-Deno.test("/bench/gantt.svg stops rendering when its request is abandoned", async () => {
+test("/bench/gantt.svg stops rendering when its request is abandoned", async () => {
   const controller = new AbortController();
   const result = await gantt(
     "?limit=12",
@@ -678,7 +679,7 @@ Deno.test("/bench/gantt.svg stops rendering when its request is abandoned", asyn
   assertEquals(result.leftover, []);
 });
 
-Deno.test("/bench/gantt.svg drops an image completed after abandonment", async () => {
+test("/bench/gantt.svg drops an image completed after abandonment", async () => {
   const controller = new AbortController();
   const result = await gantt(
     "?limit=12",
@@ -690,22 +691,22 @@ Deno.test("/bench/gantt.svg drops an image completed after abandonment", async (
   assertEquals(result.leftover, []);
 });
 
-Deno.test("/bench/gantt.svg selects loom for both cached data and rendering", async () => {
+test("/bench/gantt.svg selects cfs for both cached data and rendering", async () => {
   const { args, requested, input } = await gantt(
-    "?repo=loom&limit=12&mainOnly=1",
+    "?repo=cfs&limit=12&mainOnly=1",
   );
-  assertEquals(requested.source.key, "loom");
+  assertEquals(requested.source.key, "cfs");
   assertEquals(requested.options, {
     limit: 12,
     mainOnly: true,
     allConclusions: false,
   });
-  assertEquals(opt(args, "--repo"), LOOM_REPO);
-  assertEquals(opt(args, "--workflow"), LOOM_CI_WORKFLOW);
-  assertEquals(input.runs[0].run.workflowName, LOOM_CI_WORKFLOW);
+  assertEquals(opt(args, "--repo"), CFS_REPO);
+  assertEquals(opt(args, "--workflow"), CFS_CI_WORKFLOW);
+  assertEquals(input.runs[0].run.workflowName, CFS_CI_WORKFLOW);
 });
 
-Deno.test("a commit Gantt image requests the selected run attempts", async () => {
+test("a commit Gantt image requests the selected run attempts", async () => {
   const sha = "c".repeat(40);
   const selected = await gantt(
     `?sha=${sha}&limit=2&mainOnly=1&run=501:1&run=502:4`,
@@ -729,14 +730,14 @@ Deno.test("a commit Gantt image requests the selected run attempts", async () =>
   assertEquals(opt(selected.args, "--min-runs"), "1");
 });
 
-Deno.test("/bench/gantt.svg: limit is clamped to the slider's range, junk falls back to 60", async () => {
+test("/bench/gantt.svg: limit is clamped to the slider's range, junk falls back to 60", async () => {
   assertEquals(opt((await gantt("?limit=500")).args, "--limit"), "150");
   assertEquals(opt((await gantt("?limit=0")).args, "--limit"), "1");
   assertEquals(opt((await gantt("?limit=abc")).args, "--limit"), "60");
   assertEquals(opt((await gantt("")).args, "--limit"), "60");
 });
 
-Deno.test("/bench/gantt.svg: the checkboxes are off unless set to 1", async () => {
+test("/bench/gantt.svg: the checkboxes are off unless set to 1", async () => {
   const offResult = await gantt("?mainOnly=0&allConclusions=yes");
   const off = offResult.args;
   assert(!off.includes("--main-only"), "mainOnly=0 is not main-only");
@@ -750,7 +751,7 @@ Deno.test("/bench/gantt.svg: the checkboxes are off unless set to 1", async () =
   assertEquals(onResult.requested.options.allConclusions, true);
 });
 
-Deno.test("/bench/gantt.svg: automatic min-runs fits every window", async () => {
+test("/bench/gantt.svg: automatic min-runs fits every window", async () => {
   // A main-only window can be thin. The floor is capped at the run count so even a
   // one-run window still draws instead of having every job dropped.
   assertEquals(opt((await gantt("?mainOnly=1")).args, "--min-runs"), "2");
@@ -762,14 +763,14 @@ Deno.test("/bench/gantt.svg: automatic min-runs fits every window", async () => 
   assertEquals(opt((await gantt("?limit=4")).args, "--min-runs"), "4");
 });
 
-Deno.test("/bench/gantt.svg ignores the removed minRuns parameter", async () => {
+test("/bench/gantt.svg ignores the removed minRuns parameter", async () => {
   assertEquals(
     opt((await gantt("?mainOnly=1&minRuns=9")).args, "--min-runs"),
     "2",
   );
 });
 
-Deno.test("/bench/gantt.svg: a failing ci-gantt is a 500, with its stderr in the server log only", async () => {
+test("/bench/gantt.svg: a failing ci-gantt is a 500, with its stderr in the server log only", async () => {
   const { res, logged, leftover } = await gantt("?limit=5", {
     success: false,
     stderr: "no runs matched --min-runs",
@@ -780,7 +781,7 @@ Deno.test("/bench/gantt.svg: a failing ci-gantt is a 500, with its stderr in the
   assertEquals(leftover, []);
 });
 
-Deno.test("/bench/gantt.svg: a spawn that throws is a 500, not an unhandled rejection", async () => {
+test("/bench/gantt.svg: a spawn that throws is a 500, not an unhandled rejection", async () => {
   const { res, logged, leftover } = await gantt("", {
     throws: new Error("deno: command not found"),
   });
@@ -791,7 +792,7 @@ Deno.test("/bench/gantt.svg: a spawn that throws is a 500, not an unhandled reje
   assertEquals(leftover, []); // the temp file is removed even on the error path
 });
 
-Deno.test("/bench/gantt.svg reports the performance-history boundary as a rate limit hit", async () => {
+test("/bench/gantt.svg reports the performance-history boundary as a rate limit hit", async () => {
   const originalError = console.error;
   console.error = () => {};
   try {
@@ -812,7 +813,7 @@ Deno.test("/bench/gantt.svg reports the performance-history boundary as a rate l
   }
 });
 
-Deno.test("/bench/gantt.svg returns a safe collection error to the page", async () => {
+test("/bench/gantt.svg returns a safe collection error to the page", async () => {
   const originalError = console.error;
   console.error = () => {};
   try {
@@ -829,7 +830,7 @@ Deno.test("/bench/gantt.svg returns a safe collection error to the page", async 
   }
 });
 
-Deno.test("ci-duration: no passing runs is gray, never a false green", async () => {
+test("ci-duration: no passing runs is gray, never a false green", async () => {
   const v = await collectFromWorkingRuns(labsCiDuration, 
     ctx([
       run({ conclusion: "failure" }),
@@ -845,7 +846,7 @@ Deno.test("ci-duration: no passing runs is gray, never a false green", async () 
   );
 });
 
-Deno.test("ci-duration: the median minutes set the status against the thresholds", async () => {
+test("ci-duration: the median minutes set the status against the thresholds", async () => {
   const mins = (m: number) =>
     run({
       created_at: new Date(Date.now() - m * 60_000).toISOString(),
@@ -876,7 +877,7 @@ Deno.test("ci-duration: the median minutes set the status against the thresholds
   assertStringIncludes(v.sub ?? "", "median of last 3 PR runs"); // under the 20-run bar -> count window
 });
 
-Deno.test("ci-duration measures from creation through completion", async () => {
+test("ci-duration measures from creation through completion", async () => {
   const now = Date.now();
   const view = await collectFromWorkingRuns(labsCiDuration, 
     ctx([

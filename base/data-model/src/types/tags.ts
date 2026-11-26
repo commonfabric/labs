@@ -23,7 +23,6 @@ export const FABRIC_CONVERTIBLE_JS_OBJECT_TAGS = Object.freeze(
     JsDate: "JsDate",
     JsError: "JsError",
     JsMap: "JsMap",
-    JsRegExp: "JsRegExp",
     JsSet: "JsSet",
     JsUint8Array: "JsUint8Array",
   } as const,

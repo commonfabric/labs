@@ -31,7 +31,6 @@
  */
 
 import ts from "typescript";
-import { isTrustedBuilder } from "@commonfabric/pattern-contract/sandbox-contract";
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 import { detectCallKind, isCallbackReference } from "../ast/call-kind.ts";
 import { visitEachChildWithJsx } from "../ast/utils.ts";
@@ -63,7 +62,6 @@ function validateCallbackArgument(
   builderName: string,
   context: TransformationContext,
 ): void {
-  if (!isTrustedBuilder(builderName)) return;
   const checker = context.checker;
   const sourceFile = call.getSourceFile();
   const candidates = callbackCandidates(call.arguments, builderName);
@@ -102,6 +100,9 @@ function validateCallbackArgument(
  * The arguments the verifier considers for the callback, in the order it
  * considers them, mirroring `callbackIndexesForBuilder`. `multiUserTest` is
  * absent there — its arguments are builder results — so it is absent here.
+ * The verifier's `derive` is absent too: no call this pipeline compiles
+ * classifies as a `derive` builder. A builder the verifier does not trust,
+ * such as `render`, has no callback it checks.
  */
 function callbackCandidates(
   args: ts.NodeArray<ts.Expression>,
@@ -123,8 +124,6 @@ function callbackCandidates(
       // Function-first when the leading argument carries the callback,
       // schema-first otherwise.
       return [...at(0), ...at(2)];
-    case "derive":
-      return args.length >= 4 ? at(3) : at(1);
     default:
       return [];
   }

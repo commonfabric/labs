@@ -14,20 +14,20 @@ import { TILE_LAYOUT_FIXTURES } from "./tile-layout-fixtures.ts";
 import { type Ctx, type Run, runSource, type RunSource } from "./types.ts";
 import {
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   REPO,
   WEAVER_CI_WORKFLOW,
   WEAVER_REPO,
 } from "./config.ts";
-import { labsCiTrust, loomCiTrust, weaverCiTrust } from "./tiles/ci-trust.ts";
+import { labsCiTrust, cfsCiTrust, weaverCiTrust } from "./tiles/ci-trust.ts";
 import {
   labsCiDuration,
-  loomCiDuration,
+  cfsCiDuration,
   weaverCiDuration,
 } from "./tiles/ci-duration.ts";
 import { recentCommits } from "./tiles/recent-commits.ts";
-import { dau, foldSeries, parseExcludes } from "./tiles/dau.ts";
+import { dau, foldSeries } from "./tiles/dau.ts";
 import { githubMembers } from "./tiles/github-members.ts";
 import { buildSnapshot, discordOnline } from "./tiles/discord-online.ts";
 import { gcpSpend } from "./tiles/gcp-spend.ts";
@@ -47,6 +47,7 @@ import {
   type GithubAnswer,
   withGithubAttempt,
 } from "./test/github-attempts.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function ctx(
   runs: Run[],
@@ -168,7 +169,7 @@ function cellColors(extra: string | undefined): string[] {
     .reverse();
 }
 
-Deno.test("labs ci trust: only first-attempt success counts as green", async () => {
+test("labs ci trust: only first-attempt success counts as green", async () => {
   // Two of four completed runs passed first try. A success on retry remains in
   // the denominator but does not count as first-try green.
   const retried = run({ conclusion: "success", run_attempt: 2 });
@@ -189,11 +190,11 @@ Deno.test("labs ci trust: only first-attempt success counts as green", async () 
   );
 });
 
-Deno.test("ci trust: each tile links to its repository's page, and each cell to its run", async () => {
+test("ci trust: each tile links to its repository's page, and each cell to its run", async () => {
   const cases = [
     { tile: labsCiTrust, page: "/repos?name=labs" },
-    { tile: loomCiTrust, page: "/repos?name=loom" },
-    { tile: weaverCiTrust, page: "/repos?name=commonfabric-weaver" },
+    { tile: cfsCiTrust, page: "/repos?name=cfs" },
+    { tile: weaverCiTrust, page: "/repos?name=weaver" },
   ];
   for (const { tile, page } of cases) {
     const passed = run({ html_url: `https://github.com/${tile.repo}/actions/runs/1` });
@@ -204,10 +205,10 @@ Deno.test("ci trust: each tile links to its repository's page, and each cell to 
   }
 });
 
-Deno.test("labs and loom ci trust: a cancelled run that never started is left out of the share", async () => {
+test("labs and cfs ci trust: a cancelled run that never started is left out of the share", async () => {
   const cases = [
     { tile: labsCiTrust, repo: REPO },
-    { tile: loomCiTrust, repo: LOOM_REPO },
+    { tile: cfsCiTrust, repo: CFS_REPO },
   ];
   for (const { tile, repo } of cases) {
     const cancelled = [
@@ -239,10 +240,10 @@ Deno.test("labs and loom ci trust: a cancelled run that never started is left ou
   }
 });
 
-Deno.test("labs and loom ci trust: a cancelled run that stopped a job on a runner counts as a failure", async () => {
+test("labs and cfs ci trust: a cancelled run that stopped a job on a runner counts as a failure", async () => {
   const cases = [
     { tile: labsCiTrust, repo: REPO },
-    { tile: loomCiTrust, repo: LOOM_REPO },
+    { tile: cfsCiTrust, repo: CFS_REPO },
   ];
   for (const { tile, repo } of cases) {
     const timedOut = run({ conclusion: "cancelled" });
@@ -273,13 +274,13 @@ Deno.test("labs and loom ci trust: a cancelled run that stopped a job on a runne
   }
 });
 
-Deno.test("labs and loom ci trust: a cancelled run is left out of the share only when a concurrency group stopped the jobs it ran", async () => {
+test("labs and cfs ci trust: a cancelled run is left out of the share only when a concurrency group stopped the jobs it ran", async () => {
   // A concurrency group that cancels in progress stops a run's jobs on their
   // runners when a newer run starts. A timeout or a person stopping them
   // instead says something about the commit.
   const cases = [
     { tile: labsCiTrust, repo: REPO },
-    { tile: loomCiTrust, repo: LOOM_REPO },
+    { tile: cfsCiTrust, repo: CFS_REPO },
   ];
   const reasons = [
     { annotations: REASONS.replaced, color: "var(--status-unknown)" },
@@ -322,7 +323,7 @@ Deno.test("labs and loom ci trust: a cancelled run is left out of the share only
   }
 });
 
-Deno.test("labs ci trust: a cancelled attempt is a failure when any job stopped on a runner was not stopped by a concurrency group", async () => {
+test("labs ci trust: a cancelled attempt is a failure when any job stopped on a runner was not stopped by a concurrency group", async () => {
   // A job timed out, and then a newer run replaced the run while its other
   // jobs ran.
   const cancelled = run({ conclusion: "cancelled" });
@@ -346,7 +347,7 @@ Deno.test("labs ci trust: a cancelled attempt is a failure when any job stopped 
   );
 });
 
-Deno.test("labs ci trust: a cancelled job's annotations are read page by page until one gives the reason", async () => {
+test("labs ci trust: a cancelled job's annotations are read page by page until one gives the reason", async () => {
   const cancelled = run({ conclusion: "cancelled" });
   const warnings = Array.from({ length: 100 }, () => RUNNER_NOTICE);
   await withGithubAttempt(
@@ -370,7 +371,7 @@ Deno.test("labs ci trust: a cancelled job's annotations are read page by page un
   );
 });
 
-Deno.test("labs ci trust: annotations GitHub does not return fail the collection", async (t) => {
+test("labs ci trust: annotations GitHub does not return fail the collection", async (t) => {
   const cases: { name: string; answer: GithubAnswer; message: string }[] = [
     {
       name: "failed request",
@@ -414,13 +415,13 @@ Deno.test("labs ci trust: annotations GitHub does not return fail the collection
   }
 });
 
-Deno.test("labs and loom ci trust: a cancelled run whose cancelled jobs never reached a runner is left out of the share", async () => {
+test("labs and cfs ci trust: a cancelled run whose cancelled jobs never reached a runner is left out of the share", async () => {
   // A job-level concurrency group replaces the waiting job rather than the
   // run, so the run lists the job, cancelled with an empty runner name, beside
   // the jobs that ran.
   const cases = [
     { tile: labsCiTrust, repo: REPO },
-    { tile: loomCiTrust, repo: LOOM_REPO },
+    { tile: cfsCiTrust, repo: CFS_REPO },
   ];
   for (const { tile, repo } of cases) {
     const replaced = run({ conclusion: "cancelled" });
@@ -453,7 +454,7 @@ Deno.test("labs and loom ci trust: a cancelled run whose cancelled jobs never re
   }
 });
 
-Deno.test("labs ci trust: a cancelled run with a job that failed on a runner counts as a failure", async () => {
+test("labs ci trust: a cancelled run with a job that failed on a runner counts as a failure", async () => {
   // Someone cancels a run after one job failed and while another was queued.
   const cancelled = run({ conclusion: "cancelled" });
   await withGithubAttempt(
@@ -480,7 +481,7 @@ Deno.test("labs ci trust: a cancelled run with a job that failed on a runner cou
   );
 });
 
-Deno.test("labs ci trust: the job listing of a cancelled attempt is read only as far as its first job that did not succeed on a runner", async () => {
+test("labs ci trust: the job listing of a cancelled attempt is read only as far as its first job that did not succeed on a runner", async () => {
   const timedOut = run({ conclusion: "cancelled" });
   await withGithubAttempt(
     byUrl([[
@@ -498,7 +499,7 @@ Deno.test("labs ci trust: the job listing of a cancelled attempt is read only as
   );
 });
 
-Deno.test("labs ci trust: a job cancelled on a runner counts as a failure on any page of the job listing", async () => {
+test("labs ci trust: a job cancelled on a runner counts as a failure on any page of the job listing", async () => {
   const timedOut = run({ conclusion: "cancelled" });
   await withGithubAttempt(
     byUrl([
@@ -528,7 +529,7 @@ Deno.test("labs ci trust: a job cancelled on a runner counts as a failure on any
   );
 });
 
-Deno.test("labs ci trust: a run is green only when the one attempt left once cancellations without a verdict are passed over succeeded", async () => {
+test("labs ci trust: a run is green only when the one attempt left once cancellations without a verdict are passed over succeeded", async () => {
   const afterUnstartedGreen = run({ conclusion: "success", run_attempt: 2 });
   const afterUnstartedRed = run({ conclusion: "failure", run_attempt: 2 });
   const redAfterUnstarted = run({ conclusion: "success", run_attempt: 3 });
@@ -623,7 +624,7 @@ Deno.test("labs ci trust: a run is green only when the one attempt left once can
   );
 });
 
-Deno.test("labs ci trust: an earlier attempt is requested once", async () => {
+test("labs ci trust: an earlier attempt is requested once", async () => {
   const retried = run({ conclusion: "success", run_attempt: 2 });
   const earlier = attemptOf(retried, 1, "cancelled");
   await withGithubAttempt(
@@ -639,7 +640,7 @@ Deno.test("labs ci trust: an earlier attempt is requested once", async () => {
   );
 });
 
-Deno.test("labs ci trust: the job listing of a cancelled attempt is requested once, and no other attempt's is", async () => {
+test("labs ci trust: the job listing of a cancelled attempt is requested once, and no other attempt's is", async () => {
   const neverStarted = run({ conclusion: "cancelled" });
   const timedOut = run({ conclusion: "cancelled" });
   const runs = [
@@ -666,7 +667,7 @@ Deno.test("labs ci trust: the job listing of a cancelled attempt is requested on
   );
 });
 
-Deno.test("labs ci trust: a job listing is forgotten once its run leaves the window", async () => {
+test("labs ci trust: a job listing is forgotten once its run leaves the window", async () => {
   const cancelled = run({ conclusion: "cancelled" });
   const other = run({ conclusion: "success" });
   await withGithubAttempt(NO_JOBS, async (urls) => {
@@ -677,7 +678,7 @@ Deno.test("labs ci trust: a job listing is forgotten once its run leaves the win
   });
 });
 
-Deno.test("labs ci trust: an earlier attempt GitHub does not return fails the collection", async () => {
+test("labs ci trust: an earlier attempt GitHub does not return fails the collection", async () => {
   const retried = run({ conclusion: "success", run_attempt: 2 });
   await withGithubAttempt(
     new Error("attempt endpoint unavailable"),
@@ -697,7 +698,7 @@ function unclosedFirstAttempt(of: Run): Run {
   return { ...of, run_attempt: 1, status: "in_progress", conclusion: null };
 }
 
-Deno.test("labs ci trust: an earlier attempt GitHub left in progress takes its conclusion from its jobs", async () => {
+test("labs ci trust: an earlier attempt GitHub left in progress takes its conclusion from its jobs", async () => {
   const failedJob = run({ conclusion: "success", run_attempt: 2 });
   const passedJobs = run({ conclusion: "success", run_attempt: 2 });
   const queuedJobReplaced = run({ conclusion: "success", run_attempt: 2 });
@@ -753,7 +754,7 @@ Deno.test("labs ci trust: an earlier attempt GitHub left in progress takes its c
   );
 });
 
-Deno.test("labs ci trust: an earlier attempt that is not the one asked for fails the collection", async () => {
+test("labs ci trust: an earlier attempt that is not the one asked for fails the collection", async () => {
   const retried = run({ conclusion: "success", run_attempt: 2 });
   const answers: Run[] = [
     // Another run's attempt.
@@ -772,7 +773,7 @@ Deno.test("labs ci trust: an earlier attempt that is not the one asked for fails
   }
 });
 
-Deno.test("labs ci trust: a job listing GitHub does not return fails the collection", async (t) => {
+test("labs ci trust: a job listing GitHub does not return fails the collection", async (t) => {
   const cases: { name: string; answer: GithubAnswer; message: string }[] = [
     {
       name: "failed request",
@@ -832,7 +833,7 @@ Deno.test("labs ci trust: a job listing GitHub does not return fails the collect
   }
 });
 
-Deno.test(
+test(
   "labs ci trust grid: every run in the latest 160-run window has a cell",
   async () => {
     const createdAt = (index: number) => new Date(index * 1_000).toISOString();
@@ -867,7 +868,7 @@ Deno.test(
   },
 );
 
-Deno.test("labs ci trust grid: cell colors match trust scoring", async () => {
+test("labs ci trust grid: cell colors match trust scoring", async () => {
   const retried = run({ conclusion: "success", run_attempt: 2 });
   const neverStarted = run({ conclusion: "cancelled" });
   const timedOut = run({ conclusion: "cancelled" });
@@ -904,7 +905,7 @@ Deno.test("labs ci trust grid: cell colors match trust scoring", async () => {
   );
 });
 
-Deno.test("labs ci trust grid: duration spans the displayed runs", async () => {
+test("labs ci trust grid: duration spans the displayed runs", async () => {
   const now = Date.now();
   const runs = [
     run({ created_at: new Date(now).toISOString() }),
@@ -930,7 +931,7 @@ Deno.test("labs ci trust grid: duration spans the displayed runs", async () => {
   assertEquals(limited.duration, 159 * 86_400_000);
 });
 
-Deno.test("ci-duration window: the 6h window when it has >= 20 runs, else the most recent 20", async () => {
+test("ci-duration window: the 6h window when it has >= 20 runs, else the most recent 20", async () => {
   const now = Date.now();
   const at = (minsAgo: number) =>
     run({
@@ -955,7 +956,7 @@ Deno.test("ci-duration window: the 6h window when it has >= 20 runs, else the mo
   );
 });
 
-Deno.test("ci-duration: only runs that passed end to end count", async () => {
+test("ci-duration: only runs that passed end to end count", async () => {
   const now = Date.now();
   const at = (i: number, over: Partial<Run>) =>
     run({
@@ -980,7 +981,7 @@ Deno.test("ci-duration: only runs that passed end to end count", async () => {
   );
 });
 
-Deno.test("ci-duration: a run without a usable landing span is dropped", async () => {
+test("ci-duration: a run without a usable landing span is dropped", async () => {
   const now = Date.now();
   const usable = run({
     created_at: new Date(now - 10 * 60_000).toISOString(),
@@ -1033,7 +1034,7 @@ function jobPage(total: number, conclusions: readonly string[]): GithubAnswer {
   };
 }
 
-Deno.test("weaver ci duration: a run that ran no job, or ran one job and skipped the rest, did no work and is left out", async () => {
+test("weaver ci duration: a run that ran no job, or ran one job and skipped the rest, did no work and is left out", async () => {
   const now = Date.now();
   const minutes = (m: number) =>
     run({
@@ -1069,7 +1070,7 @@ Deno.test("weaver ci duration: a run that ran no job, or ran one job and skipped
   assertStringIncludes(view.sub ?? "", "median of last 2 PR runs");
 });
 
-Deno.test("ci-duration: a job listing is read to its last page, once", async () => {
+test("ci-duration: a job listing is read to its last page, once", async () => {
   const now = Date.now();
   const long = run({
     created_at: new Date(now - 20 * 60_000).toISOString(),
@@ -1093,7 +1094,7 @@ Deno.test("ci-duration: a job listing is read to its last page, once", async () 
   );
 });
 
-Deno.test("ci-duration: a job listing that cannot be read fails the collection", async () => {
+test("ci-duration: a job listing that cannot be read fails the collection", async () => {
   const unreadable = run({});
   await withGithubAttempt(
     byUrl([[jobPageUrl(unreadable, 1), { total_count: 1 }]]),
@@ -1106,7 +1107,7 @@ Deno.test("ci-duration: a job listing that cannot be read fails the collection",
   );
 });
 
-Deno.test("ci-duration: a run's job counts are forgotten once it leaves the snapshot", async () => {
+test("ci-duration: a run's job counts are forgotten once it leaves the snapshot", async () => {
   const kept = run({});
   const passing = run({});
   const listing = jobPage(2, ["success", "success"]);
@@ -1125,14 +1126,14 @@ Deno.test("ci-duration: a run's job counts are forgotten once it leaves the snap
   );
 });
 
-Deno.test("ci trust: every repository keeps its strip at the tile bottom", async () => {
+test("ci trust: every repository keeps its strip at the tile bottom", async () => {
   const one = ctx([run({ conclusion: "success" })]);
-  for (const tile of [labsCiTrust, loomCiTrust, weaverCiTrust]) {
+  for (const tile of [labsCiTrust, cfsCiTrust, weaverCiTrust]) {
     assertEquals((await tile.collect(one)).alignChartBottom, true);
   }
 });
 
-Deno.test("runSource creates workflow snapshot metadata", () => {
+test("runSource creates workflow snapshot metadata", () => {
   assertEquals(runSource(REPO, CI_WORKFLOW, "main"), {
     repo: REPO,
     workflow: CI_WORKFLOW,
@@ -1145,7 +1146,7 @@ Deno.test("runSource creates workflow snapshot metadata", () => {
   });
 });
 
-Deno.test("CI tiles declare the workflow snapshots that drive them", () => {
+test("CI tiles declare the workflow snapshots that drive them", () => {
   const main = (repo: string, workflow: string): RunSource[] => [
     { repo, workflow, scope: "main" },
   ];
@@ -1153,60 +1154,54 @@ Deno.test("CI tiles declare the workflow snapshots that drive them", () => {
     { repo, workflow, scope: "pull requests" },
   ];
   assertEquals(labsCiTrust.runSources, main(REPO, CI_WORKFLOW));
-  assertEquals(loomCiTrust.runSources, main(LOOM_REPO, LOOM_CI_WORKFLOW));
+  assertEquals(cfsCiTrust.runSources, main(CFS_REPO, CFS_CI_WORKFLOW));
   assertEquals(
     weaverCiTrust.runSources,
     main(WEAVER_REPO, WEAVER_CI_WORKFLOW),
   );
   assertEquals(labsCiDuration.runSources, pulls(REPO, CI_WORKFLOW));
-  assertEquals(loomCiDuration.runSources, pulls(LOOM_REPO, LOOM_CI_WORKFLOW));
+  assertEquals(cfsCiDuration.runSources, pulls(CFS_REPO, CFS_CI_WORKFLOW));
   assertEquals(
     weaverCiDuration.runSources,
     pulls(WEAVER_REPO, WEAVER_CI_WORKFLOW),
   );
   assertEquals(recentCommits.runSources, [
     ...main(REPO, CI_WORKFLOW),
-    ...main(LOOM_REPO, LOOM_CI_WORKFLOW),
+    ...main(CFS_REPO, CFS_CI_WORKFLOW),
     ...main(WEAVER_REPO, WEAVER_CI_WORKFLOW),
   ]);
 });
 
-Deno.test("dau: distinct identities per UTC day, excluding the DIDs we name", () => {
+test("dau: distinct people per UTC day", () => {
   const D = 86_400_000;
   const ser = (did: string, pts: [number, number][]) => ({
-    labels: [{ key: { name: "user.did" }, value: did }],
+    labels: [{ key: { name: "enduser.id" }, value: did }],
     values: pts.map(([timestamp, value]) => ({ timestamp, value })),
   });
   const day1 = 1_783_641_600_000, day2 = day1 + D;
   const series = [
     ser("did:key:alice", [[day1, 998], [day2, 3184]]),
     ser("did:key:bob", [[day2, 12]]),
-    ser("did:key:server", [[day1, 500], [day2, 500]]), // a service principal
   ];
-  const all = foldSeries(series, new Set());
-  assertEquals(all.get(day1)?.size, 2);
-  assertEquals(all.get(day2)?.size, 3);
-  // Naming the service principal takes it out of every day it appears in.
-  const human = foldSeries(series, new Set(["did:key:server"]));
-  assertEquals(human.get(day1)?.size, 1);
-  assertEquals(human.get(day2)?.size, 2);
-  // A bucket carrying no spans for an identity is not that identity being active.
-  assertEquals(
-    foldSeries([ser("did:key:alice", [[day1, 0]])], new Set()).size,
-    0,
-  );
+  const byDay = foldSeries(series);
+  assertEquals(byDay.get(day1)?.size, 1);
+  assertEquals(byDay.get(day2)?.size, 2);
+  // A bucket carrying no spans for a person is not that person being active.
+  assertEquals(foldSeries([ser("did:key:alice", [[day1, 0]])]).size, 0);
 });
 
-Deno.test("dau: the exclusion list is read defensively", () => {
-  assertEquals([...parseExcludes("did:key:a, did:key:b ,, ")], [
-    "did:key:a",
-    "did:key:b",
+test("dau: a series that names no person counts no one on its days", () => {
+  const day1 = 1_783_641_600_000;
+  const values = [{ timestamp: day1, value: 40 }];
+  const byDay = foldSeries([
+    { labels: [{ key: { name: "service.name" }, value: "toolshed" }], values },
+    { values },
+    { labels: [{ key: { name: "enduser.id" }, value: "did:key:alice" }], values },
   ]);
-  assertEquals(parseExcludes(undefined).size, 0);
-  assertEquals(parseExcludes("").size, 0);
+  assertEquals([...byDay.get(day1) ?? []], ["did:key:alice"]);
 });
 
-Deno.test("gated tiles gray out cleanly without their env", async () => {
+test("gated tiles gray out cleanly without their env", async () => {
   const cases = [
     [discordOnline, "DISCORD_BOT_TOKEN"],
     [gcpSpend, "GCP_BILLING_TABLE"],
@@ -1225,7 +1220,7 @@ Deno.test("gated tiles gray out cleanly without their env", async () => {
   }
 });
 
-Deno.test("discord snapshot: splits online members into Team and Visitors", () => {
+test("discord snapshot: splits online members into Team and Visitors", () => {
   const guild = {
     id: "g",
     roles: [
@@ -1253,7 +1248,7 @@ Deno.test("discord snapshot: splits online members into Team and Visitors", () =
   assertEquals(snap.teamColor, "#2ecc71"); // the role's own color
 });
 
-Deno.test("projectMonthly: >=2-week (or month-to-date) window, spilling into last month", () => {
+test("projectMonthly: >=2-week (or month-to-date) window, spilling into last month", () => {
   const lastMonth = Array.from({ length: 30 }, () => 100); // $100/day last month
   // >= 2 weeks of data this month -> pure month-to-date rate, last month ignored.
   //   $2000 over 20 days, 30-day month -> $3000.
@@ -1269,7 +1264,7 @@ Deno.test("projectMonthly: >=2-week (or month-to-date) window, spilling into las
   assertEquals(projectMonthly(0, 0, 31, []), 0);
 });
 
-Deno.test("settled: a day is known once billing has had time to finish it", () => {
+test("settled: a day is known once billing has had time to finish it", () => {
   const L = GITHUB_LAG_DAYS; // 2
   // Day 15 of the month. Spend every day through the 15th: the last two days have
   // figures, but billing is still adding to them, so they are not known yet.
@@ -1302,7 +1297,7 @@ Deno.test("settled: a day is known once billing has had time to finish it", () =
   assertEquals(settled([], 15, L).length, 0);
 });
 
-Deno.test("projectMonthly: the window keeps up with the calendar once spend stops", () => {
+test("projectMonthly: the window keeps up with the calendar once spend stops", () => {
   // The real shape that started this: $1.01 across a fortnight, a penny on the 1st
   // and a dollar on the 14th, nothing else, no prior month.
   const month = new Array(31).fill(0);
@@ -1331,7 +1326,7 @@ Deno.test("projectMonthly: the window keeps up with the calendar once spend stop
   assertEquals(settled(early, 15, 1).length, 14);
 });
 
-Deno.test("projectMonthly: a borrowed tail is settled before it is borrowed", () => {
+test("projectMonthly: a borrowed tail is settled before it is borrowed", () => {
   // Early in a month the borrowed days are last month's tail, the part most likely
   // not to have settled. Taking those zeros as real quiet days rates the window near
   // zero and projects far under the truth.
@@ -1362,7 +1357,7 @@ Deno.test("projectMonthly: a borrowed tail is settled before it is borrowed", ()
   );
 });
 
-Deno.test("benchmark: trend classification — flat/down good, up warn, steep up bad", () => {
+test("benchmark: trend classification — flat/down good, up warn, steep up bad", () => {
   const t = (v: number[]) => v.map((_, i) => i * 86_400_000); // one sample per day
   const st = (v: number[]) => trendStatus(trendPct(t(v), v));
   assertEquals(st([100, 101, 99, 100, 100, 101, 99, 100]), "good"); // flat
@@ -1371,7 +1366,7 @@ Deno.test("benchmark: trend classification — flat/down good, up warn, steep up
   assertEquals(st([100, 120, 140, 160, 180, 200, 240]), "bad"); // steep rise
 });
 
-Deno.test("benchmark: the trend ignores a lone spike", () => {
+test("benchmark: the trend ignores a lone spike", () => {
   const flat = [100, 100, 100, 100, 100, 100, 100, 100];
   const spiked = [...flat];
   spiked[3] = 400; // a 4x outlier — a median level does not move to meet it
@@ -1379,7 +1374,7 @@ Deno.test("benchmark: the trend ignores a lone spike", () => {
   assertEquals(trendStatus(trendPct(times, spiked)), "good");
 });
 
-Deno.test("registry: unique labels and positive intervals", () => {
+test("registry: unique labels and positive intervals", () => {
   const labels = TILES.map((t) => t.label);
   assertEquals(new Set(labels).size, labels.length, "tile labels must be unique");
   for (const t of TILES) {
@@ -1387,7 +1382,7 @@ Deno.test("registry: unique labels and positive intervals", () => {
   }
 });
 
-Deno.test("every tile's drill-down link reaches a route the dashboard serves", () => {
+test("every tile's drill-down link reaches a route the dashboard serves", () => {
   // An unrecognized path falls through to the dashboard itself, so a tile
   // linking at a page nobody serves lands the viewer back where they started.
   // The server serves the repository pages beside the tiles' own routes.
@@ -1405,7 +1400,7 @@ Deno.test("every tile's drill-down link reaches a route the dashboard serves", (
   }
 });
 
-Deno.test("layout fixtures cover every registered tile in registry order", () => {
+test("layout fixtures cover every registered tile in registry order", () => {
   assertEquals(
     TILE_LAYOUT_FIXTURES.map(({ label }) => label),
     TILES.map(({ label }) => label),

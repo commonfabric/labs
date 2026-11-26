@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { runPatternScenario } from "../pattern-harness.ts";
 import type { PatternIntegrationScenario } from "../pattern-harness.ts";
 import type {
@@ -6,6 +5,7 @@ import type {
   ComplianceChecklistArgs,
   ComplianceGap,
 } from "./compliance-checklist.pattern.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const complianceChecklistScenario: PatternIntegrationScenario<
   Partial<ComplianceChecklistArgs>

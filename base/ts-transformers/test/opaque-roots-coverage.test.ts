@@ -23,6 +23,7 @@ import {
   classifyOpaquePathTerminalCall,
   getOpaqueAccessInfo,
 } from "../src/transformers/opaque-roots.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function createProgram(source: string): {
   sourceFile: ts.SourceFile;
@@ -107,7 +108,7 @@ function findVariable(
 // classifyOpaquePathTerminalCall
 //
 
-Deno.test("classifyOpaquePathTerminalCall recognizes .get() and .key() property-access terminals", () => {
+test("classifyOpaquePathTerminalCall recognizes .get() and .key() property-access terminals", () => {
   const { sourceFile } = createProgram(`
     const a = obj.get();
     const b = obj.key();
@@ -122,7 +123,7 @@ Deno.test("classifyOpaquePathTerminalCall recognizes .get() and .key() property-
   assertEquals(classifyOpaquePathTerminalCall(other), undefined);
 });
 
-Deno.test("classifyOpaquePathTerminalCall recognizes string-literal element-access terminals", () => {
+test("classifyOpaquePathTerminalCall recognizes string-literal element-access terminals", () => {
   // `obj["get"]()` and `obj["key"]()` classify the same as the property-access
   // form via the element-access branch.
   const { sourceFile } = createProgram(`
@@ -136,7 +137,7 @@ Deno.test("classifyOpaquePathTerminalCall recognizes string-literal element-acce
   assertEquals(classifyOpaquePathTerminalCall(key), "key");
 });
 
-Deno.test("classifyOpaquePathTerminalCall recognizes no-substitution-template element-access terminals", () => {
+test("classifyOpaquePathTerminalCall recognizes no-substitution-template element-access terminals", () => {
   const { sourceFile } = createProgram(`
     const a = obj[\`get\`]();
   `);
@@ -144,7 +145,7 @@ Deno.test("classifyOpaquePathTerminalCall recognizes no-substitution-template el
   assertEquals(classifyOpaquePathTerminalCall(get), "get");
 });
 
-Deno.test("classifyOpaquePathTerminalCall ignores an unrelated element-access key", () => {
+test("classifyOpaquePathTerminalCall ignores an unrelated element-access key", () => {
   const { sourceFile } = createProgram(`
     const a = obj["other"]();
   `);
@@ -152,7 +153,7 @@ Deno.test("classifyOpaquePathTerminalCall ignores an unrelated element-access ke
   assertEquals(classifyOpaquePathTerminalCall(call), undefined);
 });
 
-Deno.test("classifyOpaquePathTerminalCall ignores a computed (non-literal) element-access key", () => {
+test("classifyOpaquePathTerminalCall ignores a computed (non-literal) element-access key", () => {
   // A dynamic key (identifier) is neither a StringLiteralLike nor a
   // NoSubstitutionTemplate, so the element-access branch falls through to
   // undefined.
@@ -164,7 +165,7 @@ Deno.test("classifyOpaquePathTerminalCall ignores a computed (non-literal) eleme
   assertEquals(classifyOpaquePathTerminalCall(call), undefined);
 });
 
-Deno.test("classifyOpaquePathTerminalCall returns undefined for a bare identifier callee", () => {
+test("classifyOpaquePathTerminalCall returns undefined for a bare identifier callee", () => {
   const { sourceFile } = createProgram(`const a = fn();`);
   const call = findInitializer(sourceFile, "a") as ts.CallExpression;
   assertEquals(classifyOpaquePathTerminalCall(call), undefined);
@@ -174,7 +175,7 @@ Deno.test("classifyOpaquePathTerminalCall returns undefined for a bare identifie
 // getOpaqueAccessInfo
 //
 
-Deno.test("getOpaqueAccessInfo records the root identifier and property path", () => {
+test("getOpaqueAccessInfo records the root identifier and property path", () => {
   const { sourceFile, checker } = createProgram(`const a = root.foo.bar;`);
   const expr = findInitializer(sourceFile, "a");
   const info = getOpaqueAccessInfo(expr, testContext(checker));
@@ -184,7 +185,7 @@ Deno.test("getOpaqueAccessInfo records the root identifier and property path", (
   assertFalse(info.dynamic);
 });
 
-Deno.test("getOpaqueAccessInfo unwraps parenthesized and `as`/`satisfies`/`!`/`<T>` wrappers", () => {
+test("getOpaqueAccessInfo unwraps parenthesized and `as`/`satisfies`/`!`/`<T>` wrappers", () => {
   // Each wrapper type peels off before the chain walk continues, so the root
   // and path are recovered identically to the unwrapped form.
   const { sourceFile, checker } = createProgram(`
@@ -207,7 +208,7 @@ Deno.test("getOpaqueAccessInfo unwraps parenthesized and `as`/`satisfies`/`!`/`<
   }
 });
 
-Deno.test("getOpaqueAccessInfo records literal element-access segments as path entries", () => {
+test("getOpaqueAccessInfo records literal element-access segments as path entries", () => {
   const { sourceFile, checker } = createProgram(`
     const a = root["foo"][0];
   `);
@@ -220,7 +221,7 @@ Deno.test("getOpaqueAccessInfo records literal element-access segments as path e
   assertFalse(info.dynamic);
 });
 
-Deno.test("getOpaqueAccessInfo marks a computed element-access key as dynamic", () => {
+test("getOpaqueAccessInfo marks a computed element-access key as dynamic", () => {
   // A call-expression index cannot be resolved to a static path segment, so the
   // access is flagged dynamic and no segment is recorded.
   const { sourceFile, checker } = createProgram(`
@@ -235,7 +236,7 @@ Deno.test("getOpaqueAccessInfo marks a computed element-access key as dynamic", 
   assert(info.dynamic);
 });
 
-Deno.test("getOpaqueAccessInfo unwraps a partially-emitted expression wrapper", () => {
+test("getOpaqueAccessInfo unwraps a partially-emitted expression wrapper", () => {
   // PartiallyEmittedExpression is a synthetic node kind produced by transforms
   // rather than the parser, so it is built with the factory here. The walker
   // peels it off and recovers the underlying `root.foo` chain.
@@ -248,7 +249,7 @@ Deno.test("getOpaqueAccessInfo unwraps a partially-emitted expression wrapper", 
   assertFalse(info.dynamic);
 });
 
-Deno.test("getOpaqueAccessInfo marks an unresolvable element-access key as dynamic", () => {
+test("getOpaqueAccessInfo marks an unresolvable element-access key as dynamic", () => {
   // `root[]` is a parse error; recovery yields an ElementAccess whose argument
   // is a present-but-empty missing identifier. It is not a literal key and does
   // not resolve to a known computed key, so the access is flagged dynamic with
@@ -263,7 +264,7 @@ Deno.test("getOpaqueAccessInfo marks an unresolvable element-access key as dynam
   assert(info.dynamic);
 });
 
-Deno.test("getOpaqueAccessInfo returns no root when the chain does not bottom out on an identifier", () => {
+test("getOpaqueAccessInfo returns no root when the chain does not bottom out on an identifier", () => {
   // A chain rooted in a call expression (`fn().foo`) has no identifier root, so
   // `root`/`rootIdentifier` are absent while the path is still recorded.
   const { sourceFile, checker } = createProgram(`
@@ -282,7 +283,7 @@ Deno.test("getOpaqueAccessInfo returns no root when the chain does not bottom ou
 // addBindingTargetSymbols
 //
 
-Deno.test("addBindingTargetSymbols collects a simple identifier binding symbol", () => {
+test("addBindingTargetSymbols collects a simple identifier binding symbol", () => {
   const { sourceFile, checker } = createProgram(`const single = 1;`);
   const decl = findVariable(sourceFile, "single");
   const bucket = new Set<ts.Symbol>();
@@ -290,7 +291,7 @@ Deno.test("addBindingTargetSymbols collects a simple identifier binding symbol",
   assertEquals([...bucket].map((s) => s.getName()), ["single"]);
 });
 
-Deno.test("addBindingTargetSymbols descends into nested binding patterns and skips array holes", () => {
+test("addBindingTargetSymbols descends into nested binding patterns and skips array holes", () => {
   // Array holes are OmittedExpression elements that are skipped; object and
   // nested array patterns recurse into their element names.
   const { sourceFile, checker } = createProgram(`

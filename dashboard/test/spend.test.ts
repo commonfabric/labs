@@ -7,9 +7,9 @@
  * quiet days are quiet at all.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { newestReportedDay, reportLagDays, spendChart } from "../spend.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const DAY = 86_400_000;
 
@@ -298,6 +298,28 @@ describe("spend", () => {
     const quiet = lines[0].slice(20).map(([, y]) => y);
     expect(new Set(quiet).size).toBe(1);
     expect(quiet[0]).toBeGreaterThan(lines[0][19][1]);
+  });
+
+  it("draws no line for a source whose last reported day is older than the window", () => {
+    // The 45-day window ending on the 19th opens on 6 December, so five days
+    // reported in early November fall outside it, and the same five days
+    // moved into December fall inside it.
+    const github = source(run("2025-11-20", 61, 1), 1, "#58a6ff");
+    const reported = (from: string) => {
+      const days = run(from, 5, 2);
+      return source(days, 1, "#f59e0b", undefined, days.map(([day]) => day));
+    };
+
+    // The daily line is a base and its bright trailing slice.
+    const old = spendChart([github, reported("2025-11-01")], NOW).chart;
+    expect(polylines(old).length).toBe(2);
+    expect(old).toContain("#58a6ff");
+    expect(old).not.toContain("#f59e0b");
+
+    const recent = spendChart([github, reported("2025-12-10")], NOW).chart;
+    // The December days add a base line and reach no trailing slice.
+    expect(polylines(recent).length).toBe(3);
+    expect(recent).toContain("#f59e0b");
   });
 
   it("marks a day both its neighbors are missing", () => {

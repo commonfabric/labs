@@ -1,12 +1,13 @@
 import { assertEquals, assertNotEquals, assertThrows } from "@std/assert";
-import { join } from "@std/path";
+import { join, resolve } from "@std/path";
 import {
   defaultAgentsHostStateDirectory,
   defaultTargetLedgerPath,
   parseAgentFabricApiUrl,
 } from "../src/target-state.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("target ledger paths use the canonical API and resolved space", async () => {
+test("target ledger paths use the canonical API and resolved space", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const first = await defaultTargetLedgerPath(
@@ -42,45 +43,56 @@ Deno.test("target ledger paths use the canonical API and resolved space", async 
   }
 });
 
-Deno.test("XDG_STATE_HOME selects the durable agent host state directory", () => {
+test("XDG_STATE_HOME selects the durable agent host state directory", () => {
   const directory = defaultAgentsHostStateDirectory((key) =>
     key === "XDG_STATE_HOME" ? "/state" : undefined
   );
   assertEquals(directory, join("/state", "commonfabric", "agents-host"));
 });
 
-Deno.test("HOME selects the platform agent host state directory", () => {
-  const directory = defaultAgentsHostStateDirectory((key) =>
-    key === "HOME" ? "/users/operator" : undefined
+test("HOME selects the platform agent host state directory", () => {
+  const home = (key: string) => key === "HOME" ? "/users/operator" : undefined;
+  assertEquals(
+    defaultAgentsHostStateDirectory(home, "darwin"),
+    join(
+      "/users/operator",
+      "Library",
+      "Application Support",
+      "CommonFabric",
+      "agents-host",
+    ),
   );
   assertEquals(
-    directory,
-    Deno.build.os === "darwin"
-      ? join(
-        "/users/operator",
-        "Library",
-        "Application Support",
-        "CommonFabric",
-        "agents-host",
-      )
-      : join(
-        "/users/operator",
-        ".local",
-        "state",
-        "commonfabric",
-        "agents-host",
-      ),
+    defaultAgentsHostStateDirectory(home, "linux"),
+    join("/users/operator", ".local", "state", "commonfabric", "agents-host"),
   );
-  if (Deno.build.os !== "windows") {
-    assertThrows(
-      () => defaultAgentsHostStateDirectory(() => undefined),
-      Error,
-      "HOME is required",
-    );
-  }
+  assertThrows(
+    () => defaultAgentsHostStateDirectory(() => undefined, "linux"),
+    Error,
+    "HOME is required",
+  );
 });
 
-Deno.test("API URL parsing removes the input from failures", () => {
+test("LOCALAPPDATA selects the Windows agent host state directory", () => {
+  assertEquals(
+    defaultAgentsHostStateDirectory(
+      (key) => key === "LOCALAPPDATA" ? " C:\\Users\\operator " : undefined,
+      "windows",
+    ),
+    join(resolve("C:\\Users\\operator"), "CommonFabric", "agents-host"),
+  );
+  assertThrows(
+    () =>
+      defaultAgentsHostStateDirectory(
+        (key) => key === "HOME" ? "/users/operator" : undefined,
+        "windows",
+      ),
+    Error,
+    "LOCALAPPDATA is required",
+  );
+});
+
+test("API URL parsing removes the input from failures", () => {
   const secret = "credential-that-must-not-appear";
   const error = assertThrows(
     () => parseAgentFabricApiUrl(`https://operator:${secret}@[invalid`),

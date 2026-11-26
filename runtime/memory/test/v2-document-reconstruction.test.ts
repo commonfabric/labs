@@ -15,7 +15,6 @@
  * patch row a rebuild applies.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 
@@ -30,6 +29,7 @@ import {
   read,
 } from "../v2/engine.ts";
 import { SYNC_SCHEMA_REF_PREFIX } from "../v2/sync-schema-ref.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The one document every test here installs and then patches. */
 const ENTITY = "of:doc";
@@ -166,12 +166,10 @@ describe("v2 document reconstruction", () => {
       installThenPatch(engine);
       evictDocumentCacheEntries(engine, Number.MAX_SAFE_INTEGER);
       const floors: unknown[] = [];
-      const statement = engine.statements.selectLatestBase as unknown as {
-        get: (params: { floor?: unknown }) => unknown;
-      };
-      const get = statement.get.bind(statement);
+      const statement = engine.statement("selectLatestBase");
+      const get = statement.get;
       statement.get = (params) => {
-        floors.push(params.floor);
+        floors.push(params?.floor);
         return get(params);
       };
       const newestSnapshot = SNAPSHOT_SEQS[SNAPSHOT_SEQS.length - 1];

@@ -1,5 +1,4 @@
 import { assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import {
   ARRAY_SUBSCHEMA_KEYS,
   DEFS_KEYS,
@@ -8,6 +7,7 @@ import {
   UNUSED_RECORD_SUBSCHEMA_KEYS,
   UNUSED_SINGLE_SUBSCHEMA_KEYS,
 } from "@commonfabric/data-model-schema/schema-walk";
+import { describe, it } from "@commonfabric/test-support/test";
 import { Ajv } from "ajv";
 import { normalizeSchemaForProvider } from "./schema.ts";
 
@@ -77,6 +77,10 @@ describe("normalizeSchemaForProvider", () => {
 
   it("maps a top-level `false` schema to an empty-object schema", () => {
     assertEquals(normalizeSchemaForProvider(false), {});
+  });
+
+  it("maps a top-level `undefined` schema to an empty-object schema", () => {
+    assertEquals(normalizeSchemaForProvider({ type: "undefined" }), {});
   });
 
   it("drops the type of an `unknown` position and keeps its other keywords", () => {

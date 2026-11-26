@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import { describe, it } from "@commonfabric/test-support/test";
 import { patternTestExperimentalOptions } from "../lib/pattern-test-experimental-options.ts";
 
 /** An environment reader over `vars` alone. */

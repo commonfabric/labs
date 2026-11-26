@@ -16,6 +16,7 @@
 import {
   computed,
   type Default,
+  equals,
   handler,
   ifElse,
   NAME,
@@ -73,17 +74,26 @@ export interface AnnotationOutput extends AnnotationPiece {
 
 // ===== Handlers =====
 
-const setKind = handler<Event, { kind: Writable<any> }>((event, { kind }) => {
-  const val = (event.target as { value?: string })?.value;
-  if (val) kind.set(val as AnnotationKind);
+/** What a `<select>` reports when its choice changes. */
+interface SelectChange<T extends string> {
+  target?: { value?: T };
+}
+
+const setKind = handler<
+  SelectChange<AnnotationKind>,
+  { kind: Writable<AnnotationKind> }
+>((event, { kind }) => {
+  const value = event?.target?.value;
+  if (value) kind.set(value);
 });
 
-const setStatus = handler<Event, { status: Writable<any> }>(
-  (event, { status }) => {
-    const val = (event.target as { value?: string })?.value;
-    if (val) status.set(val as AnnotationStatus);
-  },
-);
+const setStatus = handler<
+  SelectChange<AnnotationStatus>,
+  { status: Writable<AnnotationStatus> }
+>((event, { status }) => {
+  const value = event?.target?.value;
+  if (value) status.set(value);
+});
 
 const markResolved = handler<unknown, { status: Writable<any> }>(
   (_event, { status }) => {
@@ -118,7 +128,7 @@ const addBlocker = handler<
   }
 >((_event, { blocker, blockedBy, blockerSearch }) => {
   const current = (blockedBy.get() ?? []) as AnnotationPiece[];
-  if (!current.some((b) => b === blocker)) {
+  if (!current.some((b) => equals(b, blocker))) {
     blockedBy.set([...current, blocker]);
   }
   blockerSearch.set("");
@@ -153,10 +163,12 @@ export const Annotation = pattern<AnnotationInput, AnnotationOutput>(
       query: "#mentionable",
     }).result;
 
-    // Discover other annotations for blocked-by picker
-    const allAnnotations = wish<AnnotationPiece[]>({
+    // Discover other annotations for blocked-by picker. Headless: the picker
+    // lists the candidates itself, so the wish opens no chooser of its own.
+    const allAnnotations = wish<AnnotationPiece>({
       query: "#annotation",
-    }).result;
+      headless: true,
+    }).candidates;
 
     // Filtered mentionable list for target picker
     const filteredMentionable = computed(() => {
@@ -179,7 +191,7 @@ export const Annotation = pattern<AnnotationInput, AnnotationOutput>(
       const current = blockedBy.get() ?? [];
       const items = (allAnnotations ?? [])
         .filter((a) => !!a)
-        .filter((a) => !current.some((b) => b === a)) as AnnotationPiece[];
+        .filter((a) => !current.some((b) => equals(b, a))) as AnnotationPiece[];
       if (!query) return items.slice(0, 10);
       return items
         .filter((a) => {

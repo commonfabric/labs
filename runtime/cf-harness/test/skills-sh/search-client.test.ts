@@ -8,7 +8,6 @@
  * hand-run counterpart that does call it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -19,6 +18,7 @@ import {
   SkillsShSearchClient,
   SkillsShSearchError,
 } from "../../src/skills-sh/search-client.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Captured from `GET https://skills.sh/api/search?q=react%20native&limit=3` on

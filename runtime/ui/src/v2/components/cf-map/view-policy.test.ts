@@ -5,7 +5,6 @@
  * `cf-map.browser.test.ts` holds cf-map's wiring of it to Leaflet.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -23,6 +22,7 @@ import {
   WaitingForSize,
 } from "./view-policy.ts";
 import type { Bounds, MapValue } from "./types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const PARIS: Bounds = { north: 48.9, south: 48.82, east: 2.42, west: 2.27 };
 const LYON: Bounds = { north: 45.8, south: 45.72, east: 4.9, west: 4.78 };

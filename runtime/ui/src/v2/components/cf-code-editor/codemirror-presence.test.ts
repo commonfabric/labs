@@ -1,7 +1,6 @@
 /** Tests CodeMirror-native mapping and rendering of remote editor presence. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { receiveUpdates, sendableUpdates } from "@codemirror/collab";
 import {
   type ChangeDesc,
@@ -26,6 +25,7 @@ import {
   presenceParticipantColor,
   presenceSelectionToJSON,
 } from "./codemirror-presence.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const cursor = (version: number, epoch = 1): PresenceCursor => ({
   epoch,

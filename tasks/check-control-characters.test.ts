@@ -6,11 +6,11 @@
  * invisible, so a reader cannot check the verdict by eye.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { join } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { fromFileUrl } from "@std/path/from-file-url";
 
 const bytes = (text: string) => new TextEncoder().encode(text);

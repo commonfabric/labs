@@ -159,7 +159,6 @@ export class CFVScroll extends BaseElement {
   declare _atStart: boolean;
   declare _atEnd: boolean;
 
-  private _scrollContainer: HTMLElement | null = null;
   /**
    * Watches the container and every slotted element, so any growth of the
    * content (a message added, text streaming in, an image laying out, a
@@ -202,20 +201,11 @@ export class CFVScroll extends BaseElement {
     this._atEnd = true;
   }
 
-  get scrollContainer(): HTMLElement | null {
-    if (!this._scrollContainer) {
-      this._scrollContainer = this.shadowRoot?.querySelector(
-        ".scroll-container",
-      ) as HTMLElement | null;
-    }
-    return this._scrollContainer;
+  get #scrollContainer(): HTMLElement | null {
+    return this.shadowRoot?.querySelector(".scroll-container") ?? null;
   }
 
   override firstUpdated() {
-    // Cache reference
-    this._scrollContainer = this.shadowRoot?.querySelector(
-      ".scroll-container",
-    ) as HTMLElement | null;
     this.updateScrollState();
     this.observeContent();
   }
@@ -243,16 +233,18 @@ export class CFVScroll extends BaseElement {
   };
 
   private observeContent = () => {
+    const container = this.#scrollContainer;
     const slot = this.shadowRoot?.querySelector("slot");
-    if (!this.scrollContainer || !slot) return;
-    this._resizeObserver.disconnect();
-    this._resizeObserver.observe(this.scrollContainer);
-    this.observeBoxes(slot.assignedElements());
-    this._mutationObserver.observe(this, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
+    if (container && slot) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver.observe(container);
+      this.observeBoxes(slot.assignedElements());
+      this._mutationObserver.observe(this, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+    }
   };
 
   /**
@@ -277,7 +269,7 @@ export class CFVScroll extends BaseElement {
    * for anything nearer, as when a message arrives.
    */
   private snapIfFollowing() {
-    const container = this.scrollContainer;
+    const container = this.#scrollContainer;
     if (!this.snapToBottom || !this._following || !container) return;
     const { scrollTop, scrollHeight, clientHeight } = container;
     const distance = scrollHeight - clientHeight - scrollTop;
@@ -287,24 +279,23 @@ export class CFVScroll extends BaseElement {
 
   private handleScroll = () => {
     this.updateScrollState();
-    const { scrollTop } = this.scrollContainer as HTMLElement;
-    if (this._atEnd) this._following = true;
-    else if (scrollTop < this._lastScrollTop) this._following = false;
-    this._lastScrollTop = scrollTop;
-    this.emit("cf-scroll", {
-      scrollTop: (this.scrollContainer as HTMLElement)?.scrollTop || 0,
-      scrollHeight: (this.scrollContainer as HTMLElement)?.scrollHeight || 0,
-      clientHeight: (this.scrollContainer as HTMLElement)?.clientHeight || 0,
-    });
+    const container = this.#scrollContainer;
+    if (container) {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      if (this._atEnd) this._following = true;
+      else if (scrollTop < this._lastScrollTop) this._following = false;
+      this._lastScrollTop = scrollTop;
+      this.emit("cf-scroll", { scrollTop, scrollHeight, clientHeight });
+    }
   };
 
   private updateScrollState() {
-    if (!this.scrollContainer) return;
-
-    const { scrollTop, scrollHeight, clientHeight } = this
-      .scrollContainer as HTMLElement;
-    this._atStart = scrollTop <= 0;
-    this._atEnd = scrollTop + clientHeight >= scrollHeight - 1;
+    const container = this.#scrollContainer;
+    if (container) {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      this._atStart = scrollTop <= 0;
+      this._atEnd = scrollTop + clientHeight >= scrollHeight - 1;
+    }
   }
 
   override render() {
@@ -342,33 +333,17 @@ export class CFVScroll extends BaseElement {
    * Scroll to a specific vertical position
    */
   scrollToY(y: number, smooth: boolean = true) {
-    if (this.scrollContainer) {
-      (this.scrollContainer as HTMLElement).scrollTo({
-        top: y,
-        behavior: smooth ? "smooth" : "auto",
-      });
-    }
-  }
-
-  /**
-   * Scroll by a specific vertical amount
-   */
-  scrollByY(y: number, smooth: boolean = true) {
-    if (this.scrollContainer) {
-      (this.scrollContainer as HTMLElement).scrollBy({
-        top: y,
-        behavior: smooth ? "smooth" : "auto",
-      });
-    }
+    this.#scrollContainer?.scrollTo({
+      top: y,
+      behavior: smooth ? "smooth" : "auto",
+    });
   }
 
   /**
    * Scroll to the bottom of the container
    */
   scrollToBottom(smooth: boolean = true) {
-    if (this.scrollContainer) {
-      const { scrollHeight } = this.scrollContainer as HTMLElement;
-      this.scrollToY(scrollHeight, smooth);
-    }
+    const container = this.#scrollContainer;
+    if (container) this.scrollToY(container.scrollHeight, smooth);
   }
 }

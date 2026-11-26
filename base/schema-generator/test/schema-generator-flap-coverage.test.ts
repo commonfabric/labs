@@ -1,9 +1,33 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
+import type { SchemaGenerationDiagnostic } from "../src/interface.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
-import { getPrimarySymbol } from "../src/type-utils.ts";
-import { asObjectSchema, createTestProgram, getTypeFromCode } from "./utils.ts";
+import {
+  asObjectSchema,
+  createTestProgram,
+  getTypeFromCode,
+  getTypeFromFiles,
+} from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
+
+const f = ts.factory;
+
+/** A type literal with the one property `name` of type `type`. */
+const memberLiteral = (name: string, type: ts.TypeNode) =>
+  f.createTypeLiteralNode([
+    f.createPropertySignature(undefined, name, undefined, type),
+  ]);
+
+/** The synthetic keyword type node of `kind`. */
+const keyword = (kind: ts.KeywordTypeSyntaxKind) =>
+  f.createKeywordTypeNode(kind);
+
+/** A CFC alias that labels its payload with the confidentiality `L`. */
+const CONFIDENTIAL = `
+  type Confidential<T, L> = T & {
+    readonly __ct_cfc__?: { readonly meta?: { confidentiality: L }; readonly of?: T };
+  };
+`;
 
 describe("SchemaGenerator flap coverage", () => {
   // The branches exercised here otherwise run only when a pattern compiles
@@ -255,15 +279,204 @@ interface Root<T> { field: Narrow<T>; }
     expect(schema).toEqual({ type: "string" });
   });
 
-  it("returns the symbol of a reference's target when the reference carries none of its own", () => {
-    // type-utils.ts getPrimarySymbol: the fallback from a type with no
-    // `.symbol` to the one on its reference target. A reference the checker
-    // builds carries its target's symbol as its own, and a tuple's reference
-    // and target both carry none, so no compiled type takes this return. The
-    // type here is built by hand to have exactly the shape that does.
-    const symbol = { escapedName: "Target" } as unknown as ts.Symbol;
-    const reference = { target: { symbol } } as unknown as ts.Type;
+  it("returns the fallback naming the inner constituent for an intersection holding an intersection it could not merge", async () => {
+    // The inner `string[] & { a: string }` merges to the unsupported-pattern
+    // fallback, which keeps its constituents, so the outer intersection reads
+    // the array among them and refuses it too. An inner intersection that
+    // merges stands as one object.
+    const { checker } = await getTypeFromCode("type Dummy = unknown;", "Dummy");
+    const outer = (inner: ts.TypeNode) =>
+      new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        f.createIntersectionTypeNode([
+          inner,
+          memberLiteral("b", keyword(ts.SyntaxKind.NumberKeyword)),
+        ]),
+        checker,
+      );
 
-    expect(getPrimarySymbol(reference)).toBe(symbol);
+    expect(
+      outer(f.createIntersectionTypeNode([
+        f.createArrayTypeNode(keyword(ts.SyntaxKind.StringKeyword)),
+        memberLiteral("a", keyword(ts.SyntaxKind.StringKeyword)),
+      ])),
+    ).toEqual({
+      type: "object",
+      additionalProperties: true,
+      $comment:
+        "Unsupported intersection pattern: index signature on constituent",
+    });
+    expect(
+      outer(f.createIntersectionTypeNode([
+        memberLiteral("c", keyword(ts.SyntaxKind.BooleanKeyword)),
+        memberLiteral("a", keyword(ts.SyntaxKind.StringKeyword)),
+      ])),
+    ).toEqual({
+      type: "object",
+      properties: {
+        a: { type: "string" },
+        b: { type: "number" },
+        c: { type: "boolean" },
+      },
+      required: ["c", "a", "b"],
+    });
+  });
+
+  it("throws for a type no formatter claims, naming it", async () => {
+    // `Uppercase<T>` over a type parameter is a string mapping the checker
+    // leaves deferred, which is neither a primitive nor an object.
+    const { type, checker, typeNode } = await getTypeFromCode(
+      "type Shout<T extends string> = Uppercase<T>;",
+      "Shout",
+    );
+
+    expect(() => new SchemaGenerator().generateSchema(type, checker, typeNode))
+      .toThrow("No formatter found for type: Uppercase<T>");
+  });
+
+  it("keeps the labels of an argument passed through an imported base interface", async () => {
+    // `Child<U>` extends `Base<U>` through an import binding, so `Base` is
+    // reached through its alias. The argument's labels are written around
+    // `any`, which the checker erases, so only the written argument, bound
+    // through both declarations, holds them.
+    const { type, checker, typeNode } = await getTypeFromFiles(
+      {
+        "/base.ts": "export interface Base<T> { value: T; }",
+        "/main.ts": `
+          import type { Base } from "./base.ts";
+          ${CONFIDENTIAL}
+          export interface Child<U> extends Base<U> {}
+          export interface SchemaRoot {
+            c: Child<Confidential<any, readonly ["secret"]>>;
+          }
+        `,
+      },
+      "/main.ts",
+      "SchemaRoot",
+    );
+
+    expect(new SchemaGenerator().generateSchema(type, checker, typeNode))
+      .toEqual({
+        type: "object",
+        properties: {
+          c: {
+            type: "object",
+            properties: { value: { ifc: { confidentiality: ["secret"] } } },
+            required: ["value"],
+          },
+        },
+        required: ["c"],
+      });
+  });
+
+  it("reads a member of a type literal written over a bound parameter at its instantiation", async () => {
+    // The conditional over `T` is one the checker must instantiate, so its
+    // syntax cannot be read under the binding; its instantiated type,
+    // `"s"`, is read instead.
+    const { type, checker } = await getTypeFromCode(
+      `
+        interface Box<T> { inner: { v: T extends string ? "s" : "n"; w: T } }
+        interface SchemaRoot { b: Box<string> }
+      `,
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+
+    expect(schema.properties).toEqual({
+      b: {
+        type: "object",
+        properties: {
+          inner: {
+            type: "object",
+            properties: {
+              v: { type: "string", enum: ["s"] },
+              w: { type: "string" },
+            },
+            required: ["v", "w"],
+          },
+        },
+        required: ["inner"],
+      },
+    });
+  });
+
+  it("returns the payload in the scope for a synthetic union of a scope wrapper and `null`", async () => {
+    const { checker, sourceFile } = await createTestProgram(
+      "type SchemaRoot = PerUser<{ a: string }> | null;",
+    );
+    const root = sourceFile.statements.find(ts.isTypeAliasDeclaration)!;
+
+    expect(
+      new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        root.type,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+      ),
+    ).toEqual({
+      anyOf: [
+        {
+          type: "object",
+          properties: { a: { type: "string" } },
+          required: ["a"],
+        },
+        { type: "null" },
+      ],
+      scope: "user",
+    });
+  });
+
+  it("accepts any value for a library alias over a bound parameter its rules cannot apply, and reports it unread", async () => {
+    // `Record` over a template literal key set is no record the node-based
+    // analyzer can build. Read by type, it would be the checker's
+    // uninstantiated declaration, so it is not read at all.
+    const { type, checker } = await getTypeFromCode(
+      `
+        interface Box<T, K extends string> { inner: Record<K, T> }
+        interface SchemaRoot { b: Box<number, \`k\${string}\`> }
+      `,
+      "SchemaRoot",
+    );
+    const diagnostics: SchemaGenerationDiagnostic[] = [];
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker, undefined, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      }),
+    );
+
+    expect(schema.properties).toEqual({
+      b: {
+        type: "object",
+        properties: { inner: true },
+        required: ["inner"],
+      },
+    });
+    expect(diagnostics.map(({ type }) => type)).toEqual(["schema-type:unread"]);
+    expect(diagnostics[0]!.message).toContain("`Record<K, T>`");
+  });
+
+  it("attaches no definition for a `$ref` in a default value, which is data", async () => {
+    // The root's own reading is stored as a definition too, so a scan that
+    // read the default as a schema would attach it.
+    const { type, checker } = await getTypeFromCode(
+      `
+        interface A { x: string }
+        interface SchemaRoot {
+          a: A;
+          d: Default<Record<string, { $ref: string }>, { other: { $ref: "#/$defs/SchemaRoot" } }>;
+        }
+      `,
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+
+    expect(Object.keys(schema.$defs ?? {})).toEqual(["A"]);
+    expect(asObjectSchema(schema.properties?.d).default).toEqual({
+      other: { $ref: "#/$defs/SchemaRoot" },
+    });
   });
 });

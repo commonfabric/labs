@@ -17,7 +17,6 @@
  * is distinguishable from one the projected rows brought.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
@@ -33,6 +32,12 @@ import {
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { encodeCfLinkValue } from "../src/builtins/sqlite/cf-link.ts";
 import { SQLITE_ROW_SALT } from "../src/builtins/sqlite/row-identity.ts";
@@ -60,7 +65,13 @@ const clauseFor = (cls: string) => [
   { type: CFC_ATOM_TYPE.Resource, class: cls, subject: space },
 ];
 
-const BOB = "did:mailto:bob@example.test";
+/** The readers a row rule's `dbOwner()` and `principal()` name: the CFC
+ *  `User{subject}` atom (spec §15.2), not the bare DID. */
+const OWNER_READER = { type: CFC_ATOM_TYPE.User, subject: space };
+const BOB = {
+  type: CFC_ATOM_TYPE.User,
+  subject: "did:mailto:bob@example.test",
+};
 
 /** The label of the cell a parameter is read from: `S`. */
 const PICKED_CLAUSE = clauseFor("message");
@@ -679,7 +690,7 @@ describe("sqlite-query-row-set-members", () => {
           ).get();
         });
         expect(body).toBe("mine");
-        expect(join).toContainEqual(space);
+        expect(join).toContainEqual(OWNER_READER);
         expect(join).not.toContainEqual(BOB);
       });
 

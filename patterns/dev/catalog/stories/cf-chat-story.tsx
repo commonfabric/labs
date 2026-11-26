@@ -70,7 +70,7 @@ const sampleTools = [
 ];
 
 const sendMessage = handler<
-  CustomEvent<{ text?: string }>,
+  { detail?: { text?: string } },
   { messages: Writable<typeof sampleMessages> }
 >((event, { messages }) => {
   const text = event?.detail?.text;

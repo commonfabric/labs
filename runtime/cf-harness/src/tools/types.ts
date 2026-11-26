@@ -226,6 +226,12 @@ export interface HarnessToolContext {
   patternIndexPublishDiscoverable?: boolean;
 
   /**
+   * `"agent"` when the run is a person's own agent making patterns for them
+   * (`HarnessPatternIndexConfig.origin`); absent for any other run.
+   */
+  patternIndexOrigin?: "agent";
+
+  /**
    * Where this run's writes to the pattern index go: a pattern it authored is
    * held there until the session ends, so search is offered one candidate per
    * capability while the index still records every iteration, and a report
@@ -323,11 +329,7 @@ export interface HarnessToolContext {
   resolvePath(path: string): string;
   resolveHostPath(path: string): string;
   resolveHostRootPath(path: string): string;
-  hostPathToWorkspacePath(path: string): string | undefined;
-  isHostPathWithinWorkspace(
-    path: string,
-    options?: { allowMissing?: boolean },
-  ): Promise<boolean>;
+  isHostPathWithinWorkspace(path: string): Promise<boolean>;
   isHostPathWithinArtifactRoot(
     path: string,
     options?: { allowMissing?: boolean },
@@ -340,10 +342,6 @@ export interface HarnessToolContext {
    */
   imageAttachmentSnapshotDir?: string;
 
-  doesHostPathIntersectArtifactRoot(
-    path: string,
-    options?: { allowMissing?: boolean },
-  ): Promise<boolean>;
   setCurrentDir(path: string): void;
   nextOutputId(toolId: string): ToolOutputId;
   now(): string;

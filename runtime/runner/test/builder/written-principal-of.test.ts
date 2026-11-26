@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
@@ -6,6 +5,12 @@ import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { writtenPrincipalOf } from "../../src/builder/principal-of.ts";
@@ -24,6 +29,8 @@ import { createTrustedBuilder } from "../support/trusted-builder.ts";
 const alice = await Identity.fromPassphrase("written-principal-of alice");
 const bob = await Identity.fromPassphrase("written-principal-of bob");
 const space: MemorySpace = alice.did();
+const otherSpace: MemorySpace =
+  (await Identity.fromPassphrase("written-principal-of other space")).did();
 
 /** An entry at the root claiming the value represents each of `subjects`. */
 const representing = (...subjects: string[]) => ({
@@ -76,24 +83,25 @@ describe("writtenPrincipalOf()", () => {
     }
   };
 
-  /** The id of the document `cause` names. */
-  const idOf = (cause: string): URI =>
-    runtime.getCell(space, cause).getAsNormalizedFullLink().id;
+  /** The id of the document `cause` names in `at`. */
+  const idOf = (cause: string, at: MemorySpace = space): URI =>
+    runtime.getCell(at, cause).getAsNormalizedFullLink().id;
 
   /**
-   * Stores `value` at the document `cause` names with a root label claiming
-   * it represents each of `subjects`, or with no label for none.
+   * Stores `value` at the document `cause` names in `at` with a root label
+   * claiming it represents each of `subjects`, or with no label for none.
    */
-  const seed = async (
+  const seedIn = async (
+    at: MemorySpace,
     cause: string,
     value: FabricValue,
     ...subjects: string[]
   ): Promise<Cell<unknown>> => {
     const tx = runtime.edit();
-    writeSeedEnvelopeDoc(tx, space);
+    writeSeedEnvelopeDoc(tx, at);
     seedStoredEnvelope(
       tx,
-      { space, scope: "space", id: idOf(cause), path: [] },
+      { space: at, scope: "space", id: idOf(cause, at), path: [] },
       {
         value,
         ...(subjects.length === 0 ? {} : {
@@ -106,8 +114,12 @@ describe("writtenPrincipalOf()", () => {
       },
     );
     expect((await tx.commit().settled).error).toBeUndefined();
-    return runtime.getCell(space, cause);
+    return runtime.getCell(at, cause);
   };
+
+  /** `seedIn()` in the space the profiles in these cases live in. */
+  const seed = (cause: string, value: FabricValue, ...subjects: string[]) =>
+    seedIn(space, cause, value, ...subjects);
 
   /**
    * Replaces the label of the document `cause` names with a root label
@@ -201,6 +213,82 @@ describe("writtenPrincipalOf()", () => {
     );
 
     expect(callIn(profile.key("picture"))).toBeUndefined();
+  });
+
+  it("returns `undefined` for a field whose cell holds a write redirect to a value its owner wrote in another space", async () => {
+    const image = await seedIn(
+      otherSpace,
+      "image",
+      new FabricBytes(new Uint8Array([8])),
+      bob.did(),
+    );
+    const nearby = await seed(
+      "image",
+      new FabricBytes(new Uint8Array([8])),
+      bob.did(),
+    );
+    const cell = await seed("picture", image.getAsWriteRedirectLink());
+    const profile = await seed(
+      "profile",
+      { name: "Bob", picture: cell.getAsWriteRedirectLink() },
+      bob.did(),
+    );
+
+    expect(callIn(profile.key("picture"))).toBeUndefined();
+
+    await seed("picture", nearby.getAsWriteRedirectLink());
+    expect(callIn(profile.key("picture"))).toBe(bob.did());
+  });
+
+  it("returns `undefined` for a field that is a write redirect to a cell in another space", async () => {
+    const image = await seedIn(
+      otherSpace,
+      "image",
+      new FabricBytes(new Uint8Array([8])),
+      bob.did(),
+    );
+    const nearby = await seed(
+      "image",
+      new FabricBytes(new Uint8Array([8])),
+      bob.did(),
+    );
+    const profile = await seed(
+      "profile",
+      { name: "Bob", picture: image.getAsWriteRedirectLink() },
+      bob.did(),
+    );
+
+    expect(callIn(profile.key("picture"))).toBeUndefined();
+
+    await seed(
+      "profile",
+      { name: "Bob", picture: nearby.getAsWriteRedirectLink() },
+      bob.did(),
+    );
+    expect(callIn(profile.key("picture"))).toBe(bob.did());
+  });
+
+  it("returns the principal for a field reached from another space through a link to the profile", async () => {
+    const field = await picture(bob.did());
+    const room = await seedIn(otherSpace, "room", {
+      profile: runtime.getCell(space, "profile").getAsLink(),
+    });
+
+    expect(callIn(field)).toBe(bob.did());
+    expect(callIn(room.key("profile").key("picture"))).toBe(bob.did());
+  });
+
+  it("returns `undefined` for a field in another space that is a write redirect to the profile's field", async () => {
+    const field = await picture(bob.did());
+    const room = await seedIn(otherSpace, "room", {
+      picture: field.getAsWriteRedirectLink(),
+    });
+    const nearbyRoom = await seed("room", {
+      picture: field.getAsWriteRedirectLink(),
+    });
+
+    expect(callIn(room.key("picture"))).toBeUndefined();
+    expect(callIn(nearbyRoom.key("picture"))).toBe(bob.did());
   });
 
   it("returns `undefined` for a field whose links run in a cycle", async () => {

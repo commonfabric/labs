@@ -157,7 +157,7 @@ export interface CacheableModule extends CompiledModuleArtifact {
 export type Exports = Record<string, any>;
 
 export interface EvaluateResult {
-  main?: Exports;
+  main: Exports;
   exportMap?: Record<string, Exports>;
 
   /**

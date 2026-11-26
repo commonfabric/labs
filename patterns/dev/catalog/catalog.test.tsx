@@ -10,7 +10,9 @@
  * rendered tree to a sidebar item, sends its click stream, and checks the
  * selection moved and the newly shown story is the one that was picked. It
  * also collapses and reopens the sidebar, since the catalog swaps the whole
- * sidebar for a single reopen button while it is collapsed.
+ * sidebar for a single reopen button while it is collapsed. And it checks the
+ * sidebar and the story renderer agree: every item listed opens a story, and
+ * every story is listed.
  */
 import {
   action,
@@ -30,6 +32,7 @@ import {
   propsOf,
 } from "../../tools/test-support/vnode-helpers.ts";
 import Catalog from "./catalog.tsx";
+import { storyIds } from "./ui/story-renderer.tsx";
 
 type ClickStream = { send: (event: Record<string, never>) => void };
 
@@ -106,12 +109,28 @@ export default pattern(() => {
     hasText(catalog[UI], "Overview")
   );
 
+  const listedIds = computed(() =>
+    catalog.categories.flatMap((category) =>
+      category.items.map((item) => item.id)
+    )
+  );
+  const assert_every_listed_item_has_a_story = assert(() =>
+    listedIds.filter((id) => !storyIds().includes(id)).join(", ") === ""
+  );
+  const assert_every_story_is_listed = assert(() =>
+    storyIds().filter((id) => !listedIds.includes(id)).join(", ") ===
+      ""
+  );
+
   const assert_starts_on_button = assert(() =>
     catalog.selectedStory === "button" && showing === "button"
   );
 
+  // The badge shows the badge story's own label, not the label cell of the
+  // story shown before it.
   const assert_shows_badge = assert(() =>
-    catalog.selectedStory === "badge" && showing === "badge"
+    catalog.selectedStory === "badge" && showing === "badge" &&
+    hasExactText(findElement(catalog[UI], "cf-badge"), "Badge")
   );
 
   const assert_shows_chart = assert(() =>
@@ -136,6 +155,8 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert_catalog_named },
       { assertion: assert_sidebar_lists_categories },
+      { assertion: assert_every_listed_item_has_a_story },
+      { assertion: assert_every_story_is_listed },
       { assertion: assert_starts_on_button },
 
       { action: action_pick_badge },

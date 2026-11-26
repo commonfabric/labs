@@ -1,5 +1,4 @@
 import { assert, assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import {
@@ -10,6 +9,7 @@ import {
 } from "@commonfabric/integration";
 import type { Page } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import "../src/globals.ts";
 

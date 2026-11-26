@@ -9,6 +9,7 @@
 
 import { maxOf } from "@commonfabric/collections/math";
 import { isPlainObject } from "@commonfabric/js-values/types";
+import { mergeActionCosts } from "./action-costs.ts";
 import {
   DERIVED_COMMITS_BY_SPACE_MAX,
   emptyServingLoopStats,
@@ -49,6 +50,7 @@ const RULES: Readonly<Record<string, Rule>> = {
   "workers.spare": "level",
   "workers.parked": "level",
   "workers.heapUsed": "level",
+  "workers.heapStopped": "level",
 };
 
 /**
@@ -118,6 +120,7 @@ const mergedStats = (
   }));
   bounded(merged.settle);
   bounded(merged.settleAdvances);
+  merged.actions = mergeActionCosts(merged.actions);
   merged.settleAdvances.lastDelta =
     parts.findLast((part) => part.settleAdvances.count > 0)?.settleAdvances
       .lastDelta ?? 0;
@@ -139,7 +142,8 @@ const mergedStats = (
  * together: the counters of no host for an empty list. Rows of a bounded
  * series keep the order of `parts`, and the rows a bound drops are the
  * earliest of them, counted where the series counts its own.
- * `settleAdvances.lastDelta` is that of the last part that advanced.
+ * `settleAdvances.lastDelta` is that of the last part that advanced. The
+ * action costs combine as `mergeActionCosts()` describes.
  *
  * The parts are left as they are, and the result shares nothing with them
  * that the counters' holders write to.

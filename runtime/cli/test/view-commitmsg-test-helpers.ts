@@ -63,6 +63,17 @@ export async function initReftable(root: string): Promise<boolean> {
   return initialized.success;
 }
 
+/** Whether this machine's Git can create a repository with reftable ref
+ * storage. */
+export async function supportsReftable(): Promise<boolean> {
+  const root = await Deno.makeTempDir();
+  try {
+    return await initReftable(root);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+}
+
 export async function withGitShim<T>(
   body: string,
   callback: () => T | Promise<T>,
@@ -93,4 +104,41 @@ exec ${shellQuote(realGitPath)} "$@"
     else Deno.env.set("PATH", originalPath);
     await Deno.remove(shimDir, { recursive: true });
   }
+}
+
+/** Initialize a repository at `root` on branch `main` whose one commit holds
+ * `f.txt`. Returns false when Git cannot create the requested ref storage. */
+export async function initRepository(
+  root: string,
+  storage: "files" | "reftable" = "files",
+): Promise<boolean> {
+  if (storage === "reftable") {
+    if (!await initReftable(root)) return false;
+  } else {
+    await git(root, ["init", "-q"]);
+  }
+  await git(root, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+  await git(root, ["config", "user.email", "t@t.test"]);
+  await git(root, ["config", "user.name", "Test"]);
+  await Deno.writeTextFile(`${root}/f.txt`, "one\ntwo\nthree\n");
+  await git(root, ["add", "f.txt"]);
+  await git(root, ["commit", "-q", "-m", "original"]);
+  return true;
+}
+
+/** The object id `name` resolves to in the repository at `root`. */
+export async function revParse(root: string, name: string): Promise<string> {
+  return (await git(root, ["rev-parse", name])).trim();
+}
+
+/** A new commit on top of HEAD that no ref names. */
+export async function unreferencedCommit(root: string): Promise<string> {
+  return (await git(root, [
+    "commit-tree",
+    "HEAD^{tree}",
+    "-p",
+    "HEAD",
+    "-m",
+    "other",
+  ])).trim();
 }

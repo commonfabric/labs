@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
@@ -8,6 +7,12 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 import { renderCellReference } from "@commonfabric/runner/shared";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   type AgentInspectionDeps,
@@ -254,6 +259,25 @@ describe("agent-inspection", () => {
       expect((entries.get() as unknown[] | undefined)?.length).toBe(3);
     });
 
+    it("reports a rejected removal and leaves the run listed", async () => {
+      await seedAtAddresses();
+      const runtime = runtimes.get(HOME_HOST)!;
+      runtime.editWithRetry = () =>
+        Promise.resolve({
+          error: {
+            name: "StorageTransactionAborted" as const,
+            message: "queue write rejected",
+            reason: new Error("home storage unavailable"),
+          },
+        });
+
+      await expect(removeAgentRun(config, "hash-completed", deps)).rejects
+        .toThrow("queue write rejected");
+
+      Reflect.deleteProperty(runtime, "editWithRetry");
+      expect((await readAgentRuns(config, deps)).length).toBe(2);
+    });
+
     it("refuses an entry away from the address its id gives it", async () => {
       await seed();
 
@@ -345,6 +369,39 @@ describe("agent-inspection", () => {
     const run = await cancelAgentRun(config, "hash-queued", deps);
 
     expect(run.cancelRequestedAt).toBe("2026-09-20T11:30:00Z");
+  });
+
+  it("refuses an exact identifier the queue lists on two hosts", async () => {
+    const { completed } = await seed();
+    const runtime = runtimes.get(HOME_HOST)!;
+    await runtime.editWithRetry((tx) => {
+      runtime.getCell(home, "home-pattern", undefined, tx)
+        .key("agentQueue").key("entries").push({
+          run: completed,
+          host: HOME_HOST,
+        });
+    });
+
+    await expect(
+      readAgentRun(config, completed.getAsNormalizedFullLink().id, deps),
+    ).rejects.toThrow(
+      `Ambiguous agent run ${completed.getAsNormalizedFullLink().id}; use its exact address.`,
+    );
+  });
+
+  it("reports a record deleted after its cancellation was written", async () => {
+    const { queued } = await seed();
+    const runtime = runtimes.get(HOME_HOST)!;
+    const edit = runtime.editWithRetry.bind(runtime);
+    runtime.editWithRetry = async (action) => {
+      const committed = await edit(action);
+      await edit((tx) => queued.withTx(tx).setRaw(undefined));
+      return committed;
+    };
+
+    await expect(
+      cancelAgentRun(config, queued.getAsNormalizedFullLink().id, deps),
+    ).rejects.toThrow("is unavailable on https://home.example.");
   });
 
   it("rejects an ambiguous request hash", async () => {

@@ -1,9 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import type { JSONSchema } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import { CfHarnessEngine } from "../src/engine.ts";
 import type { HarnessFetch } from "../src/contracts/http-fetch.ts";
 import {
@@ -103,13 +104,6 @@ const stubIndex = (
   patterns: Record<string, unknown> = {},
 ): IndexStub => {
   const calls: { fn: string; body: unknown }[] = [];
-  const catalogRecords = new Map(results.map((result) => {
-    const record = result as Record<string, unknown>;
-    return [record.patternId as string, record];
-  }));
-  for (const [id, record] of Object.entries(patterns)) {
-    catalogRecords.set(id, record as Record<string, unknown>);
-  }
   const fetchFn: HarnessFetch = (input, init) => {
     const fn = String(input).split("/").pop() ?? "";
     const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}");
@@ -118,17 +112,6 @@ const stubIndex = (
       return Promise.resolve(
         new Response(JSON.stringify({ results }), { status: 200 }),
       );
-    }
-    if (fn === "listPatterns") {
-      return Promise.resolve(Response.json({
-        patterns: [...catalogRecords.values()].map((record) => ({
-          ...record,
-          events: { created: 1 },
-          score: 0,
-          quality: "unproven",
-        })),
-        eventTypes: {},
-      }));
     }
     const id = (body as { patternId: string }).patternId;
     const pattern = patterns[id];
@@ -229,6 +212,16 @@ describe("search-patterns", () => {
       expect(rendered).not.toContain("type Currency =");
     });
 
+    it("returns undefined for a schema it cannot render, and for no schema", () => {
+      // A schema that contains itself has no finite rendering.
+      const properties: Record<string, JSONSchema> = {};
+      const cyclic: JSONSchema = { type: "object", properties };
+      properties.self = cyclic;
+      expect(patternIndexDeclaredType(cyclic)).toBeUndefined();
+      expect(patternIndexDeclaredType(undefined)).toBeUndefined();
+      expect(patternIndexDeclaredType({ type: "string" })).toBe("string");
+    });
+
     it("adds nothing to a type that names no definition", () => {
       expect(
         patternIndexDeclaredType({
@@ -262,6 +255,8 @@ describe("search-patterns", () => {
   });
 
   it("offers only the successor's identity, import, and declared shapes", async () => {
+    // The index answers with the successor in the matched generation's
+    // place; only the successor's shapes are read.
     const successor = {
       ...PATTERN_RECORD,
       patternId: "pat-fresh",
@@ -273,7 +268,12 @@ describe("search-patterns", () => {
         required: ["donuts"],
       },
     };
-    const index = stubIndex([SEARCH_HIT], {
+    const index = stubIndex([{
+      ...SEARCH_HIT,
+      patternId: "pat-fresh",
+      description: successor.description,
+      supersedes: SEARCH_HIT.patternId,
+    }], {
       "pat-expenses": PATTERN_RECORD,
       "pat-fresh": successor,
     });
@@ -293,11 +293,7 @@ describe("search-patterns", () => {
       index.calls.filter((call) => call.fn === "getPattern").map((call) =>
         call.body
       ),
-    ).toEqual([
-      { patternId: "pat-expenses", includeSource: false },
-      { patternId: "pat-fresh", includeSource: false },
-      { patternId: "pat-fresh", includeSource: false },
-    ]);
+    ).toEqual([{ patternId: "pat-fresh", includeSource: false }]);
   });
   it("reports each hit with the import specifier that composes it", async () => {
     const index = stubIndex([SEARCH_HIT], { "pat-expenses": PATTERN_RECORD });
@@ -343,24 +339,11 @@ describe("search-patterns", () => {
     });
   });
 
-  it("reports a discovery error when catalog metadata cannot be read", async () => {
-    const index = stubIndex([SEARCH_HIT]);
-    const result = await createEngine(index).invokeBuiltinTool(
-      "search_patterns",
-      { tags: ["expenses"] },
-    );
-    const output = result.output as SearchPatternsToolErrorOutput;
-    expect(output.status).toBe("error");
-    expect(output.message).toContain("getPattern failed (404)");
-    expect(output).not.toHaveProperty("results");
-  });
-
   it("keeps a discovered hit when the later shape request loses service", async () => {
     const index = stubIndex([SEARCH_HIT], { "pat-expenses": PATTERN_RECORD });
     const available = index.fetchFn;
-    let reads = 0;
     index.fetchFn = (input, init) => {
-      if (String(input).endsWith("/getPattern") && ++reads === 2) {
+      if (String(input).endsWith("/getPattern")) {
         return Promise.resolve(new Response("unavailable", { status: 503 }));
       }
       return available(input, init);
@@ -385,6 +368,21 @@ describe("search-patterns", () => {
     const output = result.output as SearchPatternsToolErrorOutput;
     expect(output.status).toBe("error");
     expect(output.message).toContain("requires tags, text, or both");
+  });
+
+  it("returns an error naming the failure when the pattern index cannot be opened", async () => {
+    const engine = new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId: "search-patterns-test-unavailable",
+      patternIndexClientFactory: () =>
+        Promise.reject(new Error("index offline")),
+    });
+    const result = await engine.invokeBuiltinTool("search_patterns", {
+      tags: ["expenses"],
+    });
+    const output = result.output as SearchPatternsToolErrorOutput;
+    expect(output.status).toBe("error");
+    expect(output.message).toBe("pattern index unavailable: index offline");
   });
 
   it("refuses when the run has no pattern index configured", async () => {

@@ -15,7 +15,6 @@
  * `docs/development/BENCHMARKS.md` says how the recording is taken again.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -41,6 +40,7 @@ import {
 import fixture from "./topics-browser-measurement-core.fixture.json" with {
   type: "json",
 };
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("topics-browser-measurement-core", () => {
   const fryer = [
@@ -180,6 +180,43 @@ describe("topics-browser-measurement-core", () => {
           "}",
         ].join("\n"),
       );
+    });
+
+    it("returns the function of a lift the module exports, which the compiler emits as an assignment to `exports`", () => {
+      const emitted = [
+        '"use strict";',
+        'Object.defineProperty(exports, "__esModule", { value: true });',
+        "exports.glazed = void 0;",
+        'const commonfabric_2 = require("commonfabric");',
+        "exports.glazed = (0, commonfabric_2.lift)(({ rings }) => {",
+        "    return rings.length;",
+        '}, { type: "object" });',
+      ].join("\n");
+
+      expect(compiledLiftText(emitted, "glazed")).toBe(
+        ["({ rings }) => {", "    return rings.length;", "}"].join("\n"),
+      );
+    });
+
+    it("reads no declaration out of an assignment to another name, or to a property of anything but `exports`", () => {
+      const emitted = [
+        "exports.frosted = (0, commonfabric_2.lift)((value) => value);",
+        "tray.glazed = (0, commonfabric_2.lift)((value) => value);",
+        "exports.glazed = void 0;",
+        "exports.glazed = fry((value) => value);",
+      ].join("\n");
+
+      expect(() => compiledLiftText(emitted, "glazed", "/fryer.js"))
+        .toThrow("declaration in /fryer.js, found 0");
+    });
+
+    it("throws for a module declaring the lift as a `const` and again on its exports", () => {
+      const emitted = [
+        "const glazed = (0, commonfabric_2.lift)((value) => value);",
+        "exports.glazed = (0, commonfabric_2.lift)((value) => value);",
+      ].join("\n");
+
+      expect(() => compiledLiftText(emitted, "glazed")).toThrow("found 2");
     });
 
     it("reads no declaration out of a comma expression whose left operand is not `0`", () => {
@@ -426,7 +463,10 @@ describe("topics-browser-measurement-core", () => {
       expect(
         confirmLiftImplementations(
           [pivot],
-          [{ [src]: [fixture.lifts.crossrefTable.preview] }],
+          [{
+            "not a source location": [fixture.cardsByActivityPreview],
+            [src]: [fixture.lifts.crossrefTable.preview],
+          }],
           running,
         ),
       ).toEqual(new Map([[pivot.site, fixture.lifts.crossrefTable.preview]]));
@@ -643,6 +683,15 @@ describe("topics-browser-measurement-core", () => {
       } as const;
       expect(WORKER_RUN_TIMING_KEY).toBe("scheduler/scheduler/run");
       expect(workerRunCount(before, after)).toBe(7);
+    });
+
+    it("returns zero when the scheduler's run count is unchanged", () => {
+      const timing = { [WORKER_RUN_TIMING_KEY]: [4, 12] } as const;
+      expect(workerRunCount(timing, timing)).toBe(0);
+    });
+
+    it("counts the first runs when the earlier snapshot has no run span", () => {
+      expect(workerRunCount({}, { [WORKER_RUN_TIMING_KEY]: [3, 1] })).toBe(3);
     });
 
     it("throws for timing without the scheduler's run span", () => {

@@ -16,7 +16,6 @@
  * arrived from outside.
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -24,6 +23,7 @@ import {
   entityRefFrom,
   entityRefFromString,
   entityRefToString,
+  getModernCellRepConfig,
   isEntityRef,
   isLinkRef,
   LINK_V1_TAG,
@@ -39,6 +39,7 @@ import {
 } from "@/cell-rep.ts";
 import { FabricLink } from "@/fabric-instances";
 import { FabricHash } from "@/fabric-primitives";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A fixed 32-byte hash for deterministic tests. */
 const SAMPLE_HASH = new Uint8Array(32);
@@ -49,6 +50,27 @@ const HASH = new FabricHash(SAMPLE_HASH, "fid1");
 const TAGGED = HASH.taggedHashString; // "fid1:…"
 
 describe("cell-rep", () => {
+  describe("modern cell representation flag", () => {
+    afterEach(() => {
+      resetModernCellRepConfig();
+    });
+
+    it("returns `false` from `getModernCellRepConfig()` after a reset", () => {
+      setModernCellRepConfig(true);
+      resetModernCellRepConfig();
+      expect(getModernCellRepConfig()).toBe(false);
+    });
+
+    it("returns from `getModernCellRepConfig()` what was last set, an unset value changing nothing", () => {
+      setModernCellRepConfig(true);
+      expect(getModernCellRepConfig()).toBe(true);
+      setModernCellRepConfig(undefined);
+      expect(getModernCellRepConfig()).toBe(true);
+      setModernCellRepConfig(false);
+      expect(getModernCellRepConfig()).toBe(false);
+    });
+  });
+
   describe("entity-id reference", () => {
     afterEach(() => {
       resetModernCellRepConfig();
@@ -130,6 +152,18 @@ describe("cell-rep", () => {
 
     it("recognizes the link-ref envelope", () => {
       expect(isLinkRef(linkRefFrom(PAYLOAD))).toBe(true);
+    });
+
+    it("recognizes an envelope whose prototype has other enumerable keys", () => {
+      const envelope = Object.create({ inherited: 1 });
+      envelope["/"] = { [LINK_V1_TAG]: PAYLOAD };
+      expect(isLinkRef(envelope)).toBe(true);
+    });
+
+    it('returns `false` for an object whose `"/"` is inherited', () => {
+      const object = Object.create({ "/": { [LINK_V1_TAG]: PAYLOAD } });
+      object.other = 1;
+      expect(isLinkRef(object)).toBe(false);
     });
 
     it("returns `false` for everything that is not a link-ref envelope", () => {

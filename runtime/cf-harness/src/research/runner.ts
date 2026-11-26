@@ -58,7 +58,7 @@ import type {
   HarnessModelClient,
   HarnessModelUsage,
 } from "../model/client.ts";
-import { patternIndexDependencies } from "../pattern-index/composition.ts";
+import { patternIndexDependencies } from "@commonfabric/pattern-index/deploy";
 import type { DescribeHandleResearchResult } from "../tools/describe-handle.ts";
 import {
   patternIndexDeclaredType,
@@ -1581,15 +1581,15 @@ async (request) => {
     /**
      * Spends one model turn with the private tools withheld on `instruction`,
      * and returns the reply's text, or `undefined` when the model called a
-     * tool instead of answering.
+     * tool instead of answering. It checks the signal as it returns, not on
+     * entry: the turn loop checks it just before the first call, the first
+     * call's own check comes just before the second, and the model client is
+     * handed the signal as well.
      */
     const repairTurn = async (
       turnName: string,
       instruction: readonly string[],
     ): Promise<string | undefined> => {
-      if (runWasAborted(request.signal)) {
-        throw abortError(request.signal);
-      }
       transcript.push({ role: "user", content: instruction.join("\n") });
       const repaired = await options.modelClient.complete({
         model,

@@ -2,6 +2,7 @@ export {
   decomposeSchema,
   recomposeSchema,
   SchemaNotDecomposableError,
+  SchemaNotRecomposableError,
 } from "./schema-decompose.ts";
 export { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 export { lookupSchemaDocument } from "./schema-registry.ts";
@@ -44,6 +45,7 @@ export type {
   SpaceCellContents,
 } from "./runtime.ts";
 export type { EventIntentOutcome } from "./speculation/overlay-destination.ts";
+export type { IndexedCollectionMaintenance } from "./builtins/indexed-collection/maintainer.ts";
 export {
   ADOPT_SERVER_FLAGS_ENV,
   type BrowserWorkerPresetParams,
@@ -53,6 +55,8 @@ export {
   EXPERIMENTAL_FLAG_AUTHORITY,
   type ExperimentalFlagAuthority,
   experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
+  FOLLOWED_POSTURE_ENV,
   MAX_ENFORCEMENT_CFC_OPTIONS,
   MAX_ENFORCEMENT_SINK_CEILINGS,
   MAX_ENFORCEMENT_SINK_GOVERNANCE,
@@ -152,9 +156,9 @@ export {
   isCell,
   isReadableCell,
   isStream,
+  isWithheldDelivery,
   pullProjected,
   readProjected,
-  resolveWriteTarget,
   sendEvent,
   setCell,
   sinkProjected,
@@ -183,6 +187,7 @@ export {
 } from "./harness/index.ts";
 export {
   PATTERN_COVERAGE_INTEGRATION_TEST_NAME,
+  PATTERN_COVERAGE_MULTI_RUNTIME_TEST_NAME,
   PATTERN_COVERAGE_TEST_NAME,
   PatternCoverageCollector,
   type PatternCoverageData,
@@ -244,7 +249,10 @@ export {
 export {
   currentPatternKey,
   formerPatternKey,
+  formerPatternKeys,
   mainNamesPattern,
+  type PatternKeyMoves,
+  patternKeyMovesIn,
 } from "./pattern-key-moves.ts";
 export { DocumentLoadError, loadDocument } from "./document-readiness.ts";
 export {
@@ -254,6 +262,8 @@ export {
   profileOwnership,
 } from "./profile-order.ts";
 export { loadProfileOwnerDocuments, profileOwnerAt } from "./profile-owner.ts";
+export { spaceMemberListAt } from "./builder/space-access.ts";
+export { joinSpaceMembers, spaceMembersAt } from "./space-members.ts";
 export { writtenPrincipalAt } from "./written-principal.ts";
 export {
   classifyPieceOriginString,
@@ -272,6 +282,8 @@ export {
   getPatternSetupIdentityRef,
   getPatternSource,
   getPieceReconciliation,
+  getPieceSourceDelegations,
+  getPieceSourceRecord,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
   isStoredArgumentSchemaRefusal,
@@ -304,6 +316,7 @@ export {
   setPatternRepository,
   setPatternSource,
   setPieceReconciliation,
+  stampCreatedFromOrigin,
   STORED_ARGUMENT_SCHEMA_REFUSAL,
 } from "./runner.ts";
 export {
@@ -367,6 +380,7 @@ export {
   schema,
   type SchemaWithoutCell,
   type StreamValue,
+  SUGGESTIONS,
   TESTS,
   TILE_UI,
   type toJSON,
@@ -461,6 +475,7 @@ export {
 } from "./sandbox/fabric-import-specifier.ts";
 export { type PinRewrite, rewriteFabricPins } from "./fabric-pin-rewrite.ts";
 export { DEFAULT_CELL_SCOPE } from "./scope.ts";
+export { startWithInputSources } from "./ensure-piece-running.ts";
 export {
   isPieceDocument,
   isPieceRoot,
@@ -476,8 +491,10 @@ export {
 export { schemaPathSelection } from "./schema-path.ts";
 export {
   acceptsOpaqueCellOrUnresolvedLink,
+  isStoredArgumentOwnData,
   materializeStoredValueForValidation,
   overlayUnreadableLinkPlaceholders,
+  readStoredLinkChainRaw,
   storedArgumentValidationIssue,
 } from "./stored-argument-validation.ts";
 

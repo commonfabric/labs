@@ -22,7 +22,6 @@
  * a `ProblematicValue` rather than an exception.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { spy, stub } from "@std/testing/mock";
 
@@ -59,12 +58,12 @@ import {
   FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
-  FabricRegExp,
   FabricUnavailable,
   UNAVAILABLE_PENDING,
 } from "@/fabric-primitives";
 import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
 import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Shared test `LiveEnvironment`: `getCell()` always throws (no test
@@ -1119,34 +1118,13 @@ describe("JsonCodecEngine", () => {
       expect(d.value).toBe(19723n);
     });
 
-    it("round-trips `FabricRegExp` at top level and in nested structures", () => {
-      const top = roundTrip(
-        new FabricRegExp(/ab+c/gi),
-      ) as unknown as FabricRegExp;
-      expect(top).toBeInstanceOf(FabricRegExp);
-      expect(top.source).toBe("ab+c");
-      expect(top.flags).toBe("gi");
-      expect(top.flavor).toBe("es2025");
-
-      const obj = {
-        pattern: new FabricRegExp(/\d+/g),
-        label: "digits",
-      };
-      const result = roundTrip(obj) as Record<string, FabricValue>;
-      expect(result.label).toBe("digits");
-      const re = result.pattern as unknown as FabricRegExp;
-      expect(re).toBeInstanceOf(FabricRegExp);
-      expect(re.source).toBe("\\d+");
-      expect(re.flags).toBe("g");
-    });
-
     it("round-trips `FabricUnavailable` at top level and in nested structures", () => {
       const top = roundTrip(
         new FabricUnavailable("error", "general", "boom"),
       ) as unknown as FabricUnavailable;
       expect(top).toBeInstanceOf(FabricUnavailable);
       expect(top.reason).toBe("error");
-      expect(top.errorMessage).toBe("boom");
+      expect(top.message).toBe("boom");
 
       const obj = {
         status: new FabricUnavailable("pending"),
@@ -1452,6 +1430,39 @@ describe("JsonCodecEngine", () => {
       expect(result.a).toBe(1);
       expect(result.b).toBe(undefined);
       expect("b" in result).toBe(true);
+    });
+
+    describe("an enumerable key inherited from `Object.prototype`", () => {
+      // `JSON.parse()` makes each member an own property, so an inherited key
+      // reaches the decode's walk only through a polluted `Object.prototype`.
+      // The pollution lasts for the decode alone.
+
+      /** Returns what decoding `text` returns while the prototype is polluted. */
+      function decodePolluted(text: string): FabricValue {
+        const { jsonCodecEngine, runtime } = makeTestCodec();
+        Object.defineProperty(Object.prototype, "polluted", {
+          value: 1,
+          enumerable: true,
+          configurable: true,
+        });
+        try {
+          return jsonCodecEngine.decode(text, runtime);
+        } finally {
+          Reflect.deleteProperty(Object.prototype, "polluted");
+        }
+      }
+
+      it("returns a plain object holding its own keys alone", () => {
+        const result = decodePolluted(`${ENCODING_PREFIX}{"a":1}`);
+        expect(Object.keys(result as object)).toEqual(["a"]);
+        expect(Object.hasOwn(result as object, "polluted")).toBe(false);
+      });
+
+      it("returns an `/object`-unwrapped object holding its own keys alone", () => {
+        const result = decodePolluted(`${ENCODING_PREFIX}{"/object":{"/a":1}}`);
+        expect(Object.keys(result as object)).toEqual(["/a"]);
+        expect(Object.hasOwn(result as object, "polluted")).toBe(false);
+      });
     });
 
     describe("key ordering (Section 10)", () => {

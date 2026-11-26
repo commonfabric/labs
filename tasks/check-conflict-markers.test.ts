@@ -9,11 +9,11 @@
  * zero all look like the real thing to a loose pattern.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { join } from "@std/path";
 import { conflictMarkerAt, main, scan } from "./check-conflict-markers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Written out, not built. Detection is anchored at column 0, so these are inert
 // where they sit -- and that is the point: this file is tracked, so the
@@ -161,6 +161,19 @@ describe("check-conflict-markers", () => {
           new Uint8Array([0xff, 0xfe, 0x00, 0x80]),
         );
         expect(await scan(root)).toEqual([]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("throws for a tracked file it cannot read for any other reason", async () => {
+      // A path that loops back on itself is neither binary nor absent, so
+      // the run stops rather than passing a file it never read.
+      const root = await fixtureRepo("harmless");
+      try {
+        await Deno.remove(join(root, "subject.md"));
+        await Deno.symlink("subject.md", join(root, "subject.md"));
+        await expect(scan(root)).rejects.toThrow(Deno.errors.FilesystemLoop);
       } finally {
         await Deno.remove(root, { recursive: true });
       }

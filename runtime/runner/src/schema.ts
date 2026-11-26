@@ -609,33 +609,27 @@ const _filterAsCellCache = new WeakMap<
   JSONSchema | "<undefined>"
 >();
 
+/**
+ * `schema` without its `asCell`, or `undefined` where nothing else is left.
+ * `schema` is interned, as every schema `validateAndTransform()` resolves or
+ * combines is, so the answer is cached by its identity.
+ */
 function filterAsCell(schema: JSONSchema | undefined): JSONSchema | undefined {
   if (!isNontrivialSchema(schema)) {
     return schema;
   }
-
-  const makeRawResult = () => {
-    const { asCell: _asCell, ...restSchema } = schema;
-    return isNontrivialSchema(restSchema) ? restSchema : undefined;
-  };
-
-  if (isDeepFrozen(schema)) {
-    // Note: We cache literal `<undefined>` when we are to return `undefined`,
-    // to disambiguate with no-entry.
-    const cached = _filterAsCellCache.get(schema);
-    if (cached) return (cached === "<undefined>") ? undefined : cached;
-    const rawResult = makeRawResult();
-    if (rawResult) {
-      const result = internSchema(rawResult);
-      _filterAsCellCache.set(schema, result);
-      return result;
-    } else {
-      _filterAsCellCache.set(schema, "<undefined>");
-      return undefined;
-    }
-  } else {
-    return makeRawResult();
+  // Note: We cache literal `<undefined>` when we are to return `undefined`,
+  // to disambiguate with no-entry.
+  const cached = _filterAsCellCache.get(schema);
+  if (cached) return (cached === "<undefined>") ? undefined : cached;
+  const { asCell: _asCell, ...restSchema } = schema;
+  if (isNontrivialSchema(restSchema)) {
+    const result = internSchema(restSchema);
+    _filterAsCellCache.set(schema, result);
+    return result;
   }
+  _filterAsCellCache.set(schema, "<undefined>");
+  return undefined;
 }
 
 /**
@@ -1075,7 +1069,10 @@ function readValueAtResolvedLink(
   // Read without telling the scheduler. Whatever materializes this value —
   // the traverser or a view — registers its own reads as it walks.
   const meta = {
-    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    meta: Object.freeze({
+      ...ignoreReadForScheduling,
+      ...internalVerifierRead,
+    }),
   };
   const value = tx.readOrThrow(address, meta);
   if (value !== undefined || link.path.at(-1) !== "length") return value;
@@ -1834,6 +1831,16 @@ type RouteCrossing = {
   memoKey?: string;
 };
 
+/**
+ * The metadata of the read `TransformObjectCreator.cross()` journals at the
+ * slot a followed link leaves: a link-resolution probe, which CFC takes as the
+ * observation of which reference sits there, and which scheduling ignores.
+ */
+const followedSlotProbe = {
+  ...ignoreReadForScheduling,
+  ...linkResolutionProbe,
+};
+
 class TransformObjectCreator
   implements IObjectCreator<AnyCellWrapping<FabricValue>>, LinkCrossingRoute {
   #runtime: Runtime;
@@ -1889,12 +1896,13 @@ class TransformObjectCreator
     // Following a reference consumes its own restrictions as well as the
     // target observations (§8.2.4). Keep the pointer read and its trace in
     // the transaction even when the returned value cannot carry a label view.
-    // The traversal already records the slot's scheduling dependencies,
-    // including batched array reads; this observation is for CFC alone.
-    this.#tx.runWithAmbientReadMeta(
-      ignoreReadForScheduling,
-      () => readMaybeLink(this.#tx, source),
-    );
+    // The traversal already records the slot's scheduling dependencies and
+    // has the reference in hand; this observation is for CFC alone, so it
+    // loads nothing.
+    this.#tx.readOrThrow(toMemorySpaceAddress(source), {
+      meta: followedSlotProbe,
+      trackReadWithoutLoad: true,
+    });
     this.#tx.recordCfcDereferenceTrace({
       source: cfcAddressFromLink(source),
       target: cfcAddressFromLink(target),

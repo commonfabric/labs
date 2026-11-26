@@ -1,5 +1,9 @@
+// `assertThrows` returns the error it caught, typed as the class it checked,
+// for the lines that read its members.
+import { assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
+import { captureLogsForTestingOnly } from "@commonfabric/logger/for-testing-only";
 
 import {
   fabricFromRealmValue,
@@ -17,6 +21,7 @@ import {
   linkRefFrom,
   linkRefPayloadFromString,
 } from "@commonfabric/runner/shared";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   $conn,
@@ -71,6 +76,139 @@ describe("cell-handle", () => {
       },
     );
   }
+
+  describe("CellHandle schema warning", () => {
+    const runtime = {
+      [$conn]: () => ({ peersOf: () => [] }),
+    } as unknown as RuntimeClient;
+    const ref: CellRef = {
+      id: "of:schemaless" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: ["a", "b"],
+    };
+
+    it("warns once per handle, naming the method and the cell, when a handle without a schema is read", () => {
+      using logs = captureLogsForTestingOnly("cell-handle");
+      const cell = new CellHandle(runtime, ref);
+
+      cell.get();
+      cell.get();
+
+      const warnings = logs.textsOf("no-schema-get");
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("of:schemaless:a.b");
+    });
+
+    it("does not warn for a handle with a schema", () => {
+      using logs = captureLogsForTestingOnly("cell-handle");
+
+      new CellHandle(runtime, { ...ref, schema: { type: "number" } }).get();
+
+      expect(logs.logs).toEqual([]);
+    });
+  });
+
+  describe("CellHandle subscribers that throw", () => {
+    const ref: CellRef = {
+      id: "of:throwing-subscriber" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: [],
+      schema: { type: "string" },
+    };
+    const runtime = {
+      [$conn]: () => ({
+        subscribe: () => Promise.resolve(),
+        peersOf: () => [],
+      }),
+    } as unknown as RuntimeClient;
+    const refusal = { refusedBy: "display-ceiling" } as const;
+
+    it("logs a value callback that throws, and still delivers to the others", () => {
+      const cell = new CellHandle<string>(runtime, ref);
+      const heard: (string | undefined)[] = [];
+      using errors = stub(console, "error");
+      cell.subscribe(() => {
+        throw new Error("callback broke");
+      }, { onRefused: () => {} });
+      cell.subscribe((value) => {
+        heard.push(value);
+      }, { onRefused: () => {} });
+      cell[$onCellUpdate]("next");
+      expect(heard).toEqual([undefined, "next"]);
+      expect(errors.calls.map((call) => call.args)).toEqual([
+        ["[CellHandle] Callback error:", new Error("callback broke")],
+        ["[CellHandle] Callback error:", new Error("callback broke")],
+      ]);
+    });
+
+    it("logs a cleanup that throws, and runs the callback again", () => {
+      const cell = new CellHandle<string>(runtime, ref);
+      const heard: (string | undefined)[] = [];
+      using errors = stub(console, "error");
+      cell.subscribe((value) => {
+        heard.push(value);
+        return () => {
+          throw new Error("cleanup broke");
+        };
+      }, { onRefused: () => {} });
+      cell[$onCellUpdate]("next");
+      expect(heard).toEqual([undefined, "next"]);
+      expect(errors.calls.map((call) => call.args)).toEqual([
+        ["[CellHandle] Cleanup error:", new Error("cleanup broke")],
+      ]);
+    });
+
+    it("logs a refusal callback that throws, and still tells the others", () => {
+      const cell = new CellHandle<string>(runtime, ref);
+      const refused: unknown[] = [];
+      using errors = stub(console, "error");
+      cell.subscribe(() => {}, {
+        onRefused: () => {
+          throw new Error("refusal callback broke");
+        },
+      });
+      cell.subscribe(() => {}, { onRefused: (r) => refused.push(r) });
+      cell[$onCellRefused](refusal);
+      expect(refused).toEqual([refusal]);
+      expect(errors.calls.map((call) => call.args)).toEqual([
+        ["[CellHandle] Callback error:", new Error("refusal callback broke")],
+      ]);
+    });
+
+    it("hands the refusal to a read, on the error it throws", () => {
+      const cell = new CellHandle<string>(runtime, ref);
+      cell[$onCellRefused](refusal);
+      const thrown = assertThrows(() => cell.get(), CellReadRefusedError);
+      expect(thrown.refusal).toEqual(refusal);
+    });
+  });
+
+  describe("CellHandle equals()", () => {
+    const runtime = {
+      [$conn]: () => ({ peersOf: () => [] }),
+    } as unknown as RuntimeClient;
+    const ref: CellRef = {
+      id: "of:equals" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: ["a"],
+    };
+
+    it("returns true for a handle on the same cell", () => {
+      expect(new CellHandle(runtime, ref).equals(new CellHandle(runtime, ref)))
+        .toBe(true);
+    });
+
+    it("returns false for anything that is not a handle, or a handle on another cell", () => {
+      const cell = new CellHandle(runtime, ref);
+      expect(cell.equals(ref)).toBe(false);
+      expect(cell.equals(undefined)).toBe(false);
+      expect(cell.equals(new CellHandle(runtime, { ...ref, path: ["b"] })))
+        .toBe(false);
+    });
+  });
 
   describe("CellHandle key() schema", () => {
     const runtime = {
@@ -834,6 +972,33 @@ describe("cell-handle", () => {
       expect(calls.length).toBe(afterValue);
     });
 
+    it("fires a subscriber on a change of the written principal alone only when the handle asked for it", () => {
+      const heard = (options: { includeWrittenPrincipal?: boolean }) => {
+        const cell = new CellHandle<string>(makeRuntime(), ref);
+        const principals: Array<string | undefined> = [];
+        cell.subscribe((_value, _label, delivery) => {
+          principals.push(delivery?.writtenPrincipal);
+        }, { includeCfcLabel: true, onRefused: () => {}, ...options });
+        for (
+          const writtenPrincipal of ["did:key:alice", "did:key:bob"] as const
+        ) {
+          cell[$onCellUpdate]("v1", {
+            cfcLabel: labelA,
+            writtenPrincipal,
+            current: true,
+          });
+        }
+        return principals;
+      };
+
+      expect(heard({ includeWrittenPrincipal: true })).toEqual([
+        undefined,
+        "did:key:alice",
+        "did:key:bob",
+      ]);
+      expect(heard({}).length).toBe(2);
+    });
+
     it("leaves the cached label untouched on a value-only update", () => {
       const cell = new CellHandle<string>(makeRuntime(), ref);
       cell.subscribe(() => {}, { includeCfcLabel: true, onRefused: () => {} });
@@ -845,7 +1010,7 @@ describe("cell-handle", () => {
       expect(cell.cfcLabel).toEqual(labelA);
     });
 
-    it("re-establishes the backend subscription when a label-aware subscriber is added later", async () => {
+    it("asks the connection for labels when a label-aware subscriber is added later", () => {
       const events: string[] = [];
       const runtime = {
         [$conn]: () => ({
@@ -866,12 +1031,11 @@ describe("cell-handle", () => {
       expect(cell.wantsCfcLabel).toBe(false);
       expect(events).toEqual(["subscribe"]);
 
-      // A label-aware subscription on the SAME handle re-opens the backend sub so
-      // it carries labels (the old one was label-less and would be deduped away).
+      // The connection opens the worker's subscription again when the handle
+      // it is asked for again wants more than it carries.
       cell.subscribe(() => {}, { includeCfcLabel: true, onRefused: () => {} });
       expect(cell.wantsCfcLabel).toBe(true);
-      await Promise.resolve(); // let the unsubscribe().finally(subscribe) settle
-      expect(events).toEqual(["subscribe", "unsubscribe", "subscribe"]);
+      expect(events).toEqual(["subscribe", "subscribe"]);
     });
   });
 
@@ -1414,6 +1578,72 @@ describe("cell-handle", () => {
       );
 
       await expect(cell.fields()).rejects.toThrow(CellReadRefusedError);
+    });
+
+    describe("the message a refusal's error carries", () => {
+      const stored = {
+        refusedBy: "display-ceiling",
+        labelSource: "stored",
+      } as const;
+
+      for (const call of ["sync", "pull", "fields", "initialize"] as const) {
+        it(`names \`${call}()\` and the kind of label that refused its read`, async () => {
+          const cell = new CellHandle<Record<string, string>>(
+            makeRuntime({ refused: stored }),
+            ref,
+          );
+
+          await expect(
+            call === "initialize" ? cell.initialize({}) : cell[call](),
+          ).rejects.toThrow(
+            `The worker refused this read of a cell, through \`${call}()\` ` +
+              "(display-ceiling: a label stored at the cell or above it).",
+          );
+        });
+      }
+
+      it("names `get()` for the refusal the handle holds", () => {
+        const cell = new CellHandle<string>(makeRuntime(), ref);
+        cell[$onCellRefused]({
+          refusedBy: "display-ceiling",
+          labelSource: "consumed",
+        });
+
+        expect(() => cell.get()).toThrow(
+          "The worker refused this read of a cell, through `get()` " +
+            "(display-ceiling: a label the read consumed).",
+        );
+      });
+
+      it("names the ceiling alone for a refusal that names no kind of label", async () => {
+        const cell = new CellHandle<Record<string, string>>(
+          makeRuntime({ refused: refusal }),
+          ref,
+        );
+
+        await expect(cell.fields()).rejects.toThrow(
+          "The worker refused this read of a cell, through `fields()` " +
+            "(display-ceiling).",
+        );
+      });
+
+      for (
+        const [labelSource, phrase] of [
+          ["schema", "the label the cell's schema declares"],
+          ["unreadable", "labels that could not be read"],
+        ] as const
+      ) {
+        it(`names no method where none is given, and \`${labelSource}\` as ${phrase}`, () => {
+          expect(
+            new CellReadRefusedError({
+              refusedBy: "display-ceiling",
+              labelSource,
+            }).message,
+          ).toBe(
+            `The worker refused this read of a cell (display-ceiling: ${phrase}).`,
+          );
+        });
+      }
     });
   });
 

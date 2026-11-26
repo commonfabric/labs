@@ -13,7 +13,6 @@ export interface CfLauncherCommand {
   command: string;
   args: string[];
   cwd: string;
-  env: Record<string, string>;
 }
 
 export interface ParseCfLauncherArgsOptions {
@@ -145,9 +144,13 @@ export const fileUrlToPath = (url: string): string => {
   return /^\/[A-Za-z]:\//.test(path) ? path.slice(1) : path;
 };
 
-const readInitCwd = (): string | undefined => {
+/** `INIT_CWD` from `env`, or undefined when it is unset, blank, or unreadable
+ * because the process may not read the environment. */
+export const readInitCwd = (
+  env: Pick<Deno.Env, "get"> = Deno.env,
+): string | undefined => {
   try {
-    const value = Deno.env.get("INIT_CWD");
+    const value = env.get("INIT_CWD");
     return value !== undefined && value.trim() !== "" ? value : undefined;
   } catch {
     return undefined;
@@ -259,9 +262,6 @@ export const buildCfLauncherCommand = (
     ...options.cfArgs,
   ],
   cwd: options.cwd,
-  env: {
-    CF_CLI_NAME: "cf",
-  },
 });
 
 const run = async (): Promise<number> => {
@@ -281,7 +281,6 @@ const run = async (): Promise<number> => {
   const child = new Deno.Command(command.command, {
     args: command.args,
     cwd: command.cwd,
-    env: command.env,
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",

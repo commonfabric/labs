@@ -1,19 +1,17 @@
 import { ensureDir } from "@std/fs";
+import { z } from "zod";
 
 import type { WebSearchRoute } from "./web-search.routes.ts";
-import env from "@/env.ts";
 import { gatewayProvenanceHeaders } from "@/lib/gateway-provenance.ts";
 import { sha256 } from "@/lib/sha2.ts";
 import type { AppRouteHandler } from "@/lib/types.ts";
 
-const CACHE_DIR = `${env.CACHE_DIR}/agent-tools-web-search`;
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutes in milliseconds
 
-// Web search is backed by Google Search grounding via the gateway (Gemini),
-// replacing the former Jina Search dependency. We send the query with the
-// `google_search` tool and read the REAL search hits from the response's
-// `grounding_metadata.groundingChunks` — these are actual results, not the
-// model's prose (which hallucinates URLs). Each chunk's `web.uri` is a Google
+// Web search is backed by Google Search grounding via the gateway (Gemini).
+// We send the query with the `google_search` tool and read the REAL search
+// hits from the response's `grounding_metadata.groundingChunks` — these are
+// actual results, not the model's prose (which hallucinates URLs). Each chunk's `web.uri` is a Google
 // redirect that we follow to the real destination (which also validates it).
 const GROUNDED_SEARCH_MODEL = "gemini-3.5-flash";
 const RESOLVE_UA =
@@ -82,20 +80,23 @@ function isAggregatorHost(host: string): boolean {
   );
 }
 
-interface GroundingChunk {
-  web?: { uri?: string; title?: string };
-}
+const CompletionSchema = z.object({
+  choices: z.array(z.object({
+    finish_reason: z.unknown().optional(),
+    message: z.object({
+      grounding_metadata: z.object({
+        groundingChunks: z.array(z.unknown()).optional(),
+      }).optional(),
+    }).optional(),
+  })).optional(),
+});
 
-/** Pull groundingChunks out of a gateway chat-completion response. */
-function extractGroundingChunks(completion: unknown): GroundingChunk[] {
-  const gm = (completion as {
-    choices?: Array<{ message?: { grounding_metadata?: unknown } }>;
-  })?.choices?.[0]?.message?.grounding_metadata as
-    | { groundingChunks?: unknown }
-    | undefined;
-  const chunks = gm?.groundingChunks;
-  return Array.isArray(chunks) ? (chunks as GroundingChunk[]) : [];
-}
+const GroundingChunkSchema = z.object({
+  web: z.object({
+    uri: z.string().optional(),
+    title: z.string().optional(),
+  }).optional(),
+});
 
 //
 // SSRF guard
@@ -108,7 +109,7 @@ function extractGroundingChunks(completion: unknown): GroundingChunk[] {
 
 function isPrivateIpv4(ip: string): boolean {
   const m = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!m) return false;
+  if (!m) return true; // not an address, so it cannot be vetted
   const a = Number(m[1]);
   const b = Number(m[2]);
   if (a === 0 || a === 10 || a === 127) return true; // unspecified/private/loopback
@@ -125,8 +126,19 @@ function isPrivateIp(ip: string): boolean {
     if (h === "::1" || h === "::") return true; // loopback/unspecified
     if (h.startsWith("fc") || h.startsWith("fd")) return true; // unique-local fc00::/7
     if (/^fe[89ab]/.test(h)) return true; // link-local fe80::/10
-    const mapped = h.match(/::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
-    if (mapped) return isPrivateIpv4(mapped[1]);
+    // IPv4-mapped, written either dotted (as DNS answers print it) or as two
+    // hex groups (as a URL serializes it: `[::ffff:127.0.0.1]` has the
+    // hostname `[::ffff:7f00:1]`).
+    const dotted = h.match(/::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+    if (dotted) return isPrivateIpv4(dotted[1]);
+    const hex = h.match(/::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (hex) {
+      const high = parseInt(hex[1], 16);
+      const low = parseInt(hex[2], 16);
+      return isPrivateIpv4(
+        `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`,
+      );
+    }
     return false;
   }
   return isPrivateIpv4(h);
@@ -137,8 +149,17 @@ function isIpLiteral(host: string): boolean {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(":");
 }
 
+/** Looks up the addresses a host name has for one record type. */
+export type ResolveDns = (
+  host: string,
+  recordType: "A" | "AAAA",
+) => Promise<string[]>;
+
 /** True if `host` is (or resolves to) an internal/private/loopback target. */
-async function hostIsBlocked(host: string): Promise<boolean> {
+export async function hostIsBlocked(
+  host: string,
+  resolveDns: ResolveDns,
+): Promise<boolean> {
   const h = host.toLowerCase().replace(/^\[|\]$/g, "");
   if (
     !h || h === "localhost" || h.endsWith(".localhost") ||
@@ -147,18 +168,31 @@ async function hostIsBlocked(host: string): Promise<boolean> {
     return true;
   }
   if (isIpLiteral(h)) return isPrivateIp(h);
-  // Resolve and block if ANY address is private. Block on resolution failure
-  // too (don't fetch a host we can't vet).
-  try {
-    const [a, aaaa] = await Promise.all([
-      Deno.resolveDns(h, "A").catch(() => [] as string[]),
-      Deno.resolveDns(h, "AAAA").catch(() => [] as string[]),
-    ]);
-    const ips = [...a, ...aaaa];
-    return ips.length === 0 || ips.some(isPrivateIp);
-  } catch {
-    return true;
-  }
+  // Resolve and block if ANY address is private. A failed lookup contributes
+  // no addresses, and a host with none is blocked too (don't fetch a host we
+  // can't vet).
+  const lookup = async (recordType: "A" | "AAAA") => {
+    try {
+      return await resolveDns(h, recordType);
+    } catch {
+      return [];
+    }
+  };
+  const [a, aaaa] = await Promise.all([lookup("A"), lookup("AAAA")]);
+  const ips = [...a, ...aaaa];
+  return ips.length === 0 || ips.some(isPrivateIp);
+}
+
+/** What the outbound requests of a web search go through. */
+export interface WebSearchDeps {
+  /** Sends the gateway request and every page request. */
+  fetch: typeof fetch;
+  /** Resolves page hosts for the SSRF guard. */
+  resolveDns: ResolveDns;
+  /** The LLM gateway's base URL. */
+  gatewayUrl: string;
+  /** The directory search results are cached in. */
+  cacheDir: string;
 }
 
 /**
@@ -168,6 +202,7 @@ async function hostIsBlocked(host: string): Promise<boolean> {
  * so the timeout budget spans the body read, not just the headers.
  */
 async function ssrfSafeGet(
+  deps: WebSearchDeps,
   initialUrl: string,
   timeoutMs: number,
 ): Promise<{ res: Response; finalUrl: string; cleanup: () => void } | null> {
@@ -177,22 +212,10 @@ async function ssrfSafeGet(
   let url = initialUrl;
   try {
     for (let hop = 0; hop < 6; hop++) {
-      let u: URL;
-      try {
-        u = new URL(url);
-      } catch {
-        cleanup();
-        return null;
-      }
-      if (u.protocol !== "http:" && u.protocol !== "https:") {
-        cleanup();
-        return null;
-      }
-      if (await hostIsBlocked(u.hostname)) {
-        cleanup();
-        return null;
-      }
-      const res = await fetch(url, {
+      const u = new URL(url);
+      if (u.protocol !== "http:" && u.protocol !== "https:") break;
+      if (await hostIsBlocked(u.hostname, deps.resolveDns)) break;
+      const res = await deps.fetch(url, {
         method: "GET",
         redirect: "manual",
         headers: { "User-Agent": RESOLVE_UA },
@@ -201,21 +224,18 @@ async function ssrfSafeGet(
       if (res.status >= 300 && res.status < 400) {
         const loc = res.headers.get("location");
         await res.body?.cancel();
-        if (!loc) {
-          cleanup();
-          return null;
-        }
+        if (!loc) break;
         url = new URL(loc, url).toString();
         continue;
       }
       return { res, finalUrl: url, cleanup };
     }
-    cleanup(); // too many redirects
-    return null;
   } catch {
-    cleanup();
-    return null;
+    // An unparseable URL or a failed request refuses the URL, as a blocked
+    // hop, a redirect without a location and too many redirects do.
   }
+  cleanup();
+  return null;
 }
 
 /**
@@ -224,9 +244,10 @@ async function ssrfSafeGet(
  * http(s) page. De-references the redirect AND validates the candidate.
  */
 async function resolveGroundingUrl(
+  deps: WebSearchDeps,
   redirectUrl: string,
 ): Promise<string | null> {
-  const got = await ssrfSafeGet(redirectUrl, 8000);
+  const got = await ssrfSafeGet(deps, redirectUrl, 8000);
   if (!got) return null;
   const { res, finalUrl, cleanup } = got;
   await res.body?.cancel();
@@ -243,8 +264,11 @@ async function resolveGroundingUrl(
  * Not a full reader (that's the web-read route's job) — crude tag-strip with a
  * length cap; returns "" on any error or non-text response.
  */
-async function fetchPageText(url: string): Promise<string> {
-  const got = await ssrfSafeGet(url, 8000);
+async function fetchPageText(
+  deps: WebSearchDeps,
+  url: string,
+): Promise<string> {
+  const got = await ssrfSafeGet(deps, url, 8000);
   if (!got) return "";
   const { res, cleanup } = got;
   try {
@@ -272,176 +296,165 @@ async function fetchPageText(url: string): Promise<string> {
   }
 }
 
-async function isValidCache(path: string): Promise<boolean> {
-  try {
-    const stat = await Deno.stat(path);
-    const age = Date.now() - (stat.mtime?.getTime() ?? 0);
-    return age < CACHE_TTL;
-  } catch {
-    return false;
-  }
-}
+/** Builds the web search handler over `deps`. */
+export function createWebSearchHandlers(deps: WebSearchDeps): {
+  webSearch: AppRouteHandler<WebSearchRoute>;
+} {
+  const cacheDir = `${deps.cacheDir}/agent-tools-web-search`;
 
-export const webSearch: AppRouteHandler<WebSearchRoute> = async (c) => {
-  const logger = c.get("logger");
-  const verifiedUserDid = c.get("verifiedUserDid");
-  const payload = await c.req.json();
-  const { query, max_results = 5, include_content = false } = payload;
+  const webSearch: AppRouteHandler<WebSearchRoute> = async (c) => {
+    const logger = c.get("logger");
+    const verifiedUserDid = c.get("verifiedUserDid");
+    const { query, max_results, include_content } = c.req.valid("json");
 
-  const cacheKey = `${query}-${max_results}-${include_content}`;
-  const promptSha = await sha256(cacheKey);
-  const cachePath = `${CACHE_DIR}/${promptSha}.json`;
+    const cacheKey = `${query}-${max_results}-${include_content}`;
+    const promptSha = await sha256(cacheKey);
+    const cachePath = `${cacheDir}/${promptSha}.json`;
 
-  logger.info(
-    { query, max_results, include_content, promptSha, verifiedUserDid },
-    "Starting web search",
-  );
+    logger.info(
+      { query, max_results, include_content, promptSha, verifiedUserDid },
+      "Starting web search",
+    );
 
-  // Check cache first
-  try {
-    const cachedContent = await Deno.readFile(cachePath);
-    const isValid = await isValidCache(cachePath);
+    // Check cache first
+    try {
+      const { mtime } = await Deno.stat(cachePath);
+      if (Date.now() - (mtime?.getTime() ?? 0) >= CACHE_TTL) {
+        logger.info(
+          { promptSha, path: cachePath },
+          "Cache expired - Performing new search",
+        );
+        throw new Error("Cache expired");
+      }
+      const cachedContent = await Deno.readFile(cachePath);
 
-    if (!isValid) {
+      logger.info(
+        { promptSha, bytes: cachedContent.byteLength, path: cachePath },
+        "🎯 Cache HIT - Serving cached search results",
+      );
+      return c.json(JSON.parse(new TextDecoder().decode(cachedContent)), {
+        headers: {
+          "X-Disk-Cache": "HIT",
+        },
+      });
+    } catch {
       logger.info(
         { promptSha, path: cachePath },
-        "Cache expired - Performing new search",
-      );
-      throw new Error("Cache expired");
-    }
-
-    logger.info(
-      { promptSha, bytes: cachedContent.byteLength, path: cachePath },
-      "🎯 Cache HIT - Serving cached search results",
-    );
-    return c.json(JSON.parse(new TextDecoder().decode(cachedContent)), {
-      headers: {
-        "X-Disk-Cache": "HIT",
-      },
-    });
-  } catch {
-    logger.info(
-      { promptSha, path: cachePath },
-      "❌ Cache MISS - Performing new search",
-    );
-  }
-
-  try {
-    // Grounded search: send the query to Gemini with the `google_search` tool
-    // and read the REAL search hits from `grounding_metadata.groundingChunks`
-    // (NOT the model's prose, which hallucinates URLs). Each chunk's `web.uri`
-    // is a Google redirect we follow to the real destination — which also
-    // validates reachability.
-    const gatewayUrl = env.CFTS_AI_GATEWAY_URL.replace(/\/+$/, "");
-
-    const res = await fetch(`${gatewayUrl}/v1/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer gateway-internal",
-        ...gatewayProvenanceHeaders("web-search"),
-      },
-      body: JSON.stringify({
-        model: GROUNDED_SEARCH_MODEL,
-        messages: [{ role: "user", content: query }],
-        tools: [{ type: "google_search", google_search: {} }],
-        stream: false,
-      }),
-    });
-    if (!res.ok) {
-      throw new Error(`gateway ${res.status}: ${await res.text()}`);
-    }
-    const json = await res.json();
-    const chunks = extractGroundingChunks(json);
-
-    // A search that trips Vertex's content filter is grounded in nothing, and
-    // answers with no results.
-    if (chunks.length === 0) {
-      logger.warn(
-        { finishReason: json?.choices?.[0]?.finish_reason },
-        "No grounding chunks returned",
+        "❌ Cache MISS - Performing new search",
       );
     }
 
-    // Resolve chunk redirects to their real URLs CONCURRENTLY — each call has
-    // its own timeout, so wall-time is the slowest single resolution rather
-    // than serial (8s × N). Cap how many we resolve so a pathological grounding
-    // response can't fan out unbounded.
-    const RESOLVE_CAP = Math.max(max_results * 3, 8);
-    const resolved = await Promise.all(
-      chunks.slice(0, RESOLVE_CAP).map(async (chunk) => {
-        const redirect = chunk?.web?.uri;
-        if (typeof redirect !== "string" || !redirect) return null;
-        const url = await resolveGroundingUrl(redirect);
-        if (!url) return null;
-        const title =
-          typeof chunk.web?.title === "string" && chunk.web.title.trim()
-            ? chunk.web.title.trim()
-            : new URL(url).host.toLowerCase();
-        return { url, title };
-      }),
-    );
+    try {
+      // Grounded search: send the query to Gemini with the `google_search`
+      // tool and read the REAL search hits from
+      // `grounding_metadata.groundingChunks` (NOT the model's prose, which
+      // hallucinates URLs). Each chunk's `web.uri` is a Google redirect we
+      // follow to the real destination — which also validates reachability.
+      const gatewayUrl = deps.gatewayUrl.replace(/\/+$/, "");
 
-    // Pick in original (relevance) order, de-duped by host, up to max_results.
-    const seenHosts = new Set<string>();
-    const picked: Array<{ url: string; title: string }> = [];
-    for (const r of resolved) {
-      if (!r || picked.length >= max_results) continue;
-      const host = new URL(r.url).host.toLowerCase();
-      if (seenHosts.has(host)) continue;
-      seenHosts.add(host);
-      picked.push(r);
-    }
+      const res = await deps.fetch(`${gatewayUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer gateway-internal",
+          ...gatewayProvenanceHeaders("web-search"),
+        },
+        body: JSON.stringify({
+          model: GROUNDED_SEARCH_MODEL,
+          messages: [{ role: "user", content: query }],
+          tools: [{ type: "google_search", google_search: {} }],
+          stream: false,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`gateway ${res.status}: ${await res.text()}`);
+      }
+      const completion = CompletionSchema.safeParse(await res.json());
+      const choice = completion.data?.choices?.[0];
+      const chunks = choice?.message?.grounding_metadata?.groundingChunks ??
+        [];
 
-    // Honor `include_content` (best-effort page text), also concurrently.
-    const contents = include_content
-      ? await Promise.all(picked.map((p) => fetchPageText(p.url)))
-      : picked.map(() => "");
+      // A search that trips Vertex's content filter is grounded in nothing,
+      // and answers with no results.
+      if (chunks.length === 0) {
+        logger.warn(
+          { finishReason: choice?.finish_reason },
+          "No grounding chunks returned",
+        );
+      }
 
-    const results = picked.map((p, i) => ({
-      title: p.title,
-      url: p.url,
-      description: "",
-      content: contents[i],
-    }));
-
-    const transformedResult = {
-      query,
-      results,
-      total_results: results.length,
-    };
-
-    logger.info(
-      { query, chunks: chunks.length, count: results.length },
-      "Grounded web search completed",
-    );
-
-    // Cache only non-empty result sets, so a transient empty/filtered
-    // generation doesn't pin zero results for the whole TTL.
-    if (results.length > 0) {
-      await ensureDir(CACHE_DIR);
-      await Deno.writeFile(
-        cachePath,
-        new TextEncoder().encode(JSON.stringify(transformedResult)),
+      // Resolve chunk redirects to their real URLs CONCURRENTLY — each call
+      // has its own timeout, so wall-time is the slowest single resolution
+      // rather than serial (8s × N). Cap how many we resolve so a
+      // pathological grounding response can't fan out unbounded.
+      const RESOLVE_CAP = Math.max(max_results * 3, 8);
+      const resolved = await Promise.all(
+        chunks.slice(0, RESOLVE_CAP).map(async (chunk) => {
+          const web = GroundingChunkSchema.safeParse(chunk).data?.web;
+          if (!web?.uri) return null;
+          const url = await resolveGroundingUrl(deps, web.uri);
+          if (!url) return null;
+          const title = web.title?.trim() || new URL(url).host.toLowerCase();
+          return { url, title };
+        }),
       );
-      logger.info({ promptSha }, "Search results cached");
-    }
 
-    return c.json(transformedResult, {
-      headers: {
-        "X-Disk-Cache": "MISS",
-      },
-    });
-  } catch (error) {
-    logger.error({
-      error: error instanceof Error
-        ? {
-          name: error.name,
-          message: error.message,
-          stack: error.stack,
-        }
-        : String(error),
-    }, "Web search failed");
-    return c.json({ error: "Search failed" }, 500);
-  }
-};
+      // Pick in original (relevance) order, de-duped by host, up to
+      // max_results.
+      const seenHosts = new Set<string>();
+      const picked: Array<{ url: string; title: string }> = [];
+      for (const r of resolved) {
+        if (!r || picked.length >= max_results) continue;
+        const host = new URL(r.url).host.toLowerCase();
+        if (seenHosts.has(host)) continue;
+        seenHosts.add(host);
+        picked.push(r);
+      }
+
+      // Honor `include_content` (best-effort page text), also concurrently.
+      const contents = include_content
+        ? await Promise.all(picked.map((p) => fetchPageText(deps, p.url)))
+        : picked.map(() => "");
+
+      const results = picked.map((p, i) => ({
+        title: p.title,
+        url: p.url,
+        description: "",
+        content: contents[i],
+      }));
+
+      const transformedResult = {
+        query,
+        results,
+        total_results: results.length,
+      };
+
+      logger.info(
+        { query, chunks: chunks.length, count: results.length },
+        "Grounded web search completed",
+      );
+
+      // Cache only non-empty result sets, so a transient empty/filtered
+      // generation doesn't pin zero results for the whole TTL.
+      if (results.length > 0) {
+        await ensureDir(cacheDir);
+        await Deno.writeFile(
+          cachePath,
+          new TextEncoder().encode(JSON.stringify(transformedResult)),
+        );
+        logger.info({ promptSha }, "Search results cached");
+      }
+
+      return c.json(transformedResult, {
+        headers: {
+          "X-Disk-Cache": "MISS",
+        },
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Web search failed");
+      return c.json({ error: "Search failed" }, 500);
+    }
+  };
+
+  return { webSearch };
+}

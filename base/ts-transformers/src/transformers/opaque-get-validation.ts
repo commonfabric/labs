@@ -177,21 +177,20 @@ export class OpaqueGetValidationTransformer extends HelpersOnlyTransformer {
     param: ts.ParameterDeclaration,
     checker: ts.TypeChecker,
   ): boolean {
-    let functionNode: ts.Node | undefined = param.parent;
-    while (functionNode && !ts.isFunctionLike(functionNode)) {
-      functionNode = functionNode.parent;
+    // The nearest call around the function that declares the parameter.
+    for (
+      let candidate: ts.Node | undefined = param.parent.parent;
+      candidate;
+      candidate = candidate.parent
+    ) {
+      if (ts.isCallExpression(candidate)) {
+        const callKind = detectCallKind(candidate, checker);
+        return callKind?.kind === "builder" &&
+          (callKind.builderName === "pattern" ||
+            callKind.builderName === "render");
+      }
     }
-    if (!functionNode) return false;
-
-    let candidate: ts.Node | undefined = functionNode.parent;
-    while (candidate && !ts.isCallExpression(candidate)) {
-      candidate = candidate.parent;
-    }
-    if (!candidate) return false;
-
-    const callKind = detectCallKind(candidate as ts.CallExpression, checker);
-    return callKind?.kind === "builder" &&
-      (callKind.builderName === "pattern" || callKind.builderName === "render");
+    return false;
   }
 
   #isReactiveInitializer(

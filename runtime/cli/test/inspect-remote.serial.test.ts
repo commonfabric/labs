@@ -4,7 +4,6 @@
 // exercised — no live server needed. `main.parse` re-throws action errors, so
 // error paths are asserted with assertRejects.
 
-import { afterAll, afterEach, beforeAll, describe, it } from "@std/testing/bdd";
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
@@ -13,6 +12,13 @@ import { Identity } from "@commonfabric/identity";
 import { defaultCacheDir } from "@commonfabric/state-inspector";
 import type { FabricValue } from "@commonfabric/data-model";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { inspect } from "../commands/inspect.ts";
 
 const DUMP_BASE = "/api/storage/memory/dump";
@@ -51,6 +57,7 @@ let tmpRoot: string;
 const realFetch = globalThis.fetch;
 const prevIdentity = Deno.env.get("CF_IDENTITY");
 const prevApiUrl = Deno.env.get("CF_API_URL");
+const prevHome = Deno.env.get("HOME");
 
 async function buildDbBytes(): Promise<Uint8Array> {
   const dir = await Deno.makeTempDir({ prefix: "cli-remote-seed-" });
@@ -187,6 +194,9 @@ beforeAll(async () => {
   dbBytes = await buildDbBytes();
   tmpRoot = await Deno.makeTempDir({ prefix: "cli-remote-key-" });
   keyPath = `${tmpRoot}/id.key`;
+  // The snapshot cache lives under `HOME`, so a temporary one keeps pulled
+  // snapshots out of the real cache that local discovery reads.
+  Deno.env.set("HOME", tmpRoot);
   await Deno.writeFile(keyPath, await Identity.generatePkcs8());
   Deno.env.set("CF_IDENTITY", keyPath);
   Deno.env.delete("CF_API_URL");
@@ -202,6 +212,8 @@ afterAll(async () => {
   else Deno.env.set("CF_IDENTITY", prevIdentity);
   if (prevApiUrl === undefined) Deno.env.delete("CF_API_URL");
   else Deno.env.set("CF_API_URL", prevApiUrl);
+  if (prevHome === undefined) Deno.env.delete("HOME");
+  else Deno.env.set("HOME", prevHome);
   await Deno.remove(tmpRoot, { recursive: true }).catch(() => {});
 });
 

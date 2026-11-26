@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { type FabricValue, isDeepFrozen } from "@commonfabric/data-model";
 import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -20,6 +20,7 @@ import {
   isInternalVerifierRead,
   stableInternalVerifierRead,
 } from "../src/storage/reactivity-log.ts";
+import { writeChokepointMark } from "../src/storage/write-chokepoint.ts";
 
 const signer = await Identity.fromPassphrase("v2-transaction");
 const space = signer.did();
@@ -575,7 +576,7 @@ describe("v2-transaction", () => {
           expect(tx.write({ ...address, path: ["value"] }, keyedMap(length)).ok)
             .toBeTruthy();
           const hashed = getContainersHashedForTestingOnly() - before;
-          expect(tx.getReactivityLog?.().writes).toEqual([]);
+          expect(tx.getReactivityLog().writes).toEqual([]);
           return hashed;
         } finally {
           await storage.close();
@@ -1072,6 +1073,77 @@ describe("v2-transaction", () => {
     });
   });
 
+  describe("reportUnmarkedWrites()", () => {
+    // A write that arrives without the extended transaction's write-chokepoint
+    // mark is reported to every sink added, and a marked one to none.
+
+    /** A storage transaction with two sinks, and what each was told. */
+    const withSinks = (storage: ReturnType<typeof StorageManager.emulate>) => {
+      const tx = storage.edit();
+      const reported: [string[], string[]] = [[], []];
+      for (const seen of reported) {
+        tx.reportUnmarkedWrites!((address) =>
+          seen.push(address.path.join("/"))
+        );
+      }
+      return { tx, reported };
+    };
+
+    const address: IMemorySpaceAddress = {
+      space,
+      id: "of:v2-transaction-unmarked",
+      type,
+      path: ["value"],
+    };
+
+    it("reports an unmarked write to every sink, and a marked one to none", async () => {
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        const { tx, reported } = withSinks(storage);
+        expect(tx.write(address, { a: 1 }).error).toBeUndefined();
+        expect(
+          tx.write(
+            { ...address, path: ["value", "a"] },
+            2,
+            writeChokepointMark(),
+          ).error,
+        ).toBeUndefined();
+
+        expect(reported).toEqual([["value"], ["value"]]);
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("reports each write of an unmarked batch, and none of a marked one", async () => {
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        const { tx, reported } = withSinks(storage);
+        expect(tx.write(address, {}, writeChokepointMark()).error)
+          .toBeUndefined();
+        expect(
+          tx.writeBatch!([
+            { address: { ...address, path: ["value", "x"] }, value: 1 },
+            { address: { ...address, path: ["value", "y"] }, value: 2 },
+          ]).error,
+        ).toBeUndefined();
+        expect(
+          tx.writeBatch!(
+            [{ address: { ...address, path: ["value", "z"] }, value: 3 }],
+            writeChokepointMark(),
+          ).error,
+        ).toBeUndefined();
+
+        expect(reported).toEqual([
+          ["value/x", "value/y"],
+          ["value/x", "value/y"],
+        ]);
+      } finally {
+        await storage.close();
+      }
+    });
+  });
+
   describe("getReactivityLog()", () => {
     // A document's written paths are computed once and kept until the next
     // write to it, so what these cases pin is that the log still follows the
@@ -1096,16 +1168,16 @@ describe("v2-transaction", () => {
       try {
         expect(tx.write({ ...address, path: ["value", "b"] }, 2).ok)
           .toBeTruthy();
-        const built = tx.getReactivityLog!();
+        const built = tx.getReactivityLog();
         expect(
           tx.read({ ...address, path: ["value", "a"] }, {
             meta: stableInternalVerifierRead,
           }).ok,
         ).toBeTruthy();
-        expect(tx.getReactivityLog!()).toBe(built);
+        expect(tx.getReactivityLog()).toBe(built);
         expect(tx.read({ ...address, path: ["value", "a"] }).ok)
           .toBeTruthy();
-        const after = tx.getReactivityLog!();
+        const after = tx.getReactivityLog();
         expect(after).not.toBe(built);
         expect(after.reads.map(({ path }) => path)).toEqual([["value", "a"]]);
       } finally {
@@ -1125,12 +1197,12 @@ describe("v2-transaction", () => {
       try {
         expect(tx.write({ ...address, path: ["value", "b"] }, 2).ok)
           .toBeTruthy();
-        expect(tx.getReactivityLog!().reads).toEqual([]);
+        expect(tx.getReactivityLog().reads).toEqual([]);
         const meta = { ...ignoreReadForScheduling };
         expect(tx.read({ ...address, path: ["value", "a"] }, { meta }).ok)
           .toBeTruthy();
         for (const key of Reflect.ownKeys(meta)) delete meta[key];
-        expect(tx.getReactivityLog!().reads.map(({ path }) => path))
+        expect(tx.getReactivityLog().reads.map(({ path }) => path))
           .toEqual([["value", "a"]]);
       } finally {
         tx.abort();
@@ -1145,12 +1217,12 @@ describe("v2-transaction", () => {
       try {
         expect(tx.write({ ...address, path: ["value", "b"] }, 2).ok)
           .toBeTruthy();
-        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
+        expect(tx.getReactivityLog().writes.map(({ path }) => path))
           .toEqual([["value"], ["value", "b"]]);
 
         expect(tx.write({ ...address, path: ["value", "c"] }, 3).ok)
           .toBeTruthy();
-        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
+        expect(tx.getReactivityLog().writes.map(({ path }) => path))
           .toEqual([["value"], ["value", "b"], ["value", "c"]]);
 
         expect(tx.write({ ...address, path: ["value", "c"] }, 4).ok)
@@ -1162,7 +1234,7 @@ describe("v2-transaction", () => {
         ).toBeTruthy();
         // `b` is back where it began, so only `c` and the key set it grew are
         // left to report.
-        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
+        expect(tx.getReactivityLog().writes.map(({ path }) => path))
           .toEqual([["value"], ["value", "c"]]);
       } finally {
         await storage.close();
@@ -1176,7 +1248,7 @@ describe("v2-transaction", () => {
       try {
         expect(tx.write({ ...address, path: ["value", "b"] }, 2).ok)
           .toBeTruthy();
-        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
+        expect(tx.getReactivityLog().writes.map(({ path }) => path))
           .toEqual([["value"], ["value", "b"]]);
 
         expect(
@@ -1185,7 +1257,7 @@ describe("v2-transaction", () => {
             { address: { ...address, path: ["value", "a"] }, value: 9 },
           ]).ok,
         ).toBeTruthy();
-        expect(tx.getReactivityLog!().writes.map(({ path }) => path))
+        expect(tx.getReactivityLog().writes.map(({ path }) => path))
           .toEqual([
             ["value"],
             ["value", "a"],
@@ -1211,7 +1283,7 @@ describe("v2-transaction", () => {
           .toBeTruthy();
         expect(tx.write({ ...address, path: ["value"] }, { a: 1 }).ok)
           .toBeTruthy();
-        expect(tx.getReactivityLog!().writes).toEqual([]);
+        expect(tx.getReactivityLog().writes).toEqual([]);
 
         expect(tx.write({ ...address, path: ["value", "b", "-"] }, 5).error)
           .toBeDefined();
@@ -1221,7 +1293,7 @@ describe("v2-transaction", () => {
             meta: stableInternalVerifierRead,
           }).ok?.value,
         ).toEqual({ a: 1 });
-        expect(tx.getReactivityLog!().writes).toEqual([]);
+        expect(tx.getReactivityLog().writes).toEqual([]);
       } finally {
         await storage.close();
       }
@@ -1240,7 +1312,7 @@ describe("v2-transaction", () => {
           .toBeTruthy();
         expect(tx.write({ ...address, path: ["value"] }, { a: 1 }).ok)
           .toBeTruthy();
-        expect(tx.getReactivityLog!().writes).toEqual([]);
+        expect(tx.getReactivityLog().writes).toEqual([]);
 
         expect(
           tx.writeBatch!([
@@ -1254,7 +1326,7 @@ describe("v2-transaction", () => {
             meta: stableInternalVerifierRead,
           }).ok?.value,
         ).toEqual({ a: 1 });
-        expect(tx.getReactivityLog!().writes).toEqual([]);
+        expect(tx.getReactivityLog().writes).toEqual([]);
       } finally {
         await storage.close();
       }
@@ -1267,10 +1339,10 @@ describe("v2-transaction", () => {
       try {
         expect(tx.write({ ...address, path: ["value", "b"] }, 2).ok)
           .toBeTruthy();
-        const before = tx.getReactivityLog!();
+        const before = tx.getReactivityLog();
 
         expect(tx.read({ ...address, path: ["value", "a"] }).ok).toBeTruthy();
-        const after = tx.getReactivityLog!();
+        const after = tx.getReactivityLog();
 
         expect(after.writes).toEqual(before.writes);
         expect(after.reads.map(({ path }) => path)).toContainEqual([

@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteResultColumn } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { resultRowKeys } from "../src/builtins/sqlite/row-identity.ts";
 

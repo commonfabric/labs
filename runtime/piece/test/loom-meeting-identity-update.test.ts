@@ -1,12 +1,17 @@
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { valueEqual } from "@commonfabric/data-model";
 import { createSession, Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
@@ -94,9 +99,6 @@ describe("loom-meeting-identity-update", () => {
       {
         main: join(loomDirectory, "main.tsx"),
         root: fromFileUrl(new URL("../../../patterns/", import.meta.url)),
-        testPaths: Array.from(Deno.readDirSync(loomDirectory))
-          .filter((entry) => entry.isFile && entry.name.endsWith(".test.tsx"))
-          .map((entry) => join(loomDirectory, entry.name)),
       },
     );
     const piece = await pieces.create({

@@ -12,7 +12,6 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { parseDiff } from "../lib/view/diff.ts";
 import {
   buildDiffDocument,
@@ -28,6 +27,7 @@ import {
 } from "../lib/view/diffedit.ts";
 import { typeScriptLanguage } from "../lib/view/languages/typescript/language.ts";
 import { Session } from "../lib/view/session.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 /** A workspace backed by a real temp dir. */
 function tempWs(
@@ -163,7 +163,7 @@ index 0000000..1111111 100644
 // revert error branches
 //
 
-Deno.test("diffedit cov: revert returns null when the edited text no longer parses as a diff", () => {
+test("diffedit cov: revert returns null when the edited text no longer parses as a diff", () => {
   const { ws, done } = tempWs({ "m.ts": FILE_TEXT });
   try {
     const { src } = sourceFor(DIFF, ws);
@@ -177,7 +177,7 @@ Deno.test("diffedit cov: revert returns null when the edited text no longer pars
   }
 });
 
-Deno.test("diffedit cov: revert returns null when the cursor is outside every file", () => {
+test("diffedit cov: revert returns null when the cursor is outside every file", () => {
   const { ws, done } = tempWs({ "m.ts": FILE_TEXT });
   try {
     const { src } = sourceFor(DIFF, ws);
@@ -190,7 +190,7 @@ Deno.test("diffedit cov: revert returns null when the cursor is outside every fi
   }
 });
 
-Deno.test("diffedit cov: revert returns null when the file at the cursor's index has a different path", () => {
+test("diffedit cov: revert returns null when the file at the cursor's index has a different path", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "a.ts"), "a1\na2\n");
@@ -244,7 +244,7 @@ diff --git a/b.ts b/b.ts
   }
 });
 
-Deno.test("diffedit cov: revert with the 'file' scope restores the whole file's slice", () => {
+test("diffedit cov: revert with the 'file' scope restores the whole file's slice", () => {
   const { ws, done } = tempWs({ "m.ts": FILE_TEXT });
   try {
     const { src } = sourceFor(DIFF, ws);
@@ -261,7 +261,7 @@ Deno.test("diffedit cov: revert with the 'file' scope restores the whole file's 
   }
 });
 
-Deno.test("diffedit cov: revert chunk returns null when the original has no matching hunk", () => {
+test("diffedit cov: revert chunk returns null when the original has no matching hunk", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "m.ts"), "l1\nl2\nl3\nl4\nl5\nl6\n");
@@ -326,7 +326,7 @@ const EXPAND_DIFF = `diff --git a/m.ts b/m.ts
  epsilon
 `;
 
-Deno.test("diffedit cov: expandContext returns null when the text no longer parses", () => {
+test("diffedit cov: expandContext returns null when the text no longer parses", () => {
   const { ws, done } = tempWs({ "m.ts": EXPAND_FILE });
   try {
     const { src } = sourceFor(EXPAND_DIFF, ws);
@@ -337,7 +337,7 @@ Deno.test("diffedit cov: expandContext returns null when the text no longer pars
   }
 });
 
-Deno.test("diffedit cov: expandContext returns null when the cursor is in no hunk", () => {
+test("diffedit cov: expandContext returns null when the cursor is in no hunk", () => {
   const { ws, done } = tempWs({ "m.ts": EXPAND_FILE });
   try {
     const { src } = sourceFor(EXPAND_DIFF, ws);
@@ -353,7 +353,7 @@ Deno.test("diffedit cov: expandContext returns null when the cursor is in no hun
   }
 });
 
-Deno.test("diffedit cov: expandContext returns null when the file cannot be resolved", () => {
+test("diffedit cov: expandContext returns null when the file cannot be resolved", () => {
   const { root, done } = tempWs({ "m.ts": EXPAND_FILE });
   try {
     // The workspace resolves and reads at build time (so the source is editable
@@ -380,7 +380,7 @@ Deno.test("diffedit cov: expandContext returns null when the file cannot be reso
   }
 });
 
-Deno.test("diffedit cov: expandContext returns null when the file content cannot be read", () => {
+test("diffedit cov: expandContext returns null when the file content cannot be read", () => {
   const { root, done } = tempWs({ "m.ts": EXPAND_FILE });
   try {
     // Resolves fine throughout, but `read` is flipped off after build, so the
@@ -407,7 +407,7 @@ Deno.test("diffedit cov: expandContext returns null when the file content cannot
   }
 });
 
-Deno.test("diffedit cov: expandContext returns null when the hunk already covers the whole file", () => {
+test("diffedit cov: expandContext returns null when the hunk already covers the whole file", () => {
   // The hunk spans the entire two-line file, so there is no context above or
   // below it to reveal.
   const { ws, done } = tempWs({ "m.ts": "one\ntwo\n" });
@@ -429,7 +429,7 @@ Deno.test("diffedit cov: expandContext returns null when the hunk already covers
   }
 });
 
-Deno.test("diffedit cov: expandContext returns null when the baseline has fewer hunks", () => {
+test("diffedit cov: expandContext returns null when the baseline has fewer hunks", () => {
   const { ws, done } = tempWs({
     "m.ts": "a\nb\nc\nd\ne\nf\ng\nh\n",
   });
@@ -473,7 +473,7 @@ Deno.test("diffedit cov: expandContext returns null when the baseline has fewer 
   }
 });
 
-Deno.test("diffedit cov: expandContext ignores orphan hunk-like text", () => {
+test("diffedit cov: expandContext ignores orphan hunk-like text", () => {
   const { ws, done } = tempWs({ "m.ts": EXPAND_FILE });
   try {
     // A bare "@@ -3 noise" line sits before the file header. It is not a parsed
@@ -498,7 +498,7 @@ diff --git a/m.ts b/m.ts
   }
 });
 
-Deno.test("diffedit cov: expandContext reveals context below the hunk and grows its counts", () => {
+test("diffedit cov: expandContext reveals context below the hunk and grows its counts", () => {
   const { ws, done } = tempWs({ "m.ts": EXPAND_FILE });
   try {
     const { src } = sourceFor(EXPAND_DIFF, ws);
@@ -522,7 +522,7 @@ Deno.test("diffedit cov: expandContext reveals context below the hunk and grows 
 // dirtyLabels branches
 //
 
-Deno.test("diffedit cov: dirtyLabels returns empty when a side fails to parse", () => {
+test("diffedit cov: dirtyLabels returns empty when a side fails to parse", () => {
   const { ws, done } = tempWs({ "m.ts": FILE_TEXT });
   try {
     const { src } = sourceFor(DIFF, ws);
@@ -534,7 +534,7 @@ Deno.test("diffedit cov: dirtyLabels returns empty when a side fails to parse", 
   }
 });
 
-Deno.test("diffedit cov: dirtyLabels names a single file when a change is inside its slice", () => {
+test("diffedit cov: dirtyLabels names a single file when a change is inside its slice", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "x.ts"), "const x = 1;\nconst y = 3;\n");
@@ -566,7 +566,7 @@ Deno.test("diffedit cov: dirtyLabels names a single file when a change is inside
   }
 });
 
-Deno.test("diffedit cov: dirtyLabels names no file when the change pins to none (e.g. a message)", () => {
+test("diffedit cov: dirtyLabels names no file when the change pins to none (e.g. a message)", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "x.ts"), "const x = 1;\nconst y = 3;\n");
@@ -609,7 +609,7 @@ diff --git a/x.ts b/x.ts
 // createDiffHighlighter: getter, no-op update, markdown line scan
 //
 
-Deno.test("diffedit cov: the highlighter's lines getter returns the seeded lines and a no-op update is a no-op", () => {
+test("diffedit cov: the highlighter's lines getter returns the seeded lines and a no-op update is a no-op", () => {
   const { ws, done } = tempWs({ "m.ts": FILE_TEXT });
   try {
     const model = parseDiff(DIFF)!;
@@ -630,7 +630,7 @@ Deno.test("diffedit cov: the highlighter's lines getter returns the seeded lines
   }
 });
 
-Deno.test("diffedit cov: a partial seed falls back to rendering the edited line", () => {
+test("diffedit cov: a partial seed falls back to rendering the edited line", () => {
   const bodyLine = DIFF.split("\n").indexOf("+const y = 2;");
   const partialSeed = createDiffHighlighter(DIFF).lines.slice(0, bodyLine);
   const highlighter = createDiffHighlighter(
@@ -647,7 +647,7 @@ Deno.test("diffedit cov: a partial seed falls back to rendering the edited line"
   );
 });
 
-Deno.test("diffedit cov: deferred parsing selects only changed stateful files", () => {
+test("diffedit cov: deferred parsing selects only changed stateful files", () => {
   const baselines = new Map([
     ["/workspace/changed.ts", "const changed = 1;\n"],
     ["/workspace/untouched.ts", "const untouched = 1;\n"],
@@ -671,7 +671,7 @@ Deno.test("diffedit cov: deferred parsing selects only changed stateful files", 
   );
 });
 
-Deno.test("diffedit cov: repeated non-overlapping file sections are highlighted once", () => {
+test("diffedit cov: repeated non-overlapping file sections are highlighted once", () => {
   const file = [
     "const value = `",
     "first",
@@ -742,7 +742,7 @@ Deno.test("diffedit cov: repeated non-overlapping file sections are highlighted 
   }
 });
 
-Deno.test("diffedit cov: deferred parsing preserves optional blob readers", () => {
+test("diffedit cov: deferred parsing preserves optional blob readers", () => {
   const file = ["const value = `", "before", "`;", ""].join("\n");
   const diff = [
     "diff --git a/template.ts b/template.ts",
@@ -848,7 +848,7 @@ describe("deferred diff parsing", () => {
   });
 });
 
-Deno.test("diffedit cov: the highlighter recolors a Markdown body line via the +++ header scan", () => {
+test("diffedit cov: the highlighter recolors a Markdown body line via the +++ header scan", () => {
   // Seed-less so the highlighter renders every line itself, then edit a body
   // line whose nearest preceding header is `+++ b/doc.md` — exercising the
   // Markdown-aware path in the recolor.
@@ -870,7 +870,7 @@ Deno.test("diffedit cov: the highlighter recolors a Markdown body line via the +
   assertEquals(out[bodyIdx].spans[0].cls, "diffAdd");
 });
 
-Deno.test("diffedit cov: a CRLF .ts header selects TypeScript for edited lines", () => {
+test("diffedit cov: a CRLF .ts header selects TypeScript for edited lines", () => {
   const diff = [
     "diff --git a/generic.ts b/generic.ts\r",
     "--- a/generic.ts\r",
@@ -890,7 +890,7 @@ Deno.test("diffedit cov: a CRLF .ts header selects TypeScript for edited lines",
   );
 });
 
-Deno.test("diffedit cov: renamed removed lines use the old extension", () => {
+test("diffedit cov: renamed removed lines use the old extension", () => {
   const diff = `diff --git a/generic.ts b/generic.tsx
 --- a/generic.ts
 +++ b/generic.tsx
@@ -909,7 +909,7 @@ Deno.test("diffedit cov: renamed removed lines use the old extension", () => {
   );
 });
 
-Deno.test("diffedit cov: source lines resembling file headers keep the diff path", () => {
+test("diffedit cov: source lines resembling file headers keep the diff path", () => {
   const diff = `diff --git a/generic.ts b/generic.ts
 --- a/generic.ts
 +++ b/generic.ts
@@ -933,7 +933,7 @@ Deno.test("diffedit cov: source lines resembling file headers keep the diff path
   }
 });
 
-Deno.test("diffedit cov: the highlighter scans past a missing +++ to the diff --git Markdown header", () => {
+test("diffedit cov: the highlighter scans past a missing +++ to the diff --git Markdown header", () => {
   // No `+++ ` line at all (a truncated header), so the backward scan from the
   // edited body line reaches the `diff --git ...md` header instead.
   const text = [
@@ -951,7 +951,7 @@ Deno.test("diffedit cov: the highlighter scans past a missing +++ to the diff --
   assertEquals(out[idx].spans[0].cls, "diffAdd");
 });
 
-Deno.test("diffedit cov: the highlighter returns plain (non-Markdown) coloring when no header precedes a line", () => {
+test("diffedit cov: the highlighter returns plain (non-Markdown) coloring when no header precedes a line", () => {
   // A body-only fragment with no preceding header: the backward scan finds
   // nothing and reports not-Markdown.
   const text = [" context", "-old", "+changed"].join("\n");
@@ -967,13 +967,13 @@ Deno.test("diffedit cov: the highlighter returns plain (non-Markdown) coloring w
 // read-only source and save's defensive guards
 //
 
-Deno.test("diffedit cov: a diff matching no file on disk yields a read-only source whose save is a no-op", () => {
+test("diffedit cov: a diff matching no file on disk yields a read-only source whose save is a no-op", () => {
   // An empty `lines` map means nothing on disk backs the diff: the source is
   // read-only and its save reports there is nothing to write.
   const emptyEdit: DiffEdit = {
     lines: new Map(),
     fileText: new Map(),
-    oldFileLines: [],
+    oldFileLines: () => null,
     languages: diffLanguages(DIFF, parseDiff(DIFF)!),
     hunks: [],
   };
@@ -998,7 +998,7 @@ Deno.test("diffedit cov: a diff matching no file on disk yields a read-only sour
   );
 });
 
-Deno.test("diffedit cov: save skips a verified hunk whose file was not captured and reports nothing written", () => {
+test("diffedit cov: save skips a verified hunk whose file was not captured and reports nothing written", () => {
   // A hand-built edit: one verified hunk pointing at a path that is NOT present
   // in `fileText`. save() collects it into `byFile` but then finds no base
   // content for the path, skips it, and (nothing written) returns the empty
@@ -1007,7 +1007,7 @@ Deno.test("diffedit cov: save skips a verified hunk whose file was not captured 
   const edit: DiffEdit = {
     lines: new Map([[5, { absPath: "/ghost/m.ts", newLine: 0, markerLen: 1 }]]),
     fileText: new Map(), // deliberately missing /ghost/m.ts
-    oldFileLines: [],
+    oldFileLines: () => null,
     languages: [],
     hunks: [
       { absPath: "/ghost/m.ts", newStart: 1, newCount: 1, verified: true },
@@ -1025,7 +1025,7 @@ Deno.test("diffedit cov: save skips a verified hunk whose file was not captured 
   );
 });
 
-Deno.test("diffedit cov: save writes the verified hunk's new side back to the captured file", () => {
+test("diffedit cov: save writes the verified hunk's new side back to the captured file", () => {
   const { root, ws, done } = tempWs({ "m.ts": FILE_TEXT });
   try {
     const { src } = sourceFor(DIFF, ws);
@@ -1748,6 +1748,48 @@ ${testCase.row}
       } finally {
         Deno.removeSync(root, { recursive: true });
       }
+    }
+  });
+
+  it("gives a line resurrected into an emptied range its neighbor's CRLF", () => {
+    const root = Deno.makeTempDirSync();
+    try {
+      Deno.mkdirSync(join(root, ".git"));
+      const path = join(root, "value.ts");
+      Deno.writeTextFileSync(path, "new\nrest\r\n");
+      const diff = `diff --git a/value.ts b/value.ts
+--- a/value.ts
++++ b/value.ts
+@@ -1 +1 @@
+-old
++new
+`;
+      const ws = realWorkspace(root);
+      const built = buildDiffDocument(diff, parseDiff(diff)!, ws);
+      const session = new Session(
+        built.doc,
+        { color: false, showLineNumbers: false },
+        { width: 80, height: 10 },
+        undefined,
+        diffSource(ws, built.edit),
+      );
+      session.top = 5;
+      session.handleKey({ name: "e" });
+      session.handleKey({ name: "end" });
+      for (let i = 0; i < "new".length + 1; i++) {
+        session.handleKey({ name: "backspace" });
+      }
+      session.handleKey({ name: "f3" });
+      expect(Deno.readTextFileSync(path)).toBe("rest\r\n");
+
+      // The saved range is now empty, before the file's first line.
+      session.handleKey({ name: "R", char: "R" });
+      session.handleKey({ name: "f3" });
+
+      expect(session.view().message).toBe("Saved 1 file");
+      expect(Deno.readTextFileSync(path)).toBe("old\r\nrest\r\n");
+    } finally {
+      Deno.removeSync(root, { recursive: true });
     }
   });
 
@@ -3158,11 +3200,11 @@ index 1111111..2222222 100644
 // editableStart: position/verified-aware line editability
 //
 
-Deno.test("editableStart: a null model (buffer is not a diff) refuses every line", () => {
+test("editableStart: a null model (buffer is not a diff) refuses every line", () => {
   assertEquals(_de.editableStart(null, [], " some text", 0), null);
 });
 
-Deno.test("editableStart: editable only inside a verified hunk", () => {
+test("editableStart: editable only inside a verified hunk", () => {
   const diff = `diff --git a/m.ts b/m.ts
 --- a/m.ts
 +++ b/m.ts
@@ -3205,20 +3247,20 @@ Deno.test("editableStart: editable only inside a verified hunk", () => {
 // commit amend helpers
 //
 
-Deno.test("pendingAmend: null when there is no editable message", () => {
+test("pendingAmend: null when there is no editable message", () => {
   assertEquals(
     _de.pendingAmend(() => null, () => null, false, "a", "b"),
     null,
   );
 });
 
-Deno.test("pendingAmend: null when the full buffer is unchanged", () => {
+test("pendingAmend: null when the full buffer is unchanged", () => {
   const msg = { sha: "abcdef1", start: 0, end: 0 };
   const both = () => msg;
   assertEquals(_de.pendingAmend(both, both, false, "    hi", "    hi"), null);
 });
 
-Deno.test("pendingAmend: an unchanged message still amends changed commit contents", () => {
+test("pendingAmend: an unchanged message still amends changed commit contents", () => {
   const msg = { sha: "abcdef1", start: 0, end: 0 };
   const both = () => msg;
   assertEquals(
@@ -3227,7 +3269,7 @@ Deno.test("pendingAmend: an unchanged message still amends changed commit conten
   );
 });
 
-Deno.test("baselineAfterSave: keeps the baseline for a changed hunk layout", () => {
+test("baselineAfterSave: keeps the baseline for a changed hunk layout", () => {
   const { ws, done } = tempWs({ "m.ts": FILE_TEXT });
   try {
     const { src } = sourceFor(DIFF, ws);
@@ -3247,7 +3289,7 @@ Deno.test("baselineAfterSave: keeps the baseline for a changed hunk layout", () 
   }
 });
 
-Deno.test("diffSource: ignores commit-shaped text inside a file diff", () => {
+test("diffSource: ignores commit-shaped text inside a file diff", () => {
   const head = "1".repeat(40);
   const embedded = "2".repeat(40);
   const text = [
@@ -3296,7 +3338,7 @@ Deno.test("diffSource: ignores commit-shaped text inside a file diff", () => {
   }
 });
 
-Deno.test("save: rejects a diff with a different hunk count", () => {
+test("save: rejects a diff with a different hunk count", () => {
   const { root, ws, done } = tempWs({ "m.ts": FILE_TEXT });
   try {
     const { src } = sourceFor(DIFF, ws);
@@ -3336,7 +3378,7 @@ const SHOW_DIFF = [
   "",
 ].join("\n");
 
-Deno.test("diffedit cov: message revert restores the message region", () => {
+test("diffedit cov: message revert restores the message region", () => {
   const { ws, done } = tempWs({ "m.ts": FILE_TEXT });
   try {
     const { src } = sourceFor(SHOW_DIFF, ws);
@@ -3349,7 +3391,7 @@ Deno.test("diffedit cov: message revert restores the message region", () => {
   }
 });
 
-Deno.test("diffedit cov: message revert is null when the cursor is in no message", () => {
+test("diffedit cov: message revert is null when the cursor is in no message", () => {
   const { ws, done } = tempWs({ "m.ts": FILE_TEXT });
   try {
     const { src } = sourceFor(SHOW_DIFF, ws);
@@ -3361,7 +3403,7 @@ Deno.test("diffedit cov: message revert is null when the cursor is in no message
   }
 });
 
-Deno.test("diffedit cov: message revert is null when the baseline has no such region", () => {
+test("diffedit cov: message revert is null when the baseline has no such region", () => {
   const { ws, done } = tempWs({ "m.ts": FILE_TEXT });
   try {
     // Original has no commit header; current gains one. The baseline lacks the
@@ -3388,7 +3430,7 @@ Deno.test("diffedit cov: message revert is null when the baseline has no such re
 // expandRoom and the join helpers
 //
 
-Deno.test("diffedit cov: expandRoom is empty when the text no longer parses", () => {
+test("diffedit cov: expandRoom is empty when the text no longer parses", () => {
   const { ws, done } = tempWs({ "m.ts": EXPAND_FILE });
   try {
     const { src } = sourceFor(EXPAND_DIFF, ws);
@@ -3399,7 +3441,7 @@ Deno.test("diffedit cov: expandRoom is empty when the text no longer parses", ()
   }
 });
 
-Deno.test("diffedit cov: expandRoom skips a hunk whose file has no new side", () => {
+test("diffedit cov: expandRoom skips a hunk whose file has no new side", () => {
   const { ws, done } = tempWs({ "m.ts": EXPAND_FILE });
   try {
     const { src } = sourceFor(EXPAND_DIFF, ws);
@@ -3419,7 +3461,79 @@ deleted file mode 100644
   }
 });
 
-Deno.test("diffedit cov: expandContext declines when the save map lacks the cursor's hunk", () => {
+test("diffedit cov: expandRoom bounds each hunk by its file's ends and its own file's other hunks", () => {
+  const lines = Array.from({ length: 20 }, (_, i) => `l${i + 1}`);
+  const { ws, done } = tempWs({
+    "a.ts": lines.join("\n") + "\n",
+    // The second file has no final newline, and the third, in the middle,
+    // has a hunk at the lines the first file's second hunk covers.
+    "b.ts": "x\ny\nz",
+    "c.ts": lines.join("\n") + "\n",
+  });
+  try {
+    const diff = `diff --git a/a.ts b/a.ts
+--- a/a.ts
++++ b/a.ts
+@@ -3,2 +3,2 @@
+-old3
++l3
+ l4
+diff --git a/c.ts b/c.ts
+--- a/c.ts
++++ b/c.ts
+@@ -6,1 +6,1 @@
+-old6
++l6
+diff --git a/a.ts b/a.ts
+--- a/a.ts
++++ b/a.ts
+@@ -10,2 +10,2 @@
+ l10
+-old11
++l11
+diff --git a/b.ts b/b.ts
+--- a/b.ts
++++ b/b.ts
+@@ -3 +3 @@
+-old
+\\ No newline at end of file
++z
+\\ No newline at end of file
+`;
+    const { src } = sourceFor(diff, ws);
+    const room = src.expandRoom!(diff);
+    const at = (header: string) => room.get(diff.split("\n").indexOf(header));
+
+    assertEquals(at("@@ -3,2 +3,2 @@"), {
+      up: 2,
+      down: 5,
+      atFileTop: false,
+      atFileBottom: false,
+    });
+    assertEquals(at("@@ -6,1 +6,1 @@"), {
+      up: 5,
+      down: 14,
+      atFileTop: false,
+      atFileBottom: false,
+    });
+    assertEquals(at("@@ -10,2 +10,2 @@"), {
+      up: 5,
+      down: 9,
+      atFileTop: false,
+      atFileBottom: false,
+    });
+    assertEquals(at("@@ -3 +3 @@"), {
+      up: 2,
+      down: 0,
+      atFileTop: false,
+      atFileBottom: true,
+    });
+  } finally {
+    done();
+  }
+});
+
+test("diffedit cov: expandContext declines when the save map lacks the cursor's hunk", () => {
   const { ws, done } = tempWs({ "m.ts": "a\nb\nc\nd\ne\nf\ng\nh\n" });
   try {
     // The source is built from a one-hunk diff, so its save map has one entry.
@@ -3456,7 +3570,7 @@ Deno.test("diffedit cov: expandContext declines when the save map lacks the curs
   }
 });
 
-Deno.test("diffedit cov: dropHeaderBetween declines a non-diff and a lone hunk", () => {
+test("diffedit cov: dropHeaderBetween declines a non-diff and a lone hunk", () => {
   // A non-diff has no hunks to join.
   assertEquals(_de.dropHeaderBetween("not a diff", 0), null);
   // A single hunk has no second one to take the header off.
@@ -3470,7 +3584,7 @@ Deno.test("diffedit cov: dropHeaderBetween declines a non-diff and a lone hunk",
   assertEquals(_de.dropHeaderBetween(oneHunk, 0), null);
 });
 
-Deno.test("diffedit cov: joinAdjacent declines when the text will not drop a header", () => {
+test("diffedit cov: joinAdjacent declines when the text will not drop a header", () => {
   // The save map claims two adjacent, verified, same-file hunks, but the text
   // holds only one, so dropHeaderBetween finds no pair and the join backs out.
   const oneHunk = `diff --git a/m.ts b/m.ts
@@ -3487,7 +3601,7 @@ Deno.test("diffedit cov: joinAdjacent declines when the text will not drop a hea
   assertEquals(_de.joinAdjacent(oneHunk, oneHunk, hunks, 0), null);
 });
 
-Deno.test("diffedit cov: joinAdjacent keeps hunks from different commits separate", () => {
+test("diffedit cov: joinAdjacent keeps hunks from different commits separate", () => {
   const twoHunks = `diff --git a/m.ts b/m.ts
 --- a/m.ts
 +++ b/m.ts

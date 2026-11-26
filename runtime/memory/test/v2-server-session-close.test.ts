@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { PresenceJoinResult, WatchSetResult } from "../v2.ts";
 import { Server } from "../v2/server.ts";
@@ -10,6 +9,7 @@ import {
   type WirePeer,
 } from "./support/wire-peer.ts";
 import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-session-close";
 const OTHER_SPACE = "did:key:z6Mk-session-close-other";

@@ -14,7 +14,6 @@
  * surface.
  */
 
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
 import {
@@ -36,6 +35,7 @@ import {
   WALKTHROUGH_PATH,
   walkthroughCommands,
 } from "./check-verb-session-sync.ts";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -138,6 +138,17 @@ describe("check-verb-session-sync", () => {
       // spelled `cf`, and only the table knows the command is the third.
       expect(demoCommands(`refused 'why' 'cf' cf cell get --piece a x`))
         .toEqual([["cf", "cell", "get", "--piece", "a", "x"]]);
+    });
+
+    it("reads a `pending` line's first argument as the command it promises, without its space flag", () => {
+      expect(
+        demoCommands(`pending 'cf cell get -s home --piece a x' 'not yet'`),
+      )
+        .toEqual([["cf", "cell", "get", "--piece", "a", "x"]]);
+    });
+
+    it("finds no command in a `pending` line that names none", () => {
+      expect(demoCommands("pending")).toEqual([]);
     });
 
     it("ignores a helper it does not know", () => {

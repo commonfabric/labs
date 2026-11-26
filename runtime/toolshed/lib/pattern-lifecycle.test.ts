@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -16,11 +15,17 @@ import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { LoopbackStorageManager } from "@commonfabric/runner/executor/loopback-storage";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import {
   createAclServer,
   genesisAcl,
   LoopbackSessionFactory,
   TestStorageManager,
-} from "@/lib/test-support/memory-acl.ts";
+} from "@/test/support/memory-acl.ts";
 import {
   type LifecycleDeps,
   type LifecycleResult,
@@ -1094,6 +1099,74 @@ export default pattern(() => {
         ["setsrc", session],
         ["follow-prepare", session],
       ]);
+    });
+
+    it("passes a follow's permission for an incompatible schema to its preparing verb only when the request gives one", async () => {
+      const sent: ServedLifecycleVerbDescriptor[] = [];
+      const recording: ServedLifecycleVerbRunner = {
+        runLifecycleVerb: (_space, verb) => {
+          sent.push(verb);
+          return Promise.resolve({ receipt: {}, timings: [] });
+        },
+      };
+      const recorded = { ...deps, host: () => recording };
+      for (const allow of [true, false, undefined]) {
+        const outcome = await processLifecycleCall(recorded, {
+          space,
+          principal: alice.did(),
+          sessionId: SESSION,
+          verb: "follow",
+          body: {
+            piece: "of:piece",
+            origin: "system:a.tsx",
+            ...(allow === undefined
+              ? {}
+              : { dangerouslyAllowIncompatibleSchema: allow }),
+          },
+        });
+        assert("ok" in outcome, JSON.stringify(outcome));
+      }
+
+      expect(
+        sent.flatMap((verb) =>
+          verb.name === "follow-prepare"
+            ? [
+              Object.hasOwn(verb.request, "dangerouslyAllowIncompatibleSchema")
+                ? verb.request.dangerouslyAllowIncompatibleSchema
+                : "absent",
+            ]
+            : []
+        ),
+      ).toEqual([true, false, "absent"]);
+    });
+
+    it("throws before running a verb for a session-scoped piece on a request that names no session", async () => {
+      const sent: ServedLifecycleVerbDescriptor[] = [];
+      const recording: ServedLifecycleVerbRunner = {
+        runLifecycleVerb: (_space, verb) => {
+          sent.push(verb);
+          return Promise.resolve({ receipt: {}, timings: [] });
+        },
+      };
+      const recorded = { ...deps, host: () => recording };
+
+      await expect(
+        processSetSource(recorded, alice.did(), {
+          space,
+          piece: "of:piece",
+          pattern: { identity: "p", symbol: "default" },
+          scope: "session",
+        }),
+      ).rejects.toThrow("this request names none");
+      await expect(
+        processFollow(recorded, alice.did(), {
+          space,
+          piece: "of:piece",
+          origin: "system:a.tsx",
+          scope: "session",
+        }),
+      ).rejects.toThrow("this request names none");
+      expect(sent).toEqual([]);
     });
 
     it("returns a verb's refusal under its own code", async () => {

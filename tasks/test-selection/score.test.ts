@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -16,9 +15,11 @@ import {
   mergeSamples,
   moveHistory,
   type Observation,
+  orderDay,
   parseContext,
   percentile90,
   readCostsForward,
+  readNewRealTestFailuresForward,
   renameInContext,
   sampledPercentile90,
   sampleDuration,
@@ -43,6 +44,7 @@ import {
   type TestIdentity,
   testIdentityKey,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TEST = { k: "unit", s: "memory", n: "space > writes a fact" };
 const KEY = testIdentityKey(TEST);
@@ -123,6 +125,7 @@ describe("score", () => {
           ["c1 a", { day: "nope", identities: ["k"] }],
           ["c1 b", { day: "2026-08-20", identities: ["k", 3] }],
           ["c1 c", { day: "2026-08-20", identities: "k" }],
+          ["c1 d", "2026-08-20"],
         ],
       });
       expect([...back.crowds.keys()]).toEqual(["c1 b"]);
@@ -1186,6 +1189,19 @@ describe("a day's sample of its runs", () => {
 
   it("has no percentile for a day nothing ran on", () => {
     expect(sampledPercentile90(samplesOf([]))).toBe(0);
+  });
+});
+
+describe("orderDay()", () => {
+  it("gives the day a seed names", () => {
+    expect(orderDay(20260820)).toBe("2026-08-20");
+  });
+
+  it("gives no day for a seed that names none, or for no seed", () => {
+    expect(orderDay(20261340)).toBeUndefined();
+    expect(orderDay(2026082)).toBeUndefined();
+    expect(orderDay(-20260820)).toBeUndefined();
+    expect(orderDay(undefined)).toBeUndefined();
   });
 });
 
@@ -2399,6 +2415,26 @@ describe("the day a new real test failure is dated to", () => {
     expect(state.prCatches).toBe(2);
   });
 
+  it("reads forward only the stored days it can count with, and totals those", () => {
+    // What a stored aggregate holds is whatever its JSON says, so the
+    // days are given as parsed JSON.
+    const state = emptyState();
+    state.newRealTestFailureDays = JSON.parse(`{
+      "2026-08-18": { "local": 1, "pr": 2, "main": 0, "sources": ["fix"] },
+      "2026-08-19": [1, 2, 0, []],
+      "2026-08-20": null,
+      "2026-08-21": { "local": -1, "pr": 0, "main": 0, "sources": [] },
+      "someday": { "local": 0, "pr": 5, "main": 0, "sources": [] }
+    }`);
+    readNewRealTestFailuresForward(state);
+    expect(state.newRealTestFailureDays).toEqual({
+      "2026-08-18": { local: 1, pr: 2, main: 0, sources: ["fix"] },
+    });
+    expect([state.localCatches, state.prCatches, state.mainCatches])
+      .toEqual([1, 2, 0]);
+    expect(state.lastCatch).toBe("2026-08-18");
+  });
+
   it("dates a new real test failure on main to the first failure the fix ended", () => {
     // One breakage, one new real test failure, dated to where the
     // breakage entered, which is the day a later reader divides the
@@ -2494,7 +2530,7 @@ describe("moveHistory()", () => {
   });
 
   it("hands over what main last said once nothing is left behind", () => {
-    const from = twoDays();
+    const from = { ...twoDays(), ordersOnMain: ["2026-08-14"] };
     const into = emptyState();
     moveHistory(from, into, () => true);
     expect(into.lastMainByOrder).toEqual([{ seed: 20260814, outcome: "fail" }]);
@@ -2502,6 +2538,8 @@ describe("moveHistory()", () => {
     expect(into.pendingMain).toEqual([
       { day: "2026-08-14", commit: "c9", source: "main" },
     ]);
+    expect(into.ordersOnMain).toEqual(["2026-08-14"]);
+    expect(from.ordersOnMain).toBeUndefined();
   });
 });
 

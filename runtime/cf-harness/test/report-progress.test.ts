@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { reportProgressTool } from "../src/tools/report-progress.ts";
 import type { HarnessToolContext } from "../src/tools/types.ts";
 import { withheldToolIds } from "../src/contracts/tool-descriptor.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("report_progress", () => {
   it("withholds the tool until the host provides its return channel", () => {

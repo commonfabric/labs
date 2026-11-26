@@ -1,11 +1,23 @@
+/**
+ * A profile page for a person: their name, picture, bio, external links, and
+ * the cards they have pinned. Visiting shows a read-only presentation, and the
+ * owner can switch to an edit form to change the name, picture, and bio, add or
+ * remove external links, and add or remove tagged cards, among them links to
+ * existing pieces.
+ *
+ * Profiles can also carry verified external identities and a pointer to the
+ * owner's inbox for things shared with them.
+ */
+
 import {
   Cell,
   Cfc,
   computed,
   CurrentPrincipal,
+  currentPrincipal,
   Default,
   equals,
-  type FabricBytes,
+  FabricBytes,
   handler,
   type HandlerFactory,
   ifElse,
@@ -105,11 +117,27 @@ export type SetProfileAvatarEvent = {
   target?: { value?: string };
 };
 
-/** The profile picture's bytes, sent directly as `picture` or carried as
- * `detail.bytes` by the change event of `<cf-avatar-input>`. */
+/**
+ * A profile picture held as a blob in a space's blob store: the DID of that
+ * space, and the blob's id there. Empty, `{}`, for no picture.
+ */
+export type ProfilePictureBlob = { space?: string; id?: string };
+
+/**
+ * A blob holding a picture, by its space's DID and its id there, as a host
+ * that uploaded the picture names it.
+ */
+export type PictureBlobReference = { space: string; id: string };
+
+/**
+ * A profile picture: the blob a host uploaded it to, sent as `pictureBlob` or
+ * carried as `detail.blob` by the change event of `<cf-avatar-input>`, or else
+ * its bytes, sent as `picture` or carried as `detail.bytes`.
+ */
 export type SetProfilePictureEvent = {
+  pictureBlob?: PictureBlobReference;
   picture?: FabricBytes;
-  detail?: { bytes?: FabricBytes };
+  detail?: { blob?: PictureBlobReference; bytes?: FabricBytes };
 
   /** Removes the picture. A host removing it says so outright. */
   clear?: boolean;
@@ -228,9 +256,10 @@ export type SetProfileInboxEvent = {
  */
 export type InboxPointable = {
   // The pointer is a typed link. An inbox labels its offers confidential to
-  // its owner, and the link carries that label; read as an untyped link from
-  // another space, it joins that label into the reading run, and the run is
-  // refused. `private-inbox.pointer-type.test.ts` pins the type.
+  // its owner; read as an untyped link from another space, the pointer is
+  // followed into those offers, the reading run joins that label, and
+  // writer-fit refuses the run's sends. `private-inbox.pointer-type.test.ts`
+  // pins the type.
   inbox?: ProfileInbox;
   // Optional so that a handler binding a list of these as a value still runs
   // over a stored profile of a vintage without the stream.
@@ -253,10 +282,9 @@ export function pointAtInboxIfUnset(
   profile: InboxPointable | undefined,
   holder: ProfileInbox | undefined,
 ): void {
-  // The holder's link reaches the inbox through the cell that wrote it. A link
-  // written into a profile's labeled `inbox` takes its label from the document
-  // it names, and only the inbox's own result document carries the schema
-  // that label comes from, so the profile is given that document.
+  // The holder's link reaches the inbox through the cell that wrote it. The
+  // profile is given the inbox's own result document, the one its typed
+  // pointer describes.
   const inbox = holder?.piece?.resolveAsCell();
   if (inbox === undefined || profile === undefined) return;
   if (profile.inbox?.piece !== undefined) return;
@@ -304,11 +332,25 @@ export type ProfileHomeOutput = {
   // Free text: a URL, a `data:` URL, or a glyph. Kept for the readers that
   // read it; the profile shows `picture` in its place when it has one.
   avatar: OwnerProtectedProfileWrite<string, typeof setAvatar>;
-  // The profile picture: the bytes of a raster image in any format an `<img>`
-  // decodes, the format being sniffed from the bytes. Absent until someone
-  // sets one. The picture's own label names the principal who set it, so a
-  // reader showing it as the owner's face reads it through `writtenPrincipalOf()`,
-  // which reads that label, not the profile's label at `picture`.
+  // The profile picture, as a reference to the blob a host uploaded it to: a
+  // raster image in any format an `<img>` decodes, whose bytes stay out of
+  // every list and feed that carries the profile, and which a reader fetches
+  // from the blob's space's blob store. `{}` while the profile holds no
+  // picture this way, and absent on a stored profile that predates the
+  // field. `setPicture` takes a picture from the owner alone, but a value can
+  // be stored without a label, so a reader showing it as the owner's face
+  // reads it through `writtenPrincipalOf()`, which reads the reference's own
+  // label, not the profile's label at `pictureBlob`.
+  pictureBlob?: OwnerProtectedProfileWrite<
+    ProfilePictureBlob,
+    typeof setPicture
+  >;
+  // The profile picture as bytes held inline, the format being sniffed from
+  // the bytes, for a picture sent as bytes rather than uploaded. Empty while
+  // the profile holds no picture this way, and absent on a stored profile
+  // that predates its default. Earlier releases took a picture from anyone,
+  // so a reader reads this through `writtenPrincipalOf()` too, and shows it
+  // only where the owner's `pictureBlob` names no blob.
   picture?: OwnerProtectedProfileWrite<FabricBytes, typeof setPicture>;
   // A short, human-authored free-text description of the profile owner
   // (CT-1648). Owner-protected like name/avatar; the canonical shared-profile
@@ -630,7 +672,7 @@ const appendElement = (
 // the per-row remove) must be an INSTANCE of this one implementation.
 // Instances differ only in bound state — including the explicit `mode`
 // below — which doesn't change the implementation identity.
-const mutateElements = handler<
+export const mutateElements = handler<
   MutateProfileElementsEvent,
   {
     elements: Writable<ProfileElement[]>;
@@ -806,41 +848,94 @@ const setAvatar = handler<SetProfileAvatarEvent, { avatar: Writable<string> }>(
   },
 );
 
-// The authorized writer for the `picture` field. An event without bytes is a
-// no-op, not a clear; `clear: true` is how the picture is removed.
-//
-// The picture's cell has no default, so setup writes nothing to it and its
-// document stores no policy of its own. The handler's state declares that the
-// value represents the principal who writes it, so each write labels the
-// picture with its writer: the owner's picture says it is the owner's, and a
-// picture anyone else sets says it is theirs. The profile's space lets anyone
-// write, so this does not keep anyone from replacing the picture; it keeps a
-// reader from taking someone else's picture for the owner's. The explicit
-// `HandlerFactory` type lets the state name the handler as its own writer.
+// No picture: the bytes the `picture` field holds while the profile holds no
+// picture as bytes.
+const NO_PICTURE = new FabricBytes(new Uint8Array(0));
+
+// No picture: the reference the `pictureBlob` field holds while the profile
+// holds no picture as a blob.
+const NO_PICTURE_BLOB: ProfilePictureBlob = {};
+
+/**
+ * `reference` when it names a blob, by a space's DID and a non-empty id, or
+ * `undefined` when it names none.
+ */
+const namedBlob = (
+  reference: ProfilePictureBlob | undefined,
+): PictureBlobReference | undefined => {
+  const space = reference?.space;
+  const id = reference?.id;
+  return typeof space === "string" && space.startsWith("did:") &&
+      typeof id === "string" && id !== ""
+    ? { space, id }
+    : undefined;
+};
+
+/**
+ * The policy `setPicture` declares for the `picture` field: it alone writes the
+ * field, and each write labels the picture as representing its writer. It
+ * binds no owner, since a picture an earlier release let anyone set carries
+ * its writer's label, and the field would then be theirs; `setPicture` itself
+ * refuses every writer but the profile's owner. Where setup has stored the
+ * field's own owner-protected policy, that policy stays in force beside it.
+ */
+type ProfilePictureWrite = RepresentsCurrentUser<
+  WriteAuthorizedBy<FabricBytes | undefined, typeof setPicture>
+>;
+
+/** The policy `setPicture` declares for the `pictureBlob` field, as for
+ * `picture`. */
+type ProfilePictureBlobWrite = RepresentsCurrentUser<
+  WriteAuthorizedBy<ProfilePictureBlob, typeof setPicture>
+>;
+
+// The authorized writer for the picture fields, which only the person whose
+// own profile it is (`profileOwnerOf()`) may use. It stores a picture sent as
+// the blob a host uploaded it to in `pictureBlob`, and one sent as bytes in
+// `picture`, preferring the blob when an event carries both, and empties the
+// other field, so that no reader shows an earlier picture there. An event
+// without a picture is a no-op, not a clear; `clear: true` is how the picture
+// is removed, from both fields. The explicit `HandlerFactory` type lets the
+// state name the handler as its own writer.
 export type SetProfilePictureState = {
-  picture: Writable<
-    RepresentsCurrentUser<
-      WriteAuthorizedBy<FabricBytes | undefined, typeof setPicture>
-    >
-  >;
+  picture: Writable<ProfilePictureWrite>;
+  pictureBlob: Writable<ProfilePictureBlobWrite>;
+  // Read for whose own profile it is, and nothing else.
+  profile: Cell<{ name?: string }>;
 };
 
 const setPicture: HandlerFactory<
   SetProfilePictureEvent,
   SetProfilePictureState
-> = handler<SetProfilePictureEvent, SetProfilePictureState>(
-  (event, state) => {
-    if (event.clear === true) {
-      state.picture.set(undefined);
-      return;
+> = handler<SetProfilePictureEvent, SetProfilePictureState>((event, state) => {
+  const owner = profileOwnerOf(state.profile);
+  if (owner === undefined || currentPrincipal() !== owner) {
+    throw new Error("Only the profile's owner can set its picture.");
+  }
+  if (event.clear === true) {
+    state.pictureBlob.set(NO_PICTURE_BLOB);
+    state.picture.set(NO_PICTURE);
+    return;
+  }
+  const reference = event.pictureBlob ?? event.detail?.blob;
+  if (reference !== undefined) {
+    const blob = namedBlob(reference);
+    if (blob === undefined) {
+      throw new Error(
+        "A picture's blob is named by its space's DID and its id there.",
+      );
     }
-    const picture = event.picture ?? event.detail?.bytes;
-    if (!picture?.length) {
-      return;
-    }
-    state.picture.set(picture);
-  },
-);
+    state.pictureBlob.set(blob);
+    state.picture.set(NO_PICTURE);
+    return;
+  }
+  const picture = event.picture ?? event.detail?.bytes;
+  if (!picture?.length) {
+    return;
+  }
+  state.picture.set(picture);
+  state.pictureBlob.set(NO_PICTURE_BLOB);
+});
 
 // THE authorized writer for the owner-protected `bio` field (CT-1648). Bio is
 // multi-line free text, so — unlike setName — it is NOT Enter-gated and is
@@ -962,7 +1057,10 @@ function normalizeVerifiedAt(value: string): string | undefined {
     : undefined;
 }
 
-function isCanonicalVerifiedIdentity(
+/** Whether `identity` is in the canonical form a profile collects: a trimmed,
+ * lowercase type, a non-empty trimmed value, and a `verifiedAt` naming a real
+ * instant, written in the UTC form `Date#toISOString()` gives. */
+export function isCanonicalVerifiedIdentity(
   identity: ExternalIdentityAssertion,
 ): boolean {
   const type = identity.type;
@@ -1018,10 +1116,19 @@ const toggleProfileEditing = handler<void, { editing: Writable<boolean> }>(
 // `../profile-face/profile-face.ts` states for every pattern.
 const faceOf = lift<
   { profile: Cell<ProfileHomeOutput> },
-  { picture?: FabricBytes; avatar?: string }
+  {
+    pictureBlob?: { space: string; id: string };
+    picture?: FabricBytes;
+    avatar?: string;
+  }
 >(({ profile }) => {
   const owner = profileOwnerOf(profile);
   if (owner === undefined) return {};
+  const pictureBlob = profile.key("pictureBlob");
+  if (writtenPrincipalOf(pictureBlob) === owner) {
+    const blob = namedBlob(pictureBlob.get());
+    if (blob !== undefined) return { pictureBlob: blob };
+  }
   const picture = profile.key("picture");
   const bytes = picture.get();
   if (
@@ -1059,7 +1166,10 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
     >("").for("avatar");
     const picture = new Writable<
       OwnerProtectedProfileWrite<FabricBytes | undefined, typeof setPicture>
-    >(undefined).for("picture");
+    >(NO_PICTURE).for("picture");
+    const pictureBlob = new Writable<
+      OwnerProtectedProfileWrite<ProfilePictureBlob, typeof setPicture>
+    >(NO_PICTURE_BLOB).for("pictureBlob");
     const bio = new Writable<
       OwnerProtectedProfileWrite<string, typeof setBio>
     >("").for("bio");
@@ -1075,30 +1185,34 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
     const verifiedIdentities = new Writable<
       VerifiedIdentityListWrite<typeof publishVerifiedIdentities>
     >([]).for("verifiedIdentities");
-    // Unprotected draft backing the bio textarea; saved into the protected
-    // `bio` cell through `setBio` (CT-1648).
-    const bioDraft = new Writable("").for("bioDraft");
-    // Unprotected drafts for the external-link form. The durable links are
-    // written only through `mutateExternalProfileLinks` above.
-    const externalLinkLabel = new Writable("").for("externalLinkLabel");
-    const externalLinkUrl = new Writable("").for("externalLinkUrl");
+    // The edit form's drafts and the view toggle are per session. The
+    // profile's space grants anyone WRITE and none of these is
+    // owner-protected, so in a cell the space shares, a visitor could change
+    // what the owner's form saves, or flip the owner's view.
+    //
+    // The draft backing the bio textarea, saved into the protected `bio` cell
+    // through `setBio` (CT-1648).
+    const bioDraft = Writable.perSession.of("").for("bioDraft");
+    // The external-link form. The durable links are written only through
+    // `mutateExternalProfileLinks` above.
+    const externalLinkLabel = Writable.perSession.of("").for(
+      "externalLinkLabel",
+    );
+    const externalLinkUrl = Writable.perSession.of("").for("externalLinkUrl");
     const elements = new Writable<
       OwnerProtectedProfileWrite<ProfileElement[], typeof mutateElements>
     >([]).for("elements");
-    const patternUrl = new Writable("").for("patternUrl");
-    const elementTitle = new Writable("").for("elementTitle");
-    const elementTag = new Writable("").for("elementTag");
-    const userTagsText = new Writable("").for("userTagsText");
+    const patternUrl = Writable.perSession.of("").for("patternUrl");
+    const elementTitle = Writable.perSession.of("").for("elementTitle");
+    const elementTag = Writable.perSession.of("").for("elementTag");
+    const userTagsText = Writable.perSession.of("").for("userTagsText");
     // "Pin a piece" form (CT-1755): a link to an existing deployed piece by
     // its space DID + piece id.
-    const pieceSpaceForm = new Writable("").for("pieceSpaceForm");
-    const pieceIdForm = new Writable("").for("pieceIdForm");
-    const pieceTitleForm = new Writable("").for("pieceTitleForm");
+    const pieceSpaceForm = Writable.perSession.of("").for("pieceSpaceForm");
+    const pieceIdForm = Writable.perSession.of("").for("pieceIdForm");
+    const pieceTitleForm = Writable.perSession.of("").for("pieceTitleForm");
     // Rendered profile view (CT-1748): the cell view shows a read-only
     // presentation by default; the owner flips this to reveal the edit form.
-    // Per session: the profile's space grants anyone WRITE, and this flag is
-    // not owner-protected, so a space-scoped cell here would let a visitor
-    // flip the owner's own view.
     const editing = Writable.perSession.of<boolean>(false);
     // Is the current viewer the profile owner? `wish("#profile")` resolves the
     // VIEWER's default profile as `.result`, but `.candidates` contains every
@@ -1159,6 +1273,7 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
       name,
       avatar,
       picture,
+      pictureBlob,
       bio,
       inbox,
       externalLinks,
@@ -1166,7 +1281,7 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
       elements,
       setName: setName({ name }),
       setAvatar: setAvatar({ avatar }),
-      setPicture: setPicture({ picture }),
+      setPicture: setPicture({ picture, pictureBlob, profile: self }),
       setBio: setBio({ bio, draft: bioDraft }),
       setInbox: setInbox({ inbox }),
       addExternalLink: mutateExternalProfileLinks({
@@ -1357,6 +1472,7 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                 <cf-vstack gap="2">
                   <label>Picture</label>
                   <cf-avatar
+                    blob={face.pictureBlob}
                     bytes={face.picture}
                     src={face.avatar ?? ""}
                     name={name}
@@ -1364,7 +1480,11 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                   />
                   <cf-avatar-input
                     data-ui-action={TRUSTED_PROFILE_EDIT_ACTION}
-                    oncf-change={setPicture({ picture })}
+                    oncf-change={setPicture({
+                      picture,
+                      pictureBlob,
+                      profile: self,
+                    })}
                   />
                 </cf-vstack>
 

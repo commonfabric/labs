@@ -11,7 +11,6 @@
 import { assert } from "@std/assert";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { defer, type Deferred } from "@commonfabric/async/defer";
 import type { URI } from "@commonfabric/memory/interface";
@@ -25,6 +24,7 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { IStorageProvider } from "../src/storage/interface.ts";
 import {

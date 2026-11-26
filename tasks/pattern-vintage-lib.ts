@@ -13,16 +13,16 @@
 
 import { exists } from "@std/fs";
 import * as posix from "@std/path/posix";
-import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   acceptedDropKey,
   type AcceptedStateDrop,
 } from "./pattern-vintage-accepted-drops.ts";
+import type { CommandOutput } from "./command-output.ts";
 import { readOnlyArguments } from "./only-arguments.ts";
 
 import {
   currentPatternKey,
-  formerPatternKey,
+  formerPatternKeys,
   isStoredArgumentSchemaRefusal,
   resolveSystemPatternSource,
   type RuntimeProgram,
@@ -280,10 +280,13 @@ export function programAsRecorded(
   ) {
     return program;
   }
+  // A vintage recorded under `packages/` predates every move, so a module is
+  // renamed to the first key its pattern had.
+  const firstKey = (key: string) => formerPatternKeys(key).at(-1) ?? key;
   const rename = (name: string) =>
     name.startsWith(patternsPrefix)
       ? RECORDED_PATTERNS_PREFIX +
-        formerPatternKey(name.slice(patternsPrefix.length))
+        firstKey(name.slice(patternsPrefix.length))
       : name;
   // A relative specifier names a module by its position relative to the
   // importing module. When the move changed that relative position, the
@@ -590,22 +593,6 @@ async function gitMove(from: string, to: string): Promise<void> {
   }
 }
 
-/**
- * Everything a command wants to say, and the code it wants to exit with.
- *
- * Returned rather than printed so the OUTPUT is testable, not just the
- * decision behind it. That is where this file's defects have actually lived:
- * across five review rounds the recurring fault was never a wrong decision, it
- * was the wrong text printed for a correct one — a remedy that did not fit the
- * situation, or a promise about output the function did not control. Text
- * assembled inside the task shell is text no test can read.
- */
-export interface CommandOutput {
-  out?: string;
-  err?: string;
-  code: number;
-}
-
 /** What `--pin` says, given what it decided. */
 export function describePinOutcome(
   outcome:
@@ -769,9 +756,9 @@ export function reportOnlyWithCapture(): string {
  * printed instead of a promotion.
  *
  * For a gate whose every other design decision is about never reading as
- * success by accident — `armVerdictGuard`, the `replayed`/`candidates`/
- * `targets` floors, the per-fixture root control — accepting an unrecognized
- * flag and exiting 0 is the same failure in the argument parser.
+ * success by accident — the `replayed`/`candidates`/`targets` floors, the
+ * per-fixture root control — accepting an unrecognized flag and exiting 0 is
+ * the same failure in the argument parser.
  */
 export function unknownFlags(args: readonly string[]): string[] {
   const known = new Set<string>(KNOWN_FLAGS);
@@ -1176,59 +1163,6 @@ export function reportUnmappedUrls(unmapped: readonly string[]): string {
     "nothing, which would leave the gate requiring nothing at all — so it stops",
     "here instead. Teach `requiredPatternKeys` the new route shape.",
   ].join("\n");
-}
-
-/**
- * What the gate prints when the process is about to end without a verdict.
- *
- * Measured, twice: a pattern that fails to compile and a truncated fixture BOTH
- * reject a promise nobody awaits while `harness.resolve()`'s own promise never
- * settles. `main` never reaches its verdict, the event loop drains, and the
- * process exits 0 having replayed nothing and printed nothing. A gate that goes
- * green because the thing it gates is too broken to test is worse than no gate,
- * so reaching a verdict is itself part of passing.
- */
-export function reportNoVerdict(reason?: unknown): string {
-  return [
-    "The vintage gate ended without reaching a verdict.",
-    "",
-    "Something the replay awaited never settled — a pattern that does not",
-    "compile and a corrupt fixture both do this, because the failure surfaces",
-    "as an unhandled rejection while the promise stays pending forever. The",
-    "gate proved nothing, so it fails.",
-    "",
-    reason === undefined
-      ? "  (no rejection was observed; look for an unresolved await)"
-      : `  last unhandled rejection: ${describeFailure(reason)}`,
-  ].join("\n");
-}
-
-/**
- * Make "ended without a verdict" fail instead of pass.
- *
- * `beforeunload` fires when the event loop is about to drain, which is the last
- * moment at which a run that never finished is still distinguishable from one
- * that did. The caller's clean path exits explicitly, so anything that reaches
- * this listener did not get there.
- *
- * Takes its `target` and `exit` rather than reaching for `globalThis` and
- * `Deno.exit`, so the wiring itself is testable — the guard is the one piece of
- * this gate whose failure mode is silence, and an untested guard against
- * silence is a comment.
- */
-export function armVerdictGuard(
-  target: EventTarget,
-  exit: (code: number) => void,
-  log: (message: string) => void = console.error,
-): void {
-  let lastRejection: unknown;
-  target.addEventListener("unhandledrejection", (event) => {
-    lastRejection = (event as { reason?: unknown }).reason;
-  });
-  target.addEventListener("beforeunload", () => {
-    log(reportNoVerdict(lastRejection));
-    exit(1);
-  });
 }
 
 /**

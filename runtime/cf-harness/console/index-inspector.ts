@@ -1,23 +1,19 @@
 /**
- * What the Index view reads out of the index's answers: the orderings, the
- * filter and the derived labels the three panes render. These are functions of
- * their arguments alone, so the pane that shows a pattern's standing and the
- * test that pins it are reading the same rule.
+ * What the Index view reads out of the index's answers: the orderings and the
+ * derived labels its panes render. These are functions of their arguments
+ * alone, so the pane that shows a pattern's standing and the test that pins it
+ * are reading the same rule.
  */
 
 import type {
-  PatternIndexEvent,
   PatternIndexListedPattern,
   PatternIndexSearchResult,
 } from "@commonfabric/pattern-index/client";
 
-/** One event type counted against a pattern, attributed where known. */
+/** One event type and how many times it was recorded against a pattern. */
 export interface PatternEventBadge {
   eventType: string;
   count: number;
-
-  /** Author DID; absent for the portion the index leaves unattributed. */
-  did?: string;
 }
 
 /**
@@ -34,50 +30,41 @@ export const patternsByScore = (
   );
 
 /**
- * Returns a pattern's event counts by type and author, with any unattributed
- * remainder kept separate. Counts come from the listing, never the bounded,
- * caller-scoped event stream. Zero counts produce no badge.
+ * Returns a pattern's event counts by type, in type order. Counts come from the
+ * listing, which records how many of each type a pattern collected and not who
+ * recorded them. Zero counts produce no badge.
  */
 export const eventBadges = (
   events: Readonly<Record<string, number>> | undefined,
-  eventAuthors: PatternIndexListedPattern["eventAuthors"] = {},
 ): readonly PatternEventBadge[] =>
   Object.entries(events ?? {})
     .filter(([, count]) => count > 0)
     .sort(([left], [right]) => left.localeCompare(right))
-    .flatMap(([eventType, count]) => {
-      const authors = Object.entries(eventAuthors[eventType] ?? {})
-        .filter(([did, count]) => did !== "" && count > 0)
-        .sort(([left], [right]) => left.localeCompare(right));
-      const attributed = authors.reduce((sum, [, count]) => sum + count, 0);
-      // An inconsistent breakdown cannot attribute the total reliably.
-      if (attributed > count) return [{ eventType, count }];
-      return [
-        ...authors.map(([did, count]) => ({ eventType, count, did })),
-        ...(attributed < count
-          ? [{ eventType, count: count - attributed }]
-          : []),
-      ];
-    });
+    .map(([eventType, count]) => ({ eventType, count }));
 
 /**
- * The events a filter box leaves showing. The needle is matched against every
- * field of an event rather than one chosen column, because the stream is read
- * to answer "what happened to this pattern" and "what did I do at 11:04" with
- * the same box. An empty needle filters nothing.
+ * Where a pattern stands in discovery, as one short line: its listing state,
+ * the bucket it ranks in, and whether an admin hid it or the index
+ * grandfathered it. `undefined` for an answer that carries none of these.
  */
-export const filterEvents = (
-  events: readonly PatternIndexEvent[],
-  needle: string,
-): readonly PatternIndexEvent[] => {
-  const wanted = needle.trim().toLowerCase();
-  if (wanted === "") {
-    return events;
-  }
-  return events.filter((event) =>
-    [event.patternId, event.did, event.eventType, event.ts ?? "", event.note]
-      .some((field) => (field ?? "").toLowerCase().includes(wanted))
-  );
+export const listingLabel = (
+  pattern: Pick<
+    PatternIndexListedPattern,
+    "listing" | "listed" | "bucket" | "hidden" | "grandfathered"
+  >,
+): string | undefined => {
+  const parts = [
+    pattern.listing,
+    pattern.listed === undefined
+      ? undefined
+      : pattern.listed
+      ? "listed"
+      : "unlisted",
+    pattern.bucket,
+    pattern.grandfathered ? "grandfathered" : undefined,
+    pattern.hidden ? "hidden" : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.length === 0 ? undefined : parts.join(" · ");
 };
 
 /**

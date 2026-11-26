@@ -1,5 +1,7 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { createHarnessCfcPolicySnapshot } from "../src/contracts/cfc-policy-snapshot.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 const base = {
   runId: "run-ceiling",
@@ -13,7 +15,7 @@ const base = {
   subagentProfileConfigs: [],
 };
 
-Deno.test("createHarnessCfcPolicySnapshot projects the run manifest's read ceiling", () => {
+test("createHarnessCfcPolicySnapshot projects the run manifest's read ceiling", () => {
   const snapshot = createHarnessCfcPolicySnapshot({
     ...base,
     runManifest: {
@@ -40,7 +42,7 @@ Deno.test("createHarnessCfcPolicySnapshot projects the run manifest's read ceili
   });
 });
 
-Deno.test("createHarnessCfcPolicySnapshot projects no ceiling from a manifest that declares none", () => {
+test("createHarnessCfcPolicySnapshot projects no ceiling from a manifest that declares none", () => {
   const snapshot = createHarnessCfcPolicySnapshot({
     ...base,
     runManifest: {
@@ -53,7 +55,7 @@ Deno.test("createHarnessCfcPolicySnapshot projects no ceiling from a manifest th
   assertEquals("cfcReadOnExceed" in snapshot.runManifest, false);
 });
 
-Deno.test("createHarnessCfcPolicySnapshot records that the operator allows skill scripts", () => {
+test("createHarnessCfcPolicySnapshot records that the operator allows skill scripts", () => {
   const snapshot = createHarnessCfcPolicySnapshot({
     ...base,
     allowSkillScripts: true,
@@ -68,7 +70,7 @@ Deno.test("createHarnessCfcPolicySnapshot records that the operator allows skill
   });
 });
 
-Deno.test("createHarnessCfcPolicySnapshot records that the operator allows none", () => {
+test("createHarnessCfcPolicySnapshot records that the operator allows none", () => {
   const snapshot = createHarnessCfcPolicySnapshot({
     ...base,
     allowedSkillScripts: [{ skill: "agent-browser", path: "scripts/run.ts" }],
@@ -77,5 +79,22 @@ Deno.test("createHarnessCfcPolicySnapshot records that the operator allows none"
   assertEquals(snapshot.skillScripts, {
     allowSkillScripts: false,
     allowedScripts: [{ skill: "agent-browser", path: "scripts/run.ts" }],
+  });
+});
+
+describe("cfc-policy-snapshot", () => {
+  describe("createHarnessCfcPolicySnapshot()", () => {
+    it("records the sandbox under the substrate without a protected-xattr entry when none was given", () => {
+      const sandbox = {
+        kind: "runsc-cfc" as const,
+        defaultWorkingDirectory: "/workspace",
+      };
+      expect(createHarnessCfcPolicySnapshot({ ...base, sandbox }).substrate)
+        .toEqual({ sandbox });
+    });
+
+    it("records no substrate when given neither a sandbox nor protected xattrs", () => {
+      expect("substrate" in createHarnessCfcPolicySnapshot(base)).toBe(false);
+    });
   });
 });

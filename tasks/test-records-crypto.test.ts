@@ -1,16 +1,17 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   fromBase64url,
   toUnpaddedBase64url,
 } from "@commonfabric/bytes/base64url";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   generateIdentity,
   isRecipient,
   open,
   recipientFingerprint,
   seal,
+  type SealedBox,
 } from "./test-records-crypto.ts";
 
 describe("test-records-crypto", () => {
@@ -29,6 +30,10 @@ describe("test-records-crypto", () => {
         .toBe(
           false,
         );
+    });
+
+    it("returns false for a body that is not base64url", () => {
+      expect(isRecipient("cfr1" + "!".repeat(43))).toBe(false);
     });
   });
 
@@ -80,6 +85,15 @@ describe("test-records-crypto", () => {
       bytes[0]! ^= 0xff;
       const tampered = { ...box, ct: toUnpaddedBase64url(bytes) };
       await expect(open(identity, tampered)).rejects.toThrow();
+    });
+
+    it("throws for a box of an unknown version", async () => {
+      const identity = await generateIdentity();
+      const box = await seal(identity.recipient, new Uint8Array([7]));
+      const future: SealedBox = JSON.parse(JSON.stringify({ ...box, v: 2 }));
+      await expect(open(identity, future)).rejects.toThrow(
+        "unknown sealed-box version 2",
+      );
     });
   });
 });

@@ -4,7 +4,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import type { VDomOp } from "@commonfabric/html/vdom-ops";
@@ -21,6 +20,7 @@ import {
 } from "@commonfabric/runner";
 import { buildCfcPolicyArtifactManifest } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -29,6 +29,7 @@ import {
 
 import {
   browserWorkerParamsFromInitializationData,
+  renderCeilingFor,
   renderConfidentialityResolverFor,
   renderMembershipProviderFor,
   renderModulePolicySourceFor,
@@ -51,6 +52,17 @@ function createWorkerRuntime(
     options.memoryUrl ?? options.apiUrl,
   );
   return new Runtime(runtimePresets.browserWorker(params));
+}
+
+/**
+ * The ceiling a worker initialized from `options` puts in force, as
+ * `renderCeilingFor()` makes it for the principal the runtime acts as.
+ */
+function ceilingOf(options: ReturnType<typeof createRuntimeClientOptions>) {
+  return renderCeilingFor(
+    options.renderConfidentialityCeiling,
+    options.trustSnapshot?.actingPrincipal ?? options.identity.did(),
+  );
 }
 
 /**
@@ -157,7 +169,7 @@ describe("render-audience", () => {
       const membership = renderMembershipProviderFor(
         runtime,
         identity,
-        options.renderConfidentialityCeiling,
+        ceilingOf(options),
       );
       expect(membership?.readerRole(identity.did())).toBe("owner");
       expect(options.renderConfidentialityCeiling?.atoms).toContainEqual(
@@ -245,7 +257,7 @@ describe("render-audience", () => {
         }
 
         await setDelegateRead(false);
-        const ceiling = options.renderConfidentialityCeiling;
+        const ceiling = ceilingOf(options);
         const membership = renderMembershipProviderFor(
           runtime,
           identity,
@@ -377,7 +389,7 @@ describe("render-audience", () => {
       });
       expect((await seed.commit().settled).error).toBeUndefined();
 
-      const ceiling = options.renderConfidentialityCeiling;
+      const ceiling = ceilingOf(options);
       const membership = renderMembershipProviderFor(
         runtime,
         identity,
@@ -573,7 +585,7 @@ describe("render-audience", () => {
         expect((await tx.commit().settled).error).toBeUndefined();
       };
 
-      const ceiling = options.renderConfidentialityCeiling;
+      const ceiling = ceilingOf(options);
       const membership = renderMembershipProviderFor(
         runtime,
         identity,
@@ -735,7 +747,7 @@ describe("render-audience", () => {
       // holder's.
       expect(note.getAsNormalizedFullLink().space).toEqual(valueSpace);
 
-      const ceiling = options.renderConfidentialityCeiling;
+      const ceiling = ceilingOf(options);
       const membership = renderMembershipProviderFor(
         runtime,
         identity,

@@ -25,7 +25,11 @@ import {
   splitArgumentSuffix,
 } from "../llm-friendly-ref.ts";
 import { parseScopedIdSegment } from "@commonfabric/runner/shared";
-import type { PieceConfig, SpaceConfig } from "../piece.ts";
+import type {
+  PieceConfig,
+  PieceResolutionDeps,
+  SpaceConfig,
+} from "../piece.ts";
 import ports from "@commonfabric/ports" with { type: "json" };
 
 /** A directive tells the shell to complete something only it can do well. */
@@ -54,12 +58,24 @@ function directive(...directives: Directive[]): ProviderResult {
 }
 
 /**
+ * The connection a provider reads live state over: `loadPieces` opens it, and
+ * `loadPieces` from `piece.ts` stands in when it is absent.
+ */
+export type LiveConnectionDeps = Pick<PieceResolutionDeps, "loadPieces">;
+
+/** A provider: the candidates for the line's slot, read over `deps`. */
+type Provider = (
+  line: CompletionLine,
+  deps: LiveConnectionDeps,
+) => Promise<ProviderResult>;
+
+/**
  * Resolve the fabric connection the half-typed line refers to.
  *
  * Mirrors the precedence `parseSpaceOptions` applies at execution time — line
  * options beat environment, and `--url` supplies api-url plus space together —
- * but never throws: an incomplete line yields `null`, meaning "no live
- * candidates", not an error.
+ * but an incomplete or malformed line yields `null` rather than a throw,
+ * meaning "no live candidates", not an error.
  */
 export function resolveSpaceContext(
   line: CompletionLine,
@@ -89,21 +105,17 @@ export function resolveSpaceContext(
 
   if (!apiUrl || !space) return null;
 
-  try {
-    return {
-      apiUrl,
-      space,
-      identity: absPath(identity),
-      // Completion reserves stdout for candidates. `jsonOutput` is how the
-      // runtime is told stdout is machine-readable: it routes status lines
-      // that would otherwise `console.log` (the navigateTo notice in
-      // `loadPieces`) to stderr, where the shell function discards them.
-      // Without it such a line would be offered to the user as a candidate.
-      jsonOutput: true,
-    };
-  } catch {
-    return null;
-  }
+  return {
+    apiUrl,
+    space,
+    identity: absPath(identity),
+    // Completion reserves stdout for candidates. `jsonOutput` is how the
+    // runtime is told stdout is machine-readable: it routes status lines
+    // that would otherwise `console.log` (the navigateTo notice in
+    // `loadPieces`) to stderr, where the shell function discards them.
+    // Without it such a line would be offered to the user as a candidate.
+    jsonOutput: true,
+  };
 }
 
 /**
@@ -189,34 +201,46 @@ export function resolvePieceContext(line: CompletionLine): PieceConfig | null {
  * Both are values the flag takes, and the slug is the readable half of that
  * vocabulary — so it leads, and the opaque id follows.
  */
-async function pieceCandidates(line: CompletionLine): Promise<ProviderResult> {
-  const config = resolveSpaceContext(line);
-  if (!config) return NOTHING;
-  const { listPieces, listSpaceSlugs, loadPieces } = await import(
-    "../piece.ts"
-  );
-  const controller = await loadPieces(config);
-  const deps = { loadPieces: () => Promise.resolve(controller) };
-  const [pieces, slugs] = await Promise.all([
-    listPieces(config, deps),
-    listSpaceSlugs(config, deps),
-  ]);
+async function pieceCandidates(
+  line: CompletionLine,
+  deps: LiveConnectionDeps,
+): Promise<ProviderResult> {
+  const listing = await spaceListing(line, deps);
+  if (!listing) return NOTHING;
   return values([
-    ...shapeSlugCandidates(slugs, pieces),
-    ...shapePieceCandidates(pieces, controller.getSpace()),
+    ...shapeSlugCandidates(listing.slugs, listing.pieces),
+    ...shapePieceCandidates(listing.pieces, listing.space),
   ]);
 }
 
 /** Just the slugs, for the positional that takes one and nothing else. */
-async function slugCandidates(line: CompletionLine): Promise<ProviderResult> {
+async function slugCandidates(
+  line: CompletionLine,
+  deps: LiveConnectionDeps,
+): Promise<ProviderResult> {
+  const listing = await spaceListing(line, deps);
+  if (!listing) return NOTHING;
+  return values(shapeSlugCandidates(listing.slugs, listing.pieces));
+}
+
+/**
+ * Helper for {@link pieceCandidates} and {@link slugCandidates}, which returns
+ * the pieces and slugs of the space the line names, both read over one
+ * connection, and that space's DID; or `null` where the line names no space.
+ */
+async function spaceListing(line: CompletionLine, deps: LiveConnectionDeps) {
   const config = resolveSpaceContext(line);
-  if (!config) return NOTHING;
-  const { listPieces, listSpaceSlugs } = await import("../piece.ts");
+  if (!config) return null;
+  const { listPieces, listSpaceSlugs, loadPieces } = await import(
+    "../piece.ts"
+  );
+  const controller = await (deps.loadPieces ?? loadPieces)(config);
+  const held = { loadPieces: () => Promise.resolve(controller) };
   const [pieces, slugs] = await Promise.all([
-    listPieces(config),
-    listSpaceSlugs(config),
+    listPieces(config, held),
+    listSpaceSlugs(config, held),
   ]);
-  return values(shapeSlugCandidates(slugs, pieces));
+  return { pieces, slugs, space: controller.getSpace() };
 }
 
 /** Listing shape used by `shapePieceCandidates`, structural so tests need no runtime. */
@@ -289,11 +313,12 @@ export function shapeSlugCandidates(
 /** Callables (handlers and streams) exposed by the line's `--cell`. */
 async function callableCandidates(
   line: CompletionLine,
+  deps: LiveConnectionDeps,
 ): Promise<ProviderResult> {
   const config = resolvePieceContext(line);
   if (!config) return NOTHING;
   const { listPieceCallables } = await import("../piece.ts");
-  const listing = await listPieceCallables(config);
+  const listing = await listPieceCallables(config, deps);
   return values(shapeVerbCandidates(listing.verbs));
 }
 
@@ -356,6 +381,7 @@ export function shapeVerbCandidates(
  */
 async function cellPathCandidates(
   line: CompletionLine,
+  deps: LiveConnectionDeps,
 ): Promise<ProviderResult> {
   const config = resolvePieceContext(line);
   if (!config) return NOTHING;
@@ -366,7 +392,7 @@ async function cellPathCandidates(
     // `#argument` on the target and `--input` as a flag are two spellings of
     // one selection, so both reach the arguments cell here.
     input: line.flags.has("input") || config.pieceInput === true,
-  });
+  }, deps);
   if (keys.length === 0) return NOTHING;
 
   return {
@@ -417,8 +443,8 @@ const PROJECTION_SOURCE_COMMANDS: readonly string[] = ["cell get"];
  */
 function projectionFieldCandidates(
   flag: "select" | "schema",
-): (line: CompletionLine) => Promise<ProviderResult> {
-  return async (line) => {
+): Provider {
+  return async (line, deps) => {
     // `--schema` reads a JSON Schema or an `@file` as well as this list, and
     // both are recognized by their first character. Neither is a field path.
     if (flag === "schema" && /^[@{]/.test(line.word)) return NOTHING;
@@ -436,6 +462,7 @@ function projectionFieldCandidates(
         ...(line.positionals[0] ? parseCellPath(line.positionals[0]) : []),
       ],
       { input: line.flags.has("input") || config.pieceInput === true },
+      deps,
     );
 
     // Everything the position could name, including the bare address suffix
@@ -638,10 +665,11 @@ export function shapeProjectionCandidates(
  */
 async function pieceWithPathCandidates(
   line: CompletionLine,
+  deps: LiveConnectionDeps,
 ): Promise<ProviderResult> {
   const target = splitPiecePathPrefix(line.word);
   if (!target) {
-    const pieces = await pieceCandidates(line);
+    const pieces = await pieceCandidates(line, deps);
     return { candidates: pieces.candidates, directives: [{ kind: "nospace" }] };
   }
 
@@ -651,7 +679,12 @@ async function pieceWithPathCandidates(
   });
   if (!config) return NOTHING;
   const { listCellKeys } = await import("../cell-listing.ts");
-  const keys = await listCellKeys(config, target.parentPath ?? "");
+  const keys = await listCellKeys(
+    config,
+    target.parentPath ?? "",
+    {},
+    deps,
+  );
   if (keys.length === 0) return NOTHING;
   const prefix = target.prefix;
   return {
@@ -678,8 +711,8 @@ export function splitPiecePathPrefix(
       parentPath,
     };
   }
+  // A reference is rooted, so it holds a `/` to cut at.
   const cut = typed.lastIndexOf("/");
-  if (cut < 0) return undefined;
   return { reference: typed.slice(0, cut), prefix: typed.slice(0, cut + 1) };
 }
 
@@ -937,7 +970,7 @@ function namesRemote(line: CompletionLine): boolean {
  * paths say on which commands.
  */
 export type OptionProvider =
-  & ((line: CompletionLine) => Promise<ProviderResult>)
+  & Provider
   & { readonly commands?: readonly string[] };
 
 /**
@@ -951,17 +984,21 @@ export type OptionProvider =
  */
 function onlyOn(
   commands: readonly string[],
-  provider: (line: CompletionLine) => Promise<ProviderResult>,
+  provider: Provider,
 ): OptionProvider {
   const paths = new Set(commands);
-  const scoped = (line: CompletionLine) =>
-    paths.has(line.path.join(" ")) ? provider(line) : Promise.resolve(NOTHING);
+  const scoped: Provider = (line, deps) =>
+    paths.has(line.path.join(" "))
+      ? provider(line, deps)
+      : Promise.resolve(NOTHING);
   return Object.assign(scoped, { commands });
 }
 
 /** The commands whose `--root` is the directory their sources resolve against. */
 const ROOT_DIRECTORY_COMMANDS: readonly string[] = [
   "check",
+  "pattern publish",
+  "pattern share",
   "piece new",
   "piece setsrc",
   "piece survey",
@@ -1044,6 +1081,11 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
   // A delegation chain file, as `cf delegation issue --out` writes one.
   delegations: () =>
     Promise.resolve(directive({ kind: "files", glob: "*.json" })),
+  // An index chain file, as `cf delegation issue --index --out` writes one.
+  chain: onlyOn(
+    ["index join"],
+    () => Promise.resolve(directive({ kind: "files", glob: "*.json" })),
+  ),
   // `cf agent runner`: the toolshed it sits beside, the host-owned Loom tool
   // configuration it reads, and the directory its runs' workspaces go under.
   "local-api-url": () => Promise.resolve(apiUrlCandidates()),
@@ -1061,6 +1103,8 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
   // A data file has no fixed extension; the shell's own file completion is the
   // only honest candidate set.
   datafile: () => Promise.resolve(directive({ kind: "files" })),
+  // The original entry a deploy of a copy continues the lineage of.
+  "version-entry": patternFiles,
   "input-file": onlyOn(
     ["piece new"],
     () => Promise.resolve(directive({ kind: "files" })),
@@ -1185,9 +1229,7 @@ const INSPECT_ENTITY_COMMANDS: readonly string[] = [
  * path disambiguates arguments that share a name across commands — `path` means
  * a cell path under `cf cell get` but a filesystem path elsewhere.
  */
-const ARGUMENT_PROVIDERS: Readonly<
-  Record<string, (line: CompletionLine) => Promise<ProviderResult>>
-> = {
+const ARGUMENT_PROVIDERS: Readonly<Record<string, Provider>> = {
   "agent show:run": agentRunCandidates,
   "agent cancel:run": agentRunCandidates,
   "agent remove:run": agentRunCandidates,
@@ -1218,12 +1260,27 @@ const ARGUMENT_PROVIDERS: Readonly<
   "profile get-picture:file": () =>
     Promise.resolve(directive({ kind: "files" })),
   "piece new:main": patternFiles,
+  "pattern publish:entry": patternFiles,
+  "pattern share:entry": patternFiles,
+  "pattern checkpoint:entry": patternFiles,
+  "pattern history:entry": patternFiles,
+  "pattern rollback:entry": patternFiles,
+  "pattern unpublish:entry": patternFiles,
+  "pattern stable:entry": patternFiles,
+  "pattern link:entry": patternFiles,
+  "pattern unshare:entry": patternFiles,
+  "index sharing:state": () =>
+    Promise.resolve(values([{ value: "on" }, { value: "off" }])),
+  "index move-root:file": () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.json" })),
   "piece setsrc:main": patternFiles,
   "check:files": patternFiles,
   "test:paths": patternFiles,
   "view:file": () => Promise.resolve(directive({ kind: "files" })),
   "exec:mountedFile": () => Promise.resolve(directive({ kind: "files" })),
   "id did:keypath": () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.key" })),
+  "id pair:keypath": () =>
     Promise.resolve(directive({ kind: "files", glob: "*.key" })),
   "piece getsrc:outpath": () => Promise.resolve(directive({ kind: "files" })),
   "deps update:file": () => Promise.resolve(directive({ kind: "files" })),
@@ -1262,14 +1319,8 @@ const ARGUMENT_PROVIDERS: Readonly<
  * fact — "the inspect subcommands that open a space" — and eighteen table
  * entries repeating it is eighteen places for the nineteenth to be forgotten.
  */
-function inspectSpaceProviders(): Record<
-  string,
-  (line: CompletionLine) => Promise<ProviderResult>
-> {
-  const entries: Record<
-    string,
-    (line: CompletionLine) => Promise<ProviderResult>
-  > = {};
+function inspectSpaceProviders(): Record<string, Provider> {
+  const entries: Record<string, Provider> = {};
   for (const command of INSPECT_SPACE_COMMANDS) {
     entries[`inspect ${command}:space`] = (line) =>
       namesRemote(line) ? Promise.resolve(NOTHING) : spaceCandidates();
@@ -1278,14 +1329,8 @@ function inspectSpaceProviders(): Record<
 }
 
 /** The same, for the `<entity>` that follows a space on some of them. */
-function inspectEntityProviders(): Record<
-  string,
-  (line: CompletionLine) => Promise<ProviderResult>
-> {
-  const entries: Record<
-    string,
-    (line: CompletionLine) => Promise<ProviderResult>
-  > = {};
+function inspectEntityProviders(): Record<string, Provider> {
+  const entries: Record<string, Provider> = {};
   for (const command of INSPECT_ENTITY_COMMANDS) {
     entries[`inspect ${command}:entity`] = entityCandidates;
   }
@@ -1321,7 +1366,8 @@ export function completionProviderKeys(): {
 }
 
 /**
- * Run the provider for the line's slot.
+ * Run the provider for the line's slot, reading live state over the
+ * connection `deps` opens.
  *
  * Any provider failure degrades to no candidates: completion must never
  * interrupt typing with an error, and a silent empty list is the honest signal
@@ -1329,13 +1375,12 @@ export function completionProviderKeys(): {
  */
 export async function liveCandidates(
   line: CompletionLine,
+  deps: LiveConnectionDeps = {},
 ): Promise<ProviderResult> {
   const slot = line.slot;
   if (!slot) return NOTHING;
 
-  let provider:
-    | ((line: CompletionLine) => Promise<ProviderResult>)
-    | undefined;
+  let provider: Provider | undefined;
 
   if (slot.kind === "option-value") {
     provider = OPTION_VALUE_PROVIDERS[longName(slot.option)];
@@ -1348,7 +1393,7 @@ export async function liveCandidates(
   if (!provider) return NOTHING;
 
   try {
-    return await provider(line);
+    return await provider(line, deps);
   } catch {
     return NOTHING;
   }

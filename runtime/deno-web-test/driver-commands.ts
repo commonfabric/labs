@@ -4,6 +4,7 @@
  */
 
 import type { Keyboard } from "@astral/astral";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { backtickQuote } from "@commonfabric/text/markdown";
 
 import {
@@ -12,6 +13,65 @@ import {
   type ModifierKey,
   PRESSABLE_KEYS,
 } from "./commands-protocol.ts";
+
+/** The part of astral's `Keyboard` a key press uses. */
+export type KeyPresser = Pick<Keyboard, "down" | "up" | "press">;
+
+/**
+ * What settling a command in the document that sent it came back with:
+ * `undefined` where that document is gone, and `exceptionDetails` where the
+ * settler threw there.
+ */
+export type SettleResult =
+  | {
+    exceptionDetails?: { exception?: { description?: string }; text: string };
+  }
+  | undefined;
+
+/**
+ * Carries out the command `payload` a test sent, pressing its key on
+ * `keyboard`, and settles it through `settle`, with why the press failed where
+ * it did. Resolves with a message to report on the console where the command
+ * has no id, and so cannot be settled, or where settling it failed, and with
+ * `undefined` otherwise. It never rejects.
+ */
+export async function runCommand(
+  payload: string,
+  keyboard: KeyPresser,
+  settle: (id: number, error: string | null) => Promise<SettleResult>,
+): Promise<string | undefined> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    // `commandId` reports the payload below.
+  }
+  const id = commandId(parsed);
+  if (id === undefined || typeof parsed !== "object" || parsed === null) {
+    return `A test sent a command with no id: ${backtickQuote(payload)}`;
+  }
+  let error: string | null = null;
+  try {
+    await pressOn(keyboard, readKeyPress(parsed));
+  } catch (e) {
+    error = describeFailure(e);
+  }
+  let failure: string | undefined;
+  try {
+    const settled = await settle(id, error);
+    if (settled === undefined) {
+      failure = "the document that sent it is gone";
+    } else if (settled.exceptionDetails) {
+      const { exception, text } = settled.exceptionDetails;
+      failure = exception?.description ?? text;
+    }
+  } catch (e) {
+    failure = describeFailure(e);
+  }
+  return failure === undefined
+    ? undefined
+    : `Command ${id} could not be settled: ${failure}`;
+}
 
 /**
  * Returns the id of the command `parsed`, or `undefined` where it has none.
@@ -58,7 +118,7 @@ export function readKeyPress(parsed: object): KeyPress {
  * and releasing them whether or not the press succeeds.
  */
 export async function pressOn(
-  keyboard: Keyboard,
+  keyboard: KeyPresser,
   keyPress: KeyPress,
 ): Promise<void> {
   const held: ModifierKey[] = [];

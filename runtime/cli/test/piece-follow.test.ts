@@ -5,11 +5,11 @@
  * reports are covered without a server.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 
 import { PieceSourceChangedError } from "@commonfabric/piece/ops";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   FOLLOW_PIN_REFUSED_EXIT_CODE,
   followPieceSourceAction,
@@ -397,6 +397,12 @@ describe("cf piece follow", () => {
       expect(parseRevisionPin("none")).toBeNull();
       expect(parseRevisionPin(" r-1 ")).toBe("r-1");
     });
+
+    it("throws for a value of only whitespace", () => {
+      expect(() => parseRevisionPin("  ")).toThrow(
+        "--expect-revision takes a revision id, or none.",
+      );
+    });
   });
 
   describe("explicit compatibility confirmation", () => {
@@ -620,6 +626,22 @@ describe("cf piece follow", () => {
         "of:profile was not pointed at system:system/fabrichat/room.tsx: " +
         "The piece's source log moved.",
       ]);
+    });
+
+    it("throws a follow failure that is not a moved source as it stands, reporting nothing", async () => {
+      const errors: string[] = [];
+      const codes: number[] = [];
+
+      await expect(
+        followPieceSourceAction(BASE_OPTIONS, "system:system/room.tsx", {
+          followPieceSource: () =>
+            Promise.reject(new Error("server unreachable")),
+          printError: (message) => errors.push(message),
+          setExitCode: (code) => codes.push(code),
+        }),
+      ).rejects.toThrow("server unreachable");
+      expect(errors).toEqual([]);
+      expect(codes).toEqual([]);
     });
 
     it("throws a `ValidationError` for a blank origin", async () => {

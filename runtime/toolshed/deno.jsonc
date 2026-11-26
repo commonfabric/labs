@@ -1,7 +1,7 @@
 {
   "tasks": {
-    "dev": "deno run --unstable-otel -A --v8-flags=--max-old-space-size=8192 --watch --env-file=.env index.ts",
-    "production": "deno run --unstable-otel -A --v8-flags=--max-old-space-size=8192 --env-file=.env index.ts",
+    "dev": "deno run --unstable-otel -A --v8-flags=--max-old-space-size=16384 --watch --env-file=.env index.ts",
+    "production": "deno run --unstable-otel -A --v8-flags=--max-old-space-size=16384 --env-file=.env index.ts",
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
     "deno-test": "ENV=test deno test --shuffle=$(deno task -q test-seed) --no-check -A --env-file=.env.test",

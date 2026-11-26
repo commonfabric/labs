@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { ensureDir } from "@std/fs";
 import { dirname, fromFileUrl, toFileUrl } from "@std/path";
@@ -25,6 +24,7 @@ import {
   SpaceInviteClient,
 } from "@commonfabric/runner/space-invites";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
+import { describe, it } from "@commonfabric/test-support/test";
 import { createSpaceInviteRouter } from "@/routes/space-invites/router.ts";
 import { createRouter, createTestApp } from "@/lib/create-app.ts";
 

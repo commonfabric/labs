@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 
@@ -12,6 +11,13 @@ import type {
   ProcessRunRequest,
   ProcessRunResult,
 } from "../src/sandbox/process-runner.ts";
+import { writesDespiteMode } from "./support/runsc-privilege.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** Names of the entries in the directory at `path`. */
 const entriesOf = async (path: string): Promise<string[]> => {
@@ -186,6 +192,32 @@ describe("runsc", () => {
       await expect(Deno.lstat(join(root, "nowhere"))).rejects.toThrow(
         Deno.errors.NotFound,
       );
+    });
+
+    it("rejects with the error itself for a parent under a file", async () => {
+      const file = join(root, "file");
+      await Deno.writeTextFile(file, "");
+      await expect(verifyPrivateScratchParent(join(file, "cf-harness-runsc")))
+        .rejects.toThrow(Deno.errors.NotADirectory);
+    });
+
+    it({
+      name:
+        "rejects for a private directory this process may not make an entry in",
+      ignore: writesDespiteMode(),
+      fn: async () => {
+        await Deno.chmod(parent, 0o500);
+        try {
+          await expect(verifyPrivateScratchParent(parent)).rejects.toThrow(
+            new RegExp(
+              `\\(owner ${mine}, mode 500; this process could not make an entry in it: .+\\); remove it`,
+            ),
+          );
+        } finally {
+          await Deno.chmod(parent, 0o700);
+        }
+        expect(await entriesOf(parent)).toEqual([]);
+      },
     });
 
     it("rejects for a file", async () => {

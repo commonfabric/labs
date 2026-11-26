@@ -1,10 +1,23 @@
-import { assert, handler, pattern, TESTS } from "commonfabric";
-import {
+import { assert, handler, NAME, pattern, TESTS, UI } from "commonfabric";
+import Gallery, {
   BatchPhotoUploadJobExample,
   CalendarAvailabilityPolicyExample,
   DocumentExportJobExample,
   SongIdentificationRecordingExample,
 } from "./process-examples.tsx";
+import {
+  childNodes,
+  textContent,
+} from "../../tools/test-support/vnode-helpers.ts";
+
+/** The text of the gallery's card at `index`: the first introduces the
+ * gallery and the second is its catalog. Reached by position, since a search
+ * would also walk every example the gallery renders. */
+const cardText = (view: unknown, index: number): string =>
+  textContent(childNodes(childNodes(view)[0])[index]);
+
+const numbered = (titles: readonly string[]): string =>
+  "Catalog" + titles.map((title, index) => `${index + 1}. ${title}`).join("");
 
 type SongSuite = ReturnType<typeof SongIdentificationRecordingExample>;
 type PolicySuite = ReturnType<typeof CalendarAvailabilityPolicyExample>;
@@ -33,6 +46,7 @@ const runExportJob = handler<void, { suite: ExportSuite }>((_, { suite }) => {
 });
 
 export default pattern(() => {
+  const gallery = Gallery({});
   const song = SongIdentificationRecordingExample({});
   const policy = CalendarAvailabilityPolicyExample({});
   const photoJob = BatchPhotoUploadJobExample({});
@@ -65,6 +79,22 @@ export default pattern(() => {
     exportJob.jobAuthorization!.includes("Document export")
   );
 
+  // The catalog lists each example under the name it goes by, so reading it
+  // reads every example's name.
+  const assert_gallery_catalog = assert(() =>
+    gallery[NAME] === "Process Trusted Component Examples" &&
+    gallery.exampleCount === 4 &&
+    cardText(gallery[UI], 0).includes(
+      "The gallery currently exposes 4 example patterns.",
+    ) &&
+    cardText(gallery[UI], 1) === numbered([
+        "Song Identification Recording",
+        "Calendar Availability Policy",
+        "Batch Photo Upload Job",
+        "Document Export Job",
+      ])
+  );
+
   return {
     [TESTS]: [
       { action: runSong({ suite: song }) },
@@ -75,6 +105,7 @@ export default pattern(() => {
       { assertion: assert_photo_job_visible_and_cancelable },
       { action: runExportJob({ suite: exportJob }) },
       { assertion: assert_document_export_authorized },
+      { assertion: assert_gallery_catalog },
     ],
     song,
     policy,

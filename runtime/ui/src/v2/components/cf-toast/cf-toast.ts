@@ -26,7 +26,7 @@ import { surfaceRecipesCSS } from "../../styles/variables.ts";
  * @csspart icon - Icon wrapper div
  * @csspart message - Message wrapper div
  * @csspart action - Action wrapper div
- * @csspart dismiss - Dismiss button (only present when dismissable)
+ * @csspart dismiss - Dismiss button (only present when dismissible)
  */
 export class CFToast extends BaseElement {
   // deno-fmt-ignore
@@ -226,8 +226,8 @@ export class CFToast extends BaseElement {
   static override properties = {
     status: { type: String, reflect: true },
     duration: { type: Number },
-    dismissable: { type: Boolean, reflect: true },
     dismissible: { type: Boolean, reflect: true },
+    dismissable: { type: Boolean, noAccessor: true },
     open: { type: Boolean, reflect: true },
     _hasIcon: { type: Boolean, state: true },
     _hasAction: { type: Boolean, state: true },
@@ -235,7 +235,6 @@ export class CFToast extends BaseElement {
 
   declare status: StatusIntent;
   declare duration: number;
-  declare dismissable: boolean;
   declare dismissible: boolean;
   declare open: boolean;
 
@@ -248,11 +247,19 @@ export class CFToast extends BaseElement {
     super();
     this.status = "info";
     this.duration = 5000;
-    this.dismissable = false;
     this.dismissible = false;
     this.open = false;
     this._hasIcon = false;
     this._hasAction = false;
+  }
+
+  /** The deprecated spelling of `dismissible`, which it reads and sets. */
+  get dismissable(): boolean {
+    return this.dismissible;
+  }
+
+  set dismissable(value: boolean) {
+    this.dismissible = value;
   }
 
   override connectedCallback(): void {
@@ -284,18 +291,19 @@ export class CFToast extends BaseElement {
     if (changedProperties.has("duration") && this.open) {
       this._startTimer();
     }
+  }
 
-    if (
-      changedProperties.has("dismissible") &&
-      this.dismissable !== this.dismissible
-    ) {
-      this.dismissable = this.dismissible;
-    } else if (
-      changedProperties.has("dismissable") &&
-      this.dismissible !== this.dismissable
-    ) {
-      this.dismissible = this.dismissable;
-    }
+  /**
+   * Closes an open toast and announces the dismissal with `reason`; does
+   * nothing to a toast already closed.
+   */
+  dismiss(reason: "timeout" | "user"): void {
+    if (!this.open) return;
+    this.open = false;
+    this._clearTimer();
+    const detail = { reason };
+    this.emit("cf-toast-dismiss", detail);
+    this.emit("cf-dismiss", detail);
   }
 
   private _updateAria(): void {
@@ -314,8 +322,7 @@ export class CFToast extends BaseElement {
     if (this.duration > 0) {
       this._timer = setTimeout(() => {
         this._timer = null;
-        this.open = false;
-        this._emitDismiss("timeout");
+        this.dismiss("timeout");
       }, this.duration);
     }
   }
@@ -327,17 +334,7 @@ export class CFToast extends BaseElement {
     }
   }
 
-  private _handleDismiss = (): void => {
-    this.open = false;
-    this._clearTimer();
-    this._emitDismiss("user");
-  };
-
-  private _emitDismiss(reason: "timeout" | "user"): void {
-    const detail = { reason };
-    this.emit("cf-toast-dismiss", detail);
-    this.emit("cf-dismiss", detail);
-  }
+  private _handleDismiss = (): void => this.dismiss("user");
 
   private _handleActionClick = (): void => {
     this.emit("cf-toast-action", {});
@@ -375,7 +372,7 @@ export class CFToast extends BaseElement {
             @slotchange="${this._handleActionSlotChange}"
           ></slot>
         </div>
-        ${this.dismissible || this.dismissable
+        ${this.dismissible
           ? html`
             <button
               class="dismiss"
@@ -390,5 +387,11 @@ export class CFToast extends BaseElement {
           : nothing}
       </div>
     `;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "cf-toast": CFToast;
   }
 }

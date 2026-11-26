@@ -40,6 +40,7 @@ import {
   keyPairFromRealmValue,
 } from "@commonfabric/identity";
 import type { DID } from "@commonfabric/identity/did";
+import { setLLMResponder } from "@commonfabric/llm";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   ACLManager,
@@ -48,7 +49,6 @@ import {
   ConsoleMethod,
   type Engine,
   type ErrorWithContext,
-  type Pattern,
   PatternCoverageCollector,
   patternCoverageOutputPath,
   Runtime,
@@ -70,6 +70,7 @@ import {
   type LoggerErrorWarnSnapshot,
   snapshotLoggerErrorWarnCounts,
 } from "./console-capture.ts";
+import { type LLMForwardedAnswer, LLMForwardingResponder } from "./llm-mock.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
 import { waitForMarkerCommit } from "./multi-user-marker-commit.ts";
 import { patternTestExperimentalOptions } from "./pattern-test-experimental-options.ts";
@@ -90,6 +91,7 @@ import {
   settleServed,
 } from "./served-settle.ts";
 import { pullActionEvent } from "./test-action-event.ts";
+import { participantPatternOf, requirePattern } from "./require-pattern.ts";
 import { pressRenderedControl, pressTargetOf } from "./test-press.ts";
 
 export interface WorkerRequest {
@@ -231,6 +233,17 @@ let servedQuiescence: ServedQuiescence | undefined;
 const quiescenceAnswers = new Map<number, Deferred<number>>();
 let nextQuiescenceRequest = 0;
 
+/**
+ * Sends every language-model request this worker's runtime makes to the
+ * orchestrator, which answers it from the test's `llmMocks`.
+ */
+const llmForwarding = new LLMForwardingResponder((message) =>
+  (self as unknown as Worker).postMessage(
+    message,
+  )
+);
+setLLMResponder(llmForwarding);
+
 /** Helper for {@link servedQuiescence}, which makes one request. */
 function requestServedQuiescence(): Promise<number> {
   const quiescenceRequest = nextQuiescenceRequest++;
@@ -319,6 +332,7 @@ const stepPeekSchema = {
     press: { type: "unknown" },
     control: { type: "string" },
     within: { type: "string" },
+    modifiers: { type: "array", items: { type: "string" } },
     settle: { type: "boolean" },
     label: { type: "string" },
     await: { type: "string" },
@@ -537,14 +551,18 @@ const handlers: Record<
     loggerCountsBeforeRun = snapshotLoggerErrorWarnCounts();
     consoleCaptureActive = true;
     const descriptor = (main?.default ?? {}) as {
-      setup?: Pattern;
-      participants?: Record<string, Pattern | { pattern: Pattern }>;
+      setup?: unknown;
+      participants?: Record<string, unknown>;
     };
-    const entry = descriptor.participants?.[args.participant as string];
-    const participantFactory = typeof entry === "function"
-      ? entry
-      : (entry as { pattern?: Pattern } | undefined)?.pattern;
-    if (typeof participantFactory !== "function") {
+    const setup = descriptor.setup === undefined ? undefined : requirePattern(
+      descriptor.setup,
+      "A multi-user test's `setup` must be a pattern function",
+    );
+    const participantFactory = participantPatternOf(
+      args.participant as string,
+      descriptor.participants?.[args.participant as string],
+    );
+    if (participantFactory === undefined) {
       throw new Error(
         `No participant pattern "${args.participant}" in test descriptor`,
       );
@@ -595,7 +613,7 @@ const handlers: Record<
     // worker runs the SAME instance (the first materializes it, the rest
     // resume it from storage and compute their own per-user partitions).
     let setupCell: Cell<Record<string, unknown>> | undefined;
-    if (typeof descriptor.setup === "function") {
+    if (setup !== undefined) {
       const tx = rt().edit();
       setupCell = rt().getCell<Record<string, unknown>>(
         space,
@@ -604,7 +622,7 @@ const handlers: Record<
         tx,
       );
       await setupCell.sync();
-      rt().run(tx, descriptor.setup, {}, setupCell);
+      rt().run(tx, setup, {}, setupCell);
       rt().prepareTxForCommit?.(tx);
       await tx.commit().settled;
       await settle();
@@ -627,7 +645,7 @@ const handlers: Record<
     await tx.commit().settled;
     if (args.continuousUI === true) {
       continuousUiCancel = await mountTestVDOM(
-        resultCell.key("$UI") as Cell<unknown>,
+        resultCell.key("$UI"),
         (error) => continuousUiErrors.push(error),
       );
     }
@@ -649,21 +667,17 @@ const handlers: Record<
 
     const result: ParticipantInitResult = {
       steps: stepCells.map((cell, index) => classifyStep(cell, index)),
-      allowRuntimeErrors:
-        await (resultCell.key("allowRuntimeErrors") as Cell<unknown>)
-          .pull() === true,
+      allowRuntimeErrors: await resultCell.key("allowRuntimeErrors")
+        .pull() === true,
       expectRuntimeErrors: runtimeErrorExpectation(
-        await (resultCell.key("expectRuntimeErrors") as Cell<unknown>).pull(),
+        await resultCell.key("expectRuntimeErrors").pull(),
       ),
-      expectNonIdempotent:
-        await (resultCell.key("expectNonIdempotent") as Cell<unknown>)
-          .pull() === true,
-      allowConsoleErrors:
-        await (resultCell.key("allowConsoleErrors") as Cell<unknown>)
-          .pull() === true,
-      allowConsoleWarnings:
-        await (resultCell.key("allowConsoleWarnings") as Cell<unknown>)
-          .pull() === true,
+      expectNonIdempotent: await resultCell.key("expectNonIdempotent")
+        .pull() === true,
+      allowConsoleErrors: await resultCell.key("allowConsoleErrors")
+        .pull() === true,
+      allowConsoleWarnings: await resultCell.key("allowConsoleWarnings")
+        .pull() === true,
       cfcEnforcementMode: rt().cfcEnforcementMode,
       cfcFlowLabels: rt().cfcFlowLabels,
     };
@@ -676,27 +690,23 @@ const handlers: Record<
     const peek = stepCell.asSchema(stepPeekSchema).get() as {
       control?: unknown;
       within?: unknown;
+      modifiers?: unknown;
     };
     if (Object.hasOwn(peek ?? {}, "press")) {
       await pressRenderedControl(
-        stepCell.key("press" as never) as Cell<unknown>,
+        stepCell.key("press"),
         pressTargetOf(peek, index as number),
         () => settle(),
       );
       await settle();
       return {};
     }
-    const stream = stepCell.key("action" as never) as unknown as {
-      send?: (value: unknown) => void;
-    };
-    if (typeof stream?.send !== "function") {
-      throw new Error(`Test step ${index} action is not a stream`);
-    }
+    const stream = stepCell.key("action");
     const meta = stepCell.asSchema(stepPeekSchema).get() as {
       trustedUi?: unknown;
     };
     const event = await pullActionEvent(
-      stepCell.key("event" as never),
+      stepCell.key("event"),
       meta?.trustedUi,
     );
     stream.send(event);
@@ -707,18 +717,26 @@ const handlers: Record<
   /** Evaluate an assertion step, reporting what a false value held. */
   async assertion({ index }) {
     const stepCell = stepCells[index as number];
-    const value = await (stepCell.key("assertion" as never) as Cell<unknown>)
-      .pull();
-    // An `assert(...)` assertion carries the operands recorded while the
-    // condition ran, so a failure names them and their values.
-    return assertionOutcome(value);
+    const assertionCell = stepCell.key("assertion");
+    // Demanding the assertion is what starts an asynchronous built-in it
+    // reads, such as a fetch or a model call. Hold that demand while waiting
+    // for the work it set going, as the single-user runner does.
+    const releaseDemand = assertionCell.sink(() => {});
+    try {
+      await rt().settled();
+      // An `assert(...)` assertion carries the operands recorded while the
+      // condition ran, so a failure names them and their values.
+      return assertionOutcome(await assertionCell.pull());
+    } finally {
+      releaseDemand();
+    }
   },
 
   /** Materialize one VDOM target, then remove its renderer demand. */
   async render({ index }) {
     const stepCell = stepCells[index as number];
     await materializeTestVDOM(
-      stepCell.key("render" as never) as Cell<unknown>,
+      stepCell.key("render"),
       () => settle(),
     );
     return {};
@@ -730,6 +748,10 @@ const handlers: Record<
    * next, so this is a demand for full settlement at a point the author names.
    */
   async settleStep() {
+    await settleServed(rt(), async () => {
+      await rt().settled();
+      await servedConsequences(rt());
+    }, servedQuiescence);
     await settle();
     return {};
   },
@@ -778,16 +800,13 @@ const handlers: Record<
         ...consoleWarnings,
         ...servedCfcRefusalWarnings(servedErrors),
       ],
-      nonIdempotent: rt().getIdempotencyViolations?.()?.map((violation) => {
-        const { actionId, differingWriteKeys } = violation as {
-          actionId?: string;
-          differingWriteKeys?: string[];
-        };
-        const id = String(actionId ?? violation);
-        return differingWriteKeys?.length
-          ? `${id} (differing writes: ${differingWriteKeys.join(", ")})`
-          : id;
-      }) ?? [],
+      nonIdempotent: rt().getIdempotencyViolations().map((
+        { actionId, differingWriteKeys },
+      ) =>
+        differingWriteKeys.length
+          ? `${actionId} (differing writes: ${differingWriteKeys.join(", ")})`
+          : actionId
+      ),
     });
   },
 
@@ -832,8 +851,14 @@ const announced = holdWorkerLifetimeLock().then((lifetimeLock) =>
 );
 
 self.onmessage = async (
-  event: MessageEvent<WorkerRequest | WorkerQuiescenceAnswer>,
+  event: MessageEvent<
+    WorkerRequest | WorkerQuiescenceAnswer | LLMForwardedAnswer
+  >,
 ) => {
+  if ("llmAnswer" in event.data) {
+    llmForwarding.receive(event.data);
+    return;
+  }
   if ("quiescenceAnswer" in event.data) {
     const answer = event.data;
     const waiting = quiescenceAnswers.get(answer.quiescenceAnswer);

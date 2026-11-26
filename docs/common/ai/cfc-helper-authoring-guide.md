@@ -249,10 +249,21 @@ export const edit = handler<void, { note: Writable<Note> }>((_, { note }) => {
 
 Each member is a whole policy over `unknown`: a `WriteAuthorizedBy`, a
 `TrustedActionWrite`, or a `TrustedActionWriteWithIntegrity`. Write the tuple in
-place, not through an alias of its own. Once stored, the list is fixed, so a
-later version of the pattern cannot add a writer to it, drop one, or change
+place, not through an alias of its own. Once stored, every writer the list
+names stays in it, so a later version of the pattern cannot drop one or change
 one's action, and a record whose policy names one writer cannot move to a list
-or back. Settle the writers before the record holds data that matters.
+or back. The order of the members does not matter. A later version may add a
+writer only when the update that installs it is a release of the piece, the
+new writer is in the same module as a writer already listed, or in an updated
+module the space attests succeeds that one, and its member has the same
+contract as that writer's member: the same action, or none where that member
+names none. A writer of any other module, or a new action, cannot join the
+list. The check
+of a pattern's contract that `cf piece setsrc` runs holds an update to the
+contract it replaces, so such an addition reaches a piece by a release of a
+`system:` pattern, which that check does not gate; a reordering it passes. So
+keep a retired writer in the list, and settle the module and the actions
+before the record holds data that matters.
 `AuthoredByCurrentUser` combines with it as with a lone writer: every member
 names a writer, and a member that names an action still requires its gesture.
 

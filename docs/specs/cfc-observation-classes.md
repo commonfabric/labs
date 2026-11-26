@@ -181,7 +181,8 @@ the container node resolves confidentiality with no derivation evidence at all,
 and an exchange rule guarded on `TransformedBy` cannot release an object a
 single function computed. The atom is present only when the flow stage minted
 it, which it does only when every non-privileged write of the transaction was
-authored under one identity. Membership stamps survive a slot write that adds or
+authored under one identity (a served event's processed claim, the runtime's
+write, is not one of them). Membership stamps survive a slot write that adds or
 replaces a child, so attribution on any carried `derived` or `structure` entry
 meets across the writers of its path: a transaction writing at, above, or below
 the entry's path (for a `*` template, its container's) leaves on it only the
@@ -300,7 +301,10 @@ normative from C1 on:
   The document has no position there: such an entry labels a position of
   the target, as a copy of the target's labels that a stored envelope can
   carry although no link write persists one, and a dereference consumes the
-  target's own labels where it reads them (spec §4.6.3, §8.2.5). The link
+  target's own labels where it reads them (spec §4.6.3, §8.2.5). Whether the
+  slot holds a reference is decided for the state the stored envelope
+  describes, the one before the transaction, so a transaction that takes the
+  reference and then writes the slot consumes no such entry either. The link
   entry at the slot stays consumed (spec §18.7).
 - **An `enumerate` entry applies at its container only.** It labels a
   container's membership, order and count, so it is consumed by a read of
@@ -340,6 +344,15 @@ every other path the wiring transaction wrote.
 `forEachFlowObservation` skips a marked probe alongside a trace-covered one,
 so such a read consumes nothing; a marked read that materializes content is
 unaffected and keeps consuming its ordinary labels.
+
+A pattern setup that stages a stored argument again is wiring of the same
+kind (`Runner.#readStoredArgument` in `runner.ts`): it reads each carried slot
+that holds a reference as a marked probe, and its only use of that reference
+is to write it again to the same slot of the argument it stages, where the
+slot's restriction stays. A carried slot the new argument schema refuses
+moves to the piece's refused-slot store by a plain write, which carries no
+link's restriction, so the setup reads that slot again as an ordinary read
+first.
 
 A wiring transaction that consumed the `origin: "link"` entry of a
 confidential reference would carry that clause into every result projection

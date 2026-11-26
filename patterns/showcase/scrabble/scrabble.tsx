@@ -23,6 +23,7 @@ import {
   type PerUser,
   Stream,
   UI,
+  type VNode,
   wish,
   Writable,
 } from "commonfabric";
@@ -108,6 +109,10 @@ interface TurnScore {
 }
 
 interface RackTileView extends Letter {
+  index: number;
+}
+
+interface PlacedTileView extends PlacedTile {
   index: number;
 }
 
@@ -318,6 +323,8 @@ export interface GameInput {
 }
 
 export interface GameOutput {
+  [NAME]: string;
+  [UI]: VNode;
   myName: string;
   board: readonly PlacedTile[];
   bag: readonly Letter[];
@@ -373,12 +380,6 @@ export function drawTilesFromBag(
 
 export function getRandomColor(index: number): string {
   return PLAYER_COLORS[index % PLAYER_COLORS.length];
-}
-
-export function getInitials(name: string): string {
-  if (!name.trim()) return "?";
-  return name.trim().split(/\s+/).map((word) => word[0]).join("").toUpperCase()
-    .slice(0, 2);
 }
 
 function trimmedName(name: string | undefined): string {
@@ -582,17 +583,19 @@ function calculateTurnScore(
   return { total: total + (bingoBonus ? 50 : 0), wordScores, bingoBonus };
 }
 
-function getDraggedLetterId(sourceCell: { get?: () => unknown } | undefined) {
-  const source = sourceCell?.get?.();
-  if (!source || typeof source !== "object") return undefined;
-  if ("id" in source && typeof source.id === "string") return source.id;
-  if (
-    "letter" in source && source.letter && typeof source.letter === "object" &&
-    "id" in source.letter && typeof source.letter.id === "string"
-  ) {
-    return source.letter.id;
-  }
-  return undefined;
+/**
+ * What a drag hands a drop zone: a rack letter, which carries its own `id`, or
+ * a placed tile, which carries its letter. The handler reads the dragged cell
+ * through this schema, so it sees only the fields named here.
+ */
+interface DraggedTile {
+  id?: string;
+  letter?: { id?: string };
+}
+
+function getDraggedLetterId(sourceCell: Writable<DraggedTile>) {
+  const source = sourceCell.get();
+  return source?.id ?? source?.letter?.id;
 }
 
 function returnedLetters(tiles: readonly PlacedTile[]): Letter[] {
@@ -628,14 +631,6 @@ function joinPlayerByName(
     if (currentName !== name) {
       message.set(`Name ${name} is already taken.`);
       return false;
-    }
-    if (rack.get().length === 0) {
-      const currentBag = bag.get().length ? [...bag.get()] : createTileBag();
-      if (bag.get().length === 0) bag.set(currentBag);
-      const currentIndex = bagIndex.get();
-      const drawn = drawTilesFromBag(currentBag, currentIndex, 7);
-      rack.set(drawn);
-      bagIndex.set(currentIndex + drawn.length);
     }
     message.set(`Welcome back, ${name}.`);
     return true;
@@ -793,11 +788,63 @@ const resetGameHandler = handler<
  */
 interface TileDropEvent {
   detail?: {
-    sourceCell?: Writable<unknown>;
+    sourceCell?: Writable<DraggedTile>;
     pointerX: number;
     pointerY: number;
     dropZoneRect?: { left: number; top: number; width: number; height: number };
   };
+}
+
+/**
+ * Whether a tile may go on (`row`, `col`): the square is on the board and holds
+ * no submitted tile. Says why not in `message` when it may not.
+ */
+function isOpenSquare(
+  row: number,
+  col: number,
+  board: BoardCell,
+  message: MessageCell,
+): boolean {
+  if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) {
+    message.set("Drop outside board bounds.");
+    return false;
+  }
+  if (buildBoardSet(board.get()).has(`${row},${col}`)) {
+    message.set("That square already has a submitted tile.");
+    return false;
+  }
+  return true;
+}
+
+/** Moves the rack tile `letterId` to the open square (`row`, `col`). */
+function placeFromRack(
+  letterId: string,
+  row: number,
+  col: number,
+  rack: RackCell,
+  placed: PlacedCell,
+  message: MessageCell,
+): void {
+  const currentRack = rack.get();
+  const currentPlaced = placed.get();
+  const rackIndex = currentRack.findIndex((letter) => letter.id === letterId);
+  if (rackIndex < 0) {
+    message.set("Tile not found in your rack.");
+    return;
+  }
+  if (currentPlaced.some((tile) => tile.row === row && tile.col === col)) {
+    message.set("That square already has one of your tiles.");
+    return;
+  }
+
+  const rackLetter = currentRack[rackIndex];
+  if (rackLetter.isBlank && !rackLetter.char) {
+    message.set("Choose a blank tile letter before placing it.");
+    return;
+  }
+  rack.set(currentRack.filter((_, index) => index !== rackIndex));
+  placed.set([...currentPlaced, { letter: rackLetter, row, col }]);
+  message.set("");
 }
 
 const dropOnBoard = handler<
@@ -827,73 +874,29 @@ const dropOnBoard = handler<
   const cellWithGap = CELL_SIZE + 2;
   const col = Math.floor((pointerX - dropZoneRect.left) / cellWithGap);
   const row = Math.floor((pointerY - dropZoneRect.top) / cellWithGap);
-  if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) {
-    message.set("Drop outside board bounds.");
-    return;
-  }
+  if (!isOpenSquare(row, col, board, message)) return;
 
-  if (buildBoardSet(board.get()).has(`${row},${col}`)) {
-    message.set("That square already has a submitted tile.");
-    return;
-  }
-
-  const currentRack = rack.get();
   const currentPlaced = placed.get();
   const placedIndex = currentPlaced.findIndex((tile) =>
     tile.letter.id === letterId
   );
-
-  if (placedIndex >= 0) {
-    const occupied = currentPlaced.some((tile) =>
-      tile.row === row && tile.col === col && tile.letter.id !== letterId
-    );
-    if (occupied) {
-      message.set("That square already has one of your tiles.");
-      return;
-    }
-    placed.set(
-      currentPlaced.map((tile, index) =>
-        index === placedIndex ? { ...tile, row, col } : tile
-      ),
-    );
-    message.set("");
+  if (placedIndex < 0) {
+    placeFromRack(letterId, row, col, rack, placed, message);
     return;
-  }
-
-  const rackIndex = currentRack.findIndex((letter) => letter.id === letterId);
-  if (rackIndex < 0) {
-    message.set("Tile not found in your rack.");
-    return;
-  }
-
-  const rackLetter = currentRack[rackIndex];
-  const sourceLetter: Letter = {
-    char: rackLetter.char,
-    points: rackLetter.points,
-    id: rackLetter.id,
-    isBlank: rackLetter.isBlank,
-  };
-  if (sourceLetter.isBlank && !sourceLetter.char) {
-    const chosenChar = (globalThis as any).prompt?.(
-      "Enter a letter for this blank tile (A-Z):",
-    );
-    if (!chosenChar || !/^[A-Za-z]$/.test(chosenChar)) {
-      message.set("Invalid blank tile letter.");
-      return;
-    }
-    sourceLetter.char = chosenChar.toUpperCase();
   }
 
   const occupied = currentPlaced.some((tile) =>
-    tile.row === row && tile.col === col
+    tile.row === row && tile.col === col && tile.letter.id !== letterId
   );
   if (occupied) {
     message.set("That square already has one of your tiles.");
     return;
   }
-
-  rack.set(currentRack.filter((_, index) => index !== rackIndex));
-  placed.set([...currentPlaced, { letter: sourceLetter, row, col }]);
+  placed.set(
+    currentPlaced.map((tile, index) =>
+      index === placedIndex ? { ...tile, row, col } : tile
+    ),
+  );
   message.set("");
 });
 
@@ -906,35 +909,8 @@ const placeTileOnBoard = handler<
     message: MessageCell;
   }
 >(({ letterId, row, col }, { rack, placed, board, message }) => {
-  if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) {
-    message.set("Drop outside board bounds.");
-    return;
-  }
-  if (buildBoardSet(board.get()).has(`${row},${col}`)) {
-    message.set("That square already has a submitted tile.");
-    return;
-  }
-
-  const currentRack = rack.get();
-  const currentPlaced = placed.get();
-  const rackIndex = currentRack.findIndex((letter) => letter.id === letterId);
-  if (rackIndex < 0) {
-    message.set("Tile not found in your rack.");
-    return;
-  }
-  if (currentPlaced.some((tile) => tile.row === row && tile.col === col)) {
-    message.set("That square already has one of your tiles.");
-    return;
-  }
-
-  const rackLetter = currentRack[rackIndex];
-  if (rackLetter.isBlank && !rackLetter.char) {
-    message.set("Choose a blank tile letter before placing it.");
-    return;
-  }
-  rack.set(currentRack.filter((_, index) => index !== rackIndex));
-  placed.set([...currentPlaced, { letter: rackLetter, row, col }]);
-  message.set("");
+  if (!isOpenSquare(row, col, board, message)) return;
+  placeFromRack(letterId, row, col, rack, placed, message);
 });
 
 const returnToRack = handler<
@@ -952,14 +928,10 @@ const returnToRack = handler<
   );
   if (!tile) return;
 
-  const returnedLetter = {
-    ...tile.letter,
-    char: tile.letter.isBlank ? "" : tile.letter.char,
-  };
   placed.set(
     currentPlaced.filter((placedTile) => placedTile.letter.id !== letterId),
   );
-  rack.set([...rack.get(), returnedLetter]);
+  rack.set([...rack.get(), ...returnedLetters([tile])]);
   message.set("");
 });
 
@@ -969,13 +941,7 @@ const clearBoard = handler<
 >((_event, { rack, placed, message }) => {
   const currentPlaced = placed.get();
   if (currentPlaced.length === 0) return;
-  rack.set([
-    ...rack.get(),
-    ...currentPlaced.map((tile) => ({
-      ...tile.letter,
-      char: tile.letter.isBlank ? "" : tile.letter.char,
-    })),
-  ]);
+  rack.set([...rack.get(), ...returnedLetters(currentPlaced)]);
   placed.set([]);
   message.set("Cleared your unsubmitted tiles.");
 });
@@ -1180,6 +1146,9 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
     const bagCount = Math.max(0, bag.get().length - bagIndex.get());
     const rackTiles = computed<RackTileView[]>(() =>
       rack.get().map((letter, index) => ({ ...letter, index }))
+    );
+    const placedTiles = computed<PlacedTileView[]>(() =>
+      placed.get().map((tile, index) => ({ ...tile, index }))
     );
     const joinGame = joinGameHandler({
       name: profileName,
@@ -1393,12 +1362,12 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
                       );
                     })}
 
-                    {placed.map((tile) => {
+                    {placedTiles.map((tile) => {
                       const leftPx = `${tile.col * cellWithGap}px`;
                       const topPx = `${tile.row * cellWithGap}px`;
                       return (
                         <cf-drag-source
-                          $cell={tile}
+                          $cell={placed.key(tile.index)}
                           type="board-tile"
                           style={{
                             position: "absolute",
@@ -1587,7 +1556,7 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
                       name-only joins (no profile cell) fall back to cf-avatar. */
                   }
                   {ifElse(
-                    computed(() => player.profile !== undefined),
+                    computed(() => player.profile?.get() !== undefined),
                     <cf-profile-badge
                       variant="circle"
                       size="sm"

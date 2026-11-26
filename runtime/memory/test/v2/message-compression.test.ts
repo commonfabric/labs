@@ -1,7 +1,6 @@
 /** Tests the negotiated memory WebSocket compression envelope. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   decodeCompressedMemoryMessage,
@@ -13,6 +12,7 @@ import {
   memoryMessageFrameBytes,
   parseMemoryCompressionControlMessage,
 } from "../../v2/message-compression.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("message-compression", () => {
   it("allows messages to expand to 256 MiB", () => {
@@ -24,6 +24,12 @@ describe("message-compression", () => {
 
     expect(await encodeCompressedMemoryMessage(payload)).toBe(payload);
     expect(await decodeCompressedMemoryMessage(payload)).toBe(payload);
+  });
+
+  it("keeps a message larger than a receiver expands in its original wire form", async () => {
+    const payload = "x".repeat(MAX_DECOMPRESSED_MEMORY_MESSAGE_BYTES + 1);
+
+    expect(await encodeCompressedMemoryMessage(payload)).toBe(payload);
   });
 
   it("round-trips a compressible UTF-8 message through a smaller envelope", async () => {

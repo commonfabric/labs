@@ -5,7 +5,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   createSession,
@@ -23,8 +22,14 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
-import { newPiece } from "../lib/piece.ts";
+import { newPiece, newPieceWithReceipt } from "../lib/piece.ts";
 import { resetWriteReceipts } from "../lib/write-receipt.ts";
 
 const CONFIG = {
@@ -156,6 +161,29 @@ describe("newPiece()", () => {
     );
   }
 
+  /**
+   * Creates a note from the pattern index through the CLI, the index read
+   * through `readIndex`, with a caller-owned retry identity.
+   */
+  function createIndexedNote(
+    requestKey: string,
+    readIndex: () => Promise<{ program: RuntimeProgram; name?: string }>,
+  ) {
+    return newPieceWithReceipt(
+      CONFIG,
+      { patternId: "pat-note", patternIndexUrl: "https://index.example" },
+      { requestKey, input: { title: "Indexed note", body: "# Indexed" } },
+      {
+        loadPieces: () => Promise.resolve(controller),
+        loadIdentity: () => Promise.resolve(signer),
+        getProgramFromIndex: readIndex,
+      },
+    );
+  }
+
+  /** An index that cannot be reached, as a later retry may find it. */
+  const indexDown = () => Promise.reject(new Error("the index is down"));
+
   /** Returns the identities delivered to the fixture root's registration action. */
   async function registrationAttempts(): Promise<string[]> {
     const attempts = root.key("attempts").asSchema(pieceListSchema);
@@ -192,6 +220,50 @@ describe("newPiece()", () => {
     expect((await pieces.getRegisteredPieces()).map((entry) => entry.id))
       .toEqual([created]);
     expect(await registrationAttempts()).toEqual([created]);
+  });
+
+  it("replays an indexed creation from its receipt without reading the index again", async () => {
+    // A retry of a creation that committed must not depend on the index: it
+    // may be unreachable, or the pattern since retracted.
+    const created = await createIndexedNote(
+      "indexed-import",
+      () => Promise.resolve({ program: NOTE_PROGRAM, name: "Note" }),
+    );
+    await pieces.synced();
+    await reconnect();
+
+    const retried = await createIndexedNote("indexed-import", indexDown);
+
+    expect(retried).toEqual({ pieceId: created.pieceId });
+    expect((await pieces.getRegisteredPieces()).map((entry) => entry.id))
+      .toEqual([created.pieceId]);
+    expect(await registrationAttempts()).toEqual([created.pieceId]);
+  });
+
+  it("finishes an indexed creation's registration from its receipt with the index down", async () => {
+    const blocked = await runtime.editWithRetry((tx) =>
+      root.withTx(tx).key("blocked").set(true)
+    );
+    expect(blocked.error).toBeUndefined();
+    await expect(
+      createIndexedNote(
+        "indexed-incomplete",
+        () => Promise.resolve({ program: NOTE_PROGRAM }),
+      ),
+    ).rejects.toThrow();
+    const [created] = await registrationAttempts();
+    const unblocked = await runtime.editWithRetry((tx) =>
+      root.withTx(tx).key("blocked").set(false)
+    );
+    expect(unblocked.error).toBeUndefined();
+    await pieces.synced();
+    await reconnect();
+
+    const retried = await createIndexedNote("indexed-incomplete", indexDown);
+
+    expect(retried).toEqual({ pieceId: created });
+    expect((await pieces.getRegisteredPieces()).map((entry) => entry.id))
+      .toEqual([created]);
   });
 
   it("preserves a definite refusal when a different creation claims a taken slug", async () => {

@@ -5,6 +5,7 @@ import {
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
 import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import { pathsOverlap } from "@commonfabric/memory/v2/path";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import {
   assertValidFabricValueLayer,
@@ -142,18 +143,6 @@ const cfcAddressFromLink = (link: NormalizedFullLink): CfcAddress => ({
   scope: link.scope,
   path: [...link.path],
 });
-
-const isPrefix = (
-  prefix: readonly string[],
-  path: readonly string[],
-): boolean =>
-  prefix.length <= path.length &&
-  prefix.every((segment, index) => segment === path[index]);
-
-const pathsOverlap = (
-  left: readonly string[],
-  right: readonly string[],
-): boolean => isPrefix(left, right) || isPrefix(right, left);
 
 const pathSegmentMatches = (left: string, right: string): boolean =>
   left === right || left === "*" || right === "*";
@@ -360,7 +349,10 @@ const hasPendingSchemaPolicyInput = (
 ): boolean => {
   const targetPath = canonicalizeLogicalPath(target.path);
   return tx.getCfcSchemaPolicyInputs(target.space, target.id).some((input) =>
-    pathsOverlap(canonicalizeLogicalPath(input.target.path), targetPath) &&
+    pathsOverlap(
+      canonicalizeLogicalPath(input.target.path),
+      targetPath,
+    ) &&
     schemaIfcOverlapsPath(
       input.schema,
       canonicalizeLogicalPath(input.target.path),
@@ -730,18 +722,19 @@ function writeWalked(
 ): boolean {
   const readOptions: DiffAndUpdateOptions = {
     ...options,
-    meta: {
+    meta: Object.freeze({
       ...options?.meta,
       ...markReadAsAttemptedWrite,
       ...allowMutableTransactionRead,
-    },
+    }),
   };
   const anchored: NonNullable<DiffWalkState["anchored"]> = [];
   const state: DiffWalkState = {
     seen: new Map(),
     nextAnchorId: anchorIds,
     anchored,
-    writtenKinds: new Map(),
+    // Only an anchored element consults what the walk wrote above it.
+    writtenKinds: anchorIds === undefined ? undefined : new Map(),
     carried,
   };
   const changes = normalizeAndDiff(
@@ -853,7 +846,7 @@ export function scopedArgumentInitializationTargets(
   // Reads which slots exist; the writes it leads to land in those slots.
   const value = tx.readValueOrThrow(container, {
     nonRecursive: true,
-    meta: { ...allowMutableTransactionRead, ...mergeableOpRead },
+    meta: Object.freeze({ ...allowMutableTransactionRead, ...mergeableOpRead }),
   });
   if (!isKeyableObjectNotArray(value) || isPrimitiveCellLink(value)) return [];
   return sessionScopedArgumentKeys(schema).flatMap((key) => {
@@ -889,13 +882,16 @@ export function initializeScopedArgumentSlots(
   }
   const options = {
     nonRecursive: true,
-    meta: { ...markReadAsAttemptedWrite, ...allowMutableTransactionRead },
+    meta: Object.freeze({
+      ...markReadAsAttemptedWrite,
+      ...allowMutableTransactionRead,
+    }),
   };
   // Reads which slots exist; the writes it leads to land in those slots, and
   // the diffs below attempt them under `options`.
   const value = tx.readValueOrThrow(container, {
     nonRecursive: true,
-    meta: { ...allowMutableTransactionRead, ...mergeableOpRead },
+    meta: Object.freeze({ ...allowMutableTransactionRead, ...mergeableOpRead }),
   });
   if (!isKeyableObjectNotArray(value) || isPrimitiveCellLink(value)) return;
   const changes: ChangeSet = [];
@@ -924,12 +920,12 @@ export function initializeScopedArgumentSlots(
         )
         : { ...childLink, scope: "user" as const };
       if (!target) continue;
-      let targetBlocked = false;
-      const resolvedTarget = resolveLink(runtime, tx, target, "top", {
-        onScopeBlocked: () => targetBlocked = true,
-      });
+      // A target that resolves to any other link is not this slot's own
+      // continuation: one that links elsewhere, and one whose follow a scope
+      // cap blocks, which resolves to a `data:` link holding `undefined`.
+      const resolvedTarget = resolveLink(runtime, tx, target, "top");
       if (
-        targetBlocked || resolvedTarget.pendingHopDoc ||
+        resolvedTarget.pendingHopDoc ||
         !areNormalizedLinksSame(target, resolvedTarget)
       ) continue;
       if (!present) {
@@ -1096,7 +1092,10 @@ function anchorValueAsEntity(
   // build its write; the write lands at `link`, not at what these read.
   const probeOptions = {
     ...options,
-    meta: { ...withoutAttemptedWriteMark(options?.meta), ...mergeableOpRead },
+    meta: Object.freeze({
+      ...withoutAttemptedWriteMark(options?.meta),
+      ...mergeableOpRead,
+    }),
   };
 
   // If we're setting an array element, make the array the context for the
@@ -1713,7 +1712,10 @@ export function normalizeAndDiff(
       !cfcLabelViewHasValues(carriedCfcLabelView)
     ) {
       const probeOptions = {
-        meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+        meta: Object.freeze({
+          ...ignoreReadForScheduling,
+          ...internalVerifierRead,
+        }),
       };
       const currentReference = tx.readValueOrThrow(link, probeOptions);
       if (
@@ -1732,11 +1734,11 @@ export function normalizeAndDiff(
         // from the verifier read above.
         tx.readValueOrThrow(link, {
           ...options,
-          meta: {
+          meta: Object.freeze({
             ...options?.meta,
             ...markReadAsAttemptedWrite,
             ...writeDestinationRead,
-          },
+          }),
         });
         tx.recordCfcWritePolicyInput({
           kind: "preserved-output",
@@ -1852,7 +1854,7 @@ export function normalizeAndDiff(
   let currentValue = precomputedCurrent === NO_PRECOMPUTED
     ? tx.readValueOrThrow(link, {
       ...options,
-      meta: { ...options?.meta, ...writeDestinationRead },
+      meta: Object.freeze({ ...options?.meta, ...writeDestinationRead }),
     })
     : precomputedCurrent;
 

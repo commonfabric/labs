@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   appendLineToFile,
@@ -9,6 +8,7 @@ import {
   logOutgoingFrame,
   readEnvironmentVariable,
 } from "./frame-log.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("frame log", () => {
   const collect = () => {
@@ -522,6 +522,16 @@ describe("frame log edges", () => {
     expect(readEnvironmentVariable("CF_MEMORY_FRAME_LOG_NOT_SET")).toBe(
       undefined,
     );
+  });
+
+  it("returns `undefined` for a variable name the environment cannot hold", () => {
+    // `Deno.env.get()` throws for such a name, as it does where the process
+    // may not read the environment.
+
+    for (const name of ["", "CF=MEMORY", "CF\0MEMORY"]) {
+      expect(() => Deno.env.get(name)).toThrow(TypeError);
+      expect(readEnvironmentVariable(name)).toBeUndefined();
+    }
   });
 
   it("appends lines to a file", async () => {

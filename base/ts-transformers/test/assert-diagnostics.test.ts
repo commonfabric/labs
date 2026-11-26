@@ -1,5 +1,10 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import ts from "typescript";
+
+import { TransformationContext } from "../src/core/mod.ts";
+import { transformCfDirective } from "../src/mod.ts";
+import { AssertDiagnosticsTransformer } from "../src/transformers/assert-diagnostics.ts";
 
 import { transformSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
@@ -12,6 +17,7 @@ import {
   literalToValue,
   parseModule,
 } from "./transformed-ast.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 const PREAMBLE =
   `import { assert, cell, computed, pattern } from "commonfabric";`;
@@ -68,7 +74,7 @@ function liftInputSchemas(root: ts.SourceFile): unknown[] {
   });
 }
 
-Deno.test("assert records the operands of a comparison", async () => {
+test("assert records the operands of a comparison", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => a.get() + b.get() <= c.get());
   return { check };`));
@@ -82,7 +88,7 @@ Deno.test("assert records the operands of a comparison", async () => {
   assertEquals(recordSource(root), "a.get() + b.get() <= c.get()");
 });
 
-Deno.test("assert records through a parenthesized callback", async () => {
+test("assert records through a parenthesized callback", async () => {
   const root = await transformed(patternSource(`
   const check = assert((() => a.get() + b.get() <= c.get()));
   return { check };`));
@@ -94,7 +100,7 @@ Deno.test("assert records through a parenthesized callback", async () => {
   assertEquals(recordSource(root), "a.get() + b.get() <= c.get()");
 });
 
-Deno.test("assert records the arguments of a call", async () => {
+test("assert records the arguments of a call", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => Object.is(a.get(), b.get()));
   return { check };`));
@@ -105,7 +111,7 @@ Deno.test("assert records the arguments of a call", async () => {
   ]);
 });
 
-Deno.test("assert does not record literal operands", async () => {
+test("assert does not record literal operands", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => a.get() === 3);
   return { check };`));
@@ -114,7 +120,7 @@ Deno.test("assert does not record literal operands", async () => {
   assertEquals(assertCaptureLabels(root), ["a.get()"]);
 });
 
-Deno.test("assert records the operand of a negation", async () => {
+test("assert records the operand of a negation", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => !(a.get() === b.get()));
   return { check };`));
@@ -126,7 +132,7 @@ Deno.test("assert records the operand of a negation", async () => {
   ]);
 });
 
-Deno.test("assert records each side of a short-circuit operator", async () => {
+test("assert records each side of a short-circuit operator", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => a.get() > 0 && b.get() < 10);
   return { check };`));
@@ -155,7 +161,7 @@ Deno.test("assert records each side of a short-circuit operator", async () => {
   );
 });
 
-Deno.test("assert records the branches of a conditional", async () => {
+test("assert records the branches of a conditional", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => a.get() > 0 ? b.get() > 1 : c.get() > 1);
   return { check };`));
@@ -170,7 +176,7 @@ Deno.test("assert records the branches of a conditional", async () => {
   ]);
 });
 
-Deno.test("assert lowers to a lift carrying a concrete record schema", async () => {
+test("assert lowers to a lift carrying a concrete record schema", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => a.get() <= c.get());
   return { check };`));
@@ -187,7 +193,7 @@ Deno.test("assert lowers to a lift carrying a concrete record schema", async () 
   assertEquals(result?.required, ["ok", "source", "parts"]);
 });
 
-Deno.test("assert keeps the statements ahead of its return", async () => {
+test("assert keeps the statements ahead of its return", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => {
     const total = a.get() + b.get();
@@ -202,7 +208,7 @@ Deno.test("assert keeps the statements ahead of its return", async () => {
   assertEquals(assertCaptureLabels(root), ["total", "c.get()"]);
 });
 
-Deno.test("assertDiagnostics: false keeps the record but drops recording", async () => {
+test("assertDiagnostics: false keeps the record but drops recording", async () => {
   const root = await transformed(
     patternSource(`
   const check = assert(() => a.get() <= c.get());
@@ -216,7 +222,7 @@ Deno.test("assertDiagnostics: false keeps the record but drops recording", async
   assertEquals(assertCaptures(root), []);
 });
 
-Deno.test("computed is untouched by the assert pass", async () => {
+test("computed is untouched by the assert pass", async () => {
   const source = patternSource(`
   const check = computed(() => a.get() + b.get() <= c.get());
   return { check };`);
@@ -239,7 +245,7 @@ Deno.test("computed is untouched by the assert pass", async () => {
   );
 });
 
-Deno.test("assert does not capture a body's own binding of its local names", async () => {
+test("assert does not capture a body's own binding of its local names", async () => {
   // Without unique names the emitted `const __cfAssertParts` would collide
   // with this binding, and the record's `parts` would read the author's value
   // rather than the recorded operands.
@@ -282,7 +288,7 @@ Deno.test("assert does not capture a body's own binding of its local names", asy
   assertEquals(partsTarget?.startsWith("__cfAssertParts"), true);
 });
 
-Deno.test("assert defers operand rendering to a failing-path helper", async () => {
+test("assert defers operand rendering to a failing-path helper", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => a.get() <= c.get());
   return { check };`));
@@ -319,7 +325,7 @@ Deno.test("assert defers operand rendering to a failing-path helper", async () =
   );
 });
 
-Deno.test("a local assert is not mistaken for the commonfabric one", async () => {
+test("a local assert is not mistaken for the commonfabric one", async () => {
   const root = await transformed(`import { cell, pattern } from "commonfabric";
 function assert(fn: () => boolean): boolean {
   return fn();
@@ -333,7 +339,7 @@ export default pattern(() => {
   assertEquals(assertCaptures(root), []);
 });
 
-Deno.test("assert leaves a spread argument in argument position", async () => {
+test("assert leaves a spread argument in argument position", async () => {
   const root = await transformed(
     `import { assert, cell, pattern } from "commonfabric";
 function allPositive(...values: number[]): boolean {
@@ -358,7 +364,7 @@ export default pattern(() => {
   );
 });
 
-Deno.test("assert records a call's receiver when its arguments say nothing", async () => {
+test("assert records a call's receiver when its arguments say nothing", async () => {
   const root = await transformed(
     `import { assert, cell, pattern } from "commonfabric";
 export default pattern(() => {
@@ -376,7 +382,7 @@ export default pattern(() => {
   ]);
 });
 
-Deno.test("assert leaves a namespace receiver alone", async () => {
+test("assert leaves a namespace receiver alone", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => Object.is(a.get(), b.get()));
   return { check };`));
@@ -386,7 +392,7 @@ Deno.test("assert leaves a namespace receiver alone", async () => {
   assertEquals(assertCaptureLabels(root), ["a.get()", "b.get()"]);
 });
 
-Deno.test("assert instruments a body whose nested method has its own return", async () => {
+test("assert instruments a body whose nested method has its own return", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => {
     const helper = { total() { return a.get() + b.get(); } };
@@ -399,7 +405,7 @@ Deno.test("assert instruments a body whose nested method has its own return", as
   assertEquals(assertCaptureLabels(root), ["helper.total()", "c.get()"]);
 });
 
-Deno.test("assert records a body that returns early", async () => {
+test("assert records a body that returns early", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => {
     if (a.get() < 0) { return false; }
@@ -421,7 +427,7 @@ Deno.test("assert records a body that returns early", async () => {
   assertEquals(assertCaptureLabels(root), ["a.get()", "b.get()"]);
 });
 
-Deno.test("assert reads the receiver of a recorded method call", async () => {
+test("assert reads the receiver of a recorded method call", async () => {
   const root = await transformed(
     `import { assert, computed, pattern } from "commonfabric";
 
@@ -476,7 +482,7 @@ export default pattern((state: State) => {
   assertEquals(liftInputSchemas(root), [readSchema, readSchema]);
 });
 
-Deno.test("assert compares a member it hands an identity call", async () => {
+test("assert compares a member it hands an identity call", async () => {
   const root = await transformed(
     `import { assert, computed, equals, pattern, Writable } from "commonfabric";
 
@@ -536,7 +542,7 @@ export default pattern(() => {
   assertEquals(holderSchemas, [holderSchema, holderSchema]);
 });
 
-Deno.test("assert compares a member read off `.get()` as a computed does", async () => {
+test("assert compares a member read off `.get()` as a computed does", async () => {
   const root = await transformed(
     `import { assert, computed, equals, pattern, Writable } from "commonfabric";
 
@@ -583,7 +589,7 @@ export default pattern(() => {
   assertEquals(holderSchemas, [holderSchema, holderSchema]);
 });
 
-Deno.test("assert compares the cells it captures as a computed does", async () => {
+test("assert compares the cells it captures as a computed does", async () => {
   const root = await transformed(
     `import { assert, computed, equals, pattern, Writable } from "commonfabric";
 
@@ -616,7 +622,7 @@ export default pattern(() => {
   assertEquals(liftInputSchemas(root), [inputSchema, inputSchema]);
 });
 
-Deno.test("assert leaves an operator it does not record alone", async () => {
+test("assert leaves an operator it does not record alone", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => (a.get(), b.get() === 2));
   return { check };`));
@@ -627,7 +633,7 @@ Deno.test("assert leaves an operator it does not record alone", async () => {
   assertEquals(recordSource(root), "(a.get(), b.get() === 2)");
 });
 
-Deno.test("assert leaves a namespace receiver alone when nothing else records", async () => {
+test("assert leaves a namespace receiver alone when nothing else records", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => Object.is(1, 1));
   return { check };`));
@@ -638,7 +644,7 @@ Deno.test("assert leaves a namespace receiver alone when nothing else records", 
   assertEquals(recordSource(root), "Object.is(1, 1)");
 });
 
-Deno.test("assert leaves an optional-call receiver alone", async () => {
+test("assert leaves an optional-call receiver alone", async () => {
   const root = await transformed(
     `import { assert, cell, pattern } from "commonfabric";
 export default pattern(() => {
@@ -661,7 +667,7 @@ export default pattern(() => {
 // emit a broken body. Some of these sources are deliberately ill-typed.
 //
 
-Deno.test("assert leaves a callback it was not given inline alone", async () => {
+test("assert leaves a callback it was not given inline alone", async () => {
   const root = await transformed(patternSource(`
   const predicate = () => a.get() <= c.get();
   const check = assert(predicate);
@@ -672,7 +678,7 @@ Deno.test("assert leaves a callback it was not given inline alone", async () => 
   assertEquals(recordSource(root), undefined);
 });
 
-Deno.test("assert leaves a callback that takes parameters alone", async () => {
+test("assert leaves a callback that takes parameters alone", async () => {
   // `assert` takes a callback of no arguments, so this does not type-check —
   // but the stage runs before that is reported and must not act on it.
   const root = await transformed(patternSource(`
@@ -682,7 +688,7 @@ Deno.test("assert leaves a callback that takes parameters alone", async () => {
   assertEquals(assertCaptures(root), []);
 });
 
-Deno.test("assert leaves a body with a bare return alone", async () => {
+test("assert leaves a body with a bare return alone", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => {
     if (a.get() < 0) { return; }
@@ -696,7 +702,7 @@ Deno.test("assert leaves a body with a bare return alone", async () => {
   assertEquals(recordSource(root), undefined);
 });
 
-Deno.test("assert leaves a body with no return alone", async () => {
+test("assert leaves a body with no return alone", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => {
     a.get();
@@ -705,4 +711,151 @@ Deno.test("assert leaves a body with no return alone", async () => {
 
   assertEquals(assertCaptures(root), []);
   assertEquals(recordSource(root), undefined);
+});
+
+describe("AssertDiagnosticsTransformer", () => {
+  describe("transform()", () => {
+    /** Runs the assertion's lowered callback with its captured inputs. */
+    async function compileAssertion(expression: string): Promise<
+      (inputs: unknown) => { ok: boolean }
+    > {
+      const root = await transformed(
+        `import { assert, cell, pattern } from "commonfabric";
+export default pattern(() => {
+  const holder = cell<{ revision: string } | null | undefined>(undefined);
+  const prefix = cell<string>("1:");
+  const check = assert(() => ${expression} ?? false);
+  return { check };
+});`,
+      );
+      const [lift] = callsNamed(root, "lift");
+      const callback = lift.arguments[0];
+      const printed = ts.createPrinter().printNode(
+        ts.EmitHint.Expression,
+        callback,
+        root,
+      );
+      const { outputText } = ts.transpileModule(`const run = (${printed});`, {
+        compilerOptions: { target: ts.ScriptTarget.ESNext },
+      });
+      return new Function("__cfHelpers", `${outputText}\nreturn run;`)({
+        assertCapture: (_parts: unknown, _source: string, value: unknown) =>
+          value,
+        assertRenderParts: () => [],
+      });
+    }
+
+    for (
+      const expression of [
+        'holder.get()?.revision.startsWith("1:")',
+        'holder.get()?.["revision"].startsWith("1:")',
+        'holder.get()?.revision.toUpperCase().startsWith("1:")',
+        'holder.get()?.revision.startsWith?.("1:")',
+      ]
+    ) {
+      it(`preserves the optional chain in \`${expression}\``, async () => {
+        const run = await compileAssertion(expression);
+        for (const value of [undefined, null, "1:current", "2:later"]) {
+          let reads = 0;
+          let revisionReads = 0;
+          const ok = run({
+            holder: {
+              get: () => {
+                reads++;
+                return value == null ? value : {
+                  get revision() {
+                    revisionReads++;
+                    return value;
+                  },
+                };
+              },
+            },
+          }).ok;
+          expect(ok).toBe(value === "1:current");
+          expect(reads).toBe(1);
+          expect(revisionReads).toBe(value == null ? 0 : 1);
+        }
+      });
+    }
+
+    it("skips argument evaluation when the receiver is absent", async () => {
+      const run = await compileAssertion(
+        "holder.get()?.revision.startsWith(prefix.get())",
+      );
+      let argumentsRead = 0;
+      const prefix = {
+        get: () => {
+          argumentsRead++;
+          return "1:";
+        },
+      };
+      expect(run({ holder: { get: () => undefined }, prefix }).ok).toBe(false);
+      expect(argumentsRead).toBe(0);
+      expect(
+        run({ holder: { get: () => ({ revision: "1:current" }) }, prefix })
+          .ok,
+      ).toBe(true);
+      expect(argumentsRead).toBe(1);
+    });
+
+    it("keeps an unguarded missing member inside a present chain throwing", async () => {
+      const run = await compileAssertion(
+        'holder.get()?.revision.startsWith("1:")',
+      );
+      expect(() => run({ holder: { get: () => ({}) } })).toThrow(TypeError);
+    });
+
+    it("keeps parentheses that end an optional chain", async () => {
+      const run = await compileAssertion(
+        '(holder.get()?.revision).startsWith("1:")',
+      );
+      expect(() => run({ holder: { get: () => undefined } })).toThrow(
+        TypeError,
+      );
+      expect(run({ holder: { get: () => ({ revision: "1:current" }) } }).ok)
+        .toBe(true);
+    });
+  });
+
+  describe("filter()", () => {
+    /** What `filter()` returns for a module holding `source`. */
+    function filterResult(source: string): boolean | undefined {
+      const fileName = "/module.ts";
+      const sourceFile = ts.createSourceFile(
+        fileName,
+        source,
+        ts.ScriptTarget.ES2020,
+        true,
+      );
+      const options: ts.CompilerOptions = { noLib: true };
+      const host = ts.createCompilerHost(options);
+      host.getSourceFile = (name) => name === fileName ? sourceFile : undefined;
+      const program = ts.createProgram([fileName], options, host);
+      let result: boolean | undefined;
+      ts.transform(sourceFile, [(tsContext) => (file) => {
+        result = new AssertDiagnosticsTransformer({}).filter(
+          new TransformationContext({ program, sourceFile: file, tsContext }),
+        );
+        return file;
+      }]);
+      return result;
+    }
+
+    const usesAssert = `import { assert } from "commonfabric";
+assert(true);
+`;
+
+    it("returns `true` for a module with helpers that mentions `assert`", () => {
+      expect(filterResult(transformCfDirective(usesAssert))).toBe(true);
+    });
+
+    it("returns `false` for a module with helpers that does not mention `assert`", () => {
+      expect(filterResult(transformCfDirective("export const value = 1;\n")))
+        .toBe(false);
+    });
+
+    it("returns `false` for a module without helpers that mentions `assert`", () => {
+      expect(filterResult(usesAssert)).toBe(false);
+    });
+  });
 });

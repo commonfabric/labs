@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { transitionLane } from "../../src/local-jobs/readiness.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("local-jobs/readiness", () => {
   it("keeps since until the state or reason changes", () => {

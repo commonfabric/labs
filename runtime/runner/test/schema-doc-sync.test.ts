@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { FabricValue, JSONSchema, JSONSchemaObj } from "@commonfabric/api";
@@ -36,6 +35,12 @@ import { resolveSchema } from "../src/schema.ts";
 import { LINK_V1_TAG, type URI } from "../src/sigil-types.ts";
 import { defer } from "@commonfabric/async/defer";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("schema-doc-sync", () => {
   // Two managers on one shared loopback server model two real sessions: what

@@ -1,6 +1,5 @@
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type FabricPlainObject,
@@ -8,6 +7,8 @@ import {
   isDeepFrozen,
   isValidFabricValue,
 } from "@commonfabric/data-model";
+import { isPlainObject } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { decodeTrustedMemoryBoundary, encodeMemoryBoundary } from "../../v2.ts";
 import {
@@ -325,5 +326,90 @@ describe("label-metadata-table", () => {
       expect(compressClientMessageLabels(indexed)).toBe(indexed);
       expect(expandClientMessageLabels(indexed)).toBe(indexed);
     }
+  });
+
+  describe("patch positions", () => {
+    const tabledLabel = { integrity: [{ type: "claim", name: "tabled" }] };
+
+    /**
+     * A request patching one document, beside a label dictionary when
+     * `labelTable` is given.
+     */
+    function patchRequest(patches: unknown[], labelTable?: unknown[]) {
+      return {
+        type: "transact",
+        commit: {
+          ...(labelTable === undefined ? {} : { labelTable }),
+          operations: [{ op: "patch", id: "of:patched", patches }],
+        },
+      };
+    }
+
+    it("resolves a number under an entries index and returns one under any other `labelMap` member or entries key unchanged", () => {
+      const version = "/cfc/labelMap/version";
+      const first = "/cfc/labelMap/entries/first";
+      const index = "/cfc/labelMap/entries/0";
+      const expanded = expandClientMessageLabels(patchRequest([
+        { op: "replace", path: version, value: { "0": { label: 0 } } },
+        { op: "replace", path: first, value: { label: 0 } },
+        { op: "replace", path: index, value: { label: 0 } },
+      ], [tabledLabel]));
+
+      expect(expanded).toEqual(patchRequest([
+        { op: "replace", path: version, value: { "0": { label: 0 } } },
+        { op: "replace", path: first, value: { label: 0 } },
+        { op: "replace", path: index, value: { label: tabledLabel } },
+      ]));
+    });
+
+    it("resolves the index-keyed members of an entries record and returns its other members unchanged", () => {
+      const entries = "/cfc/labelMap/entries";
+      const expanded = expandClientMessageLabels(patchRequest([{
+        op: "replace",
+        path: entries,
+        value: { "0": { label: 0 }, first: { label: 0 }, "-": { label: 0 } },
+      }], [tabledLabel]));
+
+      // `-` names the end of an array in a patch path, so it reaches an
+      // entry there, but as a key of a record it is not an index.
+      expect(expanded).toEqual(patchRequest([{
+        op: "replace",
+        path: entries,
+        value: {
+          "0": { label: tabledLabel },
+          first: { label: 0 },
+          "-": { label: 0 },
+        },
+      }]));
+    });
+
+    it("keeps a whole-field label that is not an object inline while tabling the labels beside it", () => {
+      const label = "/cfc/labelMap/entries/0/label";
+      const source = {
+        type: "transact",
+        commit: {
+          operations: [
+            { op: "set", id: "of:compressible", value: compressibleDocument() },
+            {
+              op: "patch",
+              id: "of:patched",
+              patches: [{ op: "replace", path: label, value: "inline" }],
+            },
+          ],
+        },
+      };
+
+      const compact = compressClientMessageLabels(source);
+
+      assert(isPlainObject(compact) && isPlainObject(compact.commit));
+      expect(compact.commit.labelTable).toEqual([
+        { integrity: [{ type: "claim", name: "repeated-claim" }] },
+      ]);
+      assert(Array.isArray(compact.commit.operations));
+      expect(compact.commit.operations[1]).toBe(source.commit.operations[1]);
+      expect(canonical(expandClientMessageLabels(compact))).toBe(
+        canonical(source),
+      );
+    });
   });
 });

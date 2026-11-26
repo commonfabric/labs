@@ -61,7 +61,10 @@ export class CFWebhook extends BaseElement {
    */
   declare _readFailed: boolean;
 
-  private _configUnsub?: () => void;
+  /** The configuration whose changes redraw the element, while connected. */
+  #followed:
+    | { config: CellHandle<WebhookConfig | null>; cancel: () => void }
+    | undefined;
 
   constructor() {
     super();
@@ -71,22 +74,39 @@ export class CFWebhook extends BaseElement {
     this._readFailed = false;
   }
 
-  override updated(changedProperties: Map<string | number | symbol, unknown>) {
-    super.updated(changedProperties);
-    if (changedProperties.has("config")) {
-      this._subscribeToConfig();
-    }
+  override connectedCallback() {
+    super.connectedCallback();
+    this.#follow();
   }
 
-  private _subscribeToConfig() {
-    this._configUnsub?.();
-    this._configUnsub = undefined;
-    const config = this.config;
-    if (config?.subscribe) {
-      const update = () => this.requestUpdate();
-      this._configUnsub = config.subscribe(update, { onRefused: update });
-      this._readConfig();
-    }
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    this.#follow();
+  }
+
+  override willUpdate(
+    changedProperties: Map<string | number | symbol, unknown>,
+  ) {
+    super.willUpdate(changedProperties);
+    // Before render, so that the first render reads the cell it follows.
+    this.#follow();
+  }
+
+  /**
+   * Subscribes to the cell `config` holds while the element is connected, and
+   * to nothing otherwise, cancelling the subscription it held before. A cell
+   * it starts to follow is read as well.
+   */
+  #follow(): void {
+    const config = this.isConnected ? this.config : undefined;
+    if (config === this.#followed?.config) return;
+    this.#followed?.cancel();
+    const update = () => this.requestUpdate();
+    this.#followed = config && {
+      config,
+      cancel: config.subscribe(update, { onRefused: update }),
+    };
+    if (config) this._readConfig();
   }
 
   /**
@@ -105,12 +125,6 @@ export class CFWebhook extends BaseElement {
       if (this.config === config) this._readFailed = true;
     });
   };
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    this._configUnsub?.();
-    this._configUnsub = undefined;
-  }
 
   private _getConfig(): WebhookConfig | null {
     try {
@@ -132,14 +146,7 @@ export class CFWebhook extends BaseElement {
     this._error = "";
 
     try {
-      if (!this.inbox) {
-        throw new Error("inbox is not a valid cell link");
-      }
       const cellLink = this.inbox.toWireString();
-
-      if (!this.config) {
-        throw new Error("config is not a valid cell link");
-      }
       const confidentialCellLink = this.config.toWireString();
 
       const response = await fetch("/api/webhooks", {

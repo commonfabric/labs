@@ -548,39 +548,6 @@ const ENTITY_ID_PAGE_SIZE = 1_000;
  */
 export const DEFAULT_MAX_ENTITY_PROJECTIONS = 128;
 
-/** A prop rebuild scheduled but not yet started. */
-interface ScheduledPropRebuild {
-  /** The cell being projected. */
-  cell: Cell<unknown>;
-
-  /**
-   * The value the rebuild will project, replaced by any change arriving
-   * before it starts.
-   */
-  latestValue: unknown;
-
-  /** Entity id of the piece. */
-  pieceId: string;
-
-  /** Inode of the piece root. */
-  pieceIno: bigint;
-
-  /** Projected name of the piece. */
-  pieceName: string;
-
-  /** Which prop. */
-  propName: "input" | "result";
-
-  /** Link resolver for the piece's space. */
-  resolveLink: ResolveLink;
-
-  /** Name of the space. */
-  spaceName: string;
-
-  /** The timer that starts the rebuild. */
-  timer: ReturnType<typeof setTimeout>;
-}
-
 /** One prop rebuild, as queued. */
 interface PropRebuildJob {
   /** The cell being projected. */
@@ -677,34 +644,12 @@ export class CellBridge {
    */
   #pendingPieceHydrations = new Map<string, Promise<void>>();
 
-  /**
-   * Rebuilds scheduled but not yet started, by the key `#propRebuildKey()`
-   * gives; a change arriving meanwhile replaces the value the rebuild will use.
-   */
-  #pendingPropRebuilds = new Map<
-    string,
-    ScheduledPropRebuild
-  >();
-
-  /** Keys of the rebuilds `#schedulePropRebuild()` has running. */
-  #activePropRebuilds = new Set<string>();
-
-  /**
-   * The one rebuild held back per key while a scheduled rebuild for that key
-   * runs, scheduled in turn when it finishes.
-   */
-  #deferredPropRebuilds = new Map<string, PropRebuildJob>();
-
   /** Whether `#debugLog()` writes to the console. */
   #debug = false;
 
   /** Counters about prop rebuilds, which `.status` reports. */
   #rebuildStats = {
-    scheduled: 0,
-    coalesced: 0,
     completed: 0,
-    errors: 0,
-    maxPending: 0,
     lastDurationMs: 0,
   };
 
@@ -1409,8 +1354,9 @@ export class CellBridge {
       return await this.resolveEntity(parentIno, name);
     }
 
-    if (this.#unhydratedEntityRoots.has(parentIno)) {
-      if (!await this.#hydrateEntityRoot(parentIno)) return false;
+    const unhydrated = this.#unhydratedEntityRoots.get(parentIno);
+    if (unhydrated && !await this.#hydrateEntityRoot(parentIno, unhydrated)) {
+      return false;
     }
 
     const pieceInfo = this.#getPieceInfo(parentIno);
@@ -2221,20 +2167,6 @@ export class CellBridge {
   }
 
   /**
-   * Returns the name `state`'s space is connected under, or the name recorded
-   * for its DID, or `undefined` for a state this bridge does not know.
-   */
-  #spaceNameForState(state: SpaceState): string | undefined {
-    for (const [name, candidate] of this.#spaces) {
-      if (candidate === state) return name;
-    }
-    for (const [name, did] of this.#knownSpaces) {
-      if (did === state.did) return name;
-    }
-    return undefined;
-  }
-
-  /**
    * Returns the CFC label view of `cell`, or `undefined` when annotations are
    * off or the view cannot be read.
    */
@@ -2328,14 +2260,8 @@ export class CellBridge {
         apiUrl: this.#apiUrl,
         debug: this.#debug,
         rebuilds: {
-          pending: this.#pendingPropRebuilds.size +
-            this.#activePropRebuilds.size +
-            this.#deferredPropRebuilds.size,
-          scheduled: this.#rebuildStats.scheduled,
-          coalesced: this.#rebuildStats.coalesced,
+          pending: this.#pendingPropRebuildQueues.size,
           completed: this.#rebuildStats.completed,
-          errors: this.#rebuildStats.errors,
-          maxPending: this.#rebuildStats.maxPending,
           lastDurationMs: this.#rebuildStats.lastDurationMs,
         },
         startedAt: this.#startedAt,
@@ -2807,10 +2733,8 @@ export class CellBridge {
    */
   #resolvePieceController(
     space: SpaceState,
-    parsed: ReturnType<typeof parseMountedCallablePath>,
+    parsed: NonNullable<ReturnType<typeof parseMountedCallablePath>>,
   ): PieceController | undefined {
-    if (!parsed) return undefined;
-
     if (parsed.rootKind === "pieces") {
       return space.pieceControllers.get(parsed.rootName);
     }
@@ -2837,89 +2761,6 @@ export class CellBridge {
     propName: "input" | "result",
   ): string {
     return `${pieceIno}:${propName}`;
-  }
-
-  /**
-   * Schedules a rebuild of one piece prop from `args.newValue` on the next
-   * tick. A rebuild already scheduled for the prop takes the new value instead;
-   * while one it started is running, this one is held back and scheduled when
-   * it finishes. The counters in `.status` record the coalescing.
-   */
-  #schedulePropRebuild(args: PropRebuildJob): void {
-    const key = this.#propRebuildKey(args.pieceIno, args.propName);
-    const pending = this.#pendingPropRebuilds.get(key);
-    if (pending) {
-      pending.latestValue = args.newValue;
-      pending.pieceName = args.pieceName;
-      this.#rebuildStats.coalesced++;
-      return;
-    }
-
-    if (this.#activePropRebuilds.has(key)) {
-      this.#deferredPropRebuilds.set(key, {
-        cell: args.cell,
-        newValue: args.newValue,
-        pieceId: args.pieceId,
-        pieceIno: args.pieceIno,
-        pieceName: args.pieceName,
-        propName: args.propName,
-        resolveLink: args.resolveLink,
-        spaceName: args.spaceName,
-      });
-      this.#rebuildStats.coalesced++;
-      this.#rebuildStats.maxPending = Math.max(
-        this.#rebuildStats.maxPending,
-        this.#pendingPropRebuilds.size +
-          this.#activePropRebuilds.size +
-          this.#deferredPropRebuilds.size,
-      );
-      return;
-    }
-
-    this.#rebuildStats.scheduled++;
-    const entry = {
-      cell: args.cell,
-      latestValue: args.newValue,
-      pieceId: args.pieceId,
-      pieceIno: args.pieceIno,
-      pieceName: args.pieceName,
-      propName: args.propName,
-      resolveLink: args.resolveLink,
-      spaceName: args.spaceName,
-      timer: setTimeout(() => {
-        this.#pendingPropRebuilds.delete(key);
-        this.#activePropRebuilds.add(key);
-        void this.#enqueuePiecePropRebuild({
-          cell: entry.cell,
-          newValue: entry.latestValue,
-          pieceId: entry.pieceId,
-          pieceIno: entry.pieceIno,
-          pieceName: entry.pieceName,
-          propName: entry.propName,
-          resolveLink: entry.resolveLink,
-          spaceName: entry.spaceName,
-        }).catch((e) => {
-          this.#rebuildStats.errors++;
-          console.error(
-            `[${entry.spaceName}] Error rebuilding ${entry.pieceName}/${entry.propName}: ${e}`,
-          );
-        }).finally(() => {
-          this.#activePropRebuilds.delete(key);
-          const deferred = this.#deferredPropRebuilds.get(key);
-          this.#deferredPropRebuilds.delete(key);
-          if (deferred) {
-            this.#schedulePropRebuild(deferred);
-          }
-        });
-      }, 0),
-    };
-    this.#pendingPropRebuilds.set(key, entry);
-    this.#rebuildStats.maxPending = Math.max(
-      this.#rebuildStats.maxPending,
-      this.#pendingPropRebuilds.size +
-        this.#activePropRebuilds.size +
-        this.#deferredPropRebuilds.size,
-    );
   }
 
   /**
@@ -4031,13 +3872,16 @@ export class CellBridge {
   }
 
   /**
-   * Hydrates the unhydrated entity root `entityIno`: loads its piece, builds
-   * its tree in place, and subscribes to it, sharing the work with concurrent
-   * callers. Resolves to whether the root is hydrated: false when it is not an
-   * entity root or was removed meanwhile, and true at once for a root already
-   * hydrated, which is marked used.
+   * Hydrates the unhydrated entity root `entityIno`, which `info` describes:
+   * loads its piece, builds its tree in place, and subscribes to it, sharing
+   * the work with concurrent callers. Resolves to whether the root is
+   * hydrated: false when it was removed meanwhile, and true at once for a root
+   * whose tree is already built, which is marked used.
    */
-  #hydrateEntityRoot(entityIno: bigint): Promise<boolean> {
+  #hydrateEntityRoot(
+    entityIno: bigint,
+    info: UnhydratedEntityRootInfo,
+  ): Promise<boolean> {
     if (this.#pieceRoots.has(entityIno)) {
       const info = this.#entityProjectionLru.get(entityIno);
       if (info) this.#touchEntityProjection(entityIno, info);
@@ -4045,8 +3889,6 @@ export class CellBridge {
     }
     const existing = this.#pendingEntityHydrations.get(entityIno);
     if (existing) return existing;
-    const info = this.#unhydratedEntityRoots.get(entityIno);
-    if (!info) return Promise.resolve(false);
     this.#touchEntityProjection(entityIno, info);
 
     const pending = (async () => {
@@ -4352,8 +4194,10 @@ export class CellBridge {
       this.#debugLog(`[${spaceName}] Removed piece: ${name}`);
     }
 
+    const added: string[] = [];
     for (const piece of toAdd) {
       const name = await this.#addPieceToSpace(state, piece, spaceName);
+      added.push(name);
       this.#debugLog(`[${spaceName}] Added piece: ${name}`);
     }
 
@@ -4364,12 +4208,7 @@ export class CellBridge {
       // Invalidate child entries under pieces/
       const invalidNames = [
         ...toRemove,
-        ...toAdd.map((p) => {
-          for (const [n, id] of state.pieceMap) {
-            if (id === p.id) return n;
-          }
-          return "";
-        }),
+        ...added,
         ".index.json",
         "pieces.json",
       ];
@@ -4397,7 +4236,7 @@ export class CellBridge {
       "object",
     );
     const annotator = this.#makeCfcAnnotator({
-      spaceName: this.#spaceNameForState(state) ?? state.did,
+      spaceName: state.did,
       spaceDid: state.did,
       rootKind: "pieces",
       value: entries,
@@ -4428,7 +4267,7 @@ export class CellBridge {
       "object",
     );
     const annotator = this.#makeCfcAnnotator({
-      spaceName: this.#spaceNameForState(state) ?? state.did,
+      spaceName: state.did,
       spaceDid: state.did,
       rootKind: "pieces",
       value: indexObj,
@@ -4620,9 +4459,7 @@ export class CellBridge {
         );
         annotator?.annotateEntry(pieceIno, name, oldIno);
       } else {
-        if (oldIno !== undefined) {
-          this.#tree.clear(oldIno);
-        }
+        // The rename replaces an old entry of another kind.
         this.#tree.rename(stageIno, name, pieceIno, name);
         const movedIno = this.#tree.lookup(pieceIno, name);
         if (movedIno !== undefined) {
@@ -4866,60 +4703,37 @@ export class CellBridge {
   /**
    * Adds a `<key>.json` file under `parentIno` for each VNode-typed property of
    * `value`, in place of the directory tree the JSON builder would otherwise
-   * produce for a UI tree, and removes the `$`-prefixed `.json` files of VNode
-   * properties absent from `value`.
+   * produce for a UI tree. `parentIno` is always a directory built fresh for
+   * this rebuild, and the reconcile that moves it onto the mounted tree drops
+   * the VNode files of an earlier render, so there is nothing here to replace
+   * or remove.
    */
   #addVNodeJsonFiles(
     parentIno: bigint,
     value: unknown,
     annotator?: CfcProjectionAnnotator,
   ): void {
-    const currentVNodeKeys = new Set<string>();
-
-    if (isObjectNotArray(value)) {
-      for (
-        const [key, val] of Object.entries(value as Record<string, unknown>)
-      ) {
-        if (isVNode(val)) {
-          const encodedKey = encodeFuseComponent(key);
-          const fileName = `${encodedKey}.json`;
-          currentVNodeKeys.add(encodedKey);
-          const existing = this.#tree.lookup(parentIno, fileName);
-          if (existing !== undefined) this.#tree.clear(existing);
-          const vnodeIno = this.#tree.addFile(
-            parentIno,
-            fileName,
-            stringifyEntryValue(this.#tree, parentIno, fileName, val),
-            "object",
-          );
-          const contentLabel = annotator?.subtreeLabel(val, [key]);
-          this.#annotateSyntheticNode(
-            annotator,
-            vnodeIno,
-            "aggregate-json",
-            [key],
-            { ino: parentIno, name: fileName },
-            contentLabel,
-          );
-        }
-      }
-    }
-
-    // Remove stale VNode `.json` files from previous renders.
-    // We identify them by looking for `<key>.json` children whose key starts
-    // with "$" (VNode keys are always system-prefixed symbols like $UI).
-    for (const [name, ino] of this.#tree.getChildren(parentIno)) {
-      if (
-        name.endsWith(".json") && name.startsWith("$") &&
-        !currentVNodeKeys.has(name.slice(0, -5))
-      ) {
-        // Check if this was a VNode file by seeing if the child was a file
-        // (not a directory — directories are never VNode projections).
-        const node = this.#tree.getNode(ino);
-        if (node && node.kind === "file") {
-          this.#tree.clear(ino);
-        }
-      }
+    if (!isObjectNotArray(value)) return;
+    for (
+      const [key, val] of Object.entries(value as Record<string, unknown>)
+    ) {
+      if (!isVNode(val)) continue;
+      const fileName = `${encodeFuseComponent(key)}.json`;
+      const vnodeIno = this.#tree.addFile(
+        parentIno,
+        fileName,
+        stringifyEntryValue(this.#tree, parentIno, fileName, val),
+        "object",
+      );
+      const contentLabel = annotator?.subtreeLabel(val, [key]);
+      this.#annotateSyntheticNode(
+        annotator,
+        vnodeIno,
+        "aggregate-json",
+        [key],
+        { ino: parentIno, name: fileName },
+        contentLabel,
+      );
     }
   }
 
@@ -5532,7 +5346,7 @@ export class CellBridge {
     const files = sourceFiles;
 
     const annotator = this.#makeCfcAnnotator({
-      spaceName: this.#spaceNameForState(state) ?? state.did,
+      spaceName: state.did,
       spaceDid: state.did,
       pieceId: piece.id,
       rootKind: "pieces",

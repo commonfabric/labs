@@ -26,7 +26,6 @@
 //   suppresses Bob's seed); a keyed retraction drops exactly the named
 //   instance.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -35,6 +34,12 @@ import {
 } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime, type ServerRunInfo } from "../src/runtime.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { entityKey, entityNameKey } from "../src/scheduler/keys.ts";

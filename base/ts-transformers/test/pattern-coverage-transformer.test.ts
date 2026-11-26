@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertMatch } from "@std/assert";
+import { expect } from "@std/expect";
 
 import ts from "typescript";
 
@@ -13,6 +14,7 @@ import {
   PatternCoverageTransformer,
 } from "../src/transformers/pattern-coverage.ts";
 import { collect, literalToValue, parseModule } from "./transformed-ast.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 interface TransformResult {
   output: string;
@@ -149,7 +151,7 @@ function expectNoSpanContaining(
   );
 }
 
-Deno.test("instrumented code runs without a collector installed", () => {
+test("instrumented code runs without a collector installed", () => {
   // The probe has to be part of the optional chain. Emitted as a plain call
   // around a chained callee it prints `(globalThis.__cfPatternCoverage?.hit)(…)`,
   // whose parens end the chain: the short-circuit yields `undefined` and calling
@@ -182,7 +184,7 @@ Deno.test("instrumented code runs without a collector installed", () => {
   }
 });
 
-Deno.test("PatternCoverageTransformer skips files when coverage is disabled", () => {
+test("PatternCoverageTransformer skips files when coverage is disabled", () => {
   const source = "const value = 1;";
   const { program, sourceFile } = createProgramForSource(
     "/pattern.tsx",
@@ -195,7 +197,7 @@ Deno.test("PatternCoverageTransformer skips files when coverage is disabled", ()
   assertEquals(transformWithDirectCall(source), "const value = 1;\n");
 });
 
-Deno.test("PatternCoverageTransformer skips declaration files", () => {
+test("PatternCoverageTransformer skips declaration files", () => {
   const source = "declare const value: string;";
   const { program, sourceFile } = createProgramForSource(
     "/types.d.ts",
@@ -214,7 +216,7 @@ Deno.test("PatternCoverageTransformer skips declaration files", () => {
   assertEquals(spans, []);
 });
 
-Deno.test("PatternCoverageTransformer instruments runtime statements", () => {
+test("PatternCoverageTransformer instruments runtime statements", () => {
   const source = `import "./dep.ts";
 export type ExportedType = string;
 interface Shape {
@@ -377,7 +379,7 @@ export {};
   );
 });
 
-Deno.test("PatternCoverageTransformer maps every registered span", () => {
+test("PatternCoverageTransformer maps every registered span", () => {
   const source = `const first = 1;
 function run() {
   const second = 2;
@@ -425,7 +427,7 @@ function run() {
   ]);
 });
 
-Deno.test("PatternCoverageTransformer leaves directive prologues first", () => {
+test("PatternCoverageTransformer leaves directive prologues first", () => {
   const source = `"use strict";
 const top = 1;
 function run() {
@@ -448,7 +450,7 @@ function run() {
   );
 });
 
-Deno.test("CommonFabricTransformerPipeline clears diagnostics", () => {
+test("CommonFabricTransformerPipeline clears diagnostics", () => {
   const pipeline = new CommonFabricTransformerPipeline();
   const diagnostics = pipeline.getDiagnostics() as TransformationDiagnostic[];
   diagnostics.push({
@@ -466,7 +468,7 @@ Deno.test("CommonFabricTransformerPipeline clears diagnostics", () => {
   assertEquals(pipeline.getDiagnostics(), []);
 });
 
-Deno.test("statements rebuilt as synthetic nodes still get coverage", () => {
+test("statements rebuilt as synthetic nodes still get coverage", () => {
   const fileName = "/pattern.tsx";
   const source = "const keep = 1;\nconst drop = 2;\n";
   const { program, sourceFile } = createProgramForSource(fileName, source);
@@ -521,7 +523,7 @@ Deno.test("statements rebuilt as synthetic nodes still get coverage", () => {
   ]);
 });
 
-Deno.test("a synthetic statement with no original keeps its source map range", () => {
+test("a synthetic statement with no original keeps its source map range", () => {
   const fileName = "/pattern.tsx";
   const source = "const keep = 1;\nconst drop = 2;\n";
   const { program, sourceFile } = createProgramForSource(fileName, source);
@@ -577,7 +579,7 @@ Deno.test("a synthetic statement with no original keeps its source map range", (
   ]);
 });
 
-Deno.test("leading non-directive string statement is instrumented", () => {
+test("leading non-directive string statement is instrumented", () => {
   const source = `function f() {
   "leading note";
   doStuff();
@@ -591,7 +593,7 @@ Deno.test("leading non-directive string statement is instrumented", () => {
   assertEquals(spans.some((span) => span.startLine === 2), true);
 });
 
-Deno.test("empty fall-through switch case is recorded", () => {
+test("empty fall-through switch case is recorded", () => {
   const source = `const x = 2;
 switch (x) {
   case 1:
@@ -610,7 +612,7 @@ switch (x) {
   assertEquals(spans.some((span) => span.startLine === caseOneLine), true);
 });
 
-Deno.test("switch default clause statements are recorded", () => {
+test("switch default clause statements are recorded", () => {
   const source = `const x = 3;
 switch (x) {
   case 1:
@@ -633,7 +635,7 @@ switch (x) {
   );
 });
 
-Deno.test("an empty switch default clause is recorded at its label", () => {
+test("an empty switch default clause is recorded at its label", () => {
   const source = `const x = 3;
 switch (x) {
   case 1:
@@ -655,7 +657,7 @@ switch (x) {
   );
 });
 
-Deno.test("single-statement control-flow bodies are wrapped and recorded", () => {
+test("single-statement control-flow bodies are wrapped and recorded", () => {
   const source = `const flag = 1;
 if (flag > 0) doThen(); else doElse();
 if (flag > 0) doIfOnly();
@@ -681,4 +683,129 @@ for (let i = 0; i < 0; i++) doFor();
     output,
     /while \(flag < 0\)\s*\{\s+globalThis\.__cfPatternCoverage\?\.hit[\s\S]+doWhile\(\);/,
   );
+});
+
+describe("pattern-coverage", () => {
+  /** The authored source line each registered span starts on, in order. */
+  function spanLines(spans: PatternCoverageSpan[]): number[] {
+    return spans.map((span) => span.startLine).sort((a, b) => a - b);
+  }
+
+  describe("`for...in` and `for...of` loops", () => {
+    it("wraps a bare loop body in a block that records it", () => {
+      const source = `const items = [1];
+for (const key in items) doIn(key);
+for (const item of items) doOf(item);
+`;
+      const { output, spans } = transformWithCoverage(source);
+
+      expect(spanLines(spans)).toEqual([1, 2, 2, 3, 3]);
+      const loops = collect(
+        parseModule(output),
+        (node): node is ts.ForInStatement | ts.ForOfStatement =>
+          ts.isForInStatement(node) || ts.isForOfStatement(node),
+      );
+      expect(loops.map((loop) => ts.SyntaxKind[loop.kind])).toEqual([
+        "ForInStatement",
+        "ForOfStatement",
+      ]);
+      for (const loop of loops) {
+        expect(ts.isBlock(loop.statement)).toBe(true);
+        expect(hitCallArgs(loop.statement)).toHaveLength(1);
+      }
+    });
+
+    it("records the statements of a block body without adding another block", () => {
+      const source = `const items = [1];
+for (const item of items) {
+  doOf(item);
+}
+`;
+      const { output, spans } = transformWithCoverage(source);
+
+      expect(spanLines(spans)).toEqual([1, 2, 3]);
+      const [loop] = collect(parseModule(output), ts.isForOfStatement);
+      const body = loop!.statement;
+      assert(ts.isBlock(body));
+      expect(body.statements.map((statement) => ts.isBlock(statement)))
+        .toEqual([false, false]);
+      expect(hitCallArgs(body)).toHaveLength(1);
+    });
+
+    it("leaves a function declaration body unwrapped and unrecorded", () => {
+      const source = `const items = [1];
+for (const item of items) function each() {}
+`;
+      const { output, spans } = transformWithCoverage(source);
+
+      expect(spanLines(spans)).toEqual([1, 2]);
+      const [loop] = collect(parseModule(output), ts.isForOfStatement);
+      expect(ts.isFunctionDeclaration(loop!.statement)).toBe(true);
+    });
+  });
+
+  it("leaves a function declaration `if` branch unwrapped and unrecorded", () => {
+    const source = `const flag = 1;
+if (flag) function then() {}
+`;
+    const { output, spans } = transformWithCoverage(source);
+
+    expect(spanLines(spans)).toEqual([1, 2]);
+    const [statement] = collect(parseModule(output), ts.isIfStatement);
+    expect(ts.isFunctionDeclaration(statement!.thenStatement)).toBe(true);
+  });
+
+  it("records the statements of a bare block", () => {
+    const source = `{
+  doIt();
+}
+`;
+    const { output, spans } = transformWithCoverage(source);
+
+    expect(spanLines(spans)).toEqual([1, 2]);
+    const blocks = collect(parseModule(output), ts.isBlock);
+    expect(blocks).toHaveLength(1);
+    expect(hitCallArgs(blocks[0]!)).toHaveLength(1);
+  });
+
+  it("records nothing for a module declaration without a body", () => {
+    const source = `module "elsewhere";
+const value = 1;
+`;
+    const { spans } = transformWithCoverage(source);
+
+    expect(spanLines(spans)).toEqual([2]);
+  });
+
+  it("records nothing for a synthetic statement with no source position", () => {
+    const fileName = "/pattern.tsx";
+    const source = "const keep = 1;\n";
+    const { program, sourceFile } = createProgramForSource(fileName, source);
+    const spans: PatternCoverageSpan[] = [];
+
+    // An earlier stage appends a statement that has neither an authored
+    // original node nor a source map range.
+    const appendSynthetic: ts.TransformerFactory<ts.SourceFile> =
+      (tsContext) => (file) =>
+        tsContext.factory.updateSourceFile(file, [
+          ...file.statements,
+          tsContext.factory.createExpressionStatement(
+            tsContext.factory.createIdentifier("added"),
+          ),
+        ]);
+    const transformer = new PatternCoverageTransformer({
+      patternCoverage: { registerSpan: (span) => spans.push(span) },
+    });
+    const result = ts.transform(sourceFile, [
+      appendSynthetic,
+      transformer.toFactory(program),
+    ]);
+    const output = printResult(result);
+
+    expect(spanLines(spans)).toEqual([1]);
+    const statements = parseModule(output).statements;
+    expect(statements).toHaveLength(3);
+    expect(hitCallArgs(statements[0]!)).toHaveLength(1);
+    expect(hitCallArgs(statements[2]!)).toHaveLength(0);
+  });
 });

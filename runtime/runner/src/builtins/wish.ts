@@ -17,10 +17,7 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import { extractHashtags } from "../hashtags.ts";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
-import {
-  isObjectNotArray,
-  isObjectOrArray,
-} from "@commonfabric/js-values/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { h } from "../builder/h.ts";
 // The sidecar instantiation observes its wave settlement (a serving-wave
@@ -43,7 +40,7 @@ import {
   type NormalizedFullLink,
   toMemorySpaceAddress,
 } from "../link-utils.ts";
-import type { RawBuiltinResult, RawNodeCause } from "../module.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import { systemPatternSource } from "../pattern-source-scheme.ts";
 import {
   homeHasDefaultProfileSlot,
@@ -75,7 +72,7 @@ import {
   ownedStoreLinks,
   recordRuntimeOwnedStore,
 } from "./runtime-owned-store.ts";
-import { scopedCell } from "./scope-policy.ts";
+import { isNodeCauseWithOutputSpot, scopedCell } from "./scope-policy.ts";
 import {
   createDocumentReadiness,
   DocumentLoadError,
@@ -275,7 +272,11 @@ const FACE_FIELD_TARGETS: ReadonlySet<string> = new Set([
   "#profilePicture",
   "#profileAvatar",
 ]);
-const FACE_FIELDS: ReadonlySet<string> = new Set(["picture", "avatar"]);
+const FACE_FIELDS: ReadonlySet<string> = new Set([
+  "pictureBlob",
+  "picture",
+  "avatar",
+]);
 
 /**
  * Parses the wish target `target`, with `extraPath` (a wish's `path`)
@@ -1393,6 +1394,18 @@ function acquireIntervalNowTimer(
   let timer = timers.get(key);
   if (!timer) {
     const cell = intervalNowCell(runtime, space, intervalMs, tx);
+    // The cell is out of date once the interval passes, whether or not a
+    // runtime is there to write the tick, so a record of what read it proves
+    // a stored output derived from it current only until the tick after the
+    // one the cell holds.
+    runtime.scheduler.noteClockDocument(
+      cell.getAsNormalizedFullLink(),
+      intervalMs,
+      () => {
+        const tick = cell.withTx().sample() as number | null | undefined;
+        return typeof tick === "number" ? tick : undefined;
+      },
+    );
     timer = {
       cell,
       intervalMs,
@@ -2097,6 +2110,29 @@ export function sidecarValueIsWinner(raw: unknown): boolean {
   return !(isObjectOrArray(raw) && "sidecarError" in raw);
 }
 
+/** A rejected wave settlement is the wave's own failure account. */
+const ignoreSettlementRejection = (): void => {};
+
+/**
+ * Warns under `sidecar-run-withdrawn` when `settlement`, the wave settlement
+ * of the committed run of the sidecar whose result cell is `sourceURI`,
+ * reports that the wave withdrew the run, since nothing re-issues a
+ * withdrawn sidecar instantiation. An accepted run and a rejected settlement
+ * log nothing. The returned promise resolves once the settlement has.
+ */
+export function warnWhenSidecarRunWithdrawn(
+  settlement: Promise<{ error?: { message: string } }>,
+  sourceURI: string,
+): Promise<void> {
+  return settlement.then(({ error }) => {
+    if (error === undefined) return;
+    wishFlowLogger.warn("sidecar-run-withdrawn", () => [
+      `sidecar run for ${sourceURI} committed but the wave withdrew it; ` +
+      `nothing re-issues this instantiation: ${error.message}`,
+    ]);
+  }, ignoreSettlementRejection);
+}
+
 // Test seam (this package has no logger-capture idiom — the OW45 register's
 // F9 note): process-global counts of sidecar launch activity, so a pin that
 // must WITNESS a duplicate launch can assert it happened instead of passing
@@ -2269,16 +2305,6 @@ function wishStoreCause(
     ? { parents: cause.parents, outputSpot: cause.outputSpot }
     : cause;
   return { wish: { [kind]: positional, ...fields } };
-}
-
-/** Whether `cause` is a node cause whose output binding reached a redirect. */
-function isNodeCauseWithOutputSpot(
-  cause: unknown,
-): cause is RawNodeCause & {
-  outputSpot: NonNullable<RawNodeCause["outputSpot"]>;
-} {
-  return isObjectNotArray(cause) && cause.parents !== undefined &&
-    cause.outputSpot !== undefined;
 }
 
 /**
@@ -2920,12 +2946,14 @@ export function wish(
           actionId: `wish/sidecar-run/${resultCell.sourceURI}`,
           kind: "bookkeeping",
         });
+        // The transaction is the continuation's own, holding none of the
+        // reads that chose the pattern.
         runtime.runner.run(
           runTx,
           pattern,
           inputForTx(runTx),
           resultCell.withTx(runTx),
-          sidecarRunOptions(surface),
+          { ...sidecarRunOptions(surface), runtimeStarted: true },
         );
         runtime.prepareTxForCommit(runTx);
         const { error } = await runTx.commit().settled;
@@ -2961,18 +2989,7 @@ export function wish(
         // the register).
         const settlement = waveSettlementOf(runTx);
         if (settlement !== undefined) {
-          void settlement.then((settled) => {
-            if (settled.error !== undefined) {
-              wishFlowLogger.warn("sidecar-run-withdrawn", () => [
-                `sidecar run for ${resultCell.sourceURI} committed but ` +
-                `the wave withdrew it; nothing re-issues this ` +
-                `instantiation: ${settled.error.message}`,
-              ]);
-            }
-          }, () => {
-            // A settlement rejection is the wave's own failure account;
-            // nothing to add here.
-          });
+          void warnWhenSidecarRunWithdrawn(settlement, resultCell.sourceURI);
         }
         return;
       } catch (error) {

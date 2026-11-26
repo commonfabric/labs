@@ -8,7 +8,6 @@
  */
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import {
@@ -27,6 +26,12 @@ import { isCfcEnforcementRejection } from "@commonfabric/runner";
 import { cfcLabelViewForResolvedCellWithStatus } from "@commonfabric/runner/cfc";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   clickMarked,

@@ -1,7 +1,8 @@
 import { assertEquals } from "@std/assert";
 import { parseMountedCallablePath } from "./callable-path.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("parseMountedCallablePath accepts piece handler paths", () => {
+test("parseMountedCallablePath accepts piece handler paths", () => {
   assertEquals(
     parseMountedCallablePath("home/pieces/notes/input/addItem.handler"),
     {
@@ -16,7 +17,7 @@ Deno.test("parseMountedCallablePath accepts piece handler paths", () => {
   );
 });
 
-Deno.test("parseMountedCallablePath accepts piece tool paths", () => {
+test("parseMountedCallablePath accepts piece tool paths", () => {
   assertEquals(
     parseMountedCallablePath("home/pieces/notes/result/search.tool"),
     {
@@ -31,7 +32,7 @@ Deno.test("parseMountedCallablePath accepts piece tool paths", () => {
   );
 });
 
-Deno.test("parseMountedCallablePath accepts root-level result callables", () => {
+test("parseMountedCallablePath accepts root-level result callables", () => {
   assertEquals(
     parseMountedCallablePath("home/pieces/notes/add%3Aitem.handler"),
     {
@@ -46,7 +47,7 @@ Deno.test("parseMountedCallablePath accepts root-level result callables", () => 
   );
 });
 
-Deno.test("parseMountedCallablePath decodes encoded space names", () => {
+test("parseMountedCallablePath decodes encoded space names", () => {
   assertEquals(
     parseMountedCallablePath(
       "did%3Akey%3AzSpace/pieces/notes/result/search.tool",
@@ -55,7 +56,7 @@ Deno.test("parseMountedCallablePath decodes encoded space names", () => {
   );
 });
 
-Deno.test("parseMountedCallablePath accepts entity handler paths", () => {
+test("parseMountedCallablePath accepts entity handler paths", () => {
   assertEquals(
     parseMountedCallablePath("home/entities/of:abc123/result/addItem.handler"),
     {
@@ -70,7 +71,7 @@ Deno.test("parseMountedCallablePath accepts entity handler paths", () => {
   );
 });
 
-Deno.test("parseMountedCallablePath accepts entity tool paths", () => {
+test("parseMountedCallablePath accepts entity tool paths", () => {
   assertEquals(
     parseMountedCallablePath("home/entities/abc123/input/search.tool"),
     {
@@ -85,7 +86,7 @@ Deno.test("parseMountedCallablePath accepts entity tool paths", () => {
   );
 });
 
-Deno.test("parseMountedCallablePath rejects unsupported and nested paths", () => {
+test("parseMountedCallablePath rejects unsupported and nested paths", () => {
   assertEquals(
     parseMountedCallablePath("home/pieces/notes/result.json"),
     null,

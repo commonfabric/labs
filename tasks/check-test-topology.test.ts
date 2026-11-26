@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import {
   candidateSurfaces,
   check,
@@ -16,6 +15,7 @@ import {
   workflowRecords,
 } from "./check-test-topology.ts";
 import { AliasResolver } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { Suite } from "./test-topology/suite.ts";
 import { loadTopology } from "./test-topology.ts";
 import { coverageGateSuite } from "./test-topology/coverage-gates.ts";
@@ -996,6 +996,24 @@ describe("reading a run's gathered artifacts", () => {
       expect(unclaimed.at(-1)?.message).toContain(`"bakes ${count - 1}"`);
     } finally {
       await Deno.remove(dir, { recursive: true });
+    }
+  });
+
+  it("throws where a named path is there and cannot be read", async () => {
+    // A path through a file is not missing, and reading it as a path that
+    // holds no records would judge the run on less than it gathered.
+
+    const root = await Deno.makeTempDir({ prefix: "artifacts-" });
+    try {
+      await Deno.writeTextFile(`${root}/records.ndjson`, "");
+      await expect(
+        readRecords([`${root}/records.ndjson/a`], new AliasResolver([])),
+      ).rejects.toThrow(Deno.errors.NotADirectory);
+      expect(
+        await readRecords([`${root}/absent`], new AliasResolver([])),
+      ).toEqual([]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
     }
   });
 

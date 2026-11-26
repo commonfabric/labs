@@ -1,6 +1,6 @@
 import { assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 import type {
   IStorageNotification,
   StorageNotification,

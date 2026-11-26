@@ -12,14 +12,8 @@ import {
 
 import { entityUriSchemePrefix } from "../entity-kind.ts";
 import type { MemorySpace } from "../runtime.ts";
-import type {
-  IExtendedStorageTransaction,
-  IMemorySpaceAddress,
-} from "./interface.ts";
-import {
-  getDirectTransactionReactivityLog,
-  getTransactionWriteDetails,
-} from "./transaction-inspection.ts";
+import type { IExtendedStorageTransaction } from "./interface.ts";
+import { getTransactionWriteDetails } from "./transaction-inspection.ts";
 
 /**
  * Rendering options for a written value in a summary line: a glimpse of the
@@ -194,25 +188,13 @@ function formatWrite(write: WriteDetail): string {
 export function debugTransactionWrites(
   tx: IExtendedStorageTransaction,
 ): string {
-  const status = tx.status();
-
   const parts: string[] = [];
   parts.push("=== Transaction Debug ===");
 
-  // List all write operations from activity
-  const writes: IMemorySpaceAddress[] = [];
-  const directLog = getDirectTransactionReactivityLog(tx);
-  if (directLog) {
-    for (const write of directLog.writes) writes.push(write);
-  } else {
-    for (const activity of status.journal.activity()) {
-      if ("write" in activity && activity.write) {
-        writes.push(activity.write);
-      }
-    }
-  }
+  // The reactivity log lists each path the transaction changed.
+  const writes = tx.getReactivityLog().writes;
 
-  parts.push(`Total writes in activity: ${writes.length}`);
+  parts.push(`Total writes in reactivity log: ${writes.length}`);
 
   for (const write of writes) {
     const pathStr = write.path.join(".");
@@ -242,26 +224,11 @@ function summarizeActivity(tx: IExtendedStorageTransaction): {
   reads: number;
   writes: number;
 } {
-  const directLog = getDirectTransactionReactivityLog(tx);
-  if (directLog) {
-    return {
-      reads: directLog.reads.length + directLog.shallowReads.length,
-      writes: directLog.writes.length,
-    };
-  }
-
-  let reads = 0;
-  let writes = 0;
-
-  for (const activity of tx.journal.activity()) {
-    if ("read" in activity) {
-      reads++;
-    } else if ("write" in activity) {
-      writes++;
-    }
-  }
-
-  return { reads, writes };
+  const log = tx.getReactivityLog();
+  return {
+    reads: log.reads.length + log.shallowReads.length,
+    writes: log.writes.length,
+  };
 }
 
 /**

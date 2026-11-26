@@ -1,9 +1,9 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   FabricBytes,
   FabricHash,
 } from "@commonfabric/data-model/fabric-primitives";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { wildcardPolicyMatchesValue } from "../src/cfc/prepare.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import type { JSONSchema } from "../src/builder/types.ts";

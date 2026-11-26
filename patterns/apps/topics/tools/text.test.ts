@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { center, clip, linkable, span, take, wrap } from "./text.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** `rows` as text. */
 function text(rows: readonly { text: string }[][]): string[] {
@@ -64,6 +64,18 @@ describe("text", () => {
       );
 
       expect(text(rows)).toEqual(["aaaa", "bbccdd.", "ee"]);
+    });
+
+    it("moves a word that would overrun the first row to the next, however short the first row's text", () => {
+      // The first row's "a" is no wider than the hang, so it is not held to
+      // the rule for a row holding only its indent.
+      expect(text(wrap([span("a bbbbb")], 6, [span(" ")]))).toEqual([
+        "a",
+        " bbbbb",
+      ]);
+      expect(text(wrap([span("a bbbb")], 6, [span(" ")]))).toEqual([
+        "a bbbb",
+      ]);
     });
 
     it("keeps the whitespace the first row starts with", () => {

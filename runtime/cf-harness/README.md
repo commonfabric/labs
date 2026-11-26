@@ -46,6 +46,21 @@ piece identity after checking that the run holds an unrestricted whole piece.
 Source-reader references need a retained Page first: read the source, write the
 relevant material with `page.write`, then compose the Page receipt's `ref`.
 
+The same bridge runs the other way. Any string in a command's answer that spells
+a piece's stored address (`pattern:<space>/<piece-id>`, or the
+`pattern:<space>/of:<piece-id>` form Loom records components in) reaches the
+model as the handle the run holds for that piece, once the bridge has checked it
+is a whole Pattern Instance in the session's own space. So an agent that
+inspects a Loom can describe and call the pieces in it. An address it cannot
+hold is dropped, and a `<key>_unheld` member, or `{unheld}` in a list, says why:
+`foreign-space`, `limit` (past 32 distinct pieces in one answer), or
+`unavailable` for everything else. An absent piece, a cell that is no Pattern
+Instance and a failed read all answer `unavailable`, so a raw address cannot
+probe what a space holds. This is half of the rule that an address never reaches
+a model; the other half is the host's: it must not spell a piece's address to an
+agent run any other way, such as a pane url, which the bridge cannot recognize.
+Loom keeps its render blocks out of what an agent run reads for that reason.
+
 That is the useful shape of it: the declaration is the boundary, and it is a
 narrow one by construction. A field typed as one of three enum values can carry
 no more than those three values, whatever the data behind it turned out to be.
@@ -327,8 +342,10 @@ What works today:
 - GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 gateway cost estimates with complete
   cache usage detail; estimates use the public OpenAI token schedule and are
   kept distinct from provider-reported cost
-- stable prompt-cache affinity across an interactive session, plus opt-in
-  reasoning effort and GPT-5.6/GPT-6.1 Sol gateway cache-mode controls
+- stable prompt-cache affinity across an interactive session, and across the
+  jobs of an agent-runner profile that names a `cacheAffinityKey` (sent as the
+  provider prompt-cache key in place of each run's id), plus opt-in reasoning
+  effort and GPT-5.6/GPT-6.1 Sol gateway cache-mode controls
 - transcript-based resumability
 - package-local operator CLI
 - an Agent Skills registry over `--skills-root`, defaulting to the checkout's
@@ -712,11 +729,15 @@ The API gateway's default cache mode remains the provider's implicit mode.
 Explicit mode pins a breakpoint to the first user-message prefix, which is
 stable while the harness appends assistant and tool messages. Use identical
 prompts and tool surfaces when comparing modes, since exact prefix identity is
-required for a cache hit. The ChatGPT/Codex subscription backend rejects the API
-`prompt_cache_options` field, so `--prompt-cache-mode` is not supported with
-`--model-provider openai-codex`; that provider continues to use implicit caching
-with stable affinity and reports the resulting cache usage. OpenAI documents the
-current cache fields and semantics in its
+required for a cache hit. In implicit mode a later request reuses a prompt only
+through the end of a whole message: the Responses providers send the first
+system message as `instructions` and each later one as its own developer
+message, and a batch run's result schema is the last of them, so runs that
+differ only in schema share the prompt before it. The ChatGPT/Codex subscription
+backend rejects the API `prompt_cache_options` field, so `--prompt-cache-mode`
+is not supported with `--model-provider openai-codex`; that provider continues
+to use implicit caching with stable affinity and reports the resulting cache
+usage. OpenAI documents the current cache fields and semantics in its
 [prompt caching guide](https://developers.openai.com/api/docs/guides/prompt-caching).
 
 ChatGPT/Codex subscription mode is a separate, explicit provider. It does not
@@ -832,10 +853,13 @@ A follow-up accepts `--image` and `--input-cell` with the same formats and
 limits as a first run. Images are snapshotted under the new run's artifact
 directory and attached to its new prompt. New input cells mint handles into the
 carried table, so earlier tokens still resolve. Attachment names are retained
-across continuations; a new input cell whose name is already held is refused
-before any model request. `assignedPieces` also carries forward. When no new
-input cells are supplied, their confirmed slugs are announced as attachments, as
-in later chat turns.
+across continuations. An input cell that gives a held name to the cell the name
+already stands for adds nothing, so a host may attach on a follow-up what it
+attached before. One that gives a held name to any other cell is refused before
+any model request, and so is a piece address spelled by slug under a held name,
+since the check compares the references as written. `assignedPieces` also
+carries forward. When no new input cells are supplied, their confirmed slugs are
+announced as attachments, as in later chat turns.
 
 The gateway and subscription routes have different billing, workspace policy,
 retention, and model availability. The model catalog is read live from the
@@ -1601,8 +1625,9 @@ parse, targets an unadmitted space, names a piece the space does not hold, or
 arrives on a run without a fabric session fails the run before the model is
 involved. The cells are recorded in run state (`inputCells`), replayed rather
 than re-minted on resume, and reported in the operator summary as `inputCells:`.
-A continuation retains those names and tokens and appends its new attachments;
-reusing a held attachment name is refused.
+A continuation retains those names and tokens and appends its new attachments. A
+held attachment name stays available to the cell it names and is refused for any
+other.
 
 #### Inspecting a handle's shape
 
@@ -2009,9 +2034,8 @@ unify them.
 
 ### Pattern-index client
 
-The shared signed client, successor resolution, search-body composition, and
-feedback vocabulary live in
-[`@commonfabric/pattern-index`](../pattern-index/README.md). Harness
+The shared signed client, search-body composition, and feedback vocabulary live
+in [`@commonfabric/pattern-index`](../pattern-index/README.md). Harness
 configuration and identity loading live in `src/pattern-index/factory.ts`;
 composition, publication gates, the session ledger, probes, retrieval scoring,
 and tools remain in this package.
@@ -2054,27 +2078,26 @@ establish either an entry's intended audience or who evaluated it.
 
 ### Pattern generations in search
 
-The shared index client resolves discovery for `search_patterns`, private
-research, and the console's Index search. It reads the discoverable catalog and
-follows each entry's `priorPatternId` to find replacements, including a
-successor outside the original query's result limit. Only same-owner links
-participate. An unambiguous chain contributes its final generation once, at the
-earliest matching position. A penalized final generation removes that chain from
-the answer; a branch or cycle fails the affected search instead of choosing a
-generation arbitrarily.
+The pattern index resolves discovery itself, for `search_patterns`, private
+research, and the console's Index search alike: the shared client returns its
+`searchPatterns` answer as given. Each matched generation whose same-owner
+successor chain is unambiguous is replaced by the chain's final discoverable
+generation, once, at the earliest position any generation of the chain matched,
+and the replacement names the matched generation in `supersedes`. A chain that
+branches or cycles is withheld from the answer rather than failing the search,
+and a replacement below the search's quality floor is withheld without bringing
+back the generation it replaced. Resolution runs over the whole ranked list
+before the result limit, so a successor outside the limit still takes its
+predecessor's place. The service's `docs/api.md` states the rule.
 
-Replacement metadata, schemas, quality, and signals describe the successor.
-Where the index supports generation evidence, its combined signal summary
-includes an attributed `inherited` portion: predecessor ID, publication cutoff,
-event counts, and score. The harness preserves that attribution; a proven tier
-can come entirely from predecessor evidence before the successor has run. Older
-deployments supply only that generation's own event counts and score. Query-term
-counts are omitted on a replacement because the index measured them against the
-predecessor. The catalog is refreshed for every nonempty search; create-only
-metadata is cached by identity within the client, and failed reads are not
-cached. This requires one metadata read per catalog entry on the first search
-and for each newly discovered identity thereafter. No source is requested. An
-unavailable catalog or metadata read fails discovery explicitly.
+Replacement metadata, quality, and signals describe the successor, and a row
+carries a display `name` when the index holds or can derive one. Where the index
+supports generation evidence, its combined signal summary includes an attributed
+`inherited` portion: predecessor ID, publication cutoff, event counts, and
+score. The harness preserves that attribution; a proven tier can come entirely
+from predecessor evidence before the successor has run. Query-term counts on a
+replacement are those of the generation that matched. A search is one signed
+request; no catalog or metadata read accompanies it.
 
 `getPattern`, attached pattern references, and `cf:pattern:` imports continue to
 resolve the exact requested identity. Search resolution changes recommendations,
@@ -3020,8 +3043,14 @@ service starts. Without that binding the service has no Fabric session.
 The interactive service owns the Fabric runtimes created for its chat sessions.
 Completed turns keep their runtimes until the session closes. Closing an active
 session aborts its turn and releases its runtimes after the turn unwinds;
-`waitForIdle()` includes that cleanup. Persisted pieces can reopen in a later
-session. Library callers supplying an existing engine retain ownership of it.
+`waitForIdle()` includes that cleanup. `releaseFabricRuntimes()` waits for idle
+and then releases every session's runtimes while leaving the sessions open, so a
+host shutting down frees them without recording the sessions as closed: the
+console does, on SIGINT or SIGTERM, and the stdio host does at the end of its
+input, for a service it created. A runtime that fails to release does not stop
+the others, and the failures are thrown once every release has settled.
+Persisted pieces can reopen in a later session. Library callers supplying an
+existing engine retain ownership of it.
 
 These entrypoints share the batch CLI's CFC session options:
 `--fabric-cfc-enforcement-mode`, `--fabric-cfc-flow-labels`,
@@ -3432,6 +3461,18 @@ that reference into `run_pattern` to check the inputs the piece actually uses.
 `revise_piece` applies a compatible revision in place; a successful receipt
 establishes the source update, not the behavior the user asked for.
 
+A binary media file in a piece's source, an image, a font or a sound, is stored
+as a base64 `data:` URL, and neither tool passes one through the model. The read
+leaves each out of `files` and lists it under `omittedFiles` by name, media type
+and size in bytes, with the reason. A revision sends only its `sourceText`, and
+`revise_piece` carries every data file, binary or text, over from the current
+source unchanged, at its own path; code modules other than the entry are not
+carried. It writes `sourceText` as `main.tsx` in the directory of the entry it
+replaces, so a path the source reads relative to itself names the file it named
+before. The read refuses a source whose binary file does not hold a `data:` URL
+of its media type, as `cf piece getsrc` does, and both tools refuse a piece
+whose authored source the space does not hold.
+
 For a classifier or filter change, the child is instructed to evaluate the old
 and new predicates over the same bounded sample before applying the revision.
 The check retains the existing readers, session scope, and filters. Its result
@@ -3704,7 +3745,7 @@ declared it was doing), one per clause family:
 | AUD-9   | the artifacts that would explain why a result was exposed or denied are present; what each holds is not read here. An invocation context is required of a side effect that reached the substrate minting one, read as AUD-2 reads it; a run that recorded no context at all warns, its artifacts being unable to tell a host-side effect from lost evidence                                                                                                                                                        | AH-CFC-16                                  |
 | AUD-13  | the run's recorded fabric-session dial tuple is a point the enforcement matrix admits: `enforce-strict` without persisted flow labels fails, and a dial that is sound anywhere but credits nothing at this flow setting warns                                                                                                                                                                                                                                                                                      | matrix §2, §3                              |
 | AUD-14  | under a claimed enforcement posture, every sink releasing with no confidentiality ceiling is named with its recorded reason; a record publishing no deviation while a sink is ungated fails                                                                                                                                                                                                                                                                                                                        | AH-CFC-14, AH-CFC-15                       |
-| AUD-15  | a run whose enforcement **mode** came from a default and landed weaker than the mode its session claims — a silent fallback from an enforcing mode                                                                                                                                                                                                                                                                                                                                                                 | AH-CFC-15                                  |
+| AUD-15  | a run whose enforcement **mode** came from a default and landed weaker than the mode its session claims — a silent fallback from an enforcing mode. A snapshot that does not record the mode's source passes only a mode no weaker than the claim, and is `inconclusive` otherwise                                                                                                                                                                                                                                 | AH-CFC-15                                  |
 | AUD-15a | a run whose **flow-label dial** came from a default and landed weaker than the named posture bundle it claims asserts. Ours: no clause names the dial                                                                                                                                                                                                                                                                                                                                                              |                                            |
 | AUD-20  | counts each model-boundary omission by its recorded rule and rejects duplicated or transcript-mismatched results, duplicated rules, and rules with no artifact location. Ours: AH-CFC-16 motivates retained evidence but does not require this accounting artifact                                                                                                                                                                                                                                                 |                                            |
 | AUD-21  | **known defect (CT-2175).** a side effect that produced a result and was admitted by a decision that could not have consulted a label. The predicate is the `release` record, which only a boundary that measured a flow against a sink writes; every `cfc_*` reason code comes from the authority switch instead. A call that produced no result reached no boundary and is not counted, and a run where none did is `not-applicable` rather than `pass`. Ours: no clause states it                               |                                            |

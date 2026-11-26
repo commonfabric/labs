@@ -1,12 +1,11 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import {
   FabricBytes,
   FabricEpochNsec,
-  FabricRegExp,
 } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 import { validateAndCheckReactives } from "../src/runner.ts";
 import { isReactiveMarker } from "../src/builder/types.ts";
 import { normalizeSandboxResult } from "../src/sandbox/result-normalization.ts";
@@ -16,7 +15,6 @@ describe("normalizeSandboxResult", () => {
     const input = {
       bytes: new Uint8Array([1, 2, 3]),
       date: new Date(1_234),
-      regexp: /fabric/gi,
       error: new TypeError("fabric"),
     };
 
@@ -29,9 +27,6 @@ describe("normalizeSandboxResult", () => {
     expect(Array.from((value.bytes as FabricBytes).slice())).toEqual([1, 2, 3]);
     expect(value.date).toBeInstanceOf(FabricEpochNsec);
     expect((value.date as FabricEpochNsec).value).toBe(1_234_000_000n);
-    expect(value.regexp).toBeInstanceOf(FabricRegExp);
-    expect((value.regexp as FabricRegExp).source).toBe("fabric");
-    expect((value.regexp as FabricRegExp).flags).toBe("gi");
     expect(value.error).toBeInstanceOf(FabricError);
     expect((value.error as FabricError).type).toBe("TypeError");
   });
@@ -123,12 +118,6 @@ describe("normalizeSandboxResult", () => {
     expect(() => normalizeSandboxResult({ nested: date })).toThrow(
       /Action returned a Date at path "nested"[\s\S]*extra enumerable properties/,
     );
-
-    const regexp = /fabric/ as RegExp & { extra?: boolean };
-    regexp.extra = true;
-    expect(() => normalizeSandboxResult({ nested: regexp })).toThrow(
-      /Action returned a RegExp at path "nested"[\s\S]*extra enumerable properties/,
-    );
   });
 
   it("does not trust spoofed intrinsic brands", () => {
@@ -139,15 +128,6 @@ describe("normalizeSandboxResult", () => {
     }
     expect(() => normalizeSandboxResult(new FakeDate())).toThrow(
       /Action returned a FakeDate/,
-    );
-
-    class FakeRegExp {
-      get [Symbol.toStringTag](): string {
-        return "RegExp";
-      }
-    }
-    expect(() => normalizeSandboxResult(new FakeRegExp())).toThrow(
-      /Action returned a FakeRegExp/,
     );
   });
 
@@ -199,7 +179,6 @@ describe("validateAndCheckReactives", () => {
       ).toBe(false);
       expect(validateAndCheckReactives(new Uint8Array([4, 5, 6]))).toBe(false);
       expect(validateAndCheckReactives(new Date(0))).toBe(false);
-      expect(validateAndCheckReactives(/fabric/gi)).toBe(false);
       expect(validateAndCheckReactives(new Error("fabric"))).toBe(false);
     });
 
@@ -238,6 +217,12 @@ describe("validateAndCheckReactives", () => {
     it("rejects Set", () => {
       expect(() => validateAndCheckReactives(new Set())).toThrow(
         /Action returned a Set[\s\S]*Consider using an array/,
+      );
+    });
+
+    it("rejects RegExp", () => {
+      expect(() => validateAndCheckReactives(/fabric/gi)).toThrow(
+        /Action returned a RegExp/,
       );
     });
 

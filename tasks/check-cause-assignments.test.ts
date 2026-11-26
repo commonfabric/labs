@@ -1,20 +1,35 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { existsSync } from "@std/fs";
 import { fromFileUrl, join, toFileUrl } from "@std/path";
 import {
   readDenoConfig,
   runDenoCommandWithTemporaryLock,
 } from "@commonfabric/test-support/isolated-deno";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import {
+  acceptedInPart,
   acceptedMoveProblems,
   compareDumps,
   describeCompileErrors,
   describeFailures,
   dumperConfig,
   dumperEnvironment,
+  dumpTree,
   failureReports,
+  type GateCheckout,
+  inPart,
+  main,
+  parseArguments,
+  unevaluableIn,
   workspacePackages,
 } from "./check-cause-assignments.ts";
+import type { DumpOutput } from "./cause-assignments-dump.ts";
+import { UNEVALUABLE_PATTERNS } from "./pattern-compat-unevaluable.ts";
 import {
   assignmentDigest,
   type PatternAssignment,
@@ -111,9 +126,6 @@ const STAND_IN_COMPILER: Readonly<Record<string, string>> = {
   `,
   "runtime/runner/src/harness/read-by-no-build.ts": "// a comment\n",
 };
-
-/** The stand-in compiler's evaluation, changed to give no entry module. */
-const EVALUATES_TO_NOTHING = "export const evaluate = () => ({});\n";
 
 /** A change to a file under the gate's watched paths that no build reads. */
 const WATCHED_EDIT: Readonly<Record<string, string>> = {
@@ -583,6 +595,87 @@ describe("check-cause-assignments", () => {
     });
   });
 
+  describe("parseArguments()", () => {
+    it("names no base revision and compares every pattern when given nothing", () => {
+      expect(parseArguments([])).toEqual({
+        baseRef: undefined,
+        part: { index: 0, count: 1 },
+      });
+    });
+
+    it("reads a base revision and a part counted from one", () => {
+      expect(parseArguments(["HEAD~2", "--part", "2/3"])).toEqual({
+        baseRef: "HEAD~2",
+        part: { index: 1, count: 3 },
+      });
+    });
+
+    it("throws on a part outside its count, malformed, or missing", () => {
+      for (
+        const part of [
+          "0/3",
+          "4/3",
+          "two/3",
+          "1/",
+          "1/9007199254740993",
+          undefined,
+        ]
+      ) {
+        expect(() =>
+          parseArguments(part === undefined ? ["--part"] : ["--part", part])
+        ).toThrow("--part takes K/N");
+      }
+    });
+
+    it("throws on a second base revision", () => {
+      expect(() => parseArguments(["HEAD", "HEAD~1"])).toThrow(
+        "a second base revision, HEAD~1",
+      );
+    });
+
+    it("throws on an option it does not know", () => {
+      expect(() => parseArguments(["--parts", "1/2"])).toThrow(
+        "unknown argument --parts",
+      );
+    });
+  });
+
+  describe("inPart()", () => {
+    it("deals every item into exactly one of the parts", () => {
+      const items = ["a", "b", "c", "d", "e", "f", "g"];
+      const parts = [0, 1, 2].map((index) =>
+        inPart(items, { index, count: 3 })
+      );
+      expect(parts).toEqual([["a", "d", "g"], ["b", "e"], ["c", "f"]]);
+      expect(parts.flat().toSorted()).toEqual(items);
+    });
+  });
+
+  describe("acceptedInPart()", () => {
+    const entry = (pattern: string): AcceptedMove => ({
+      pattern,
+      base: "0123456789abcdef",
+      head: "fedcba9876543210",
+      reason: "a reason",
+    });
+    const files = ["patterns/a.tsx", "patterns/b.tsx"];
+    const accepted = [entry("a.tsx"), entry("b.tsx"), entry("gone.tsx")];
+
+    it("gives each part the entries naming its own patterns", () => {
+      expect(
+        acceptedInPart(accepted, files, { index: 1, count: 2 })
+          .map(({ pattern }) => pattern),
+      ).toEqual(["b.tsx"]);
+    });
+
+    it("gives the first part the entries naming no pattern the tree holds", () => {
+      expect(
+        acceptedInPart(accepted, files, { index: 0, count: 2 })
+          .map(({ pattern }) => pattern),
+      ).toEqual(["a.tsx", "gone.tsx"]);
+    });
+  });
+
   describe("acceptedMoveProblems()", () => {
     const entry = (overrides: Partial<AcceptedMove> = {}): AcceptedMove => ({
       pattern: "room.tsx",
@@ -799,6 +892,428 @@ describe("check-cause-assignments", () => {
         const withAdded = await run(await dumperConfig(base, head));
         expect(new TextDecoder().decode(withAdded.stdout)).toBe("3 3\n");
       }));
+
+    it("throws where the checkout's own configuration is not an object", () =>
+      withCheckouts(async ({ base, head }) => {
+        await Deno.writeTextFile(join(base, "deno.jsonc"), "[]");
+        await expect(dumperConfig(base, head)).rejects.toThrow(
+          `${join(base, "deno.jsonc")} is not an object`,
+        );
+      }));
+  });
+
+  describe("workspacePackages()", () => {
+    let root: string;
+
+    beforeEach(async () => {
+      root = await Deno.makeTempDir({ prefix: "workspace-packages-" });
+    });
+    afterEach(async () => {
+      await Deno.remove(root, { recursive: true });
+    });
+
+    it("returns only the string entries of a manifest, and nothing for a member with no manifest", async () => {
+      await write(root, {
+        "deno.jsonc": JSON.stringify({
+          workspace: [3, "./base/a", "./base/bare"],
+        }),
+        "base/a/deno.json": JSON.stringify({
+          name: "@t/a",
+          exports: { ".": "./m.ts", "./x": 4 },
+          imports: { "@/": "./src/", "odd": 5 },
+        }),
+        "base/bare/README.md": "no manifest\n",
+      });
+      const url = (path: string) => toFileUrl(join(root, path)).href;
+
+      expect(await workspacePackages(root)).toEqual(
+        new Map([["@t/a", {
+          dir: url("base/a/"),
+          exports: new Map([["@t/a", url("base/a/m.ts")]]),
+          imports: { "@/": url("base/a/src/") },
+        }]]),
+      );
+    });
+
+    it("throws for a member manifest that does not parse", async () => {
+      await write(root, {
+        "deno.jsonc": JSON.stringify({ workspace: ["./base/a"] }),
+        "base/a/deno.jsonc": "{ not json",
+      });
+
+      await expect(workspacePackages(root)).rejects.toThrow(SyntaxError);
+    });
+  });
+
+  describe("unevaluableIn()", () => {
+    it("returns the list this checkout keeps", async () => {
+      expect(await unevaluableIn(ROOT)).toBe(UNEVALUABLE_PATTERNS);
+    });
+
+    it("returns an empty set for a checkout that keeps no list", async () => {
+      const root = await Deno.makeTempDir({ prefix: "unevaluable-" });
+      try {
+        expect(await unevaluableIn(root)).toEqual(new Set());
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("throws where the checkout cannot be read", async () => {
+      const file = await Deno.makeTempFile({ prefix: "unevaluable-" });
+      try {
+        await expect(unevaluableIn(file)).rejects.toThrow(
+          Deno.errors.NotADirectory,
+        );
+      } finally {
+        await Deno.remove(file);
+      }
+    });
+  });
+
+  describe("dumpTree()", () => {
+    it("throws with the dumper's own error where the dumper fails", async () => {
+      // The checkout holds no compiler for the dumper to load.
+      const root = await Deno.makeTempDir({ prefix: "dump-tree-" });
+      try {
+        await expect(
+          dumpTree(
+            root,
+            join(ROOT, "deno.jsonc"),
+            ["patterns/room.tsx"],
+            1,
+            root,
+            "base",
+          ),
+        ).rejects.toThrow(
+          /^dumping the base build failed:\n[^]*runtime\/cli\/lib\/dev\.ts/,
+        );
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+  });
+
+  describe("main()", () => {
+    const MERGE_BASE = "0123456789abcdef0123456789abcdef01234567";
+
+    let head: string;
+    let asked: string[][];
+    let baseTree: string | undefined;
+    let dumped: Record<string, readonly string[]>;
+
+    beforeEach(async () => {
+      head = await Deno.makeTempDir({ prefix: "cause-assignments-main-" });
+      await write(head, {
+        "deno.jsonc": "{}",
+        "patterns/room.tsx": "// a pattern\n",
+        "patterns/added.tsx": "// a pattern the base lacks\n",
+      });
+      for (const tree of CONNECTOR_PATTERN_SOURCES) {
+        await Deno.mkdir(join(head, tree.directory), { recursive: true });
+      }
+      asked = [];
+      baseTree = undefined;
+      dumped = {};
+    });
+    afterEach(async () => {
+      await Deno.remove(head, { recursive: true });
+    });
+
+    /**
+     * A checkout at `head` whose git finds `changed` changed since the merge
+     * base and checks out a base tree holding `baseFiles`, failing to remove it
+     * again where `removal` says so, and whose dump of each side is the one
+     * `dumps` gives. Each call's arguments go to `asked`.
+     */
+    const checkout = (
+      {
+        changed = "runtime/runner/src/harness/x.ts\n",
+        baseFiles,
+        dumps,
+        removal = "succeeds",
+      }: {
+        changed?: string;
+        baseFiles?: Readonly<Record<string, string>>;
+        dumps?: { base: DumpOutput; head: DumpOutput };
+        removal?: "succeeds" | "fails";
+      } = {},
+    ): GateCheckout => ({
+      git: async (...args) => {
+        asked.push(args);
+        switch (args[0]) {
+          case "merge-base":
+            if (args[1] !== "main") throw new Error("no such ref");
+            return `${MERGE_BASE}\n`;
+          case "diff":
+            return changed;
+          case "rev-parse":
+            return `${head}\n`;
+          case "for-each-ref":
+            return "refs/remotes/upstream/main\n";
+          case "worktree":
+            if (args[1] === "add") {
+              baseTree = args[3];
+              await write(baseTree, {
+                "deno.jsonc": "{}",
+                ...(baseFiles ?? { "patterns/room.tsx": "// a pattern\n" }),
+              });
+            } else if (removal === "fails") {
+              throw new Error("the worktree is locked");
+            } else {
+              await Deno.remove(args[3], { recursive: true });
+            }
+            return "";
+        }
+        throw new Error(`unexpected git ${args.join(" ")}`);
+      },
+      dumpTree: (_root, _config, files, _shards, _outDir, label) => {
+        dumped[label] = files;
+        const side = dumps ?? { base: dump(NUMBERED), head: dump(NUMBERED) };
+        return Promise.resolve(label === "base" ? side.base : side.head);
+      },
+    });
+
+    /** The directory the gate checked the base out under. */
+    function baseScratch(): string {
+      if (baseTree === undefined) throw new Error("no base was checked out");
+      return join(baseTree, "..");
+    }
+
+    const forgiving: AcceptedMove = {
+      pattern: "room.tsx",
+      base: assignmentDigest(NUMBERED),
+      head: assignmentDigest(RENUMBERED),
+      reason: "test",
+    };
+
+    it("returns 1 naming each problem with the accepted moves, before asking git anything", async () => {
+      expect(
+        await main(["main"], checkout(), [{ ...forgiving, reason: " " }]),
+      ).toEqual({
+        err: "tasks/cause-assignments-accepted-moves.ts:\n" +
+          `  room.tsx (${forgiving.base} -> ${forgiving.head}) gives no reason`,
+        code: 1,
+      });
+      expect(asked).toEqual([]);
+    });
+
+    it("returns 2 with its usage for a part it cannot read, before asking git anything", async () => {
+      expect(await main(["main", "--part", "0/2"], checkout(), [])).toEqual({
+        err: "Error: --part takes K/N with 1 <= K <= N, not 0/2\n" +
+          "Usage: check-cause-assignments.ts [base-ref] [--part K/N]",
+        code: 2,
+      });
+      expect(asked).toEqual([]);
+    });
+
+    it("returns 2 and asks for real history where git finds no merge base", async () => {
+      expect(await main(["nowhere"], checkout(), [])).toEqual({
+        err: "Could not resolve a merge base against nowhere. This check " +
+          "needs real history — CI must check out with fetch-depth: 0.",
+        code: 2,
+      });
+      expect(asked).toEqual([["merge-base", "nowhere", "HEAD"]]);
+    });
+
+    it("measures from the default base where it is named none", async () => {
+      // The fake git has an `upstream/main`, so that is the default, and it
+      // finds no merge base with it.
+      expect(await main([], checkout(), [])).toEqual({
+        err: "Could not resolve a merge base against " +
+          "refs/remotes/upstream/main. This check needs real history — CI " +
+          "must check out with fetch-depth: 0.",
+        code: 2,
+      });
+      expect(asked).toContainEqual([
+        "merge-base",
+        "refs/remotes/upstream/main",
+        "HEAD",
+      ]);
+    });
+
+    it("returns 2 against a ref this checkout's own git does not know", async () => {
+      const { code, err } = await main(["refs/heads/no-such-branch-anywhere"]);
+
+      expect(code).toBe(2);
+      expect(err).toContain(
+        "Could not resolve a merge base against " +
+          "refs/heads/no-such-branch-anywhere.",
+      );
+    });
+
+    it("returns 0 without checking out the base, where nothing it watches changed", async () => {
+      expect(await main(["main"], checkout({ changed: "\n" }), [])).toEqual({
+        out: "check-cause-assignments: nothing a pattern's numbering is " +
+          "built by changed since 0123456789.",
+        code: 0,
+      });
+      expect(asked.map(([command]) => command)).toEqual(["merge-base", "diff"]);
+    });
+
+    it("dumps on the base side only the patterns the base checkout holds, and removes that checkout afterwards", async () => {
+      const { code, out, err } = await main(["main"], checkout(), []);
+
+      expect(code).toBe(0);
+      expect(err).toBeUndefined();
+      expect(out).toMatch(
+        /^check-cause-assignments: compared 1 patterns built from the same source by 0123456789 and this change, in \d+s\.$/,
+      );
+      expect(dumped).toEqual({
+        base: ["patterns/room.tsx"],
+        head: ["patterns/added.tsx", "patterns/room.tsx"],
+      });
+      expect(asked.slice(-2)).toEqual([
+        [
+          "worktree",
+          "add",
+          "--detach",
+          join(baseScratch(), "base"),
+          MERGE_BASE,
+        ],
+        ["worktree", "remove", "--force", join(baseScratch(), "base")],
+      ]);
+      expect(existsSync(baseScratch())).toBe(false);
+    });
+
+    it("returns 1 with what the run found and the base checkout it could not remove", async () => {
+      try {
+        const { code, out, err } = await main(
+          ["main"],
+          checkout({
+            dumps: { base: dump(NUMBERED), head: dump(RENUMBERED) },
+            removal: "fails",
+          }),
+          [],
+        );
+
+        expect(code).toBe(1);
+        expect(out).toContain("compared 1 patterns");
+        expect(err).toContain("A compiler change moves anonymous cells");
+        expect(err).toMatch(
+          /\nCould not clean up the base checkout at .*: Error: the worktree is locked$/,
+        );
+      } finally {
+        await Deno.remove(baseScratch(), { recursive: true });
+      }
+    });
+
+    it("returns 1 for a run that passed but could not remove the base checkout", async () => {
+      try {
+        const { code, out, err } = await main(
+          ["main"],
+          checkout({ removal: "fails" }),
+          [],
+        );
+
+        expect(code).toBe(1);
+        expect(out).toContain("compared 1 patterns");
+        expect(err).toBe(
+          `Could not clean up the base checkout at ${
+            join(baseScratch(), "base")
+          }: Error: the worktree is locked`,
+        );
+      } finally {
+        await Deno.remove(baseScratch(), { recursive: true });
+      }
+    });
+
+    it("throws both the error that ended the run and the base checkout it could not remove", async () => {
+      try {
+        const run = main(
+          ["main"],
+          checkout({
+            baseFiles: { "patterns": "a file\n" },
+            removal: "fails",
+          }),
+          [],
+        );
+
+        await expect(run).rejects.toThrow(/NotADirectory/);
+        await expect(run).rejects.toThrow(
+          /\nCould not clean up the base checkout at .*: Error: the worktree is locked$/,
+        );
+      } finally {
+        await Deno.remove(baseScratch(), { recursive: true });
+      }
+    });
+
+    it("dumps only the patterns its part holds, and names the part", async () => {
+      const { code, out } = await main(
+        ["main", "--part", "2/2"],
+        checkout(),
+        [],
+      );
+
+      expect(code).toBe(0);
+      expect(out).toContain(
+        "check-cause-assignments part 2 of 2: compared 1 patterns",
+      );
+      expect(dumped).toEqual({
+        base: ["patterns/room.tsx"],
+        head: ["patterns/room.tsx"],
+      });
+    });
+
+    it("returns 0 naming a move an accepted entry forgives, and an entry that forgives nothing", async () => {
+      const unused: AcceptedMove = { ...forgiving, pattern: "lobby.tsx" };
+
+      const { code, out, err } = await main(
+        ["main"],
+        checkout({ dumps: { base: dump(NUMBERED), head: dump(RENUMBERED) } }),
+        [forgiving, unused],
+      );
+
+      expect(code).toBe(0);
+      expect(err).toBeUndefined();
+      expect(out).toContain(
+        "\n  room.tsx: moves forgiven by an accepted entry\n" +
+          `  the accepted entry for lobby.tsx (${forgiving.base} -> ` +
+          `${forgiving.head}) forgives nothing in this run and can be removed`,
+      );
+    });
+
+    it("returns 1 with the report of a move no accepted entry forgives", async () => {
+      const { code, out, err } = await main(
+        ["main"],
+        checkout({ dumps: { base: dump(NUMBERED), head: dump(RENUMBERED) } }),
+        [],
+      );
+
+      expect(code).toBe(1);
+      expect(out).toContain("compared 1 patterns");
+      expect(err).toContain("A compiler change moves anonymous cells");
+      expect(err).toContain("room.tsx (base build");
+    });
+
+    it("returns 1 with each report, one after another, for a run that compared nothing and dropped a pattern", async () => {
+      const { code, err } = await main(
+        ["main"],
+        checkout({
+          dumps: { base: dump(NUMBERED), head: dumpUnassigned(NUMBERED) },
+        }),
+        [],
+      );
+
+      expect(code).toBe(1);
+      expect(err).toBe(
+        failureReports(
+          compareDumps(dump(NUMBERED), dumpUnassigned(NUMBERED), [], {
+            base: new Set(),
+            head: UNEVALUABLE_PATTERNS,
+          }),
+        ).join("\n"),
+      );
+      expect(err).toContain("compared no patterns");
+      expect(err).toContain("\nroom.tsx");
+    });
+
+    it("throws, and removes the base checkout, where a pattern's path in it cannot be read", async () => {
+      await expect(
+        main(["main"], checkout({ baseFiles: { "patterns": "a file\n" } }), []),
+      ).rejects.toThrow(Deno.errors.NotADirectory);
+      expect(existsSync(baseScratch())).toBe(false);
+    });
   });
 
   describe("dumperEnvironment()", () => {
@@ -852,7 +1367,8 @@ describe("check-cause-assignments", () => {
     /**
      * Commits a repository holding a pattern, a helper module, a note, and the
      * stand-in compiler, applies `change` to its working tree, and returns the
-     * result of running the gate there against that commit. The repository's
+     * result of running the gate there against that commit, with this
+     * checkout's own git and dumper. The repository's
      * configuration lets the dump, whose modules are this checkout's, name the
      * packages it imports, and compiles them with this checkout's compiler
      * options. Deno caches one compiled copy of each module, so a dump compiled
@@ -861,10 +1377,6 @@ describe("check-cause-assignments", () => {
      */
     async function runGate(
       change: Readonly<Record<string, string>>,
-      patterns: Readonly<Record<string, string>> = {
-        "patterns/room.tsx": "// a pattern\n",
-        "patterns/schemas.ts": "// a helper\n",
-      },
     ): Promise<{ code: number; stdout: string; stderr: string }> {
       const repo = await Deno.makeTempDir({
         prefix: "cause-assignments-gate-",
@@ -875,7 +1387,8 @@ describe("check-cause-assignments", () => {
         );
         await write(repo, {
           ...STAND_IN_COMPILER,
-          ...patterns,
+          "patterns/room.tsx": "// a pattern\n",
+          "patterns/schemas.ts": "// a helper\n",
           "deno.jsonc": JSON.stringify({ imports, compilerOptions }),
           "notes.md": "a note\n",
         });
@@ -916,35 +1429,14 @@ describe("check-cause-assignments", () => {
       }
     }
 
-    it("exits 0 without comparing, for a change touching none of its watched paths", async () => {
-      const { code, stdout } = await runGate({ "notes.md": "edited\n" });
-
-      expect(code).toBe(0);
-      expect(stdout).toContain("nothing a pattern's numbering is built by");
-    });
-
     it("exits 0 having compared the pattern, for a change that builds each pattern as the base does", async () => {
+      // The one run through real git and the real dumper; `main()` above
+      // holds each outcome to the facts a checkout supplies.
+
       const { code, stdout } = await runGate(WATCHED_EDIT);
 
       expect(stdout).toContain("compared 1 patterns");
       expect(code).toBe(0);
-    });
-
-    it("exits 1 naming the pattern, where every build on the head side returns `undefined`", async () => {
-      const { code, stderr } = await runGate({
-        "runtime/runner/src/harness/evaluate.ts": EVALUATES_TO_NOTHING,
-      });
-
-      expect(code).toBe(1);
-      expect(stderr).toContain("room.tsx");
-      expect(stderr).not.toContain("schemas.ts");
-    });
-
-    it("exits 1 for a change reaching the comparison where no pattern exists to compare", async () => {
-      const { code, stderr } = await runGate(WATCHED_EDIT, {});
-
-      expect(code).toBe(1);
-      expect(stderr).toContain("compared no patterns");
     });
   });
 });

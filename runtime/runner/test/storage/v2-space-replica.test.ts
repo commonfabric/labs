@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
@@ -11,10 +10,14 @@ import {
   toValuePath,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
-import * as MemoryV2Server from "@commonfabric/memory/v2/server";
-import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
-import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import type {
   ForeignScopedReadGrant,
   IStorageSubscription,
@@ -24,10 +27,18 @@ import type {
   StoreReadThrough,
   URI,
 } from "../../src/storage/interface.ts";
-import { type SessionConnection, SpaceReplica } from "../../src/storage/v2.ts";
-import { captureLogs } from "../support/log-capture.ts";
-
-const AUDIENCE = "did:key:z6Mk-runner-v2-space-replica-audience";
+import {
+  type SessionConnection,
+  setConflictAdmissionMode,
+  type SpaceReplica,
+} from "../../src/storage/v2.ts";
+import {
+  mountOver,
+  newSharedServer,
+  newSpaceReplica,
+  withoutMarkedSplices,
+} from "../memory-v2-test-utils.ts";
+import { captureLogs } from "../support/captured-logs.ts";
 
 const service = await Identity.fromPassphrase("v2-space-replica service");
 const bob = await Identity.fromPassphrase("v2-space-replica bob");
@@ -73,23 +84,13 @@ describe("SpaceReplica", () => {
   const mount = async (): Promise<
     { client: MemoryV2Client.Client; session: MemoryV2Client.SpaceSession }
   > => {
-    const client = await MemoryV2Client.connect({
-      instanceNames: namesInstancesByDefault(),
-      transport: MemoryV2Client.loopback(server),
-    });
-    cleanups.push(() => client.close());
-    const session = await client.mount(
+    const opened = await mountOver(
+      MemoryV2Client.loopback(server),
       space,
-      {},
-      (_space, _session, context) => ({
-        invocation: {
-          aud: context.audience,
-          challenge: context.challenge.value,
-        },
-        authorization: { principal: service.did() },
-      }),
+      service,
     );
-    return { client, session };
+    cleanups.push(() => opened.client.close());
+    return opened;
   };
 
   /** A replica of `space` acting as the service, closed after the case. */
@@ -107,22 +108,14 @@ describe("SpaceReplica", () => {
       storeReadThrough?: StoreReadThrough;
     } = {},
   ): SpaceReplica => {
-    const replica = new SpaceReplica({
+    const replica = newSpaceReplica({
       as: service,
       space,
-      settings: {},
-      subscription: options.subscription ?? { next: () => {} },
+      subscription: options.subscription,
       localSessionDocuments: () => options.localSessionDocuments === true,
-      scopeKeyIdentity: () => ({
-        principal: service.did(),
-        sessionId: "v2-space-replica-session",
-      }),
-      routeState: options.routeState ?? { generation: 0 },
-      routeGeneration: 0,
+      routeState: options.routeState,
       createSession: options.createSession ?? mount,
-      syncReplayDependencies: () => Promise.resolve(undefined),
-      watchDocument: options.watchDocument ??
-        (() => Promise.resolve({ ok: {} })),
+      watchDocument: options.watchDocument,
       isRead: options.isRead,
       onDocumentsDropped: options.onDocumentsDropped,
       storeReadThrough: () => options.storeReadThrough,
@@ -166,13 +159,7 @@ describe("SpaceReplica", () => {
 
   beforeEach(() => {
     cleanups = [];
-    server = new MemoryV2Server.Server({
-      namesInstances: namesInstancesByDefault,
-      store: new URL(`memory://v2-space-replica-${crypto.randomUUID()}`),
-      authorizeSessionOpen: authorizeLoopbackSessionOpen,
-      sessionOpenAuth: { audience: AUDIENCE },
-      subscriptionRefreshDelayMs: 0,
-    });
+    server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
   });
 
   afterEach(async () => {
@@ -215,7 +202,7 @@ describe("SpaceReplica", () => {
           "the read authority probe failed: Error: probe down",
         );
         expect(asked).toEqual([bob.did()]);
-        expect(logs.lines("foreign-scoped-read-grant-probe-failed")).toEqual([
+        expect(logs.textsOf("foreign-scoped-read-grant-probe-failed")).toEqual([
           expect.stringContaining(
             `the read authority probe for ${space} (actor ${bob.did()}) ` +
               "failed; refusing the actor's instances fail-closed",
@@ -388,10 +375,10 @@ describe("SpaceReplica", () => {
         expect((await settled).error?.message).toContain(
           "memory replica reset",
         );
-        expect(logs.lines("seal-late-commit")).toEqual([]);
+        expect(logs.textsOf("seal-late-commit")).toEqual([]);
         verdict.resolve({ committed: { seq: 2 } });
         await verdict.promise;
-        expect(logs.lines("seal-late-commit")).toEqual([
+        expect(logs.textsOf("seal-late-commit")).toEqual([
           expect.stringContaining(
             "wave committed a sealed commit after its local rejection",
           ),
@@ -460,7 +447,7 @@ describe("SpaceReplica", () => {
         replica.sinkDocument(doc, (document) => seen.push(document?.value));
         sealSet(replica, { n: 2 });
         expect(seen).toEqual([{ n: 2 }]);
-        expect(logs.lines("sink-error")).toEqual([
+        expect(logs.textsOf("sink-error")).toEqual([
           expect.stringContaining("storage sink failed: Error: sink failed"),
         ]);
       });
@@ -493,7 +480,7 @@ describe("SpaceReplica", () => {
         // land on.
         confirm(replica, { items: 5 }, 2);
         expect(replica.getDocument(doc)?.value).toEqual({ items: 5 });
-        expect(logs.lines("pending-replay-skip")).toEqual([
+        expect(logs.textsOf("pending-replay-skip")).toEqual([
           expect.stringContaining(
             "pending patch layer skipped: ops do not apply to the current base",
           ),
@@ -594,6 +581,46 @@ describe("SpaceReplica", () => {
         });
         expect(mounts).toBe(0);
       });
+
+      it("refuses a commit the session refuses to send for its marked splice as a local conflict, leaving no stale floor", async () => {
+        setConflictAdmissionMode("preempt");
+        cleanups.push(() => setConflictAdmissionMode(undefined));
+        // The server does not advertise `markedSplicesV1`, as one that
+        // predates marked splices does not, so the session refuses the commit
+        // at its first send.
+        withoutMarkedSplices(server);
+        const replica = replicaOver();
+        const result = await replica.commitNative({
+          operations: [{
+            op: "patch",
+            id: doc,
+            type: "application/json",
+            patches: [{
+              op: "splice",
+              path: "/value/list",
+              index: 0,
+              remove: 0,
+              add: ["x"],
+              pinned: true,
+            }],
+            value: { value: { list: ["x"] } },
+          }],
+        });
+        expect(result.error?.name).toBe("ConflictError");
+        expect(result.error?.message).toContain("markedSplicesV1");
+        // Nothing reached the store, which will never report this commit
+        // caught up, so a later reader of the document is not held for it.
+        expect(
+          replica.accessForTestingOnly.preemptThreshold({
+            localSeq: 99,
+            reads: {
+              confirmed: [{ id: doc, path: toDocumentPath([]), seq: 0 }],
+              pending: [],
+            },
+            operations: [],
+          }),
+        ).toBeUndefined();
+      });
     });
 
     describe("send()", () => {
@@ -638,9 +665,9 @@ describe("SpaceReplica", () => {
         expect(replica.unappliedForeignSeqFloor()).toBeUndefined();
         expect(replica.getDocument(doc)?.value).toEqual({ n: 5 });
         expect(seen.at(-1)).toEqual({ n: 5 });
-        expect(logs.lines("shadow-flip-observer-error")).toEqual([
+        expect(logs.textsOf("shadow-flip-observer-error")).toEqual([
           expect.stringContaining(
-            "shadowFlipObserver threw during promotion Error: observer failed",
+            "shadowFlipObserver threw during promotion observer failed",
           ),
         ]);
       });
@@ -672,7 +699,7 @@ describe("SpaceReplica", () => {
         );
         expect(flips).toBe(1);
         expect(replica.unappliedForeignSeqFloor()).toBeUndefined();
-        expect(logs.lines("shadow-flip-observer-error")).toEqual([
+        expect(logs.textsOf("shadow-flip-observer-error")).toEqual([
           expect.stringContaining(
             "shadowFlipObserver threw during a pending drop",
           ),
@@ -692,7 +719,7 @@ describe("SpaceReplica", () => {
         confirm(replica, { n: 1 }, 1);
         expect(arrivals).toEqual([[{ id: doc }]]);
         expect(replica.getDocument(doc)?.value).toEqual({ n: 1 });
-        expect(logs.lines("speculation-arrival-observer-error")).toEqual([
+        expect(logs.textsOf("speculation-arrival-observer-error")).toEqual([
           expect.stringContaining(
             "speculationArrivalObserver threw during frame integration",
           ),
@@ -721,7 +748,7 @@ describe("SpaceReplica", () => {
         ).toEqual({ ok: {} });
         expect(acks).toBe(1);
         expect(replica.getDocument(doc)?.value).toEqual({ n: 1 });
-        expect(logs.lines("speculation-ack-observer-error")).toEqual([
+        expect(logs.textsOf("speculation-ack-observer-error")).toEqual([
           expect.stringContaining(
             "speculationAckObserver threw during accept settlement",
           ),
@@ -826,10 +853,10 @@ describe("SpaceReplica", () => {
           released: [],
           deferred: false,
         });
-        expect(logs.lines("release-watches-deferred")).toEqual([
+        expect(logs.textsOf("release-watches-deferred")).toEqual([
           expect.stringContaining(
             "keeping the watches of documents nothing reads for a later " +
-              "pass: Error: memory replica closed",
+              "pass: memory replica closed",
           ),
         ]);
       });
@@ -846,10 +873,10 @@ describe("SpaceReplica", () => {
           released: [],
           deferred: false,
         });
-        expect(logs.lines("release-watches-failed")).toEqual([
+        expect(logs.textsOf("release-watches-failed")).toEqual([
           expect.stringContaining(
             "failed to remove the watches of documents nothing reads: " +
-              "Error: removal refused",
+              "removal refused",
           ),
         ]);
         // The next pass offers them again.
@@ -888,7 +915,7 @@ describe("SpaceReplica", () => {
           expect.objectContaining({ id: doc }),
         ]);
         expect(watched).toEqual([doc]);
-        expect(logs.lines("watch-again-failed")).toEqual([
+        expect(logs.textsOf("watch-again-failed")).toEqual([
           expect.stringContaining(
             "a document held during its release could not be watched again: " +
               `${doc}`,
@@ -1154,10 +1181,11 @@ describe("SpaceReplica", () => {
           }],
         };
         replica.accessForTestingOnly.hydrateArrivedCfcSchemaRefs(frame);
-        expect(await logs.line("cfc-schema-hydration-failed")).toContain(
-          "arrived-metadata document pull failed; a later frame carrying " +
-            "the reference re-kicks",
-        );
+        expect((await logs.first("cfc-schema-hydration-failed")).text)
+          .toContain(
+            "arrived-metadata document pull failed; a later frame carrying " +
+              "the reference re-kicks",
+          );
         expect(attempts).toBe(1);
         replica.accessForTestingOnly.hydrateArrivedCfcSchemaRefs(frame);
         await retried.promise;
@@ -1190,6 +1218,130 @@ describe("SpaceReplica", () => {
           "memory replica closed",
         );
         expect(closed.length).toBe(1);
+      });
+    });
+
+    describe("markedSplices()", () => {
+      /**
+       * A replica whose session sits on a connection to a server that
+       * advertises `markedSplicesV1` when `advertised`, in the state `state`
+       * leaves it (a connection with no state when it is `undefined`).
+       */
+      const replicaOnConnection = async (
+        state: { now?: MemoryV2Client.ConnectionState },
+        advertised = true,
+      ) => {
+        const replica = replicaOver({
+          createSession: async () => {
+            const { client, session } = await mount();
+            const connection: SessionConnection = {
+              serverFlags: {
+                ...client.serverFlags!,
+                markedSplicesV1: advertised,
+              },
+              delivered: () => client.delivered(),
+              close: () => client.close(),
+            };
+            if (state.now === undefined) return { session, client: connection };
+            return {
+              session,
+              client: {
+                ...connection,
+                get connectionState() {
+                  return state.now;
+                },
+              },
+            };
+          },
+        });
+        await replica.ensureSession();
+        return replica;
+      };
+
+      it("returns `true` while a connection that advertises the mark is up", async () => {
+        const replica = await replicaOnConnection({ now: "connected" });
+        expect(replica.markedSplices()).toBe(true);
+      });
+
+      it("returns `false` while the connection reconnects, though its last flags advertise the mark", async () => {
+        const state: { now?: MemoryV2Client.ConnectionState } = {
+          now: "connected",
+        };
+        const replica = await replicaOnConnection(state);
+        state.now = "reconnecting";
+        expect(replica.markedSplices()).toBe(false);
+        state.now = "connected";
+        expect(replica.markedSplices()).toBe(true);
+      });
+
+      it("returns `false` for a connection that reports no state", async () => {
+        const replica = await replicaOnConnection({});
+        expect(replica.markedSplices()).toBe(false);
+      });
+
+      it("returns `false` for a live connection that does not advertise the mark", async () => {
+        const replica = await replicaOnConnection({ now: "connected" }, false);
+        expect(replica.markedSplices()).toBe(false);
+      });
+
+      it("returns `false` before a session exists", () => {
+        expect(replicaOver().markedSplices()).toBe(false);
+      });
+    });
+
+    describe("invitesRevisionWatchable()", () => {
+      /**
+       * A replica whose session sits on a connection to a server that
+       * advertises `spaceInvitesRevision` as `advertised` says, on the branch
+       * `branch` forks (the default branch when it is absent).
+       */
+      const replicaAdvertising = async (
+        advertised: boolean,
+        branch?: string,
+      ) => {
+        const replica = replicaOver({
+          createSession: async () => {
+            const { client, session } = branch === undefined
+              ? await mount()
+              : await mountOver(
+                MemoryV2Client.loopback(server),
+                space,
+                service,
+                { branch, forkBranch: true },
+              );
+            if (branch !== undefined) cleanups.push(() => client.close());
+            const connection: SessionConnection = {
+              serverFlags: {
+                ...client.serverFlags!,
+                spaceInvitesRevision: advertised,
+              },
+              delivered: () => client.delivered(),
+              close: () => client.close(),
+            };
+            return { session, client: connection };
+          },
+        });
+        await replica.ensureSession();
+        return replica;
+      };
+
+      it("returns `true` for a session on the default branch of a server that advertises the revision document", async () => {
+        const replica = await replicaAdvertising(true);
+        expect(replica.invitesRevisionWatchable()).toBe(true);
+      });
+
+      it("returns `false` for a session on a server that does not advertise it", async () => {
+        const replica = await replicaAdvertising(false);
+        expect(replica.invitesRevisionWatchable()).toBe(false);
+      });
+
+      it("returns `false` for a session on a branch, whose document stays as the fork found it, though its server advertises it", async () => {
+        const replica = await replicaAdvertising(true, "invites-fork");
+        expect(replica.invitesRevisionWatchable()).toBe(false);
+      });
+
+      it("returns `false` before a session exists", () => {
+        expect(replicaOver().invitesRevisionWatchable()).toBe(false);
       });
     });
   });

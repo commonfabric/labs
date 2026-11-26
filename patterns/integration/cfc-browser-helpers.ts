@@ -173,33 +173,45 @@ const viewSettledReady = (): boolean =>
 // anything, so a re-check on the next DOM mutation retries the fill; a ready
 // field is filled once and verified.
 //
-// Each invocation keeps a progress ledger on `globalThis.__cfFillDiag`
-// (per selector): which phase it reached and when. waitForCondition never
-// re-enters a predicate whose promise is still pending, so if one of the
-// awaits below stalls (typically `commit()` waiting on a stuck cell
-// round-trip), the ledger's `phase` names the exact await the fill died in —
-// that is what `readCfInputProbe` reports on timeout.
+// Each fill keeps a progress ledger on `globalThis.__cfFillDiag`, keyed by
+// selector, which each attempt updates: which phase it reached and when, how
+// many attempts the fill `fillId` names has made, and when its first and its
+// latest began. waitForCondition never re-enters a predicate whose promise is
+// still pending, so if one of the awaits below stalls (typically `commit()`
+// waiting on a stuck cell round-trip), the ledger's `phase` names the exact
+// await the fill died in — that is what `readCfInputProbe` reports on timeout.
 const fillAndVerify = async (
   probe: ProbeApi,
   selector: string,
   nextValue: string,
+  fillId: string,
 ): Promise<boolean> => {
   type FillDiag = {
+    fillId: string;
     attempts: number;
     phase: string;
     phaseAt: number;
-    startedAt: number;
+    firstAttemptAt: number;
+    lastAttemptAt: number;
     commitStartedAt?: number;
     lastInputValue?: string;
   };
   const registry = ((globalThis as typeof globalThis & {
     __cfFillDiag?: Record<string, FillDiag>;
   }).__cfFillDiag ??= {});
+  const now = Date.now();
+  // A ledger under another `fillId` is an earlier fill's, and this fill's first
+  // attempt replaces it.
+  const previousAttempt = registry[selector]?.fillId === fillId
+    ? registry[selector]
+    : undefined;
   const diag: FillDiag = {
-    attempts: (registry[selector]?.attempts ?? 0) + 1,
+    fillId,
+    attempts: (previousAttempt?.attempts ?? 0) + 1,
     phase: "settling",
-    phaseAt: Date.now(),
-    startedAt: Date.now(),
+    phaseAt: now,
+    firstAttemptAt: previousAttempt?.firstAttemptAt ?? now,
+    lastAttemptAt: now,
   };
   registry[selector] = diag;
   const phase = (name: string) => {
@@ -272,10 +284,13 @@ const fillAndVerify = async (
   await hostElement.commit?.();
   phase("committed");
   await hostElement.requestUpdate?.();
-  phase("update-requested");
-  await new Promise((resolve) =>
-    requestAnimationFrame(() => requestAnimationFrame(resolve))
-  );
+  // Named apart from the update, so a fill stalled on its two steps of page
+  // progress says so. In a document that is not being rendered a step is a
+  // turn of the event loop rather than a frame (`ProbeApi.nextFrame`), so a
+  // fill in a tab behind another still reads its value back.
+  phase("awaiting-frame");
+  await probe.nextFrame();
+  await probe.nextFrame();
 
   // A commit that re-renders the host replaces the control. The input this fill
   // typed into is then detached and still holds the typed text, so resolve the
@@ -542,6 +557,9 @@ const recordTrustedActionClick = (clickTarget: HTMLElement): void => {
             tagName: node.tagName.toLowerCase(),
             id: node.id,
             dataset,
+            value: "value" in node && typeof node.value === "string"
+              ? node.value
+              : undefined,
           }];
         }),
       };
@@ -824,17 +842,44 @@ export async function fillCfInput(
       await presentation.typeIntoCfInput(selector, value);
     } else {
       await waitForCondition(page, fillAndVerify, {
-        args: [selector, value],
+        args: [selector, value, crypto.randomUUID()],
       });
     }
   } catch (cause) {
     const probe = await readCfInputProbe(page, selector).catch(() => undefined);
-    throw new Error(
-      `Timed out filling cf input "${selector}" with "${value}". ` +
-        debugStr`Last probe: $quote,indent,long${probe}`,
-      { cause },
-    );
+    throw new Error(fillFailureMessage(selector, value, probe), { cause });
   }
+}
+
+/**
+ * Returns the message `fillCfInput` fails with. It renders `probe` at `xlong`,
+ * less its console tail, which follows as plain lines, one per entry with its
+ * own line breaks escaped, so that neither a cut of the probe nor a rendering
+ * that shortens long strings can reach it. The probe keeps at most 40 entries,
+ * and the page keeps 400 characters of each. Where no probe could be read, or
+ * the page kept no tail, it says so.
+ */
+export function fillFailureMessage(
+  selector: string,
+  value: string,
+  probe: CfInputProbe | undefined,
+): string {
+  const head = `Timed out filling cf input "${selector}" with "${value}". `;
+  if (probe === undefined) return `${head}No probe of the page could be read.`;
+  const { consoleTail, ...rest } = probe;
+  const tail = Array.isArray(consoleTail)
+    ? `Its console tail, oldest first:\n${
+      consoleTail.map((entry) => {
+        const { t, method, text } = entry as {
+          t?: unknown;
+          method?: unknown;
+          text?: unknown;
+        };
+        return `  ${t} ${method} ${JSON.stringify(text)}`;
+      }).join("\n")
+    }`
+    : "The page kept no console tail.";
+  return head + debugStr`Last probe: $quote,indent,xlong${rest}` + `\n${tail}`;
 }
 
 /**
@@ -1408,27 +1453,13 @@ const aimAtMarkedTarget = async (
     }
   };
 
-  // One step of page progress, after which the settle looks again.
-  //
-  // While the document is being rendered that step is a frame, which is what
-  // moves a box. A document that is not being rendered produces no frames, so
-  // waiting for one waits for something that will not arrive; the step there is
-  // one turn of the event loop, delivered through a message channel. It has to
-  // be a real turn rather than a resolved promise: a hidden control comes back
-  // when a timer or a task puts it back, and a loop that only yields to the
-  // microtask queue never lets either run, so it would spin against a control
-  // it is itself preventing from returning.
+  // One step of page progress, after which the settle looks again: a frame,
+  // which is what moves a box, or in a document that is not being rendered one
+  // turn of the event loop (`ProbeApi.nextFrame`). A hidden control comes back
+  // when a timer or a task puts it back, which that turn lets run.
   const nextFrame = (): Promise<void> => {
     diag.frames++;
-    return new Promise((resolve) => {
-      if (document.visibilityState !== "hidden") {
-        requestAnimationFrame(() => resolve());
-        return;
-      }
-      const channel = new MessageChannel();
-      channel.port1.onmessage = () => resolve();
-      channel.port2.postMessage(0);
-    });
+    return probe.nextFrame();
   };
 
   // Absent and hidden are different answers. A hidden control is coming back,
@@ -2985,6 +3016,7 @@ type TrustedActionProbe = {
       tagName: string;
       id: string;
       dataset: Record<string, string>;
+      value?: string;
     }>;
   };
   matches: Array<{
@@ -3018,7 +3050,7 @@ type TextProbe = {
   bodyText: string;
 };
 
-type CfInputProbe = {
+export type CfInputProbe = {
   selector: string;
   found: boolean;
   value: string;
@@ -3041,6 +3073,12 @@ type CfInputProbe = {
    */
   hostValueBinding?: unknown;
 
+  /** The page's `document.visibilityState` at probe time. */
+  visibilityState?: string;
+
+  /** Whether the page had focus at probe time (`document.hasFocus()`). */
+  hasFocus?: boolean;
+
   /** Progress ledger left by fillAndVerify for this selector (see there). */
   fill?: unknown;
 
@@ -3055,15 +3093,36 @@ type CfInputProbe = {
 
   /** Bounded tail of the page's console messages (see Page wrapper). */
   consoleTail?: unknown;
+
+  /**
+   * Ids of the elements the page holds, through shadow roots, sorted, at most
+   * {@link PRESENT_IDS_MAX} of them, where nothing matches the selector. They
+   * say how far the view around the missing field rendered.
+   */
+  presentIds?: string[];
+
+  /** Number of distinct ids the page holds, where nothing matches the selector. */
+  presentIdCount?: number;
 };
 
-async function readCfInputProbe(
+/** Largest number of ids a probe that finds no match reports. */
+export const PRESENT_IDS_MAX = 100;
+
+/**
+ * Reads, once, what the page holds for the cf input `selector` names, for a
+ * failure report.
+ */
+export async function readCfInputProbe(
   page: Page,
   selector: string,
 ): Promise<CfInputProbe> {
-  return await page.evaluate((targetSelector) => {
+  return await page.evaluate((targetSelector, presentIdsMax) => {
+    // The walk that finds the matches also gathers every id it passes, for a
+    // probe that finds none.
+    const ids = new Set<string>();
     function collect(root: Document | ShadowRoot, result: Element[]): void {
       for (const element of root.querySelectorAll("*")) {
+        if (element.id !== "") ids.add(element.id);
         try {
           if (element.matches(targetSelector)) result.push(element);
         } catch {
@@ -3125,7 +3184,11 @@ async function readCfInputProbe(
       subscriptionTotals = `unavailable: ${error}`;
     }
     const consoleTail = (g.__cfConsoleTail ?? []).slice(-40);
+    // Whether the page is being rendered, which a fill waiting on frames
+    // needs, comes first: the rest of the context is unbounded.
     const context = {
+      visibilityState: document.visibilityState,
+      hasFocus: document.hasFocus(),
       fill,
       pendingIpc,
       completedIpc,
@@ -3137,6 +3200,9 @@ async function readCfInputProbe(
     collect(document, matches);
     const element = matches[0];
     if (!element) {
+      // A cut of a long report keeps its first lines, so what this probe most
+      // has to say, the ids, comes ahead of the page context, whose fill
+      // ledger in turn comes ahead of its IPC counts.
       return {
         selector: targetSelector,
         found: false,
@@ -3145,6 +3211,8 @@ async function readCfInputProbe(
         readOnly: false,
         visible: false,
         hostTagName: "",
+        presentIds: [...ids].sort().slice(0, presentIdsMax),
+        presentIdCount: ids.size,
         ...context,
       };
     }
@@ -3213,7 +3281,7 @@ async function readCfInputProbe(
       hostValueBinding,
       ...context,
     };
-  }, { args: [selector] });
+  }, { args: [selector, PRESENT_IDS_MAX] });
 }
 
 async function readDisabledProbe(
@@ -3351,7 +3419,8 @@ async function closeClickLanding(
   }, { args: [selector] });
 }
 
-async function readTrustedActionProbe(
+/** Reads the action controls and the last marked click, including input values. */
+export async function readTrustedActionProbe(
   page: Page,
   action: string,
 ): Promise<TrustedActionProbe> {

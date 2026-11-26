@@ -6,10 +6,15 @@
  * is refused by name rather than reported as a missing file it never named.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { runTests } from "../lib/test-runner.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const TEST_PATTERN = `import { assert, pattern, TESTS } from "commonfabric";
 import { expected } from "../shared/value.ts";

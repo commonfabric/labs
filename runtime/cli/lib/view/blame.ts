@@ -1,10 +1,16 @@
 /**
  * Line attribution for the pager's blame column: running `git blame`, parsing
- * its porcelain output, and the short label the column shows for each line.
+ * its porcelain output, reading a commit's own attribution, and the short
+ * label the column shows for each line.
  */
 
+import { repositoryEnv } from "./gitenv.ts";
+
+/** A file for `git blame` to attribute, or a commit to attribute to itself. */
+export type BlameRequest = FileBlameRequest | CommitBlameRequest;
+
 /** A file for `git blame` to attribute. */
-export interface BlameRequest {
+export interface FileBlameRequest {
   /** The directory git runs in, which selects the repository. */
   readonly cwd: string;
 
@@ -19,11 +25,26 @@ export interface BlameRequest {
   readonly contents?: Uint8Array;
 }
 
+/** A commit, attributed as a single line to its own author and author time. */
+export interface CommitBlameRequest {
+  /** The directory git runs in, which selects the repository. */
+  readonly cwd: string;
+
+  /** Always absent: a commit request names no file. */
+  readonly path?: never;
+
+  /** The commit. */
+  readonly rev: string;
+
+  /** Always absent: a commit request has no text of its own. */
+  readonly contents?: never;
+}
+
 /** Where one displayed line comes from, for the blame column. */
 export interface BlameTarget {
   readonly request: BlameRequest;
 
-  /** The 0-based line of the blamed file. */
+  /** The 0-based line of the blamed file; 0 for a commit. */
   readonly line: number;
 
   /** The text the line must have in the blamed file for its attribution to
@@ -42,7 +63,7 @@ export interface BlameLine {
   /** The author time, in seconds since the epoch. */
   readonly time: number;
 
-  /** The line's content, without its line terminator. */
+  /** The line's content, without its line terminator; empty for a commit. */
   readonly text: string;
 
   /** The commit's page on GitHub, when the repository's remote is there. */
@@ -55,30 +76,40 @@ export const BLAME_WIDTH = 20;
 
 /** Identifies the file a request attributes, whatever text it attributes. */
 export function blameKey(request: BlameRequest): string {
-  return `${request.cwd}\0${request.path}\0${request.rev ?? ""}`;
+  return `${request.cwd}\0${request.path ?? ""}\0${request.rev ?? ""}`;
 }
 
 /** A function that runs `git blame` for a request, resolving to one entry
- * per line of the file, each committed line linked to its commit's page when
- * the repository has a remote on GitHub. It rejects with git's message when
- * git fails, for example because the file is not tracked, and when its signal
- * aborts, which stops git. */
+ * per line of the file, or one entry for a commit, each committed line linked
+ * to its commit's page when the repository has a remote on GitHub. It rejects
+ * with git's message when git fails, for example because the file is not
+ * tracked, and when its signal aborts, which stops git. */
 export type BlameRunner = (
   request: BlameRequest,
   signal: AbortSignal,
 ) => Promise<BlameLine[]>;
 
 /** A {@link BlameRunner} that finds each directory's GitHub page once, and
- * reuses it for every later request from that directory. */
-export function blameRunner(): BlameRunner {
+ * reuses it for every later request from that directory. Git runs in the
+ * environment {@link repositoryEnv} makes from `env`, the environment the
+ * viewer was started with in the directory `start`. */
+export function blameRunner(
+  env: Readonly<Record<string, string>> = Deno.env.toObject(),
+  start: string = Deno.cwd(),
+): BlameRunner {
   const pages = new Map<string, Promise<string | null>>();
+  let environment: Promise<Record<string, string>> | undefined;
   return async (request, signal) => {
+    const repoEnv = await (environment ??= repositoryEnv(env, start));
     let page = pages.get(request.cwd);
     if (!page) {
-      page = githubPage(request.cwd, signal);
+      page = githubPage(request.cwd, repoEnv, signal);
       pages.set(request.cwd, page);
     }
-    const [lines, url] = await Promise.all([blame(request, signal), page]);
+    const [lines, url] = await Promise.all([
+      blame(request, repoEnv, signal),
+      page,
+    ]);
     return url === null
       ? lines
       : lines.map((line) =>
@@ -89,17 +120,42 @@ export function blameRunner(): BlameRunner {
   };
 }
 
+/** Runs `git blame` for a file request, or `git show` for a commit request,
+ * in the environment `env`, and parses what it writes. */
 async function blame(
   request: BlameRequest,
+  env: Record<string, string>,
   signal: AbortSignal,
 ): Promise<BlameLine[]> {
-  const args = ["blame", "--porcelain"];
-  if (request.contents) args.push("--contents", "-");
-  if (request.rev) args.push(request.rev);
-  args.push("--", request.path);
+  const { path, rev } = request;
+  const [args, parse] = path === undefined
+    ? [
+      [
+        "show",
+        "--no-patch",
+        "--no-show-signature",
+        "--format=%H%n%at%n%aN",
+        `${rev}^{commit}`,
+        "--",
+      ],
+      (output: string) => [parseCommitLine(output)],
+    ]
+    : [
+      [
+        "blame",
+        "--porcelain",
+        ...request.contents ? ["--contents", "-"] : [],
+        ...rev ? [rev] : [],
+        "--",
+        path,
+      ],
+      parseBlamePorcelain,
+    ];
   const child = new Deno.Command("git", {
     args,
     cwd: request.cwd,
+    env,
+    clearEnv: true,
     stdin: request.contents ? "piped" : "null",
     stdout: "piped",
     stderr: "piped",
@@ -114,9 +170,22 @@ async function blame(
   const decoder = new TextDecoder();
   if (!output.success) {
     const message = decoder.decode(output.stderr).trim().split("\n")[0];
-    throw new Error(message || "git blame failed");
+    throw new Error(message || `git ${args[0]} failed`);
   }
-  return parseBlamePorcelain(decoder.decode(output.stdout));
+  return parse(decoder.decode(output.stdout));
+}
+
+/** Parses the output of `git show --no-patch --format=%H%n%at%n%aN` into the
+ * commit's attribution. Throws when the output does not follow that format. */
+export function parseCommitLine(output: string): BlameLine {
+  const match = /^([0-9a-f]{40}|[0-9a-f]{64})\n(\d+)\n(.*)\n$/.exec(output);
+  if (!match) throw new Error(`Unexpected git show output: ${output}`);
+  return {
+    commit: match[1],
+    author: match[3],
+    time: Number(match[2]),
+    text: "",
+  };
 }
 
 /** The GitHub page of the repository at `cwd`: that of the remote git
@@ -124,11 +193,17 @@ async function blame(
  * remote on GitHub. Null when none of them is on GitHub. */
 async function githubPage(
   cwd: string,
+  env: Record<string, string>,
   signal: AbortSignal,
 ): Promise<string | null> {
   const [fetched, configured] = await Promise.all([
-    gitOutput(cwd, ["ls-remote", "--get-url"], signal),
-    gitOutput(cwd, ["config", "--get-regexp", "^remote\\..*\\.url$"], signal),
+    gitOutput(cwd, ["ls-remote", "--get-url"], env, signal),
+    gitOutput(
+      cwd,
+      ["config", "--get-regexp", "^remote\\..*\\.url$"],
+      env,
+      signal,
+    ),
   ]);
   const remotes = configured.split("\n").flatMap((line) => {
     const match = /^remote\.(.+)\.url (.*)$/.exec(line);
@@ -140,16 +215,19 @@ async function githubPage(
   return urls.map(githubRepositoryPage).find((page) => page !== null) ?? null;
 }
 
-/** What git writes to its output for `args` in `cwd`, or nothing when it
- * fails. */
+/** What git writes to its output for `args` in `cwd` and the environment
+ * `env`, or nothing when it fails. */
 async function gitOutput(
   cwd: string,
   args: readonly string[],
+  env: Record<string, string>,
   signal: AbortSignal,
 ): Promise<string> {
   const output = await new Deno.Command("git", {
     args: [...args],
     cwd,
+    env,
+    clearEnv: true,
     stdout: "piped",
     stderr: "null",
     signal,
@@ -168,7 +246,7 @@ export function githubRepositoryPage(remote: string): string | null {
 
 /** Writes `bytes` to `stdin` and closes it, settling once that has finished
  * or failed. */
-async function feed(
+export async function feed(
   stdin: WritableStream<Uint8Array>,
   bytes: Uint8Array,
 ): Promise<void> {

@@ -5,7 +5,6 @@
  * produces comes back to the parent as a token the parent can resolve.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -15,6 +14,7 @@ import { type Cell, isCell, Runtime } from "@commonfabric/runner";
 import type { CfcConfClause, IFCLabel } from "@commonfabric/runner/cfc";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { join, normalize } from "@std/path/posix";
 import { CfHarnessEngine } from "../src/engine.ts";
 import { createFileSystemHarnessArtifactStore } from "../src/artifacts.ts";
@@ -43,6 +43,7 @@ import {
 import {
   HANDLE_TOKEN_PATTERN,
   type HarnessHandleReferentDraft,
+  REFERENT_TOKEN_PATTERN,
 } from "../src/contracts/handle-table.ts";
 import {
   HARNESS_RESEARCH_HANDLE_TYPE,
@@ -52,6 +53,10 @@ import {
 } from "../src/contracts/research.ts";
 import type { HarnessRunState } from "../src/run-state.ts";
 import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
+import type {
+  HarnessModelClient,
+  HarnessModelTurnRequest,
+} from "../src/model/client.ts";
 import { createPatternSkillsFixture } from "./support/pattern-skills-fixture.ts";
 import {
   chatViewOfRequest,
@@ -1138,6 +1143,121 @@ describe("prompt-loop cross-agent address handles", () => {
       `cf cell get ${result.runState.handleTable?.entries[0]?.ref}`,
     );
     expect(command).not.toContain(parentTokenC);
+  });
+
+  it("adopts into the parent's table a research handle the child minted", async () => {
+    const runId = "run-child-minted-research-handle";
+    const childRunId = `${runId}.subagent.1`;
+    let childResearchHandle: string | undefined;
+    let delegateOutput: string | undefined;
+    const reply = (
+      content: string,
+      toolCall?: { id: string; name: string; input: unknown },
+    ) => ({
+      assistant: {
+        role: "assistant" as const,
+        content,
+        ...(toolCall === undefined ? {} : {
+          toolCalls: [{
+            id: toolCall.id,
+            type: "function" as const,
+            function: {
+              name: toolCall.name,
+              arguments: JSON.stringify(toolCall.input),
+            },
+          }],
+        }),
+      },
+    });
+    const lastToolContent = (request: HarnessModelTurnRequest) =>
+      request.transcript.findLast((message) => message.role === "tool")
+        ?.content;
+    const modelClient: HarnessModelClient = {
+      providerId: "test-provider",
+      complete: (request) => {
+        if (request.runId.includes(":research:")) {
+          return Promise.resolve(reply(JSON.stringify({
+            status: "incomplete",
+            summary: "The counter contract needs more evidence.",
+            inputs: [],
+            selectedPatternIds: [],
+            leads: [],
+            questions: ["Which counter contract fits?"],
+            rules: [],
+            sourceIds: [],
+            missing: ["an exact implementation contract"],
+          })));
+        }
+        const toolContent = lastToolContent(request);
+        if (request.runId === childRunId) {
+          if (toolContent === undefined) {
+            return Promise.resolve(reply("", {
+              id: "call-child-research",
+              name: "research",
+              input: { task: "Find the counter contract.", purpose: "orient" },
+            }));
+          }
+          childResearchHandle = JSON.parse(toolContent).researchHandle;
+          return Promise.resolve(reply(JSON.stringify({
+            ok: false,
+            reason: `Findings are in ${childResearchHandle}.`,
+          })));
+        }
+        if (toolContent === undefined) {
+          return Promise.resolve(reply("", {
+            id: "call-delegate",
+            name: "delegate_task",
+            input: {
+              goal: "Research the counter contract.",
+              profile: "pattern-author",
+            },
+          }));
+        }
+        delegateOutput = toolContent;
+        return Promise.resolve(reply("Parent done."));
+      },
+    };
+    const engine = new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId,
+      model: "gpt-5.4",
+    });
+    const loop = new CfHarnessPromptLoop({
+      engine,
+      modelClient,
+      allowedSubagentProfiles: ["pattern-author"],
+    });
+
+    await loop.runPrompt({
+      prompt: "Delegate the research.",
+      promptSlotBinding: directPromptSlotBinding,
+    });
+
+    expect(childResearchHandle).toMatch(
+      new RegExp(`^${REFERENT_TOKEN_PATTERN.source}$`),
+    );
+    // The child's token resolves in the child's table only. What the parent
+    // keeps is an entry of its own table for the same findings, under a token
+    // its own salt mints, and the delegation result does not carry the
+    // child's token.
+    const table = engine.handleTable;
+    if (table === undefined) {
+      throw new Error("expected the parent to hold a handle table");
+    }
+    const adopted = table.referents ?? [];
+    expect(adopted).toEqual([
+      expect.objectContaining({
+        kind: "research",
+        value: expect.objectContaining({
+          researchRunId: `${childRunId}:research:1`,
+        }),
+      }),
+    ]);
+    expect(adopted[0].token).not.toBe(childResearchHandle);
+    expect(resolveReferentToken(table, adopted[0].token))
+      .toMatchObject({ kind: "research" });
+    expect(delegateOutput).not.toContain(childResearchHandle);
+    expect(engine.getRunState().handleTable).toEqual(engine.handleTable);
   });
 
   it("returns a reference whose path segment is token-shaped whole", async () => {

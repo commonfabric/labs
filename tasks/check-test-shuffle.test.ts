@@ -6,7 +6,6 @@
  * thing the gate exists to stop.
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { join } from "@std/path";
@@ -19,6 +18,7 @@ import {
   staleRecords,
   writtenCommands,
 } from "./check-test-shuffle.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const SHUFFLE = "--shuffle=$(deno task -q test-seed)";
 
@@ -580,6 +580,22 @@ describe("check-test-shuffle", () => {
         "deno-test": `deno test ${SHUFFLE} -A`,
         "browser-test": "deno run -A ../deno-web-test/cli.ts x.test.ts",
       });
+      expect(await scan(root)).toEqual([]);
+    });
+
+    it("passes over a task a member's test script is told to run that the member does not have", async () => {
+      const root = await fixtureMember({
+        test: "deno run -A ../tasks/run-member-tests.ts deno-test absent",
+        "deno-test": `deno test ${SHUFFLE} -A`,
+      });
+      expect(await scan(root)).toEqual([]);
+    });
+
+    it("passes over a tracked TypeScript source the working tree no longer holds", async () => {
+      const root = await fixtureMember({ test: `deno test ${SHUFFLE} -A` }, {
+        "tasks/run.ts": 'await run(["deno", "test", "-A"]);\n',
+      });
+      await Deno.remove(join(root, "tasks/run.ts"));
       expect(await scan(root)).toEqual([]);
     });
 

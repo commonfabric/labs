@@ -1,5 +1,5 @@
 import { action, assert, FabricBytes, pattern, TESTS } from "commonfabric";
-import ProfileEmbed from "./profile-embed.tsx";
+import ProfileEmbed, { savePicture } from "./profile-embed.tsx";
 import ProfileHome from "../profile-home/profile-home.tsx";
 
 /**
@@ -20,11 +20,9 @@ import ProfileHome from "../profile-home/profile-home.tsx";
  *       name/picture and allowed for bio (CT-1828). The rendered badge/bio
  *       presentation and edit affordance are verified in the browser.
  */
-// Stands in for a picked picture; the profile stores the bytes as sent.
+// Stands in for a picked picture, and the blob the picker stored it in.
 const PICKED_PICTURE = [0x89, 0x50, 0x4e, 0x47];
-
-const isPickedPicture = (picture: FabricBytes | undefined) =>
-  picture?.slice().join() === PICKED_PICTURE.join();
+const PICKED_BLOB = { space: "did:key:z6MkPickedPicture", id: "fid1:picked" };
 
 export default pattern(() => {
   // (1) Fallback branch: with no profile resolvable in lane-2, the embed reports
@@ -49,15 +47,20 @@ export default pattern(() => {
     if (draft.trim()) profile.setName.send({ name: draft });
   });
 
-  // The embed's picture picker forwards the picked bytes into setPicture,
-  // suppressing an empty pick.
+  // The embed's picture picker forwards the bytes `<cf-avatar-input>` hands
+  // on into setPicture, suppressing an empty pick.
+  const pickPicture = savePicture({ setPicture: profile.setPicture });
   const action_amend_picture = action(() => {
-    const picked = new FabricBytes(new Uint8Array(PICKED_PICTURE));
-    if (picked.length) profile.setPicture.send({ picture: picked });
+    pickPicture.send({
+      detail: {
+        bytes: new FabricBytes(new Uint8Array(PICKED_PICTURE)),
+        blob: PICKED_BLOB,
+      },
+    });
   });
   const action_amend_picture_empty = action(() => {
-    const picked = new FabricBytes(new Uint8Array());
-    if (picked.length) profile.setPicture.send({ picture: picked });
+    pickPicture.send({ detail: { bytes: new FabricBytes(new Uint8Array()) } });
+    pickPicture.send({ detail: {} });
   });
 
   // Bio is deliberately clearable (unlike name/picture); the embed sends the
@@ -78,9 +81,14 @@ export default pattern(() => {
   const assert_name_survives_empty = assert(() =>
     profile.initialNameApplied === "Grace Hopper"
   );
-  const assert_picture_amended = assert(() => isPickedPicture(profile.picture));
+  // The picker's bytes and the blob they were stored in both reach the
+  // profile, which holds the blob.
+  const assert_picture_amended = assert(() =>
+    profile.pictureBlob?.id === PICKED_BLOB.id &&
+    profile.pictureBlob?.space === PICKED_BLOB.space
+  );
   const assert_picture_survives_empty = assert(() =>
-    isPickedPicture(profile.picture)
+    profile.pictureBlob?.id === PICKED_BLOB.id
   );
   const assert_bio_amended = assert(() =>
     profile.bio === "Countess of computing."

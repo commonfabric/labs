@@ -7,12 +7,6 @@ export interface TypeTraversalOptions<T> {
   /** Function to check each type and potentially return a result */
   readonly checkType: (type: ts.Type) => T | undefined;
 
-  /** How to combine results from union types (default: return first match) */
-  readonly handleUnion?: "first" | "some" | "every";
-
-  /** How to combine results from intersection types (default: return first match) */
-  readonly handleIntersection?: "first" | "some" | "every";
-
   /** Whether to check apparent type (default: false) */
   readonly visitApparentType?: boolean;
 
@@ -55,35 +49,13 @@ export function traverseTypeHierarchy<T>(
     }
   }
 
-  // Handle union and intersection types
-  if (type.flags & (ts.TypeFlags.Union | ts.TypeFlags.Intersection)) {
-    const compound = type as ts.UnionOrIntersectionType;
-    const isUnion = !!(type.flags & ts.TypeFlags.Union);
-    const strategy = isUnion
-      ? (options.handleUnion ?? "first")
-      : (options.handleIntersection ?? "first");
-
-    if (strategy === "first") {
-      // Return first match
-      for (const child of compound.types) {
-        const result = traverseTypeHierarchy(child, options, seen);
-        if (result !== undefined) return result;
-      }
-      // No match found in union/intersection
-      return undefined;
-    } else if (strategy === "some") {
-      // Check if any child matches (for boolean results)
-      const hasMatch = compound.types.some((child) =>
-        traverseTypeHierarchy(child, options, seen)
-      );
-      return (hasMatch as unknown as T);
-    } else if (strategy === "every") {
-      // Check if all children match (for boolean results)
-      const allMatch = compound.types.every((child) =>
-        traverseTypeHierarchy(child, options, seen)
-      );
-      return (allMatch as unknown as T);
+  // A union or an intersection matches as its first matching member does.
+  if (type.isUnionOrIntersection()) {
+    for (const child of type.types) {
+      const result = traverseTypeHierarchy(child, options, seen);
+      if (result !== undefined) return result;
     }
+    return undefined;
   }
 
   // Handle object types

@@ -8,7 +8,6 @@
  * store, as a person's second device is.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
@@ -37,6 +36,12 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 
 import {
@@ -926,6 +931,8 @@ export default pattern<{
       await receivedThrough("first");
       await first.storage.synced();
 
+      // This host has loaded no profile documents. Home's ownership reads
+      // must load them through the links its profile list holds.
       const second = await open();
       const root = await second.controller.getDefaultPattern();
       if (root === undefined) throw new Error("The second host finds no Home.");
@@ -951,6 +958,8 @@ export default pattern<{
       await first.storage.synced();
       await close(first);
 
+      // The restarted host must load the retired profile's documents from
+      // Home's links, without another host keeping its graph running.
       const second = await open();
       const root = await second.controller.getDefaultPattern();
       if (root === undefined) throw new Error("The second host finds no Home.");

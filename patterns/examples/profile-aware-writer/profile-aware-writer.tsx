@@ -1,3 +1,10 @@
+/**
+ * A writing assistant that asks a language model to write about a topic you
+ * enter, personalizing the result with a summary of the user found through
+ * `wish({ query: "#learnedSummary" })`. It shows the profile text in an
+ * editable `cf-code-editor` and the generated text beneath it.
+ */
+
 import {
   Cell,
   computed,
@@ -15,7 +22,8 @@ type Input = {
   title?: string | Default<"Profile-Aware Writer">;
 };
 
-const handleSend = handler<
+// Takes the trimmed message as the topic, ignoring a blank one.
+export const handleSend = handler<
   { detail: { message: string } },
   { topic: Writable<string> }
 >((event, { topic }) => {
@@ -81,7 +89,7 @@ Write content personalized to the user when appropriate.`;
         {result.pending
           ? (
             <div style="margin-top: 16px;">
-              <cf-loader show-elapsed /> Generating personalized content...
+              <cf-loader showElapsed /> Generating personalized content...
             </div>
           )
           : result.result

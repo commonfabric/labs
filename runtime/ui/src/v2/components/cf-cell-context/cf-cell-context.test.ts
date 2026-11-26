@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { CFCellContext } from "./index.ts";
 import { resetRetiredElementWarnings } from "../../core/retired-element.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("CFCellContext (retired)", () => {
   // The contract for a retired element, exercised on the first one.

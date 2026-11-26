@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { parseConsoleReference } from "../../console/reference.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("reference", () => {
   it("requires a complete entity scheme and a nonempty identifier", () => {

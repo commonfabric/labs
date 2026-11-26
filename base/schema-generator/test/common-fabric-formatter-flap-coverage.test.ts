@@ -4,7 +4,6 @@
 // across runs of identical code. These unit tests drive the same branches
 // directly so the package's own test job records them on every run.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 import { SchemaGenerator } from "../src/schema-generator.ts";
@@ -14,6 +13,7 @@ import {
   getTypeFromCode,
   getTypeFromFiles,
 } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function findInterfaceMemberTypeNode(
   sourceFile: ts.SourceFile,
@@ -113,7 +113,7 @@ describe("Common Fabric formatter flap coverage", () => {
         new SchemaGenerator().generateSchema(type, checker),
       );
 
-      const save = schema.properties?.save as any;
+      const save = asObjectSchema(schema.properties?.save);
       expect(save.type).toBe("string");
       expect(save.ifc?.uiContract).toEqual({
         helper: "UiAction",
@@ -158,7 +158,7 @@ describe("Common Fabric formatter flap coverage", () => {
         new SchemaGenerator().generateSchema(type, checker),
       );
 
-      const save = schema.properties?.save as any;
+      const save = asObjectSchema(schema.properties?.save);
       expect(save.type).toBe("string");
       expect(save.ifc?.uiContract).toEqual({
         helper: "UiAction",
@@ -201,7 +201,7 @@ describe("Common Fabric formatter flap coverage", () => {
         new SchemaGenerator().generateSchema(type, checker),
       );
 
-      const body = schema.properties?.body as any;
+      const body = asObjectSchema(schema.properties?.body);
       expect(body.type).toBe("string");
       expect(body.ifc?.confidentiality).toEqual([
         { kind: "prompt-influence", allowed: false, owner: null },
@@ -239,7 +239,7 @@ describe("Common Fabric formatter flap coverage", () => {
         wrapperNode,
         undefined,
         schemaHints,
-      ) as Record<string, any>;
+      );
 
       expect(result).toEqual({
         type: "array",
@@ -274,7 +274,7 @@ describe("Common Fabric formatter flap coverage", () => {
         wrapperNode,
         undefined,
         schemaHints,
-      ) as Record<string, any>;
+      );
 
       expect(result).toEqual({
         type: "array",
@@ -314,7 +314,7 @@ describe("Common Fabric formatter flap coverage", () => {
         wrapperNode,
         undefined,
         schemaHints,
-      ) as Record<string, any>;
+      );
 
       expect(result).toEqual({
         type: "object",

@@ -1,22 +1,26 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLogger } from "@commonfabric/logger";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { Pattern } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import {
-  getDerivedInternalCellLink,
-  getMetaLink,
-  parseLink,
-} from "../src/link-utils.ts";
+import { getDerivedInternalCellLink, parseLink } from "../src/link-utils.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { trustExecutable } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("resume list children faults");
 const space = signer.did();
+const otherSpace = (await Identity.fromPassphrase(
+  "resume list children faults, other space",
+)).did();
 
 type Emission = { level: "debug" | "warn"; key: string; parts: unknown[] };
 
@@ -70,7 +74,7 @@ const childPattern: Pattern = {
 
 // A `map` node whose `list` input aliases a derived internal cell the
 // pattern's manifest does not declare. Binding the node's inputs throws, so
-// neither the slot rounds nor the children derivation can read past it.
+// neither the list rounds nor the children derivation can read past it.
 const unbindableListPattern: Pattern = {
   argumentSchema: {},
   resultSchema: {},
@@ -186,14 +190,14 @@ describe("resume-list-children-faults", () => {
       }
     };
 
-    it("skips a node whose inputs do not bind, in both the slot rounds and the children derivation", async () => {
+    it("skips a node whose inputs do not bind, in both the list rounds and the children derivation", async () => {
       const messages = await resumeWith(
         unbindableListPattern,
         "list-faults-unbindable",
         /Unknown derived internal cell/,
       );
       expect(messages).toContain(
-        "debug:skipping a list node whose slots could not be resolved",
+        "debug:skipping a list node whose list could not be read",
       );
       expect(messages).toContain(
         "debug:skipping a list node whose children could not be derived",
@@ -208,10 +212,10 @@ describe("resume-list-children-faults", () => {
       expect(messages).toContain(
         "debug:skipping a list node whose children could not be derived",
       );
-      // The slot rounds read this node fine: its list input binds, and an
+      // The list rounds read this node fine: its list input binds, and an
       // argument without `items` syncs the list's entity for the next round.
       expect(messages).not.toContain(
-        "debug:skipping a list node whose slots could not be resolved",
+        "debug:skipping a list node whose list could not be read",
       );
     });
   });
@@ -244,7 +248,7 @@ describe("resume-list-children-faults", () => {
       return { runtime, manager };
     }
 
-    it("resumes without the children, owned cells, and slot targets it could not sync, warning for each", async () => {
+    it("resumes without the children and owned cells it could not sync, warning for each", async () => {
       const cellId = "list-faults-sync-failures";
 
       // CREATE: the durable list and its children, on one replica.
@@ -285,26 +289,18 @@ describe("resume-list-children-faults", () => {
         );
       });
       expect(ownedIds.length).toBe(2);
-      const argumentId = getMetaLink(authored, "argument")?.id;
-      expect(argumentId).toBeDefined();
       await author.runtime.dispose({ closeStorage: false });
       runtimes.splice(runtimes.indexOf(author.runtime), 1);
 
       // RESUME: a cold replica whose syncs of exactly the wave's targets
-      // fail — the children, their owned cells, and the slot resolutions
-      // (element paths into the list's own document; the root wave's syncs
-      // of that document at its root and at the list's path are left alone).
+      // fail — the children and their owned cells.
       const resumer = replica();
       await resumer.runtime.patternManager.compilePattern(PROGRAM, { space });
       const original = resumer.manager.syncCell.bind(resumer.manager);
       const refused: string[] = [];
       resumer.manager.syncCell = ((cell, options) => {
         const link = cell.getAsNormalizedFullLink();
-        const isSlotTarget = link.id === argumentId && link.path.length > 1;
-        if (
-          childIds.includes(link.id) || ownedIds.includes(link.id) ||
-          isSlotTarget
-        ) {
+        if (childIds.includes(link.id) || ownedIds.includes(link.id)) {
           refused.push(link.id);
           return Promise.reject(new Error("injected sync failure"));
         }
@@ -319,9 +315,6 @@ describe("resume-list-children-faults", () => {
       });
       const messages = listChildrenMessages(emissions);
       expect(messages).toContain(
-        "warn:list slot resolution sync failed; resuming without it",
-      );
-      expect(messages).toContain(
         "warn:list child sync failed; resuming without it",
       );
       expect(messages).toContain(
@@ -331,6 +324,74 @@ describe("resume-list-children-faults", () => {
 
       // The resume still converges: the coordinator's own run pulls what the
       // wave could not, once the injected refusals no longer apply.
+      resumer.manager.syncCell = original as typeof resumer.manager.syncCell;
+      await resumed.pull();
+      await resumer.runtime.settled();
+      await resumer.runtime.storageManager.synced();
+      expect(
+        (resumed.key("doubled").getAsQueryResult() as { value: number }[])
+          .map((row) => row.value),
+      ).toEqual([2, 4]);
+    });
+
+    it("resumes without a list document it could not sync, warning for it", async () => {
+      const cellId = "list-faults-list-sync-failure";
+
+      // CREATE: a host whose list lives in a document of another space, which
+      // no wave of the host's own space delivers alongside it.
+      const author = replica();
+      const items = author.runtime.getCell<{ n: number }[]>(
+        otherSpace,
+        "list-faults-other-space-list",
+      );
+      {
+        const itemsTx = author.runtime.edit();
+        items.withTx(itemsTx).set([{ n: 1 }, { n: 2 }]);
+        expect((await itemsTx.commit().settled).error).toBeUndefined();
+      }
+      const compiled = await author.runtime.patternManager.compilePattern(
+        PROGRAM,
+        { space },
+      );
+      const tx = author.runtime.edit();
+      const authored = author.runtime.getCell<
+        { doubled: { value: number }[] }
+      >(space, cellId, compiled.resultSchema, tx);
+      author.runtime.run(tx, compiled, { items }, authored);
+      await tx.commit().settled;
+      await authored.pull();
+      await author.runtime.settled();
+      await author.runtime.patternManager.flushCompileCacheWrites();
+      await author.runtime.storageManager.synced();
+      const listId = items.getAsNormalizedFullLink().id;
+      await author.runtime.dispose({ closeStorage: false });
+      runtimes.splice(runtimes.indexOf(author.runtime), 1);
+
+      // RESUME: a cold replica whose syncs of the list document fail.
+      const resumer = replica();
+      await resumer.runtime.patternManager.compilePattern(PROGRAM, { space });
+      const original = resumer.manager.syncCell.bind(resumer.manager);
+      let refused = 0;
+      resumer.manager.syncCell = ((cell, options) => {
+        if (cell.getAsNormalizedFullLink().id === listId) {
+          refused++;
+          return Promise.reject(new Error("injected sync failure"));
+        }
+        return original(cell, options);
+      }) as typeof resumer.manager.syncCell;
+      const resumed = resumer.runtime.getCell<
+        { doubled: { value: number }[] }
+      >(space, cellId, compiled.resultSchema);
+
+      const emissions = await captureRunnerLog(async () => {
+        expect(await resumer.runtime.runner.start(resumed)).toBe(true);
+      });
+      expect(listChildrenMessages(emissions)).toContain(
+        "warn:list document sync failed; resuming without it",
+      );
+      expect(refused).toBeGreaterThan(0);
+
+      // The resume still converges once the refusals no longer apply.
       resumer.manager.syncCell = original as typeof resumer.manager.syncCell;
       await resumed.pull();
       await resumer.runtime.settled();

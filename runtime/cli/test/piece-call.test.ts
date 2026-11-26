@@ -1,6 +1,5 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { ValidationError } from "@cliffy/command";
 import type { JSONSchema } from "@commonfabric/api";
@@ -23,7 +22,14 @@ import {
   parseLLMFriendlyLink,
 } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { withheldStatusTxViewForTestingOnly } from "@commonfabric/runner/for-testing-only";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   boundedSettlement,
@@ -1228,6 +1234,109 @@ describe("executePieceCallable", () => {
     // off this handling's commit — never from draining the whole graph.
     expect(harness.tracker.idleCalls).toBe(0);
     expect(harness.tracker.syncedCalls).toBe(0);
+  });
+
+  it("settles a handling whose outcome is withheld without reading a receipt, and says so beside the Invocation JSON", async () => {
+    const harness = createPieceCallableHarness({
+      callableKind: "handler",
+      cellKey: "addComment",
+      inputSchema: {
+        type: "object",
+        properties: { message: { type: "string" } },
+        required: ["message"],
+      },
+      receiptValue: { commentId: "c-1" },
+    });
+    const phases: string[] = [];
+    // The runtime reports a handling that read data the space does not admit
+    // through a withheld view of the transaction its commit callback hands.
+    const sendWithheld: typeof sendEvent = (stream, event, onCommit, opts) =>
+      sendThroughStandIn(
+        stream,
+        event,
+        onCommit &&
+          ((tx) => onCommit(withheldStatusTxViewForTestingOnly(tx))),
+        opts,
+      );
+
+    const result = await executePieceCallable(
+      {
+        apiUrl: "http://localhost:8000",
+        identity: "/tmp/test-identity.pem",
+        piece: "fid1:piece-123",
+        space: "home",
+      },
+      "addComment",
+      ["--message", "milk"],
+      {
+        sendEvent: sendWithheld,
+        loadPieces: () => Promise.resolve(harness.pieces),
+        loadPiece: () => Promise.resolve(harness.piece),
+        invocation: { id: "inv-123", session: callerSession },
+        onPhase: (phase) => phases.push(phase),
+      },
+    );
+
+    expect(result.invocation).toEqual({
+      id: "inv-123",
+      status: "settled",
+      withheld: true,
+    });
+    expect(phases).toEqual(["dispatched", "committed"]);
+    expect(harness.tracker.receiptLinkRequested).toBeUndefined();
+
+    const rendered: string[] = [];
+    const hinted: string[] = [];
+    renderPieceCallOutcome(
+      { finish: () => {} },
+      result,
+      "addComment",
+      "fid1:piece-123",
+      {
+        render: (text) => rendered.push(text),
+        hint: (text) => hinted.push(text),
+      },
+    );
+    expect(JSON.parse(rendered[0])).toMatchObject({ withheld: true });
+    expect(hinted[0]).toContain("Handled; outcome withheld");
+  });
+
+  it("names no withheld outcome beside an Invocation JSON that settled", async () => {
+    const harness = createPieceCallableHarness({
+      callableKind: "handler",
+      cellKey: "addComment",
+      inputSchema: {
+        type: "object",
+        properties: { message: { type: "string" } },
+        required: ["message"],
+      },
+      receiptValue: { commentId: "c-1" },
+    });
+    const result = await executePieceCallable(
+      {
+        apiUrl: "http://localhost:8000",
+        identity: "/tmp/test-identity.pem",
+        piece: "fid1:piece-123",
+        space: "home",
+      },
+      "addComment",
+      ["--message", "milk"],
+      {
+        sendEvent: sendThroughStandIn,
+        loadPieces: () => Promise.resolve(harness.pieces),
+        loadPiece: () => Promise.resolve(harness.piece),
+        invocation: { id: "inv-123", session: callerSession },
+      },
+    );
+    const hinted: string[] = [];
+    renderPieceCallOutcome(
+      { finish: () => {} },
+      result,
+      "addComment",
+      "fid1:piece-123",
+      { render: () => {}, hint: (text) => hinted.push(text) },
+    );
+    expect(hinted.join("\n")).not.toContain("withheld");
   });
 
   it("carries the caller's session beside the invocation id to send", async () => {

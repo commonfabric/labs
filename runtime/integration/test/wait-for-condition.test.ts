@@ -1,8 +1,9 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { Browser } from "../browser.ts";
 import { waitForCondition } from "../utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("waitForCondition transports only lossless JSON answers", async () => {
+test("waitForCondition transports only lossless JSON answers", async () => {
   const browser = await Browser.launch();
   const page = await browser.newPage();
 

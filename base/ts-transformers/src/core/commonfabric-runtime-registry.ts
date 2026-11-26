@@ -10,7 +10,6 @@ export type CommonFabricRuntimeExportSpec =
     category: "call";
     callKind:
       | "cell-factory"
-      | "lift-applied"
       | "ifElse"
       | "when"
       | "unless"
@@ -132,6 +131,14 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // plain string rather than a reactive value.
   {
     exportName: "eventKey",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // Resolves its argument's links in the running computation or handler, as
+  // `equals` does, and returns a plain string or `undefined`. It builds no
+  // graph node.
+  {
+    exportName: "equalsKey",
     category: "ignored",
     reactiveOrigin: false,
   },
@@ -352,6 +359,14 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     callKind: "runtime-call",
     reactiveOrigin: true,
   },
+  // `indexedCollections` declares a database the runtime keeps current with
+  // its member cells; like `sqliteDatabase`, it gets no schema injection.
+  {
+    exportName: "indexedCollections",
+    category: "call",
+    callKind: "runtime-call",
+    reactiveOrigin: true,
+  },
   // uiVariant(piece, kind) returns a static `cf-render` VNode (it just calls
   // `h`); cf-render owns all reactivity at render time. The transformer needs no
   // special handling — it is not a reactive-origin call and gets no dedicated
@@ -380,6 +395,14 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // and builds no graph node either.
   {
     exportName: "spaceMembers",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // joinSpaceMembers(roster, list, ownerOf, keyOf) joins a member list and a
+  // roster through the two functions it is given, and returns a plain array.
+  // It reads nothing itself and builds no graph node.
+  {
+    exportName: "joinSpaceMembers",
     category: "ignored",
     reactiveOrigin: false,
   },

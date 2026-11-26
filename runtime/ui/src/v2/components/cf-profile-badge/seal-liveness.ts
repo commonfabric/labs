@@ -18,9 +18,6 @@
  * down and clears every seal's highlight; disabling it resumes the loop.
  */
 
-export const prefersReducedMotion = (): boolean =>
-  globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
-
 /**
  * Implemented by a seal that wants cursor-driven sheen. `updateSeal` is called
  * once per animation frame while registered; `clearSeal` is called when the loop
@@ -32,76 +29,108 @@ export interface SealLivenessClient {
   clearSeal(): void;
 }
 
-const clients = new Set<SealLivenessClient>();
-let cursorX = -1e6;
-let cursorY = -1e6;
-let rafId = 0;
-let listening = false;
+/** The parts of a window the controller drives the sheen through. */
+export interface SealLivenessWindow {
+  requestAnimationFrame(callback: (frameMs: number) => void): number;
+  cancelAnimationFrame(handle: number): void;
+  addEventListener(
+    type: "pointermove",
+    listener: (event: PointerEvent) => void,
+    options: AddEventListenerOptions,
+  ): void;
+  removeEventListener(
+    type: "pointermove",
+    listener: (event: PointerEvent) => void,
+  ): void;
+  matchMedia?(query: string): {
+    readonly matches: boolean;
+    addEventListener(type: "change", listener: () => void): void;
+  };
+}
 
-const onPointerMove = (e: PointerEvent): void => {
-  cursorX = e.clientX;
-  cursorY = e.clientY;
+/** Registers and unregisters the seals one window's sheen loop drives. */
+export interface SealLiveness {
+  /** Registers a seal for cursor sheen. The loop starts on the first seal. */
+  register(client: SealLivenessClient): void;
+  /** Unregisters a seal; the listener and frame stop when the last leaves. */
+  unregister(client: SealLivenessClient): void;
+}
+
+/** The sheen loop of `window`. */
+export const createSealLiveness = (
+  window: SealLivenessWindow,
+): SealLiveness => {
+  const clients = new Set<SealLivenessClient>();
+  let cursorX = -1e6;
+  let cursorY = -1e6;
+  let frame = 0;
+  let listening = false;
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+
+  const onPointerMove = (e: PointerEvent): void => {
+    cursorX = e.clientX;
+    cursorY = e.clientY;
+  };
+
+  const tick = (t: number): void => {
+    frame = 0;
+    for (const c of clients) c.updateSeal(cursorX, cursorY, t);
+    if (clients.size > 0) frame = window.requestAnimationFrame(tick);
+  };
+
+  const startLoop = (): void => {
+    if (reducedMotion?.matches) return;
+    if (!listening) {
+      window.addEventListener("pointermove", onPointerMove, { passive: true });
+      listening = true;
+    }
+    if (!frame) frame = window.requestAnimationFrame(tick);
+  };
+
+  const stopLoop = (): void => {
+    if (listening) {
+      window.removeEventListener("pointermove", onPointerMove);
+      listening = false;
+    }
+    if (frame) {
+      window.cancelAnimationFrame(frame);
+      frame = 0;
+    }
+  };
+
+  // Honor a live prefers-reduced-motion toggle: stop the sheen loop (and clear
+  // any lingering highlight) when it turns on; resume when it turns off.
+  // Registrations persist across the toggle so seals don't have to re-register.
+  reducedMotion?.addEventListener("change", () => {
+    if (reducedMotion.matches) {
+      stopLoop();
+      for (const c of clients) c.clearSeal();
+    } else if (clients.size > 0) {
+      startLoop();
+    }
+  });
+
+  return {
+    register: (client) => {
+      clients.add(client);
+      startLoop();
+    },
+    unregister: (client) => {
+      if (clients.delete(client) && clients.size === 0) stopLoop();
+    },
+  };
 };
 
-const tick = (t: number): void => {
-  rafId = 0;
-  for (const c of clients) c.updateSeal(cursorX, cursorY, t);
-  if (clients.size > 0) {
-    rafId = globalThis.requestAnimationFrame(tick);
-  } else {
-    stopLoop();
-  }
-};
+// Outside a browser (SSR, unit tests) there is no animation loop to drive, and
+// the cursor sheen is a browser-only enhancement, so no seal is retained.
+const liveness = typeof globalThis.requestAnimationFrame === "function"
+  ? createSealLiveness(globalThis)
+  : undefined;
 
-const startLoop = (): void => {
-  // Needs a real animation loop; bail under reduced motion and in non-browser
-  // envs (SSR, unit tests) rather than throwing on a missing requestAnimationFrame.
-  if (prefersReducedMotion()) return;
-  if (typeof globalThis.requestAnimationFrame !== "function") return;
-  if (!listening) {
-    globalThis.addEventListener("pointermove", onPointerMove, {
-      passive: true,
-    });
-    listening = true;
-  }
-  if (!rafId) rafId = globalThis.requestAnimationFrame(tick);
-};
+/** Registers a verified seal for the page's cursor sheen. */
+export const registerSeal = (client: SealLivenessClient): void =>
+  liveness?.register(client);
 
-const stopLoop = (): void => {
-  if (listening) {
-    globalThis.removeEventListener("pointermove", onPointerMove);
-    listening = false;
-  }
-  if (rafId) {
-    globalThis.cancelAnimationFrame(rafId);
-    rafId = 0;
-  }
-};
-
-// Honor a live prefers-reduced-motion toggle: stop the sheen loop (and clear any
-// lingering highlight) when it turns on; resume when it turns off. Registrations
-// persist across the toggle so seals don't have to re-register.
-const reducedMotionQuery =
-  globalThis.matchMedia?.("(prefers-reduced-motion: reduce)") ?? null;
-reducedMotionQuery?.addEventListener?.("change", () => {
-  if (prefersReducedMotion()) {
-    stopLoop();
-    for (const c of clients) c.clearSeal();
-  } else if (clients.size > 0) {
-    startLoop();
-  }
-});
-
-/** Register a verified seal for cursor sheen. The loop starts on the first seal. */
-export const registerSeal = (client: SealLivenessClient): void => {
-  // No animation loop available (SSR / unit tests) → don't retain a client we
-  // can never drive; the cursor sheen is a browser-only enhancement anyway.
-  if (typeof globalThis.requestAnimationFrame !== "function") return;
-  clients.add(client);
-  startLoop();
-};
-
-/** Unregister a seal; the loop (listener + rAF) tears down when the last leaves. */
-export const unregisterSeal = (client: SealLivenessClient): void => {
-  if (clients.delete(client) && clients.size === 0) stopLoop();
-};
+/** Unregisters a seal from the page's cursor sheen. */
+export const unregisterSeal = (client: SealLivenessClient): void =>
+  liveness?.unregister(client);

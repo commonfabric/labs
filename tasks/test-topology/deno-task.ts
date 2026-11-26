@@ -266,9 +266,8 @@ export function testBatchOf(
  * A member's test task as the pieces a subset run needs, or undefined for
  * a task this cannot read. That is a task that is neither a single `deno test`
  * nor a `deno run` of the batch runner, a task carrying a shell
- * metacharacter, or a task naming its own import map. A task's import map
- * applies to every module of the invocation, including the preload, so a
- * specifier the preload needs has to be in it.
+ * metacharacter, or a task naming its own import map, which no member does
+ * and whose flag this does not read.
  */
 export function parseTestTask(
   task: string,
@@ -327,9 +326,15 @@ const SKIPPED_DIRECTORIES = new Set([
   "dist",
 ]);
 
-async function walkTestFiles(
+/**
+ * Adds to `found` every test file under `directory` that Deno would discover
+ * there, reading each directory with `readDir`. A directory that is not
+ * there holds none, and any other failure to read one is thrown.
+ */
+export async function walkTestFiles(
   directory: string,
   found: string[],
+  readDir: (path: string) => AsyncIterable<Deno.DirEntry> = Deno.readDir,
 ): Promise<void> {
   // The entries are read before any of them is followed, so that only
   // this directory's own absence is passed over. Catching around the
@@ -338,7 +343,7 @@ async function walkTestFiles(
   // tests — the failure the topology exists to make impossible.
   let entries: Deno.DirEntry[];
   try {
-    entries = await Array.fromAsync(Deno.readDir(directory));
+    entries = await Array.fromAsync(readDir(directory));
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return;
     throw error;
@@ -346,7 +351,7 @@ async function walkTestFiles(
   for (const entry of entries) {
     if (entry.isDirectory) {
       if (SKIPPED_DIRECTORIES.has(entry.name)) continue;
-      await walkTestFiles(path.join(directory, entry.name), found);
+      await walkTestFiles(path.join(directory, entry.name), found, readDir);
       continue;
     }
     if (entry.isFile && DENO_TEST_FILE.test(entry.name)) {

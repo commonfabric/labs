@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { dirname, join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type {
@@ -10,6 +9,7 @@ import type {
 } from "@commonfabric/js-compiler";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { getProgramFromFile } from "../lib/piece.ts";
 

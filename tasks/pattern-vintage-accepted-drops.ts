@@ -1,8 +1,5 @@
 import { mainNamesPattern } from "@commonfabric/runner";
-import {
-  isObjectNotArray,
-  isObjectOrArray,
-} from "@commonfabric/js-values/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /**
  * State a pattern stopped holding on purpose, and therefore no longer owes a
@@ -318,11 +315,8 @@ function spineOf(paths: ReadonlySet<string>): ReadonlySet<string> {
   return spine;
 }
 
-/** A value this walk may rebuild: a bare object literal, nothing else. */
-const isPlainObject = (value: unknown): value is Record<string, unknown> => {
-  if (!isObjectNotArray(value)) {
-    return false;
-  }
+/** Whether this walk may rebuild an object: a bare object literal, nothing else. */
+const isPlainObject = (value: object): boolean => {
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
 };

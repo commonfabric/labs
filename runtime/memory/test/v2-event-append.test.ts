@@ -37,6 +37,7 @@ import { assert, assertEquals, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 import { maxOf } from "@commonfabric/collections/math";
+import { test } from "@commonfabric/test-support/test";
 import {
   applyCommit,
   applyWaveCommit,
@@ -170,7 +171,7 @@ const waveSetSidecar = (
   });
 
 const headSeqOf = (engine: Engine): number =>
-  (engine.statements.selectServerSeq.get() as { seq: number }).seq;
+  (engine.statement("selectServerSeq").get() as { seq: number }).seq;
 
 const commitActingColumns = (
   path: string,
@@ -190,7 +191,7 @@ const commitActingColumns = (
   }
 };
 
-Deno.test("event-append admission: the authored row, end to end", async (t) => {
+test("event-append admission: the authored row, end to end", async (t) => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -338,7 +339,7 @@ Deno.test("event-append admission: the authored row, end to end", async (t) => {
   }
 });
 
-Deno.test("event-append admission: declarations and the sidecar write guard", async (t) => {
+test("event-append admission: declarations and the sidecar write guard", async (t) => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   const authored = (localSeq: number, commit: Partial<ClientCommit>) =>
@@ -437,6 +438,7 @@ Deno.test("event-append admission: declarations and the sidecar write guard", as
           const overrides of [
             { consequenced: true },
             { error: "boo" },
+            { withheld: true as const },
             { status: "dropped" as const, reason: "x" },
           ]
         ) {
@@ -803,7 +805,7 @@ Deno.test("event-append admission: declarations and the sidecar write guard", as
   }
 });
 
-Deno.test("event-append admission: LT1 derived carriage and delegated stamping", async (t) => {
+test("event-append admission: LT1 derived carriage and delegated stamping", async (t) => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -1009,7 +1011,7 @@ Deno.test("event-append admission: LT1 derived carriage and delegated stamping",
   }
 });
 
-Deno.test("OW15: the sessionless space-scope floor carve-out, both negatives and the positive", async (t) => {
+test("OW15: the sessionless space-scope floor carve-out, both negatives and the positive", async (t) => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   const delegatedAppend = (
@@ -1148,7 +1150,7 @@ Deno.test("OW15: the sessionless space-scope floor carve-out, both negatives and
   }
 });
 
-Deno.test("event-append admission: the non-array /value/entries shape guard — both admission arms, both flag postures (M1+m4, review 2026-08-11)", async (t) => {
+test("event-append admission: the non-array /value/entries shape guard — both admission arms, both flag postures (M1+m4, review 2026-08-11)", async (t) => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   const authoredOps = (
@@ -1350,7 +1352,7 @@ Deno.test("event-append admission: the non-array /value/entries shape guard — 
   }
 });
 
-Deno.test("maintainStreamEventWatermarks: the frontier holds below a pending entry and advances only over fully-consequenced seqs (C1 pin, review 2026-08-11)", async (t) => {
+test("maintainStreamEventWatermarks: the frontier holds below a pending entry and advances only over fully-consequenced seqs (C1 pin, review 2026-08-11)", async (t) => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -1483,7 +1485,7 @@ Deno.test("maintainStreamEventWatermarks: the frontier holds below a pending ent
   }
 });
 
-Deno.test("maintainStreamEventWatermarks: a folded sqlite op before the sidecar consequence must not collide the synthetic watermark opIndex (verdict blocker, 2026-08-12)", async () => {
+test("maintainStreamEventWatermarks: a folded sqlite op before the sidecar consequence must not collide the synthetic watermark opIndex (verdict blocker, 2026-08-12)", async () => {
   // sqlite ops consume OPERATION slots but push no revision, so a
   // synthetic index derived from `revisions.length` re-uses the sidecar
   // revision's own opIndex for `[sqlite, sidecar]` — a (seq, op_index)
@@ -1554,7 +1556,7 @@ Deno.test("maintainStreamEventWatermarks: a folded sqlite op before the sidecar 
   }
 });
 
-Deno.test("event attention retention: unresolved terminal covers survive every server rewrite until resolution", async () => {
+test("event attention retention: unresolved terminal covers survive every server rewrite until resolution", async () => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -1676,7 +1678,7 @@ Deno.test("event attention retention: unresolved terminal covers survive every s
   }
 });
 
-Deno.test("system Retry actor carriage rejects incomplete and forged metadata", async () => {
+test("system Retry actor carriage rejects incomplete and forged metadata", async () => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -1764,7 +1766,7 @@ Deno.test("system Retry actor carriage rejects incomplete and forged metadata", 
   }
 });
 
-Deno.test("selectPendingStreamEventDocs: the undelivered-events discovery input (serving-loop §1, §6 step 4)", async () => {
+test("selectPendingStreamEventDocs: the undelivered-events discovery input (serving-loop §1, §6 step 4)", async () => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {

@@ -11,6 +11,7 @@ import {
   literalToValue,
   parseModule,
 } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * The hoisted `const __cfLift_N = __cfHelpers.lift(...)` call that ultimately
@@ -170,7 +171,7 @@ function isInsideCallNamed(node: ts.Node, name: string): boolean {
   return false;
 }
 
-Deno.test(
+test(
   "Pipeline regression: manual mapWithPattern preserves fixed plain-capture key evaluation",
   async () => {
     const source = `import { pattern, UI } from "commonfabric";
@@ -231,7 +232,7 @@ const p = pattern<{ items: string[] }>((state) => ({
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: CFC transformer stages stay in the fixed order",
   () => {
     assertEquals(CFC_TRANSFORMER_STAGE_NAMES, [
@@ -244,6 +245,7 @@ Deno.test(
       "IndirectBuilderCallbackValidationTransformer",
       "CfcPolicyAuthoringTransformer",
       "CfcPolicyOfValidationTransformer",
+      "JsxPropNameValidationTransformer",
       "JsxExpressionSiteRouterTransformer",
       "AssertDiagnosticsTransformer",
       "LiftLoweringTransformer",
@@ -265,7 +267,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: opaque key lowering preserves literal-typed key evaluation",
   async () => {
     const source = `/// <cts-enable />
@@ -313,7 +315,7 @@ const p = pattern<{ item: { title: string } }>((state) => {
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: imported Common Fabric keys stay helper-backed in rewrites",
   async () => {
     const source = `/// <cts-enable />
@@ -376,7 +378,7 @@ const p = pattern<{ mentionable: MentionablePiece[] }, { [UI]: any }>((
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: scheduler options preserve helper-backed keys in lift callbacks",
   async () => {
     const source = await Deno.readTextFile(
@@ -414,7 +416,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: nested writable map callbacks keep direct key reads in shrunk schemas",
   async () => {
     const source = await Deno.readTextFile(
@@ -467,7 +469,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: nested authored ifElse predicate in helper-owned branch lowers to derive",
   async () => {
     const source =
@@ -652,7 +654,7 @@ export default pattern<{
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: dynamic key access in helper-owned map callback initializer lowers without computation diagnostics",
   async () => {
     const source =
@@ -741,12 +743,12 @@ export default pattern<{
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: self-improving classifier examples map keeps examples capture",
   async () => {
     const source = await Deno.readTextFile(
       new URL(
-        "../../../patterns/apps/self-improving-classifier/self-improving-classifier.tsx",
+        "../../../patterns/apps/self-improving-classifier/main.tsx",
         import.meta.url,
       ),
     );
@@ -807,12 +809,12 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: shopping-list sorted ifElse branch does not wrap mapped results in derive",
   async () => {
     const source = await Deno.readTextFile(
       new URL(
-        "../../../patterns/apps/shopping-list/shopping-list.tsx",
+        "../../../patterns/apps/shopping-list/main.tsx",
         import.meta.url,
       ),
     );
@@ -849,7 +851,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: imported pattern factory calls with local cells stay structural",
   async () => {
     const source =
@@ -893,7 +895,7 @@ export default pattern(() => {
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: mapped pattern factory calls with element fields stay structural",
   async () => {
     const source = `import { UI, pattern, type VNode } from "commonfabric";
@@ -971,7 +973,7 @@ export default pattern<{ entries: Entry[] }, { [UI]: VNode }>(({ entries }) => (
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: plain callables that lack pattern-factory shape are not classified as opaque-origin calls (CT-1586 boundary)",
   async () => {
     // CT-1586 extended `isOpaqueOriginCall` to recognize structural pattern
@@ -1034,7 +1036,7 @@ export default pattern<{ entries: Entry[] }, { [UI]: VNode }>(({ entries }) => (
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: dynamic key access on pattern-factory result still wraps in derive (CT-1586 boundary)",
   async () => {
     // After CT-1586, well-known CF computed keys (UI/NAME/SELF/FS) lower
@@ -1102,7 +1104,7 @@ export default pattern<{ entries: Entry[] }, { [UI]: VNode }>(({ entries }) => (
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: module-scope sub-pattern calls in maps stay structural",
   async () => {
     const source = `import { pattern, UI, type VNode } from "commonfabric";
@@ -1150,7 +1152,7 @@ export default pattern<{ entries: Entry[] }, { [UI]: VNode }>(({ entries }) => (
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: opaque-returning factory helpers with local cells stay structural",
   async () => {
     const source = `import { pattern, Writable } from "commonfabric";
@@ -1214,7 +1216,7 @@ export default pattern(() => {
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: computed callbacks that rely on contextual typing still receive injected schemas",
   async () => {
     const source = `import { computed, pattern } from "commonfabric";
@@ -1273,7 +1275,7 @@ export default pattern<{ values: string[] }>(({ values }) => {
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: local concise ternary event handlers stay function-valued",
   async () => {
     const source =
@@ -1419,7 +1421,7 @@ export default pattern<{ items: Writable<Item[]>; votes: Writable<Vote[]> }>(
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: helper-owned IIFE local cell reads lower before use",
   async () => {
     const source = `import { pattern, UI, Writable } from "commonfabric";
@@ -1474,7 +1476,7 @@ export default pattern<{ enabled: Writable<boolean> }>(({ enabled }) => ({
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: nullable computed capture keeps source array schema array-shaped",
   async () => {
     const source = `import { computed, pattern, UI } from "commonfabric";
@@ -1545,7 +1547,7 @@ export default pattern<{ options: Option[] }, { [UI]: any }>(({ options }) => {
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: computed captures preserve destructured PerUser defaults",
   async () => {
     const source =
@@ -1596,7 +1598,7 @@ export default pattern<Input, { [NAME]: string; [UI]: VNode }>(({ question, ["my
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: computed captures preserve destructured Writable defaults",
   async () => {
     const source =
@@ -1635,7 +1637,7 @@ export default pattern<Input, { [NAME]: string; [UI]: VNode }>(({ draftTitle }) 
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: computed captures preserve Writable Record defaults without orphan refs",
   async () => {
     const source =
@@ -1679,7 +1681,7 @@ export default pattern<Input, { [NAME]: string; [UI]: VNode }>(({ selections }) 
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: side-writing computed marks writable inputs for materialization",
   async () => {
     const source =
@@ -1717,7 +1719,7 @@ export default pattern<Input>(({ departments }) => {
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: complete source lifts emit scheduler scope proof including proven-empty",
   async () => {
     const source = `import { computed, pattern } from "commonfabric";
@@ -1746,7 +1748,7 @@ export default pattern<{ value: number }>(({ value }) => {
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: uncertain source lifts do not emit scheduler scope proof",
   async () => {
     // A rest element takes every member the pattern does not name, which the
@@ -1776,7 +1778,7 @@ export default pattern<{ value: Record<string, string> }>(
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: a read through a dynamic key emits scheduler scope proof",
   async () => {
     // A key that can name any member reads the whole value it indexes, which
@@ -1803,7 +1805,7 @@ export default pattern<{ value: Record<string, string>; key: string }>(
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: uncertain writers keep materializer paths without scope proof",
   async () => {
     const source =
@@ -1835,7 +1837,7 @@ export default pattern<Input>(({ departments, values }) => {
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: unreadable cell arguments do not emit scheduler scope proof",
   async () => {
     const source = `import { lift, pattern, type Writable } from "commonfabric";
@@ -1874,7 +1876,7 @@ export default pattern<{ auth: Writable<Auth>; marker: boolean }>(
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: readonly computed does not mark writable-looking inputs for materialization",
   async () => {
     const source =
@@ -1924,7 +1926,7 @@ export default pattern<Input>(({ departments }) => {
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: capture-free computed lowers with a parameterless callback and no materializer options",
   async () => {
     // A computed with NO captures lowers to a lift whose callback has zero
@@ -1972,7 +1974,7 @@ export default pattern<Input>(({ label }) => {
   },
 );
 
-Deno.test(
+test(
   "Pipeline regression: send-only computed keeps stream paths in write metadata but never brands them collectible",
   async () => {
     const source =

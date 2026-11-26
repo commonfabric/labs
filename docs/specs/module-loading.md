@@ -22,7 +22,7 @@ and replication use the empty runtime fingerprint until that provider is enabled
 
 ## Last Updated
 
-2026-07-30
+2026-11-13
 
 ## Summary
 
@@ -123,7 +123,12 @@ graph, keyed by stored path. A module reading one gets its own view of the
 runtime namespaces that expose `dataFile`, whose reader resolves a path against
 that module's own stored name — the way the record compiler resolves an import
 specifier against the importing source — and then looks it up in that closure.
-The result is a graph of per-module records.
+The reader records each string it returns in the engine's `DataFileStrings`,
+and setup writes such a string into a result document as a link to the code
+document holding it rather than inline, so a data file a pattern passes to its
+view is stored once per space
+([static assets for iframe guests](iframe-static-assets.md), part 1). The
+result is a graph of per-module records.
 It:
 
 1. Derives a per-load program id and prefixes every file path with it
@@ -321,7 +326,8 @@ hash with the tag `cf/executable-runtime-fingerprint/v1`. The hash includes:
 
 - the compiler-input fingerprint (`computeCompilerFingerprint()` in
   `compiler-fingerprint.deno.ts`);
-- [`schedulerRuntimeFingerprint()`][c12];
+- a scheduler-semantics version, defined alongside the provider and changed
+  with every change to how the scheduler runs a pattern's actions;
 - an automatically generated catalog hash of the implementations and export
   surfaces of every pattern-facing runtime module; and
 - an automatically generated catalog hash of the sandbox and execution-policy
@@ -628,7 +634,8 @@ source document stores one identity-only link per member of its source package
 that no import reaches and that its module owns: [`SOURCE_ROOT_SPECIFIER`][c7]
 (`cf:source-root/`) for an attached source entry point such as a test, owned
 by the entry, and [`DATA_FILE_SPECIFIER`][c7] (`cf:data-file/`) for an attached
-data file, owned by the module whose `dataFile()` call names it. The entry owns
+data file, owned by the module whose `dataFile()` or `dataFile.url()` call names
+it, or whose `dataFile.urls()` call names the directory holding it. The entry owns
 a data file that no module's source names, such as one read by a computed path
 ([`sourcePackageOwners`][c17] assigns the owners). Unlike a retention
 link, these participate in the owning module's identity, and through it in the
@@ -641,9 +648,12 @@ program's source roots and the data files no module's source names. Neither
 link resolves a module record. A data
 document is hashed as a leaf over its own bytes and filename rather than through
 a parse of its contents, which is what lets a data file hold bytes that are not
-TypeScript. Both namespaces are reserved against authored imports. The compiled
-set carries the same data documents under `kind: "data"`, with the authored
-bytes as their `code`, so a warm load has everything the pattern needs without
+TypeScript. Its stored bytes are text: a binary media file, decided by its
+extension, is stored as a base64 `data:` URL (`decodeDataFile` in
+`base/text/src/data-file.ts`). Both namespaces are reserved against authored
+imports. The compiled
+set carries the same data documents under `kind: "data"`, with their stored
+text as their `code`, so a warm load has everything the pattern needs without
 reading the source set. Cold recovery preserves source-package links on every
 module that owns them, including when the requested pattern is a child of that
 module. Recompilation resolves those attached sources and partitions those data
@@ -662,14 +672,55 @@ current module may exercise. Since content addressing does not authenticate that
 mutable field, source documents carry the compiler integrity stamp on the
 delegation field alone. Compiled documents authenticate it with their existing
 root compiler stamp. Loaders discard delegation metadata without the applicable
-stamp. The source-update transaction computes a union of proposed entries and
-authenticated entries already stored in either document set under
-`editWithRetry`. It writes the same union to both sets with the source pointer
-and revision, and registers it in the active runtime only after the durable
-commit succeeds. General cache saves ([`writeSourceAndCompiledDocs`][c14])
-preserve authenticated authority already present in either set. Entries
-accumulate because one content-addressed successor can be shared by patterns
-updated from different predecessors.
+stamp. A source update writes no cache document in its own transaction, which
+reads the piece's data and would label every document it wrote with that data's
+flow label. It records what it grants in the piece's `pieceSourceDelegations`
+meta member instead, which names the pattern it is for and which every source
+transition writes for the next pattern (see
+[piece-source-lifecycle.md](piece-source-lifecycle.md)). The member has two
+fields. `edges` holds every delegation edge the piece's history recorded, each
+with every position in the piece's source history at which a transition recorded
+it, a derivation or a terminal entry; nothing is removed from it. `delegations`
+holds, for each module of the named pattern's closure, every predecessor it
+reaches over `edges` along a path whose positions do not increase, so a module
+takes what its predecessor held when the module was granted it, and nothing the
+predecessor was granted later. When the update is prepared, it records each
+successor's edge to the module it succeeds at one past the piece's history
+length, which every transition increases and which is never 0. The predecessor
+record's attested list is closed as of when it was written, and the successor
+takes it in now, so an entry of it the edges do not already reach from the
+successor becomes the successor's own edge at that same position, marked
+terminal: a walk reaches it from the successor, and from whatever reaches the
+successor at that position or later, and goes no further, so the successor gets
+the list as written and nothing a listed module was granted afterward, and no
+module that succeeded the predecessor earlier, or the successor earlier, sees
+it. It then closes the candidate's modules, and the transaction is pinned to
+them. A transition that is no source update carries `edges` as they are and
+closes the next pattern's modules over them, in its own transaction, so a module
+it keeps or brings back keeps what the piece's history granted it and a new
+module gets nothing. The runtime registers the update's delegations once its
+transaction commits. A cache transaction of its own then computes a union of
+those entries and authenticated entries already stored in either document set
+under `editWithRetry`, and writes the same union to both sets. A runtime that
+starts or swaps a piece to the member's pattern registers the `delegations`
+entries whose module is in the closure it verifies, reads nothing else of the
+member, closes nothing, and writes nothing, so the authority holds before that
+second transaction lands, and when it never does. A staging that fails is not
+retried, and the piece's own authority does not depend on it; the piece's next
+committed update stages the closed entries of the modules it then runs. A grant
+whose staging failed stays missing from the records where nothing of the piece's
+carries it to them, and three readers of the records alone are refused it. A
+runtime from before the member that makes any transition of the piece after the
+failed staging, a source update or not, is refused the grant and granted nothing
+more. A source update of another piece from the ungranted module after the
+failed staging takes in its unstaged record, so it is refused the grant, carries
+the loss into that piece's record and on to its successors, and is granted
+nothing more. A write that another piece's module makes through a link after
+the failed staging is refused the grant, and is granted nothing more. A member that is absent or names another
+pattern registers nothing, and the stored entries decide. General cache saves
+([`writeSourceAndCompiledDocs`][c14]) preserve authenticated authority already
+present in either set. Entries accumulate because one content-addressed
+successor can be shared by patterns updated from different predecessors.
 
 Because `identity` is a one-way Merkle hash, internal source links are
 load-bearing and stored explicitly. The parent hash commits to those children's
@@ -713,7 +764,11 @@ the successor inherits the direct predecessor plus the predecessor's
 cumulative delegation list ([`deriveModuleDelegations`][c14]). Each setup
 attempt pins the
 proposal alongside committed authority in its own transaction; ordinary
-transactions cannot observe it. The authority fields commit atomically with the
+transactions cannot observe it. The pinned proposal is also what lets the
+setup, a release, append an alternative to a stored write policy whose
+writer's module the installed one succeeds
+([`cfc-conformance-statement.md`](cfc-conformance-statement.md) §10). The
+authority fields commit atomically with the
 source transition. Rejection publishes no proposed authority, while success
 registers the committed union before the updated pattern starts. This makes an
 update chain cold-reload-stable.
@@ -732,8 +787,14 @@ over the envelopes stored on the piece's argument document and on the piece's
 own document — the latter only where setup would rewrite the result
 projection, as the commit merges it only then — so a stored `writeAuthorizedBy`
 claim the candidate's schema cannot reconcile with is reported by the check
-rather than by the commit. It issues no storage writes and creates no module
-update authority. Verified byte caches and in-memory compiler state may be
+rather than by the commit. The dry run reads through a transaction that cannot
+write, pinned to the delegations the update would propose, derived from the
+two entries' verified source closures as setup derives them, or, for a
+candidate the space does not hold yet, from the modules this session
+evaluated it with, which leave out a module imported only for its types. So
+it judges an appended write-policy alternative as the commit does, except
+where that leaves out a delegation the commit's proposal holds. It issues no storage writes and creates no module update authority.
+Verified byte caches and in-memory compiler state may be
 reused by later operations. Normal storage reads can demand materialization by
 an active server executor; preflight does not freeze the space or suppress
 other actors' writes.
@@ -756,9 +817,12 @@ registers the new pattern's module as inheriting from every other pattern the
 history names. A grant registered for one of them settles nothing about the
 rest, since a later update onto the same successor extends its stored grants
 with that update's own predecessors. If any is missing, the runner first reads
-the new pattern's verified source closure in a transaction without writes,
-which registers whatever delegation that closure durably carries. The start or
-swap proceeds once the read settles, whether or not it added a grant.
+the new pattern's compiled closure, and its verified source closure if a
+grant is still missing, in a transaction without writes, which registers
+whatever delegation that closure durably carries, and the entries the piece's
+`pieceSourceDelegations` member records for that pattern whose module is in
+the closure. The start or swap proceeds once the read settles, whether or not
+it added a grant.
 
 Registration and transitive closure are scoped by the space carrying that
 attestation. Each transaction snapshots the resulting per-space maps, and
@@ -862,6 +926,11 @@ cell's contents. The cache is designed around this:
   piece's source transition among them. Each cache write therefore records a
   `runtime.undeclarable-store` marker naming its document
   (`recordUndeclarablePolicyStore`), and the check skips the ceiling there.
+  The marker covers only what a builtin wrote: a write of the record under
+  any other identity in the same transaction, or an unmarked one on the
+  storage transaction beneath, is measured as any writer's is, whatever the
+  cache writes after it. Code holding the transaction object can still write
+  around that record (`cfc-enforcement-matrix.md` §4).
   The skip is scoped to a join the target's own space produced: where a clause
   reached the join from another space, the cache write is measured like any
   other, so a compile cannot carry a foreign space's labeled value into a
@@ -871,6 +940,80 @@ cell's contents. The cache is designed around this:
   which CFC leaves out of the flow join on both sides, so what a stamp can
   reach is the compiler's bookkeeping beside them. `cfc-enforcement-matrix.md`
   §4 carries the reasoning, including where this stops short of spec §18.6.2.
+- **Repairing a stamped record.** A runtime that staged a source update's
+  delegations in the update's own transaction left the piece data's label on
+  the successor's records, and every later setup that reads one consumes the
+  label and is refused as a writer-fit misfit. The load ahead of a setup
+  repairs them: `PatternManager.prepareSourceClosureVerification()` runs
+  `repairCompileCacheStamps()` for each closure it prepares, and the setup
+  then reads the records unlabeled.
+  - It verifies the closure in a transaction of its own and aborts it. The
+    repair's transaction reads each record it writes whole, and refuses to
+    write if any changed since. The source record of each module whose
+    compiled record it erases guards the erase: it is read as the verifier
+    reads, so its label flows nowhere, and the read still refuses the commit
+    if the record changed. The transaction reads and writes nothing else but
+    content-addressed documents, is refused if it is CFC-relevant, and
+    commits with no explicit preparation, refused if its commit would prepare
+    it.
+  - A stamped compiled record is erased, value and label together, and the
+    next load compiles it again. It is left, and the closure refused, where
+    its attested delegation list names an identity the source record's
+    attested list does not, or is stored as anything but an inline list of
+    identities.
+  - A stamped source record is rewritten to the value the compile-cache
+    writer stores for its identity, computed from the verified closure: its
+    code, filename, the authored edges a scan of its code yields in scan
+    order, its source-root and data-file edges ordered by specifier and
+    identity, on the closure's entry only a cache-root edge per other module
+    of the closure it linked, and its delegation list where its own label
+    attests it in an entry the repair keeps. Its new label is
+    that attestation alone; every `derived` and `structure` entry goes,
+    existence entries included.
+  - Each member is read at the document its own identity keys, an edge that
+    lands anywhere else refuses the closure, the list is taken only from the
+    record's own document, and no attestation is added. A record holding
+    annotations, a field the cache writer does not write, code its identity
+    does not hash unchanged, a clause outside a stamp entry, or a
+    label-metadata template its entries do not derive is refused. So is a
+    source record whose stamp entry holds the compiler's attestation at its
+    list, or that holds any entry outside a stamp entry other than that
+    attestation over a non-empty list of identities, and a closure a
+    member's dropped cache-root edges were the only way to reach.
+  - The write takes the `compile-cache-repair` builtin identity and a
+    compile-cache record's key (`writeRepairedCompileCacheRecord()`). A
+    session that may not write the space is refused at the commit, and its
+    setup is refused as before. A clean closure costs a read of its labels,
+    and a sync of each member's compiled record, in the transaction that
+    already loaded it.
+  - A refused closure is not tried again in the session. One whose commit lost a
+    race, was refused for want of write access, or failed for another reason is
+    tried again at the next load: a session that may only read the space
+    verifies the closure again at each load of it, about 40 to 50 ms for a
+    28-module closure. A module that is a non-entry member of one closure and
+    the entry of another is repaired with its own cache-root edges only through
+    the closure it enters: a test program's closure verified before its page's
+    is refused when the page's dropped edges were the only way to reach a
+    member, and is clean once the page's closure is repaired.
+  - Not repaired: a stamped compiled record of a module the source closure
+    does not reach, such as a `fabric:` dependency the compiled closure
+    links, is neither checked nor erased. A setup of its importer still
+    commits, since a setup reads source records only, but a write-back of the
+    importer that reads it re-stamps the importer's compiled record, which
+    the next load erases again. On a serving runtime, a closure in a space
+    other than the one it serves is not repaired, since a direct commit
+    there may write only the served space; that setup is refused as before,
+    and the closure is tried again at its next load.
+  - The loads that run it are each creation's and each source transition's
+    preparation, ahead of the transaction that verifies the closure: a served
+    instantiation, a controller's creation, the children a handler returns,
+    and a supplied source compiled into a space for a wish's sidecar, which
+    the sidecar's creation in the wish's own transaction then reads. A
+    supplied source is compiled once per space in a session, so a record an
+    older runtime stamps again later in that session is not repaired before
+    the next sidecar created from it. Not repaired first: a child a
+    pattern's own graph places in another space, whose closure no load
+    prepares there. Its creation reads a stamped record as before.
 - **Fail-closed, not fail-hard.** A compiled document with a missing or invalid
   integrity label is treated as a **cache miss** and recompiled from the
   (self-verifying) source set, which re-runs the SES verifier. So the verifier
@@ -889,7 +1032,9 @@ cell's contents. The cache is designed around this:
   shared space reads one cache (a per-user stamp made every other member a
   permanent miss and made their write-backs collide on the label merge). Minting
   is gated — prepare strips `cf-compiled-by:` atoms from any write not authored
-  by a trusted builtin — so pattern code cannot stamp a forged doc. While
+  by a trusted builtin, and at any path a write by another identity in the same
+  transaction reached — so pattern code cannot stamp a forged doc, nor keep
+  the stamp over a value it chose, before or after the cache writer's write. While
   compilation is still client-side, the label remains client-asserted at the
   raw-storage level, so within a space it amounts to self-poisoning (acceptable,
   and contained by the per-space scope). The end state moves **compilation to the
@@ -1071,7 +1216,7 @@ index's restart-stable `action` column,
   and the `dataFile()` reads that decide which module owns a data file's edge:
   [`scanModuleDeclarations`][c5], one parse per module, shared across a
   compile through [`scanModules`][c3]. [`collectImportSpecifiers`][c5] and
-  [`collectDataFileNames`][c5] each return one half of that scan.
+  [`collectDataReads`][c5] each return one half of that scan.
 - Record assembly and the warm-load rebuild: [`compileSourcesToRecords`][c7],
   [`deriveModuleRecordFields`][c7], [`buildRecordsFromCompiled`][c7].
 - Loading: [`openModuleGraph`][c6], [`loadModuleGraph`][c6] and
@@ -1090,8 +1235,8 @@ index's restart-stable `action` column,
   implementations install their accessors through
   [`annotateFunctionDebugMetadata`][c11]; pattern factories call
   `defineAuthoredDebugAccessors` directly.
-- Scheduler fingerprints: [`schedulerImplementationFingerprint`][c12] and
-  [`schedulerRuntimeFingerprint`][c12].
+- Scheduler implementation fingerprint:
+  [`schedulerImplementationFingerprint`][c12].
 - Hash primitive: [`hashStringOf`][c13] (and [`hashOf`][c13]).
 - Content-addressed cache: [`sourceDocKey`][c14], [`compiledDocKey`][c14],
   [`buildSourceDocs`][c14], [`verifySourceDocs`][c14],

@@ -15,6 +15,7 @@ import {
   fuseMod,
   fuseSupervisorMod,
   isAlive,
+  isCompiledBinary,
   isMountpointInTable,
   isMountStateAlive,
   type MountStateEntry,
@@ -335,199 +336,15 @@ export const fuse = new Command()
       "Linux only: export the mount to Docker or other users.",
     ),
   )
-  .action(async (options, mountpoint) => {
-    // globalEnv merges CF_API_URL / CF_IDENTITY into options automatically
-    const apiUrl = options.apiUrl ?? "";
-    const identity = options.identity ? resolve(options.identity) : "";
-    const absMountpoint = resolve(mountpoint);
-
-    // cliffy's integer type accepts any whole number; enforce the daemon's
-    // range here so the error surfaces at the command line rather than in
-    // the (possibly backgrounded) FUSE child.
-    const attrcacheTimeout = options.attrcacheTimeout !== undefined
-      ? String(options.attrcacheTimeout)
-      : undefined;
-    if (attrcacheTimeout !== undefined) {
-      parseAttrcacheTimeoutSeconds(attrcacheTimeout);
-    }
-
-    if (identity) {
-      let stat: Deno.FileInfo;
-      try {
-        stat = await Deno.stat(identity);
-      } catch {
-        throw new Error(`Identity file not found: ${identity}`);
-      }
-      if (!stat.isFile) {
-        throw new Error(`Identity file not found: ${identity}`);
-      }
-    }
-
-    // Ensure mountpoint exists
-    try {
-      await Deno.stat(absMountpoint);
-    } catch {
-      await Deno.mkdir(absMountpoint, { recursive: true });
-    }
-
-    const stateDir = defaultStateDir();
-    const execCli = await ensureExecShim(stateDir, import.meta.url);
-    const execPath = Deno.execPath();
-    const execBase = basename(execPath);
-    const isCompiledBinary = execBase !== "deno" && execBase !== "deno.exe";
-
-    // The mount flags every spawn path forwards, whichever entrypoint runs.
-    const mountFlags = {
-      mountpoint: absMountpoint,
-      apiUrl,
-      identity,
-      execCli,
-      spaces: options.space ?? [],
-      debug: options.debug,
-      allowOther: options.allowOther,
-      noattrcache: options.noattrcache,
-      attrcacheTimeout,
-      cfcMode: options.cfcMode,
-      cfcAnnotations: options.cfcAnnotations,
-      cfcXattrNamespace: options.cfcXattrNamespace,
-      cfcWritebackXattrs: options.cfcWritebackXattrs,
-      cfcWritebackState: options.cfcWritebackState,
-      dangerouslyAllowIncompatibleSchema:
-        options.dangerouslyAllowIncompatibleSchema,
-    };
-
-    let spawnCmd: string;
-    let spawnArgs: string[];
-    if (isCompiledBinary) {
-      spawnCmd = execPath;
-      spawnArgs = buildFuseBinaryArgs({
-        subcommand: "fuse-daemon",
-        ...mountFlags,
-      });
-    } else {
-      spawnCmd = "deno";
-      spawnArgs = buildFuseChildDenoArgs({
-        modPath: fuseMod(import.meta.url),
-        ...mountFlags,
-      });
-    }
-
-    if (options.background) {
-      // Derive log file path: /tmp/cf-fuse-<mountname>.log
-      const logFile = `/tmp/cf-fuse-${basename(absMountpoint)}.log`;
-
-      // The supervisor writes the mount state, because it is the process that
-      // spawns the FUSE child and so the only one that knows both PIDs. It holds
-      // write access to that one file, so the directory is prepared here.
-      const statePath = await prepareMountStatePath(stateDir, absMountpoint);
-      const childStatusPath = childStatusPathForStatePath(statePath);
-      try {
-        await Deno.remove(childStatusPath);
-      } catch (error) {
-        if (!(error instanceof Deno.errors.NotFound)) throw error;
-      }
-
-      const supervisorFlags = {
-        ...mountFlags,
-        logFile,
-        statePath,
-        supervisorStatusPath: childStatusPath,
-      };
-      spawnCmd = execPath;
-      spawnArgs = isCompiledBinary
-        ? buildFuseBinaryArgs({
-          subcommand: "fuse-supervisor",
-          ...supervisorFlags,
-        })
-        : buildBackgroundSupervisorDenoArgs({
-          cliModPath: fuseSupervisorMod(import.meta.url),
-          ...supervisorFlags,
-        });
-
-      // Detached background process. Its stdout is a pipe the supervisor passes
-      // down to the FUSE child, which writes its readiness into it.
-      const cmd = new Deno.Command(spawnCmd, {
-        args: spawnArgs,
-        stdin: "null",
-        stdout: "piped",
-        stderr: "null",
-      });
-      const child = cmd.spawn();
-
-      const pid = child.pid;
-      try {
-        await awaitBackgroundMountStartup(pid, statePath, {
-          readiness: child.stdout,
-          supervisorExit: child.status,
-          childStatusPath,
-        });
-        // The mount is up and outlives this command, so stop holding the process
-        // open for it. Unreferencing any earlier would also stop the readiness
-        // read from holding it, and the command would exit mid-handshake.
-        child.unref();
-      } catch (error) {
-        try {
-          Deno.kill(pid, "SIGTERM");
-        } catch {
-          // Process may have already exited.
-        }
-        throw error;
-      }
-
-      console.log(`FUSE mounted in background (PID ${pid})`);
-      console.log(`  mountpoint: ${absMountpoint}`);
-      console.log(`  log:        ${logFile}`);
-      console.log(
-        cliText(
-          `Use 'cf fuse status' to check, 'cf fuse unmount ${mountpoint}' to stop.`,
-        ),
-      );
-    } else {
-      // Foreground — inherit stdio, propagate exit code
-      const logFile = `/tmp/cf-fuse-${basename(absMountpoint)}.log`;
-      spawnArgs.push("--log-file", logFile);
-      console.error(`FUSE log: ${logFile}`);
-
-      const cmd = new Deno.Command(spawnCmd, {
-        args: spawnArgs,
-        stdin: "inherit",
-        stdout: "inherit",
-        stderr: "inherit",
-      });
-      const child = cmd.spawn();
-      let statePath: string;
-      try {
-        statePath = await writeMountState(stateDir, {
-          pid: child.pid,
-          mountpoint: absMountpoint,
-          apiUrl,
-          identity,
-          startedAt: new Date().toISOString(),
-          logFile,
-        });
-      } catch (error) {
-        try {
-          Deno.kill(child.pid, "SIGTERM");
-        } catch {
-          // Process may have already exited.
-        }
-        throw error;
-      }
-
-      await awaitForegroundMountExit(child, statePath);
-    }
-  })
+  // globalEnv merges CF_API_URL / CF_IDENTITY into options automatically
+  .action((options, mountpoint) => runMount(options, mountpoint))
   .reset()
   /* unmount */
   .command(
     "unmount <mountpoint:string>",
     "Unmount a FUSE filesystem.",
   )
-  .action(async (_options, mountpoint) => {
-    const { ok, message } = await runUnmount(mountpoint);
-    console.log(message);
-    if (!ok) Deno.exit(1);
-  })
+  .action((_options, mountpoint) => reportUnmount(mountpoint))
   .reset()
   /* status */
   .command("status", "Show active FUSE mounts.")
@@ -538,12 +355,226 @@ export const fuse = new Command()
     console.log(formatMountStatusTable(await buildMountStatusRows(entries)));
   });
 
+/** The options `cf fuse mount` takes. */
+export interface FuseMountOptions {
+  apiUrl?: string;
+  identity?: string;
+  background?: boolean;
+  debug?: boolean;
+  allowOther?: boolean;
+  noattrcache?: boolean;
+  attrcacheTimeout?: number;
+  cfcMode?: string;
+  cfcAnnotations?: boolean;
+  cfcXattrNamespace?: string;
+  cfcWritebackXattrs?: boolean;
+  cfcWritebackState?: string;
+  dangerouslyAllowIncompatibleSchema?: boolean;
+  space?: string[];
+}
+
+/**
+ * The part of a spawned process that `cf fuse mount` uses. Only a background
+ * mount reads `stdout`, which it spawns piped.
+ */
+export interface FuseMountChild {
+  pid: number;
+  status: Promise<Deno.CommandStatus>;
+  stdout: ReadableStream<Uint8Array>;
+  unref(): void;
+}
+
+/** What `cf fuse mount` reaches outside itself through. */
+export interface FuseMountDeps {
+  spawn?: (command: string, options: Deno.CommandOptions) => FuseMountChild;
+  kill?: (pid: number, signal: Deno.Signal) => void;
+  isAlive?: (pid: number) => boolean;
+  exit?: (code: number) => never | void;
+  output?: Pick<Console, "log" | "error">;
+  stateDir?: string;
+  execPath?: string;
+  importMetaUrl?: string;
+}
+
+/**
+ * Mounts `mountpoint`. In the foreground the FUSE process inherits this
+ * process's stdio and its exit status becomes this process's. In the
+ * background a supervisor is spawned and this returns once the mount reports
+ * that it is up.
+ */
+export async function runMount(
+  options: FuseMountOptions,
+  mountpoint: string,
+  deps: FuseMountDeps = {},
+): Promise<void> {
+  const spawn = deps.spawn ??
+    ((command: string, commandOptions: Deno.CommandOptions) =>
+      new Deno.Command(command, commandOptions).spawn());
+  const kill = deps.kill ?? Deno.kill;
+  const output = deps.output ?? console;
+  const importMetaUrl = deps.importMetaUrl ?? import.meta.url;
+  const stop = (pid: number) => {
+    try {
+      kill(pid, "SIGTERM");
+    } catch {
+      // Process may have already exited.
+    }
+  };
+
+  const apiUrl = options.apiUrl ?? "";
+  const identity = options.identity ? resolve(options.identity) : "";
+  const absMountpoint = resolve(mountpoint);
+
+  // cliffy's integer type accepts any whole number; enforce the daemon's
+  // range here so the error surfaces at the command line rather than in
+  // the (possibly backgrounded) FUSE child.
+  const attrcacheTimeout = options.attrcacheTimeout !== undefined
+    ? String(options.attrcacheTimeout)
+    : undefined;
+  if (attrcacheTimeout !== undefined) {
+    parseAttrcacheTimeoutSeconds(attrcacheTimeout);
+  }
+
+  if (identity) {
+    const stat = await Deno.stat(identity).catch(() => undefined);
+    if (!stat?.isFile) {
+      throw new Error(`Identity file not found: ${identity}`);
+    }
+  }
+
+  await Deno.mkdir(absMountpoint, { recursive: true });
+
+  const stateDir = deps.stateDir ?? defaultStateDir();
+  const execPath = deps.execPath ?? Deno.execPath();
+  const execCli = await ensureExecShim(stateDir, importMetaUrl, execPath);
+  const compiled = isCompiledBinary(execPath);
+  const logFile = `/tmp/cf-fuse-${basename(absMountpoint)}.log`;
+
+  // The mount flags every spawn path forwards, whichever entrypoint runs.
+  const mountFlags = {
+    mountpoint: absMountpoint,
+    apiUrl,
+    identity,
+    execCli,
+    spaces: options.space ?? [],
+    debug: options.debug,
+    allowOther: options.allowOther,
+    noattrcache: options.noattrcache,
+    attrcacheTimeout,
+    cfcMode: options.cfcMode,
+    cfcAnnotations: options.cfcAnnotations,
+    cfcXattrNamespace: options.cfcXattrNamespace,
+    cfcWritebackXattrs: options.cfcWritebackXattrs,
+    cfcWritebackState: options.cfcWritebackState,
+    dangerouslyAllowIncompatibleSchema:
+      options.dangerouslyAllowIncompatibleSchema,
+  };
+
+  if (options.background) {
+    // The supervisor writes the mount state, because it is the process that
+    // spawns the FUSE child and so the only one that knows both PIDs. It holds
+    // write access to that one file, so the directory is prepared here.
+    const statePath = await prepareMountStatePath(stateDir, absMountpoint);
+    const childStatusPath = childStatusPathForStatePath(statePath);
+    try {
+      await Deno.remove(childStatusPath);
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+    }
+
+    const supervisorFlags = {
+      ...mountFlags,
+      logFile,
+      statePath,
+      supervisorStatusPath: childStatusPath,
+    };
+    // Detached background process. Its stdout is a pipe the supervisor passes
+    // down to the FUSE child, which writes its readiness into it.
+    const child = spawn(execPath, {
+      args: compiled
+        ? buildFuseBinaryArgs({
+          subcommand: "fuse-supervisor",
+          ...supervisorFlags,
+        })
+        : buildBackgroundSupervisorDenoArgs({
+          cliModPath: fuseSupervisorMod(importMetaUrl),
+          ...supervisorFlags,
+        }),
+      stdin: "null",
+      stdout: "piped",
+      stderr: "null",
+    });
+
+    try {
+      await awaitBackgroundMountStartup(child.pid, statePath, {
+        readiness: child.stdout,
+        supervisorExit: child.status,
+        isAlive: deps.isAlive,
+        childStatusPath,
+      });
+      // The mount is up and outlives this command, so stop holding the process
+      // open for it. Unreferencing any earlier would also stop the readiness
+      // read from holding it, and the command would exit mid-handshake.
+      child.unref();
+    } catch (error) {
+      stop(child.pid);
+      throw error;
+    }
+
+    output.log(`FUSE mounted in background (PID ${child.pid})`);
+    output.log(`  mountpoint: ${absMountpoint}`);
+    output.log(`  log:        ${logFile}`);
+    output.log(
+      cliText(
+        `Use 'cf fuse status' to check, 'cf fuse unmount ${mountpoint}' to stop.`,
+      ),
+    );
+    return;
+  }
+
+  // Foreground — inherit stdio, propagate exit code
+  output.error(`FUSE log: ${logFile}`);
+  const child = spawn(compiled ? execPath : "deno", {
+    args: [
+      ...(compiled
+        ? buildFuseBinaryArgs({ subcommand: "fuse-daemon", ...mountFlags })
+        : buildFuseChildDenoArgs({
+          modPath: fuseMod(importMetaUrl),
+          ...mountFlags,
+        })),
+      "--log-file",
+      logFile,
+    ],
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  let statePath: string;
+  try {
+    statePath = await writeMountState(stateDir, {
+      pid: child.pid,
+      mountpoint: absMountpoint,
+      apiUrl,
+      identity,
+      startedAt: new Date().toISOString(),
+      logFile,
+    });
+  } catch (error) {
+    stop(child.pid);
+    throw error;
+  }
+
+  await awaitForegroundMountExit(child, statePath, deps.exit);
+}
+
 export async function buildMountStatusRows(
   entries: Array<{ entry: MountStateEntry; path: string }>,
   deps: {
     isMountStateAlive?: (entry: MountStateEntry) => boolean;
     removeMountStateFile?: (path: string) => Promise<void>;
-    readChildMountStatus?: (entry: MountStateEntry) => Promise<string>;
+    readChildMountStatus?: (
+      entry: MountStateEntry & { childStatusPath: string },
+    ) => Promise<string>;
     isMountpointInTable?: (mountpoint: string) => Promise<MountTableState>;
   } = {},
 ): Promise<string[][]> {
@@ -574,9 +605,10 @@ export async function buildMountStatusRows(
       // Kernel mount exists. If a process still serves it, report its live
       // state; if the daemon is dead, the mount outlived it — surface "dead"
       // so the user knows there is a stale mount to clean up. Never sweep.
+      const { childStatusPath } = entry;
       status = alive
-        ? (entry.childStatusPath
-          ? await readChildMountStatusFn(entry)
+        ? (childStatusPath
+          ? await readChildMountStatusFn({ ...entry, childStatusPath })
           : "running")
         : "dead";
     } else if (tableState === "absent") {
@@ -606,8 +638,7 @@ export function formatMountStatusTable(rows: string[][]): string {
   return [mountStatusHeader, ...rows.map((row) => row.join("\t"))].join("\n");
 }
 
-async function readChildMountStatus(entry: { childStatusPath?: string }) {
-  if (!entry.childStatusPath) return "running";
+async function readChildMountStatus(entry: { childStatusPath: string }) {
   try {
     const status = parseChildSupervisorStatus(
       await Deno.readTextFile(entry.childStatusPath),
@@ -618,13 +649,18 @@ async function readChildMountStatus(entry: { childStatusPath?: string }) {
   }
 }
 
-/** Verify a PID belongs to a deno/fuse process before we SIGTERM it. */
-async function verifyIsFuseProcess(pid: number): Promise<boolean> {
+/**
+ * Verify a PID belongs to a deno/fuse process before we SIGTERM it. `ps` is the
+ * command that prints the PID's command line; tests pass a stand-in.
+ */
+export async function verifyIsFuseProcess(
+  pid: number,
+  ps: Pick<Deno.Command, "output"> = new Deno.Command("ps", {
+    args: ["-p", String(pid), "-o", "command="],
+    stdout: "piped",
+  }),
+): Promise<boolean> {
   try {
-    const ps = new Deno.Command("ps", {
-      args: ["-p", String(pid), "-o", "command="],
-      stdout: "piped",
-    });
     const out = await ps.output();
     const cmd = new TextDecoder().decode(out.stdout).trim();
     return isFuseProcessCommand(cmd);
@@ -635,6 +671,16 @@ async function verifyIsFuseProcess(pid: number): Promise<boolean> {
 }
 
 const SYSTEM_UNMOUNT_TIMEOUT_MS = 5_000;
+
+/** The command and arguments that unmount `mountpoint` on `os`. */
+export function systemUnmountCommand(
+  mountpoint: string,
+  os: typeof Deno.build.os = Deno.build.os,
+): { command: string; args: string[] } {
+  return os === "darwin"
+    ? { command: "umount", args: [mountpoint] }
+    : { command: "fusermount3", args: ["-u", mountpoint] };
+}
 
 /**
  * Run the OS unmount for a mountpoint. `umount`/`fusermount3` tear down the
@@ -649,24 +695,20 @@ const SYSTEM_UNMOUNT_TIMEOUT_MS = 5_000;
  */
 export async function defaultSystemUnmount(
   mountpoint: string,
-  opts: { command?: Deno.Command; timeoutMs?: number } = {},
+  opts: {
+    command?: {
+      spawn(): Pick<Deno.ChildProcess, "output" | "kill" | "unref">;
+    };
+    timeoutMs?: number;
+  } = {},
 ): Promise<{ code: number; stderr: string }> {
+  const { command, args } = systemUnmountCommand(mountpoint);
   const cmd = opts.command ??
-    (Deno.build.os === "darwin"
-      ? new Deno.Command("umount", {
-        args: [mountpoint],
-        stdout: "null",
-        stderr: "piped",
-      })
-      : new Deno.Command("fusermount3", {
-        args: ["-u", mountpoint],
-        stdout: "null",
-        stderr: "piped",
-      }));
+    new Deno.Command(command, { args, stdout: "null", stderr: "piped" });
   const timeoutMs = opts.timeoutMs ?? SYSTEM_UNMOUNT_TIMEOUT_MS;
   const timedOut = Symbol("timedOut");
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let child: Deno.ChildProcess | undefined;
+  let child: Pick<Deno.ChildProcess, "output" | "kill" | "unref"> | undefined;
   try {
     child = cmd.spawn();
     const done = child.output().then((out) => ({
@@ -813,6 +855,21 @@ export async function runUnmount(
     message:
       `${absMountpoint} is still mounted. Try: sudo umount -f ${absMountpoint}`,
   };
+}
+
+/**
+ * Runs `cf fuse unmount`: unmounts, prints the outcome, and exits with status 1
+ * when the mount survives.
+ */
+export async function reportUnmount(
+  mountpoint: string,
+  deps: Parameters<typeof runUnmount>[1] & {
+    exit?: (code: number) => never | void;
+  } = {},
+): Promise<void> {
+  const { ok, message } = await runUnmount(mountpoint, deps);
+  (deps.log ?? console.log)(message);
+  if (!ok) (deps.exit ?? Deno.exit)(1);
 }
 
 export const fuseDaemon = new Command()

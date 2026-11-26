@@ -69,3 +69,17 @@ export function isPatternCoverageCacheRuntimeVersion(
 ): boolean {
   return runtimeVersion.endsWith(`/${PATTERN_COVERAGE_CACHE_VARIANT}`);
 }
+
+/**
+ * The byte-cache version of modules compiled from stored source under
+ * `runtimeVersion`, a compiled-code cache key's version. A compile of stored
+ * source emits the bytes a compile of fresh source does, but reports as
+ * warnings some of what a fresh one refuses, so that source admitted before a
+ * check existed still reloads. A fresh compile that took such modules for a
+ * hit would skip the checks it admits source by, so the two never share
+ * entries. The mark goes ahead of the version, which leaves the variant
+ * suffixes where {@link isPatternCoverageCacheRuntimeVersion} reads them.
+ */
+export function storedSourceByteCacheVersion(runtimeVersion: string): string {
+  return `stored-source:${runtimeVersion}`;
+}

@@ -1,10 +1,15 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
-import { listSlotResolutions } from "../../src/builtins/list-coordinator-plan.ts";
+import { listSlotLinks } from "../../src/builtins/list-coordinator-plan.ts";
 import type { Cell } from "../../src/cell.ts";
 import { Runtime } from "../../src/runtime.ts";
 import {
@@ -14,6 +19,8 @@ import {
 
 const signer = await Identity.fromPassphrase("list-coordinator-plan");
 const space = signer.did();
+const farSpace =
+  (await Identity.fromPassphrase("list-coordinator-plan far space")).did();
 
 describe("list-coordinator-plan", () => {
   let server: ReturnType<typeof newLoopbackServer>;
@@ -46,10 +53,9 @@ describe("list-coordinator-plan", () => {
   /**
    * The ways a list's middle element can link so that its links run in a
    * cycle, each given the list's own cell: back to its own place, and into a
-   * subpath of its own place. Each list builtin resolves its list's slots
-   * through `listSlotResolutions()`, by the input keys `list` and, for an
-   * aggregate selecting an element and a collection index, `elements`, as
-   * the resume pre-sync does by `list`.
+   * subpath of its own place. Each list builtin names its list's slots
+   * through `listSlotLinks()`, by the input keys `list` and, for an
+   * aggregate selecting an element and a collection index, `elements`.
    */
   const cycles: [string, (list: Cell<FabricValue>) => FabricValue][] = [
     ["to its own place", (list) => list.key(1).getAsLink()],
@@ -61,13 +67,25 @@ describe("list-coordinator-plan", () => {
    * built from the list's own cell, and a cell holding it under `list` and
    * `elements`, as a list builtin's inputs hold their lists.
    */
-  async function listWith(
+  function listWith(
     name: string,
     middle: (list: Cell<FabricValue>) => FabricValue,
   ): Promise<{ list: Cell<FabricValue>; inputs: Cell<unknown> }> {
+    return listOf(name, (list) => ["a", middle(list), "c"]);
+  }
+
+  /**
+   * The list `slots` builds from the list's own cell, committed under
+   * `name`, and a cell holding it under `list` and `elements`, as a list
+   * builtin's inputs hold their lists.
+   */
+  async function listOf(
+    name: string,
+    slots: (list: Cell<FabricValue>) => FabricValue[],
+  ): Promise<{ list: Cell<FabricValue>; inputs: Cell<unknown> }> {
     const tx = runtime.edit();
     const list = runtime.getCell<FabricValue>(space, name, undefined, tx);
-    list.setRaw(["a", middle(list), "c"]);
+    list.setRaw(slots(list));
     const inputs = runtime.getCell<unknown>(
       space,
       `${name} inputs`,
@@ -111,13 +129,13 @@ describe("list-coordinator-plan", () => {
 
   for (const [kind, middle] of cycles) {
     describe(`over a list an element of which links ${kind}`, () => {
-      it("resolves that element's slot to its place in the list, and each other slot to its value", async () => {
+      it("names that element's slot by its place in the list, as it does each inline slot", async () => {
         const { list, inputs } = await listWith(`slots ${kind}`, middle);
         const base = list.getAsNormalizedFullLink();
 
         for (const key of ["list", "elements"]) {
           const tx = runtime.edit();
-          const { slots } = listSlotResolutions(runtime, tx, inputs, key);
+          const { slots } = listSlotLinks(tx, inputs, key);
           tx.abort();
 
           expect(slots.map(({ id, path }) => ({ id, path }))).toEqual(
@@ -147,6 +165,141 @@ describe("list-coordinator-plan", () => {
       });
     });
   }
+
+  describe("over a list an element of which reaches its own place through another document", () => {
+    /** `["a", <alias of the list's middle place>, "c"]`, and the alias. */
+    async function aliasCycle(name: string) {
+      const tx = runtime.edit();
+      const alias = runtime.getCell<FabricValue>(
+        space,
+        `${name} alias`,
+        undefined,
+        tx,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const made = await listWith(name, () => alias.getAsLink());
+      const aliasTx = runtime.edit();
+      alias.withTx(aliasTx).setRaw(made.list.key(1).getAsLink());
+      expect((await aliasTx.commit().settled).error).toBeUndefined();
+      return { ...made, alias };
+    }
+
+    it("names that element's slot by the link it holds, and each inline slot by its place", async () => {
+      const { list, inputs, alias } = await aliasCycle("alias cycle slots");
+      const base = list.getAsNormalizedFullLink();
+
+      for (const key of ["list", "elements"]) {
+        const tx = runtime.edit();
+        const { slots } = listSlotLinks(tx, inputs, key);
+        tx.abort();
+
+        expect(slots.map(({ id, path }) => ({ id, path }))).toEqual([
+          { id: base.id, path: ["0"] },
+          { id: alias.getAsNormalizedFullLink().id, path: [] },
+          { id: base.id, path: ["2"] },
+        ]);
+      }
+    });
+
+    it("maps the list", async () => {
+      const { list } = await aliasCycle("alias cycle map");
+
+      const result = await runOver(
+        `
+        import { pattern } from "commonfabric";
+        export default pattern<{ list: string[] }>(({ list }) => ({
+          out: list.map((_, index) => index * 10),
+        }));
+      `,
+        list,
+      );
+
+      expect(result.key("out").get()).toEqual([0, 10, 20]);
+      expect(errors).toEqual([]);
+    });
+  });
+
+  it("maps a list two elements of which link to each other", async () => {
+    const { list } = await listOf("pair cycle map", (list) => [
+      list.key(1).getAsLink(),
+      list.key(0).getAsLink(),
+      "c",
+    ]);
+
+    const result = await runOver(
+      `
+      import { pattern } from "commonfabric";
+      export default pattern<{ list: string[] }>(({ list }) => ({
+        out: list.map((_, index) => index * 10),
+      }));
+    `,
+      list,
+    );
+
+    expect(result.key("out").get()).toEqual([0, 10, 20]);
+    expect(errors).toEqual([]);
+  });
+
+  describe("over a list whose slots link to one document by different chains", () => {
+    it("names each slot by the link it holds, following none", async () => {
+      const tx = runtime.edit();
+      const target = runtime.getCell<FabricValue>(
+        space,
+        "chain target",
+        undefined,
+        tx,
+      );
+      target.setRaw({ name: "Ada" });
+      const alias = runtime.getCell<FabricValue>(
+        space,
+        "chain alias",
+        undefined,
+        tx,
+      );
+      alias.setRaw(target.getAsLink());
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const { inputs } = await listOf("chains", () => [
+        alias.getAsLink(),
+        target.getAsLink(),
+      ]);
+
+      for (const key of ["list", "elements"]) {
+        const readTx = runtime.edit();
+        const { slots } = listSlotLinks(readTx, inputs, key);
+        readTx.abort();
+
+        expect(slots.map(({ id, path }) => ({ id, path }))).toEqual([
+          { id: alias.getAsNormalizedFullLink().id, path: [] },
+          { id: target.getAsNormalizedFullLink().id, path: [] },
+        ]);
+      }
+    });
+  });
+
+  it("names a slot that links into another space without opening that space", async () => {
+    const tx = runtime.edit();
+    const far = runtime.getCell<FabricValue>(farSpace, "far", undefined, tx);
+    far.setRaw({ name: "Ada" });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const { list, inputs } = await listOf("into another space", () => [
+      far.getAsLink(),
+    ]);
+    await runtime.storageManager.synced();
+
+    const reader = open();
+    const readInputs = reader.getCellFromLink(inputs.getAsNormalizedFullLink());
+    await readInputs.sync();
+    await reader.getCellFromLink(list.getAsNormalizedFullLink()).sync();
+    const readTx = reader.edit();
+    const { slots } = listSlotLinks(readTx, readInputs);
+    readTx.abort();
+    await reader.idle();
+
+    expect(slots.map(({ space, id }) => ({ space, id }))).toEqual([
+      { space: farSpace, id: far.getAsNormalizedFullLink().id },
+    ]);
+    expect(reader.storageManager.openedSpaces?.()).not.toContain(farSpace);
+  });
 
   for (
     const [op, call] of [

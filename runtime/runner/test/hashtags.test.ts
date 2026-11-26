@@ -10,10 +10,10 @@
  * first-appearance order.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { extractHashtags } from "../src/hashtags.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("extractHashtags()", () => {
   it("extracts tags lowercased without the leading #", () => {

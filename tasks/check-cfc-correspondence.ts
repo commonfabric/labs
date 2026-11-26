@@ -153,10 +153,52 @@ export interface Exemption {
 }
 
 /**
- * Every `§` citation under `runtime/runner/src/cfc/` that names something
- * other than a section of the specification, on purpose.
+ * Every `§` citation in {@link CITATION_SOURCE} that names something other
+ * than a section of the specification, on purpose.
  */
-export const EXEMPTIONS: readonly Exemption[] = [];
+export const EXEMPTIONS: readonly Exemption[] = [
+  {
+    file: "runtime/memory/v2/cfc-anchors-label.ts",
+    citation: "§7.7.4",
+    reason: "cites the memory-v2 specification, " +
+      "docs/specs/memory-v2/07-op-views-and-annotations.md, where the " +
+      "engine's labeling of moved anchors is arranged",
+  },
+  {
+    file: "runtime/runner/src/cfc/schema-merge.ts",
+    citation: "§8.15.13",
+    reason: "the write-policy merge cites the section " +
+      "https://github.com/commonfabric/specs/pull/52 adds, and the merge in it " +
+      "https://github.com/commonfabric/specs/pull/96 adds, neither of which " +
+      "the pinned snapshot (specs#88's head) holds; its SPEC-PENDING marker " +
+      "names specs#96",
+  },
+  {
+    file: "runtime/runner/src/cfc/schema-merge.ts",
+    citation: "§8.15.6.1",
+    reason: "the write-policy merge cites the section " +
+      "https://github.com/commonfabric/specs/pull/96 adds, which the pinned " +
+      "snapshot (specs#88's head) does not hold; its SPEC-PENDING marker names " +
+      "that pull request",
+  },
+  {
+    file: "runtime/runner/src/cfc/claim-preservation.ts",
+    citation: "§8.15.6.1",
+    reason: "the keep rule's matching of write-policy alternatives cites the " +
+      "section https://github.com/commonfabric/specs/pull/96 adds, which the " +
+      "pinned snapshot (specs#88's head) does not hold; its SPEC-PENDING " +
+      "marker names that pull request",
+  },
+  {
+    file: "runtime/runner/src/cfc/claim-preservation.ts",
+    citation: "§8.15.13",
+    reason: "the keep rule's write-policy admission cites the section " +
+      "https://github.com/commonfabric/specs/pull/52 adds, and the carve-out " +
+      "in it https://github.com/commonfabric/specs/pull/96 adds, neither of " +
+      "which the pinned snapshot (specs#88's head) holds; its SPEC-PENDING " +
+      "marker names specs#96",
+  },
+];
 
 /** A file this check reads. */
 export interface SourceFile {
@@ -179,7 +221,10 @@ export interface Finding {
   message: string;
 }
 
-/** Everything the check reads, gathered by `main` and given to the pure core. */
+/**
+ * Everything the check reads, gathered by `gatherInput` and given to the pure
+ * core.
+ */
 export interface CheckInput {
   snapshot: SpecSnapshot;
   manifest: readonly ManifestRow[];
@@ -465,7 +510,7 @@ function kernelFileFindings(
 }
 
 /**
- * Every finding over `input`. Pure: all reading happens in `main`.
+ * Every finding over `input`. Pure: all reading happens in `gatherInput`.
  */
 export function collectFindings(input: CheckInput): Finding[] {
   const findings: Finding[] = [];
@@ -753,47 +798,50 @@ function normalizedPath(path: string): string {
   return segments.join("/");
 }
 
-/** Reads the files the check covers from the tree at `root`. */
-export async function readInput(root: string): Promise<CheckInput> {
-  const read = async (path: string): Promise<SourceFile> => ({
+/**
+ * Gathers what the check reads from a tree: `files` is every file the tree
+ * holds, repository-relative, and `read` returns one of them, or the snapshot,
+ * by that path. `manifest` is the ledger whose `missing` rows name the
+ * `decidedToday` files to read.
+ */
+export async function gatherInput(
+  files: readonly string[],
+  read: (path: string) => Promise<string>,
+  manifest: readonly ManifestRow[] = MANIFEST,
+): Promise<CheckInput> {
+  const source = async (path: string): Promise<SourceFile> => ({
     path,
-    text: await Deno.readTextFile(`${root}/${path}`),
+    text: await read(path),
   });
-  const files = await repositoryFiles(root);
   const kernelFiles: SourceFile[] = [];
   const citationFiles: SourceFile[] = [];
   const markerFiles: SourceFile[] = [];
   for (const path of files) {
     if (path.startsWith(KERNEL_DIR) && SOURCE.test(path)) {
-      kernelFiles.push(await read(path));
+      kernelFiles.push(await source(path));
     }
     if (CITATION_SOURCE.some((pattern) => pattern.test(path))) {
-      citationFiles.push(await read(path));
+      citationFiles.push(await source(path));
     }
     if (isGovernedSource(path)) {
-      markerFiles.push(await read(path));
+      markerFiles.push(await source(path));
     }
   }
   const decidedFiles = new Map<string, string | undefined>();
   const tracked = new Set(files);
-  for (const row of MANIFEST) {
+  for (const row of manifest) {
     if (row.relation !== "missing" || row.decidedToday === "unknown") {
       continue;
     }
     for (const { file } of row.decidedToday) {
       if (decidedFiles.has(file)) continue;
       const path = normalizedPath(`${RUNTIME_SYMBOL_ROOT}${file}`);
-      decidedFiles.set(
-        file,
-        tracked.has(path) ? (await read(path)).text : undefined,
-      );
+      decidedFiles.set(file, tracked.has(path) ? await read(path) : undefined);
     }
   }
   return {
-    snapshot: JSON.parse(
-      await Deno.readTextFile(`${root}/${SNAPSHOT_PATH}`),
-    ) as SpecSnapshot,
-    manifest: MANIFEST,
+    snapshot: JSON.parse(await read(SNAPSHOT_PATH)) as SpecSnapshot,
+    manifest,
     companions: COMPANIONS,
     criticalSections: CRITICAL_SECTIONS,
     kernelFiles,
@@ -805,54 +853,76 @@ export async function readInput(root: string): Promise<CheckInput> {
   };
 }
 
-function reportFindings(
-  findings: readonly Finding[],
-  specsCommit: string,
-): void {
-  console.error(
-    [
-      "",
-      `CFC correspondence against specs ${specsCommit.slice(0, 8)}:`,
-      "",
-      ...findings.map((finding) =>
-        `  ${finding.file}${
-          finding.line === undefined ? "" : `:${finding.line}`
-        }` +
-        `\n      ${finding.message}`
-      ),
-      "",
-      "docs/development/cfc-spec-correspondence.md is the procedure. A kernel",
-      "header or manifest row that disagrees with the snapshot is re-derived",
-      "from the specification at the recorded commit, or the snapshot is",
-      "regenerated with `deno task cfc-spec-snapshot` from a specs checkout.",
-      "A citation naming a section the specification does not have is",
-      "corrected, or, where it is written on purpose to something else,",
-      "recorded in EXEMPTIONS in tasks/check-cfc-correspondence.ts with the",
-      "file, the citation and the reason.",
-      "",
-    ].join("\n"),
+/** Reads the files the check covers from the working tree at `root`. */
+export async function readInput(root: string): Promise<CheckInput> {
+  return gatherInput(
+    await repositoryFiles(root),
+    (path) => Deno.readTextFile(`${root}/${path}`),
   );
 }
 
-/** Runs the check over `root`, reports, and returns a process exit code. */
-export async function main(root: string = REPO_ROOT): Promise<number> {
-  const input = await readInput(root);
+/** What the check says, and the process exit code it ends with. */
+export interface Report {
+  /** The text: standard output's when `code` is 0, standard error's if not. */
+  text: string;
+
+  code: number;
+}
+
+/** The check's verdict over `input`. */
+export function report(input: CheckInput): Report {
+  const specsCommit = input.snapshot.specsCommit.slice(0, 8);
   const findings = collectFindings(input);
   if (findings.length > 0) {
-    reportFindings(findings, input.snapshot.specsCommit);
-    return 1;
+    return {
+      text: [
+        "",
+        `CFC correspondence against specs ${specsCommit}:`,
+        "",
+        ...findings.map((finding) =>
+          `  ${finding.file}${
+            finding.line === undefined ? "" : `:${finding.line}`
+          }` +
+          `\n      ${finding.message}`
+        ),
+        "",
+        "docs/development/cfc-spec-correspondence.md is the procedure. A kernel",
+        "header or manifest row that disagrees with the snapshot is re-derived",
+        "from the specification at the recorded commit, or the snapshot is",
+        "regenerated with `deno task cfc-spec-snapshot` from a specs checkout.",
+        "A citation naming a section the specification does not have is",
+        "corrected, or, where it is written on purpose to something else,",
+        "recorded in EXEMPTIONS in tasks/check-cfc-correspondence.ts with the",
+        "file, the citation and the reason.",
+        "",
+      ].join("\n"),
+      code: 1,
+    };
   }
   let citations = 0;
   for (const file of input.citationFiles) {
     citations += [...file.text.matchAll(/§\s?\d/g)].length;
   }
-  console.log(
-    `CFC correspondence OK against specs ` +
-      `${input.snapshot.specsCommit.slice(0, 8)}: ${input.manifest.length} ` +
-      `manifest rows, ${input.kernelFiles.length} kernel files, ` +
+  return {
+    text: `CFC correspondence OK against specs ${specsCommit}: ` +
+      `${input.manifest.length} manifest rows, ` +
+      `${input.kernelFiles.length} kernel files, ` +
       `${citations} citations in ${input.citationFiles.length} files.`,
-  );
-  return 0;
+    code: 0,
+  };
 }
 
-if (import.meta.main) Deno.exit(await main());
+/**
+ * Prints `shown`'s text through `sink.log` when its code is 0 and through
+ * `sink.error` otherwise, and returns the code.
+ */
+export function show(
+  shown: Report,
+  sink: Pick<Console, "log" | "error"> = console,
+): number {
+  if (shown.code === 0) sink.log(shown.text);
+  else sink.error(shown.text);
+  return shown.code;
+}
+
+if (import.meta.main) Deno.exit(show(report(await readInput(REPO_ROOT))));

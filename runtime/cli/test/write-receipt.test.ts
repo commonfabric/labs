@@ -1,9 +1,23 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { noteWroteTo, resetWriteReceipts } from "../lib/write-receipt.ts";
+import { Identity } from "@commonfabric/identity";
+import { Runtime } from "@commonfabric/runner";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import {
+  noteWroteTo,
+  resetWriteReceipts,
+  transactionWroteTo,
+} from "../lib/write-receipt.ts";
 
 const SPACE = "did:key:z6MkjcdxtxTiUWkPkPffhs8ENkCcJjuRCQPpJFb2xyzwHqEk";
 const OTHER = "did:key:z6MkqyUta9P4wHtvDmwebQtXBjyJ3bSzmY2wFEkPL9ZAdp4W";
+
+const signer = await Identity.fromPassphrase("write-receipt");
 
 // Collects what a receipt writes, and restores the console afterwards.
 function captureStderr(body: () => void): string[] {
@@ -58,5 +72,49 @@ describe("write-receipt", () => {
     resetWriteReceipts();
     const lines = captureStderr(() => noteWroteTo(SPACE));
     expect(lines).toHaveLength(1);
+  });
+
+  describe("transactionWroteTo()", () => {
+    const space = signer.did();
+    let storageManager: ReturnType<typeof StorageManager.emulate>;
+    let runtime: Runtime;
+
+    beforeEach(() => {
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+    });
+
+    afterEach(async () => {
+      await runtime.dispose();
+      await storageManager.close();
+    });
+
+    it("returns `true` for the space a transaction wrote, and `false` for another", () => {
+      const tx = runtime.edit();
+      runtime.getCell(space, "written", undefined, tx).set({ n: 1 });
+
+      expect(transactionWroteTo(tx, space)).toBe(true);
+      expect(transactionWroteTo(tx, OTHER)).toBe(false);
+      tx.abort();
+    });
+
+    it("returns `false` for a transaction that wrote nothing", () => {
+      const tx = runtime.edit();
+
+      expect(transactionWroteTo(tx, space)).toBe(false);
+      tx.abort();
+    });
+
+    it("returns `false` for an aborted transaction that had written", () => {
+      const tx = runtime.edit();
+      runtime.getCell(space, "aborted", undefined, tx).set({ n: 1 });
+      tx.abort();
+
+      expect(tx.status().status).toBe("error");
+      expect(transactionWroteTo(tx, space)).toBe(false);
+    });
   });
 });

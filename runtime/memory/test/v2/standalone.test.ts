@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import type { FabricValue } from "@commonfabric/api";
 import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   decodeMemoryBoundary,
@@ -162,6 +162,102 @@ describe("StandaloneMemoryServer", () => {
       } finally {
         await server.shutdown();
       }
+    });
+  });
+
+  describe("static members", () => {
+    describe("start()", () => {
+      describe("`traceWrite`", () => {
+        /**
+         * Starts a server tracing to the returned list, says hello over a
+         * socket, sends `transact` with `commit` and returns the reply's
+         * error name. The trace is written as the connection takes the
+         * commit, which is before the reply.
+         */
+        const traceOf = async (commit: FabricValue) => {
+          const traced: string[] = [];
+          const standalone = StandaloneMemoryServer.start({
+            traceWrite: (line) => traced.push(line),
+          });
+          const address = new URL(standalone.url);
+          address.protocol = "ws:";
+          const socket = new WebSocket(address);
+          const frames = frameReader(socket);
+          try {
+            await new Promise((resolve) =>
+              socket.addEventListener("open", resolve, { once: true })
+            );
+            socket.send(encodeMemoryBoundary({
+              type: "hello",
+              protocol: MEMORY_PROTOCOL,
+              flags: {
+                ...getMemoryProtocolFlags(),
+                messageCompressionV1: false,
+              },
+            }));
+            await frames.next();
+            socket.send(encodeMemoryBoundary({
+              type: "transact",
+              requestId: "traced",
+              space: space.did(),
+              sessionId: "unopened",
+              commit,
+            }));
+            const reply = decodeMemoryBoundary<
+              { requestId: string; error?: { name: string } }
+            >(await frames.next());
+            expect(reply.requestId).toBe("traced");
+            return { traced, error: reply.error?.name };
+          } finally {
+            const closed = new Promise((resolve) =>
+              socket.addEventListener("close", resolve, { once: true })
+            );
+            socket.close();
+            await closed;
+            await standalone.close();
+          }
+        };
+
+        it("receives a line naming each operation of a commit a client sends", async () => {
+          const { traced } = await traceOf({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              { op: "set", id: "of:set", value: { value: { a: 1, b: 2 } } },
+              {
+                op: "patch",
+                id: "of:patch",
+                scope: "user",
+                patches: [{ op: "replace", path: "/a", value: 1 }],
+              },
+              { op: "delete", id: "of:delete" },
+            ],
+          });
+
+          expect(traced).toHaveLength(3);
+          expect(traced[0]).toMatch(
+            /^\[memwrite conn=\d+\] op=set id=of:set scope=\(space\) keys=\["a","b"\]$/,
+          );
+          expect(traced[1]).toMatch(
+            /^\[memwrite conn=\d+\] op=patch id=of:patch scope=user paths=\["\/a"\]$/,
+          );
+          expect(traced[2]).toMatch(
+            /^\[memwrite conn=\d+\] op=delete id=of:delete scope=\(space\)$/,
+          );
+        });
+
+        it("receives no line for a commit whose operations cannot be read, which the server still answers", async () => {
+          // A `set` with no value, which the trace cannot describe.
+          const { traced, error } = await traceOf({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{ op: "set", id: "of:set" }],
+          });
+
+          expect(traced).toEqual([]);
+          expect(error).toBeDefined();
+        });
+      });
     });
   });
 

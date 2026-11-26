@@ -1,3 +1,10 @@
+/**
+ * A searchable list of the pieces in the space that carry a summary. It shows
+ * each piece with its summary, filters as you type by name or summary text, and
+ * reports how many pieces match.
+ * Assistants can also use it as a search tool.
+ */
+
 import {
   computed,
   type Default,
@@ -6,6 +13,7 @@ import {
   patternTool,
   type PatternToolResult,
   UI,
+  type VNode,
   wish,
   Writable,
 } from "commonfabric";
@@ -22,24 +30,16 @@ export type SummaryIndexEntry = {
 type Input = Record<string, never>;
 
 export type Output = {
+  [NAME]: string;
+  [UI]: VNode;
   entries: SummaryIndexEntry[];
   search: PatternToolResult<{ entries: SummaryIndexEntry[] }>;
 };
 
-function isCellLike<T>(value: unknown): value is { get: () => T } {
-  return !!value && typeof value === "object" &&
-    typeof (value as { get?: unknown }).get === "function";
-}
-
-function extractSummary(piece: any): string | undefined {
+function extractSummary(
+  piece: SummarizablePiece | undefined,
+): string | undefined {
   const summary = piece?.summary;
-  if (!summary) return undefined;
-
-  if (isCellLike<string>(summary)) {
-    const value = summary.get();
-    return typeof value === "string" && value.trim() ? value : undefined;
-  }
-
   return typeof summary === "string" && summary.trim() ? summary : undefined;
 }
 
@@ -127,7 +127,7 @@ const SummaryIndex = pattern<Input, Output>(() => {
             {filteredCount} of {entryCount} pieces
           </span>
 
-          <cf-table full-width>
+          <cf-table fullWidth>
             <tbody>
               {filtered.map((entry) => (
                 <tr>

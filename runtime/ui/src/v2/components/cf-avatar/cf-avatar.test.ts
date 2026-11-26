@@ -1,9 +1,9 @@
 // First, so that the document it installs is there when Lit loads.
 import { mount } from "../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import type { CFImage } from "../cf-image/index.ts";
 import {
   CFAvatar,
@@ -68,6 +68,61 @@ describe("CFAvatar", () => {
       expect(shown(el).image).toBeNull();
       expect(shown(el).glyph).toBeNull();
       expect(shown(el).initials).toBe("AL");
+    });
+
+    it("shows a blob as an image, ahead of a glyph, where the bytes are empty", async () => {
+      const blob = { space: "did:key:z6MkBlobSpace", id: "fid1:abc" };
+      const el = await mountAvatar({
+        bytes: new FabricBytes(new Uint8Array()),
+        blob,
+        src: "🦊",
+        name: "Ada",
+      });
+      const { image, glyph, initials } = shown(el);
+      expect(image?.blob).toEqual(blob);
+      expect(image?.bytes).toBeUndefined();
+      expect(glyph).toBeNull();
+      expect(initials).toBeNull();
+    });
+
+    it("shows a blob rather than bytes given both, as a face holds them", async () => {
+      const blob = { space: "did:key:z6MkBlobSpace", id: "fid1:abc" };
+      const el = await mountAvatar({ bytes, blob });
+      expect(shown(el).image?.blob).toEqual(blob);
+      expect(shown(el).image?.bytes).toBeUndefined();
+    });
+
+    it("shows the glyph for a blob that names no space or no id", async () => {
+      for (
+        const blob of [
+          { space: "not a did", id: "fid1:abc" },
+          { space: "did:key:z6MkBlobSpace", id: "" },
+          { space: "did:key:z6MkBlobSpace" },
+          {},
+        ]
+      ) {
+        const el = await mountAvatar({ blob, src: "🦊" });
+        expect(shown(el).image).toBeNull();
+        expect(shown(el).glyph).toBe("🦊");
+      }
+    });
+
+    it("shows initials once its blob's image fails to load, until its blob changes", async () => {
+      const el = await mountAvatar({
+        blob: { space: "did:key:z6MkBlobSpace", id: "fid1:abc" },
+        name: "Ada Lovelace",
+      });
+      shown(el).image!.dispatchEvent(new CustomEvent("cf-error"));
+      await el.updateComplete;
+      expect(shown(el).image).toBeNull();
+      expect(shown(el).initials).toBe("AL");
+
+      el.blob = { space: "did:key:z6MkBlobSpace", id: "fid1:other" };
+      await el.updateComplete;
+      expect(shown(el).image?.blob).toEqual({
+        space: "did:key:z6MkBlobSpace",
+        id: "fid1:other",
+      });
     });
 
     it("shows a `data:` source as an image labeled by its alt text", async () => {

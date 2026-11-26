@@ -1,10 +1,11 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   AliasResolver,
   parseManifest,
   serializeManifest,
+  testIdentityKey,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { dialSnapshot, manifestUnderAliases } from "./manifest.ts";
 import { DIALS } from "./policy.ts";
@@ -64,6 +65,85 @@ describe("manifest", () => {
         }]);
       expect(resolved.coverageBaselines.map(({ member }) => member))
         .toEqual(["runtime/memory"]);
+    });
+
+    it("returns every other identity and path the manifest names under the names the aliases give them", () => {
+      const writes = { k: "unit", s: "memory", n: "space > writes" };
+      const commits = { k: "unit", s: "memory", n: "space > commits" };
+      const fit = {
+        overhead: 1,
+        correction: 1,
+        unitHooks: { "packages/memory/test/space.test.ts": 2 },
+      };
+      const manifest = sampleManifest({
+        calibration: {
+          setupCost: {},
+          prologue: 0,
+          suites: { "workspace-unit": { ...fit, unitOverhead: 0 } },
+          suitesWithCoverage: { "workspace-unit": { ...fit, unitOverhead: 3 } },
+        },
+        withheld: [{ test: writes, suite: "workspace-unit", reason: "flaky" }],
+        unavailable: [
+          {
+            suite: "workspace-unit",
+            unit: "packages/memory/test/space.test.ts",
+            reason: "needs a database",
+          },
+          {
+            suite: "workspace-unit",
+            unit: "packages/memory/test/space.test.ts",
+            leafName: "packages/memory/test/space.test.ts",
+            reason: "needs a database",
+          },
+        ],
+        unschedulable: [{ test: writes, suite: "workspace-unit", cost: 900 }],
+        lanes: [{
+          lane: 1,
+          projectedSeconds: 10,
+          batches: [{
+            suite: "workspace-unit",
+            identities: [testIdentityKey(writes), "not an identity"],
+          }],
+        }],
+      });
+      const resolved = manifestUnderAliases(manifest, moved);
+      const hooks = { "runtime/memory/test/space.test.ts": 2 };
+      expect(resolved.calibration.suites["workspace-unit"]?.unitHooks)
+        .toEqual(hooks);
+      expect(resolved.calibration.suitesWithCoverage?.["workspace-unit"])
+        .toEqual({ ...fit, unitOverhead: 3, unitHooks: hooks });
+      expect(resolved.withheld.map(({ test }) => test)).toEqual([commits]);
+      expect(resolved.unavailable.map(({ unit, leafName }) => [unit, leafName]))
+        .toEqual([
+          ["runtime/memory/test/space.test.ts", undefined],
+          [
+            "runtime/memory/test/space.test.ts",
+            "runtime/memory/test/space.test.ts",
+          ],
+        ]);
+      expect(resolved.unavailable[0]).not.toHaveProperty("leafName");
+      expect(resolved.unschedulable.map(({ test }) => test)).toEqual([commits]);
+      expect(resolved.lanes[0]!.batches[0]!.identities).toEqual([
+        testIdentityKey(commits),
+        "not an identity",
+      ]);
+    });
+
+    it("leaves a fit that names no hooks, and a manifest with no coverage fits, as they are", () => {
+      const fit = { overhead: 1, correction: 1, unitOverhead: 0 };
+      const manifest = sampleManifest({
+        calibration: {
+          setupCost: {},
+          prologue: 0,
+          suites: { "workspace-unit": fit },
+        },
+        entries: [
+          sampleEntry({ k: "unit", s: "memory", n: "space > writes" }),
+        ],
+      });
+      const resolved = manifestUnderAliases(manifest, moved);
+      expect(resolved.calibration).toEqual(manifest.calibration);
+      expect(resolved.calibration).not.toHaveProperty("suitesWithCoverage");
     });
 
     it("returns the entry already under a name over a renamed entry that claims it", () => {

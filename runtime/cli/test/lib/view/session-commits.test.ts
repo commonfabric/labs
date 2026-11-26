@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { parseDiff } from "../../../lib/view/diff.ts";
 import {
@@ -10,6 +9,7 @@ import { diffSource } from "../../../lib/view/diffedit.ts";
 import { decodeKeys } from "../../../lib/view/keys.ts";
 import { Session } from "../../../lib/view/session.ts";
 import { wrappedRowAt } from "../../../lib/view/wrap.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIRST = "commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SECOND = "commit bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -176,7 +176,7 @@ describe("Session", () => {
           const s = session(
             LOG.replace("Update the app", "Long subject ".repeat(40)),
           );
-          press(s, "tab", "L");
+          press(s, "tab", "l");
           expect(s.view().selected).not.toBeNull();
           expect(s.view().left).toBeGreaterThan(0);
           press(s, ">");

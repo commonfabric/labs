@@ -2,8 +2,9 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
+import { CFCheckbox } from "../cf-checkbox/index.ts";
 import { CFCard } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A card holding `children`, mounted in the document. */
 function card(
@@ -149,6 +150,27 @@ describe("cf-card", () => {
       });
       expect(seen).toEqual([{ clickable: true }, { clickable: true }]);
       expect(handled).toEqual([true, true, false]);
+    });
+
+    it("emits one cf-card-click for a key a control inside already handled", async () => {
+      // Space on the checkbox clicks it, and that click reaches the card;
+      // the keydown that follows it up must not click the card again.
+      const checkbox = new CFCheckbox();
+      const element = await card([checkbox], true);
+      await checkbox.updateComplete;
+      const seen = clicks(element, () => {
+        checkbox.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: " ",
+            bubbles: true,
+            composed: true,
+            cancelable: true,
+          }),
+        );
+      });
+      expect(seen).toEqual([{ clickable: true }]);
+      await checkbox.updateComplete;
+      expect(checkbox.checked).toBe(true);
     });
 
     it("ignores Enter on a card that is not clickable", async () => {

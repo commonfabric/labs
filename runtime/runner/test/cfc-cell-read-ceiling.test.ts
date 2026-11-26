@@ -1,8 +1,13 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { toMemorySpaceAddress } from "../src/link-utils.ts";
@@ -260,6 +265,79 @@ describe("cfc-cell-read-ceiling", () => {
     } finally {
       readTx.abort();
     }
+  });
+
+  describe("an eager read of a list of references", () => {
+    // Each item is a reference to a public document, and the slot holding the
+    // first one carries the reference's own label, which only a reader whose
+    // ceiling admits it may observe by following the reference.
+
+    const seedProtectedItems = async () => {
+      const tx = writer.edit();
+      const targets = ["first", "second"].map((name) => {
+        const target = writer.getCell(
+          signer.did(),
+          `public item ${crypto.randomUUID()}`,
+          undefined,
+          tx,
+        );
+        target.set({ name });
+        return {
+          "/": { "link@1": { id: target.getAsNormalizedFullLink().id } },
+        };
+      });
+      const list = writer.getCell(
+        signer.did(),
+        `protected items ${crypto.randomUUID()}`,
+        undefined,
+        tx,
+      );
+      const link = list.getAsNormalizedFullLink();
+      writeSeedEnvelopeDoc(tx, signer.did());
+      seedStoredEnvelope(tx, { ...toMemorySpaceAddress(link), path: [] }, {
+        value: targets,
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: ["0"],
+              label: { confidentiality: [B] },
+              origin: "link",
+            }],
+          },
+        },
+      });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      return link;
+    };
+
+    const readItems = async (
+      ceiling: readonly CfcConfClause[],
+      link: Awaited<ReturnType<typeof seedProtectedItems>>,
+    ) => {
+      const reader = readerFor(ceiling);
+      const cell = reader.getCellFromLink(link);
+      await cell.sync();
+      return () =>
+        cell.asSchema({
+          type: "array",
+          items: { type: "object", properties: { name: { type: "string" } } },
+        }).get();
+    };
+
+    it("is withheld outside the ceiling", async () => {
+      const read = await readItems([A], await seedProtectedItems());
+
+      expect(read).toThrow(/read ceiling/);
+    });
+
+    it("returns every item inside the ceiling", async () => {
+      const read = await readItems([B], await seedProtectedItems());
+
+      expect(read().map((item) => item.name)).toEqual(["first", "second"]);
+    });
   });
 
   it("withholds an ordinary read that exposes protected reference identity", async () => {

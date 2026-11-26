@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { readConsoleTurnResult } from "../console/turn-result.ts";
 import { readHarnessRunState } from "../src/artifacts.ts";

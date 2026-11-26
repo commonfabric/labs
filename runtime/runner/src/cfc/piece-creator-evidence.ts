@@ -1,5 +1,3 @@
-import { isObjectOrArray } from "@commonfabric/js-values/types";
-
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
@@ -39,7 +37,6 @@ export const legacyPieceCreatorEvidence = (
     if (envelope.status !== "loaded") continue;
     const ownerPaths = cfcSchemaEntries(envelope.schema)
       .filter((entry) =>
-        isObjectOrArray(entry.schema) && isObjectOrArray(entry.schema.ifc) &&
         isCurrentPrincipalPlaceholder(entry.schema.ifc.ownerPrincipal)
       )
       .map((entry) => entry.path);

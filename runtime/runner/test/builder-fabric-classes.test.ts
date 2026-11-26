@@ -13,7 +13,6 @@
  * rather than a hand-copied list that someone has to remember to extend.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { StaticCache } from "@commonfabric/static";
 import { FabricInstance, FabricPrimitive } from "@commonfabric/data-model";
@@ -29,9 +28,9 @@ import {
   FabricEpochNsec,
   FabricHash,
   FabricKeyPair,
-  FabricRegExp,
   FabricUnavailable,
 } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 import { createBuilder } from "../src/builder/factory.ts";
 import { getRuntimeModuleExports } from "../src/sandbox/runtime-modules.ts";
 
@@ -55,7 +54,6 @@ const expectedBindings: Record<string, unknown> = {
   FabricHash,
   FabricLink,
   FabricBytes,
-  FabricRegExp,
   FabricKeyPair,
   FabricUnavailable,
   FabricError,
@@ -123,32 +121,6 @@ describe("commonfabric `FabricSpecialObject` classes", () => {
     });
   });
 
-  describe("FabricRegExp", () => {
-    // Both declared constructor overloads, since the pattern-visible
-    // declaration offers both and only one of them is the obvious one.
-
-    it("constructs an instance from a JS `RegExp`", () => {
-      const BoundFabricRegExp = commonfabric
-        .FabricRegExp as typeof FabricRegExp;
-      const instance = new BoundFabricRegExp(/ab+c/gi);
-
-      expect(instance).toBeInstanceOf(FabricRegExp);
-      expect(instance.source).toBe("ab+c");
-      expect(instance.flags).toBe("gi");
-      expect(instance.value).toEqual(/ab+c/gi);
-    });
-
-    it("constructs an instance from an explicit flavor, source and flags", () => {
-      const BoundFabricRegExp = commonfabric
-        .FabricRegExp as typeof FabricRegExp;
-      const instance = new BoundFabricRegExp("es2025", "a.c", "s");
-
-      expect(instance.flavor).toBe("es2025");
-      expect(instance.source).toBe("a.c");
-      expect(instance.flags).toBe("s");
-    });
-  });
-
   describe("FabricKeyPair", () => {
     it("constructs an instance from an algorithm name and key bytes", () => {
       const BoundFabricKeyPair = commonfabric
@@ -180,7 +152,7 @@ describe("commonfabric `FabricSpecialObject` classes", () => {
       expect(instance).toBeInstanceOf(FabricUnavailable);
       expect(instance.reason).toBe("error");
       expect(instance.errorKind).toBe("network");
-      expect(instance.errorMessage).toBe("boom");
+      expect(instance.message).toBe("boom");
       expect(instance.isError()).toBe(true);
     });
   });

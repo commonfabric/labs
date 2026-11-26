@@ -1,0 +1,31 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "url": {
+        "default": "https://github.com",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "examples/link-preview/link-preview.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "url",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

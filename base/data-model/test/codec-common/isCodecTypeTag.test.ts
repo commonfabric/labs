@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -6,6 +5,7 @@ import {
   CODEC_TYPE_TAGS,
   isCodecTypeTag,
 } from "@/codec-common";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("isCodecTypeTag", () => {
   it("returns `true` for every tag in `CODEC_TYPE_TAGS`", () => {
@@ -94,11 +94,50 @@ describe("isCodecTypeTag", () => {
     });
   });
 
+  describe("underscores", () => {
+    // `_` counts as a letter rather than as a digit, so it may stand anywhere
+    // in a component, including at its start, and may be the whole of one.
+
+    it("returns `true` for a name holding `_` at its start, middle, or end", () => {
+      expect(isCodecTypeTag("_x@1")).toBe(true);
+      expect(isCodecTypeTag("_Boop@1")).toBe(true);
+      expect(isCodecTypeTag("Boop_@1")).toBe(true);
+      expect(isCodecTypeTag("a_b@1")).toBe(true);
+    });
+
+    it("returns `true` for a name that is `_` alone or holds `_` twice in a row", () => {
+      expect(isCodecTypeTag("_@1")).toBe(true);
+      expect(isCodecTypeTag("__@1")).toBe(true);
+      expect(isCodecTypeTag("a__b@1")).toBe(true);
+    });
+
+    it("returns `true` for a prefix holding `_`", () => {
+      expect(isCodecTypeTag("sys_x.Boop@1")).toBe(true);
+      expect(isCodecTypeTag("_.Boop@1")).toBe(true);
+      expect(isCodecTypeTag("A.b_c.D_@2")).toBe(true);
+    });
+
+    it("returns `true` for a component of 100 characters holding `_`", () => {
+      expect(isCodecTypeTag(`${"_".repeat(100)}@1`)).toBe(true);
+      expect(isCodecTypeTag(`_${"N".repeat(98)}_.Boop@1`)).toBe(true);
+    });
+
+    it("returns `false` for a component of 101 characters holding `_`", () => {
+      expect(isCodecTypeTag(`${"_".repeat(101)}@1`)).toBe(false);
+      expect(isCodecTypeTag(`_${"N".repeat(99)}_.Boop@1`)).toBe(false);
+    });
+
+    it("returns `false` for a component starting with a digit before `_`", () => {
+      expect(isCodecTypeTag("1_Bytes@1")).toBe(false);
+      expect(isCodecTypeTag("1_.Boop@1")).toBe(false);
+    });
+  });
+
   it("returns `false` for a malformed namespace prefix", () => {
     expect(isCodecTypeTag("sys..Boop@1")).toBe(false);
     expect(isCodecTypeTag(".Boop@1")).toBe(false);
     expect(isCodecTypeTag("sys.Boop.@1")).toBe(false);
-    expect(isCodecTypeTag("sys_x.Boop@1")).toBe(false);
+    expect(isCodecTypeTag("sys$x.Boop@1")).toBe(false);
     expect(isCodecTypeTag("sys-x.Boop@1")).toBe(false);
     expect(isCodecTypeTag("1sys.Boop@1")).toBe(false);
     expect(isCodecTypeTag("s\u00fcs.Boop@1")).toBe(false);

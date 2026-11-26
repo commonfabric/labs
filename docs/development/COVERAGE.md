@@ -36,6 +36,14 @@ transitions in an ordinary source module and exercise them from a plain Deno
 unit test as well; keep the browser case for the boundary only a real DOM can
 prove.
 
+A component in `runtime/ui` does not need a browser to render. A plain Deno
+test that imports `runtime/ui/src/v2/test-utils/dom.ts` ahead of anything that
+loads Lit
+gets a happy-dom document, in which the component connects, renders into its
+shadow root, and answers events, and Deno's coverage records what it ran.
+`cf-toggle.test.ts` is the worked example. What happy-dom does not implement,
+such as layout and real focus, still takes the browser case.
+
 Do not name a source file so that its path ends in `test.ts` (or `test.tsx`,
 `test.js`, `test.mjs`, `test.jsx`). `deno coverage` takes those for test files
 and leaves them out of the report, even though V8 records them and even if
@@ -204,7 +212,14 @@ suites collect authored-pattern coverage").
 `tasks/coverage-metrics.ts` scores LCOV reports. It walks the tracked source
 files under the package directories `LAYOUT.md` names and under `tasks`, and
 counts, for each file, how many lines no test covered. The top-level `scripts`
-directory is left out. The same counting serves both readers:
+directory is left out, and so is an iframe pattern's `guest.js`: that file is
+the bundle `deno bundle` writes from the `guest.ts` or `guest.tsx` beside it,
+and the metric counts the source instead. [Testing an iframe
+guest](#testing-an-iframe-guest) says how a test loads that source. A
+`deno-web-test.config.ts` is left out as well, because it is the
+configuration the browser test runner reads for a package's browser tests,
+not source those tests exercise. The same
+counting serves both readers:
 
 - **The repository-wide figure** merges every report the full run's lanes wrote
   and rolls the counts up into `coverage-debt: <group> uncovered lines` metrics,
@@ -218,11 +233,15 @@ directory is left out. The same counting serves both readers:
 Authored pattern files under `patterns` are tracked source files, so
 their uncovered lines count toward `coverage-debt: patterns`. Every
 authored-pattern coverage stream feeds this one metric: the `pattern-unit`
-suite's coverage (`TN:pattern-runtime`) and the integration suites' coverage
-(`TN:pattern-runtime-integration`) both join the merged report, and a line
-covered by either counts covered. Nothing in the accounting reads the test name
-— the two are kept distinct only so a reader of the merged report can tell what
-covered a line.
+suite's coverage (`TN:pattern-runtime`), the integration suites' coverage
+(`TN:pattern-runtime-integration`), and the multi-runtime harness's coverage
+(`TN:pattern-runtime-multi-runtime`) all join the merged report, and a line
+covered by any of them counts covered. The accounting reads the test name only
+to tell the instrumentation's records from those of Deno's coverage, which
+carry none; [A file both producers
+recorded](#a-file-both-producers-recorded) says why. It treats the
+instrumentation's streams alike. They carry different names so that a reader
+of a lane's reports can tell which path covered a line.
 
 One detail of the accounting is worth knowing when reasoning about pattern
 coverage. A file with no LCOV record has every tracked line counted as
@@ -234,16 +253,57 @@ nothing](#a-file-that-opts-out-of-coverage-is-charged-nothing). A record that
 names none of a file's lines says nothing about which of them ran, so it counts
 as no record. A file with a record is scored against the lines that record
 names. For a file measured by Deno's V8 coverage that is every executable line;
-pattern instrumentation names only the statements it could instrument, so a
-pattern file's first record both covers real lines and drops the never-named
-lines out of the count.
+pattern instrumentation names only the statements it could instrument, so the
+first record of a file only the instrumentation records both covers real lines
+and drops the never-named lines out of the count. A file Deno's coverage also
+records is scored against Deno's lines instead, as [A file both producers
+recorded](#a-file-both-producers-recorded) describes.
 
-Gaining a record can therefore only *lower* a file's count, since the record
-names a subset of the file's lines and the rest stop being counted. A figure
-whose file gains one moves down, and a measured set's baseline settles at a
-lower — and therefore stricter — bar rather than failing anything. The
-instrumented statements are also the only lines this mechanism can speak to: a
-line the instrumentation cannot reach is not a line a pattern test could cover.
+Gaining a first record can therefore only *lower* a file's count, since the
+record names a subset of the file's lines and the rest stop being counted. A
+figure whose file gains one moves down, and a measured set's baseline settles at
+a lower — and therefore stricter — bar rather than failing anything. A second
+producer's record can raise the count, since Deno's coverage names executable
+lines the instrumentation could not reach. The instrumented statements are also
+the only lines this mechanism can speak to: a line the instrumentation cannot
+reach is not a line a pattern test could cover.
+
+### A file both producers recorded
+
+A module that a Deno unit test imports and that a pattern also loads gets a
+record from each producer, and the two name different lines of the same
+statement. Deno's coverage names every line it counts as executable, run or
+not, but leaves out a line holding only the end of a statement begun on an
+earlier line, such as the closing `);` of a call written over three lines. The
+pattern instrumentation names every line a statement spans, each with a count
+taken from the statements that cover it.
+
+So for a file that a record from Deno's coverage names, the lines scored are
+the lines Deno's records name. Each of them is covered when a record from
+either producer shows a hit on it. A line that only the instrumentation names
+belongs to a statement whose first line Deno's coverage names, so that
+statement is charged, or not, on Deno's lines rather than a second time on its
+last line. `tasks/lcov.ts` holds the rule, which makes the repository-wide
+figure, the measured-set gate, and the combined report all apply it. It tells
+the producers' records apart by their `TN:` line: every record the
+instrumentation writes carries `pattern-runtime`, alone or followed by a hyphen
+and the name of the path that collected it, and Deno's records carry no test
+name. The type of the runner's `patternCoverageReportToLcov()` parameter
+admits no other name, and the reader refuses a record carrying one, since it
+cannot tell which lines that record's producer counts.
+
+Take a `throw new RangeError(...)` on lines 278 to 280 of a module, closing
+with `);` on line 280, which a Deno test runs and no pattern test reaches.
+Deno's record names lines 278 and 279 as hit. The instrumentation's names lines
+278, 279 and 280 with no hits. Lines 278 and 279 are covered, and line 280 is
+not scored. Had no test run the throw, lines 278 and 279 would both be charged.
+Had only a pattern test run it, the instrumentation's hits on lines 278 and 279
+would cover them.
+
+Deno's coverage also leaves out the lines that a `deno-coverage-ignore` comment,
+or a `deno-coverage-ignore-start` and `deno-coverage-ignore-stop` pair, opts
+out, so those lines are not scored for such a file either. A file that only the
+instrumentation recorded is scored against the lines the instrumentation names.
 
 ### A file that compiles to nothing is charged nothing
 
@@ -257,11 +317,18 @@ to report. No test can cover a line of it, so the metric charges it nothing.
 The metric tells the two apart by compiling each file it finds no record for,
 and charges it only when something comes out. `tasks/executable-source.ts` runs
 the file through the TypeScript compiler and reads the emitted JavaScript: a
-file that emits no statement, an `export {}` module marker aside, is charged
+file that emits no statement other than export declarations is charged
 nothing, and every other file is charged its full tracked-line count. Which
 constructs reach the output is the compiler's rule. An enum, a namespace holding
 a value, and an import kept for its side effects all emit code. A type-only
-import, a namespace holding only types, and a comment do not. The compile
+import, a namespace holding only types, and a comment do not. An export
+declaration does reach the output — `export * from "./a.ts"`,
+`export { b } from "./b.ts"`, or the `export {}` the compiler adds to keep an
+otherwise empty file a module — but it only binds names, and a module's
+evaluation runs no step for it. So a file that only re-exports other modules is
+charged nothing as well. The pattern instrumentation agrees: it skips export
+declarations, so a pattern test that loads such a file leaves no record of it.
+The compile
 happens when the report is scored, once per file the report leaves out. A file
 with a record never pays for it, because its record already says which of its
 lines ran.
@@ -302,6 +369,30 @@ test could pay its debt down, and the browser tests that do drive it report
 into nothing this metric reads. A file a Deno test could load is not such a
 file. Where its member carries a measured set, the measured-set gate is what
 holds it to its tests.
+
+### Testing an iframe guest
+
+An iframe pattern's guest (`guest.ts` or `guest.tsx`) runs in the browser, but
+a Deno test can load it as it is.
+`patterns/tools/test-support/iframe-guest.ts` loads the guest's `guest.html`
+into a simulated document, with any static assets the test supplies, installs
+that document's globals, evaluates a fresh instance of the guest module against
+it, and serves the guest the resources a test supplies through the host end of
+the real bridge: in-memory cells, presence rooms and SQLite databases. The test
+drives the document as a person would and reads back both the document and what
+the guest wrote. Deno's coverage records the guest module like any other, so
+the lines its tests run count as covered.
+`patterns/examples/iframe-cursor-canvas/guest.test.ts` is the worked example.
+
+A guest's writes cross the bridge, a message channel, before they reach a test's
+cells, so a check that the guest wrote nothing waits for the page's `settled()`
+first: checked straight after the event, it would pass whatever the guest did.
+Engines the simulated document lacks, such as Web Audio, a canvas's drawing
+context, or WebGL, are test doubles the test supplies through the page's
+`globals` and `patchProperty()`. The tests of
+`patterns/showcase/iframe-shared-tape-lab/` (Web Audio),
+`iframe-ring-loops/` (a drawing context) and `iframe-orbital-salvage-yard/`
+(WebGL) supply them.
 
 ### A local run under coverage runs every package
 
@@ -377,8 +468,9 @@ this one, and cannot. It replaces `performance.now` with logical time, and
 logical time moves only when a positive-delay timer fires. A synchronous call
 arms no timers, so a span timed around synchronous work measures exactly zero:
 under the runner package's preload, `elapsed > 100` is deterministically false
-in every test in the package. The `clock.tick(ms)` control is asynchronous and
-advances nothing until it is awaited, so there is no way to move logical time
+in every test in the package. The `clock.tick(ms)` control, which
+`@commonfabric/test-support/fake-clock` exports, is asynchronous and advances
+nothing until it is awaited, so there is no way to move logical time
 from inside a synchronous call either. A test that wants a chosen elapsed time
 therefore replaces `performance.now` outright, saving and restoring it rather
 than assuming it is the native one, since the preload already owns that
@@ -1028,7 +1120,11 @@ it has finished converting. The fragments therefore map onto any checkout: the
 `Status` job, which reads them from a different directory than the one the lane
 ran from, and an IDE with a local checkout. The merge combines the records for
 the same source file into one, with the per-line hit counts added together, so a
-file exercised by several lanes is reported once with its combined coverage.
+file exercised by several lanes is reported once with its combined coverage. It
+keeps the lines the metric scores, by the rule in [A file both producers
+recorded](#a-file-both-producers-recorded), so the combined report scores the
+same as the lanes' reports it came from. A merged record that took in one of
+Deno's carries no test name, since the lines it names are Deno's.
 
 The merged file carries line coverage only. LCOV identifies a function by its
 name, and `deno coverage --lcov` can emit several functions with the same name
@@ -1100,10 +1196,11 @@ them into runs of neighbors of about a fifth of the list each, never across a
 program root, and hands each run to a `cf test --compile-only` process, five at
 a time; each compiles its files' programs and runs nothing. Files that sit
 together share most of their modules, so each run compiles those once, and the
-test processes that follow, five at a time, all start from a full cache. A
-`cf test` process seeds from the file only as it starts, so without that pass
-the processes started together on a cold cache each compile the modules they
-share. The compile-only process writes no coverage, since nothing ran.
+test processes that follow, one at a time, start from a full cache. A `cf test`
+process seeds from the file as it starts, so the time recorded for a file does
+not include compiling its program, unless the run holding that file failed to
+compile, in which case its own process compiles it. The compile-only process
+writes no coverage, since nothing ran.
 
 The persistent cell cache stores each module's span list as one JSON string.
 This keeps reporting metadata in one value instead of expanding every span
@@ -1156,6 +1253,13 @@ rendered its UI. Once it instruments, the test passes in 7 seconds.
 
 A new browser-driven suite that creates its pieces some other way should expect
 the same trap.
+
+An integration test with no browser at all, whose pattern code runs only in
+runtimes it constructs itself, collects the same way: it hands each runtime
+`patternCoverageCollector()` as its `patternCoverage` option. No page dump
+writes that collector out, so the test calls `writeProcessPatternCoverage()`
+once it has disposed its runtimes. `patterns/integration/fabrifile-store.test.ts`
+is the worked example.
 
 Getting the hits back out crosses two boundaries: the worker's and the browser's.
 `PatternCoverageCollector.toData()` and `ingest()` give the spans and hit counts a
@@ -1242,12 +1346,6 @@ record matches nothing and drops its coverage without complaining, which looks
 exactly like a pattern nobody tested. Writing one warns.
 
 ## Known limitations and possible future work
-
-- Only the browser-driven suites contribute. A pattern exercised solely through
-  the headless multi-runtime harness (`multi-runtime-harness.ts`), whose sessions
-  are Deno workers rather than pages, has nowhere for the teardown dump to run and
-  contributes nothing. Those sessions could write their own LCOV directly — they
-  are Deno realms with a filesystem — which is the natural way to extend this.
 
 - Integration coverage is not a reason to skip a unit test. A unit test can cover
   a handler body too (see the handler bullet above) and can assert on what the

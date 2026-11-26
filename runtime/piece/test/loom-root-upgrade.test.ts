@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { createSession, Identity } from "@commonfabric/identity";
 import {
+  type Cell,
   getPatternIdentityRef,
   getPatternSetupIdentityRef,
   Runtime,
@@ -12,6 +12,7 @@ import {
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
 const signer = await Identity.fromPassphrase("loom-root-upgrade");
@@ -23,8 +24,40 @@ const rootSchema = {
     panels: { type: "array", items: { type: "unknown", asCell: ["cell"] } },
     addPiece: { asCell: ["stream"] },
     retitleLoom: { asCell: ["stream"] },
+    retitlePanel: { asCell: ["stream"] },
+    removePanel: { asCell: ["stream"] },
   },
 } as const;
+
+/** `panel` read as a panel's adder and title. */
+const adderOf = (panel: Cell<unknown>) =>
+  panel.asSchema(
+    {
+      type: "object",
+      properties: {
+        addedBy: { type: "string" },
+        titleOverride: { type: "string" },
+      },
+    } as const,
+  );
+
+/**
+ * The module identity `pattern`'s result schema names as the writer of a
+ * panel's adder, `admitPanel`'s module.
+ */
+const adderWriterIdentity = (pattern: { resultSchema?: unknown }): unknown =>
+  (pattern.resultSchema as {
+    $defs?: {
+      PanelAdderDid?: {
+        ifc?: {
+          writeAuthorizedBy?: {
+            __ctWriterIdentityOf?: { moduleIdentity?: unknown };
+          };
+        };
+      };
+    };
+  }).$defs?.PanelAdderDid?.ifc?.writeAuthorizedBy?.__ctWriterIdentityOf
+    ?.moduleIdentity;
 
 describe("loom-root-upgrade", () => {
   for (const mode of ["controller", "cold setup"] as const) {
@@ -61,20 +94,16 @@ describe("loom-root-upgrade", () => {
         await pieces.linkDefaultPattern(root);
         const output = root.asSchema(rootSchema);
         const target = runtime.getCell(space, "before-upgrade");
-        await new Promise<void>((resolve, reject) =>
-          sendEvent(
-            output.key("addPiece"),
-            { piece: target },
-            (tx) => {
-              const status = tx.status();
-              if (status.status === "error") reject(status.error);
-              else resolve();
-            },
-            { eventId: "before-upgrade", session: signer.did() },
-          )
-        );
+        // Registered through the controller, which records its principal as
+        // the panel's adder.
+        await pieces.add([target]);
         const [panel] = await output.key("panels").pull();
         const panelLink = panel.resolveAsCell().getAsNormalizedFullLink();
+        // The panel's adder is stamped by `admitPanel`, under its module's
+        // identity as it stands before the update.
+        expect((await adderOf(panel.resolveAsCell()).pull()).addedBy).toBe(
+          signer.did(),
+        );
         const candidate = {
           ...program,
           files: program.files.map((file) =>
@@ -94,6 +123,12 @@ describe("loom-root-upgrade", () => {
         });
         const nextRef = runtime.patternManager.getArtifactEntryRef(next)!;
         expect(nextRef).not.toEqual(getPatternIdentityRef(root));
+        // `admitPanel`'s module imports the edited one, so its identity moves
+        // with the edit, and the stored panel's stamp names the old one.
+        expect(adderWriterIdentity(next)).toBeDefined();
+        expect(adderWriterIdentity(next)).not.toEqual(
+          adderWriterIdentity(oldPattern),
+        );
         const link = root.getAsNormalizedFullLink();
         if (mode === "controller") {
           await (await pieces.get(link.id)).setPattern(candidate);
@@ -153,6 +188,37 @@ describe("loom-root-upgrade", () => {
         }
         expect(await reopened.key("panels").pull()).toHaveLength(2);
         expect(await reopened.key("title").pull()).toBe("Upgraded Loom");
+        // The panel added before the update keeps its adder, takes a title,
+        // and its adder can still remove it, under the moved identity.
+        const kept = runtime.getCellFromLink(panelLink);
+        expect((await adderOf(kept).pull()).addedBy).toBe(signer.did());
+        for (
+          const [key, event] of [
+            ["retitlePanel", { panel: kept, titleOverride: "Kept" }],
+            ["removePanel", { panel: kept }],
+          ] as const
+        ) {
+          await new Promise<void>((resolve, reject) =>
+            sendEvent(
+              reopened.key(key),
+              event,
+              (tx) => {
+                const status = tx.status();
+                if (status.status === "error") reject(status.error);
+                else resolve();
+              },
+              { eventId: `old-panel-${key}`, session: signer.did() },
+            )
+          );
+          if (key === "retitlePanel") {
+            expect((await adderOf(kept).pull()).titleOverride).toBe("Kept");
+          }
+        }
+        const remaining = await reopened.key("panels").pull();
+        expect(remaining).toHaveLength(1);
+        expect(
+          remaining[0].resolveAsCell().getAsNormalizedFullLink(),
+        ).not.toEqual(panelLink);
       } finally {
         await runtime.dispose();
         await manager.close();

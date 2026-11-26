@@ -1,8 +1,13 @@
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as path from "@std/path";
 import { hasExecutableCode } from "./executable-source.ts";
 import { parseLcov } from "./coverage-metrics.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** A fixture module, and whether its content compiles to code that can run. */
 interface Fixture {
@@ -55,7 +60,7 @@ const COVERAGE_FIXTURES: Fixture[] = [
   {
     name: "barrel.ts",
     content: 'export * from "./values.ts";\n',
-    executable: true,
+    executable: false,
   },
 ];
 
@@ -111,6 +116,12 @@ describe("executable-source", () => {
           "export type Rendered = (widget: Widget) => string;",
         ].join("\n"),
       ],
+      ["a re-export of everything", 'export * from "./values.ts";'],
+      [
+        "named re-exports",
+        'export { used, skipped as unused } from "./values.ts";',
+      ],
+      ["a namespace re-export", 'export * as values from "./values.ts";'],
       [
         "comments and the module marker",
         ["/** Everything here is commented out. */", "export {};"].join("\n"),
@@ -150,7 +161,11 @@ describe("executable-source", () => {
           "}",
         ].join("\n"),
       ],
-      ["a re-export", 'export * from "./values.ts";'],
+      [
+        "a re-export beside a value",
+        'export * from "./values.ts";\nexport const answer = 42;',
+      ],
+      ["a default export", "export default 42;"],
       // Error recovery emits what the compiler managed to read, so a file it
       // cannot parse carries its full charge.
       ["a file that does not parse", "export const broken = {"],

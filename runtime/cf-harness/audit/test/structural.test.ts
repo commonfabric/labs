@@ -9,10 +9,10 @@
  * its case is about.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { HarnessCfcInvocationContext } from "../../src/contracts/cfc-invocation-context.ts";
 import type { HarnessHandleTable } from "../../src/contracts/handle-table.ts";
@@ -518,6 +518,39 @@ describe("structural", () => {
       expect(outcome.verdict).toBe("pass");
     });
 
+    it("fails a side-effect call when the policy trace lists no decisions", () => {
+      // A trace that leaves out its decisions list holds none, so the call
+      // the run report recorded joins to nothing, even though the report
+      // itself lists a decision for it.
+      const decisions = [decision({ toolCallId: "call-1" })];
+      const outcome = inspect("AUD-3", {
+        policyTrace: policyTrace([], { decisions: undefined }),
+        runReport: runReport({
+          policyDecisions: decisions,
+          toolActivity: [activity({ toolCallId: "call-1" })],
+        }),
+      });
+
+      expect(outcome.verdict).toBe("fail");
+      expect(detailsOf(outcome)).toContain(
+        "side-effect call `bash` (call-1) joins to no policy decision",
+      );
+    });
+
+    it("fails a side-effect call when the run report, read without a trace, lists no decisions", () => {
+      const outcome = inspect("AUD-3", {
+        runReport: runReport({
+          policyDecisions: undefined,
+          toolActivity: [activity({ toolCallId: "call-1" })],
+        }),
+      });
+
+      expect(outcome.verdict).toBe("fail");
+      expect(detailsOf(outcome)).toContain(
+        "(call-1) joins to no policy decision",
+      );
+    });
+
     it("fails a policy trace whose declared counts do not match its decisions", () => {
       const decisions = [decision({ toolCallId: "call-1" })];
       const outcome = inspect("AUD-3", {
@@ -532,6 +565,25 @@ describe("structural", () => {
 
       expect(outcome.verdict).toBe("fail");
       expect(detailsOf(outcome)).toContain("declares total 7");
+    });
+
+    it("fails a policy trace declaring a `withheld` count its decisions do not hold, and passes one declaring zero", () => {
+      const decisions = [decision({ toolCallId: "call-1" })];
+      const withDeclared = (withheld: number) =>
+        inspect("AUD-3", {
+          policyTrace: policyTrace(decisions, {
+            decisionCounts: { ...counted(decisions), withheld },
+          }),
+          runReport: runReport({
+            policyDecisions: decisions,
+            toolActivity: [activity({ toolCallId: "call-1" })],
+          }),
+        });
+
+      expect(withDeclared(0).verdict).toBe("pass");
+      const outcome = withDeclared(2);
+      expect(outcome.verdict).toBe("fail");
+      expect(detailsOf(outcome)).toContain("withheld 2; its decisions are");
     });
 
     it("fails a run report whose declared counts do not match its decisions", () => {
@@ -1038,6 +1090,25 @@ describe("structural", () => {
 
       expect(outcome.verdict).toBe("inconclusive");
       expect(outcome.message).toContain("`transcript.json` is absent");
+    });
+
+    it("returns `inconclusive`, naming why, when the omission record did not parse", () => {
+      const root = evidenceOf({ transcript: [] });
+      root.transcriptOmissions = {
+        status: "unparseable",
+        path: "built",
+        detail: "did not parse",
+      };
+
+      const outcome = checkNamed("AUD-20").inspect(root, {
+        root,
+        children: [],
+      });
+
+      expect(outcome.verdict).toBe("inconclusive");
+      expect(outcome.message).toBe(
+        "`transcript-omissions.json` did not parse, so nothing about this clause was established",
+      );
     });
 
     it("returns `inconclusive` when a current omission record has an unreadable transcript", () => {

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
@@ -9,6 +8,7 @@ import {
   normalizeHostname,
   parseIpAddress,
 } from "../src/network-address.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const parsed = (text: string): Uint8Array => {
   const address = parseIpAddress(text);
@@ -50,6 +50,12 @@ describe("network-address", () => {
           "1..2.3",
           "+1.2.3.4",
           "::1::2",
+          ":1:2:3:4:5:6:7",
+          "1:2::3:",
+          "1:2:3:4:5:6:7",
+          "1:2:3:4:5:6:7::8",
+          "g::1",
+          "12345::1",
           "",
         ]
       ) {
@@ -82,8 +88,14 @@ describe("network-address", () => {
           "169.254.169.254",
           "172.16.0.1",
           "192.168.0.1",
+          "192.0.0.1",
           "192.0.2.1",
+          "192.88.99.1",
+          "198.18.0.1",
+          "198.51.100.1",
+          "203.0.113.1",
           "224.0.0.1",
+          "255.255.255.255",
           "0.0.0.0",
           "::1",
           "::",
@@ -93,6 +105,8 @@ describe("network-address", () => {
           "2001:db8::1",
           "2002::1",
           "2001::1",
+          "2001:2::1",
+          "2001:10::1",
           "2001:20::1",
           "3fff::1",
           "::ffff:127.0.0.1",

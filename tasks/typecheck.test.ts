@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { walk } from "@std/fs";
 import { dirname, extname, fromFileUrl, join, relative } from "@std/path";
 
 import { recordsSpooledBy } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   changeReach,
@@ -372,6 +372,26 @@ describe("typecheck", () => {
             ["runtime/base/mod.ts", 1],
             ["runtime/top/top.test.ts", 2],
           ]),
+        );
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("throws what Deno says where it cannot load the workspace the graph is read in", async () => {
+      // Deno refuses a workspace one of whose members has no manifest, so
+      // the module graph cannot be read, and the reach says why rather than
+      // returning an empty one.
+
+      const root = await tree({
+        "deno.jsonc": JSON.stringify({ workspace: ["./runtime/bare"] }),
+        "runtime/bare/mod.ts": "export const bare = 1;\n",
+      });
+      try {
+        const reach = await changeReach(root, () => ["runtime/bare/mod.ts"]);
+        expect(reach(new Set())).toEqual(new Map());
+        expect(() => reach(new Set(["runtime/bare/mod.ts"]))).toThrow(
+          /^deno info could not read the checked modules' imports:\n.*Could not find config file for workspace member/s,
         );
       } finally {
         await Deno.remove(root, { recursive: true });

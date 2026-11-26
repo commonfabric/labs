@@ -3,7 +3,6 @@
  * counts taken by hand from the same tables.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
@@ -12,15 +11,19 @@ import {
   applyCommit,
   close,
   COMPACTION_SESSION_PREFIX,
+  createBranch,
+  deleteBranch,
   type Engine,
   open,
 } from "../v2/engine.ts";
+import { HISTORY_FORK_BRANCH_PREFIX } from "../v2.ts";
 import {
   type CompactionReport,
   formatCompactionReport,
   normalizePrefixes,
   planCompaction,
 } from "../v2/compact.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const A = "computed:a";
 const B = "computed:b";
@@ -394,6 +397,54 @@ describe("planCompaction", () => {
         selection: { prefixes: ["computed:"] },
       });
       expect(report.preconditions.foreignKeyViolations).toBe(1);
+    });
+  });
+
+  it("reports an active history fork without refusing the store", async () => {
+    await withStore((db, engine) => {
+      const fork = `${HISTORY_FORK_BRANCH_PREFIX}one`;
+      createBranch(engine, fork);
+      // A fork that was ended is deleted already, and is not reported.
+      createBranch(engine, `${HISTORY_FORK_BRANCH_PREFIX}ended`);
+      deleteBranch(engine, `${HISTORY_FORK_BRANCH_PREFIX}ended`);
+
+      const report = planCompaction(db, {
+        selection: { prefixes: ["computed:"] },
+      });
+
+      expect(report.preconditions).toMatchObject({
+        singleBranch: true,
+        branches: [],
+        historyForks: [fork],
+      });
+      const text = formatCompactionReport(report);
+      expect(text).toContain(
+        `one branch; 1 leftover history fork(s) deleted by a run (${fork})`,
+      );
+      expect(text).not.toContain("REFUSED");
+    });
+  });
+
+  it("reports an active branch that is not a history fork as a failed precondition, apart from the history forks", async () => {
+    await withStore((db, engine) => {
+      const fork = `${HISTORY_FORK_BRANCH_PREFIX}one`;
+      createBranch(engine, fork);
+      createBranch(engine, "draft");
+
+      const report = planCompaction(db, {
+        selection: { prefixes: ["computed:"] },
+      });
+
+      expect(report.preconditions).toMatchObject({
+        singleBranch: false,
+        branches: ["draft"],
+        historyForks: [fork],
+      });
+      const text = formatCompactionReport(report);
+      expect(text).toContain("REFUSED: branches draft;");
+      expect(text).toContain(
+        `1 leftover history fork(s) deleted by a run (${fork})`,
+      );
     });
   });
 

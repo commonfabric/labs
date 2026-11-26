@@ -226,8 +226,9 @@ writing a case:
 
 - A board built in a pattern test with topics in its argument lists them, one
   topic twice included, and runs its pivot over them. Those topics get no
-  `referencedBy` of their own, because the board wires `boardCrossrefs` only
-  into the topics `addTopic` and the composer create. An action that pushes a
+  `referencedBy` of their own, because the board wires `boardCrossrefs` and
+  `boardCrossrefIndex` only into the topics `addTopic` and the composer
+  create. An action that pushes a
   Topic built in a pattern body does not run: its argument reads as undefined,
   which the runner logs as a potential schema mismatch.
 - The pivot excludes a topic from its own inbound edges by identity rather than

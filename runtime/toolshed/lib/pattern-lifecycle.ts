@@ -193,7 +193,6 @@ export interface LifecycleDeps {
 
   logger?: {
     warn: (obj: unknown, msg: string) => void;
-    info: (obj: unknown, msg: string) => void;
   };
 
   /**

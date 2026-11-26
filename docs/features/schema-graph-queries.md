@@ -44,7 +44,11 @@ caller keeps them, walks them under a schema, and records what it reached.
   scoped addresses against; call `visit(document, selector)` for each root.
   A root that names an explicit scope instance passes its key as `visit`'s
   third argument, and records under THAT instance rather than one resolved
-  from the acting identity. The walk builds the read-only transaction the
+  from the acting identity. A link the walk follows resolves under the acting
+  identity, and a walk acting as a principal with no session follows no
+  session-scoped link; "One graph per acting identity" below says which
+  identity `memory` walks a root under. The walk builds the read-only
+  transaction the
   traverser reads through, carries the pointer-cycle tracker that stops a
   link loop, and loads, for every document it delivers, the schema document
   its `cfc` labels are stated against, which a reader needs in order to
@@ -66,17 +70,44 @@ caller keeps them, walks them under a schema, and records what it reached.
   consumers of traversed values observe; see the OFF-ARM NEUTRALITY note at
   that site for what gates enabling it.
 - A walk reports each tracker record it makes, or finds the tracker already
-  holding, to the `onTrackedDoc` hook of its options, with the document whose
-  walk needed it: the document holding the link that was followed, the
-  document whose schema or `cfc` envelope named a schema document, or the
-  referrer `visit()` was given for a root. `memory` attributes its tracker
-  with that, so a document nothing reaches any more can leave a session's
-  result (`../specs/memory-v2/04-protocol.md`, section 4.6.3). A visit a
-  memory server's incremental passes make to a document it already tracks,
-  for a root added again, a covered root walked on its own, or a document
-  walked again for its attributions, asks for a `rewalk`, which traverses
-  the document itself even where the shared memo holds it, so that its links
-  are reported again; a graph's first evaluation does not.
+  holding, to the `onTrackedDoc` hook of its options: the record's tracker
+  key and selector, and the referrer whose walk needed it, which is the key
+  (`trackedRecordKey`, one document under one selector) of the record
+  walking the document that holds the link that was followed, or whose
+  schema or `cfc` envelope named a schema document, or the referrer
+  `visit()` was given for a root. A document is walked under the
+  record a visit or a followed link entered it by while the traversal of
+  the position that entered it lasts, which the traversal reports through
+  `TraversalContext.records`. Misses and crossings are reported by record
+  in the same way. `memory` attributes its tracker with that, so a
+  document nothing reaches any more can leave a session's result
+  (`../specs/memory-v2/04-protocol.md`, section 4.6.3), and a record that
+  retires releases what its own walk reached without a walk.
+- A memoized result keeps what its position reported to the record that was
+  walking that position's document when the position began
+  (`RecordWalk.positionOf()`), and names each memoized position a memo hit
+  inside it stood for, so it stands for what those positions reached as
+  well. A memo hit reports the same again for the record walking the
+  document now (`RecordWalk.replay()`), so every record of a document that
+  traverses a position is attributed that position's reach. A hit for the
+  record that memoized the position, in the same visit, reports nothing,
+  since what it attributed stands, and a replay reports to a record only
+  what it has not made or stood for in that visit. A document visited again,
+  as a root added again, a covered root walked on its own, or a document
+  walked again for its attributions, is attributed all it reaches in the
+  same way. A memo hit naming a record the tracker no longer holds is
+  traversed instead, because that record's own reach left with it. Two kinds
+  of position are replayed only for the record that memoized them, in the
+  same visit, since their range lacks something another record's traversal
+  of them would attribute: the first position of a record whose walk
+  followed the document's own links before the position began, as resolving
+  a link through to its target can, and a position whose traversal the
+  cycle tracker cut short at a traversal that began outside it
+  (`CompoundCycleTracker.openSpan()`). A position enclosing one of those
+  hits is then of the same kind. A memo
+  key names a document by its scope, so the positions of a scope instance a
+  visit names explicitly are memoized under that instance as well
+  (`RecordWalk.positionOf()`).
 - The rest is vocabulary the two sides name in common:
   `MapSetStringToPathSelectors` (the tracker), `schemaTrackerCoversSelector`
   and `coveringSelector` (whether a tracker already covers a selector, and
@@ -105,6 +136,36 @@ current set of watch roots. Keeping those results across evaluations would
 retain obsolete schemas and could reuse results whose traversal effects have
 retired. A cache shared across evaluations must instead validate revisions and
 replay effects; a bare schema memo has neither contract.
+
+## One graph per acting identity
+
+A serving session may name another identity's instance of a scoped document as
+a root (`entityScopeKey`; `../specs/server-side-execution/protocol.md`, §2's
+read row). `memory` splits a query by the identity each root is walked under
+(`partitionGraphQuery()` in `runtime/memory/v2/query.ts`). The roots naming one
+scope instance that is not the session's own are walked under the identity
+that instance belongs to, in a tracked graph of their own, and every other root
+is walked under the session's identity. A link followed from a named root
+therefore resolves to that identity's instances, as it does in a walk that
+identity's own session runs. `trackGraph()` and `extendTrackedGraph()` refuse a
+root naming an instance of an identity other than the one they walk under,
+since walking it there would record the document under that identity's own
+instance as well.
+
+A session then holds one graph over a branch for each identity its roots are
+walked under, keyed as `watchGraphGroups()` in
+`runtime/memory/v2/server-sync.ts` keys them. Each graph has a tracker of its
+own, so a document two of them reach is walked once in each and delivered
+once, and a document one of them retires is retracted only when no other graph
+of the session over that branch tracks it.
+
+A `user` instance names a principal and no session. The walk of a root naming
+one follows no session-scoped link, since its identity resolves no instance of
+that scope, and counts each link it leaves
+(`GraphQueryWalkStats.unresolvedLinkScopes`). An evaluation that left one is
+not kept in the evaluation cache, since a walk under another identity would
+reach more. A walk under an identity that names no principal fails at a
+user- or session-scoped link.
 
 ## What this coupling costs
 

@@ -10,11 +10,11 @@
  * further out, which is the form deployed documents written then still hold.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema, JSONSchemaObj } from "../../src/builder/types.ts";
 import { cfcSchemaEntries } from "../../src/cfc/schema-label-view.ts";

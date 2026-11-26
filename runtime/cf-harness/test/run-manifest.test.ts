@@ -1,5 +1,7 @@
 import { assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 import {
   bindLoomLocalRunManifest,
@@ -8,7 +10,7 @@ import {
   parseLoomRunManifestJson,
 } from "../src/contracts/run-manifest.ts";
 
-Deno.test("parseLoomRunManifestJson validates prompt-slot evidence", () => {
+test("parseLoomRunManifestJson validates prompt-slot evidence", () => {
   const manifest = parseLoomRunManifestJson(
     JSON.stringify({
       type: "cf-harness.loom-run-manifest",
@@ -33,7 +35,7 @@ Deno.test("parseLoomRunManifestJson validates prompt-slot evidence", () => {
   });
 });
 
-Deno.test("parseLoomRunManifestJson rejects malformed prompt-slot evidence", () => {
+test("parseLoomRunManifestJson rejects malformed prompt-slot evidence", () => {
   assertThrows(
     () => parseLoomRunManifestJson(JSON.stringify([])),
     Error,
@@ -67,7 +69,7 @@ Deno.test("parseLoomRunManifestJson rejects malformed prompt-slot evidence", () 
   );
 });
 
-Deno.test("parseLoomRunManifestJson rejects a non-Loom source", () => {
+test("parseLoomRunManifestJson rejects a non-Loom source", () => {
   assertThrows(
     () =>
       parseLoomRunManifestJson(
@@ -82,7 +84,7 @@ Deno.test("parseLoomRunManifestJson rejects a non-Loom source", () => {
   );
 });
 
-Deno.test("parseLoomRunManifestJson rejects invalid CFC metadata", () => {
+test("parseLoomRunManifestJson rejects invalid CFC metadata", () => {
   assertThrows(
     () =>
       parseLoomRunManifestJson(
@@ -124,7 +126,7 @@ Deno.test("parseLoomRunManifestJson rejects invalid CFC metadata", () => {
   );
 });
 
-Deno.test("parseLoomRunManifestJson preserves a non-secret credential owner reference", () => {
+test("parseLoomRunManifestJson preserves a non-secret credential owner reference", () => {
   const manifest = parseLoomRunManifestJson(JSON.stringify({
     type: "cf-harness.loom-run-manifest",
     version: 1,
@@ -147,7 +149,7 @@ Deno.test("parseLoomRunManifestJson preserves a non-secret credential owner refe
   });
 });
 
-Deno.test("parseLoomRunManifestJson preserves non-secret local host binding metadata", () => {
+test("parseLoomRunManifestJson preserves non-secret local host binding metadata", () => {
   const manifest = parseLoomRunManifestJson(JSON.stringify({
     type: "cf-harness.loom-run-manifest",
     version: 1,
@@ -173,7 +175,7 @@ Deno.test("parseLoomRunManifestJson preserves non-secret local host binding meta
   }
 });
 
-Deno.test("parseLoomRunManifestJson rejects malformed provider ownership", () => {
+test("parseLoomRunManifestJson rejects malformed provider ownership", () => {
   for (
     const credentialOwner of [
       {},
@@ -216,7 +218,7 @@ Deno.test("parseLoomRunManifestJson rejects malformed provider ownership", () =>
   );
 });
 
-Deno.test("parseLoomRunManifestJson rejects a path-shaped harness home identity", () => {
+test("parseLoomRunManifestJson rejects a path-shaped harness home identity", () => {
   assertThrows(
     () =>
       parseLoomRunManifestJson(JSON.stringify({
@@ -230,7 +232,7 @@ Deno.test("parseLoomRunManifestJson rejects a path-shaped harness home identity"
   );
 });
 
-Deno.test("bindLoomLocalRunManifest rejects every conflicting caller binding", () => {
+test("bindLoomLocalRunManifest rejects every conflicting caller binding", () => {
   const binding: LoomLocalHostBinding = {
     source: "loom",
     modelProvider: "openai-codex",
@@ -317,7 +319,7 @@ const manifestWithCfc = (cfc: unknown): string =>
     cfc,
   });
 
-Deno.test("parseLoomRunManifestJson carries a read ceiling through normalization", () => {
+test("parseLoomRunManifestJson carries a read ceiling through normalization", () => {
   const ceiling: CfcConfClause[] = [
     "did:key:zOwner",
     { type: "Facet", owner: "did:key:zOwner", id: "work" },
@@ -337,14 +339,14 @@ Deno.test("parseLoomRunManifestJson carries a read ceiling through normalization
   });
 });
 
-Deno.test("parseLoomRunManifestJson still drops a cfc key it does not know", () => {
+test("parseLoomRunManifestJson still drops a cfc key it does not know", () => {
   const manifest = parseLoomRunManifestJson(
     manifestWithCfc({ enforcementMode: "observe", ceiling: ["did:key:zX"] }),
   );
   assertEquals(manifest.cfc, { enforcementMode: "observe" });
 });
 
-Deno.test("parseLoomRunManifestJson refuses a malformed read ceiling rather than dropping it", () => {
+test("parseLoomRunManifestJson refuses a malformed read ceiling rather than dropping it", () => {
   const cases: { cfc: unknown; message: string }[] = [
     {
       cfc: { maxConfidentiality: [] },
@@ -381,4 +383,53 @@ Deno.test("parseLoomRunManifestJson refuses a malformed read ceiling rather than
       testCase.message,
     );
   }
+});
+
+describe("run-manifest", () => {
+  describe("parseLoomRunManifestJson()", () => {
+    const parse = (manifest: Record<string, unknown>) =>
+      parseLoomRunManifestJson(JSON.stringify(manifest));
+
+    it("throws naming the parse failure for text that is not JSON", () => {
+      expect(() => parseLoomRunManifestJson("{not json")).toThrow(
+        "failed to parse run manifest JSON:",
+      );
+    });
+
+    it("throws naming a manifest type other than the Loom one", () => {
+      expect(parse({ type: "cf-harness.loom-run-manifest" }).type).toBe(
+        "cf-harness.loom-run-manifest",
+      );
+      expect(() => parse({ type: "cf-harness.other-manifest" })).toThrow(
+        "unsupported run manifest type: cf-harness.other-manifest",
+      );
+    });
+
+    it("throws naming a manifest version other than 1", () => {
+      expect(parse({ version: 1 }).version).toBe(1);
+      expect(() => parse({ version: 2 })).toThrow(
+        "unsupported run manifest version: 2",
+      );
+    });
+
+    it("returns the CFC label source when it is the Loom manifest's own", () => {
+      expect(parse({ cfc: { labelSource: "loom-run-manifest" } }).cfc).toEqual(
+        { labelSource: "loom-run-manifest" },
+      );
+    });
+
+    it("throws naming a CFC label source other than the Loom manifest", () => {
+      expect(() => parse({ cfc: { labelSource: "model" } })).toThrow(
+        "unsupported run manifest cfc.labelSource: model",
+      );
+    });
+
+    it("throws for a credential owner that is not a JSON object", () => {
+      for (const credentialOwner of ["loom:user", ["loom:user"], null]) {
+        expect(() => parse({ credentialOwner })).toThrow(
+          "run manifest credentialOwner must be a JSON object",
+        );
+      }
+    });
+  });
 });

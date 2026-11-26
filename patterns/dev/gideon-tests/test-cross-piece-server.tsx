@@ -18,6 +18,7 @@ import {
   pattern,
   Stream,
   UI,
+  type VNode,
   Writable,
 } from "commonfabric";
 
@@ -31,6 +32,8 @@ interface Input {
 
 /** A #crossPieceTestServer that exposes a stream for testing cross-piece invocation. */
 export interface Output {
+  [NAME]: string;
+  [UI]: VNode;
   counter: number;
   invocationLog: string[];
 

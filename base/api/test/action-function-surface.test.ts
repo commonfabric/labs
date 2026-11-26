@@ -17,6 +17,7 @@
 import { assertEquals } from "@std/assert";
 import type { ActionFunction, Stream } from "@commonfabric/api";
 import type { MustBeTrue, Same } from "@commonfabric/js-values/types";
+import { test } from "@commonfabric/test-support/test";
 
 interface AddTopic {
   title: string;
@@ -59,6 +60,6 @@ export function _actionFunctionSurfaceProbe() {
   return { noEvent, concise, declared, output };
 }
 
-Deno.test("ActionFunction exposes the declared-result overload to patterns", () => {
+test("ActionFunction exposes the declared-result overload to patterns", () => {
   assertEquals(typeof _actionFunctionSurfaceProbe, "function");
 });

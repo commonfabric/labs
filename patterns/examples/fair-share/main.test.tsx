@@ -10,7 +10,8 @@
  *   (CT-1715): it writes through the element's cell; replacing the array
  *   slot with a fresh object literal would re-mint the entity and orphan
  *   every previously-held reference (selection cells, rows read earlier)
- * - an existing picture is NOT overwritten by a later join
+ * - an existing picture is NOT overwritten by a later join, whether the
+ *   join's picture is bytes or a blob, so a person holds at most one picture
  * - held-reference survival: a reference stashed BEFORE the backfill still
  *   `equals()`-matches the person and still drives a subsequent
  *   equals()-located removal AFTER the backfill
@@ -35,6 +36,7 @@ import { joinWithProfile } from "./main.tsx";
 
 interface Person {
   name: string;
+  pictureBlob?: { space: string; id: string };
   picture?: FabricBytes;
   avatar?: string;
 }
@@ -44,11 +46,13 @@ interface Person {
 const SMILE = [1, 1];
 const FOX = [2, 2];
 const CAT = [3, 3];
+const BLOB = { space: "did:key:z6MkPictureSpace", id: "picture-blob" };
 
 const bytesAre = (actual: FabricBytes | undefined, expected: number[]) =>
   actual?.slice().join() === expected.join();
 
 const dee = (people: readonly Person[]) => people.find((p) => p.name === "Dee");
+const eve = (people: readonly Person[]) => people.find((p) => p.name === "Eve");
 
 // Test plumbing: remove the person the held reference points at, locating it
 // with equals() — proves a reference held across the picture backfill still
@@ -108,6 +112,14 @@ export default pattern(() => {
     face: { picture: new FabricBytes(new Uint8Array(FOX)) },
   });
 
+  // Nor may a picture held as a blob.
+  const action_join_ann_blob = joinWithProfile({
+    people: peopleCell,
+    myName: myNameCell,
+    name: "Ann",
+    face: { pictureBlob: BLOB },
+  });
+
   // New person with a picture — the push branch.
   const action_join_bob = joinWithProfile({
     people: peopleCell,
@@ -150,6 +162,26 @@ export default pattern(() => {
     face: { picture: new FabricBytes(new Uint8Array(FOX)) },
   });
 
+  // Eve is added by hand, then joins with a picture blob (backfilled), then
+  // with picture bytes (not backfilled beside the blob).
+  const action_add_eve = joinWithProfile({
+    people: peopleCell,
+    myName: myNameCell,
+    name: "Eve",
+  });
+  const action_join_eve_with_blob = joinWithProfile({
+    people: peopleCell,
+    myName: myNameCell,
+    name: "Eve",
+    face: { pictureBlob: BLOB },
+  });
+  const action_join_eve_with_picture = joinWithProfile({
+    people: peopleCell,
+    myName: myNameCell,
+    name: "Eve",
+    face: { picture: new FabricBytes(new Uint8Array(CAT)) },
+  });
+
   const action_remove_via_held = removeHeldPerson({
     people: peopleCell,
     held,
@@ -170,8 +202,9 @@ export default pattern(() => {
     return h.name === "Ann" && equals(peopleCell.get()[0], h);
   });
 
-  const assert_picture_backfilled = assert(() =>
-    bytesAre(peopleCell.get()[0]?.picture, SMILE)
+  const assert_picture_is_smile = assert(() =>
+    bytesAre(peopleCell.get()[0]?.picture, SMILE) &&
+    peopleCell.get()[0]?.pictureBlob === undefined
   );
   // KEY: the stale-but-once-valid reference still equals()-matches the
   // person AFTER the backfill wrote through the element's cell.
@@ -183,10 +216,6 @@ export default pattern(() => {
   // orphaned entity if the backfill had re-minted identity).
   const assert_held_reads_backfill = assert(() =>
     bytesAre(held.get().picture, SMILE)
-  );
-
-  const assert_picture_not_clobbered = assert(() =>
-    bytesAre(peopleCell.get()[0]?.picture, SMILE)
   );
 
   const assert_bob_added_with_picture = assert(() => {
@@ -211,6 +240,17 @@ export default pattern(() => {
     return bytesAre(d?.picture, FOX) && d?.avatar === "🐙";
   });
 
+  const assert_eve_has_no_picture = assert(() => {
+    const e = eve(peopleCell.get());
+    return e !== undefined && e.pictureBlob === undefined &&
+      e.picture === undefined;
+  });
+  const assert_eve_blob_backfilled = assert(() => {
+    const e = eve(peopleCell.get());
+    return e?.pictureBlob?.space === BLOB.space &&
+      e.pictureBlob.id === BLOB.id && e.picture === undefined;
+  });
+
   const assert_cy_added_with_avatar = assert(() => {
     const cur = peopleCell.get();
     return cur.length === 2 && cur[1]?.name === "Cy" &&
@@ -233,13 +273,15 @@ export default pattern(() => {
 
       // Picture backfill preserves identity
       { action: action_join_ann_with_picture },
-      { assertion: assert_picture_backfilled },
+      { assertion: assert_picture_is_smile },
       { assertion: assert_held_survives_backfill },
       { assertion: assert_held_reads_backfill },
 
       // Existing picture is not overwritten
       { action: action_join_ann_other_picture },
-      { assertion: assert_picture_not_clobbered },
+      { assertion: assert_picture_is_smile },
+      { action: action_join_ann_blob },
+      { assertion: assert_picture_is_smile },
 
       // New person push branch
       { action: action_join_bob },
@@ -263,6 +305,15 @@ export default pattern(() => {
       { assertion: assert_dee_text_backfilled },
       { action: action_join_dee_with_picture },
       { assertion: assert_dee_picture_backfilled },
+
+      // A picture blob is backfilled; picture bytes are not backfilled
+      // beside it
+      { action: action_add_eve },
+      { assertion: assert_eve_has_no_picture },
+      { action: action_join_eve_with_blob },
+      { assertion: assert_eve_blob_backfilled },
+      { action: action_join_eve_with_picture },
+      { assertion: assert_eve_blob_backfilled },
     ],
     peopleCell,
   };

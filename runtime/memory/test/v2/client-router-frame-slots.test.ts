@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { getMemoryProtocolFlags } from "../../v2.ts";
 import { connect, type Transport } from "../../v2/client.ts";

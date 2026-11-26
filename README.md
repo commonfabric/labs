@@ -114,6 +114,8 @@ surfaces and Claude compatibility commands for common workflows:
 - `skills/pattern-dev/` - Develop patterns with LLM assistance
 - `skills/pattern-test/` - Write and run pattern tests
 - `skills/pattern-deploy/` - Deploy patterns and test with CLI
+- `skills/weaver-patterns/` - Make patterns for your own Weaver: open Claude
+  Code in this clone and say "set me up to make patterns for my Weaver"
 - `/start-local-dev` - Start local dev servers
 - `/deps` - Dependency and integration setup
 - `/fix-issue` - Fix a specific issue

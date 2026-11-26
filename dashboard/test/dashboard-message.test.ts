@@ -1,4 +1,3 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   DASHBOARD_MESSAGE_LIFETIME_MS,
@@ -7,6 +6,7 @@ import {
   DashboardMessageStore,
   normalizeDashboardMessageText,
 } from "../dashboard-message.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 describe("dashboard-message", () => {
   const directories: string[] = [];

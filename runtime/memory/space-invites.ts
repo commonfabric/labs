@@ -24,6 +24,39 @@ import type { Capability } from "./acl.ts";
 export const INVITE_ACCESS = ["READ", "WRITE", "OWNER"] as const;
 
 /**
+ * The id of the document the invitation service moves on, on the space's
+ * default branch, whenever an operation changes what `list` or `receipts`
+ * return: an invitation made or withdrawn, a new receipt, or an invitation
+ * retired because its issuer no longer owns the space. Its value is an
+ * {@link InviteLedgerRevision}. A client that holds a session on the space's
+ * default branch watches it to learn that the ledger moved, where nothing
+ * else would say so: another owner's invitation, or a redemption by an identity
+ * that already held the access, which writes a receipt and leaves the access
+ * list as it was.
+ *
+ * The document says only that the ledger moved, never what it holds, so every
+ * principal that may read the space may read it while the ledger stays the
+ * owners'. Expiry moves nothing, since every reader compares `expiresAt` with
+ * the time itself. Only the service writes it: the store refuses it in any
+ * commit but a system one, the server's direct writes (`writeDocument`)
+ * refuse it, and a branch restore leaves it as it is.
+ *
+ * A memory server whose service writes it advertises `spaceInvitesRevision`
+ * in its handshake (`MemoryProtocolFlags` in `v2.ts`), so a client asks the
+ * server its session is on. A session on another branch sees the document as
+ * it stood when the branch was forked. A server that does not advertise it
+ * writes no such document, and a client that wants to learn of a change it did
+ * not make reads the ledger again itself.
+ */
+export const SPACE_INVITES_REVISION_DOC_ID = "of:space-invites-revision";
+
+/**
+ * The value of the document {@link SPACE_INVITES_REVISION_DOC_ID} names:
+ * `revision` counts the changes to the ledger, from `1` at the first.
+ */
+export type InviteLedgerRevision = { revision: number };
+
+/**
  * Host limits for version one of the invitation protocol.
  *
  * `suggestedProfile` bounds the profile an issuer may suggest for the person
@@ -227,23 +260,29 @@ export class SpaceInviteError extends Error {
   }
 }
 
-/** Canonical secure service origin, allowing loopback HTTP for development. */
-export function normalizeInviteHost(host: string): string {
-  let url: URL;
-  try {
-    url = new URL(host);
-  } catch {
-    throw new SpaceInviteError("invalid-host");
-  }
+/**
+ * Canonical secure service origin, allowing loopback HTTP for development, or
+ * `undefined` for a host that is not one.
+ */
+export function inviteHostOrigin(host: string): string | undefined {
+  if (!URL.canParse(host)) return undefined;
+  const url = new URL(host);
   const loopback = isLoopbackHostname(url.hostname);
   if (
     url.username || url.password || url.pathname !== "/" || url.search ||
     url.hash ||
     !(url.protocol === "https:" || (url.protocol === "http:" && loopback))
   ) {
-    throw new SpaceInviteError("invalid-host");
+    return undefined;
   }
   return url.origin;
+}
+
+/** Canonical secure service origin, allowing loopback HTTP for development. */
+export function normalizeInviteHost(host: string): string {
+  const origin = inviteHostOrigin(host);
+  if (origin === undefined) throw new SpaceInviteError("invalid-host");
+  return origin;
 }
 
 /** Whether a value is the canonical unpadded encoding of exactly 32 bytes. */
@@ -270,7 +309,7 @@ export function isInviteId(value: unknown): value is string {
  * Whether a space or inviter has the DID key encoding accepted by invite
  * routes. The check is syntactic only.
  */
-function isInviteDIDKey(value: unknown): value is DIDKey {
+export function isInviteDIDKey(value: unknown): value is DIDKey {
   return isDIDKey(value) &&
     /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,120}$/.test(value);
 }
@@ -308,9 +347,60 @@ export function inviteCodeVerifier(link: InviteLink): string {
 }
 
 /**
- * Builds a join link whose secret is carried only in its fragment:
- * `/join?host&space&invite[&inviter]#code`. The optional `inviter` is an
- * unverified claim; see {@link InviteLink}.
+ * The custom URL scheme of the invitation link format, shared by every Weaver
+ * from any maker as `mailto:` is shared by mail clients, so a browser can hand
+ * an invitation to whichever Weaver its owner chose without anyone keeping a
+ * list of Weavers. The scheme has three actions, each named by the URL's host:
+ *
+ * - `fbrc://join?host&space&invite[&inviter]#code=…` is an invitation, with
+ *   the query and fragment of the canonical `https` link (see
+ *   {@link buildInviteLink}). On Android the code arrives instead as the
+ *   intent's `S.code` extra, and the URL has no fragment; pass it to
+ *   {@link parseInviteLink} as `options.code`.
+ * - `fbrc://setup?n=<nonce>` is a Weaver's setup reply: the page a Weaver opens
+ *   while making itself the browser's default for the scheme answers on it,
+ *   and the Weaver accepts only a nonce it issued. It is never an invitation,
+ *   and {@link parseInviteLink} returns undefined for it.
+ *
+ * - `fbrc://space?host&space` is a link to a space, which grants nothing
+ *   (`parseSpaceLink` in `./space-links.ts`).
+ *
+ * Each action's parser returns undefined for every other action, including
+ * ones added later, so that a newer link reaches an older reader as one it
+ * does not know rather than as a malformed one. Each refuses a malformed URL
+ * of its own action, and {@link parseInviteLink} also refuses a scheme URL
+ * that names no action (`fbrc:join?…`).
+ */
+export const INVITE_LINK_SCHEME = "fbrc";
+
+/**
+ * Whether `url`, a URL on {@link INVITE_LINK_SCHEME}, names `action`: false
+ * for another action, so that each action's parser passes over the others,
+ * including ones added later. Throws `invalid-link` for a URL that names no
+ * action (`fbrc:join?…`, `fbrc:///join?…`) or names `action` malformed (in
+ * another case, with a port, credentials or a path), as every parser of the
+ * scheme must.
+ */
+export function isSchemeAction(url: URL, action: string): boolean {
+  if (url.host === "") throw new SpaceInviteError("invalid-link");
+  if (url.hostname.toLowerCase() !== action) return false;
+  if (
+    url.host !== action || url.pathname !== "" || url.username || url.password
+  ) throw new SpaceInviteError("invalid-link");
+  return true;
+}
+
+/**
+ * The query keys that make a `/join` or `/open` URL an invitation, so that one
+ * carrying none of them, such as another site's `/open?id=…`, is not one.
+ */
+const INVITE_LINK_QUERY_KEYS = ["host", "space", "invite"] as const;
+
+/**
+ * Builds the canonical join link, `/join?host&space&invite[&inviter]#code`, on
+ * the `shell` origin, with the secret carried only in its fragment. The
+ * optional `inviter` is an unverified claim; see {@link InviteLink}.
+ * {@link parseInviteLink} documents the other forms of the same invitation.
  */
 export function buildInviteLink(shell: string, invite: InviteLink): URL {
   inviteCodeVerifier(invite);
@@ -329,12 +419,41 @@ export function buildInviteLink(shell: string, invite: InviteLink): URL {
 }
 
 /**
- * Parses a join link; unrelated routes return undefined, malformed joins throw
- * secret-free errors. A returned `inviter` is the link's unverified claim; see
+ * Parses an invitation link in any of its forms, each carrying the same query
+ * (`host`, `space`, `invite`, and optionally `inviter`) and nothing else:
+ *
+ * - `https://<origin>/join?…#code=…`, the canonical link
+ *   {@link buildInviteLink} makes, on any secure origin or loopback HTTP;
+ * - `https://<origin>/open?…#code=…`, the same link from a person who asked to
+ *   open it in Weaver rather than on the web;
+ * - `fbrc://join?…#code=…`, the {@link INVITE_LINK_SCHEME} form, in which
+ *   `join` is the URL's host and its path is empty;
+ * - `fbrc://join?…` with no fragment, given `options.code`, as Android
+ *   delivers the scheme form: the code travels as the intent's `S.code` extra,
+ *   because Android's `intent:` URL keeps its own fields in the fragment.
+ *
+ * Every form yields the same result, so the result does not say which form it
+ * came from, and it reports no origin of the link itself: `host` is always the
+ * service named in the query, which the code verifier binds, never the link's
+ * origin or the scheme form's `join`.
+ *
+ * A URL that is not an invitation returns undefined: another scheme's URL on
+ * any path but `/join` or `/open`, a `/join` or `/open` URL whose query names
+ * none of `host`, `space`, and `invite`, and any {@link INVITE_LINK_SCHEME}
+ * action but `join`, such as the setup reply, `fbrc://setup?…`, or a space
+ * link, `fbrc://space?…`. Anything else throws a secret-free
+ * {@link SpaceInviteError}: `invalid-link` for a malformed invitation,
+ * including a malformed `join` URL such as `fbrc://JOIN?…` or
+ * `fbrc://join/?…`, or a scheme URL naming no action, such as `fbrc:join?…`;
+ * `invalid-link` too for a code given both in a fragment and in
+ * `options.code`, or in `options.code` beside a `/join` or `/open` invitation.
+ * A URL that is not an invitation returns undefined whatever `options.code`
+ * holds. A returned `inviter` is the link's unverified claim; see
  * {@link InviteLink}.
  */
 export function parseInviteLink(
   link: string | URL,
+  options: { code?: string } = {},
 ): (InviteLink & { space: DIDKey; inviter?: DIDKey }) | undefined {
   let url: URL;
   try {
@@ -342,15 +461,28 @@ export function parseInviteLink(
   } catch {
     throw new SpaceInviteError("invalid-link");
   }
-  if (url.pathname !== "/join") return undefined;
-  normalizeInviteHost(url.origin);
+  if (url.protocol === `${INVITE_LINK_SCHEME}:`) {
+    // Another action, such as the setup reply or a space link, or one added
+    // later, is not an invitation: an older reader then sees a link it does
+    // not know rather than a malformed one.
+    if (!isSchemeAction(url, "join")) return undefined;
+  } else {
+    if (
+      (url.pathname !== "/join" && url.pathname !== "/open") ||
+      !INVITE_LINK_QUERY_KEYS.some((key) => url.searchParams.has(key))
+    ) return undefined;
+    normalizeInviteHost(url.origin);
+    if (options.code !== undefined) throw new SpaceInviteError("invalid-link");
+  }
   const fragment = new URLSearchParams(url.hash.slice(1));
   if (
-    url.username || url.password || url.pathname !== "/join" ||
+    url.username || url.password ||
     !["host,invite,space", "host,invite,inviter,space"].includes(
       [...url.searchParams.keys()].sort().join(","),
     ) ||
-    [...fragment.keys()].join(",") !== "code"
+    (options.code === undefined
+      ? [...fragment.keys()].join(",") !== "code"
+      : url.hash !== "")
   ) throw new SpaceInviteError("invalid-link");
   const space = url.searchParams.get("space");
   if (!isInviteDIDKey(space)) throw new SpaceInviteError("invalid-link");
@@ -362,7 +494,7 @@ export function parseInviteLink(
     host: normalizeInviteHost(url.searchParams.get("host")!),
     space,
     inviteId: url.searchParams.get("invite")!,
-    code: fragment.get("code")!,
+    code: options.code ?? fragment.get("code")!,
     ...(inviter === null ? {} : { inviter }),
   };
   inviteCodeVerifier(invite);

@@ -6,9 +6,6 @@ if (!customElements.get("cf-theme")) {
 
 export { CFThemeProvider };
 export type { CFThemeProvider as CFThemeProviderElement } from "./cf-theme.ts";
-export {
-  subscribeToThemeCellValues,
-  unwrapThemeCellValues,
-} from "./cf-theme.ts";
+export { themeCellHandles, unwrapThemeCellValues } from "./cf-theme.ts";
 
 export type { CFThemeProvider as CFThemeElement } from "./cf-theme.ts";

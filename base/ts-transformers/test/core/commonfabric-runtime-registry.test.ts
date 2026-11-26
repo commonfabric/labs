@@ -1,9 +1,9 @@
 import { assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 
 import { COMMONFABRIC_RUNTIME_EXPORTS_BY_NAME } from "../../src/core/commonfabric-runtime-registry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FACTORY_URL = new URL(
   "../../../../runtime/runner/src/builder/factory.ts",
@@ -20,12 +20,14 @@ const TRACKED_IMPORT_SOURCES = new Set([
   "@commonfabric/identity/did",
   "./built-in.ts",
   "./current-principal.ts",
+  "./equals-key.ts",
   "./event-key.ts",
   "./module.ts",
   "./pattern.ts",
   "./principal-of.ts",
   "./space-access.ts",
   "./space-access-change.ts",
+  "../space-members.ts",
 ]);
 
 function getPropertyNameText(name: ts.PropertyName): string | undefined {

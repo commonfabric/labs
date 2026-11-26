@@ -12,11 +12,11 @@
  * rather than throwing.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { CODEC_TYPE_TAGS, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
 import { SpecialNumberCodec } from "@/codec-json/SpecialNumberCodec.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("SpecialNumberCodec", () => {
   const codec = new SpecialNumberCodec();

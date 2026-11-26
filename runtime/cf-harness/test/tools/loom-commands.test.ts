@@ -1,6 +1,11 @@
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { createCfHarnessCliCapabilities } from "../../src/cli.ts";
 import {
@@ -34,7 +39,6 @@ import {
   type ListCommandsOutput,
   listCommandsTool,
   LOOM_COMMAND_COMPLETED_LIMIT,
-  LOOM_COMMAND_TOOLS,
   LOOM_COMMAND_UNTRUSTED_NOTICE,
   LOOM_COMMANDS_EFFECT_NOTICE,
   loomCommandModelContextObservation,
@@ -46,7 +50,10 @@ import {
 } from "../../src/tools/loom-commands.ts";
 import { LOOM_RETRIEVAL_MAX_OUTPUT_CHARS } from "../../src/tools/loom-retrieval.ts";
 import { getBuiltinTool } from "../../src/tools/registry.ts";
-import type { HarnessToolContext } from "../../src/tools/types.ts";
+import type {
+  HarnessToolContext,
+  HarnessToolDefinition,
+} from "../../src/tools/types.ts";
 import {
   type CommandHost,
   type CommandHostAnswers,
@@ -284,6 +291,28 @@ const engineWith = (
   return { engine, calls: host.requests, processes };
 };
 
+/**
+ * A copy of `context` whose catalog source records each read before passing
+ * it on, and the reads asked of it.
+ */
+const askedOf = (
+  context: HarnessToolContext,
+): { context: HarnessToolContext; asked: string[] } => {
+  const asked: string[] = [];
+  const source = context.loomCommandCatalog;
+  if (source === undefined) throw new Error("the context holds no catalog");
+  return {
+    context: {
+      ...context,
+      loomCommandCatalog: {
+        current: () => (asked.push("current"), source.current()),
+        refresh: () => (asked.push("refresh"), source.refresh()),
+      },
+    },
+    asked,
+  };
+};
+
 describe("loom-commands tools", () => {
   beforeAll(() => {
     host = startCommandHost({
@@ -318,8 +347,8 @@ describe("loom-commands tools", () => {
       expect(getBuiltinTool("run_command")?.descriptor.effectClass).toBe(
         "write",
       );
-      expect(LOOM_COMMAND_TOOLS.map((tool) => tool.descriptor.toolId))
-        .toEqual(["list_commands", "run_command"]);
+      expect(getBuiltinTool("list_commands")).toBe(listCommandsTool);
+      expect(getBuiltinTool("run_command")).toBe(runCommandTool);
     });
 
     it("withholds the tools without a host command endpoint and offers them with one", () => {
@@ -381,6 +410,17 @@ describe("loom-commands tools", () => {
         code: "cancelled",
       });
       expect(calls).toHaveLength(0);
+    });
+
+    it("returns a cancellation when the turn is cancelled during the host call", async () => {
+      const { context, calls } = contextWith({ cancelDuringListing: true });
+      const output = await listCommandsTool.invoke(context, {});
+      expect(output).toMatchObject({
+        status: "error",
+        code: "cancelled",
+        message: "The turn was cancelled during the host call.",
+      });
+      expect(calls.map((call) => call.path)).toEqual(["/commands"]);
     });
 
     it("relays a host failure as a typed error", async () => {
@@ -508,6 +548,10 @@ describe("loom-commands tools", () => {
   });
 
   describe("runCommandTool", () => {
+    // The tool as the registry holds it, which takes whatever input a model
+    // sent, as the engine passes it.
+    const untypedRunCommandTool: HarnessToolDefinition = runCommandTool;
+
     it("returns an error without sending a request when the run has no configuration", async () => {
       const { context, calls } = contextWith({ configured: false });
       expect(
@@ -518,6 +562,45 @@ describe("loom-commands tools", () => {
         landed: "no",
       });
       expect(calls).toHaveLength(0);
+    });
+
+    it("delivers a full artifact preflight without trimming its HTML", async () => {
+      const page = "<!doctype html><html><body>" +
+        '<p>Evidence, alternatives, and limits: "résumé" 🧶.</p>\n'.repeat(
+          4_000,
+        ) +
+        "</body></html>";
+      const args = {
+        candidate: {
+          entries: [{
+            title: "Research dossier",
+            artifact: { page, components: { lists: [], notes: false } },
+          }],
+          nothing_because: null,
+        },
+      };
+      const { context, calls } = contextWith({
+        manifest: JSON.stringify({
+          ...MANIFEST,
+          commands: [{
+            id: "preparation.check-preparation",
+            title: "Validate a prepared artifact.",
+            scope: "global",
+            effect: "read",
+            inputs: { type: "object" },
+          }],
+        }),
+      });
+      const output = await runCommandTool.invoke(context, {
+        command: "preparation.check-preparation",
+        args,
+      });
+      expect(output.status).toBe("executed");
+      expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
+      expect(calls.at(-1)?.body).toMatchObject({
+        id: "preparation.check-preparation",
+        args,
+      });
     });
 
     it("refuses malformed input before sending a request", async () => {
@@ -537,10 +620,21 @@ describe("loom-commands tools", () => {
       for (const input of inputs) {
         const { context, calls } = contextWith();
         expect(
-          await runCommandTool.invoke(
-            context,
-            input as unknown as Parameters<typeof runCommandTool.invoke>[1],
-          ),
+          await untypedRunCommandTool.invoke(context, input),
+        ).toMatchObject({
+          status: "failed_to_deliver",
+          code: "invalid_input",
+          landed: "no",
+        });
+        expect(calls).toHaveLength(0);
+      }
+    });
+
+    it("refuses input that is not an object before sending a request", async () => {
+      for (const input of ["loom.compose", null, ["loom.compose"]]) {
+        const { context, calls } = contextWith();
+        expect(
+          await untypedRunCommandTool.invoke(context, input),
         ).toMatchObject({
           status: "failed_to_deliver",
           code: "invalid_input",
@@ -591,6 +685,58 @@ describe("loom-commands tools", () => {
       );
     });
 
+    it("starts no further piece checks once the turn is cancelled", async () => {
+      const space =
+        "did:key:z6MkpiecesAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      const ids = Array.from(
+        { length: 20 },
+        (_, index) => `fid1:${String(index).padStart(43, "C")}`,
+      );
+      const controller = new AbortController();
+      const { context } = contextWith({
+        answer: JSON.stringify({
+          ok: true,
+          id: "loom.inspect",
+          result: {
+            components: ids.map((id) => ({ ref: `pattern:${space}/${id}` })),
+          },
+        }),
+      });
+      let reads = 0;
+      await runCommandTool.invoke({
+        ...context,
+        signal: controller.signal,
+        getFabricSession: () => {
+          reads += 1;
+          controller.abort();
+          return Promise.reject(new Error("cancelled read"));
+        },
+      }, { command: "loom.inspect", args: {} });
+      // the first window of checks may already be under way; none after it
+      expect(reads).toBeGreaterThan(0);
+      expect(reads).toBeLessThan(ids.length);
+    });
+
+    it("refuses a component reference to a token the run does not hold, before posting", async () => {
+      const { context, calls } = contextWith();
+      const output = await runCommandTool.invoke({
+        ...context,
+        handleTable: createHarnessHandleTable("unheld-component"),
+      }, {
+        command: "loom.compose",
+        args: { components: [{ ref: "cfh:a:zzzzz" }] },
+      });
+      expect(output).toMatchObject({
+        status: "failed_to_deliver",
+        code: "invalid_input",
+        landed: "no",
+        reason: expect.stringContaining(
+          "Use the ref returned by run_pattern or assign_slug",
+        ),
+      });
+      expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
+    });
+
     it("reports a failed Fabric session read without blaming a held reference", async () => {
       const { context, calls } = contextWith();
       const minted = await mintAddressHandle(
@@ -633,22 +779,15 @@ describe("loom-commands tools", () => {
 
     it("ends only the cancelled caller's wait on a catalog read another caller shares", async () => {
       for (const cancelled of ["first", "second"] as const) {
-        const first = contextWith();
-        const second = contextWith();
+        const { context } = contextWith();
         const listing = Promise.withResolvers<Response>();
         answers.list = () => listing.promise;
         // Both callers wait on the one read the run holds.
         const signals = [new AbortController(), new AbortController()];
-        Object.assign(first.context, { signal: signals[0].signal });
-        Object.assign(second.context, {
-          signal: signals[1].signal,
-          loomCommandCatalog: first.context.loomCommandCatalog,
-        });
         const call = { command: "loom.compose", args: {} };
-        const pending = [
-          runCommandTool.invoke(first.context, call),
-          runCommandTool.invoke(second.context, call),
-        ];
+        const pending = signals.map(({ signal }) =>
+          runCommandTool.invoke({ ...context, signal }, call)
+        );
         signals[cancelled === "first" ? 0 : 1].abort();
         listing.resolve(new Response(JSON.stringify(MANIFEST)));
         const [one, two] = await Promise.all(pending);
@@ -691,7 +830,8 @@ describe("loom-commands tools", () => {
     });
 
     it("returns an error without sending a request once the turn is cancelled", async () => {
-      const { context, calls } = contextWith({ aborted: true });
+      const { context: unwatched, calls } = contextWith({ aborted: true });
+      const { context, asked } = askedOf(unwatched);
       expect(
         await runCommandTool.invoke(context, {
           command: "loom.compose",
@@ -699,6 +839,9 @@ describe("loom-commands tools", () => {
         }),
       ).toMatchObject({ status: "failed_to_deliver", code: "cancelled" });
       expect(calls).toHaveLength(0);
+      // Nor is the host asked for its catalog, which would otherwise land
+      // after the answer.
+      expect(asked).toEqual([]);
     });
 
     it("refuses without running when the host's list cannot be read", async () => {
@@ -830,6 +973,185 @@ describe("loom-commands tools", () => {
           "executed",
         ]);
         expect(output.results[1]).toMatchObject({ landed: "unknown" });
+      });
+
+      it("returns `invalid_input` for a malformed call beside its siblings' answers, sending only theirs", async () => {
+        const { context, calls } = contextWith({
+          answer: ({ id }) => Response.json({ ok: true, id }),
+        });
+        const output = batched(
+          await runCommandTool.invoke(context, {
+            calls: [
+              { command: "loom.compose", args: {} },
+              { command: "-bad", args: {} },
+            ],
+          }),
+        );
+        expect(output.results.map((result) => result.status)).toEqual([
+          "executed",
+          "failed_to_deliver",
+        ]);
+        expect(output.results[1]).toMatchObject({
+          code: "invalid_input",
+          landed: "no",
+        });
+        expect(calls.map((call) => call.body && idOf(call.body))).toEqual([
+          undefined,
+          "loom.compose",
+        ]);
+      });
+
+      it("refuses a batch without running any call when the host's list cannot be read", async () => {
+        const { context, calls } = contextWith({ manifest: "[]" });
+        expect(
+          await runCommandTool.invoke(context, {
+            calls: [{ command: "loom.compose", args: {} }],
+          }),
+        ).toMatchObject({
+          status: "failed_to_deliver",
+          code: "malformed_payload",
+          landed: "no",
+        });
+        expect(calls.map((call) => call.path)).toEqual(["/commands"]);
+      });
+
+      it("sends no call that would start after the turn is cancelled", async () => {
+        // Four calls start at once and the host holds their answers until the
+        // fourth arrives, then cancels the turn and answers all four, so the
+        // fifth, which waits for one of them to finish, is never sent.
+        const controller = new AbortController();
+        const held: (() => void)[] = [];
+        const { context, calls } = contextWith({
+          answer: () => {
+            const answer = Promise.withResolvers<Response>();
+            held.push(() => answer.resolve(Response.json({ ok: true })));
+            if (held.length === 4) {
+              controller.abort();
+              for (const release of held) release();
+            }
+            return answer.promise;
+          },
+        });
+        const output = batched(
+          await runCommandTool.invoke({
+            ...context,
+            signal: controller.signal,
+          }, {
+            calls: Array.from(
+              { length: 5 },
+              () => ({ command: "loom.inspect", args: {} }),
+            ),
+          }),
+        );
+        expect(output.results[4]).toMatchObject({
+          status: "failed_to_deliver",
+          code: "cancelled",
+          landed: "no",
+        });
+        expect(calls.filter((call) => call.path === "/command")).toHaveLength(
+          4,
+        );
+      });
+
+      it("returns `cancelled` without reading the Fabric session for calls with held or unheld references that start after the turn is cancelled", async () => {
+        // As above, the turn is cancelled while four calls are in flight. The
+        // fifth carries a held reference, which would otherwise be read from
+        // the Fabric session, and the sixth a reference the run does not
+        // hold, which would otherwise be refused as `invalid_input`.
+        const controller = new AbortController();
+        const held: (() => void)[] = [];
+        const { context, calls } = contextWith({
+          answer: () => {
+            const answer = Promise.withResolvers<Response>();
+            held.push(() => answer.resolve(Response.json({ ok: true })));
+            if (held.length === 4) {
+              controller.abort();
+              for (const release of held) release();
+            }
+            return answer.promise;
+          },
+        });
+        const minted = await mintAddressHandle(
+          createHarnessHandleTable("cancelled-batch"),
+          "/of:fid1:" + "a".repeat(43),
+        );
+        let sessionReads = 0;
+        const output = batched(
+          await runCommandTool.invoke({
+            ...context,
+            signal: controller.signal,
+            handleTable: minted.table,
+            getFabricSession: () => {
+              sessionReads += 1;
+              return Promise.reject(new Error("no session in this test"));
+            },
+          }, {
+            calls: [
+              ...Array.from(
+                { length: 4 },
+                () => ({ command: "loom.inspect", args: {} }),
+              ),
+              {
+                command: "loom.compose",
+                args: { components: [{ ref: minted.token }] },
+              },
+              {
+                command: "loom.compose",
+                args: { components: [{ ref: "cfh:a:zzzzz" }] },
+              },
+            ],
+          }),
+        );
+        for (const result of output.results.slice(4)) {
+          expect(result).toMatchObject({
+            status: "failed_to_deliver",
+            code: "cancelled",
+            landed: "no",
+          });
+        }
+        expect(sessionReads).toBe(0);
+        expect(calls.filter((call) => call.path === "/command")).toHaveLength(
+          4,
+        );
+      });
+
+      it("returns `cancelled` without sending a call whose references were being read when the turn is cancelled", async () => {
+        // Both calls start at once. The first reads its arguments for held
+        // references, and the second's read of the Fabric session cancels
+        // the turn before the first's read ends.
+        const controller = new AbortController();
+        const { context, calls } = contextWith();
+        const minted = await mintAddressHandle(
+          createHarnessHandleTable("cancelled-during-read"),
+          "/of:fid1:" + "a".repeat(43),
+        );
+        const output = batched(
+          await runCommandTool.invoke({
+            ...context,
+            signal: controller.signal,
+            handleTable: minted.table,
+            getFabricSession: () => {
+              controller.abort();
+              return Promise.reject(new Error("no session in this test"));
+            },
+          }, {
+            calls: [
+              { command: "loom.compose", args: { title: "cfh:ordinary" } },
+              {
+                command: "loom.compose",
+                args: { components: [{ ref: minted.token }] },
+              },
+            ],
+          }),
+        );
+        expect(output.results[0]).toMatchObject({
+          status: "failed_to_deliver",
+          code: "cancelled",
+          landed: "no",
+        });
+        expect(calls.filter((call) => call.path === "/command")).toHaveLength(
+          0,
+        );
       });
 
       it("keeps at most four calls in flight to the host", async () => {
@@ -1419,6 +1741,89 @@ describe("loom-commands tools", () => {
         "The result body was omitted to fit the tool output limit. No requested values are shown. Read a smaller date range, fewer results, or a smaller batch.",
       );
       expect(output.truncated).toBe(true);
+    });
+  });
+
+  describe("runCommandTool.effectClassOf()", () => {
+    const effectOf = (
+      input: Record<string, unknown>,
+      context: HarnessToolContext,
+    ) => runCommandTool.effectClassOf!(input, context);
+
+    it("returns the strongest effect the listed commands of a call or batch declare", async () => {
+      const { context } = contextWith();
+      expect(
+        await effectOf({
+          command: "people-discovery.dossier",
+          args: { entity_id: "e" },
+        }, context),
+      ).toBe("read");
+      expect(
+        await effectOf({
+          calls: [
+            { command: "people-discovery.dossier", args: {} },
+            { command: "loom.compose", args: {} },
+          ],
+        }, context),
+      ).toBe("write");
+    });
+
+    it("returns `write` when the effect cannot be read: no catalog, a cancelled turn, an unreadable list, an empty batch, or a malformed call", async () => {
+      const read = { command: "people-discovery.dossier", args: {} };
+      expect(await effectOf(read, contextWith({ configured: false }).context))
+        .toBe("write");
+      const { context: cancelled, asked } = askedOf(
+        contextWith({ aborted: true }).context,
+      );
+      expect(await effectOf(read, cancelled)).toBe("write");
+      expect(asked).toEqual([]);
+      expect(await effectOf(read, contextWith({ manifest: "[]" }).context))
+        .toBe("write");
+      const { context } = contextWith();
+      expect(await effectOf({ calls: [] }, context)).toBe("write");
+      expect(await effectOf({ calls: [read, "loom.compose"] }, context)).toBe(
+        "write",
+      );
+    });
+
+    it("returns `write` when the turn is cancelled during the catalog read", async () => {
+      const { context } = contextWith();
+      const controller = new AbortController();
+      const requested = Promise.withResolvers<void>();
+      const listing = Promise.withResolvers<Response>();
+      answers.list = () => {
+        requested.resolve();
+        return listing.promise;
+      };
+      const pending = effectOf(
+        { command: "people-discovery.dossier", args: {} },
+        { ...context, signal: controller.signal },
+      );
+      try {
+        await requested.promise;
+        controller.abort();
+        expect(await pending).toBe("write");
+      } finally {
+        // The catalog read outlives its cancelled caller. Finish it while
+        // this fixture still owns the shared host's answers and requests.
+        listing.resolve(new Response(JSON.stringify(MANIFEST)));
+        await context.loomCommandCatalog!.current();
+      }
+    });
+  });
+
+  describe("runCommandModelView()", () => {
+    it("returns a batch's results without their labels, leaving a result that is not a record as it was", () => {
+      const view = runCommandModelView({
+        status: "batch",
+        cfc: { version: 1 },
+        results: [{ status: "executed", cfc: { version: 1 } }, "lost"],
+      });
+      expect(view.output).toEqual({
+        status: "batch",
+        results: [{ status: "executed" }, "lost"],
+      });
+      expect(view.artifactOnlyPointers).toEqual(["/cfc", "/results/0/cfc"]);
     });
   });
 

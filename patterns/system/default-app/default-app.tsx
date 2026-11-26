@@ -1,3 +1,10 @@
+/**
+ * The default home view of a space, listing its pieces with a button to remove
+ * each and a link to a grid view of them. A menu creates new notes and
+ * notebooks, and dragging a note onto a notebook files it there. It also lists
+ * the space's participants with a button to join, links to the Mentions and
+ * Search indexes, and builds the indexes other patterns look up.
+ */
 import {
   computed,
   equals,
@@ -6,6 +13,8 @@ import {
   NAME,
   navigateTo,
   pattern,
+  type PerUser,
+  spaceMembers,
   Stream,
   UI,
   type VNode,
@@ -20,6 +29,7 @@ import {
   rosterProfiles,
 } from "../loom/participants.tsx";
 import { default as Note, type NotePiece } from "../notes/note.tsx";
+import { memberSet, type SpaceMember } from "../social-space/member-set.ts";
 
 import BacklinksIndex, {
   type MentionablePiece,
@@ -57,18 +67,24 @@ export interface PiecesListOutput {
    */
   participants: ParticipantProfile[];
 
+  /**
+   * The members of the space (`memberSet()`): one for each principal its
+   * access list names, sorted by DID, with the level the list grants them,
+   * and those of the profiles `participants` lists that are their own, each
+   * once, in the order listed. The list's `"*"` entry adds no member, and a
+   * profile counts toward no one when it is no one's, when its owner is not
+   * on the list, when it is still loading, or when the reader can't read it.
+   * What the reader can read is the reader's own, so the value is derived for
+   * each reader, and is absent while the reader can't read the list. The
+   * stored value is computed when a running runtime reads it, so a reader of
+   * the stored value alone can find it absent, or stale after the list
+   * changes.
+   */
+  members?: PerUser<SpaceMember[]>;
+
   /** Adds a labeled profile to `participants` once. */
   addParticipant: Stream<{ profile: ParticipantProfile }>;
 }
-
-const _visit = handler<
-  Record<string, never>,
-  { piece: Writable<MinimalPiece> }
->(
-  (_, state) => {
-    return navigateTo(state.piece);
-  },
-);
 
 const removePiece = handler<
   Record<string, never>,
@@ -182,6 +198,14 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
   // contract admits.
   const participants = new Writable<ParticipantRoster>({});
   const roster = computed(() => rosterProfiles(participants));
+  // Only a member may read the space's access list, and a profile lives in
+  // its owner's own space, which may refuse a reader. Both are the reader's
+  // principal's, so the members are derived per user. The binding's name is
+  // its value's cause, the identity of the document that stores it, so
+  // renaming it moves its data.
+  const membersForUser = computed((): PerUser<SpaceMember[]> | undefined =>
+    memberSet(roster, spaceMembers(participants))
+  );
   const join = addParticipant({ roster: participants });
   const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
   const viewerName = wish<string>({ query: "#profileName" });
@@ -368,7 +392,7 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
                 <cf-cell-link $cell={gridView} />
               </cf-hstack>
 
-              <cf-table full-width hover>
+              <cf-table fullWidth hover>
                 <tbody>
                   {visiblePieces.map((piece) => {
                     const isNotebook = computed(() => {
@@ -425,6 +449,7 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
     addPiece: addPiece({ pieceRegistry }),
     trackRecent: retiredAction({}),
     participants: roster,
+    members: membersForUser,
     addParticipant: join,
   };
 });

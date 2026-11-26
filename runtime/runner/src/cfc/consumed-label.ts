@@ -44,10 +44,14 @@ export const appliesAtItsPathOnly = (
   entry.observes === "enumerate" ||
   (entry.origin === "structure" && !template);
 
-export const labelForEntriesAtPath = (
+/**
+ * The entries that resolve at `path`, grouped by the component each replaces
+ * down within. `labelForEntriesAtPath` joins their labels.
+ */
+const resolvedEntryGroups = (
   entries: readonly LabelMapEntry[],
   path: readonly string[],
-): IFCLabel | undefined => {
+): LabelMapEntry[][] => {
   // Per-component longest-prefix resolution: within one origin component a
   // more specific entry replaces its ancestor (§4.6.3 replace-down), but
   // components layer independently, so the effective label is the join of
@@ -56,7 +60,7 @@ export const labelForEntriesAtPath = (
   // single-map resolution for pre-component metadata.
   const matches = new Map<
     string,
-    { depth: number; labels: IFCLabel[] }
+    { depth: number; entries: LabelMapEntry[] }
   >();
   for (const entry of entries) {
     if (!isPrefix(entry.path, path)) {
@@ -92,23 +96,31 @@ export const labelForEntriesAtPath = (
       : component;
     const match = matches.get(bucket);
     if (match === undefined || match.depth < entry.path.length) {
-      matches.set(bucket, { depth: entry.path.length, labels: [entry.label] });
+      matches.set(bucket, { depth: entry.path.length, entries: [entry] });
     } else if (match.depth === entry.path.length) {
       // Two equally specific prefixes of one queried path are the same
       // path — or, with wildcard segments, a concrete entry and a `*`
       // template covering the same slot; duplicate (path, origin) entries
       // shouldn't survive coalescing, but join defensively (fail-toward-
       // taint) rather than drop one.
-      match.labels.push(entry.label);
+      match.entries.push(entry);
     }
   }
-  if (matches.size === 0) {
+  return Array.from(matches.values(), (match) => match.entries);
+};
+
+export const labelForEntriesAtPath = (
+  entries: readonly LabelMapEntry[],
+  path: readonly string[],
+): IFCLabel | undefined => {
+  const groups = resolvedEntryGroups(entries, path);
+  if (groups.length === 0) {
     return undefined;
   }
-  const labels = Array.from(
-    matches.values(),
-    (match) =>
-      match.labels.length === 1 ? match.labels[0] : joinLabels(match.labels),
+  const labels = groups.map((group) =>
+    group.length === 1
+      ? group[0].label
+      : joinLabels(group.map((entry) => entry.label))
   );
   return labels.length === 1 ? labels[0] : joinLabels(labels);
 };
@@ -162,6 +174,27 @@ export const labelForConsumedEntries = (
     parts.push(entry.label);
   }
   return parts.length === 1 ? base : joinLabels(parts);
+};
+
+/**
+ * The entries whose labels `labelForConsumedEntries` joins for the same
+ * arguments: those that resolve at `path`, and, for a recursive read, every
+ * entry below it. An entry another one replaces down is not among them, so
+ * each atom of the label is held by one of these, and no atom outside it is.
+ */
+export const entriesForConsumedLabel = (
+  entries: readonly LabelMapEntry[],
+  path: readonly string[],
+  nonRecursive: boolean | undefined,
+): LabelMapEntry[] => {
+  const contributing = resolvedEntryGroups(entries, path).flat();
+  if (nonRecursive === true) return contributing;
+  for (const entry of entries) {
+    if (entry.path.length <= path.length) continue;
+    if (!isPrefix(path, entry.path)) continue;
+    contributing.push(entry);
+  }
+  return contributing;
 };
 
 /**

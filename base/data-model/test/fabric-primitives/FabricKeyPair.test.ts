@@ -10,7 +10,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { hashStringOf, isValidFabricValue } from "@";
 import {
@@ -19,9 +18,17 @@ import {
   NULL_LIVE_ENVIRONMENT,
   ProblematicValue,
   REALM_CODEC,
+  UnknownValue,
 } from "@/codec-common";
-import type { RealmCodecValue } from "@/codec-realm";
+import type { RealmCodecValue, RealmEncodedValue } from "@/codec-realm";
+import {
+  jsonFromFabricValue,
+  newDefaultJsonCodecEngine,
+  newDefaultRealmCodecEngine,
+  realmFromFabricValue,
+} from "@/codecs.ts";
 import { FabricBytes, FabricKeyPair } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Fixed public-key bytes for deterministic tests. */
 const PUBLIC_BYTES = new Uint8Array([1, 2, 3]);
@@ -32,6 +39,17 @@ const PRIVATE_BYTES = new Uint8Array([250, 251, 252, 253]);
 /** Returns a fresh instance holding material. */
 function materialPair(): FabricKeyPair {
   return new FabricKeyPair("ExampleAlgorithm", PUBLIC_BYTES, PRIVATE_BYTES);
+}
+
+/**
+ * Returns the realm form of a value tagged `KeyPair@1` over `state`, built by
+ * hand so that it can carry a state this class never writes.
+ */
+function realmFormOf(state: object): RealmEncodedValue {
+  const marker = realmFromFabricValue(null)[0];
+  const tagged = [marker, CODEC_TYPE_TAGS.KeyPair, state];
+
+  return [marker, tagged as RealmCodecValue];
 }
 
 /** A fixed non-extractable pair, so identity checks have a stable subject. */
@@ -259,6 +277,35 @@ describe("FabricKeyPair", () => {
         expect(() => pair.privateKeyBytes).toThrow(/holds handles/);
       });
     });
+
+    describe(".state", () => {
+      it("returns the algorithm name and the two keys' bytes", () => {
+        const pair = materialPair();
+        const state = pair.state;
+
+        expect(Object.keys(state).sort()).toEqual([
+          "algorithm",
+          "privateKey",
+          "publicKey",
+        ]);
+        expect(state.algorithm).toBe("ExampleAlgorithm");
+        expect(state.publicKey).toBe(pair.publicKeyBytes);
+        expect(state.privateKey).toBe(pair.privateKeyBytes);
+      });
+
+      it("returns the same frozen record on each call", () => {
+        const pair = materialPair();
+
+        expect(Object.isFrozen(pair.state)).toBe(true);
+        expect(pair.state).toBe(pair.state);
+      });
+
+      it("throws for an instance holding handles", async () => {
+        const pair = new FabricKeyPair(await generatePair());
+
+        expect(() => pair.state).toThrow(/holds handles/);
+      });
+    });
   });
 
   describe("static members", () => {
@@ -281,12 +328,10 @@ describe("FabricKeyPair", () => {
       });
 
       describe("encode()", () => {
-        it("encodes material to an `{ algorithm, publicKey, privateKey }` object", () => {
-          expect(codec.encode(materialPair(), env)).toEqual({
-            algorithm: "ExampleAlgorithm",
-            publicKey: "AQID",
-            privateKey: "-vv8_Q",
-          });
+        it("encodes material to its state, the keys left as `FabricBytes`", () => {
+          const pair = materialPair();
+
+          expect(codec.encode(pair, env)).toBe(pair.state);
         });
 
         it("returns a frozen record", () => {
@@ -303,12 +348,12 @@ describe("FabricKeyPair", () => {
       });
 
       describe("canDecode()", () => {
-        it("returns `true` for a record of three strings", () => {
+        it("returns `true` for an algorithm name and two `FabricBytes`", () => {
           expect(
             codec.canDecode({
               algorithm: "ExampleAlgorithm",
-              publicKey: "AQID",
-              privateKey: "AQID",
+              publicKey: new FabricBytes(PUBLIC_BYTES),
+              privateKey: new FabricBytes(PRIVATE_BYTES),
             }),
           ).toBe(true);
         });
@@ -321,7 +366,7 @@ describe("FabricKeyPair", () => {
           expect(
             codec.canDecode({
               algorithm: "ExampleAlgorithm",
-              publicKey: "AQID",
+              publicKey: new FabricBytes(PUBLIC_BYTES),
             }),
           )
             .toBe(false);
@@ -331,12 +376,12 @@ describe("FabricKeyPair", () => {
           // Read as an own property, so a `privateKey` reachable only through
           // the prototype chain does not stand in for one.
           const polluted = Object.prototype as { privateKey?: unknown };
-          polluted.privateKey = "AQID";
+          polluted.privateKey = new FabricBytes(PRIVATE_BYTES);
           try {
             expect(
               codec.canDecode({
                 algorithm: "ExampleAlgorithm",
-                publicKey: "AQID",
+                publicKey: new FabricBytes(PUBLIC_BYTES),
               }),
             ).toBe(false);
           } finally {
@@ -344,25 +389,46 @@ describe("FabricKeyPair", () => {
           }
         });
 
-        it("returns `false` for a record with a non-string field", () => {
+        it("returns `false` for a record with a non-string algorithm", () => {
+          expect(
+            codec.canDecode({
+              algorithm: 7,
+              publicKey: new FabricBytes(PUBLIC_BYTES),
+              privateKey: new FabricBytes(PRIVATE_BYTES),
+            }),
+          ).toBe(false);
+        });
+
+        it("returns `false` for a record whose keys are strings rather than `FabricBytes`", () => {
           expect(
             codec.canDecode({
               algorithm: "ExampleAlgorithm",
               publicKey: "AQID",
-              privateKey: 7,
+              privateKey: "-vv8_Q",
+            }),
+          ).toBe(false);
+        });
+
+        it("returns `false` for a record holding a key it does not read", () => {
+          expect(
+            codec.canDecode({
+              algorithm: "ExampleAlgorithm",
+              publicKey: new FabricBytes(PUBLIC_BYTES),
+              privateKey: new FabricBytes(PRIVATE_BYTES),
+              extra: "x",
             }),
           ).toBe(false);
         });
       });
 
       describe("decode()", () => {
-        it("decodes malformed base64url to a `ProblematicValue`", () => {
+        it("decodes a state with an empty algorithm name to a `ProblematicValue`", () => {
           const decoded = codec.decode(
             expectedTag,
             {
-              algorithm: "ExampleAlgorithm",
-              publicKey: "not valid base64!!",
-              privateKey: "AQID",
+              algorithm: "",
+              publicKey: new FabricBytes(PUBLIC_BYTES),
+              privateKey: new FabricBytes(PRIVATE_BYTES),
             },
             env,
           );
@@ -487,6 +553,27 @@ describe("FabricKeyPair", () => {
           ).toBe(false);
         });
 
+        it("returns `false` for a material state holding a key it does not read", () => {
+          expect(
+            codec.canDecode({
+              algorithm: "ExampleAlgorithm",
+              publicKey: new ArrayBuffer(1),
+              privateKey: new ArrayBuffer(1),
+              extra: "x",
+            }),
+          ).toBe(false);
+        });
+
+        it("returns `false` for a handle state holding a key it does not read", async () => {
+          const { publicKey, privateKey } = await generatePair();
+
+          expect(codec.canDecode({ publicKey, privateKey, extra: "x" }))
+            .toBe(false);
+          expect(
+            codec.canDecode({ algorithm: undefined, publicKey, privateKey }),
+          ).toBe(false);
+        });
+
         it("returns `false` for state that is not a record", () => {
           expect(codec.canDecode(123)).toBe(false);
         });
@@ -535,6 +622,57 @@ describe("FabricKeyPair", () => {
     });
   });
 
+  describe("under an engine", () => {
+    const env = NULL_LIVE_ENVIRONMENT;
+
+    it("decodes JSON whose state holds a key it does not read to a `ProblematicValue` preserving the state", () => {
+      const state = {
+        algorithm: "ExampleAlgorithm",
+        publicKey: new FabricBytes(PUBLIC_BYTES),
+        privateKey: new FabricBytes(PRIVATE_BYTES),
+        extra: "x",
+      };
+      const text = jsonFromFabricValue(
+        new UnknownValue(CODEC_TYPE_TAGS.KeyPair, state),
+      );
+      const decoded = newDefaultJsonCodecEngine({ lenient: true })
+        .decode(text, env);
+
+      expect(decoded).toBeInstanceOf(ProblematicValue);
+      expect((decoded as ProblematicValue).wireTypeTag)
+        .toBe(CODEC_TYPE_TAGS.KeyPair);
+      expect(jsonFromFabricValue((decoded as ProblematicValue).state))
+        .toBe(jsonFromFabricValue(state));
+      expect(() => newDefaultJsonCodecEngine().decode(text, env)).toThrow();
+    });
+
+    it("decodes a realm form whose state holds a key it does not read to a `ProblematicValue` reporting the state", () => {
+      // The state holds buffers, which are not `FabricValue`s, so what the
+      // `ProblematicValue` preserves is a rendering of it.
+
+      const stateWithExtra = () => ({
+        algorithm: "ExampleAlgorithm",
+        publicKey: new ArrayBuffer(1),
+        privateKey: new ArrayBuffer(2),
+        extra: "x",
+      });
+      const decoded = newDefaultRealmCodecEngine({ lenient: true })
+        .decode(realmFormOf(stateWithExtra()), env);
+
+      expect(decoded).toBeInstanceOf(ProblematicValue);
+      expect((decoded as ProblematicValue).wireTypeTag)
+        .toBe(CODEC_TYPE_TAGS.KeyPair);
+      expect((decoded as ProblematicValue).state)
+        .toMatch(/algorithm.*publicKey.*privateKey.*extra/);
+      expect(() =>
+        newDefaultRealmCodecEngine().decode(
+          realmFormOf(stateWithExtra()),
+          env,
+        )
+      ).toThrow();
+    });
+  });
+
   describe("as a `FabricValue`", () => {
     it("returns `true` from `isValidFabricValue()` in either state", async () => {
       // An instance in either state has to pass the vetting boundary. The
@@ -577,7 +715,9 @@ describe("FabricKeyPair", () => {
         expect(handles[name]).toBeDefined();
       }
 
-      for (const name of ["publicKeyBytes", "privateKeyBytes"] as const) {
+      for (
+        const name of ["publicKeyBytes", "privateKeyBytes", "state"] as const
+      ) {
         expect(() => handles[name]).toThrow(/holds handles/);
         expect(material[name]).toBeDefined();
       }

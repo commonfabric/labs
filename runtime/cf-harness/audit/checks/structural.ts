@@ -721,29 +721,14 @@ const countsAgree = (
     ? computed.invalid === 0
     : declared.invalid === computed.invalid) &&
   // `withheld` is the outcome of a release entry whose values were held back.
-  // Unlike `invalid`, the counter this audit computes with may not know the
-  // outcome at all: a trace can be written by a harness newer than the build
-  // reading it. So the reconciliation is conditional on THIS build being able
-  // to count the outcome — where it cannot, there is nothing to reconcile and
-  // saying so is honest, where inventing a zero would manufacture a
-  // disagreement out of a version gap. Once the counter emits `withheld`, a
-  // declared count that is not the number beside it is a disagreement like any
-  // other, and an absent declaration still reads as zero.
+  // A declared count that is not the number beside it is a disagreement like
+  // any other, an absent declaration reads as zero for the same reason an
+  // absent `invalid` does, and a field that is present and is not a number
+  // equals no count.
   ((): boolean => {
     const theirs = withheldIn(declared);
-    // A field that is present and is not a number equals no count, so it
-    // disagrees whether or not this build can compute one. Deciding that
-    // first is what keeps a malformed declaration from hiding behind a
-    // version gap.
     if (theirs.kind === "malformed") return false;
-    // `computed` is this build's own count, so it is a number or nothing; only
-    // the declared side can be malformed, which is decided above.
-    const mine = withheldIn(computed);
-    // Anything but a number on this side means this build did not count the
-    // outcome, so there is nothing to reconcile; inventing a zero here would
-    // manufacture a disagreement out of a trace written by a newer harness.
-    if (mine.kind !== "number") return true;
-    return (theirs.kind === "absent" ? 0 : theirs.value) === mine.value;
+    return (theirs.kind === "absent" ? 0 : theirs.value) === computed.withheld;
   })();
 
 const describeCounts = (counts: HarnessPolicyDecisionCounts): string =>
@@ -1471,28 +1456,6 @@ interface RetentionRequirement {
 }
 
 /**
- * What became of a run's cell-labels read: the artifact's own state, and, for
- * a run without one, whether the harness tried and failed — which it records
- * on the run — or never asked.
- *
- * The two cases are different facts and {@link cellLabelsSnapshot} reports
- * them differently, so this says which it was rather than only that the
- * artifact is absent.
- */
-const cellLabelsRetentionDetail = (run: RunEvidence): string => {
-  if (run.cellLabels.status === "present") {
-    return "present";
-  }
-  const failed = runStateOf(run)?.failureRecords?.find((record) =>
-    record.source === "cell_labels"
-  );
-  if (failed !== undefined) {
-    return `${run.cellLabels.status}; the read was attempted and failed: ${failed.detail}`;
-  }
-  return `${run.cellLabels.status}; no read was attempted`;
-};
-
-/**
  * The invocation contexts a run minted and no artifact still holds.
  *
  * The mint site numbers a context `contexts.length + 1`, so a run's retained
@@ -1906,9 +1869,13 @@ const cellLabelsSnapshot: AuditCheck = {
     const attempted = state.failureRecords?.find((record) =>
       record.source === "cell_labels"
     );
+    // The two absences are different facts, so the evidence says which it
+    // was rather than only that the artifact is absent.
     const evidence: readonly CheckEvidence[] = [{
       artifact: "cell-labels.json",
-      detail: cellLabelsRetentionDetail(run),
+      detail: attempted !== undefined
+        ? `${run.cellLabels.status}; the read was attempted and failed: ${attempted.detail}`
+        : `${run.cellLabels.status}; no read was attempted`,
     }];
     if (attempted !== undefined) {
       return {

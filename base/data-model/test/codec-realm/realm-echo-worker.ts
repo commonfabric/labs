@@ -104,15 +104,6 @@ self.onmessage = async (ev: MessageEvent) => {
           hashBytes: (value.hash as { bytes: Uint8Array } | undefined)
             ? [...(value.hash as { bytes: Uint8Array }).bytes]
             : undefined,
-          regexpParts: (value.regexp as
-              | { flavor: string; source: string; flags: string }
-              | undefined)
-            ? [
-              (value.regexp as { flavor: string }).flavor,
-              (value.regexp as { source: string }).source,
-              (value.regexp as { flags: string }).flags,
-            ]
-            : undefined,
           holeKeys: Array.isArray(value.sparse)
             ? Object.keys(value.sparse)
             : undefined,
@@ -140,14 +131,14 @@ self.onmessage = async (ev: MessageEvent) => {
               | {
                 reason: string;
                 errorKind: string | null;
-                rawErrorMessage: string | null;
+                rawMessage: string | null;
               }
               | undefined)
             ? [
               (value.unavailable as { reason: string }).reason,
               (value.unavailable as { errorKind: string | null }).errorKind,
-              (value.unavailable as { rawErrorMessage: string | null })
-                .rawErrorMessage,
+              (value.unavailable as { rawMessage: string | null })
+                .rawMessage,
             ]
             : undefined,
           prefabIsThatRealmsPrefab: value.prefab === UNAVAILABLE_SYNCING,

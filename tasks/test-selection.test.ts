@@ -1,21 +1,20 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   coverageLines,
   dialLines,
-  dispatch,
   explainLines,
   gatedMembers,
   laneArgument,
+  main,
   momentArgument,
   parseIdentityArgument,
   planLines,
   type Sources,
-  Stop,
   verdictFor,
 } from "./test-selection.ts";
 import type { TestIdentity } from "@commonfabric/test-support/records";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { type LanePlan, lanePlan, manifestMoment } from "./ci-lane.ts";
 import {
   freeCalibration,
@@ -63,18 +62,20 @@ const TOPOLOGY: Suite[] = [
 
 /**
  * What the lanes plan over `suites` when `manifest` is the manifest they
- * resolve. The moment is named, so no checkout is read for one.
+ * resolve, as the full run plans it where `full` is set. The moment is
+ * named, so no checkout is read for one.
  */
 function planned(
   manifest: Manifest,
   suites: readonly Suite[] = TOPOLOGY,
   of?: number,
+  full = false,
 ): Promise<LanePlan> {
   return lanePlan(
     {
       lane: 1,
       ...(of === undefined ? {} : { of }),
-      full: false,
+      full,
       dryRun: true,
       laneCount: false,
       root: Deno.cwd(),
@@ -343,6 +344,25 @@ describe("test-selection", () => {
           .join("\n"),
       ).not
         .toContain("the mandatory set alone");
+    });
+
+    it("names each gate the plan chose, and why", async () => {
+      // The full run chooses every gate, and reads no change to do it.
+      const manifest = sampleManifest({
+        entries: [sampleEntry(TEST, {
+          unit: "runtime/memory/test/memory.test.ts",
+        })],
+      });
+      const suites = [...TOPOLOGY, coverageGateSuite(TOPOLOGY)];
+      expect(planLines(await planned(manifest, suites, 1, true), undefined))
+        .toContain(
+          'gate ["gate","memory","coverage-gate workspace-unit"] by full, ' +
+            "run in whatever lanes hold what it judges",
+        );
+      expect(
+        planLines(await planned(manifest, TOPOLOGY, 1, true), undefined)
+          .join("\n"),
+      ).not.toContain("gate ");
     });
 
     it("names an identity no lane can hold", async () => {
@@ -755,12 +775,16 @@ describe("gatedMembers()", () => {
 });
 
 describe("dispatch()", () => {
-  /** Everything the dispatch printed, and the code it gave back. */
+  /**
+   * Everything the dispatch printed, and the code it gave back, run through
+   * `main()` the way the command line runs it, so a stop reads as the code
+   * it names and the message it prints.
+   */
   async function ran(
     args: readonly string[],
     sources: Partial<Sources> = {},
     root?: string,
-  ): Promise<{ code: number; out: string; err: string; stop?: Stop }> {
+  ): Promise<{ code: number; out: string; err: string }> {
     const out: string[] = [];
     const err: string[] = [];
     const log = console.log;
@@ -768,7 +792,7 @@ describe("dispatch()", () => {
     console.log = (...parts: unknown[]) => out.push(parts.join(" "));
     console.error = (...parts: unknown[]) => err.push(parts.join(" "));
     try {
-      const code = await dispatch(args, {
+      const code = await main(args, {
         manifest: () => Promise.resolve({ manifest: sampleManifest() }),
         members: () => Promise.resolve(["runtime/memory"]),
         aliases: () =>
@@ -779,9 +803,6 @@ describe("dispatch()", () => {
         ...sources,
       } as Sources, root);
       return { code, out: out.join("\n"), err: err.join("\n") };
-    } catch (error) {
-      if (!(error instanceof Stop)) throw error;
-      return { code: error.code, out: out.join("\n"), err: "", stop: error };
     } finally {
       console.log = log;
       console.error = warn;
@@ -896,7 +917,7 @@ describe("dispatch()", () => {
       const store = storeOf(["2026-08-31T00:00:00.000Z"]);
       const result = await ran(["plan", "--dry-run", "--at", "soon"], store);
       expect(result.code).toBe(2);
-      expect(result.stop?.message).toContain("--at takes a moment");
+      expect(result.err).toContain("--at takes a moment");
       expect(store.asked).toEqual([]);
     });
 
@@ -949,7 +970,7 @@ describe("dispatch()", () => {
   it("stops with the usage code on a mode it does not have", async () => {
     const result = await ran(["wat"]);
     expect(result.code).toBe(2);
-    expect(result.stop?.message).toContain("unknown mode wat");
+    expect(result.err).toContain("unknown mode wat");
   });
 
   it("prints every dial without reading anything", async () => {
@@ -994,7 +1015,21 @@ describe("dispatch()", () => {
     expect((await ran(["explain"])).code).toBe(2);
     const bad = await ran(["explain", "not a key"]);
     expect(bad.code).toBe(2);
-    expect(bad.stop?.message).toContain("not an identity key");
+    expect(bad.err).toContain("not an identity key");
+  });
+
+  it("says there is no manifest to plan from, or to verify, where the store holds none", async () => {
+    for (const args of [["plan"], ["plan", "--verify"]]) {
+      const result = await ran(args, {
+        manifest: () => Promise.resolve({ absent: "the store holds none" }),
+      });
+      expect({ args, code: result.code, out: result.out }).toEqual({
+        args,
+        code: 1,
+        out: "",
+      });
+      expect(result.err).toContain("no manifest: the store holds none");
+    }
   });
 
   it("explains one test, through the alias file", async () => {
@@ -1066,12 +1101,12 @@ describe("dispatch()", () => {
   it("stops on a lane number no lane has", async () => {
     const result = await ran(["plan", "--lane", "9"]);
     expect(result.code).toBe(2);
-    expect(result.stop?.message).toContain(
+    expect(result.err).toContain(
       "--lane names lane 9, and this plan has 1",
     );
     const zero = await ran(["plan", "--lane", "0"]);
     expect(zero.code).toBe(2);
-    expect(zero.stop?.message).toContain("whole number from 1");
+    expect(zero.err).toContain("whole number from 1");
   });
 
   it("verifies the manifest against the tree", async () => {

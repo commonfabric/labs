@@ -1,11 +1,19 @@
 import type { CellBridge } from "./cell-bridge.ts";
-import { FuseOperationState } from "./directory-handles.ts";
+import {
+  type FuseOperationPreparer,
+  FuseOperationState,
+} from "./directory-handles.ts";
 import type { HandleMap } from "./handles.ts";
 import type { FsTree } from "./tree.ts";
 
 export function createFuseOperationState(
   tree: FsTree,
-  bridge: CellBridge | null,
+  bridge:
+    | (
+      & FuseOperationPreparer
+      & Pick<CellBridge, "resolveWritePath" | "resolveSourceWritePath">
+    )
+    | null,
 ): FuseOperationState {
   return new FuseOperationState(
     tree,

@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
-import { Identity } from "@commonfabric/identity";
+import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import type { ACL } from "@commonfabric/memory/acl";
+import { describe, it } from "@commonfabric/test-support/test";
 import { join } from "@std/path";
 
 import type {
@@ -70,6 +70,7 @@ const REQUEST = {
 /** Helper for tests, which reads the id of the job an enqueue added. */
 const idOf = (result: ReturnType<LocalJobStore["enqueue"]>): string => {
   if ("conflict" in result) throw new Error(result.conflict);
+  if ("refusal" in result) throw new Error(result.refusal.error);
   return result.job.id;
 };
 
@@ -462,6 +463,38 @@ describe("local-jobs/lane", () => {
       expect(spec).toMatchObject({ depth: "deep", reasoningEffort: "low" });
       expect("depth" in plain).toBe(false);
       expect("reasoningEffort" in plain).toBe(false);
+    });
+
+    it("hands the harness the profile's shared cache affinity key, and none where it names none", async () => {
+      const spec = await localJobSpecOf(
+        { request: REQUEST } as LocalJob,
+        { ...ASK, cacheAffinityKey: "loom-brief" },
+        {},
+      );
+      const plain = await localJobSpecOf(
+        { request: REQUEST } as LocalJob,
+        ASK,
+        {},
+      );
+
+      expect(spec.cacheAffinityKey).toBe("loom-brief");
+      expect("cacheAffinityKey" in plain).toBe(false);
+    });
+
+    it("hands the harness the profile's model provider, and none where it names none", async () => {
+      const spec = await localJobSpecOf(
+        { request: REQUEST } as LocalJob,
+        { ...ASK, modelProvider: "openai-codex" },
+        {},
+      );
+      const plain = await localJobSpecOf(
+        { request: REQUEST } as LocalJob,
+        ASK,
+        {},
+      );
+
+      expect(spec.modelProvider).toBe("openai-codex");
+      expect("modelProvider" in plain).toBe(false);
     });
 
     it("takes the runner's retrieval file and model where the profile names none, and the profile's over the runner's", async () => {
@@ -908,6 +941,57 @@ describe("local-jobs/lane", () => {
         result: { answer: "Saturn" },
         report: { modelTurns: 3 },
       });
+    });
+
+    it("runs a job on its profile's model provider, whatever provider its request names", async () => {
+      const profiles = new Map([
+        ["pinned", { ...ASK, modelProvider: "openai-codex" as const }],
+        ["ask", ASK],
+      ]);
+      const { store, lane, nextRun, runs } = laneWith({ profiles });
+      const api = createLocalJobApi({
+        store,
+        profiles,
+        token: "test",
+        kick: () => lane.kick(),
+        cancel: (id) => lane.cancel(id),
+      });
+      const enqueue = async (profile: string, modelProvider: string) => {
+        const response = await api(
+          new Request("http://runner/jobs", {
+            method: "POST",
+            headers: { authorization: "Bearer test" },
+            body: JSON.stringify({
+              caller: "cfs:weaver",
+              profile,
+              idempotencyKey: profile,
+              task: REQUEST.task,
+              modelProvider,
+            }),
+          }),
+        );
+        expect(response.status).toBe(201);
+        return (await response.json()).job.id as string;
+      };
+      try {
+        await lane.start();
+        const pinned = await enqueue("pinned", "openai-compatible-gateway");
+        const ask = await enqueue("ask", "openai-codex");
+
+        const first = await nextRun(0);
+        expect(first.spec.modelProvider).toBe("openai-codex");
+        // Background jobs leave a slot free, so the second starts once the
+        // first ends.
+        first.settle({ outcome: "cancelled" });
+        expect("modelProvider" in (await nextRun(1)).spec).toBe(false);
+        for (const id of [pinned, ask]) {
+          expect("modelProvider" in store.get(id)!.request).toBe(false);
+        }
+      } finally {
+        for (const run of runs) run.settle({ outcome: "cancelled" });
+        await lane.stop();
+        store.close();
+      }
     });
 
     it("ends a job whose result was refused with the reason its run gave", async () => {
@@ -1372,6 +1456,44 @@ describe("local-jobs/lane", () => {
         const run = await nextRun(0);
 
         expect(run.spec.fabric?.inputs).toEqual({ focus: foreign, own });
+        expect(run.spec.fabric?.foreignSpaces).toEqual({
+          [other]: "https://estuary.example/",
+        });
+        run.settle({ outcome: "cancelled" });
+        await Deno.remove(key.dir, { recursive: true });
+      });
+
+      it("drops the route of an input in the space a profile names by name, keeping the route elsewhere", async () => {
+        // Only the session resolves a legacy name to its DID, so the request
+        // routes both spaces and the run keeps the one that is not the
+        // profile's own.
+        const key = await identityKey();
+        const named = await legacySpaceDid("lunch-club");
+        const other =
+          "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+        const own = `//${named}/of:fid1:${"B".repeat(43)}`;
+        const foreign = `//${other}/of:fid1:${"A".repeat(43)}`;
+        const { lane, nextRun, enqueue } = laneWith({
+          profiles: new Map([["carry", {
+            ...CARRY,
+            fabric: {
+              ...CARRY.fabric!,
+              space: "lunch-club",
+              identityKeyPath: key.path,
+            },
+          }]]),
+        });
+        await lane.start();
+        enqueue("a", {
+          ...REQUEST,
+          inputs: { own, focus: foreign },
+          foreignSpaces: {
+            [named]: "https://toolshed.example",
+            [other]: "https://estuary.example",
+          },
+        }, "carry");
+        const run = await nextRun(0);
+
         expect(run.spec.fabric?.foreignSpaces).toEqual({
           [other]: "https://estuary.example/",
         });

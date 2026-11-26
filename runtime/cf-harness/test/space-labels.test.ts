@@ -1,10 +1,15 @@
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import type { FabricValue } from "@commonfabric/data-model";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
 
 import type { LinkWalkBounds } from "@commonfabric/state-inspector";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   cellAddressOfRef,
@@ -162,6 +167,18 @@ const REFERENCED_ENTITY = entity("referenced-entity");
 
 /** A document linking at `via` to {@link REFERENCED_MISSING}. */
 const VIA_MISSING = entity("via-missing");
+
+/**
+ * A document whose one label mixes clauses the reader can report with ones it
+ * cannot: a number, and a record carrying no `type`.
+ */
+const MALFORMED_CLAUSES = entity("malformedClauses");
+
+/**
+ * A document holding a link that names a path and no entity, so it addresses
+ * no other cell for the walk to follow.
+ */
+const ENTITYLESS_LINK = entity("entitylessLink");
 
 /** One stored link, in the at-rest sigil form the store holds. */
 const link = (id: string, space?: string, path: string[] = []) => ({
@@ -427,6 +444,27 @@ const documents: Record<string, unknown> = {
     },
   },
   [VIA]: { value: { via: link(LINKER) } },
+  [MALFORMED_CLAUSES]: {
+    value: { note: "partly labelled" },
+    cfc: {
+      version: 1,
+      labelMap: {
+        version: 1,
+        entries: [
+          stored([], {
+            confidentiality: ["kept", 42, { class: "no-type" }],
+            integrity: [],
+          }, "declared"),
+        ],
+      },
+    },
+  },
+  [ENTITYLESS_LINK]: {
+    value: {
+      here: { "/": { "link@1": { path: ["other"] } } },
+      other: 1,
+    },
+  },
   [BARE]: { value: { row: link(UNLABELLED) } },
   [COMMITTED]: {
     value: { attachment: "…" },
@@ -488,6 +526,8 @@ const PLAIN = new Set([
   SLOTTED,
   VIA,
   BARE,
+  MALFORMED_CLAUSES,
+  ENTITYLESS_LINK,
 ]);
 
 /**
@@ -761,6 +801,36 @@ describe("space-labels", () => {
           subject: { digestOf: SCHEMA_HASH },
         },
       }]);
+    });
+
+    it("drops a clause that is neither a string nor a record naming its type", () => {
+      const [entry] = reader.read({ id: MALFORMED_CLAUSES, scope: "space" })
+        .entries;
+      expect(entry.confidentiality).toEqual([{ type: "kept", name: "kept" }]);
+    });
+
+    it("returns no link path for a link naming no entity", () => {
+      const read = didReader.read({ id: ENTITYLESS_LINK, scope: "space" });
+      expect(read.linkPaths).toEqual([]);
+      expect(read.linked).toEqual([]);
+      expect(read.unreadPaths).toBe(undefined);
+    });
+
+    it("opens the database a path names when given no database path", async () => {
+      const opened = await openSpaceLabelReader(didDbPath);
+      try {
+        expect(opened.dbPath).toBe(didDbPath);
+        expect(opened.did).toBe(OWN_DID);
+        expect(opened.read({ id: DECLARED, scope: "space" }).entries.length)
+          .toBe(1);
+      } finally {
+        opened.close();
+      }
+    });
+
+    it("throws for a path naming no database when given no database path", async () => {
+      await expect(openSpaceLabelReader(`${directory}/absent.sqlite`)).rejects
+        .toThrow();
     });
 
     it("returns the space DID the opened file is named for", () => {
@@ -1337,6 +1407,28 @@ describe("space-labels", () => {
     it("records no truncation for a cell the read reached the end of", async () => {
       const snapshot = await readAgainstDid([`/${DEEPER}`]);
       expect(snapshot.cells[0].truncationReason).toBe(undefined);
+    });
+
+    it("returns an unavailable snapshot naming the read failure for a database that is not a space", async () => {
+      const notASpace = `${directory}/not-a-space.sqlite`;
+      const db = new Database(notASpace, { create: true });
+      db.exec("CREATE TABLE unrelated (x)");
+      db.close();
+
+      const snapshot = await readSpaceCellLabels({
+        space: "demo-space",
+        dbPath: notASpace,
+        refs: [`/${DECLARED}`],
+        generatedAt: "2026-01-01T00:00:00.000Z",
+      });
+      expect(snapshot.status).toBe("unavailable");
+      expect(snapshot.unavailableReason).toBe("read-failed");
+      expect(snapshot.unavailableDetail).toContain("revision");
+      expect(snapshot.space).toEqual({
+        configured: "demo-space",
+        dbPath: notASpace,
+      });
+      expect(snapshot.cells).toEqual([]);
     });
 
     it("returns an unavailable snapshot naming the space when no database is found", async () => {

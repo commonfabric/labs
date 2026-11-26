@@ -1039,10 +1039,14 @@ function resolveDirectContextCellRef(cell: unknown): Cell<any> | undefined {
 
 function resolveContextCellRef(cell: unknown): Cell<any> | undefined {
   const resolved = resolveDirectContextCellRef(cell);
-  if (!resolved) {
-    return undefined;
-  }
+  return resolved && resolveNestedContextCell(resolved);
+}
 
+/**
+ * The cell a context entry that resolved to `resolved` names: the cell
+ * `resolved` holds, when it holds one, and otherwise `resolved` itself.
+ */
+function resolveNestedContextCell(resolved: Cell<any>): Cell<any> {
   try {
     const nested = resolveDirectContextCellRef(resolved.get());
     if (nested) {
@@ -1066,7 +1070,10 @@ function readCellValueForObservation(
     "top",
   );
   const value = readTx.readValueOrThrow(link, {
-    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    meta: Object.freeze({
+      ...ignoreReadForScheduling,
+      ...internalVerifierRead,
+    }),
   });
   return value === undefined ? cell.get() ?? cell.getRaw() : value;
 }
@@ -3490,9 +3497,11 @@ async function handleInvoke(
     if (pattern) {
       // The model's tool call instantiates the pattern, in a continuation of
       // the dialog's action: no principal's act attributes what its setup
-      // initializes.
+      // initializes, and its transaction holds none of the reads that chose
+      // the pattern.
       runtime.run(tx, pattern, invocationArgs, result, {
         attributeInitialization: false,
+        runtimeStarted: true,
       });
     } else if (handler) {
       // Inject the result cell only when the caller's input does not carry a
@@ -4168,18 +4177,24 @@ export function llmDialog(
                 runtime.trackAsyncWork(
                   settleAbandonedRequest(
                     runtime,
-                    "llmDialog",
-                    `llmDialog:${nextRequestId}`,
+                    {
+                      builtinId: "llmDialog",
+                      effectKey: `llmDialog:${nextRequestId}`,
+                      identity: capturedRequest.scopeKeyIdentity,
+                      scope: outputScope,
+                      attributeToBuiltin: true,
+                    },
                     (settleTx) => {
-                      if (capturedRequest.scopeKeyIdentity) {
-                        settleTx.tx.scopeKeyIdentity =
-                          capturedRequest.scopeKeyIdentity;
-                      }
                       // An accepted publication owns the physical binding.
                       // Legacy callers without that coordinate can only check
-                      // whether their input scope still selects this target.
-                      settleTx.resetNarrowestReadScope();
-                      inputs.withTx(settleTx).get();
+                      // whether their input scope still selects this target,
+                      // which reads the inputs; with it, the ending reads none,
+                      // so their labels don't refuse what it writes, none of
+                      // which derives from them.
+                      if (publicationBinding === undefined) {
+                        settleTx.resetNarrowestReadScope();
+                        inputs.withTx(settleTx).get();
+                      }
                       if (
                         ownsPublication() &&
                         (publicationBinding !== undefined ||
@@ -4470,6 +4485,16 @@ async function startRequest(
       tx,
       messagesCell.getAsNormalizedFullLink(),
     );
+    const stamped = runtime.cfcEnforcementMode !== "disabled";
+    if (stamped) {
+      // Attribute the writes to the builtin, before they are made: a write
+      // made before the identity is set is another identity's, which the gate
+      // keeps no evidence over.
+      setCfcImplementationIdentity(tx, {
+        kind: "builtin",
+        builtinId: "llmDialog",
+      });
+    }
     messagesCell.withTx(tx).pushAll(
       messages.map((message) => {
         const messageCell = runtime.getCell<Schema<typeof LLMMessageSchema>>(
@@ -4486,17 +4511,9 @@ async function startRequest(
         return messageCell;
       }),
     );
-    if (runtime.cfcEnforcementMode === "disabled") {
+    if (!stamped) {
       return;
     }
-    // Attribute the writes to the builtin: `LlmDerived` is a runtime-minted
-    // evidence family, so the persist-time gate (`gateRuntimeMintedIntegrity`,
-    // audit S4) admits it only from builtin authors — the same gating that
-    // stops pattern code from forging the stamp.
-    setCfcImplementationIdentity(tx, {
-      kind: "builtin",
-      builtinId: "llmDialog",
-    });
     // Record the stamping schema for each pushed message's own entity doc
     // (every message is appended as a link to a document of its own, so each
     // one is separately addressable). The messages link carries its own schema,
@@ -4533,14 +4550,13 @@ async function startRequest(
   const contextCells = inputs.key("context").get() ?? {};
   const toolPinnedCells = pinnedCells.get() ?? [];
 
-  const contextAsPinnedCells: PinnedCell[] = Object.entries(contextCells)
+  const contextAsPinnedCells: PinnedCell[] = Object.keys(contextCells)
     // Convert context cells to PinnedCell format
     .map(
-      ([name, cell]) => {
-        const link = resolveContextCellRef(cell)?.getAsNormalizedFullLink();
-        if (!link) {
-          throw new Error(`Context entry "${name}" is not a cell`);
-        }
+      (name) => {
+        const link = resolveNestedContextCell(
+          inputs.key("context").key(name).resolveAsCell(),
+        ).getAsNormalizedFullLink();
         const path = createLLMFriendlyLink(link, space);
         return { name, path };
       },
@@ -4658,15 +4674,13 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
     messages: visibleMessages.messages,
   };
 
-  const mappedLlmHost = runtime.mappedHostFor(space);
+  const endpoint = runtime.llmEndpointFor(space);
   const doWork = () =>
     client.sendRequest(
       llmParams,
       undefined,
       abortSignal,
-      mappedLlmHost
-        ? { endpoint: new URL("/api/ai/llm", mappedLlmHost) }
-        : undefined,
+      endpoint ? { endpoint } : undefined,
     );
 
   const resultPromise = queueName
@@ -4731,154 +4745,150 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
         llmResult.content.some((part) => part.type === "tool-call");
 
       if (hasToolCalls) {
-        try {
-          const llmContent = llmResult.content as BuiltInLLMMessage["content"];
-          const toolCallParts = extractToolCallParts(llmContent);
-          const assistantMessage = buildAssistantMessage(
-            llmContent,
-            toolCallParts,
+        const llmContent = llmResult.content as BuiltInLLMMessage["content"];
+        const toolCallParts = extractToolCallParts(llmContent);
+        const assistantMessage = buildAssistantMessage(
+          llmContent,
+          toolCallParts,
+        );
+
+        await safelyPerformUpdate(
+          runtime,
+          pending,
+          internal,
+          requestId,
+          capturedRequest.scopeKeyIdentity,
+          (tx) => {
+            const nextIndex = (messagesCell.withTx(tx).get() as
+              | readonly BuiltInLLMMessage[]
+              | undefined)?.length ?? 0;
+            recordDialogMessageObservations(tx, internal, [
+              {
+                index: nextIndex,
+                observedConfidentiality: requestObservedConfidentiality,
+              },
+            ]);
+            pushModelMessages(tx, [
+              assistantMessage as Schema<typeof LLMMessageSchema>,
+            ]);
+          },
+        );
+
+        // Now execute the tool calls
+        const toolResults = await executeToolCalls(
+          runtime,
+          space,
+          toolCatalog,
+          toolCallParts,
+          pinnedCells,
+          requestObservedConfidentiality,
+          observationMaxConfidentiality,
+          abortSignal,
+        );
+
+        // If presentResult was called, cellify the raw input so we can
+        // store it on the dialog's result cell (guarded by requestId below).
+        let cellifiedResult: unknown | undefined;
+        if (userResultSchema) {
+          const presentResultPart = toolCallParts.find(
+            (p) => p.toolName === PRESENT_RESULT_TOOL_NAME,
           );
-
-          await safelyPerformUpdate(
-            runtime,
-            pending,
-            internal,
-            requestId,
-            capturedRequest.scopeKeyIdentity,
-            (tx) => {
-              const nextIndex = (messagesCell.withTx(tx).get() as
-                | readonly BuiltInLLMMessage[]
-                | undefined)?.length ?? 0;
-              recordDialogMessageObservations(tx, internal, [
-                {
-                  index: nextIndex,
-                  observedConfidentiality: requestObservedConfidentiality,
-                },
-              ]);
-              pushModelMessages(tx, [
-                assistantMessage as Schema<typeof LLMMessageSchema>,
-              ]);
-            },
-          );
-
-          // Now execute the tool calls
-          const toolResults = await executeToolCalls(
-            runtime,
-            space,
-            toolCatalog,
-            toolCallParts,
-            pinnedCells,
-            requestObservedConfidentiality,
-            observationMaxConfidentiality,
-            abortSignal,
-          );
-
-          // If presentResult was called, cellify the raw input so we can
-          // store it on the dialog's result cell (guarded by requestId below).
-          let cellifiedResult: unknown | undefined;
-          if (userResultSchema) {
-            const presentResultPart = toolCallParts.find(
-              (p) => p.toolName === PRESENT_RESULT_TOOL_NAME,
-            );
-            if (presentResultPart) {
-              cellifiedResult = traverseAndCellify(
-                runtime,
-                space,
-                presentResultPart.input,
-              );
-            }
-          }
-
-          // Create and publish tool result messages
-          const toolResultMessages = createToolResultMessages(toolResults);
-
-          const success = await safelyPerformUpdate(
-            runtime,
-            pending,
-            internal,
-            requestId,
-            capturedRequest.scopeKeyIdentity,
-            (tx) => {
-              // Write presentResult atomically with tool result messages,
-              // guarded by requestId to prevent stale writes from canceled requests.
-              if (cellifiedResult !== undefined) {
-                result.withTx(tx).key("result").set(cellifiedResult);
-              }
-              const nextIndex = (messagesCell.withTx(tx).get() as
-                | readonly BuiltInLLMMessage[]
-                | undefined)?.length ?? 0;
-              recordDialogMessageObservations(
-                tx,
-                internal,
-                toolResultMessages.map((_, index) => ({
-                  index: nextIndex + index,
-                  observedConfidentiality:
-                    toolResults[index]?.observedConfidentiality ?? [],
-                })),
-              );
-              pushModelMessages(
-                tx,
-                toolResultMessages as Schema<typeof LLMMessageSchema>[],
-              );
-            },
-          );
-
-          refreshRead();
-
-          // Optionally record to suggestion history via the default pattern's
-          // recordSuggestion handler. This is intentionally best-effort: spaces
-          // whose default pattern doesn't export recordSuggestion simply skip
-          // recording (caught below) rather than failing the suggestion flow.
-          if (
-            success && cellifiedResult !== undefined &&
-            queueName === "suggestions"
-          ) {
-            try {
-              const spaceCell = runtime.getCell(space, space, spaceCellSchema);
-              const handler = spaceCell
-                .key("defaultPattern")
-                .key("recordSuggestion");
-              handler.send({
-                result: (cellifiedResult as any)?.cell ?? cellifiedResult,
-                messages: messagesCell.get() ?? [],
-                timestamp: new Date().toISOString(),
-              });
-            } catch (e) {
-              logger.warn(
-                "llm",
-                "Failed to record suggestion history entry",
-                e,
-              );
-            }
-          }
-
-          if (success) {
-            logger.info("llm", "Continuing conversation after tool calls...");
-
-            // Awaited so the turn that follows the tool calls stays inside this
-            // turn's promise, and so the conversation settles as one unit
-            // rather than one hop at a time.
-            await startRequest(
+          if (presentResultPart) {
+            cellifiedResult = traverseAndCellify(
               runtime,
               space,
-              cause,
-              inputs,
-              pending,
-              internal,
-              pinnedCells,
-              result,
-              requestId,
-              abortSignal,
-              capturedRequest,
-            );
-          } else {
-            logger.info(
-              "llm",
-              "Skipping write: pending=false or request changed",
+              presentResultPart.input,
             );
           }
-        } catch (error: unknown) {
-          console.error(error);
+        }
+
+        // Create and publish tool result messages
+        const toolResultMessages = createToolResultMessages(toolResults);
+
+        const success = await safelyPerformUpdate(
+          runtime,
+          pending,
+          internal,
+          requestId,
+          capturedRequest.scopeKeyIdentity,
+          (tx) => {
+            // Write presentResult atomically with tool result messages,
+            // guarded by requestId to prevent stale writes from canceled requests.
+            if (cellifiedResult !== undefined) {
+              result.withTx(tx).key("result").set(cellifiedResult);
+            }
+            const nextIndex = (messagesCell.withTx(tx).get() as
+              | readonly BuiltInLLMMessage[]
+              | undefined)?.length ?? 0;
+            recordDialogMessageObservations(
+              tx,
+              internal,
+              toolResultMessages.map((_, index) => ({
+                index: nextIndex + index,
+                observedConfidentiality:
+                  toolResults[index]?.observedConfidentiality ?? [],
+              })),
+            );
+            pushModelMessages(
+              tx,
+              toolResultMessages as Schema<typeof LLMMessageSchema>[],
+            );
+          },
+        );
+
+        refreshRead();
+
+        // Optionally record to suggestion history via the default pattern's
+        // recordSuggestion handler. This is intentionally best-effort: spaces
+        // whose default pattern doesn't export recordSuggestion simply skip
+        // recording (caught below) rather than failing the suggestion flow.
+        if (
+          success && cellifiedResult !== undefined &&
+          queueName === "suggestions"
+        ) {
+          try {
+            const spaceCell = runtime.getCell(space, space, spaceCellSchema);
+            const handler = spaceCell
+              .key("defaultPattern")
+              .key("recordSuggestion");
+            handler.send({
+              result: (cellifiedResult as any)?.cell ?? cellifiedResult,
+              messages: messagesCell.get() ?? [],
+              timestamp: new Date().toISOString(),
+            });
+          } catch (e) {
+            logger.warn(
+              "llm",
+              "Failed to record suggestion history entry",
+              e,
+            );
+          }
+        }
+
+        if (success) {
+          logger.info("llm", "Continuing conversation after tool calls...");
+
+          // Awaited so the turn that follows the tool calls stays inside this
+          // turn's promise, and so the conversation settles as one unit
+          // rather than one hop at a time.
+          await startRequest(
+            runtime,
+            space,
+            cause,
+            inputs,
+            pending,
+            internal,
+            pinnedCells,
+            result,
+            requestId,
+            abortSignal,
+            capturedRequest,
+          );
+        } else {
+          logger.info(
+            "llm",
+            "Skipping write: pending=false or request changed",
+          );
         }
       } else {
         // No tool calls, just add the assistant message

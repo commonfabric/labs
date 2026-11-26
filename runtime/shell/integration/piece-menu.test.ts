@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { join, resolve } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import type { DID } from "@commonfabric/identity";
 import {
@@ -10,6 +9,7 @@ import {
 } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { writeTempIdentity } from "@commonfabric/integration/temp-identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import "../src/globals.ts";
 

@@ -1,3 +1,9 @@
+/**
+ * A grid view of a list of pieces, three to a row. Each piece appears as a
+ * scaled preview of its own interface above its name chip, and clicking a
+ * preview opens the piece.
+ */
+
 import {
   computed,
   equals,

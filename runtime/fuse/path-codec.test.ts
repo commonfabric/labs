@@ -5,14 +5,15 @@ import {
   encodeFuseComponent,
   encodeFusePathSegments,
 } from "./path-codec.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("path codec leaves ordinary components stable", () => {
+test("path codec leaves ordinary components stable", () => {
   assertEquals(encodeFuseComponent("title"), "title");
   assertEquals(encodeFuseComponent("item-01"), "item-01");
   assertEquals(decodeFuseComponent("item-01"), "item-01");
 });
 
-Deno.test("path codec escapes unsafe and macOS-special components", () => {
+test("path codec escapes unsafe and macOS-special components", () => {
   assertEquals(encodeFuseComponent("has/slash"), "has%2Fslash");
   assertEquals(encodeFuseComponent("of:entity"), "of%3Aentity");
   assertEquals(encodeFuseComponent("literal%"), "literal%25");
@@ -25,7 +26,7 @@ Deno.test("path codec escapes unsafe and macOS-special components", () => {
   );
 });
 
-Deno.test("path codec decodes escaped components and paths", () => {
+test("path codec decodes escaped components and paths", () => {
   assertEquals(decodeFuseComponent("has%2Fslash"), "has/slash");
   assertEquals(decodeFuseComponent("of%3Aentity"), "of:entity");
   assertEquals(decodeFuseComponent("literal%25"), "literal%");

@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join, resolve } from "@std/path";
 import { test as testCommand } from "../commands/test-command.ts";
 import { runTests } from "../lib/test-runner.ts";
 import { argv, cf, checkStderr, withEnv } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/pattern-coverage");
 const SUBJECT = join(FIXTURES, "subject.tsx").replaceAll("\\", "/");
@@ -227,15 +227,15 @@ describe(
         expect(failed).toBe(0);
         expect(
           errors.some((line) =>
-            line.includes(
-              "[cf test] failed to write pattern coverage for alice:",
+            /\[cf test\] failed to write pattern coverage for alice: \S/.test(
+              line,
             )
           ),
         ).toBe(true);
         expect(
           errors.some((line) =>
-            line.includes(
-              "[cf test] failed to write pattern coverage for bob:",
+            /\[cf test\] failed to write pattern coverage for bob: \S/.test(
+              line,
             )
           ),
         ).toBe(true);

@@ -5,10 +5,10 @@
  * primitive, and that a caller cannot choose which bucket they land in.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createRateLimiter } from "@/lib/rate-limit.ts";
 import { clientKey } from "@/middlewares/rate-limit.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("token bucket", () => {
   it("allows a burst up to capacity, then refuses", () => {
@@ -112,6 +112,10 @@ describe("token bucket", () => {
 
     limiter.take("b");
     limiter.take("c"); // pushes "old" out
+
+    // Only the least recently used key went: the other two are still spent.
+    expect(limiter.take("b")).toBe(false);
+    expect(limiter.take("c")).toBe(false);
 
     // "old" is a fresh bucket again, which is the documented trade-off.
     expect(limiter.take("old")).toBe(true);

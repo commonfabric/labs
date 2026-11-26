@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   buildObjectBody,
   ciObjectName,
   datePartition,
+  enclosingNames,
   isMainRun,
   localObjectName,
   objectNameSlug,
@@ -18,6 +18,7 @@ import {
   testIdentityOfKey,
   type TestRecord,
 } from "./schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const RECORD: TestRecord = {
   line: "record",
@@ -42,6 +43,20 @@ const CONTEXT: RunContext = {
 };
 
 describe("schema", () => {
+  describe("enclosingNames()", () => {
+    it("returns each enclosing name, outermost first", () => {
+      expect(enclosingNames("a > b > c")).toEqual(["a", "a > b"]);
+    });
+
+    it("returns nothing for a name nothing encloses", () => {
+      expect(enclosingNames("a")).toEqual([]);
+    });
+
+    it("cuts at every separator, overlapping ones included", () => {
+      expect(enclosingNames("a > > b")).toEqual(["a", "a >"]);
+    });
+  });
+
   describe("serializeRecordLine()", () => {
     it("returns one newline-terminated JSON line", () => {
       const line = serializeRecordLine(RECORD);
@@ -73,6 +88,20 @@ describe("schema", () => {
 
     it("returns undefined for malformed JSON", () => {
       expect(parseRecordLine("{nope")).toBeUndefined();
+    });
+
+    it("returns undefined for JSON that is not an object", () => {
+      expect(parseRecordLine('"record"')).toBeUndefined();
+    });
+
+    it("returns undefined for a test that is not an object", () => {
+      const line = JSON.stringify({ ...RECORD, test: "glaze" });
+      expect(parseRecordLine(line)).toBeUndefined();
+    });
+
+    it("returns undefined for a file that is not a string", () => {
+      const line = JSON.stringify({ ...RECORD, file: 7 });
+      expect(parseRecordLine(line)).toBeUndefined();
     });
 
     it("returns undefined for an unknown outcome", () => {
@@ -217,8 +246,15 @@ describe("schema", () => {
           job: "Test (3/8)",
           shard: "3/8",
           headCommit: "feedfacefeedfacefeedfacefeedfacefeedface",
+          event: "pull_request",
         },
       };
+      expect(parseContextLine(serializeContextLine(context).trim()))
+        .toEqual(context);
+    });
+
+    it("keeps the agent that ran a run", () => {
+      const context: RunContext = { ...CONTEXT, agent: "claude-code" };
       expect(parseContextLine(serializeContextLine(context).trim()))
         .toEqual(context);
     });

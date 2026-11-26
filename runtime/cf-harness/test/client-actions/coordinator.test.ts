@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { fromFileUrl, toFileUrl } from "@std/path";
@@ -37,6 +36,7 @@ import type { HarnessChatSessionStore } from "../../src/session-store.ts";
 import { openSqliteHarnessChatSessionStore } from "../../src/sqlite-session-store.ts";
 import { weaverActionTool } from "../../src/tools/weaver-action.ts";
 import type { HarnessToolContext } from "../../src/tools/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURES = fromFileUrl(
   new URL("../fixtures/client-command-wire/", import.meta.url),

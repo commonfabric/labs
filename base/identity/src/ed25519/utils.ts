@@ -192,58 +192,55 @@ export class AuthorizationError extends Error {
 //   https://github.com/denoland/deno/issues/12067#issuecomment-1975001079
 // * [4] Safari/Webkit generates randomized signatures as per `draft-irtf-cfrg-det-sigs-with-noise`
 //   https://datatracker.ietf.org/doc/draft-irtf-cfrg-det-sigs-with-noise/
-export const isNativeEd25519Supported = (() => {
-  async function isDeterministic(key: CryptoKey): Promise<boolean> {
+export function isNativeEd25519Supported(): Promise<boolean> {
+  nativeEd25519Support ??= hasEd25519Features(WEB_CRYPTO_ED25519);
+  return nativeEd25519Support;
+}
+
+/** The answer `isNativeEd25519Supported()` found, once it has looked. */
+let nativeEd25519Support: Promise<boolean> | undefined;
+
+/** The operations `hasEd25519Features()` tries out on a platform. */
+export interface Ed25519Platform {
+  /** Generates a key pair that can sign, or throws if there is no Ed25519. */
+  generateKey(): Promise<CryptoKeyPair>;
+
+  /** Signs `payload` with `key`. */
+  sign(key: CryptoKey, payload: Uint8Array): Promise<ArrayBuffer>;
+
+  /** Clones `key` as storing it would, or throws if it cannot be. */
+  clone(key: CryptoKey): unknown;
+}
+
+/** This platform's WebCrypto, as `hasEd25519Features()` tries it out. */
+const WEB_CRYPTO_ED25519: Ed25519Platform = {
+  generateKey: () => crypto.subtle.generateKey(ED25519_ALG, false, ["sign"]),
+  sign: (key, payload) =>
+    crypto.subtle.sign(ED25519_ALG, key, payload as BufferSource),
+  clone: (key) => globalThis.structuredClone(key),
+};
+
+/**
+ * Returns whether `platform` has the Ed25519 that `isNativeEd25519Supported()`
+ * describes: it generates a key, signs deterministically with it, and clones
+ * it. A step that throws means it does not.
+ *
+ * Note this does not test whether a cloned key can be rehydrated (that fails
+ * in Deno if needed); the clone is checked so that Firefox keys can be saved
+ * to storage.
+ */
+export async function hasEd25519Features(
+  platform: Ed25519Platform,
+): Promise<boolean> {
+  try {
+    const key = await platform.generateKey();
     const payload = new Uint8Array(32);
-    const [first, second] = [
-      new Uint8Array(await crypto.subtle.sign("ed25519", key, payload)),
-      new Uint8Array(await crypto.subtle.sign("ed25519", key, payload)),
-    ];
-    if (first.length !== second.length) return false;
-    for (let i = 0; i < first.length; i++) {
-      if (first[i] !== second[i]) return false;
-    }
+    const first = new Uint8Array(await platform.sign(key.privateKey, payload));
+    const second = new Uint8Array(await platform.sign(key.privateKey, payload));
+    if (!arrayEqual(first, second)) return false;
+    platform.clone(key.privateKey);
     return true;
+  } catch {
+    return false;
   }
-
-  // Note we do not test if the key can be rehydrated (fails in Deno if needed),
-  // we're mostly checking that Firefox keys can be saved to storage.
-  function isCloneable(key: CryptoKey): boolean {
-    try {
-      globalThis.structuredClone(key);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  async function testEd25519Features(): Promise<boolean> {
-    let key;
-    try {
-      key = await crypto.subtle.generateKey("ed25519", false, [
-        "sign",
-      ]) as CryptoKeyPair;
-    } catch (_) {
-      return false;
-    }
-
-    if (!(await isDeterministic(key.privateKey))) {
-      return false;
-    }
-    if (!isCloneable(key.privateKey)) {
-      return false;
-    }
-    return true;
-  }
-
-  let isSupported: boolean | null = null;
-
-  return async function isNativeEd25519Supported() {
-    if (isSupported !== null) {
-      return isSupported;
-    }
-
-    isSupported = await testEd25519Features();
-    return isSupported;
-  };
-})();
+}

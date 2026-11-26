@@ -7,7 +7,7 @@ import {
 import { decodeBase64 } from "@std/encoding/base64";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
 
 import type { HarnessRunArtifacts } from "../src/artifacts.ts";
 import {
@@ -16,18 +16,25 @@ import {
 } from "../src/cfc-posture.ts";
 import { InMemoryHarnessCredentialStore } from "../src/auth/credential-store.ts";
 import {
+  OPENAI_CODEX_DEVICE_START_URL,
+  OPENAI_CODEX_DEVICE_TOKEN_URL,
+  OPENAI_CODEX_TOKEN_URL,
+} from "../src/auth/openai-codex.ts";
+import {
   buildCfHarnessBaseSystemPrompt,
   buildCfHarnessBatchSystemPrompt,
   buildCfHarnessOperatorSystemPrompt,
   cfHarnessCliInformationalControl,
   type CfHarnessCliIO,
   type CfHarnessCliSignalHandler,
+  cfHarnessOpenUrlCommand,
   createCfHarnessBatchResult,
   createCfHarnessCliCapabilities,
   formatCfHarnessCliResult,
   formatCfHarnessCliUsage,
   formatCfHarnessTranscriptEvent,
   installCfHarnessSignalHandlers,
+  registerCfHarnessSignalHandler,
   resolveCfHarnessCliSystemPrompt,
   validateCfHarnessStructuredResult,
 } from "../src/cli.ts";
@@ -41,6 +48,7 @@ import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts
 import { HarnessControlError } from "../src/control-errors.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "../src/revision-verification.ts";
+import { PIECE_SOURCE_TOOL_GUIDANCE } from "../src/tool-guidance.ts";
 import type { HarnessModelClient } from "../src/model/client.ts";
 import {
   CfHarnessPromptLoop,
@@ -54,6 +62,13 @@ import {
   responsesBodyFromChatFixture,
 } from "./support/responses-fixture.ts";
 import { INERT_RUNSC } from "./support/inert-runsc.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
 
 const ONE_PIXEL_PNG = decodeBase64(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p94AAAAASUVORK5CYII=",
@@ -115,7 +130,7 @@ const completedCliResult = (
   },
 });
 
-Deno.test("parseCfHarnessCliArgs requires host backing for explicit report_progress", async () => {
+test("parseCfHarnessCliArgs requires host backing for explicit report_progress", async () => {
   const argv = ["--allow-tool", "report_progress", "Ask"];
   await expect(parseCfHarnessCliArgs(argv, { cwd: "/tmp/project", env: {} }))
     .rejects.toThrow("report_progress requires a host progress publisher");
@@ -128,7 +143,7 @@ Deno.test("parseCfHarnessCliArgs requires host backing for explicit report_progr
   expect(parsed.allowedToolIds).toContain("report_progress");
 });
 
-Deno.test("parseCfHarnessCliArgs resolves defaults from cwd and positional prompt text", async () => {
+test("parseCfHarnessCliArgs resolves defaults from cwd and positional prompt text", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["Summarize", "this", "workspace"],
     {
@@ -156,7 +171,7 @@ Deno.test("parseCfHarnessCliArgs resolves defaults from cwd and positional promp
   assertEquals(parsed.imageAttachments, []);
 });
 
-Deno.test("parseCfHarnessCliArgs collects every --docs-corpus-root", async () => {
+test("parseCfHarnessCliArgs collects every --docs-corpus-root", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--docs-corpus-root",
@@ -178,7 +193,7 @@ Deno.test("parseCfHarnessCliArgs collects every --docs-corpus-root", async () =>
   });
 });
 
-Deno.test("parseCfHarnessCliArgs lets --no-docs-corpus override a named root", async () => {
+test("parseCfHarnessCliArgs lets --no-docs-corpus override a named root", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--docs-corpus-root", "reference", "--no-docs-corpus", "Ask"],
     { cwd: "/tmp/project", env: {} },
@@ -194,7 +209,7 @@ Deno.test("parseCfHarnessCliArgs lets --no-docs-corpus override a named root", a
   });
 });
 
-Deno.test("parseCfHarnessCliArgs leaves the corpus unset when no docs flag is given", async () => {
+test("parseCfHarnessCliArgs leaves the corpus unset when no docs flag is given", async () => {
   const parsed = await parseCfHarnessCliArgs(["Ask"], {
     cwd: "/tmp/project",
     env: {},
@@ -206,7 +221,7 @@ Deno.test("parseCfHarnessCliArgs leaves the corpus unset when no docs flag is gi
   assertEquals(parsed.docsCorpus, undefined);
 });
 
-Deno.test("parseCfHarnessCliArgs resolves image attachments within the workspace", async () => {
+test("parseCfHarnessCliArgs resolves image attachments within the workspace", async () => {
   const workspace = await Deno.makeTempDir();
   const launcherCwd = await Deno.makeTempDir();
   await Deno.writeFile(join(workspace, "capture.png"), ONE_PIXEL_PNG);
@@ -242,7 +257,7 @@ Deno.test("parseCfHarnessCliArgs resolves image attachments within the workspace
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects image attachments outside the workspace", async () => {
+test("parseCfHarnessCliArgs rejects image attachments outside the workspace", async () => {
   const workspace = await Deno.makeTempDir();
   const outside = await Deno.makeTempDir();
   const outsideImage = join(outside, "capture.png");
@@ -269,7 +284,7 @@ Deno.test("parseCfHarnessCliArgs rejects image attachments outside the workspace
   );
 });
 
-Deno.test("parseCfHarnessCliArgs accepts image attachments from a host mount", async () => {
+test("parseCfHarnessCliArgs accepts image attachments from a host mount", async () => {
   const workspace = await Deno.makeTempDir();
   const mounted = await Deno.makeTempDir();
   const launcherCwd = await Deno.makeTempDir();
@@ -310,7 +325,7 @@ Deno.test("parseCfHarnessCliArgs accepts image attachments from a host mount", a
   assertEquals(parsed.imageAttachments[0].mediaType, "image/png");
 });
 
-Deno.test("parseCfHarnessCliArgs rejects image symlinks that resolve outside the workspace", async () => {
+test("parseCfHarnessCliArgs rejects image symlinks that resolve outside the workspace", async () => {
   const workspace = await Deno.makeTempDir();
   const outside = await Deno.makeTempDir();
   const outsideImage = join(outside, "capture.png");
@@ -339,7 +354,7 @@ Deno.test("parseCfHarnessCliArgs rejects image symlinks that resolve outside the
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects image attachments while resuming", async () => {
+test("parseCfHarnessCliArgs rejects image attachments while resuming", async () => {
   const workspace = await Deno.makeTempDir();
   await Deno.writeFile(join(workspace, "capture.png"), ONE_PIXEL_PNG);
 
@@ -364,7 +379,7 @@ Deno.test("parseCfHarnessCliArgs rejects image attachments while resuming", asyn
   );
 });
 
-Deno.test("parseCfHarnessCliArgs supports prompt files and mode overrides", async () => {
+test("parseCfHarnessCliArgs supports prompt files and mode overrides", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--workspace",
@@ -394,7 +409,7 @@ Deno.test("parseCfHarnessCliArgs supports prompt files and mode overrides", asyn
   assertEquals(parsed.maxModelTurns, 5);
 });
 
-Deno.test("parseCfHarnessCliArgs accepts CFC mode from environment", async () => {
+test("parseCfHarnessCliArgs accepts CFC mode from environment", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     {
@@ -409,7 +424,7 @@ Deno.test("parseCfHarnessCliArgs accepts CFC mode from environment", async () =>
   assertEquals(parsed.cfcEnforcementModeOverride, "enforce-strict");
 });
 
-Deno.test("parseCfHarnessCliArgs parses the three --fabric-* session flags together", async () => {
+test("parseCfHarnessCliArgs parses the three --fabric-* session flags together", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -443,7 +458,7 @@ Deno.test("parseCfHarnessCliArgs parses the three --fabric-* session flags toget
   assertEquals(unset.fabricSession, undefined);
 });
 
-Deno.test("parseCfHarnessCliArgs accepts fabric session settings from the environment", async () => {
+test("parseCfHarnessCliArgs accepts fabric session settings from the environment", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     {
@@ -466,7 +481,7 @@ Deno.test("parseCfHarnessCliArgs accepts fabric session settings from the enviro
   });
 });
 
-Deno.test("parseCfHarnessCliArgs rejects a partial fabric session naming the missing flags", async () => {
+test("parseCfHarnessCliArgs rejects a partial fabric session naming the missing flags", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -478,7 +493,7 @@ Deno.test("parseCfHarnessCliArgs rejects a partial fabric session naming the mis
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects --allow-tool run_pattern without the fabric session flags", async () => {
+test("parseCfHarnessCliArgs rejects --allow-tool run_pattern without the fabric session flags", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -490,7 +505,7 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool run_pattern without the fa
   );
 });
 
-Deno.test("parseCfHarnessCliArgs accepts --allow-tool run_pattern alongside the fabric session flags", async () => {
+test("parseCfHarnessCliArgs accepts --allow-tool run_pattern alongside the fabric session flags", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -518,7 +533,7 @@ Deno.test("parseCfHarnessCliArgs accepts --allow-tool run_pattern alongside the 
   });
 });
 
-Deno.test("parseCfHarnessCliArgs rejects a fabric API URL that does not parse", async () => {
+test("parseCfHarnessCliArgs rejects a fabric API URL that does not parse", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -539,7 +554,7 @@ Deno.test("parseCfHarnessCliArgs rejects a fabric API URL that does not parse", 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs carries the fabric CFC dials into the session config", async () => {
+test("parseCfHarnessCliArgs carries the fabric CFC dials into the session config", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -570,7 +585,7 @@ Deno.test("parseCfHarnessCliArgs carries the fabric CFC dials into the session c
   });
 });
 
-Deno.test("parseCfHarnessCliArgs accepts fabric CFC dials from the environment", async () => {
+test("parseCfHarnessCliArgs accepts fabric CFC dials from the environment", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     {
@@ -597,7 +612,7 @@ Deno.test("parseCfHarnessCliArgs accepts fabric CFC dials from the environment",
   });
 });
 
-Deno.test("parseCfHarnessCliArgs rejects a fabric CFC enforcement mode below the preset pin", async () => {
+test("parseCfHarnessCliArgs rejects a fabric CFC enforcement mode below the preset pin", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -620,7 +635,7 @@ Deno.test("parseCfHarnessCliArgs rejects a fabric CFC enforcement mode below the
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects an unknown fabric CFC flow-labels mode", async () => {
+test("parseCfHarnessCliArgs rejects an unknown fabric CFC flow-labels mode", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -643,7 +658,7 @@ Deno.test("parseCfHarnessCliArgs rejects an unknown fabric CFC flow-labels mode"
   );
 });
 
-Deno.test("parseCfHarnessCliArgs carries the fabric CFC posture into the session config", async () => {
+test("parseCfHarnessCliArgs carries the fabric CFC posture into the session config", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -671,7 +686,7 @@ Deno.test("parseCfHarnessCliArgs carries the fabric CFC posture into the session
   });
 });
 
-Deno.test("parseCfHarnessCliArgs accepts the fabric CFC posture from the environment", async () => {
+test("parseCfHarnessCliArgs accepts the fabric CFC posture from the environment", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     {
@@ -696,7 +711,7 @@ Deno.test("parseCfHarnessCliArgs accepts the fabric CFC posture from the environ
   });
 });
 
-Deno.test("parseCfHarnessCliArgs reads the fabric CFC posture from the process environment", async () => {
+test("parseCfHarnessCliArgs reads the fabric CFC posture from the process environment", async () => {
   // Through the DEFAULT env projection (no injected `deps.env`), the path a
   // real invocation takes: a key missing from that projection reads as unset
   // even when the process environment carries it.
@@ -728,7 +743,7 @@ Deno.test("parseCfHarnessCliArgs reads the fabric CFC posture from the process e
   }
 });
 
-Deno.test("parseCfHarnessCliArgs rejects an unknown fabric CFC posture", async () => {
+test("parseCfHarnessCliArgs rejects an unknown fabric CFC posture", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -751,7 +766,7 @@ Deno.test("parseCfHarnessCliArgs rejects an unknown fabric CFC posture", async (
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects the fabric CFC posture without a fabric session", async () => {
+test("parseCfHarnessCliArgs rejects the fabric CFC posture without a fabric session", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -768,7 +783,7 @@ Deno.test("parseCfHarnessCliArgs rejects the fabric CFC posture without a fabric
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects fabric CFC dials without a fabric session", async () => {
+test("parseCfHarnessCliArgs rejects fabric CFC dials without a fabric session", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -797,7 +812,7 @@ const withFabricSession = (...extra: string[]) => [
   ...extra,
 ];
 
-Deno.test("parseCfHarnessCliArgs resolves the space database against the working directory", async () => {
+test("parseCfHarnessCliArgs resolves the space database against the working directory", async () => {
   const parsed = await parseCfHarnessCliArgs(
     withFabricSession("--space-db", "cache/memory/space.sqlite"),
     { cwd: "/tmp/project", env: {} },
@@ -808,7 +823,7 @@ Deno.test("parseCfHarnessCliArgs resolves the space database against the working
   assertEquals(parsed.spaceDbPath, "/tmp/project/cache/memory/space.sqlite");
 });
 
-Deno.test("parseCfHarnessCliArgs takes the space database from the environment", async () => {
+test("parseCfHarnessCliArgs takes the space database from the environment", async () => {
   const parsed = await parseCfHarnessCliArgs(withFabricSession(), {
     cwd: "/tmp/project",
     env: { CF_HARNESS_SPACE_DB: "/srv/toolshed/space.sqlite" },
@@ -819,7 +834,7 @@ Deno.test("parseCfHarnessCliArgs takes the space database from the environment",
   assertEquals(parsed.spaceDbPath, "/srv/toolshed/space.sqlite");
 });
 
-Deno.test("parseCfHarnessCliArgs leaves the space database unset when nothing names one", async () => {
+test("parseCfHarnessCliArgs leaves the space database unset when nothing names one", async () => {
   const parsed = await parseCfHarnessCliArgs(withFabricSession(), {
     cwd: "/tmp/project",
     env: {},
@@ -830,7 +845,7 @@ Deno.test("parseCfHarnessCliArgs leaves the space database unset when nothing na
   assertEquals(parsed.spaceDbPath, undefined);
 });
 
-Deno.test("parseCfHarnessCliArgs rejects a space database without a fabric session", async () => {
+test("parseCfHarnessCliArgs rejects a space database without a fabric session", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -842,7 +857,7 @@ Deno.test("parseCfHarnessCliArgs rejects a space database without a fabric sessi
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects an empty space database value", async () => {
+test("parseCfHarnessCliArgs rejects an empty space database value", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(withFabricSession("--space-db", "  "), {
@@ -854,7 +869,7 @@ Deno.test("parseCfHarnessCliArgs rejects an empty space database value", async (
   );
 });
 
-Deno.test("parseCfHarnessCliArgs resolves run manifest paths", async () => {
+test("parseCfHarnessCliArgs resolves run manifest paths", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi", "--run-manifest", "loom-run.json"],
     {
@@ -880,7 +895,7 @@ describe("CLI model turn budgets", () => {
   }
 });
 
-Deno.test("parseCfHarnessCliArgs refuses a misspelled restriction flag, naming the flag it meant", async () => {
+test("parseCfHarnessCliArgs refuses a misspelled restriction flag, naming the flag it meant", async () => {
   const error = await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -893,7 +908,7 @@ Deno.test("parseCfHarnessCliArgs refuses a misspelled restriction flag, naming t
   assertEquals(error.code, "invalid-request");
 });
 
-Deno.test("parseCfHarnessCliArgs refuses an undeclared flag in either spelling without its value", async () => {
+test("parseCfHarnessCliArgs refuses an undeclared flag in either spelling without its value", async () => {
   for (
     const spelling of [["--api-key=sk-secret"], ["--api-key", "sk-secret"]]
   ) {
@@ -910,7 +925,7 @@ Deno.test("parseCfHarnessCliArgs refuses an undeclared flag in either spelling w
   }
 });
 
-Deno.test("parseCfHarnessCliArgs reads a flag after `--` as prompt text", async () => {
+test("parseCfHarnessCliArgs reads a flag after `--` as prompt text", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--output-mode", "batch", "--", "--not-a-flag", "text"],
     { cwd: "/tmp/project", env: {} },
@@ -922,7 +937,7 @@ Deno.test("parseCfHarnessCliArgs reads a flag after `--` as prompt text", async 
   assertEquals(parsed.prompt, "--not-a-flag text");
 });
 
-Deno.test("parseCfHarnessCliArgs refuses a prompt starting with `-` after `--prompt`, without repeating it", async () => {
+test("parseCfHarnessCliArgs refuses a prompt starting with `-` after `--prompt`, without repeating it", async () => {
   for (
     const prompt of [
       "--Remember my password is hunter2",
@@ -946,7 +961,7 @@ Deno.test("parseCfHarnessCliArgs refuses a prompt starting with `-` after `--pro
   }
 });
 
-Deno.test("parseCfHarnessCliArgs takes a prompt starting with `-` written `--prompt=`", async () => {
+test("parseCfHarnessCliArgs takes a prompt starting with `-` written `--prompt=`", async () => {
   const parsed = await parseCfHarnessCliArgs(["--prompt=- buy milk"], {
     cwd: "/tmp/project",
     env: {},
@@ -958,7 +973,7 @@ Deno.test("parseCfHarnessCliArgs takes a prompt starting with `-` written `--pro
   assertEquals(parsed.prompt, "- buy milk");
 });
 
-Deno.test("parseCfHarnessCliArgs refuses positional text starting with `-` without repeating it", async () => {
+test("parseCfHarnessCliArgs refuses positional text starting with `-` without repeating it", async () => {
   const error = await assertRejects(
     () =>
       parseCfHarnessCliArgs(["- buy milk"], { cwd: "/tmp/project", env: {} }),
@@ -970,7 +985,7 @@ Deno.test("parseCfHarnessCliArgs refuses positional text starting with `-` witho
   );
 });
 
-Deno.test("parseCfHarnessCliArgs returns help whatever else is on the line", async () => {
+test("parseCfHarnessCliArgs returns help whatever else is on the line", async () => {
   for (
     const argv of [
       ["--allowed-tools", "read_file", "--help"],
@@ -985,7 +1000,7 @@ Deno.test("parseCfHarnessCliArgs returns help whatever else is on the line", asy
   }
 });
 
-Deno.test("runCfHarnessCli refuses a flag whose value reads as help, rather than printing it", async () => {
+test("runCfHarnessCli refuses a flag whose value reads as help, rather than printing it", async () => {
   for (const help of ["-h", "--help"]) {
     const buffers = createIoBuffers();
     assertEquals(
@@ -1004,7 +1019,7 @@ Deno.test("runCfHarnessCli refuses a flag whose value reads as help, rather than
   }
 });
 
-Deno.test("parseCfHarnessCliArgs refuses a negated switch given a value, by the name typed", async () => {
+test("parseCfHarnessCliArgs refuses a negated switch given a value, by the name typed", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(["--prompt", "hi", "--no-skill-catalog=true"], {
@@ -1016,7 +1031,7 @@ Deno.test("parseCfHarnessCliArgs refuses a negated switch given a value, by the 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs suggests no flag of the opposite meaning", async () => {
+test("parseCfHarnessCliArgs suggests no flag of the opposite meaning", async () => {
   const error = await assertRejects(
     () =>
       parseCfHarnessCliArgs(["--prompt", "hi", "--no-print-transcript"], {
@@ -1031,7 +1046,7 @@ Deno.test("parseCfHarnessCliArgs suggests no flag of the opposite meaning", asyn
   );
 });
 
-Deno.test("runCfHarnessCli refuses a dotted flag without the value of the flag before the dot", async () => {
+test("runCfHarnessCli refuses a dotted flag without the value of the flag before the dot", async () => {
   for (
     const [argv, flag] of [
       [["--prompt", "hunter2", "--prompt.x", "y"], "--prompt.x"],
@@ -1064,7 +1079,7 @@ Deno.test("runCfHarnessCli refuses a dotted flag without the value of the flag b
   }
 });
 
-Deno.test("runCfHarnessCli refuses a value holding an `h` as given no value, rather than printing help", async () => {
+test("runCfHarnessCli refuses a value holding an `h` as given no value, rather than printing help", async () => {
   const buffers = createIoBuffers();
   assertEquals(
     await runCfHarnessCli(["--prompt", "-hidden"], {
@@ -1081,7 +1096,7 @@ Deno.test("runCfHarnessCli refuses a value holding an `h` as given no value, rat
   );
 });
 
-Deno.test("parseCfHarnessCliArgs refuses a lone negative number without naming it", async () => {
+test("parseCfHarnessCliArgs refuses a lone negative number without naming it", async () => {
   const error = await assertRejects(
     () =>
       parseCfHarnessCliArgs(["--prompt", "hi", "-15"], {
@@ -1096,7 +1111,7 @@ Deno.test("parseCfHarnessCliArgs refuses a lone negative number without naming i
   );
 });
 
-Deno.test("parseCfHarnessCliArgs names a word after a single dash whole", async () => {
+test("parseCfHarnessCliArgs names a word after a single dash whole", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(["--prompt", "hi", "-hidden"], {
@@ -1108,7 +1123,7 @@ Deno.test("parseCfHarnessCliArgs names a word after a single dash whole", async 
   );
 });
 
-Deno.test("runCfHarnessCli names an undeclared flag in a host's structured failure", async () => {
+test("runCfHarnessCli names an undeclared flag in a host's structured failure", async () => {
   const buffers = createIoBuffers();
   assertEquals(
     await runCfHarnessCli(["--allowed-tools", "read_file", "--prompt", "hi"], {
@@ -1126,7 +1141,7 @@ Deno.test("runCfHarnessCli names an undeclared flag in a host's structured failu
   });
 });
 
-Deno.test("parseCfHarnessCliArgs supports gateway auth mode override", async () => {
+test("parseCfHarnessCliArgs supports gateway auth mode override", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi", "--gateway-auth-mode", "none"],
     {
@@ -1141,7 +1156,7 @@ Deno.test("parseCfHarnessCliArgs supports gateway auth mode override", async () 
   assertEquals(parsed.gatewayAuthMode, "none");
 });
 
-Deno.test("parseCfHarnessCliArgs accepts cache and reasoning experiment controls", async () => {
+test("parseCfHarnessCliArgs accepts cache and reasoning experiment controls", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -1159,7 +1174,7 @@ Deno.test("parseCfHarnessCliArgs accepts cache and reasoning experiment controls
   assertEquals(parsed.promptCacheMode, "explicit");
 });
 
-Deno.test("parseCfHarnessCliArgs reads cache and reasoning defaults from the process environment", async () => {
+test("parseCfHarnessCliArgs reads cache and reasoning defaults from the process environment", async () => {
   const names = [
     "CF_HARNESS_REASONING_EFFORT",
     "CF_HARNESS_PROMPT_CACHE_MODE",
@@ -1184,7 +1199,7 @@ Deno.test("parseCfHarnessCliArgs reads cache and reasoning defaults from the pro
   }
 });
 
-Deno.test("parseCfHarnessCliArgs reads a run depth, leaves an unnamed one to the default, and refuses one it does not know", async () => {
+test("parseCfHarnessCliArgs reads a run depth, leaves an unnamed one to the default, and refuses one it does not know", async () => {
   const parse = (argv: string[]) =>
     parseCfHarnessCliArgs(["--prompt", "hi", ...argv], {
       cwd: "/tmp/project",
@@ -1206,7 +1221,7 @@ Deno.test("parseCfHarnessCliArgs reads a run depth, leaves an unnamed one to the
   );
 });
 
-Deno.test("parseCfHarnessCliArgs reads a caller's task tags and domains, none as no domain, and refuses a word it does not know or a shape on resume", async () => {
+test("parseCfHarnessCliArgs reads a caller's task tags and domains, none as no domain, and refuses a word it does not know or a shape on resume", async () => {
   const parse = (argv: string[]) =>
     parseCfHarnessCliArgs(["--prompt", "hi", ...argv], {
       cwd: "/tmp/project",
@@ -1257,7 +1272,7 @@ Deno.test("parseCfHarnessCliArgs reads a caller's task tags and domains, none as
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects an empty reasoning effort flag", async () => {
+test("parseCfHarnessCliArgs rejects an empty reasoning effort flag", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -1269,7 +1284,7 @@ Deno.test("parseCfHarnessCliArgs rejects an empty reasoning effort flag", async 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects an empty research reasoning effort flag", async () => {
+test("parseCfHarnessCliArgs rejects an empty research reasoning effort flag", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -1281,7 +1296,7 @@ Deno.test("parseCfHarnessCliArgs rejects an empty research reasoning effort flag
   );
 });
 
-Deno.test("parseCfHarnessCliArgs refuses an unknown output mode, prompt slot role or CFC enforcement mode, and an empty pattern index URL", async () => {
+test("parseCfHarnessCliArgs refuses an unknown output mode, prompt slot role or CFC enforcement mode, and an empty pattern index URL", async () => {
   for (
     const [args, message] of [
       [
@@ -1300,6 +1315,25 @@ Deno.test("parseCfHarnessCliArgs refuses an unknown output mode, prompt slot rol
         ["--pattern-index-url", "  "],
         "--pattern-index-url requires a non-empty value",
       ],
+      [
+        ["--pattern-index-origin", "agent"],
+        "--pattern-index-origin needs --pattern-index-url",
+      ],
+      [
+        [
+          "--fabric-api-url",
+          "https://toolshed.example/",
+          "--fabric-identity",
+          "keys/agent.pkcs8",
+          "--fabric-space",
+          "my-space",
+          "--pattern-index-url",
+          "http://index.test",
+          "--pattern-index-origin",
+          "person",
+        ],
+        '--pattern-index-origin must be "agent": person',
+      ],
     ] as const
   ) {
     await assertRejects(
@@ -1314,7 +1348,7 @@ Deno.test("parseCfHarnessCliArgs refuses an unknown output mode, prompt slot rol
   }
 });
 
-Deno.test("parseCfHarnessCliArgs resolves gateway config from environment", async () => {
+test("parseCfHarnessCliArgs resolves gateway config from environment", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     {
@@ -1335,7 +1369,7 @@ Deno.test("parseCfHarnessCliArgs resolves gateway config from environment", asyn
   assertEquals(parsed.model, "gpt-oss-120b");
 });
 
-Deno.test("parseCfHarnessCliArgs prefers gateway flags over environment", async () => {
+test("parseCfHarnessCliArgs prefers gateway flags over environment", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -1365,7 +1399,7 @@ Deno.test("parseCfHarnessCliArgs prefers gateway flags over environment", async 
   assertEquals(parsed.model, "gpt-5.5");
 });
 
-Deno.test("parseCfHarnessCliArgs rejects invalid gateway auth mode from environment", async () => {
+test("parseCfHarnessCliArgs rejects invalid gateway auth mode from environment", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(["--prompt", "hi"], {
@@ -1377,7 +1411,7 @@ Deno.test("parseCfHarnessCliArgs rejects invalid gateway auth mode from environm
   );
 });
 
-Deno.test("parseCfHarnessCliArgs ignores blank gateway environment values", async () => {
+test("parseCfHarnessCliArgs ignores blank gateway environment values", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     {
@@ -1398,7 +1432,7 @@ Deno.test("parseCfHarnessCliArgs ignores blank gateway environment values", asyn
   expect(parsed.model).toBe("gpt-6.1-sol");
 });
 
-Deno.test("parseCfHarnessCliArgs supports batch output mode override", async () => {
+test("parseCfHarnessCliArgs supports batch output mode override", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi", "--output-mode", "batch"],
     {
@@ -1413,7 +1447,7 @@ Deno.test("parseCfHarnessCliArgs supports batch output mode override", async () 
   assertEquals(parsed.outputMode, "batch");
 });
 
-Deno.test("parseCfHarnessCliArgs supports stream-events flag", async () => {
+test("parseCfHarnessCliArgs supports stream-events flag", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi", "--stream-events"],
     {
@@ -1428,7 +1462,7 @@ Deno.test("parseCfHarnessCliArgs supports stream-events flag", async () => {
   assertEquals(parsed.streamEvents, true);
 });
 
-Deno.test({
+test({
   name: "parseCfHarnessCliArgs supports skills root and skill preloads",
   // `/bin/test` too: the Linux default asks it whether the store's `runsc`
   // can be executed.
@@ -1479,7 +1513,7 @@ Deno.test({
   },
 });
 
-Deno.test("parseCfHarnessCliArgs preloads a skill out of the checkout's own skills tree", async () => {
+test("parseCfHarnessCliArgs preloads a skill out of the checkout's own skills tree", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi", "--skill", "pattern-dev"],
     { cwd: "/tmp/project", env: {} },
@@ -1509,7 +1543,7 @@ Deno.test("parseCfHarnessCliArgs preloads a skill out of the checkout's own skil
   );
 });
 
-Deno.test("parseCfHarnessCliArgs takes an acquired pin's script without a skills root", async () => {
+test("parseCfHarnessCliArgs takes an acquired pin's script without a skills root", async () => {
   // An acquired script is keyed on the pin its bytes were read at, and those
   // bytes reach the sandbox through the acquisition's own mount. Asking for a
   // skills root would make the operator name a tree the skill never came from.
@@ -1533,7 +1567,7 @@ Deno.test("parseCfHarnessCliArgs takes an acquired pin's script without a skills
   }]);
 });
 
-Deno.test("parseCfHarnessCliArgs still asks a registry name for its skills root, beside a pin", async () => {
+test("parseCfHarnessCliArgs still asks a registry name for its skills root, beside a pin", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -1552,7 +1586,7 @@ Deno.test("parseCfHarnessCliArgs still asks a registry name for its skills root,
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects skills root outside workspace", async () => {
+test("parseCfHarnessCliArgs rejects skills root outside workspace", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -1574,7 +1608,7 @@ Deno.test("parseCfHarnessCliArgs rejects skills root outside workspace", async (
   );
 });
 
-Deno.test({
+test({
   name:
     "parseCfHarnessCliArgs rejects skills root symlinks that resolve outside workspace",
   permissions: { read: true, write: true },
@@ -1619,7 +1653,7 @@ Deno.test({
   },
 });
 
-Deno.test("parseCfHarnessCliArgs rejects skill preloads while resuming", async () => {
+test("parseCfHarnessCliArgs rejects skill preloads while resuming", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -1643,7 +1677,7 @@ Deno.test("parseCfHarnessCliArgs rejects skill preloads while resuming", async (
   );
 });
 
-Deno.test("parseCfHarnessCliArgs supports allowed tools and result json path", async () => {
+test("parseCfHarnessCliArgs supports allowed tools and result json path", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -1678,7 +1712,7 @@ Deno.test("parseCfHarnessCliArgs supports allowed tools and result json path", a
   assertEquals(parsed.resultJsonPath, "/tmp/project/results/output.json");
 });
 
-Deno.test({
+test({
   name:
     "parseCfHarnessCliArgs parses exact skill script allowlists with skills root",
   // `/bin/test` too: the Linux default asks it whether the store's `runsc`
@@ -1730,7 +1764,7 @@ Deno.test({
   },
 });
 
-Deno.test("parseCfHarnessCliArgs rejects invalid skill script execution targets", async () => {
+test("parseCfHarnessCliArgs rejects invalid skill script execution targets", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -1747,7 +1781,7 @@ Deno.test("parseCfHarnessCliArgs rejects invalid skill script execution targets"
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects skill script allowlists without a skills root", async () => {
+test("parseCfHarnessCliArgs rejects skill script allowlists without a skills root", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -1764,7 +1798,7 @@ Deno.test("parseCfHarnessCliArgs rejects skill script allowlists without a skill
   );
 });
 
-Deno.test("parseCfHarnessCliArgs supports structured result validation flags", async () => {
+test("parseCfHarnessCliArgs supports structured result validation flags", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -1814,7 +1848,7 @@ Deno.test("parseCfHarnessCliArgs supports structured result validation flags", a
   });
 });
 
-Deno.test("parseCfHarnessCliArgs rejects malformed structured result validation flags", async () => {
+test("parseCfHarnessCliArgs rejects malformed structured result validation flags", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -1891,7 +1925,7 @@ Deno.test("parseCfHarnessCliArgs rejects malformed structured result validation 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects submit_result without a structured result target", async () => {
+test("parseCfHarnessCliArgs rejects submit_result without a structured result target", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -1903,7 +1937,7 @@ Deno.test("parseCfHarnessCliArgs rejects submit_result without a structured resu
   );
 });
 
-Deno.test("parseCfHarnessCliArgs supports explicit subagent profile authorization", async () => {
+test("parseCfHarnessCliArgs supports explicit subagent profile authorization", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -1926,7 +1960,7 @@ Deno.test("parseCfHarnessCliArgs supports explicit subagent profile authorizatio
   assertEquals(parsed.allowedSubagentProfiles, ["default"]);
 });
 
-Deno.test("parseCfHarnessCliArgs supports explicit browser subagent profile authorization", async () => {
+test("parseCfHarnessCliArgs supports explicit browser subagent profile authorization", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -1949,7 +1983,7 @@ Deno.test("parseCfHarnessCliArgs supports explicit browser subagent profile auth
   assertEquals(parsed.allowedSubagentProfiles, ["browser"]);
 });
 
-Deno.test("parseCfHarnessCliArgs supports a Browser Access lease", async () => {
+test("parseCfHarnessCliArgs supports a Browser Access lease", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -1991,7 +2025,7 @@ Deno.test("parseCfHarnessCliArgs supports a Browser Access lease", async () => {
   });
 });
 
-Deno.test("parseCfHarnessCliArgs collects handle-value destination origins", async () => {
+test("parseCfHarnessCliArgs collects handle-value destination origins", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -2015,7 +2049,7 @@ Deno.test("parseCfHarnessCliArgs collects handle-value destination origins", asy
   ]);
 });
 
-Deno.test("parseCfHarnessCliArgs allows no handle-value destination by default", async () => {
+test("parseCfHarnessCliArgs allows no handle-value destination by default", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     { cwd: "/tmp/project", env: {} },
@@ -2027,7 +2061,7 @@ Deno.test("parseCfHarnessCliArgs allows no handle-value destination by default",
   assertEquals(parsed.handleValueOrigins, []);
 });
 
-Deno.test("parseCfHarnessCliArgs rejects a handle-value origin that is not one", async () => {
+test("parseCfHarnessCliArgs rejects a handle-value origin that is not one", async () => {
   for (
     const value of [
       "example.com",
@@ -2047,7 +2081,7 @@ Deno.test("parseCfHarnessCliArgs rejects a handle-value origin that is not one",
   }
 });
 
-Deno.test("parseCfHarnessCliArgs collects operator input cells", async () => {
+test("parseCfHarnessCliArgs collects operator input cells", async () => {
   const cellRef = `/of:fid1:${"A".repeat(43)}/travellerName`;
   const citiesRef = `/of:fid1:${"B".repeat(43)}/cities`;
   const parsed = await parseCfHarnessCliArgs(
@@ -2071,7 +2105,7 @@ Deno.test("parseCfHarnessCliArgs collects operator input cells", async () => {
   ]);
 });
 
-Deno.test("parseCfHarnessCliArgs passes no input cells by default", async () => {
+test("parseCfHarnessCliArgs passes no input cells by default", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     { cwd: "/tmp/project", env: {} },
@@ -2083,7 +2117,7 @@ Deno.test("parseCfHarnessCliArgs passes no input cells by default", async () => 
   assertEquals(parsed.inputCells, []);
 });
 
-Deno.test("parseCfHarnessCliArgs rejects an input cell that does not fit the grammar", async () => {
+test("parseCfHarnessCliArgs rejects an input cell that does not fit the grammar", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -2095,7 +2129,7 @@ Deno.test("parseCfHarnessCliArgs rejects an input cell that does not fit the gra
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects malformed Browser Access leases", async () => {
+test("parseCfHarnessCliArgs rejects malformed Browser Access leases", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -2235,7 +2269,7 @@ Deno.test("parseCfHarnessCliArgs rejects malformed Browser Access leases", async
   );
 });
 
-Deno.test("parseCfHarnessCliArgs supports explicit web_fetch subagent profile authorization", async () => {
+test("parseCfHarnessCliArgs supports explicit web_fetch subagent profile authorization", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -2258,7 +2292,7 @@ Deno.test("parseCfHarnessCliArgs supports explicit web_fetch subagent profile au
   assertEquals(parsed.allowedSubagentProfiles, ["web_fetch"]);
 });
 
-Deno.test("parseCfHarnessCliArgs supports explicit web_search subagent profile authorization", async () => {
+test("parseCfHarnessCliArgs supports explicit web_search subagent profile authorization", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -2281,7 +2315,7 @@ Deno.test("parseCfHarnessCliArgs supports explicit web_search subagent profile a
   assertEquals(parsed.allowedSubagentProfiles, ["web_search"]);
 });
 
-Deno.test("parseCfHarnessCliArgs covers tool allowlist and subagent profile permutations", async () => {
+test("parseCfHarnessCliArgs covers tool allowlist and subagent profile permutations", async () => {
   const cases = [
     {
       name: "implicit default profile when parent tools are unrestricted",
@@ -2408,7 +2442,7 @@ Deno.test("parseCfHarnessCliArgs covers tool allowlist and subagent profile perm
   }
 });
 
-Deno.test("parseCfHarnessCliArgs rejects unknown subagent profiles", async () => {
+test("parseCfHarnessCliArgs rejects unknown subagent profiles", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -2423,7 +2457,7 @@ Deno.test("parseCfHarnessCliArgs rejects unknown subagent profiles", async () =>
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects browser as a parent allow-tool", async () => {
+test("parseCfHarnessCliArgs rejects browser as a parent allow-tool", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -2438,7 +2472,7 @@ Deno.test("parseCfHarnessCliArgs rejects browser as a parent allow-tool", async 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects unknown allowed tools before resolving profiles", async () => {
+test("parseCfHarnessCliArgs rejects unknown allowed tools before resolving profiles", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -2460,7 +2494,7 @@ Deno.test("parseCfHarnessCliArgs rejects unknown allowed tools before resolving 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs resolves focus-root relative to workspace", async () => {
+test("parseCfHarnessCliArgs resolves focus-root relative to workspace", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--workspace",
@@ -2481,7 +2515,7 @@ Deno.test("parseCfHarnessCliArgs resolves focus-root relative to workspace", asy
   assertEquals(parsed.focusRoot, "/tmp/project/runtime/cf-harness");
 });
 
-Deno.test("parseCfHarnessCliArgs resolves an initial cwd within the workspace", async () => {
+test("parseCfHarnessCliArgs resolves an initial cwd within the workspace", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--workspace",
@@ -2502,7 +2536,7 @@ Deno.test("parseCfHarnessCliArgs resolves an initial cwd within the workspace", 
   assertEquals(parsed.cwd, "/workspace/.ops");
 });
 
-Deno.test("parseCfHarnessCliArgs rejects an initial cwd outside the workspace", async () => {
+test("parseCfHarnessCliArgs rejects an initial cwd outside the workspace", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -2523,7 +2557,7 @@ Deno.test("parseCfHarnessCliArgs rejects an initial cwd outside the workspace", 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs supports prompt-slot-role override", async () => {
+test("parseCfHarnessCliArgs supports prompt-slot-role override", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi", "--prompt-slot-role", "context"],
     {
@@ -2538,7 +2572,7 @@ Deno.test("parseCfHarnessCliArgs supports prompt-slot-role override", async () =
   assertEquals(parsed.promptSlotRole, "context");
 });
 
-Deno.test("parseCfHarnessCliArgs tolerates a leading task-runner separator", async () => {
+test("parseCfHarnessCliArgs tolerates a leading task-runner separator", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--", "--prompt", "hi", "--gateway-auth-mode", "none"],
     {
@@ -2554,7 +2588,7 @@ Deno.test("parseCfHarnessCliArgs tolerates a leading task-runner separator", asy
   assertEquals(parsed.gatewayAuthMode, "none");
 });
 
-Deno.test("parseCfHarnessCliArgs prefers CF_HARNESS_API_KEY over OPENAI_API_KEY", async () => {
+test("parseCfHarnessCliArgs prefers CF_HARNESS_API_KEY over OPENAI_API_KEY", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     {
@@ -2573,7 +2607,7 @@ Deno.test("parseCfHarnessCliArgs prefers CF_HARNESS_API_KEY over OPENAI_API_KEY"
   assertEquals(parsed.apiKeySource, "CF_HARNESS_API_KEY");
 });
 
-Deno.test("parseCfHarnessCliArgs supports resume-run inputs without a prompt", async () => {
+test("parseCfHarnessCliArgs supports resume-run inputs without a prompt", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--resume-run", "/tmp/project/.cf-harness-artifacts/run-1"],
     {
@@ -2594,7 +2628,7 @@ Deno.test("parseCfHarnessCliArgs supports resume-run inputs without a prompt", a
   assertEquals(parsed.model, undefined);
 });
 
-Deno.test("runCfHarnessCli prints usage for help", async () => {
+test("runCfHarnessCli prints usage for help", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   const exitCode = await runCfHarnessCli(["--help"], { io });
 
@@ -2603,7 +2637,7 @@ Deno.test("runCfHarnessCli prints usage for help", async () => {
   assertEquals(stderr, []);
 });
 
-Deno.test("cfHarnessCliInformationalControl mirrors global control parsing", () => {
+test("cfHarnessCliInformationalControl mirrors global control parsing", () => {
   assertEquals(cfHarnessCliInformationalControl(["--help"]), "help");
   assertEquals(cfHarnessCliInformationalControl(["-h"]), "help");
   assertEquals(
@@ -2633,7 +2667,7 @@ Deno.test("cfHarnessCliInformationalControl mirrors global control parsing", () 
   );
 });
 
-Deno.test("runCfHarnessCli prints machine-readable capabilities", async () => {
+test("runCfHarnessCli prints machine-readable capabilities", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   const exitCode = await runCfHarnessCli(["--describe-capabilities"], { io });
 
@@ -2674,7 +2708,7 @@ Deno.test("runCfHarnessCli prints machine-readable capabilities", async () => {
   assertEquals(capabilities.features.loomLocalOwnerBinding, true);
 });
 
-Deno.test("installCfHarnessSignalHandlers terminalizes the active run before exiting", async () => {
+test("installCfHarnessSignalHandlers terminalizes the active run before exiting", async () => {
   const engine = new CfHarnessEngine({
     ...INERT_RUNSC,
     workspaceHostPath: "/tmp/project",
@@ -2724,7 +2758,7 @@ Deno.test("installCfHarnessSignalHandlers terminalizes the active run before exi
   );
 });
 
-Deno.test("installCfHarnessSignalHandlers handles one signal, and disposes once", async () => {
+test("installCfHarnessSignalHandlers handles one signal, and disposes once", async () => {
   let handler: CfHarnessCliSignalHandler | undefined;
   let disposals = 0;
   const exits: number[] = [];
@@ -2760,7 +2794,7 @@ Deno.test("installCfHarnessSignalHandlers handles one signal, and disposes once"
   assertEquals(disposals, 2);
 });
 
-Deno.test("runCfHarnessCli registers and disposes signal handlers around a run", async () => {
+test("runCfHarnessCli registers and disposes signal handlers around a run", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   let registeredSignals: readonly string[] = [];
   let disposed = false;
@@ -2846,7 +2880,7 @@ const POSTURED_SESSION_RECORD = harnessFabricSessionPosture({
   cfcPosture: "max-enforcement",
 });
 
-Deno.test("runCfHarnessCli prints the fabric-session posture bundle in the operator summary", async () => {
+test("runCfHarnessCli prints the fabric-session posture bundle in the operator summary", async () => {
   const { io, stdout } = createIoBuffers();
   const exitCode = await runCfHarnessCli(
     [
@@ -2918,7 +2952,7 @@ Deno.test("runCfHarnessCli prints the fabric-session posture bundle in the opera
   }
 });
 
-Deno.test("runCfHarnessCli omits the posture record for a run that recorded none", async () => {
+test("runCfHarnessCli omits the posture record for a run that recorded none", async () => {
   // A run predating the record keeps the two itemized dials and nothing
   // invented under them.
   const { io, stdout } = createIoBuffers();
@@ -2973,7 +3007,7 @@ Deno.test("runCfHarnessCli omits the posture record for a run that recorded none
   assertEquals(summary.includes("provenance"), false);
 });
 
-Deno.test("runCfHarnessCli hands an embedder's browser host to the run's engine", async () => {
+test("runCfHarnessCli hands an embedder's browser host to the run's engine", async () => {
   const { io } = createIoBuffers();
   const browserHost: HarnessBrowserHost = {
     perform: () =>
@@ -3023,7 +3057,7 @@ Deno.test("runCfHarnessCli hands an embedder's browser host to the run's engine"
   assertEquals(createdOptions?.allowedSubagentProfiles, ["browser"]);
 });
 
-Deno.test("runCfHarnessCli executes the prompt loop and prints result metadata", async () => {
+test("runCfHarnessCli executes the prompt loop and prints result metadata", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   let createdOptions: Record<string, unknown> | undefined;
   let runPromptOptions: RunHarnessPromptOptions | undefined;
@@ -3143,7 +3177,7 @@ Deno.test("runCfHarnessCli executes the prompt loop and prints result metadata",
   assertEquals(stderr, []);
 });
 
-Deno.test("runCfHarnessCli announces well-known grants to the model and the operator", async () => {
+test("runCfHarnessCli announces well-known grants to the model and the operator", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   const registrySpace =
     "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
@@ -3236,7 +3270,87 @@ Deno.test("runCfHarnessCli announces well-known grants to the model and the oper
   assertEquals(stderr, []);
 });
 
-Deno.test("runCfHarnessCli announces operator input cells to the model and the operator", async () => {
+describe("the rule for changing a piece's source", () => {
+  it("opens a lookup run with a fabric session only where the run may delegate to the profile that changes source", async () => {
+    // A run tagged as a lookup holds no piece at the start and can still be
+    // handed one by a command's answer, so the rule does not wait for a tag.
+    const contextOf = async (profile: string): Promise<readonly string[]> => {
+      const { io } = createIoBuffers();
+      const workspace = await Deno.makeTempDir();
+      let runPromptOptions: RunHarnessPromptOptions | undefined;
+      const exitCode = await runCfHarnessCli(
+        [
+          "--model-provider",
+          "openai-compatible-gateway",
+          "--workspace",
+          workspace,
+          "--prompt",
+          "Add a due date to each task in the tracker in this loom",
+          "--fabric-api-url",
+          "https://toolshed.example/",
+          "--fabric-identity",
+          "/keys/agent.pkcs8",
+          "--fabric-space",
+          "demo-space",
+          "--allow-tool",
+          "delegate_task",
+          "--allow-subagent-profile",
+          profile,
+        ],
+        {
+          io,
+          env: { CF_HARNESS_API_KEY: "test-key" },
+          fabricSessionFactory: () =>
+            Promise.reject(new Error("no tool here opens the session")),
+          createPromptLoop: () => ({
+            classifyTask: () =>
+              Promise.resolve({
+                type: "cf-harness.task-classification",
+                version: 1,
+                tags: ["find"],
+                path: "assumed",
+                durationMs: 0,
+              }),
+            runPrompt: (options) => {
+              runPromptOptions = options;
+              return Promise.resolve(
+                ({
+                  model: "gpt-5.4",
+                  finalAssistantText: "Done.",
+                  transcript: [],
+                  modelTurns: 1,
+                  runState: {
+                    runId: "run-source-rule",
+                    status: "completed",
+                    createdAt: "2026-04-15T22:00:00.000Z",
+                    updatedAt: "2026-04-15T22:00:01.000Z",
+                    cfcEnforcementMode: "enforce-explicit",
+                    currentDir: "/workspace",
+                    policyEvents: [],
+                    toolOutputs: [],
+                  },
+                }) satisfies HarnessPromptLoopResult,
+              );
+            },
+            runTranscript: () =>
+              Promise.reject(new Error("unexpected resume path")),
+          }),
+        },
+      );
+      expect(exitCode).toBe(0);
+      return runPromptOptions?.contextMessages ?? [];
+    };
+
+    expect(await contextOf("pattern-author")).toContain(
+      PIECE_SOURCE_TOOL_GUIDANCE,
+    );
+    expect(await contextOf("default")).not.toContain(
+      PIECE_SOURCE_TOOL_GUIDANCE,
+    );
+  });
+});
+
+test("runCfHarnessCli announces operator input cells to the model and the operator", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   const cellSpace = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
   const cellId = `of:fid1:${"E".repeat(43)}`;
@@ -3331,7 +3445,7 @@ Deno.test("runCfHarnessCli announces operator input cells to the model and the o
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects an input cell alongside --resume-run", async () => {
+test("parseCfHarnessCliArgs rejects an input cell alongside --resume-run", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -3350,7 +3464,7 @@ Deno.test("parseCfHarnessCliArgs rejects an input cell alongside --resume-run", 
   );
 });
 
-Deno.test("runCfHarnessCli refuses duplicate input-cell names before any run setup", async () => {
+test("runCfHarnessCli refuses duplicate input-cell names before any run setup", async () => {
   const { io, stderr } = createIoBuffers();
   const cellRef = `/of:fid1:${"A".repeat(43)}/travellerName`;
   let startupWorkReached = false;
@@ -3391,7 +3505,7 @@ Deno.test("runCfHarnessCli refuses duplicate input-cell names before any run set
   );
 });
 
-Deno.test("runCfHarnessCli says so when the well-known grants cannot be established", async () => {
+test("runCfHarnessCli says so when the well-known grants cannot be established", async () => {
   const { io, stderr } = createIoBuffers();
   let runPromptOptions: RunHarnessPromptOptions | undefined;
   const exitCode = await runCfHarnessCli(
@@ -3457,7 +3571,7 @@ Deno.test("runCfHarnessCli says so when the well-known grants cannot be establis
   );
 });
 
-Deno.test("runCfHarnessCli forwards --compact-threshold to a fresh run", async () => {
+test("runCfHarnessCli forwards --compact-threshold to a fresh run", async () => {
   // Parsing was already covered; this pins the handoff. The option was
   // forwarded on the resume path only, so a fresh run silently lost it.
   const { io } = createIoBuffers();
@@ -3523,7 +3637,7 @@ Deno.test("runCfHarnessCli forwards --compact-threshold to a fresh run", async (
   assertEquals(createdOptions?.compactThreshold, 12_000);
 });
 
-Deno.test("runCfHarnessCli reads CF_HARNESS_COMPACT_THRESHOLD from the process environment", async () => {
+test("runCfHarnessCli reads CF_HARNESS_COMPACT_THRESHOLD from the process environment", async () => {
   // Every other CLI test injects `env`, which bypasses the default projection
   // built from `Deno.env.get` — exactly where this variable was missing:
   // documented and parsed, but never populated in a real run.
@@ -3609,7 +3723,7 @@ Deno.test("runCfHarnessCli reads CF_HARNESS_COMPACT_THRESHOLD from the process e
   }
 });
 
-Deno.test("runCfHarnessCli passes image attachments to the prompt loop", async () => {
+test("runCfHarnessCli passes image attachments to the prompt loop", async () => {
   const workspace = await Deno.makeTempDir();
   await Deno.writeFile(join(workspace, "capture.png"), ONE_PIXEL_PNG);
   const { io, stderr } = createIoBuffers();
@@ -3676,7 +3790,7 @@ Deno.test("runCfHarnessCli passes image attachments to the prompt loop", async (
   expect(await Deno.readFile(snapshotPath!)).toEqual(ONE_PIXEL_PNG);
 });
 
-Deno.test("runCfHarnessCli passes tool and subagent profile allowlists", async () => {
+test("runCfHarnessCli passes tool and subagent profile allowlists", async () => {
   const cases = [
     {
       name: "delegate_task without profile authorization",
@@ -3788,7 +3902,7 @@ Deno.test("runCfHarnessCli passes tool and subagent profile allowlists", async (
   }
 });
 
-Deno.test("runCfHarnessCli passes Browser Access leases to the prompt loop", async () => {
+test("runCfHarnessCli passes Browser Access leases to the prompt loop", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   let createdOptions: Record<string, unknown> | undefined;
   const exitCode = await runCfHarnessCli(
@@ -3858,7 +3972,7 @@ Deno.test("runCfHarnessCli passes Browser Access leases to the prompt loop", asy
   assertEquals(stderr, []);
 });
 
-Deno.test("runCfHarnessCli can override the prompt-slot role for testing", async () => {
+test("runCfHarnessCli can override the prompt-slot role for testing", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   let runPromptOptions: RunHarnessPromptOptions | undefined;
   const exitCode = await runCfHarnessCli(
@@ -3916,7 +4030,7 @@ Deno.test("runCfHarnessCli can override the prompt-slot role for testing", async
   assertEquals(stdout.length, 1);
 });
 
-Deno.test("runCfHarnessCli passes a Loom run manifest and its prompt slot", async () => {
+test("runCfHarnessCli passes a Loom run manifest and its prompt slot", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   let createdOptions: Record<string, unknown> | undefined;
   let runPromptOptions: RunHarnessPromptOptions | undefined;
@@ -4000,7 +4114,7 @@ Deno.test("runCfHarnessCli passes a Loom run manifest and its prompt slot", asyn
   assertEquals(stdout.length, 1);
 });
 
-Deno.test("runCfHarnessCli can stream transcript events as they happen", async () => {
+test("runCfHarnessCli can stream transcript events as they happen", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   const exitCode = await runCfHarnessCli(
     [
@@ -4106,7 +4220,7 @@ Deno.test("runCfHarnessCli can stream transcript events as they happen", async (
   ]);
 });
 
-Deno.test("runCfHarnessCli uses plain stdout and no operator guidance in batch mode", async () => {
+test("runCfHarnessCli uses plain stdout and no operator guidance in batch mode", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   let runPromptOptions: RunHarnessPromptOptions | undefined;
   const exitCode = await runCfHarnessCli(
@@ -4165,11 +4279,63 @@ Deno.test("runCfHarnessCli uses plain stdout and no operator guidance in batch m
       systemPrompt: "You are a Loom batch worker.",
     }),
   );
+  assertEquals(runPromptOptions?.systemPromptLayers, []);
   assertEquals(stdout, ["Batch result.\n"]);
   assertEquals(stderr, []);
 });
 
-Deno.test("runCfHarnessCli writes a structured batch result sidecar when requested", async () => {
+test("runCfHarnessCli gives a batch run's result schema its own system message after the system prompt", async () => {
+  const { io } = createIoBuffers();
+  let runPromptOptions: RunHarnessPromptOptions | undefined;
+  const schema = { type: "object", properties: { ok: { type: "boolean" } } };
+  await runCfHarnessCli(
+    [
+      "--model-provider",
+      "openai-compatible-gateway",
+      "--workspace",
+      "/tmp/project",
+      "--prompt",
+      "Execute the batch task",
+      "--output-mode",
+      "batch",
+      "--system-prompt",
+      "You are a Loom batch worker.",
+      "--structured-result-path",
+      "out/result.json",
+      "--structured-result-schema",
+      JSON.stringify(schema),
+      "--gateway-auth-mode",
+      "none",
+    ],
+    {
+      io,
+      env: {},
+      readTextFile: () => Promise.resolve('{"ok":true}'),
+      createPromptLoop: () => ({
+        runPrompt: (options) => {
+          runPromptOptions = options;
+          return Promise.reject(new Error("captured"));
+        },
+        runTranscript: () =>
+          Promise.reject(new Error("unexpected resume path")),
+      }),
+    },
+  );
+
+  assertEquals(runPromptOptions?.systemPromptLayers, [
+    `Result schema (JSON):\n${JSON.stringify(schema)}`,
+  ]);
+  assertStringIncludes(
+    runPromptOptions?.systemPrompt ?? "",
+    "You are a Loom batch worker.",
+  );
+  assertEquals(
+    runPromptOptions?.systemPrompt?.includes(JSON.stringify(schema)),
+    false,
+  );
+});
+
+test("runCfHarnessCli writes a structured batch result sidecar when requested", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   const writes: Array<{ path: string; text: string }> = [];
   const exitCode = await runCfHarnessCli(
@@ -4279,7 +4445,7 @@ Deno.test("runCfHarnessCli writes a structured batch result sidecar when request
   );
 });
 
-Deno.test("runCfHarnessCli validates a top-level structured result sidecar", async () => {
+test("runCfHarnessCli validates a top-level structured result sidecar", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   const writes: Array<{ path: string; text: string }> = [];
   let runPromptOptions: RunHarnessPromptOptions | undefined;
@@ -4393,7 +4559,7 @@ Deno.test("runCfHarnessCli validates a top-level structured result sidecar", asy
   );
 });
 
-Deno.test("runCfHarnessCli exits nonzero when top-level structured result is invalid", async () => {
+test("runCfHarnessCli exits nonzero when top-level structured result is invalid", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   const writes: Array<{ path: string; text: string }> = [];
   const exitCode = await runCfHarnessCli(
@@ -4517,6 +4683,23 @@ describe("validateCfHarnessStructuredResult()", () => {
     );
   });
 
+  it("says the result file was not valid JSON for text that does not parse", async () => {
+    const validation = await validate(() => Promise.resolve("{answer"));
+
+    expect(validation).toMatchObject({
+      status: "invalid",
+      validation_error: "structured result file was not valid JSON",
+    });
+  });
+
+  it("says the result file was empty for a file holding only whitespace", async () => {
+    const validation = await validate(() => Promise.resolve("  \n"));
+
+    expect(validation.validation_error).toBe(
+      "structured result file was empty",
+    );
+  });
+
   it("names the field and the reason a result does not match the schema", async () => {
     const validation = await validate(() =>
       Promise.resolve(JSON.stringify({ answer: 7 }))
@@ -4528,7 +4711,7 @@ describe("validateCfHarnessStructuredResult()", () => {
   });
 });
 
-Deno.test({
+test({
   name:
     "runCfHarnessCli preloads configured skills and persists skill artifacts",
   // `/bin/test` and the environment too: the Linux default asks the one
@@ -4646,7 +4829,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "runCfHarnessCli passes host skill script execution target into run_skill_script",
   permissions: { read: true, write: true, run: true, env: true },
@@ -4810,7 +4993,7 @@ Deno.test({
   },
 });
 
-Deno.test("buildCfHarnessOperatorSystemPrompt appends user instructions after guardrails", () => {
+test("buildCfHarnessOperatorSystemPrompt appends user instructions after guardrails", () => {
   assertEquals(
     buildCfHarnessOperatorSystemPrompt({
       workspace: "/tmp/project",
@@ -4833,7 +5016,7 @@ Deno.test("buildCfHarnessOperatorSystemPrompt appends user instructions after gu
   );
 });
 
-Deno.test("resolveCfHarnessCliSystemPrompt bypasses operator guidance in batch mode", () => {
+test("resolveCfHarnessCliSystemPrompt bypasses operator guidance in batch mode", () => {
   assertEquals(
     resolveCfHarnessCliSystemPrompt({
       workspace: "/tmp/project",
@@ -4847,7 +5030,7 @@ Deno.test("resolveCfHarnessCliSystemPrompt bypasses operator guidance in batch m
   );
 });
 
-Deno.test("resolveCfHarnessCliSystemPrompt offers the pattern index only to a run configured with one", () => {
+test("resolveCfHarnessCliSystemPrompt offers the pattern index only to a run configured with one", () => {
   const config = {
     workspace: "/tmp/project",
     focusRoot: "/tmp/project/runtime/cf-harness",
@@ -4873,7 +5056,7 @@ Deno.test("resolveCfHarnessCliSystemPrompt offers the pattern index only to a ru
   assertEquals(unindexed?.includes("indexed pattern"), false);
 });
 
-Deno.test("buildCfHarnessBatchSystemPrompt omits submit_result guidance when the tool is not allowed", () => {
+test("buildCfHarnessBatchSystemPrompt omits submit_result guidance when the tool is not allowed", () => {
   const config = {
     structuredResult: {
       path: "/tmp/project/result.json",
@@ -4891,7 +5074,7 @@ Deno.test("buildCfHarnessBatchSystemPrompt omits submit_result guidance when the
   );
 });
 
-Deno.test("resolveCfHarnessCliSystemPrompt honors disabled skill catalog guidance", () => {
+test("resolveCfHarnessCliSystemPrompt honors disabled skill catalog guidance", () => {
   const prompt = resolveCfHarnessCliSystemPrompt({
     workspace: "/tmp/project",
     focusRoot: "/tmp/project/runtime/cf-harness",
@@ -4903,7 +5086,7 @@ Deno.test("resolveCfHarnessCliSystemPrompt honors disabled skill catalog guidanc
   assertEquals(prompt?.includes("Configured skills guidance:"), false);
 });
 
-Deno.test("resolveCfHarnessCliSystemPrompt includes enabled skill guidance", () => {
+test("resolveCfHarnessCliSystemPrompt includes enabled skill guidance", () => {
   const prompt = resolveCfHarnessCliSystemPrompt({
     workspace: "/tmp/project",
     focusRoot: "/tmp/project/runtime/cf-harness",
@@ -4915,7 +5098,7 @@ Deno.test("resolveCfHarnessCliSystemPrompt includes enabled skill guidance", () 
   assertEquals(prompt?.includes("Configured skills guidance:"), true);
 });
 
-Deno.test("formatCfHarnessTranscriptEvent formats assistant tool calls and tool results", () => {
+test("formatCfHarnessTranscriptEvent formats assistant tool calls and tool results", () => {
   assertEquals(
     formatCfHarnessTranscriptEvent({
       message: {
@@ -5109,7 +5292,7 @@ Deno.test("formatCfHarnessTranscriptEvent formats assistant tool calls and tool 
   );
 });
 
-Deno.test("runCfHarnessCli reports argument errors to stderr", async () => {
+test("runCfHarnessCli reports argument errors to stderr", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   const exitCode = await runCfHarnessCli(
     ["--prompt", "one", "two"],
@@ -5126,7 +5309,7 @@ Deno.test("runCfHarnessCli reports argument errors to stderr", async () => {
   );
 });
 
-Deno.test("runCfHarnessCli fails early when no API key is configured", async () => {
+test("runCfHarnessCli fails early when no API key is configured", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   const exitCode = await runCfHarnessCli(
     ["--model-provider", "openai-compatible-gateway", "--prompt", "hello"],
@@ -5140,7 +5323,7 @@ Deno.test("runCfHarnessCli fails early when no API key is configured", async () 
   ]);
 });
 
-Deno.test("runCfHarnessCli refuses a run that selected no model provider", async () => {
+test("runCfHarnessCli refuses a run that selected no model provider", async () => {
   // No store is injected, so the run reads the harness home the CLI resolves
   // for itself — the one place an operator's persisted selection would be.
   const home = await Deno.makeTempDir({ prefix: "cf-harness-no-provider-" });
@@ -5171,7 +5354,7 @@ Deno.test("runCfHarnessCli refuses a run that selected no model provider", async
   }
 });
 
-Deno.test("runCfHarnessCli allows no-auth gateway mode without an API key", async () => {
+test("runCfHarnessCli allows no-auth gateway mode without an API key", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   let createdOptions: Record<string, unknown> | undefined;
   const exitCode = await runCfHarnessCli(
@@ -5245,7 +5428,7 @@ Deno.test("runCfHarnessCli allows no-auth gateway mode without an API key", asyn
   assertEquals(stderr, []);
 });
 
-Deno.test("runCfHarnessCli can resume from persisted run artifacts", async () => {
+test("runCfHarnessCli can resume from persisted run artifacts", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   let createdOptions: Record<string, unknown> | undefined;
   let runTranscriptOptions: RunHarnessTranscriptOptions | undefined;
@@ -5426,7 +5609,7 @@ const resumeHandleRunArtifacts = (
   );
 };
 
-Deno.test("runCfHarnessCli resume rehydrates the recorded handle table", async () => {
+test("runCfHarnessCli resume rehydrates the recorded handle table", async () => {
   const { io, stderr } = createIoBuffers();
   let createdOptions: Record<string, unknown> | undefined;
   const exitCode = await runCfHarnessCli(
@@ -5468,7 +5651,7 @@ Deno.test("runCfHarnessCli resume rehydrates the recorded handle table", async (
   assertEquals(engine.handleTable?.entries[0]?.token, "cfh:a:22222");
 });
 
-Deno.test("formatCfHarnessCliResult includes policy event summaries", () => {
+test("formatCfHarnessCliResult includes policy event summaries", () => {
   const text = formatCfHarnessCliResult({
     model: "gpt-5.4",
     finalAssistantText: "Done.",
@@ -5512,7 +5695,7 @@ Deno.test("formatCfHarnessCliResult includes policy event summaries", () => {
   );
 });
 
-Deno.test("formatCfHarnessCliResult names the skills tree and a docs channel that answered nothing", () => {
+test("formatCfHarnessCliResult names the skills tree and a docs channel that answered nothing", () => {
   const result = completedCliResult("run-docs-blind");
   result.runState.skillsRoot = {
     type: "cf-harness.skills-root-record",
@@ -5533,7 +5716,7 @@ Deno.test("formatCfHarnessCliResult names the skills tree and a docs channel tha
   assertEquals(text.includes("ended with no answer"), true);
 });
 
-Deno.test("formatCfHarnessCliResult summarizes cache usage and cost", () => {
+test("formatCfHarnessCliResult summarizes cache usage and cost", () => {
   const result = completedCliResult("run-usage");
   result.usage = {
     inputTokens: 2_000,
@@ -5555,7 +5738,7 @@ Deno.test("formatCfHarnessCliResult summarizes cache usage and cost", () => {
   assertEquals(createCfHarnessBatchResult(result, 50).usage, result.usage);
 });
 
-Deno.test("formatCfHarnessCliResult explains why a cost estimate is absent", () => {
+test("formatCfHarnessCliResult explains why a cost estimate is absent", () => {
   const result = completedCliResult("run-usage-withheld");
   result.usage = {
     inputTokens: 2_000,
@@ -5570,7 +5753,7 @@ Deno.test("formatCfHarnessCliResult explains why a cost estimate is absent", () 
   );
 });
 
-Deno.test("formatCfHarnessCliResult returns plain final text in batch mode", () => {
+test("formatCfHarnessCliResult returns plain final text in batch mode", () => {
   assertEquals(
     formatCfHarnessCliResult({
       model: "gpt-5.4",
@@ -5592,7 +5775,7 @@ Deno.test("formatCfHarnessCliResult returns plain final text in batch mode", () 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs resolves fabric-mount to an absolute path", async () => {
+test("parseCfHarnessCliArgs resolves fabric-mount to an absolute path", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi", "--fabric-mount", "/tmp/cf-fuse"],
     { cwd: "/tmp/project", env: {} },
@@ -5601,7 +5784,7 @@ Deno.test("parseCfHarnessCliArgs resolves fabric-mount to an absolute path", asy
   assertEquals(parsed.fabricMount, "/tmp/cf-fuse");
 });
 
-Deno.test("parseCfHarnessCliArgs omits fabricMount when flag is absent", async () => {
+test("parseCfHarnessCliArgs omits fabricMount when flag is absent", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     { cwd: "/tmp/project", env: {} },
@@ -5610,7 +5793,7 @@ Deno.test("parseCfHarnessCliArgs omits fabricMount when flag is absent", async (
   assertEquals(parsed.fabricMount, undefined);
 });
 
-Deno.test("parseCfHarnessCliArgs resolves relative fabric-mount against cwd", async () => {
+test("parseCfHarnessCliArgs resolves relative fabric-mount against cwd", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi", "--fabric-mount", "fuse-dir"],
     { cwd: "/tmp/project", env: {} },
@@ -5619,7 +5802,7 @@ Deno.test("parseCfHarnessCliArgs resolves relative fabric-mount against cwd", as
   assertEquals(parsed.fabricMount, "/tmp/project/fuse-dir");
 });
 
-Deno.test("parseCfHarnessCliArgs rejects empty fabric-mount value", async () => {
+test("parseCfHarnessCliArgs rejects empty fabric-mount value", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -5631,7 +5814,7 @@ Deno.test("parseCfHarnessCliArgs rejects empty fabric-mount value", async () => 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs parses explicit host mounts", async () => {
+test("parseCfHarnessCliArgs parses explicit host mounts", async () => {
   const workspace = await Deno.makeTempDir();
   const mountRoot = await Deno.makeTempDir();
 
@@ -5659,7 +5842,7 @@ Deno.test("parseCfHarnessCliArgs parses explicit host mounts", async () => {
   assertEquals(parsed.cwd, "/file-cabinet");
 });
 
-Deno.test("parseCfHarnessCliArgs rejects structured result paths in readonly host mounts", async () => {
+test("parseCfHarnessCliArgs rejects structured result paths in readonly host mounts", async () => {
   const workspace = await Deno.makeTempDir();
   const mountRoot = await Deno.makeTempDir();
 
@@ -5685,7 +5868,7 @@ Deno.test("parseCfHarnessCliArgs rejects structured result paths in readonly hos
   );
 });
 
-Deno.test("parseCfHarnessCliArgs allows structured result paths in writable host mounts", async () => {
+test("parseCfHarnessCliArgs allows structured result paths in writable host mounts", async () => {
   const workspace = await Deno.makeTempDir();
   const mountRoot = await Deno.makeTempDir();
 
@@ -5716,7 +5899,7 @@ Deno.test("parseCfHarnessCliArgs allows structured result paths in writable host
   );
 });
 
-Deno.test("parseCfHarnessCliArgs uses the most specific overlapping host mount", async () => {
+test("parseCfHarnessCliArgs uses the most specific overlapping host mount", async () => {
   const workspace = await Deno.makeTempDir();
   const mountRoot = await Deno.makeTempDir();
   const nestedRoot = join(mountRoot, "nested");
@@ -5748,7 +5931,7 @@ Deno.test("parseCfHarnessCliArgs uses the most specific overlapping host mount",
   assertEquals(parsed.structuredResult?.sandboxPath, "/inner/result.json");
 });
 
-Deno.test("parseCfHarnessCliArgs rejects missing paths under symlink parents outside allowed roots", async () => {
+test("parseCfHarnessCliArgs rejects missing paths under symlink parents outside allowed roots", async () => {
   const workspace = await Deno.makeTempDir();
   const outside = await Deno.makeTempDir();
   const linkedOutside = join(workspace, "linked-outside");
@@ -5774,7 +5957,7 @@ Deno.test("parseCfHarnessCliArgs rejects missing paths under symlink parents out
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects invalid host mount specs", async () => {
+test("parseCfHarnessCliArgs rejects invalid host mount specs", async () => {
   const workspace = await Deno.makeTempDir();
   const mountRoot = await Deno.makeTempDir();
 
@@ -5796,7 +5979,7 @@ Deno.test("parseCfHarnessCliArgs rejects invalid host mount specs", async () => 
   );
 });
 
-Deno.test("buildCfHarnessOperatorSystemPrompt includes fabric mount guidance", () => {
+test("buildCfHarnessOperatorSystemPrompt includes fabric mount guidance", () => {
   const prompt = buildCfHarnessOperatorSystemPrompt({
     workspace: "/tmp/project",
     systemPrompt: undefined,
@@ -5810,7 +5993,7 @@ Deno.test("buildCfHarnessOperatorSystemPrompt includes fabric mount guidance", (
   );
 });
 
-Deno.test("buildCfHarnessOperatorSystemPrompt omits fabric guidance without mount", () => {
+test("buildCfHarnessOperatorSystemPrompt omits fabric guidance without mount", () => {
   const prompt = buildCfHarnessOperatorSystemPrompt({
     workspace: "/tmp/project",
     systemPrompt: undefined,
@@ -5818,7 +6001,7 @@ Deno.test("buildCfHarnessOperatorSystemPrompt omits fabric guidance without moun
   assertEquals(prompt.includes("mounted at"), false);
 });
 
-Deno.test("buildCfHarnessOperatorSystemPrompt includes host mount guidance", () => {
+test("buildCfHarnessOperatorSystemPrompt includes host mount guidance", () => {
   const prompt = buildCfHarnessOperatorSystemPrompt({
     workspace: "/tmp/project",
     systemPrompt: undefined,
@@ -5836,7 +6019,7 @@ Deno.test("buildCfHarnessOperatorSystemPrompt includes host mount guidance", () 
   );
 });
 
-Deno.test("runCfHarnessCli threads fabric-mount into engine additionalMounts", async () => {
+test("runCfHarnessCli threads fabric-mount into engine additionalMounts", async () => {
   const { io, stderr } = createIoBuffers();
   let createdOptions: Record<string, unknown> | undefined;
   let runPromptOptions: RunHarnessPromptOptions | undefined;
@@ -5905,7 +6088,7 @@ Deno.test("runCfHarnessCli threads fabric-mount into engine additionalMounts", a
   );
 });
 
-Deno.test("runCfHarnessCli threads host-mount into engine additionalMounts", async () => {
+test("runCfHarnessCli threads host-mount into engine additionalMounts", async () => {
   const workspace = await Deno.makeTempDir();
   const mountRoot = await Deno.makeTempDir();
   const { io, stderr } = createIoBuffers();
@@ -5981,7 +6164,7 @@ Deno.test("runCfHarnessCli threads host-mount into engine additionalMounts", asy
   );
 });
 
-Deno.test("runCfHarnessCli routes skills.sh discovery through its injected fetch", async () => {
+test("runCfHarnessCli routes skills.sh discovery through its injected fetch", async () => {
   const originalFetch = globalThis.fetch;
   let defaultFetchCalls = 0;
   const injectedUrls: string[] = [];
@@ -6046,7 +6229,7 @@ Deno.test("runCfHarnessCli routes skills.sh discovery through its injected fetch
   assertEquals(toolStatus, "ok");
 });
 
-Deno.test("parseCfHarnessCliArgs selects openai-codex without an API key", async () => {
+test("parseCfHarnessCliArgs selects openai-codex without an API key", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--model-provider", "openai-codex", "--prompt", "hello"],
     { cwd: "/tmp/project", env: {} },
@@ -6056,7 +6239,7 @@ Deno.test("parseCfHarnessCliArgs selects openai-codex without an API key", async
   assertEquals(parsed.apiKey, undefined);
 });
 
-Deno.test("parseCfHarnessCliArgs applies explicit provider before environment validation", async () => {
+test("parseCfHarnessCliArgs applies explicit provider before environment validation", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--model-provider", "openai-codex", "--prompt", "hello"],
     {
@@ -6068,7 +6251,7 @@ Deno.test("parseCfHarnessCliArgs applies explicit provider before environment va
   assertEquals(parsed.modelProvider, "openai-codex");
 });
 
-Deno.test("parseCfHarnessCliArgs rejects gateway configuration for openai-codex", async () => {
+test("parseCfHarnessCliArgs rejects gateway configuration for openai-codex", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -6099,7 +6282,7 @@ Deno.test("parseCfHarnessCliArgs rejects gateway configuration for openai-codex"
   );
 });
 
-Deno.test("runCfHarnessCli injects the Codex model client into the shared loop", async () => {
+test("runCfHarnessCli injects the Codex model client into the shared loop", async () => {
   const { io, stderr } = createIoBuffers();
   const client: HarnessModelClient = {
     providerId: "openai-codex",
@@ -6140,7 +6323,7 @@ Deno.test("runCfHarnessCli injects the Codex model client into the shared loop",
   assertEquals(loopModelClient, client);
 });
 
-Deno.test("Loom Codex invocation requires an authenticated owner reference", async () => {
+test("Loom Codex invocation requires an authenticated owner reference", async () => {
   const { io, stderr } = createIoBuffers();
   let modelClients = 0;
   const exitCode = await runCfHarnessCli(
@@ -6175,7 +6358,7 @@ Deno.test("Loom Codex invocation requires an authenticated owner reference", asy
   ]);
 });
 
-Deno.test("Loom Codex invocation requires an injected owner-bound resolver", async () => {
+test("Loom Codex invocation requires an injected owner-bound resolver", async () => {
   const { io, stderr } = createIoBuffers();
   const exitCode = await runCfHarnessCli(
     ["--run-manifest", "/tmp/loom-owner.json", "--prompt", "hello"],
@@ -6203,7 +6386,7 @@ Deno.test("Loom Codex invocation requires an injected owner-bound resolver", asy
   ]);
 });
 
-Deno.test("Loom Codex invocation preserves two users' owner bindings", async () => {
+test("Loom Codex invocation preserves two users' owner bindings", async () => {
   const owners: string[] = [];
   for (const ownerKey of ["loom:user-a", "loom:user-b"]) {
     const { io, stderr } = createIoBuffers();
@@ -6247,7 +6430,7 @@ Deno.test("Loom Codex invocation preserves two users' owner bindings", async () 
   assertEquals(owners, ["loom:user-a", "loom:user-b"]);
 });
 
-Deno.test("Loom Codex client injection preserves the authenticated tenant binding", async () => {
+test("Loom Codex client injection preserves the authenticated tenant binding", async () => {
   const { io, stderr } = createIoBuffers();
   const exitCode = await runCfHarnessCli(
     ["--run-manifest", "/tmp/loom-tenant.json", "--prompt", "hello"],
@@ -6292,7 +6475,7 @@ Deno.test("Loom Codex client injection preserves the authenticated tenant bindin
   assertEquals(stderr, []);
 });
 
-Deno.test("local auth status and logout are provider-scoped and secret-free", async () => {
+test("local auth status and logout are provider-scoped and secret-free", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.set("local", "openai-codex", {
     type: "oauth",
@@ -6326,7 +6509,7 @@ Deno.test("local auth status and logout are provider-scoped and secret-free", as
   assertEquals(await store.get("local", "openai-codex"), undefined);
 });
 
-Deno.test("structured config commands expose stable success and failure envelopes", async () => {
+test("structured config commands expose stable success and failure envelopes", async () => {
   const home = await Deno.makeTempDir();
   const env = { CF_HARNESS_HOME: home };
 
@@ -6407,7 +6590,7 @@ Deno.test("structured config commands expose stable success and failure envelope
   assertEquals(failed.stdout[0].includes("secret-corruption"), false);
 });
 
-Deno.test("config inspect reports environment precedence and rejects invalid environment", async () => {
+test("config inspect reports environment precedence and rejects invalid environment", async () => {
   const home = await Deno.makeTempDir();
   const overridden = createIoBuffers();
   assertEquals(
@@ -6440,7 +6623,7 @@ Deno.test("config inspect reports environment precedence and rejects invalid env
   assertEquals(JSON.parse(invalid.stdout[0]).error.code, "invalid-request");
 });
 
-Deno.test("structured control usage failures always return one bounded envelope", async () => {
+test("structured control usage failures always return one bounded envelope", async () => {
   const cases = [
     ["config", "bogus", "--json"],
     ["config", "inspect", "extra", "--json"],
@@ -6467,7 +6650,7 @@ Deno.test("structured control usage failures always return one bounded envelope"
   }
 });
 
-Deno.test("control commands name an undeclared flag given where their action goes", async () => {
+test("control commands name an undeclared flag given where their action goes", async () => {
   for (
     const [argv, message] of [
       [
@@ -6495,7 +6678,7 @@ Deno.test("control commands name an undeclared flag given where their action goe
   }
 });
 
-Deno.test("control commands name an undeclared flag and the flag it meant", async () => {
+test("control commands name an undeclared flag and the flag it meant", async () => {
   const cases: [string[], string][] = [
     [
       ["auth", "status", "openai-codex", "--jsno"],
@@ -6532,7 +6715,7 @@ Deno.test("control commands name an undeclared flag and the flag it meant", asyn
   }
 });
 
-Deno.test("control commands name an undeclared flag without its value", async () => {
+test("control commands name an undeclared flag without its value", async () => {
   for (
     const [argv, message] of [
       [["whoami", "--token=sk-secret"], "`--token` is not a flag of `whoami`."],
@@ -6549,7 +6732,7 @@ Deno.test("control commands name an undeclared flag without its value", async ()
   }
 });
 
-Deno.test("a structured control failure names an undeclared flag", async () => {
+test("a structured control failure names an undeclared flag", async () => {
   const buffers = createIoBuffers();
   assertEquals(
     await runCfHarnessCli([
@@ -6573,7 +6756,7 @@ Deno.test("a structured control failure names an undeclared flag", async () => {
   );
 });
 
-Deno.test("config provider validation is structured only when requested", async () => {
+test("config provider validation is structured only when requested", async () => {
   const structured = createIoBuffers();
   assertEquals(
     await runCfHarnessCli(["config", "set", "invalid", "--json"], {
@@ -6599,7 +6782,7 @@ Deno.test("config provider validation is structured only when requested", async 
   assertStringIncludes(human.stderr[0], "Model provider must be");
 });
 
-Deno.test("structured logout success and control failures stay bounded", async () => {
+test("structured logout success and control failures stay bounded", async () => {
   const successStore = new InMemoryHarnessCredentialStore();
   const success = createIoBuffers();
   assertEquals(
@@ -6639,7 +6822,7 @@ Deno.test("structured logout success and control failures stay bounded", async (
   assertStringIncludes(failedHuman.stderr[0], "secret-delete");
 });
 
-Deno.test("structured config output redacts corrupt values and unreadable details", async () => {
+test("structured config output redacts corrupt values and unreadable details", async () => {
   const sentinel = "refresh-secret-sentinel";
   for (
     const state of [
@@ -6690,7 +6873,7 @@ Deno.test("structured config output redacts corrupt values and unreadable detail
   }
 });
 
-Deno.test("structured config cancellation is typed and preserves missing state", async () => {
+test("structured config cancellation is typed and preserves missing state", async () => {
   const home = await Deno.makeTempDir();
   const controller = new AbortController();
   controller.abort(new Error("cancel-secret-sentinel"));
@@ -6714,7 +6897,7 @@ Deno.test("structured config cancellation is typed and preserves missing state",
   );
 });
 
-Deno.test("persisted provider preference selects the direct-run model client", async () => {
+test("persisted provider preference selects the direct-run model client", async () => {
   const providerSettingsStore = {
     inspect: () =>
       Promise.resolve({
@@ -6753,7 +6936,7 @@ Deno.test("persisted provider preference selects the direct-run model client", a
   assertEquals(selectedProvider, "openai-codex");
 });
 
-Deno.test("human config and auth controls preserve operator output", async () => {
+test("human config and auth controls preserve operator output", async () => {
   const providerSettingsStore = {
     inspect: () => Promise.resolve({ state: "missing" as const }),
     initialize: () =>
@@ -6825,7 +7008,7 @@ Deno.test("human config and auth controls preserve operator output", async () =>
   assertEquals(logout.stdout, ["openai-codex: disconnected\n"]);
 });
 
-Deno.test("structured auth status exposes bounded health without credential fields", async () => {
+test("structured auth status exposes bounded health without credential fields", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.updateRecord("local", "openai-codex", () => ({
     credential: {
@@ -6864,7 +7047,7 @@ Deno.test("structured auth status exposes bounded health without credential fiel
   assertEquals(stdout[0].includes("expiresAt"), false);
 });
 
-Deno.test("structured browser login emits JSON events and a bounded result", async () => {
+test("structured browser login emits JSON events and a bounded result", async () => {
   const store = new InMemoryHarnessCredentialStore();
   const { io, stdout } = createIoBuffers();
 
@@ -6914,7 +7097,7 @@ Deno.test("structured browser login emits JSON events and a bounded result", asy
   assertEquals(JSON.stringify(stdout).includes("secret"), false);
 });
 
-Deno.test("structured login cancellation preserves prior auth and provider state", async () => {
+test("structured login cancellation preserves prior auth and provider state", async () => {
   const store = new InMemoryHarnessCredentialStore();
   const previous = {
     type: "oauth" as const,
@@ -6952,7 +7135,7 @@ Deno.test("structured login cancellation preserves prior auth and provider state
   assertEquals(stdout[0].includes("cancel-secret"), false);
 });
 
-Deno.test("structured auth failures discard secret-bearing cause graphs", async () => {
+test("structured auth failures discard secret-bearing cause graphs", async () => {
   const store = new InMemoryHarnessCredentialStore();
   store.getRecord = () => Promise.reject(new Error("storage-secret-sentinel"));
   const { io, stdout } = createIoBuffers();
@@ -6971,7 +7154,7 @@ Deno.test("structured auth failures discard secret-bearing cause graphs", async 
   assertEquals(stdout[0].includes("storage-secret-sentinel"), false);
 });
 
-Deno.test("models openai-codex reports live provider order", async () => {
+test("models openai-codex reports live provider order", async () => {
   const { io, stdout, stderr } = createIoBuffers();
   const exitCode = await runCfHarnessCli(["models", "openai-codex"], {
     io,
@@ -7005,7 +7188,7 @@ Deno.test("models openai-codex reports live provider order", async () => {
   ]);
 });
 
-Deno.test("resume preserves the recorded Codex provider and continuation", async () => {
+test("resume preserves the recorded Codex provider and continuation", async () => {
   const transcript = [{ role: "user" as const, content: "Continue" }, {
     role: "assistant" as const,
     content: "Working",
@@ -7089,7 +7272,7 @@ Deno.test("resume preserves the recorded Codex provider and continuation", async
   ]);
 });
 
-Deno.test("CLI resume keeps the corpus the run recorded and refuses a differing one", async () => {
+test("CLI resume keeps the corpus the run recorded and refuses a differing one", async () => {
   const transcript = [{ role: "user" as const, content: "Ask" }];
   const readRunArtifacts = () =>
     Promise.resolve({
@@ -7167,7 +7350,7 @@ Deno.test("CLI resume keeps the corpus the run recorded and refuses a differing 
   ]);
 });
 
-Deno.test("CLI resume keeps the CFC enforcement mode the run recorded and refuses a differing one", async () => {
+test("CLI resume keeps the CFC enforcement mode the run recorded and refuses a differing one", async () => {
   const transcript = [{ role: "user" as const, content: "Ask" }];
   const readRunArtifacts = () =>
     Promise.resolve({
@@ -7287,7 +7470,7 @@ Deno.test("CLI resume keeps the CFC enforcement mode the run recorded and refuse
   ]);
 });
 
-Deno.test("top-level CLI resume rejects subagent lineage before creating a model client", async () => {
+test("top-level CLI resume rejects subagent lineage before creating a model client", async () => {
   const { io, stderr } = createIoBuffers();
   let modelClientsCreated = 0;
   const exitCode = await runCfHarnessCli(
@@ -7347,7 +7530,7 @@ Deno.test("top-level CLI resume rejects subagent lineage before creating a model
   ]);
 });
 
-Deno.test("Codex cross-model resume fails before creating a model client", async () => {
+test("Codex cross-model resume fails before creating a model client", async () => {
   const { io, stderr } = createIoBuffers();
   let modelClientsCreated = 0;
   const exitCode = await runCfHarnessCli(
@@ -7405,7 +7588,7 @@ Deno.test("Codex cross-model resume fails before creating a model client", async
   ]);
 });
 
-Deno.test("a refused resume names the setting, whichever tier refused it", async () => {
+test("a refused resume names the setting, whichever tier refused it", async () => {
   // The CLI checks the argv and the run manifest against the recorded run,
   // and the engine constructor checks the settings the CLI hands it. A host
   // that reports structured failures reads both tiers through one mapping, so
@@ -7545,7 +7728,7 @@ Deno.test("a refused resume names the setting, whichever tier refused it", async
   assertStringIncludes(gateway.message, "this run recorded");
 });
 
-Deno.test("resume rejects manifest provider and credential-owner switches", async () => {
+test("resume rejects manifest provider and credential-owner switches", async () => {
   const recordedOwner = {
     type: "cf-harness.credential-owner-ref" as const,
     version: 1 as const,
@@ -7619,7 +7802,7 @@ Deno.test("resume rejects manifest provider and credential-owner switches", asyn
   ]);
 });
 
-Deno.test("parseCfHarnessCliArgs validates --compact-threshold", async () => {
+test("parseCfHarnessCliArgs validates --compact-threshold", async () => {
   const parse = (args: string[], env: Record<string, string> = {}) =>
     parseCfHarnessCliArgs(args, { cwd: "/tmp/project", env });
 
@@ -7666,7 +7849,7 @@ Deno.test("parseCfHarnessCliArgs validates --compact-threshold", async () => {
   );
 });
 
-Deno.test("local Loom binding conflicts become structured provider mismatches before execution", async () => {
+test("local Loom binding conflicts become structured provider mismatches before execution", async () => {
   const buffers = createIoBuffers();
   let promptLoopsCreated = 0;
   let providerRequests = 0;
@@ -7717,7 +7900,7 @@ Deno.test("local Loom binding conflicts become structured provider mismatches be
   assertStringIncludes(failure.error.message, "provider");
 });
 
-Deno.test("a startup fault is internal, and only bad argv is an invalid request", async () => {
+test("a startup fault is internal, and only bad argv is an invalid request", async () => {
   const workspace = await Deno.makeTempDir();
 
   const rejected = createIoBuffers();
@@ -7770,7 +7953,7 @@ Deno.test("a startup fault is internal, and only bad argv is an invalid request"
   assertEquals(JSON.stringify(failure).includes("artifact store"), false);
 });
 
-Deno.test("a resume reads a missing run as bad argv and an unreadable one as internal", async () => {
+test("a resume reads a missing run as bad argv and an unreadable one as internal", async () => {
   const workspace = await Deno.makeTempDir();
   const run = async (
     error: Error,
@@ -7801,7 +7984,7 @@ Deno.test("a resume reads a missing run as bad argv and an unreadable one as int
   assertEquals(unreadable.message.includes("run-state"), false);
 });
 
-Deno.test("parseCfHarnessCliArgs parses --pattern-index-url alongside the fabric session flags", async () => {
+test("parseCfHarnessCliArgs parses --pattern-index-url alongside the fabric session flags", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -7824,7 +8007,7 @@ Deno.test("parseCfHarnessCliArgs parses --pattern-index-url alongside the fabric
   assertEquals(parsed.patternIndex, { baseUrl: "https://index.example/api" });
 });
 
-Deno.test("parseCfHarnessCliArgs parses --skills-registry-url", async () => {
+test("parseCfHarnessCliArgs parses --skills-registry-url", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -7841,7 +8024,7 @@ Deno.test("parseCfHarnessCliArgs parses --skills-registry-url", async () => {
   assertEquals(parsed.skillsSh, { baseUrl: "https://registry.example" });
 });
 
-Deno.test("parseCfHarnessCliArgs reads the skills registry URL from the environment", async () => {
+test("parseCfHarnessCliArgs reads the skills registry URL from the environment", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     {
@@ -7856,7 +8039,7 @@ Deno.test("parseCfHarnessCliArgs reads the skills registry URL from the environm
   assertEquals(parsed.skillsSh, { baseUrl: "https://registry.example" });
 });
 
-Deno.test("parseCfHarnessCliArgs rejects a skills registry URL that does not parse", async () => {
+test("parseCfHarnessCliArgs rejects a skills registry URL that does not parse", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -7868,7 +8051,7 @@ Deno.test("parseCfHarnessCliArgs rejects a skills registry URL that does not par
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects an empty skills registry flag", async () => {
+test("parseCfHarnessCliArgs rejects an empty skills registry flag", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -7880,7 +8063,7 @@ Deno.test("parseCfHarnessCliArgs rejects an empty skills registry flag", async (
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects --allow-tool search_skills without a skills registry", async () => {
+test("parseCfHarnessCliArgs rejects --allow-tool search_skills without a skills registry", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -7892,7 +8075,7 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool search_skills without a sk
   );
 });
 
-Deno.test("parseCfHarnessCliArgs reads the Loom retrieval configuration from the flag or the environment", async () => {
+test("parseCfHarnessCliArgs reads the Loom retrieval configuration from the flag or the environment", async () => {
   const retrieval = {
     cliPath: "/trusted/loom",
     transport: { kind: "broker" as const, queuePath: "/trusted/queue" },
@@ -7932,7 +8115,7 @@ Deno.test("parseCfHarnessCliArgs reads the Loom retrieval configuration from the
   assertEquals(absent.loomRetrieval, undefined);
 });
 
-Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a Loom retrieval tool without its configuration", async () => {
+test("parseCfHarnessCliArgs rejects --allow-tool for a Loom retrieval tool without its configuration", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -7944,7 +8127,7 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a Loom retrieval tool 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs reads the host command endpoint from its three flags", async () => {
+test("parseCfHarnessCliArgs reads the host command endpoint from its three flags", async () => {
   const flagged = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -7975,7 +8158,7 @@ Deno.test("parseCfHarnessCliArgs reads the host command endpoint from its three 
   assertEquals(absent.loomCommands, undefined);
 });
 
-Deno.test("parseCfHarnessCliArgs reads each repeated --commands-relevant, and refuses one without an endpoint", async () => {
+test("parseCfHarnessCliArgs reads each repeated --commands-relevant, and refuses one without an endpoint", async () => {
   const endpoint = [
     "--commands-url",
     "http://127.0.0.1:8080",
@@ -8007,7 +8190,7 @@ Deno.test("parseCfHarnessCliArgs reads each repeated --commands-relevant, and re
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects the command flags given apart or naming an invalid endpoint", async () => {
+test("parseCfHarnessCliArgs rejects the command flags given apart or naming an invalid endpoint", async () => {
   const flags = {
     url: ["--commands-url", "http://127.0.0.1:8080"],
     actor: ["--commands-actor", "agent:agent-runner"],
@@ -8048,7 +8231,7 @@ Deno.test("parseCfHarnessCliArgs rejects the command flags given apart or naming
   );
 });
 
-Deno.test("parseCfHarnessCliArgs ignores a command configuration file named in the environment", async () => {
+test("parseCfHarnessCliArgs ignores a command configuration file named in the environment", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     {
@@ -8063,7 +8246,7 @@ Deno.test("parseCfHarnessCliArgs ignores a command configuration file named in t
   assertEquals(parsed.loomCommands, undefined);
 });
 
-Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a command tool without the host command endpoint", async () => {
+test("parseCfHarnessCliArgs rejects --allow-tool for a command tool without the host command endpoint", async () => {
   for (const tool of ["list_commands", "run_command"]) {
     await assertRejects(
       () =>
@@ -8077,7 +8260,7 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a command tool without
   }
 });
 
-Deno.test("parseCfHarnessCliArgs rejects --allow-tool acquire_skill without both backings", async () => {
+test("parseCfHarnessCliArgs rejects --allow-tool acquire_skill without both backings", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -8109,7 +8292,7 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool acquire_skill without both
   );
 });
 
-Deno.test("parseCfHarnessCliArgs accepts --allow-tool acquire_skill with both backings", async () => {
+test("parseCfHarnessCliArgs accepts --allow-tool acquire_skill with both backings", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -8132,7 +8315,7 @@ Deno.test("parseCfHarnessCliArgs accepts --allow-tool acquire_skill with both ba
   assertEquals(parsed.allowedToolIds, ["acquire_skill"]);
 });
 
-Deno.test("parseCfHarnessCliArgs reads the pattern index URL from the environment", async () => {
+test("parseCfHarnessCliArgs reads the pattern index URL from the environment", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -8156,7 +8339,7 @@ Deno.test("parseCfHarnessCliArgs reads the pattern index URL from the environmen
   assertEquals(parsed.patternIndex, { baseUrl: "https://index.example/api" });
 });
 
-Deno.test("parseCfHarnessCliArgs rejects --pattern-index-url without the fabric session flags", async () => {
+test("parseCfHarnessCliArgs rejects --pattern-index-url without the fabric session flags", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -8173,7 +8356,7 @@ Deno.test("parseCfHarnessCliArgs rejects --pattern-index-url without the fabric 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects a pattern index URL that does not parse", async () => {
+test("parseCfHarnessCliArgs rejects a pattern index URL that does not parse", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -8196,7 +8379,7 @@ Deno.test("parseCfHarnessCliArgs rejects a pattern index URL that does not parse
   );
 });
 
-Deno.test("parseCfHarnessCliArgs rejects --allow-tool search_patterns without a pattern index", async () => {
+test("parseCfHarnessCliArgs rejects --allow-tool search_patterns without a pattern index", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -8219,7 +8402,7 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool search_patterns without a 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs records the publish opt-out from --no-pattern-index-publish", async () => {
+test("parseCfHarnessCliArgs records the publish opt-out from --no-pattern-index-publish", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -8246,7 +8429,7 @@ Deno.test("parseCfHarnessCliArgs records the publish opt-out from --no-pattern-i
   });
 });
 
-Deno.test("parseCfHarnessCliArgs reads the pattern index publish opt-out from the environment", async () => {
+test("parseCfHarnessCliArgs reads the pattern index publish opt-out from the environment", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -8276,7 +8459,7 @@ Deno.test("parseCfHarnessCliArgs reads the pattern index publish opt-out from th
   });
 });
 
-Deno.test("parseCfHarnessCliArgs reads deliberate discoverable publishing from the environment", async () => {
+test("parseCfHarnessCliArgs reads deliberate discoverable publishing from the environment", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -8306,7 +8489,7 @@ Deno.test("parseCfHarnessCliArgs reads deliberate discoverable publishing from t
   });
 });
 
-Deno.test("parseCfHarnessCliArgs rejects --allow-tool record_feedback without a pattern index", async () => {
+test("parseCfHarnessCliArgs rejects --allow-tool record_feedback without a pattern index", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -8329,7 +8512,7 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool record_feedback without a 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs carries --max-confidentiality into the fabric session as its read ceiling", async () => {
+test("parseCfHarnessCliArgs carries --max-confidentiality into the fabric session as its read ceiling", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -8363,7 +8546,7 @@ Deno.test("parseCfHarnessCliArgs carries --max-confidentiality into the fabric s
   });
 });
 
-Deno.test("parseCfHarnessCliArgs refuses a --max-confidentiality that is not a ceiling", async () => {
+test("parseCfHarnessCliArgs refuses a --max-confidentiality that is not a ceiling", async () => {
   const fabric = [
     "--prompt",
     "hi",
@@ -8403,7 +8586,7 @@ Deno.test("parseCfHarnessCliArgs refuses a --max-confidentiality that is not a c
   );
 });
 
-Deno.test("parseCfHarnessCliArgs refuses --max-confidentiality without a fabric session", async () => {
+test("parseCfHarnessCliArgs refuses --max-confidentiality without a fabric session", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -8415,7 +8598,7 @@ Deno.test("parseCfHarnessCliArgs refuses --max-confidentiality without a fabric 
   );
 });
 
-Deno.test("a resume whose manifest declares another read ceiling is refused as a structured mismatch", async () => {
+test("a resume whose manifest declares another read ceiling is refused as a structured mismatch", async () => {
   const buffers = createIoBuffers();
   let promptLoopsCreated = 0;
   const recordedManifest = {
@@ -8487,7 +8670,7 @@ Deno.test("a resume whose manifest declares another read ceiling is refused as a
   assertStringIncludes(failure.error.message, "resume read ceiling mismatch");
 });
 
-Deno.test("a resume whose manifest respells the recorded ceiling (anyOf reordered) is not a mismatch", async () => {
+test("a resume whose manifest respells the recorded ceiling (anyOf reordered) is not a mismatch", async () => {
   const buffers = createIoBuffers();
   let promptLoopsCreated = 0;
   const recordedManifest = {
@@ -8571,7 +8754,7 @@ Deno.test("a resume whose manifest respells the recorded ceiling (anyOf reordere
   );
 });
 
-Deno.test("parseCfHarnessCliArgs refuses a present --max-confidentiality with no value rather than running unbounded", async () => {
+test("parseCfHarnessCliArgs refuses a present --max-confidentiality with no value rather than running unbounded", async () => {
   const fabric = [
     "--prompt",
     "hi",
@@ -8608,7 +8791,7 @@ Deno.test("parseCfHarnessCliArgs refuses a present --max-confidentiality with no
   }
 });
 
-Deno.test("parseCfHarnessCliArgs resolves the sandbox runtime kind and its runsc settings", async () => {
+test("parseCfHarnessCliArgs resolves the sandbox runtime kind and its runsc settings", async () => {
   const fromFlags = await parseCfHarnessCliArgs(
     [
       "--prompt",
@@ -8682,7 +8865,7 @@ Deno.test("parseCfHarnessCliArgs resolves the sandbox runtime kind and its runsc
   );
 });
 
-Deno.test("cf-harness cli discovers the default CFC policy for the runsc runtime", async () => {
+test("cf-harness cli discovers the default CFC policy for the runsc runtime", async () => {
   const defaultPolicy = "/home/u/.local/share/runsc-cfc/cfc-policy.json";
   const parse = (
     runtime: "runsc",
@@ -8712,7 +8895,7 @@ Deno.test("cf-harness cli discovers the default CFC policy for the runsc runtime
   assertEquals(absent.sandboxCfcPolicy, undefined);
 });
 
-Deno.test("cf-harness cli rejects an invalid network mode for the runsc runtime", async () => {
+test("cf-harness cli rejects an invalid network mode for the runsc runtime", async () => {
   await assertRejects(
     () =>
       parseCfHarnessCliArgs(
@@ -8725,4 +8908,910 @@ Deno.test("cf-harness cli rejects an invalid network mode for the runsc runtime"
     Error,
     "must be one of none, bridge, or host",
   );
+});
+
+describe("cli", () => {
+  describe("formatCfHarnessTranscriptEvent()", () => {
+    const toolCallLine = (name: string, args: string): string | undefined =>
+      formatCfHarnessTranscriptEvent({
+        message: {
+          role: "assistant",
+          content: "",
+          toolCalls: [{
+            id: `call-${name}`,
+            type: "function",
+            function: { name, arguments: args },
+          }],
+        },
+        transcript: [],
+      });
+
+    it("returns each tool's call with the arguments it shows", () => {
+      const cases: readonly (readonly [string, unknown, string])[] = [
+        ["bash", { command: "ls -l" }, 'bash(command="ls -l")'],
+        ["read_file", { path: "a.ts" }, 'read_file(path="a.ts")'],
+        [
+          "web_fetch",
+          { url: "https://x.test/" },
+          'web_fetch(url="https://x.test/")',
+        ],
+        [
+          "browser",
+          { action: "open", url: "https://x.test/" },
+          'browser(action="open" url="https://x.test/")',
+        ],
+        [
+          "edit_file",
+          { path: "a.ts", edits: [{}, {}] },
+          'edit_file(path="a.ts" edits=2)',
+        ],
+        [
+          "read_skill_resource",
+          { skill: "kit", path: "references/a.md" },
+          'read_skill_resource(skill="kit" path="references/a.md")',
+        ],
+        [
+          "run_skill_script",
+          { skill: "kit", path: "scripts/a.sh", args: ["-v"] },
+          'run_skill_script(skill="kit" path="scripts/a.sh" args=1)',
+        ],
+        [
+          "write_file",
+          { path: "a.ts", mode: "append", content: "secret" },
+          'write_file(path="a.ts" mode="append")',
+        ],
+        [
+          "search_patterns",
+          { tags: ["todo"], text: "list" },
+          'search_patterns(tags=["todo"] text="list")',
+        ],
+        [
+          "search_skills",
+          { query: "pdf", owner: "acme", limit: 3 },
+          'search_skills(query="pdf" owner="acme" limit=3)',
+        ],
+        ["research", { task: "find it" }, 'research(task="find it")'],
+        ["query_docs", { question: "how?" }, 'query_docs(question="how?")'],
+        [
+          "record_feedback",
+          { patternId: "p1", verdict: "worked", note: "private prose" },
+          'record_feedback(patternId="p1" verdict="worked")',
+        ],
+        ["run_pattern", { patternId: "p1" }, 'run_pattern(patternId="p1")'],
+        ["delegate_task", { task: "anything" }, "delegate_task(subagent)"],
+      ];
+      expect(
+        cases.map(([name, args]) => toolCallLine(name, JSON.stringify(args))),
+      ).toEqual(
+        cases.map(([, , shown]) => `assistant -> tools: ${shown}\n`),
+      );
+    });
+
+    it("returns a bare tool name when no shown argument has its type", () => {
+      const bare = [
+        ["bash", { command: 1 }],
+        ["edit_file", { path: 1, edits: "two" }],
+        ["read_skill_resource", {}],
+        ["run_skill_script", { args: "-v" }],
+        ["write_file", { mode: 1 }],
+        ["search_patterns", { tags: "todo" }],
+        ["search_skills", { limit: "3" }],
+        ["research", { task: 1 }],
+        ["query_docs", {}],
+        ["record_feedback", { note: "prose" }],
+        ["run_pattern", {}],
+        ["web_fetch", {}],
+        ["read_file", {}],
+        ["describe_handle", {}],
+      ] as const;
+      expect(
+        bare.map(([name, args]) => toolCallLine(name, JSON.stringify(args))),
+      )
+        .toEqual(bare.map(([name]) => `assistant -> tools: ${name}\n`));
+    });
+
+    it("returns a bare tool name for arguments that are not a JSON object", () => {
+      expect(toolCallLine("bash", "{not json")).toBe(
+        "assistant -> tools: bash\n",
+      );
+      expect(toolCallLine("bash", '["ls"]')).toBe(
+        "assistant -> tools: bash\n",
+      );
+      expect(toolCallLine("delegate_task", "{not json")).toBe(
+        "assistant -> tools: delegate_task\n",
+      );
+    });
+
+    it("returns a bare tool name for a tool it does not summarize", () => {
+      expect(toolCallLine("constructor", '{"path":"a"}')).toBe(
+        "assistant -> tools: constructor\n",
+      );
+    });
+
+    it("returns undefined for a system message", () => {
+      expect(
+        formatCfHarnessTranscriptEvent({
+          message: { role: "system", content: "You are a harness." },
+          transcript: [],
+        }),
+      ).toBeUndefined();
+    });
+
+    it("returns a tool result's text on one line, cut short when long", () => {
+      const toolLine = (content: string) =>
+        formatCfHarnessTranscriptEvent({
+          message: {
+            role: "tool",
+            toolCallId: "call-1",
+            toolName: "bash",
+            content,
+          },
+          transcript: [],
+        });
+      expect(toolLine('{"exitCode":0}')).toBe('tool bash: {"exitCode":0}\n');
+      expect(toolLine("line one\n  line two")).toBe(
+        "tool bash: line one line two\n",
+      );
+      expect(toolLine("x".repeat(200))).toBe(
+        `tool bash: ${"x".repeat(177)}...\n`,
+      );
+    });
+  });
+
+  describe("parseCfHarnessCliArgs()", () => {
+    it("throws naming the flag for a malformed --allow-skill-script", async () => {
+      await expect(
+        parseCfHarnessCliArgs(
+          ["--allow-skill-script", "no-separator", "Ask"],
+          { cwd: "/tmp/project", env: {} },
+        ),
+      ).rejects.toThrow(
+        "invalid --allow-skill-script: allowed skill script must use skill:scripts/path form: no-separator",
+      );
+    });
+
+    describe("--skills-root", () => {
+      let workspace: string;
+      let outside: string;
+
+      beforeEach(async () => {
+        workspace = await Deno.realPath(
+          await Deno.makeTempDir({ prefix: "cf-harness-cli-workspace-" }),
+        );
+        outside = await Deno.realPath(
+          await Deno.makeTempDir({ prefix: "cf-harness-cli-outside-" }),
+        );
+      });
+
+      afterEach(async () => {
+        await Deno.remove(workspace, { recursive: true });
+        await Deno.remove(outside, { recursive: true });
+      });
+
+      const parseWithSkillsRoot = (skillsRoot: string) =>
+        parseCfHarnessCliArgs(["--skills-root", skillsRoot, "Ask"], {
+          cwd: workspace,
+          env: {},
+        });
+
+      it("throws for a skills root that does not exist", async () => {
+        await expect(parseWithSkillsRoot("skills")).rejects.toThrow(
+          `--skills-root must exist: ${join(workspace, "skills")}`,
+        );
+      });
+
+      it("throws for a skills root that links outside the workspace", async () => {
+        await Deno.symlink(outside, join(workspace, "skills"));
+        await expect(parseWithSkillsRoot("skills")).rejects.toThrow(
+          "--skills-root must stay within the workspace or a host mount",
+        );
+      });
+
+      it("returns the skills root that resolves within the workspace", async () => {
+        await Deno.mkdir(join(workspace, "skills"));
+        const parsed = await parseWithSkillsRoot("skills");
+        if ("help" in parsed) throw new Error("expected config result");
+        expect(parsed.skillsRoot).toBe(join(workspace, "skills"));
+      });
+    });
+  });
+
+  describe("system prompts", () => {
+    it("points the operator at the workspace for a focus root outside it", () => {
+      const prompt = buildCfHarnessOperatorSystemPrompt({
+        workspace: "/tmp/project",
+        focusRoot: "/tmp/elsewhere",
+      });
+      expect(prompt).toContain("- Prefer exploration within /workspace.");
+    });
+
+    it("points the operator at the focus root inside the workspace", () => {
+      const prompt = buildCfHarnessOperatorSystemPrompt({
+        workspace: "/tmp/project",
+        focusRoot: "/tmp/project/packages/app",
+      });
+      expect(prompt).toContain(
+        "- Prefer exploration within /workspace/packages/app.",
+      );
+    });
+
+    it("lists host mounts and the Fabric mount in a batch prompt", () => {
+      const prompt = buildCfHarnessBatchSystemPrompt({
+        fabricMountPath: "/fabric",
+        hostMounts: [{
+          name: "notes",
+          hostPath: "/host/notes",
+          sandboxPath: "/notes",
+          mode: "readonly",
+        }],
+      });
+      expect(prompt).toContain(
+        "- A Common Fabric space is mounted at /fabric.",
+      );
+      expect(prompt).toContain("  - /notes: readonly (notes)");
+    });
+
+    it("leaves mounts out of a batch prompt that has none", () => {
+      const prompt = buildCfHarnessBatchSystemPrompt({});
+      expect(prompt).not.toContain("mounted at");
+      expect(prompt).not.toContain("Additional host mounts");
+    });
+  });
+
+  describe("models command", () => {
+    it("exits nonzero when the created client is for another provider", async () => {
+      const { io, stderr } = createIoBuffers();
+      const exitCode = await runCfHarnessCli(["models", "openai-codex"], {
+        io,
+        createModelClient: () => ({
+          providerId: "openai-compatible-gateway",
+          complete: () => Promise.reject(new Error("unused")),
+        }),
+      });
+      expect(exitCode).toBe(1);
+      expect(stderr.join("")).toContain(
+        "created model client provider openai-compatible-gateway does not match selected provider openai-codex",
+      );
+    });
+
+    it("exits nonzero when the client cannot list models", async () => {
+      const { io, stdout, stderr } = createIoBuffers();
+      const exitCode = await runCfHarnessCli(["models", "openai-codex"], {
+        io,
+        env: {},
+        createModelClient: () => ({
+          providerId: "openai-codex",
+          complete: () => Promise.reject(new Error("unused")),
+        }),
+      });
+      expect(exitCode).toBe(1);
+      expect(stdout).toEqual([]);
+      expect(stderr.join("")).toContain(
+        "openai-codex model discovery is unavailable",
+      );
+    });
+
+    it("asks the store under the harness home when no client is injected", async () => {
+      // Nothing is stored for the local owner, so discovery stops at the
+      // credential, before any request.
+
+      const home = await Deno.makeTempDir({
+        prefix: "cf-harness-models-home-",
+      });
+      try {
+        const { io, stdout, stderr } = createIoBuffers();
+        const exitCode = await runCfHarnessCli(["models", "openai-codex"], {
+          io,
+          env: { CF_HARNESS_HOME: home },
+          fetchFn: () => Promise.reject(new Error("unexpected request")),
+        });
+        expect(exitCode).toBe(1);
+        expect(stdout).toEqual([]);
+        expect(stderr).toEqual([
+          "OpenAI Codex is not connected for this credential owner\n",
+        ]);
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    });
+  });
+
+  describe("auth command", () => {
+    class FailingCredentialStore extends InMemoryHarnessCredentialStore {
+      override getRecord(): never {
+        throw new Error("credential store is locked");
+      }
+
+      override get(): never {
+        throw new Error("credential store is locked");
+      }
+    }
+
+    it("reports no connection from the store under the harness home", async () => {
+      const home = await Deno.makeTempDir({ prefix: "cf-harness-auth-home-" });
+      try {
+        const { io, stdout } = createIoBuffers();
+        const exitCode = await runCfHarnessCli(
+          ["auth", "status", "openai-codex"],
+          { io, env: { CF_HARNESS_HOME: home } },
+        );
+        expect(exitCode).toBe(1);
+        expect(stdout).toEqual(["openai-codex: not connected\n"]);
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    });
+
+    it("exits nonzero with the store's error for a status it cannot read", async () => {
+      const { io, stdout, stderr } = createIoBuffers();
+      const exitCode = await runCfHarnessCli(
+        ["auth", "status", "openai-codex"],
+        { io, credentialStore: new FailingCredentialStore() },
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toEqual([]);
+      expect(stderr.join("")).toContain("credential store is locked");
+    });
+
+    it("prints the authorization URL, opens it, and reports the connection", async () => {
+      const { io, stdout } = createIoBuffers();
+      const opened: string[] = [];
+      const exitCode = await runCfHarnessCli(
+        ["auth", "login", "openai-codex"],
+        {
+          io,
+          credentialStore: new InMemoryHarnessCredentialStore(),
+          controlSignal: new AbortController().signal,
+          openUrl: (url) => {
+            opened.push(url);
+          },
+          loginOpenAICodex: async (options) => {
+            await options.onAuthorizationUrl("https://auth.example.test/go");
+            return {
+              type: "oauth",
+              providerId: "openai-codex",
+              accessToken: "access",
+              refreshToken: "refresh",
+              expiresAt: Date.UTC(2099, 0, 1),
+              accountId: "account",
+            };
+          },
+        },
+      );
+      expect(exitCode).toBe(0);
+      expect(opened).toEqual(["https://auth.example.test/go"]);
+      expect(stdout).toEqual([
+        "Open this URL to connect openai-codex:\nhttps://auth.example.test/go\n",
+        "openai-codex: connected\n",
+      ]);
+    });
+
+    it("exits nonzero with the login's error when not asked for JSON", async () => {
+      const { io, stdout, stderr } = createIoBuffers();
+      const exitCode = await runCfHarnessCli(
+        ["auth", "login", "openai-codex"],
+        {
+          io,
+          credentialStore: new InMemoryHarnessCredentialStore(),
+          controlSignal: new AbortController().signal,
+          loginOpenAICodex: () => Promise.reject(new Error("login refused")),
+        },
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toEqual([]);
+      expect(stderr.join("")).toContain("login refused");
+    });
+
+    it("prints the device code and exits nonzero when that login is canceled", async () => {
+      const controller = new AbortController();
+      const { io, stdout, stderr } = createIoBuffers();
+      const exitCode = await runCfHarnessCli(
+        ["auth", "login", "openai-codex", "--device"],
+        {
+          io: {
+            stdout: (text) => {
+              io.stdout(text);
+              controller.abort(new Error("operator canceled the login"));
+            },
+            stderr: io.stderr,
+          },
+          credentialStore: new InMemoryHarnessCredentialStore(),
+          controlSignal: controller.signal,
+          fetchFn: () =>
+            Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  device_auth_id: "device-1",
+                  user_code: "ABCD-EFGH",
+                  interval: 5,
+                }),
+                { status: 200 },
+              ),
+            ),
+        },
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toHaveLength(1);
+      expect(stdout[0]).toMatch(/^Open \S+ and enter code ABCD-EFGH\n$/);
+      expect(stderr.join("")).toContain("operator canceled the login");
+    });
+
+    it("saves the credential a device login completes once its interval passes", async () => {
+      // The device endpoint asks for a five-second interval between polls;
+      // fake time stands in for those five seconds.
+
+      using time = new FakeTime();
+      const store = new InMemoryHarnessCredentialStore();
+      const shown = Promise.withResolvers<void>();
+      const { io, stdout, stderr } = createIoBuffers();
+      const encode = (value: unknown) =>
+        btoa(JSON.stringify(value)).replaceAll("+", "-").replaceAll("/", "_")
+          .replace(/=+$/, "");
+      const accessToken = `${encode({ alg: "none" })}.${
+        encode({
+          "https://api.openai.com/auth": { chatgpt_account_id: "account-1" },
+        })
+      }.`;
+      const answers = new Map<string, unknown>([
+        [OPENAI_CODEX_DEVICE_START_URL, {
+          device_auth_id: "device-1",
+          user_code: "ABCD-EFGH",
+          interval: 5,
+        }],
+        [OPENAI_CODEX_DEVICE_TOKEN_URL, {
+          authorization_code: "code-1",
+          code_verifier: "verifier-1",
+        }],
+        [OPENAI_CODEX_TOKEN_URL, {
+          access_token: accessToken,
+          refresh_token: "refresh-1",
+          expires_in: 3600,
+        }],
+      ]);
+      const exitCode = runCfHarnessCli(
+        ["auth", "login", "openai-codex", "--device"],
+        {
+          io: {
+            stdout: (text) => {
+              io.stdout(text);
+              shown.resolve();
+            },
+            stderr: io.stderr,
+          },
+          credentialStore: store,
+          controlSignal: new AbortController().signal,
+          fetchFn: (input) => {
+            const answer = answers.get(String(input));
+            return answer === undefined
+              ? Promise.reject(new Error(`unexpected request: ${input}`))
+              : Promise.resolve(
+                new Response(JSON.stringify(answer), { status: 200 }),
+              );
+          },
+        },
+      );
+      await shown.promise;
+      expect(await store.get("local", "openai-codex")).toBeUndefined();
+      await time.tickAsync(5_000);
+      expect(await exitCode).toBe(0);
+      expect(stderr).toEqual([]);
+      expect(stdout.at(-1)).toBe("openai-codex: connected\n");
+      expect(await store.get("local", "openai-codex")).toMatchObject({
+        accessToken,
+        refreshToken: "refresh-1",
+        accountId: "account-1",
+      });
+    });
+
+    it("reports a device login canceled while it waits for the code", async () => {
+      // The device endpoint answers through the injected fetch; the login is
+      // canceled as soon as the code is shown, which ends the wait for the
+      // operator without any timer.
+
+      const controller = new AbortController();
+      const lines: string[] = [];
+      const requests: string[] = [];
+      const exitCode = await runCfHarnessCli(
+        ["auth", "login", "openai-codex", "--device", "--json"],
+        {
+          io: {
+            stdout: (text) => {
+              lines.push(text);
+              controller.abort();
+            },
+            stderr: (text) => lines.push(text),
+          },
+          credentialStore: new InMemoryHarnessCredentialStore(),
+          controlSignal: controller.signal,
+          fetchFn: (input) => {
+            requests.push(String(input));
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  device_auth_id: "device-1",
+                  user_code: "ABCD-EFGH",
+                  interval: 5,
+                }),
+                { status: 200 },
+              ),
+            );
+          },
+        },
+      );
+      expect(exitCode).toBe(1);
+      expect(requests).toHaveLength(1);
+      expect(lines.map((line) => JSON.parse(line))).toEqual([
+        {
+          type: "cf-harness.control-event",
+          version: 1,
+          command: "auth.login",
+          event: "authorization-required",
+          data: {
+            method: "device",
+            verificationUrl: expect.any(String),
+            userCode: "ABCD-EFGH",
+          },
+        },
+        {
+          type: "cf-harness.control-result",
+          version: 1,
+          ok: false,
+          command: "auth.login",
+          error: {
+            code: "operation-canceled",
+            message: "The cf-harness control operation was canceled",
+          },
+        },
+      ]);
+    });
+  });
+
+  describe("recorded runs", () => {
+    const recordedArtifacts = (
+      overrides: Partial<HarnessRunState> = {},
+    ): HarnessRunArtifacts => ({
+      runRoot: "/tmp/project/.cf-harness-artifacts/run-1",
+      runStatePath: "/tmp/project/.cf-harness-artifacts/run-1/run-state.json",
+      transcriptPath:
+        "/tmp/project/.cf-harness-artifacts/run-1/transcript.json",
+      runState: {
+        runId: "run-1",
+        status: "failed",
+        createdAt: "2026-04-15T22:10:00.000Z",
+        updatedAt: "2026-04-15T22:10:01.000Z",
+        cfcEnforcementMode: "disabled",
+        currentDir: "/workspace",
+        model: "gpt-5.4",
+        artifactRoot: "/tmp/project/.cf-harness-artifacts/run-1",
+        policyEvents: [],
+        toolOutputs: [],
+        ...overrides,
+      },
+      transcript: [{ role: "user", content: "hello" }],
+    });
+
+    const resume = (
+      artifacts: HarnessRunArtifacts,
+      deps: Partial<Parameters<typeof runCfHarnessCli>[1]> = {},
+    ) => {
+      const { io, stdout, stderr } = createIoBuffers();
+      const loops: string[] = [];
+      const exitCode = runCfHarnessCli(
+        ["--resume-run", "/tmp/project/.cf-harness-artifacts/run-1"],
+        {
+          io,
+          cwd: "/tmp/project",
+          env: { CF_HARNESS_API_KEY: "test-key" },
+          readRunArtifacts: () => Promise.resolve(artifacts),
+          createPromptLoop: () => {
+            loops.push("created");
+            return {
+              runPrompt: () => Promise.reject(new Error("unexpected prompt")),
+              runTranscript: () => Promise.resolve(completedCliResult("run-1")),
+            };
+          },
+          ...deps,
+        },
+      );
+      return { exitCode, stdout, stderr, loops };
+    };
+
+    it("exits nonzero for a gateway run resumed without an API key", async () => {
+      const { exitCode, stderr, loops } = resume(recordedArtifacts(), {
+        env: {},
+      });
+      expect(await exitCode).toBe(1);
+      expect(stderr).toEqual([
+        "no API key configured; set CF_HARNESS_API_KEY or OPENAI_API_KEY\n",
+      ]);
+      expect(loops).toEqual([]);
+    });
+
+    it("exits nonzero for a recorded run with no transcript", async () => {
+      const { exitCode, stderr } = resume({
+        ...recordedArtifacts(),
+        transcript: undefined,
+      });
+      expect(await exitCode).toBe(1);
+      expect(stderr.join("")).toContain(
+        "resume run is missing transcript data: /tmp/project/.cf-harness-artifacts/run-1",
+      );
+    });
+
+    it("exits zero for a recorded run with its transcript", async () => {
+      const { exitCode, stderr, loops } = resume(recordedArtifacts());
+      expect(await exitCode).toBe(0);
+      expect(stderr).toEqual([]);
+      expect(loops).toEqual(["created"]);
+    });
+
+    it("exits nonzero for a continuation asking for a result its run had no schema for", async () => {
+      // Continuing a run may leave the schema to the record, so the parse
+      // accepts a result path alone; a record without one leaves nothing.
+
+      const workspace = await Deno.realPath(
+        await Deno.makeTempDir({ prefix: "cf-harness-cli-continue-" }),
+      );
+      try {
+        const prior = join(workspace, ".cf-harness-artifacts", "prior");
+        await Deno.mkdir(prior, { recursive: true });
+        const { io, stderr } = createIoBuffers();
+        const exitCode = await runCfHarnessCli(
+          [
+            "--continue-run",
+            prior,
+            "--prompt",
+            "Next task",
+            "--structured-result-path",
+            "result.json",
+          ],
+          {
+            io,
+            cwd: workspace,
+            env: { CF_HARNESS_API_KEY: "test-key" },
+            readRunArtifacts: () =>
+              Promise.resolve({
+                ...recordedArtifacts({ status: "completed" }),
+                runRoot: prior,
+              }),
+            createPromptLoop: () => {
+              throw new Error("must not start a loop");
+            },
+          },
+        );
+        expect(exitCode).toBe(1);
+        expect(stderr).toEqual([
+          "--structured-result-path requires a recorded or explicit schema\n",
+        ]);
+      } finally {
+        await Deno.remove(workspace, { recursive: true });
+      }
+    });
+
+    it("exits nonzero for a Loom Codex run recorded without its owner", async () => {
+      const { exitCode, stderr, loops } = resume(
+        recordedArtifacts({
+          modelProvider: "openai-codex",
+          runManifest: {
+            type: "cf-harness.loom-run-manifest",
+            version: 1,
+            source: "loom",
+          },
+        }),
+        {
+          createModelClient: () => {
+            throw new Error("must not resolve credentials");
+          },
+        },
+      );
+      expect(await exitCode).toBe(1);
+      expect(stderr).toEqual([
+        "Loom openai-codex runs require an authenticated credential owner reference\n",
+      ]);
+      expect(loops).toEqual([]);
+    });
+  });
+
+  describe("fresh runs", () => {
+    const loomCodexRun = (
+      deps: Partial<Parameters<typeof runCfHarnessCli>[1]>,
+    ) => {
+      const { io, stderr } = createIoBuffers();
+      const exitCode = runCfHarnessCli(
+        ["--run-manifest", "/tmp/loom-owner.json", "--prompt", "hello"],
+        {
+          io,
+          cwd: "/tmp/project",
+          env: {},
+          readTextFile: () =>
+            Promise.resolve(JSON.stringify({
+              type: "cf-harness.loom-run-manifest",
+              version: 1,
+              source: "loom",
+              modelProvider: "openai-codex",
+              credentialOwner: {
+                type: "cf-harness.credential-owner-ref",
+                version: 1,
+                ownerKey: "loom:user-a",
+              },
+            })),
+          createPromptLoop: () => {
+            throw new Error("must not start a loop");
+          },
+          ...deps,
+        },
+      );
+      return { exitCode, stderr };
+    };
+
+    it("exits nonzero for a Loom model client bound to another owner", async () => {
+      const { exitCode, stderr } = loomCodexRun({
+        createModelClient: () => ({
+          providerId: "openai-codex",
+          credentialOwner: {
+            type: "cf-harness.credential-owner-ref",
+            version: 1,
+            ownerKey: "loom:user-b",
+          },
+          complete: () => Promise.reject(new Error("unused")),
+        }),
+      });
+      expect(await exitCode).toBe(1);
+      expect(stderr).toEqual([
+        "Loom model client credential owner does not match the run manifest\n",
+      ]);
+    });
+
+    it("exits nonzero for a Loom credential resolver keyed to another owner", async () => {
+      const { exitCode, stderr } = loomCodexRun({
+        openAICodexCredentialResolver: {
+          ownerKey: "loom:user-b",
+          resolve: () => Promise.reject(new Error("must not resolve")),
+        },
+      });
+      expect(await exitCode).toBe(1);
+      expect(stderr).toEqual([
+        "Loom credential resolver owner does not match the run manifest\n",
+      ]);
+    });
+
+    it("exits nonzero for gateway options given to a run its manifest makes openai-codex", async () => {
+      // The flag naming the provider is refused at parse; a provider the run
+      // manifest names is only known once the run starts.
+
+      const { io, stderr } = createIoBuffers();
+      const exitCode = await runCfHarnessCli(
+        [
+          "--run-manifest",
+          "/tmp/manifest.json",
+          "--gateway-base-url",
+          "https://gateway.example.test/v1",
+          "hello",
+        ],
+        {
+          io,
+          cwd: "/tmp/project",
+          env: {},
+          readTextFile: () =>
+            Promise.resolve(JSON.stringify({
+              type: "cf-harness.loom-run-manifest",
+              version: 1,
+              source: "loom",
+              modelProvider: "openai-codex",
+            })),
+          createModelClient: () => {
+            throw new Error("must not resolve credentials");
+          },
+        },
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr).toEqual([
+        "gateway URL/auth options cannot be used with openai-codex\n",
+      ]);
+    });
+  });
+
+  describe("cfHarnessOpenUrlCommand()", () => {
+    const url = "https://auth.example.test/go?a=1";
+
+    it("returns open for macOS", () => {
+      expect(cfHarnessOpenUrlCommand("darwin", url)).toEqual({
+        command: "open",
+        args: [url],
+      });
+    });
+
+    it("returns cmd's start, with an empty window title, for Windows", () => {
+      expect(cfHarnessOpenUrlCommand("windows", url)).toEqual({
+        command: "cmd",
+        args: ["/c", "start", "", url],
+      });
+    });
+
+    it("returns xdg-open for every other platform", () => {
+      for (const os of ["linux", "freebsd", "android"] as const) {
+        expect(cfHarnessOpenUrlCommand(os, url)).toEqual({
+          command: "xdg-open",
+          args: [url],
+        });
+      }
+    });
+  });
+
+  describe("registerCfHarnessSignalHandler()", () => {
+    /** A process whose signals the test fires itself. */
+    const fakeProcess = () => {
+      const listeners = new Map<Deno.Signal, Set<() => void>>();
+      const removals: Deno.Signal[] = [];
+      return {
+        listeners,
+        removals,
+        process: {
+          addSignalListener: (signal: Deno.Signal, handler: () => void) => {
+            const held = listeners.get(signal) ?? new Set();
+            held.add(handler);
+            listeners.set(signal, held);
+          },
+          removeSignalListener: (signal: Deno.Signal, handler: () => void) => {
+            removals.push(signal);
+            listeners.get(signal)?.delete(handler);
+          },
+        },
+        fire: (signal: Deno.Signal) => {
+          for (const listener of [...(listeners.get(signal) ?? [])]) {
+            listener();
+          }
+        },
+      };
+    };
+
+    it("calls the handler with the signal that fired, and only that one", () => {
+      const fake = fakeProcess();
+      const received: string[] = [];
+      registerCfHarnessSignalHandler(
+        ["SIGINT", "SIGTERM"],
+        (signal) => {
+          received.push(signal);
+        },
+        fake.process,
+      );
+      fake.fire("SIGTERM");
+      expect(received).toEqual(["SIGTERM"]);
+    });
+
+    it("removes each listener once, however often it is disposed", () => {
+      const fake = fakeProcess();
+      const received: string[] = [];
+      const dispose = registerCfHarnessSignalHandler(
+        ["SIGINT", "SIGTERM"],
+        (signal) => {
+          received.push(signal);
+        },
+        fake.process,
+      );
+      dispose();
+      dispose();
+      fake.fire("SIGINT");
+      expect(fake.removals).toEqual(["SIGINT", "SIGTERM"]);
+      expect(received).toEqual([]);
+    });
+
+    it("lets the installed handlers exit 130 on SIGINT and stop listening", async () => {
+      const fake = fakeProcess();
+      const exited = Promise.withResolvers<number>();
+      const dispose = installCfHarnessSignalHandlers(() => undefined, {
+        registerSignalHandler: (signals, handler) =>
+          registerCfHarnessSignalHandler(signals, handler, fake.process),
+        exit: (code) => {
+          exited.resolve(code);
+        },
+      });
+      fake.fire("SIGINT");
+      expect(await exited.promise).toBe(130);
+      expect([...fake.listeners.values()].every((held) => held.size === 0))
+        .toBe(true);
+      dispose();
+      expect(fake.removals).toEqual(["SIGINT", "SIGTERM"]);
+    });
+  });
 });

@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { exists } from "@std/fs";
-import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
@@ -8,6 +7,7 @@ import {
   decomposeSchema,
   STORED_ARGUMENT_SCHEMA_REFUSAL,
 } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   schemaRelaxedForComparison,
@@ -20,7 +20,6 @@ import {
   vintageCompanionDir,
 } from "../runtime/piece/test/vintage-layout.ts";
 import {
-  armVerdictGuard,
   AUTO,
   AUTO_GENERATIONS_KEPT,
   autoGenerationsToPrune,
@@ -53,7 +52,6 @@ import {
   reportNothingMatched,
   reportNothingReplayed,
   reportNothingToPin,
-  reportNoVerdict,
   reportOnlyWithCapture,
   reportPinNeedsOneTestKey,
   reportReplaySummary,
@@ -88,6 +86,21 @@ const findingKeys = (
 ): string[] => strandedKeys(before, after).map((finding) => finding.key);
 
 describe("vintage paths", () => {
+  it("returns `undefined` for a fixture-named file outside a test and tier directory", () => {
+    const name = vintageFileName(
+      stampFor(new Date("2026-07-29T16:33:28.000Z")),
+      ID_A,
+    );
+
+    expect(parseVintagePath(`root/${name}`, "root")).toBeUndefined();
+    expect(parseVintagePath(`root/pinned/${name}`, "root")).toBeUndefined();
+    expect(parseVintagePath(`root//pinned/${name}`, "root")).toBeUndefined();
+    expect(parseVintagePath(`root/a.test.tsx//${name}`, "root"))
+      .toBeUndefined();
+    expect(parseVintagePath(`root/a.test.tsx/pinned/${name}`, "root"))
+      .toMatchObject({ testKey: "a.test.tsx", tier: PINNED });
+  });
+
   it("round-trips a path it built itself", () => {
     const stamp = stampFor(new Date("2026-07-29T16:33:28.000Z"));
     const path = `${vintageDir("system/home/home.test.tsx", PINNED)}/${
@@ -311,6 +324,19 @@ describe("coverage", () => {
 });
 
 describe("collectVintages", () => {
+  it("throws when the tree cannot be read, and returns nothing when it is absent", async () => {
+    const root = await Deno.makeTempDir({ prefix: "vintage-collect-" });
+    try {
+      await Deno.writeTextFile(`${root}/file`, "");
+
+      await expect(collectVintages(`${root}/file`)).rejects
+        .toThrow(Deno.errors.NotADirectory);
+      expect(await collectVintages(`${root}/absent`)).toEqual([]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("finds fixtures at any depth and ignores non-fixtures", async () => {
     const root = await Deno.makeTempDir({ prefix: "vintage-collect-" });
     try {
@@ -622,55 +648,6 @@ describe("reporting", () => {
 
     expect(report).toContain("/api/pattern/system/home.tsx");
     expect(report).toContain("requiredPatternKeys");
-  });
-
-  it("fails the run when the process ends without a verdict", () => {
-    // The wiring, not just the message. This guard is the one piece of the
-    // gate whose failure mode is SILENCE — before it, a `home.tsx` that did
-    // not compile exited 0 with no output at all — so the listeners being
-    // attached to the right events, in the right order, is the assertion.
-    const target = new EventTarget();
-    const exits: number[] = [];
-    const logs: string[] = [];
-    armVerdictGuard(target, (code) => exits.push(code), (m) => logs.push(m));
-
-    const rejection = Object.assign(new Event("unhandledrejection"), {
-      reason: new Error("database disk image is malformed"),
-    });
-    target.dispatchEvent(rejection);
-    target.dispatchEvent(new Event("beforeunload"));
-
-    expect(exits).toEqual([1]);
-    // The rejection has to survive to the message: "something went wrong
-    // somewhere" would send the reader looking in the wrong place.
-    expect(logs[0]).toContain("database disk image is malformed");
-  });
-
-  it("still fails when no rejection was ever observed", () => {
-    // A promise that simply never settles leaves nothing to report, and that
-    // must still be a red rather than a pass for lack of evidence.
-    const target = new EventTarget();
-    const exits: number[] = [];
-    armVerdictGuard(target, (code) => exits.push(code), () => {});
-
-    target.dispatchEvent(new Event("beforeunload"));
-
-    expect(exits).toEqual([1]);
-  });
-
-  it("explains an end with no verdict, and carries the rejection", () => {
-    // Measured twice — a pattern that does not compile, and a truncated
-    // fixture — both leave the replay's promise pending forever while the real
-    // error surfaces as a rejection nobody awaits. The reader needs the
-    // rejection, or the message is "something went wrong somewhere".
-    const report = reportNoVerdict(
-      new Error("database disk image is malformed"),
-    );
-
-    expect(report).toContain("without reaching a verdict");
-    expect(report).toContain("database disk image is malformed");
-    // And it still says something useful when nothing was observed.
-    expect(reportNoVerdict(undefined)).toContain("unresolved await");
   });
 });
 

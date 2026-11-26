@@ -7,15 +7,21 @@
  * re-run the sub-pattern.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { createBuilder } from "../src/builder/factory.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { toURI } from "../src/uri-utils.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -231,6 +237,68 @@ describe("Pattern Runner - Derive returning pattern", () => {
     expect(deriveCallCount).toBeGreaterThan(deriveCallsAfterFirstRun);
     // But inner pattern's lift should NOT have re-run (cache hit on pattern)
     expect(innerLiftRunCount).toBe(innerLiftsAfterFirstRun);
+  });
+
+  it("restarts an unchanged returned pattern after its cached child stops", async () => {
+    const received: string[] = [];
+    const { handler } = createTrustedBuilder(runtime).commonfabric;
+    const save = handler<string, Record<string, never>>(
+      { type: "string" },
+      { type: "object", properties: {} },
+      (event) => {
+        received.push(event);
+      },
+    );
+    const innerPattern = pattern(() => ({ save: save({}) }));
+    const outerPattern = pattern<{ trigger: number }>(({ trigger }) =>
+      lift((_trigger: number) => innerPattern({}))(trigger)
+    );
+    const trigger = runtime.getCell<number>(space, "restarted-handler-trigger");
+    trigger.withTx(tx).set(1);
+    const resultCell = runtime.getCell<{ save: unknown }>(
+      space,
+      "derive-return-pattern-restarted-handler",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(tx, outerPattern, { trigger }, resultCell);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await result.pull();
+    const stream = result.key("save").asSchema({ asCell: ["stream"] });
+
+    stream.send("first");
+    await runtime.idle();
+    expect(received).toEqual(["first"]);
+
+    await runtime.storageManager.synced();
+    // A repeated result with no output writes keeps its pattern memo.
+    tx = runtime.edit();
+    trigger.withTx(tx).set(2);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await result.pull();
+    await runtime.storageManager.synced();
+    const memos = runtime.runner.accessForTestingOnly.resultPatternCache;
+    const keys = [...memos.keys()];
+    expect(keys).toHaveLength(1);
+    const key = keys[0];
+    const child = runtime.getCellFromLink({
+      space,
+      id: toURI(key.slice(space.length + 1)),
+      path: [],
+    });
+    runtime.runner.stop(child);
+    expect(runtime.runner.isRunning(child)).toBe(false);
+    expect(memos.has(key)).toBe(true);
+    tx = runtime.edit();
+    trigger.withTx(tx).set(3);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await result.pull();
+    expect(received).toEqual(["first"]);
+
+    result.key("save").asSchema({ asCell: ["stream"] }).send("second");
+    await runtime.idle();
+    expect(received).toEqual(["first", "second"]);
+    await runtime.storageManager.synced();
   });
 
   it("should not spuriously rerun parent derive when returned child pattern changes", async () => {

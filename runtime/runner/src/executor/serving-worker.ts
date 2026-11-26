@@ -1,6 +1,6 @@
 /**
  * The serving loop's worker entry (serving-loop-worker.md). Loading this
- * module in a Worker serves the worker's global scope as a port, with no
+ * module in a serving worker's thread serves that thread's port, with no
  * lifecycle verbs, and with one compiled-module cache and one compile worker
  * for every space the worker serves, as a toolshed's own entry has;
  * `serving-worker-main.ts` has the rest. Nothing outside a worker imports a
@@ -10,10 +10,14 @@
 
 import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 import { ModuleCompileWorker } from "../harness/module-compile-worker.ts";
-import type { PortLike } from "./serving-port-protocol.ts";
+import { logUnhandledRejections } from "../sandbox/unhandled-rejections.ts";
 import { serveFromPort } from "./serving-worker-main.ts";
+import { servingWorkerPort } from "./serving-thread.ts";
 
-serveFromPort(self as unknown as PortLike, {
+// The worker serves several spaces, so a rejection that one space's patterns
+// leave unhandled is logged rather than ending the worker.
+logUnhandledRejections();
+serveFromPort(servingWorkerPort(), {
   moduleByteCache: new ProcessModuleByteCache(),
   moduleCompiler: new ModuleCompileWorker(),
 });

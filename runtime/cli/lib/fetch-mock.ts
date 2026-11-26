@@ -8,8 +8,8 @@
  * stays the harness's job via the `{ settle: true }` step (`runtime.settled()`).
  *
  * This is the generic-HTTP (`fetchJson`) seam; LLM calls
- * (`generateText`/`generateObject`) mock separately at the `LLMClient` layer
- * (`@commonfabric/llm`).
+ * (`generateText`/`generateObject`) are answered separately, at the
+ * `LLMClient` layer, from the test's `llmMocks` (`llm-mock.ts`).
  */
 
 import type { RuntimeFetch } from "@commonfabric/runner";

@@ -9,7 +9,7 @@
  * interfaces should declare [UI].
  */
 
-import { NAME, type Stream } from "commonfabric";
+import type { NAME, Stream } from "commonfabric";
 
 // ===== Core Types =====
 

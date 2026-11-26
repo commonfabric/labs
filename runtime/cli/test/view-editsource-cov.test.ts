@@ -7,15 +7,15 @@
 
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   fileSource,
   readonlySource,
   shortName,
 } from "../lib/view/editsource.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("fileSource.dirtyLabels: empty when unchanged, the filename when changed", () => {
+test("fileSource.dirtyLabels: empty when unchanged, the filename when changed", () => {
   const src = fileSource("/tmp/some/dir/example.ts");
   assert(src.dirtyLabels, "a plain file reports its dirty labels");
 
@@ -37,7 +37,7 @@ Deno.test("fileSource.dirtyLabels: empty when unchanged, the filename when chang
   );
 });
 
-Deno.test("fileSource.revert: null when unchanged, whole file otherwise", () => {
+test("fileSource.revert: null when unchanged, whole file otherwise", () => {
   const src = fileSource("/tmp/some/dir/example.ts");
   assert(src.revert, "a plain file supports revert");
 
@@ -57,7 +57,7 @@ Deno.test("fileSource.revert: null when unchanged, whole file otherwise", () => 
   );
 });
 
-Deno.test("fileSource.revert: clamps the cursor to the reverted file's last line", () => {
+test("fileSource.revert: clamps the cursor to the reverted file's last line", () => {
   const src = fileSource("/tmp/x.ts");
   assert(src.revert);
 
@@ -74,7 +74,7 @@ Deno.test("fileSource.revert: clamps the cursor to the reverted file's last line
   assertEquals(reverted!.cursorLine, 3);
 });
 
-Deno.test("fileSource.revert: keeps an in-range cursor unchanged", () => {
+test("fileSource.revert: keeps an in-range cursor unchanged", () => {
   const src = fileSource("/tmp/y.ts");
   assert(src.revert);
 
@@ -104,7 +104,7 @@ describe("fileSource.save() with a read-only language", () => {
   });
 });
 
-Deno.test("readonlySource.parse: parses text into a Document without a path", () => {
+test("readonlySource.parse: parses text into a Document without a path", () => {
   const reason =
     "This view is of a pipe — there is no underlying file to edit.";
   const src = readonlySource(reason);

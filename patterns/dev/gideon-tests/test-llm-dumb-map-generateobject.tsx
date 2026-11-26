@@ -171,7 +171,7 @@ export default pattern<Input>(({ items }) => {
                       }}
                     >
                       <cf-loader
-                        show-elapsed
+                        showElapsed
                         style={{
                           display: "inline-block",
                           marginRight: "8px",

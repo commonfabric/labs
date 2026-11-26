@@ -14,7 +14,6 @@
  * here holds that line so it reads as a decision rather than an oversight.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
@@ -26,6 +25,7 @@ import { analyzeSpaceSignals } from "../grouping.ts";
 import { spaceParticipants, valueAsIdentity } from "../scopes.ts";
 import { convergenceExact, convergenceScanExact } from "../multispace.ts";
 import { owningLink, reconstructDocument } from "../reconstruct.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -57,7 +57,12 @@ interface Write {
   id: string;
   scope?: string;
   session?: string;
-  value: unknown;
+  /** The value a `set` writes; ignored when `patches` is given. */
+  value?: unknown;
+  /** Written as a `patch` row with these operations instead of a `set`. */
+  patches?: unknown[];
+  /** The row's operation, when it is neither of those. */
+  op?: string;
 }
 
 /**
@@ -79,7 +84,7 @@ async function withFork(
   );
   const rev = db.prepare(
     `INSERT INTO revision (branch, id, scope_key, seq, op_index, op, data, commit_seq)
-     VALUES (?, ?, ?, ?, 0, 'set', ?, ?)`,
+     VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
   );
   let seq = 0;
   const write = (w: Write) => {
@@ -91,7 +96,8 @@ async function withFork(
       w.id,
       w.scope ?? "space",
       seq,
-      JSON.stringify({ value: w.value }),
+      w.op ?? (w.patches ? "patch" : "set"),
+      JSON.stringify(w.patches ?? { value: w.value }),
       seq,
     );
   };
@@ -142,8 +148,8 @@ describe("branch-visible", () => {
         { id: "of:quiet", value: "child" },
       ], (space) => {
         // The child's write is the visible row, and the value came from it
-        // alone — `reconstructWithinBranch` never composes across the fork — so
-        // the parent's two writes are not this entity's history from here.
+        // alone — a `set` on the child replaces what it inherited — so the
+        // parent's two writes are not this entity's history from here.
         expect(reconstructDocument(space, { id: "of:quiet", branch: "kid" }))
           .toEqual({ value: "child" });
         expect(
@@ -179,6 +185,76 @@ describe("branch-visible", () => {
           entityTimeline(space, { id: "of:quiet", branch: "kid" })
             .map((s) => s.seq),
         ).toEqual([6]);
+      });
+    });
+
+    it("replays a child's patches over the document it inherited at the fork", async () => {
+      // The child's first write to the entity is a patch, so it was written
+      // over what the child inherited, as the engine and `reconstruct` read
+      // it. Each step of the child's history is then known, and the first one
+      // counts its changes against the inherited value.
+      await withFork([
+        { id: "of:list", value: { list: ["a", "b"] } },
+      ], [
+        {
+          id: "of:list",
+          patches: [{ op: "add", path: "/value/list/0", value: "c" }],
+        },
+        {
+          id: "of:list",
+          patches: [{ op: "add", path: "/value/list/3", value: "d" }],
+        },
+      ], (space) => {
+        expect(reconstructDocument(space, { id: "of:list", branch: "kid" }))
+          .toEqual({ value: { list: ["c", "a", "b", "d"] } });
+        const steps = entityTimeline(space, { id: "of:list", branch: "kid" });
+        expect(steps.map((s) => ({
+          seq: s.seq,
+          exists: s.exists,
+          stateKnown: s.stateKnown,
+          changesKnown: s.changesKnown,
+          error: s.error,
+        }))).toEqual([
+          {
+            seq: 2,
+            exists: true,
+            stateKnown: undefined,
+            changesKnown: undefined,
+            error: undefined,
+          },
+          {
+            seq: 3,
+            exists: true,
+            stateKnown: undefined,
+            changesKnown: undefined,
+            error: undefined,
+          },
+        ]);
+        expect(steps[0].changes).toBeGreaterThan(0);
+      });
+    });
+
+    it("reports a child's patch as unknown, naming the cause, when what it inherited cannot be read", async () => {
+      // The parent's row holds an operation no reader understands, so what
+      // the child inherits is unknown, and so is the state after the child's
+      // patch over it. The step names the inherited document as the cause,
+      // not an earlier write of the child's.
+      await withFork([
+        { id: "of:odd", op: "merge", value: { list: ["a"] } },
+      ], [
+        {
+          id: "of:odd",
+          patches: [{ op: "add", path: "/value/list/0", value: "c" }],
+        },
+      ], (space) => {
+        const steps = entityTimeline(space, { id: "of:odd", branch: "kid" });
+        expect(steps).toHaveLength(1);
+        expect(steps[0].stateKnown).toBe(false);
+        expect(steps[0].exists).toBe(false);
+        expect(steps[0].error).toBe(
+          "The document this branch inherits could not be reconstructed: " +
+            "Unsupported revision operation: merge",
+        );
       });
     });
   });

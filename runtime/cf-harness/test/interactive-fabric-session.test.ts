@@ -5,7 +5,6 @@
 
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import type {
   CreateHarnessPromptLoopOptions,
@@ -25,6 +24,7 @@ import {
   runHarnessInteractiveChatStdioCli,
 } from "./support/on-linux.ts";
 import type { HarnessFabricSession } from "../src/fabric-session.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Host settings isolated from the invoking developer's persisted sessions. */
 const hostKeys = [
@@ -95,6 +95,8 @@ const observeTurn = async (
           fabricSessionFactory: () =>
             Promise.resolve({
               pieces: {
+                // Released when the transport's input ends.
+                runtime: { dispose: () => Promise.resolve() },
                 getSpace: () =>
                   "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
                 getDefaultPattern: () =>

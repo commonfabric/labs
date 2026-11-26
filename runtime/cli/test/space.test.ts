@@ -6,14 +6,15 @@
 // The library's semantics are covered in runtime/state-inspector/test/; this
 // suite guards the command surface and its exit codes.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import { clonePaths } from "@commonfabric/state-inspector";
-import { argv, cf, stripAnsi } from "./utils.ts";
+import { argv, cf, exists, stripAnsi } from "./utils.ts";
+import { REAP_SPACE, reapSpaceStore } from "./space-reap-store.ts";
 import { join, toFileUrl } from "@std/path";
 import { applyCommit, close, open } from "@commonfabric/memory/v2/engine";
 import { cellDatabaseFilePrefix } from "@commonfabric/memory/v2/storage-path";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * `CliResult` streams are line arrays; join before substring assertions.
@@ -27,17 +28,12 @@ const text = (lines: string[]): string => stripAnsi(lines.join("\n"));
 /** The directory `cf` runs in under test: the CLI package. */
 const cliDir = join(import.meta.dirname!, "..");
 
-/**
- * Staging directories `--from <url>` may have created, by name.
- *
- * Callers compare a before/after set rather than asserting the system temp
- * directory holds none: it is shared, so an unrelated leftover would fail that
- * spuriously and forever.
- */
-async function stagingDirs(): Promise<Set<string>> {
-  const found = new Set<string>();
-  for await (const entry of Deno.readDir(Deno.env.get("TMPDIR") ?? "/tmp")) {
-    if (entry.name.startsWith("cf-space-clone-")) found.add(entry.name);
+/** The staging directories a clone left in `tmp`, the temporary directory a
+ *  test gives the command so that no other process's clones are counted. */
+async function stagingDirs(tmp: string): Promise<string[]> {
+  const found: string[] = [];
+  for await (const entry of Deno.readDir(tmp)) {
+    if (entry.name.startsWith("cf-space-clone-")) found.push(entry.name);
   }
   return found;
 }
@@ -299,8 +295,7 @@ describe("cf space compact", () => {
       );
       expect(outServed.code).not.toBe(0);
       expect(text(outServed.stderr)).toContain("write the result to");
-      expect(await Deno.stat(`${liveDir}/result.sqlite`).catch(() => undefined))
-        .toBeUndefined();
+      expect(await exists(`${liveDir}/result.sqlite`)).toBe(false);
       // A dangling symlink into the served directory is an entry at the
       // result path, and refused as one.
       await Deno.symlink(`${liveDir}/new.sqlite`, `${root}/link.sqlite`);
@@ -310,8 +305,7 @@ describe("cf space compact", () => {
       );
       expect(dangling.code).not.toBe(0);
       expect(text(dangling.stderr)).toContain("exists");
-      expect(await Deno.lstat(`${liveDir}/new.sqlite`).catch(() => undefined))
-        .toBeUndefined();
+      expect(await exists(`${liveDir}/new.sqlite`)).toBe(false);
       // A result named by a bare file name lands in the working directory,
       // and a store named by one is found there, its default result beside it.
       const bare = `cf-space-compact-test-${crypto.randomUUID()}.sqlite`;
@@ -421,46 +415,17 @@ INSERT INTO head (branch, id, seq, op_index) VALUES ('', 'computed:x', 3, 0);
 });
 
 describe("cf space reap", () => {
-  // Two DIDs, found by search, whose cell-database prefixes are the same.
-  const space = "did:key:z6MkCliReapShared00006pfs";
+  // A DID, found by search, whose cell-database prefix is the same as the
+  // reaped space's.
+  const space = REAP_SPACE;
   const sharing = "did:key:z6MkCliReapShared0000nvja";
-  const alice = "did:key:z6MkCliReapAlice";
-
-  /** A store the engine wrote for a space alice owns alone, with a document,
-   * and then, with `deleted`, deleted. */
-  async function spaceStore(path: string, deleted: boolean): Promise<void> {
-    const engine = await open({ url: toFileUrl(path) });
-    let local = 1;
-    const apply = (operations: unknown[]) =>
-      applyCommit(engine, {
-        sessionId: "s:alice",
-        space,
-        principal: alice,
-        commit: {
-          localSeq: local++,
-          reads: { confirmed: [], pending: [] },
-          operations,
-        },
-      } as never);
-    const acl = `of:${space}`;
-    apply([{ op: "set", id: acl, value: { value: { [alice]: "OWNER" } } }]);
-    apply([{ op: "set", id: "of:doc", value: { value: { n: 1 } } }]);
-    if (deleted) {
-      apply([{
-        op: "set",
-        id: acl,
-        value: { value: { deleted: { by: alice } } },
-      }]);
-    }
-    close(engine);
-  }
 
   it("reaps a deleted space's store and reports the checked result, and refuses a space that is not deleted", async () => {
     const root = await Deno.makeTempDir({ prefix: "cf-space-reap-" });
     try {
       const store = `${root}/space.sqlite`;
       const result = `${root}/space.reaped.sqlite`;
-      await spaceStore(store, true);
+      await reapSpaceStore(store, true);
 
       const planned = await cf(argv`space reap ${store} --dry-run --json`);
       expect(planned.code).toBe(0);
@@ -487,6 +452,16 @@ describe("cf space reap", () => {
         cellDatabases: [],
         sharedWith: [sharing],
       });
+      const sharedText = await cf(
+        argv`space reap ${store} --dry-run --live ${liveDir}/${space}.sqlite`,
+      );
+      expect(sharedText.code).toBe(0);
+      expect(text(sharedText.stdout)).toContain(
+        `cell files none moved: the prefix ${
+          cellDatabaseFilePrefix(space)
+        } is shared with the store of ${sharing}, so which files are whose cannot be told by name`,
+      );
+      expect(text(sharedText.stdout)).not.toContain(`cell files ${cell}`);
 
       const ran = await cf(argv`space reap ${store} --out ${result}`);
       expect(ran.code).toBe(0);
@@ -507,9 +482,14 @@ describe("cf space reap", () => {
         result: jsonResult,
       });
       expect(report.staged).toBeUndefined();
+      expect((await Deno.stat(jsonResult)).isFile).toBe(true);
+      expect(
+        (await Array.fromAsync(Deno.readDir(root)))
+          .filter(({ name }) => name.includes(".staging-")),
+      ).toEqual([]);
 
       const live = `${root}/live.sqlite`;
-      await spaceStore(live, false);
+      await reapSpaceStore(live, false);
       const refused = await cf(argv`space reap ${live} --dry-run`);
       expect(refused.code).not.toBe(0);
       expect(text(refused.stderr)).toContain("holds no deletion tombstone");
@@ -524,7 +504,7 @@ describe("cf space reap", () => {
     const root = await Deno.makeTempDir({ prefix: "cf-space-reap-legacy-" });
     try {
       const store = `${root}/space.sqlite`;
-      await spaceStore(store, true);
+      await reapSpaceStore(store, true);
       const db = new Database(store);
       db.exec(`CREATE TABLE scheduler_observation (x INTEGER)`);
       db.close();
@@ -751,8 +731,9 @@ describe("cf space", () => {
     // `--from <url>` is the S3 hop the July rehearsal used to share one
     // snapshot across operators. A real snapshot is gigabytes, so the staging
     // copy must not survive the command.
-    await withFixture(async ({ snapshot, clone }) => {
-      const before = await stagingDirs();
+    await withFixture(async ({ snapshot, clone, root }) => {
+      const tmp = join(root, "tmp");
+      await Deno.mkdir(tmp);
 
       const body = await Deno.readFile(snapshot);
       const server = Deno.serve(
@@ -763,6 +744,7 @@ describe("cf space", () => {
       try {
         const result = await cf(
           argv`space clone ${SPACE} --from ${url} --to ${clone}`,
+          { env: { TMPDIR: tmp } },
         );
         expect(result.code).toBe(0);
         expect(text(result.stdout)).toContain("1 generated cells excluded");
@@ -772,9 +754,7 @@ describe("cf space", () => {
         await server.shutdown();
       }
 
-      const after = await stagingDirs();
-      const leaked = [...after].filter((name) => !before.has(name));
-      expect(leaked).toEqual([]);
+      expect(await stagingDirs(tmp)).toEqual([]);
     });
   });
 
@@ -784,8 +764,9 @@ describe("cf space", () => {
     // partial file stranded in the system temp directory is however much
     // arrived — so cleanup has to live where the failure does, not with a
     // caller that never received a directory to clean.
-    await withFixture(async ({ snapshot, clone }) => {
-      const before = await stagingDirs();
+    await withFixture(async ({ snapshot, clone, root }) => {
+      const tmp = join(root, "tmp");
+      await Deno.mkdir(tmp);
 
       const body = await Deno.readFile(snapshot);
       const server = Deno.serve(
@@ -809,14 +790,14 @@ describe("cf space", () => {
       try {
         const result = await cf(
           argv`space clone ${SPACE} --from ${url} --to ${clone}`,
+          { env: { TMPDIR: tmp } },
         );
         expect(result.code).not.toBe(0);
       } finally {
         await server.shutdown();
       }
 
-      const leaked = [...await stagingDirs()].filter((n) => !before.has(n));
-      expect(leaked).toEqual([]);
+      expect(await stagingDirs(tmp)).toEqual([]);
     });
   });
 
@@ -1164,12 +1145,3 @@ describe("cf space", () => {
     });
   });
 });
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await Deno.stat(path);
-    return true;
-  } catch {
-    return false;
-  }
-}

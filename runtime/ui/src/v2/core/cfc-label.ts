@@ -1,31 +1,14 @@
 /**
  * Shared helpers for reading CFC labels on the trusted main thread.
  *
- * These let a trusted component query a cell's runtime-attested CFC label (over
- * IPC) and pull the owner a profile badge shows out of its
+ * These let a trusted component decide whether a cell's runtime-attested CFC
+ * label is public, and pull the owner a profile badge shows out of its
  * `represents-principal` integrity atoms.
  */
 
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 export type { CfcLabelView };
-
-export type CfcLabelQueryable = {
-  getCfcLabel(): Promise<CfcLabelView | undefined>;
-};
-
-export type CfcLabelResolvable = {
-  resolveAsCell(): Promise<unknown> | unknown;
-};
-
-export const canQueryCfcLabel = (value: unknown): value is CfcLabelQueryable =>
-  isObjectOrArray(value) &&
-  typeof (value as { getCfcLabel?: unknown }).getCfcLabel === "function";
-
-const canResolveAsCell = (value: unknown): value is CfcLabelResolvable =>
-  isObjectOrArray(value) &&
-  typeof (value as { resolveAsCell?: unknown }).resolveAsCell === "function";
 
 /**
  * Egress check (host-embedding seam — see `docs/features/host-embedding.md`
@@ -56,26 +39,6 @@ export const cfcLabelViewIsPublic = (
     }
   }
   return true;
-};
-
-/**
- * Reads a cell's CFC label view, resolving the cell first if the handle itself
- * doesn't expose `getCfcLabel` (e.g. an unresolved link). Returns undefined if
- * no label can be read.
- */
-export const readCfcLabelView = async (
-  value: unknown,
-): Promise<CfcLabelView | undefined> => {
-  if (canQueryCfcLabel(value)) {
-    return await value.getCfcLabel();
-  }
-  if (canResolveAsCell(value)) {
-    const resolved = await value.resolveAsCell();
-    if (canQueryCfcLabel(resolved)) {
-      return await resolved.getCfcLabel();
-    }
-  }
-  return undefined;
 };
 
 export { ownerPrincipalFromLabel } from "@commonfabric/runner/cfc/represents-principal";

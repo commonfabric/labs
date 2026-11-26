@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { Pattern } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
@@ -97,6 +102,29 @@ describe("start()", () => {
     it("rejects when the loaded document holds nothing and nothing stopped it", async () => {
       const empty = runtime.getCell(space, "loaded empty");
       await expect(runtime.runner.start(empty)).rejects.toThrow(
+        "No data at cell",
+      );
+    });
+  });
+
+  describe("a field whose document cannot be looked up", () => {
+    it("rejects with the lookup's error, and a later start makes an attempt of its own", async () => {
+      const field = runtime.getCell<{ field: unknown }>(space, "lookup throws")
+        .key("field");
+      const lookupFailure = new Error("lookup failed");
+      const getCellFromLink = stub(runtime, "getCellFromLink", () => {
+        throw lookupFailure;
+      });
+      let started: Promise<boolean>;
+      try {
+        started = runtime.runner.start(field);
+      } finally {
+        getCellFromLink.restore();
+      }
+      await expect(started).rejects.toBe(lookupFailure);
+
+      // The failed attempt is finished, so this start does not join it.
+      await expect(runtime.runner.start(field)).rejects.toThrow(
         "No data at cell",
       );
     });

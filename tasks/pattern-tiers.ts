@@ -66,6 +66,7 @@ export const TIER_FILES: Readonly<Record<string, MarkedTier>> = {
   "dev/render-test/render-test.tsx": "fixture",
   "dev/self-reference-test/self-reference-test.tsx": "fixture",
   "system/fabrichat/room-test-fixture.ts": "fixture",
+  "system/notes/note-test-fixtures.tsx": "fixture",
   "dev/factory-outputs/vehicles.ts": "legacy",
 };
 

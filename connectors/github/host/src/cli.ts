@@ -32,7 +32,8 @@ export interface GithubHostCliDependencies {
   error: typeof console.error;
 }
 
-const defaultDependencies: GithubHostCliDependencies = {
+/** The dependencies `runGithubHostCli()` uses when its caller supplies none. */
+export const defaultGithubHostCliDependencies: GithubHostCliDependencies = {
   readEnv: (key) => Deno.env.get(key),
   resolveToken: resolveGithubToken,
   openFabric: openGithubFabricRuntime,
@@ -52,7 +53,7 @@ const defaultDependencies: GithubHostCliDependencies = {
 /** Run the laptop GitHub host until one collection or a shutdown signal. */
 export async function runGithubHostCli(
   argv: string[] = Deno.args,
-  dependencies: GithubHostCliDependencies = defaultDependencies,
+  dependencies: GithubHostCliDependencies = defaultGithubHostCliDependencies,
 ): Promise<number> {
   let fabric: GithubFabricRuntime | undefined;
   let host: GithubHost | undefined;

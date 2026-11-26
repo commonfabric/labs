@@ -1,7 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   InputReadView,
@@ -143,21 +143,120 @@ describe("InputReadView", () => {
         const runtime = newRuntime();
         const tx = runtime.edit();
         try {
-          tx.readOrThrow({ ...address("reclassified"), path: ["value"] });
-          const record = [...tx.getReadActivities!()].at(-1)!;
-          const view = new InputReadView(tx);
-          expect(view.reads().map((read) => read.id)).toEqual([
-            "of:reclassified",
-          ]);
-
           const meta = { ...internalVerifierRead };
-          record.meta = meta;
+          tx.readOrThrow({ ...address("reclassified"), path: ["value"] }, {
+            meta,
+          });
+          const view = new InputReadView(tx);
           expect(view.reads()).toEqual([]);
 
           for (const key of Reflect.ownKeys(meta)) delete meta[key];
           expect(view.reads().map((read) => read.id)).toEqual([
             "of:reclassified",
           ]);
+
+          Object.assign(meta, internalVerifierRead);
+          expect(view.reads()).toEqual([]);
+        } finally {
+          tx.abort();
+        }
+      });
+
+      it("compares no record with its copy while the transaction lists the same records", () => {
+        // A boundary pass asks once for each target it verifies. An ask that
+        // compared every record would cost the targets times the reads.
+
+        const runtime = newRuntime();
+        const tx = runtime.edit();
+        try {
+          const records = 40;
+          for (let index = 0; index < records; index++) {
+            tx.readOrThrow({ ...address(`read-${index}`), path: ["value"] });
+          }
+          const view = new InputReadView(tx);
+          const reads = view.reads();
+          expect(reads).toHaveLength(records);
+          for (let ask = 0; ask < 25; ask++) {
+            expect(view.reads()).toBe(reads);
+          }
+          expect(view.recordsCompared).toBe(0);
+          expect(view.metadataObjectsClassified).toBe(0);
+        } finally {
+          tx.abort();
+        }
+      });
+
+      it("classifies no more metadata objects for more cells written", () => {
+        // The write path records its reads of each destination under
+        // metadata objects of its own. Each is frozen, so an ask does not
+        // classify one for every cell the transaction wrote.
+
+        const classified = (cells: number) => {
+          const runtime = newRuntime();
+          const tx = runtime.edit();
+          try {
+            for (let index = 0; index < cells; index++) {
+              runtime.getCell(space, `written-${index}`, {
+                type: "object",
+                properties: { text: { type: "string" } },
+              }, tx).set({ text: `row ${index}` });
+            }
+            const view = new InputReadView(tx);
+            view.reads();
+            view.reads();
+            return view.metadataObjectsClassified;
+          } finally {
+            tx.abort();
+          }
+        };
+        expect(classified(40)).toBe(classified(4));
+      });
+
+      it("fixes the metadata object of each record it has copied", () => {
+        const runtime = newRuntime();
+        const tx = runtime.edit();
+        try {
+          tx.readOrThrow({ ...address("fixed"), path: ["value"] });
+          const record = [...tx.getReadActivities!()].at(-1)!;
+          const view = new InputReadView(tx);
+          view.reads();
+          expect(() => {
+            record.meta = { ...internalVerifierRead };
+          }).toThrow(TypeError);
+          expect(view.reads().map((read) => read.id)).toEqual(["of:fixed"]);
+        } finally {
+          tx.abort();
+        }
+      });
+
+      it("compares every record of a transaction that does not fix its records", () => {
+        // Such a transaction leaves each record open to another metadata
+        // object, which only a comparison of every record finds.
+
+        const runtime = newRuntime();
+        const tx = runtime.edit();
+        try {
+          tx.readOrThrow({ ...address("open"), path: ["value"] });
+          const record = [...tx.getReadActivities!()].at(-1)!;
+          const open = new Proxy(tx, {
+            get(target, prop) {
+              if (prop === "freezeReadActivityRecords") return undefined;
+              const member = Reflect.get(target, prop, target);
+              return typeof member === "function"
+                ? member.bind(target)
+                : member;
+            },
+          });
+          const view = new InputReadView(open);
+          expect(view.reads().map((read) => read.id)).toEqual(["of:open"]);
+
+          const meta = { ...internalVerifierRead };
+          record.meta = meta;
+          expect(view.reads()).toEqual([]);
+          expect(view.recordsCompared).toBe(1);
+
+          for (const key of Reflect.ownKeys(meta)) delete meta[key];
+          expect(view.reads().map((read) => read.id)).toEqual(["of:open"]);
         } finally {
           tx.abort();
         }

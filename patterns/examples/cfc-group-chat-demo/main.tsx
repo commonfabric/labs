@@ -1,3 +1,11 @@
+/**
+ * A group chat with per-user profiles, a room list with room creation, admin
+ * controls, and a transcript that shows each message with a verified author
+ * badge.
+ * Demonstrates building an ordinary chat interface from small reviewed CFC
+ * trusted surfaces for sending, saving profiles, adding rooms, and managing
+ * admins, with authorship checked by `cf-cfc-authorship`.
+ */
 import {
   action,
   computed,
@@ -127,7 +135,7 @@ const SharedTranscript = pattern<
   });
 
   return {
-    [NAME]: computed(() => `${id} transcript`),
+    [NAME]: "transcript",
     [UI]: (
       <cf-vstack id={id} gap="3" style={{ minHeight: 0 }}>
         <cf-label>{messageCountLabel}</cf-label>
@@ -164,7 +172,7 @@ const RoomsList = pattern<RoomsListInput, { [NAME]: string; [UI]: any }>((
   });
 
   return {
-    [NAME]: computed(() => `${id} rooms`),
+    [NAME]: "rooms list",
     [UI]: (
       <cf-hstack id={id} gap="2" wrap>
         <cf-chip

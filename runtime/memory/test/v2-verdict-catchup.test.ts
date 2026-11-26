@@ -26,6 +26,7 @@ import {
 } from "../v2.ts";
 import { Server } from "../v2/server.ts";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import { test } from "@commonfabric/test-support/test";
 import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
 
 // Content-addressed ids of the schema documents the tests below install.
@@ -140,7 +141,7 @@ const setup = async (options: {
   };
 };
 
-Deno.test("memory v2 server: an accept returns inline and its marker rides the batched frame with the parked novelty", async () => {
+test("memory v2 server: an accept returns inline and its marker rides the batched frame with the parked novelty", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-accept",
@@ -191,7 +192,7 @@ Deno.test("memory v2 server: an accept returns inline and its marker rides the b
   assertEquals(committerMessages.length, 0);
 });
 
-Deno.test("memory v2 server: an accept with no watched novelty still gets its marker on an otherwise-empty frame", async () => {
+test("memory v2 server: an accept with no watched novelty still gets its marker on an otherwise-empty frame", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-empty-frame",
@@ -234,7 +235,7 @@ Deno.test("memory v2 server: an accept with no watched novelty still gets its ma
   assertEquals(sync.removes, []);
 });
 
-Deno.test("memory v2 server: an accept on a doc OUTSIDE the watch set still gets its marker on an otherwise-empty frame", async () => {
+test("memory v2 server: an accept on a doc OUTSIDE the watch set still gets its marker on an otherwise-empty frame", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: "manual",
     store: "memory://verdict-catchup-unwatched-doc",
@@ -279,7 +280,7 @@ Deno.test("memory v2 server: an accept on a doc OUTSIDE the watch set still gets
   assertEquals(sync.removes, []);
 });
 
-Deno.test("memory v2 server: a rejection's read repair rides the batched frame with the rejection's marker", async () => {
+test("memory v2 server: a rejection's read repair rides the batched frame with the rejection's marker", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-reject",
@@ -324,7 +325,7 @@ Deno.test("memory v2 server: a rejection's read repair rides the batched frame w
   );
 });
 
-Deno.test("memory v2 server: a failed fan-out requeues the batch and the scheduled refresh recovers", async () => {
+test("memory v2 server: a failed fan-out requeues the batch and the scheduled refresh recovers", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-requeue",
@@ -390,11 +391,11 @@ Deno.test("memory v2 server: a failed fan-out requeues the batch and the schedul
   );
 });
 
-Deno.test("memory v2 server: same-doc foreign novelty is not echo-suppressed by the writer's own commit", async () => {
-  // Pin the mixed-provenance machinery itself: with the own-write echo on,
-  // every own patch head is delivered regardless of provenance, so this
-  // test would pass vacuously. Suppression mode is where the clearing rule
-  // is load-bearing.
+test("memory v2 server: same-doc foreign novelty is not echo-suppressed by the writer's own commit", async () => {
+  // Pin the mixed-provenance machinery itself, in suppression mode, where
+  // the clearing rule alone decides: with the own-write echo on, a patch
+  // head is also delivered to a writer that does not hold the revision it
+  // was applied over, which would let this test pass without the rule.
   setOwnWriteEchoConfig(false);
   try {
     const context = await setup({
@@ -450,7 +451,7 @@ Deno.test("memory v2 server: same-doc foreign novelty is not echo-suppressed by 
   }
 });
 
-Deno.test("memory v2 server: a failed send rolls back delivery state; the next flush recomputes and delivers", async () => {
+test("memory v2 server: a failed send rolls back delivery state; the next flush recomputes and delivers", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-send-rollback",
@@ -544,7 +545,7 @@ Deno.test("memory v2 server: a failed send rolls back delivery state; the next f
   assertEquals(committerMessages.length, 0);
 });
 
-Deno.test("memory v2 server: transact against a registry-unknown session fails closed", async () => {
+test("memory v2 server: transact against a registry-unknown session fails closed", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-unknown-session",
@@ -574,7 +575,7 @@ Deno.test("memory v2 server: transact against a registry-unknown session fails c
   assertEquals(response.error?.message, "Unknown session for space");
 });
 
-Deno.test("memory v2 server: a failing timer-driven flush warns and leaves recovery to the requeue", async () => {
+test("memory v2 server: a failing timer-driven flush warns and leaves recovery to the requeue", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-scheduled-flush-failure",
@@ -606,7 +607,7 @@ Deno.test("memory v2 server: a failing timer-driven flush warns and leaves recov
   );
 });
 
-Deno.test("memory v2 server: requeue after failure does not resurrect echo suppression for re-dirtied docs", async () => {
+test("memory v2 server: requeue after failure does not resurrect echo suppression for re-dirtied docs", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-requeue-origin",
@@ -633,8 +634,8 @@ Deno.test("memory v2 server: requeue after failure does not resurrect echo suppr
         // seq matches the delivered upsert's seq, so a fabricated seq would
         // never suppress and the pin would pass even without the provenance
         // rule it exists to guard. The op must be an ELIDABLE kind
-        // ("set"): a "patch" origin is delivered under CT-1965 regardless,
-        // which would also let the pin pass vacuously.
+        // ("set"): a "patch" origin that names no base is delivered under
+        // CT-1965 regardless, which would also let the pin pass vacuously.
         seq: 1,
         ops: new Map([["space\x00of:doc:b", "set" as const]]),
       });
@@ -662,7 +663,7 @@ Deno.test("memory v2 server: requeue after failure does not resurrect echo suppr
   );
 });
 
-Deno.test("memory v2 server: the verdict leaves within the transact's publication turn; fan-out cannot enter it", async () => {
+test("memory v2 server: the verdict leaves within the transact's publication turn; fan-out cannot enter it", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-publication-turn",
@@ -738,7 +739,7 @@ Deno.test("memory v2 server: the verdict leaves within the transact's publicatio
   assertEquals(committerMessages.length, 0);
 });
 
-Deno.test("memory v2 server: an evaluation failure skips only that session's frame; later spaces deliver in the same pass", async () => {
+test("memory v2 server: an evaluation failure skips only that session's frame; later spaces deliver in the same pass", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-multi-space",
@@ -805,7 +806,7 @@ Deno.test("memory v2 server: an evaluation failure skips only that session's fra
   );
 });
 
-Deno.test("memory v2 server: an identical cid re-set fans out no novelty to watchers", async () => {
+test("memory v2 server: an identical cid re-set fans out no novelty to watchers", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-cid-elide",
@@ -914,7 +915,7 @@ Deno.test("memory v2 server: an identical cid re-set fans out no novelty to watc
   observer.close();
 });
 
-Deno.test("memory v2 server: an all-elided accept still delivers its marker on an empty frame", async () => {
+test("memory v2 server: an all-elided accept still delivers its marker on an empty frame", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-all-elided",
@@ -972,7 +973,7 @@ Deno.test("memory v2 server: an all-elided accept still delivers its marker on a
   assertEquals(frame.caughtUpLocalSeq, 2);
 });
 
-Deno.test("memory v2 server: an all-elided accept leaves every session's tracked graphs in place", async () => {
+test("memory v2 server: an all-elided accept leaves every session's tracked graphs in place", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-all-elided-untouched",
@@ -1070,7 +1071,7 @@ Deno.test("memory v2 server: an all-elided accept leaves every session's tracked
   observer.close();
 });
 
-Deno.test("memory v2 server: an identical direct re-write fans out nothing", async () => {
+test("memory v2 server: an identical direct re-write fans out nothing", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-direct-elide",
@@ -1123,7 +1124,7 @@ Deno.test("memory v2 server: an identical direct re-write fans out nothing", asy
   assertEquals(committerMessages.length, 0);
 });
 
-Deno.test("memory v2 server: a failed send forgets the frame's crossings, so the recomputed frame carries them again", async () => {
+test("memory v2 server: a failed send forgets the frame's crossings, so the recomputed frame carries them again", async () => {
   const context = await setup({
     subscriptionRefreshDelayMs: 60_000,
     store: "memory://verdict-catchup-crossings-rollback",

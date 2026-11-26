@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CoalescedDocListener } from "../../src/speculation/doc-notification-listener.ts";
 import type {
@@ -6,6 +5,7 @@ import type {
   MemorySpace,
   StorageNotification,
 } from "../../src/storage/interface.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE: MemorySpace = "did:key:z6MkDocListenerSpace";
 const WANTED = "of:wanted";

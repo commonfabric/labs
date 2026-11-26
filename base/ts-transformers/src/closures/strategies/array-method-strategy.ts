@@ -2,6 +2,7 @@ import ts from "typescript";
 import type { TransformationContext } from "../../core/mod.ts";
 import {
   classifyArrayMethodCall,
+  getNodeText,
   isFunctionLikeExpression,
   type ReactiveContextInfo,
 } from "../../ast/mod.ts";
@@ -49,23 +50,14 @@ export function transformArrayMethodCall(
   return undefined;
 }
 
-function getNodeSnippet(
-  node: ts.Node,
-  sourceFile: ts.SourceFile,
-  maxLength = 160,
-): string {
-  try {
-    const text = node.getText(sourceFile).replace(/\s+/g, " ").trim();
-    if (text.length <= maxLength) return text;
-    return `${text.slice(0, maxLength - 3)}...`;
-  } catch {
-    return ts.SyntaxKind[node.kind];
-  }
+function getNodeSnippet(node: ts.Node, maxLength = 160): string {
+  const text = getNodeText(node).replace(/\s+/g, " ").trim();
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 3)}...`;
 }
 
 type SyntheticComputeOwnedLookup = Pick<
   TransformationContext,
-  "sourceFile" | "isSyntheticComputeOwnedNode"
+  "isSyntheticComputeOwnedNode"
 >;
 
 export function assertValidSyntheticComputeOwnedArrayMethodContext(
@@ -100,7 +92,7 @@ export function assertValidSyntheticComputeOwnedArrayMethodContext(
     [
       "Internal Common Fabric compiler error: synthetic compute-owned array method retained a non-compute context.",
       "This is a bug in the compiler, not in your code. Please report it to the maintainers.",
-      `Method call: \`${getNodeSnippet(methodCall, context.sourceFile)}\``,
+      `Method call: \`${getNodeSnippet(methodCall)}\``,
       `Reactive context: ${contextInfo.kind} (${contextInfo.owner})`,
     ].join("\n"),
   );

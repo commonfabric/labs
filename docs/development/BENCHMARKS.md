@@ -122,6 +122,15 @@ the Topics read and graph limits ([below](#the-read-budget), tests of the
 regression shows up as trend drift on the dashboard rather than as a failing
 check.
 
+The dashboard (https://dashboard.saga-castor.ts.net/, on the tailnet) serves
+the numbers behind its benchmark tiles and `/bench` page as JSON, read from
+what it already holds, so reading them costs no GitHub requests:
+`/bench/tiles.json`, `/bench/runs.json` and `/bench/steps.json`. "Benchmark
+data as JSON" in `dashboard/README.md` describes them, and how to read them to
+find the commits behind a rise a tile reports. Download `bench-results`
+artifacts from GitHub only for what the dashboard does not hold: runs older
+than its 45-day window, and the raw report with its sample counts.
+
 Most packages with benches define a `bench` task for running them locally
 (see `runtime/runner/deno.jsonc`); otherwise invoke `deno bench` on a
 single file.
@@ -187,7 +196,7 @@ validation step (`tasks/check-bench-report.ts`) fails the run when stdout
 carried no report, a report that will not parse, or anything besides the
 report, and when the report is missing what every tile needs of it: the
 processor identity, a product measurement, the machine calibration, and each
-of the two key benchmarks. That last is a set rather than the whole report — a
+of the key benchmarks. That last is a set rather than the whole report — a
 product benchmark that stopped reporting passes it, and shows up as its own
 series ending on the chart — and each of these shows up as a red run in the
 Actions tab. What keeps a corrupt artifact off the charts is the dashboard
@@ -233,14 +242,17 @@ and misses others.
 **Names identify chart series.** The dashboard tracks each benchmark by its
 origin file, group, and verbatim name. Renaming a bench or its group breaks
 the series: history stays under the old name and the renamed bench starts
-over. Two of those keys are written out in `KEY_BENCHMARKS` in
-`dashboard/bench-report.ts`, and the key benchmarks tile trends those
-and nothing else, so moving or renaming one of them costs that tile half of
-what it reads and both of them leave it nothing at all. Two things hold that
-in place: `deno task check-bench-workflow` fails a change that leaves one of
-those files out of the workflow's `deno bench` list, and the validation step
-fails a run whose report is missing either, which together keep such a change
-to a red check or one red run instead of a hole in the history. So:
+over. Five of those keys are written out in `KEY_BENCHMARKS` in
+`dashboard/bench-report.ts`: the topic board's `journey`, the 100-topic board
+load, and the `home cold`, `home warm`, and `room` steps of
+[the FabriChat setup benchmark](#setup-steps). The key benchmarks tile trends
+those and nothing else, so moving or renaming one of them costs that tile a
+fifth of what it reads, and moving the FabriChat setup file or renaming its
+group costs three fifths at once. Two things hold that in place:
+`deno task check-bench-workflow` fails a change that leaves one of those files
+out of the workflow's `deno bench` list, and the validation step fails a run
+whose report is missing any of them, which together keep such a change to a red
+check or one red run instead of a hole in the history. So:
 
 - Keep names stable. Never interpolate values that change as unrelated commits
   land: content hashes, byte counts, module counts, dates. If a name must
@@ -598,8 +610,9 @@ shell's runtime client, runs the operation, waits until the view has settled and
 the runtime is idle, and turns both off again. From the `scheduler.run.complete`
 markers it sums runs, `durationMs`, proxy accesses, the largest single run's
 accesses, link resolutions, distinct documents, and registered dependencies, in
-one row for the board's pivot (`crossrefTable`, the producer), one for the
-per-topic consumer (`backlinksOf`), and one for every other run. It also records the scheduler
+one row each for the board's pivot (`crossrefTable`) and its index by topic
+number (`crossrefIndexOf`), the producers, one for the per-topic consumer
+(`backlinksOf`), and one for every other run. It also records the scheduler
 graph's node and edge counts before and after, the operation's elapsed time, and
 the timing statistics the main thread and the worker accumulated over it, less
 the helper's own requests. A timing row sums spans that can overlap, so its
@@ -1030,12 +1043,13 @@ API_URL=http://localhost:8000/ FRONTEND_URL=http://localhost:5173/ \
 deno bench -A patterns/integration/piece-grid-stopped.bench.ts
 ```
 
-## The FabriChat room benchmarks
+## The FabriChat benchmarks
 
-Three bench files measure a FabriChat group room, on the pattern in
+Four bench files measure FabriChat, on the pattern in
 `patterns/system/fabrichat/`. Two drive a browser against a running toolshed
-as the Topics benchmarks do, and one runs many runtimes against one storage
-server as the lunch-poll contention benchmark does.
+as the Topics benchmarks do, one runs many runtimes against one storage server
+as the lunch-poll contention benchmark does, and one measures the setup a
+headless FabriChat test performs before it asserts anything.
 
 ### The seeded room
 
@@ -1188,7 +1202,60 @@ four participants. `CF_FABRICHAT_BURST_MEMBERS` and
 `CF_FABRICHAT_BURST_MESSAGES` resize it for a local run, and the size names the
 series.
 
-### Running them locally
+### Setup steps
+
+`patterns/integration/fabrichat-setup.bench.ts` measures the steps a headless
+FabriChat integration test spends almost all of its time in: the ones the
+`fabrichat-room-list-*` tests repeat many times before they assert anything,
+and the Home and profile the seeded room above brings up for every member. Its
+`fabrichat setup` group has one series per step:
+
+- `home cold` brings up a new person's Home with `ensureDefaultPattern()`, with
+  the client, and the serving loop when it runs in this process rather than in
+  a worker of its own, compiling into one compile cache that starts empty, so
+  the Home pattern compiles from source once. What the process keeps beyond
+  that cache, the compiler's own modules and its parse memos among them, is
+  already warm by then, so the one-time cost the first Home in a process also
+  pays is not part of this series.
+- `home warm` is the same with the compile caches holding what earlier
+  bring-ups compiled, as for every later person.
+- `profile` creates the person's profile through Home's `createProfile`, sent
+  as a click on its reviewed action, until Home lists it.
+- `room` creates a group room the way the room-list tests do, through
+  `RoomListServer.createGroup()`: the manager's `createGroup`, sent the same
+  way, until the request reports done, then a read of the new room's link.
+- `reopen` starts a fresh client of a Home that holds a profile and a room the
+  way the room-list tests do, through `RoomListServer.bootClient()`: from
+  starting its controller through `ensureDefaultPattern()` and
+  `adoptCatalogRooms()`, keeping the record of every document it loads that
+  those tests keep.
+
+Because `room` and `reopen` time those helpers whole, a change to what a helper
+does beyond the runtime's own work moves these series as well.
+
+Each step ends once the client has settled, which is what the room-list tests
+wait for between steps (`RoomListServer.settle()`): the client's runtime idle,
+its writes on the server, and, with server execution on, the serving loop
+quiescent and the client caught up with what it wrote.
+
+Every invocation starts a `RoomListServer` of its own, the in-process storage
+server the room-list tests use, and generates new people. Whatever the step
+needs before it, a Home or a profile or a room, is done with the timer stopped.
+The posture resolves from `EXPERIMENTAL_SERVER_EXECUTION` as the tests' does,
+so the Benchmarks workflow measures these steps with server execution off; a
+local run without that variable measures them with it on, serving from a
+serving memory server. Nothing in the file needs a toolshed or a browser:
+
+```sh
+CF_LOG_LEVEL=silent deno bench -A patterns/integration/fabrichat-setup.bench.ts
+```
+
+`home cold`, `home warm`, and `room` are key benchmarks. Bringing up Homes and
+creating rooms is what a FabriChat integration test spends most of its setup
+on, so these three say whether a runtime change makes those tests faster or
+slower, and which of the steps moved.
+
+### Running the browser benchmarks locally
 
 Start client-execution dev servers as described in
 [Local dev servers](LOCAL_DEV_SERVERS.md), then run, for example:
@@ -1348,8 +1415,10 @@ outside the timed interval.
 The reused-memo case includes its first miss. The cleared-memo control clears
 only the active snapshot memo before each request; storage read caches remain
 active. That control includes clearing the map and journaling the additional
-reads. Both cases still merge label views for every request. They measure the
-cost of repeated derivation in this fixture, not a whole-pattern speedup.
+reads. The memo holds each dereference's merged view as well as the view at
+each address, so the reused-memo case merges label views once and the
+cleared-memo control merges them for every request. They measure the cost of
+repeated derivation in this fixture, not a whole-pattern speedup.
 
 Untimed diagnostics verify one metadata read with reuse and one per request
 with clearing. These are transaction read activities, not proxy-access counts
@@ -1391,9 +1460,10 @@ repository root to measure the Topics board's mention pivot and each topic's
 backlink lookup over the headless fixture in
 `patterns/integration/topics-headless-fixture.ts`. The fixture writes synthetic
 topics straight to emulated storage and runs the unmodified Topics lifts —
-`crossrefTable` and `backlinksOf` — with no browser and no server. A topic's
-comment count and last activity are stored values its verbs keep in the write
-that changes them, so there is no derivation of theirs to measure.
+`crossrefTable`, `crossrefIndexOf` and `backlinksOf` — with no browser and no
+server. A topic's comment count and last activity are stored values its verbs
+keep in the write that changes them, so there is no derivation of theirs to
+measure.
 Each case runs in a process of its own, started with `--frozen` as well, so no
 process in a run writes `deno.lock`.
 
@@ -1464,8 +1534,15 @@ At 32 and at 128 topics a sweep varies mentions per source over 0, 1, 4, and
 16, where 0 is the `none` graph: 32 topics is the size the read budget gates,
 and 128 is the size the probe reports the effect of mention degree at. The
 small pivot cases hold 4 topics, with as many mentions per source, up to four,
-as each graph allows. The fixture's documentation of
-`MentionGraph` says how each graph spreads its mentions.
+as each graph allows. The fixture's documentation of `MentionGraph` says how
+each graph spreads its mentions.
+
+Every topic in those cases is wired as `addTopic` wires one, to the pivot and to
+the pivot's index by topic number, so each numbered topic's lookup reads its row
+by number. One more case, the 32-topic `high-degree` case at four mentions per
+source, holds unbound topics instead: each lookup is handed the pivot and no
+index, as a topic filed before its board published an index is until it is
+bound, so every lookup scans the pivot.
 
 The pivot cases are recorded under three demand workloads. The first topic is
 the focus topic: the one `topic-open` opens. The mention phases change which
@@ -1488,7 +1565,8 @@ pivot and that topic's backlinks. That is one small sample. Server execution,
 and lazy materialization off, were not measured.
 
 A case's ID names all of that, as
-`pivot/<graph>/mentions-<count>/topics-<count>/<workload>`.
+`pivot/<graph>/mentions-<count>/topics-<count>/<workload>`, with `/unbound`
+before the workload for the case whose topics are unbound.
 
 ### The phases
 
@@ -1613,7 +1691,9 @@ The gated cases are:
 - the 4-topic `low-degree` pivot cases under `topic-open` and `all-backlinks`;
 - the 32-topic pivot cases under both workloads for the `high-degree` and
   `single-bucket` graphs at four mentions per source, and for the `low-degree`
-  graph at 16.
+  graph at 16;
+- the 32-topic `high-degree` case whose topics are unbound, under both
+  workloads, which gates the scan every unbound topic's lookup makes.
 
 No `board` case is gated, since the probe measures none. Every gated case holds
 32 topics or the small case's 4; the larger sizes run only from the probe. A
@@ -1659,11 +1739,17 @@ lifts, in the same transaction:
 Every limit is an upper bound, so the budget catches a change that reads more
 and is blind to one that reads differently. Lazy materialization turned back
 into eager traversal is the case that matters: it makes fewer proxy accesses,
-not more, while every topic's `backlinksOf` runs again on each mention edit.
-`patterns/integration/topics-lazy-lookup-reruns.test.ts` holds that
-property directly, on the 32-topic `high-degree` `all-backlinks` case under
-lazy materialization: a mention edit re-runs the lookups of the topics whose
-pivot row changed, and no other.
+not more, while every unbound topic's `backlinksOf`, which scans the pivot, runs
+again on each mention edit. A keyed lookup reads only the positions filed under
+its number and re-runs only for its own row in either mode.
+`patterns/integration/topics-lazy-lookup-reruns.test.ts` holds the property
+directly, under lazy materialization, on the 32-topic `high-degree`
+`all-backlinks` case with its topics unbound and with them wired to the index: a
+mention edit re-runs the lookups of the topics whose pivot row changed, and no
+other. The same file holds that a numbered topic's lookup, which reads its row
+through the pivot's index, registers the same reads at 4 and at 32 topics, and
+that filing a topic re-runs only its own lookup and those of the topics it
+mentions.
 
 A case's test fails when a count exceeds its limit, when a measured count has no
 limit, or when a limit names a phase the case did not record. The failure names

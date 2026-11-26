@@ -5,7 +5,11 @@ import type {
   MemorySpace,
   Runtime,
 } from "@commonfabric/runner";
-import { isLink, type NormalizedLink, parseLink } from "@commonfabric/runner";
+import {
+  isLink,
+  type NormalizedLink,
+  parseLinkOrThrow,
+} from "@commonfabric/runner";
 import {
   linkRefFrom,
   linkRefPayloadFromString,
@@ -156,15 +160,9 @@ export function cellTargetOf(link: NormalizedLink): CellTarget {
 
 /** Returns the link a `CellTarget` holds the parts of. */
 function linkOfCellTarget(target: CellTarget): NormalizedLink {
-  const link = parseLink(
+  return parseLinkOrThrow(
     linkRefFrom({ id: target.id, space: target.space, path: target.path }),
   );
-  if (link === undefined) {
-    throw new Error(
-      `cell target ${target.id} in ${target.space} is not a link`,
-    );
-  }
-  return link;
 }
 
 /**
@@ -194,11 +192,7 @@ export function parseWireCellLink(wire: string): NormalizedLink {
   if (scope !== undefined && scope !== "space") {
     throw new Error("a target cell must be space-scoped");
   }
-  const link = parseLink(linkRefFrom({ id, space, path: path ?? [] }));
-  if (link === undefined) {
-    throw new Error("a target cell link did not parse as a link");
-  }
-  return link;
+  return parseLinkOrThrow(linkRefFrom({ id, space, path: path ?? [] }));
 }
 
 export interface IngestRegistration {

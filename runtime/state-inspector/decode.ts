@@ -398,10 +398,6 @@ export function annotate(v: FabricValue, maxDepth = 8): FabricValue {
       assign(String(frame.value));
       continue;
     }
-    if (typeof frame.value === "function") {
-      assign("[function]");
-      continue;
-    }
 
     if (Array.isArray(frame.value)) {
       if (detectCycles && ancestors.has(frame.value)) {
@@ -813,7 +809,6 @@ export function linksWithPaths(
   let budget = bounds.maxNodes;
   let budgetExhausted = false;
   const walk = (held: FabricValue, at: Trail, depth: number): void => {
-    if (budgetExhausted) return;
     // Budget before depth: once the budget is gone the walk is over, and a
     // path it declines from there is one it never reached rather than one it
     // reached and refused, which is not a fact `tooDeep` may carry.

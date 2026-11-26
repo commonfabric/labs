@@ -405,10 +405,16 @@ open(path, "w").write(modified_src)
 FUSE preserves the existing attached test roots and data files during this
 write, but it does not run the tests and cannot change which entries are
 attached or which files are data. Editing a data file this way replaces its
-bytes and leaves it a data file. Treat the live edit as a diagnostic experiment.
-Before completing the change, make it in the repository checkout, run every test
-against that changed source, and deploy it with explicit `cf piece setsrc` plus
-the complete set of `--test` and `--datafile` flags.
+stored contents and leaves it a data file. A file whose extension the media-type
+table in `base/text/src/data-file.ts` marks binary (a `.png`, `.jpg`, `.jpeg`,
+`.gif`, `.webp`, or `.avif` image, a `.woff2`, `.woff`, `.ttf`, or `.otf` font,
+or a `.mp3`, `.ogg`, or `.wav` sound) appears here as its stored base64 `data:`
+URL, not as its bytes; change one in the checkout and deploy it with `setsrc`.
+Every other data file, an SVG included, appears as its text. Treat the live edit
+as a diagnostic experiment. Before completing the change, make it in the
+repository checkout, run every test against that changed source, and deploy it
+with explicit `cf piece setsrc` plus the complete set of `--test` and
+`--datafile` flags.
 
 **Check for errors after modifying:**
 
