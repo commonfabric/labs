@@ -7,7 +7,8 @@ says otherwise; stage 5 runs only under `start-upstream` and `record`
 synthetic Topics board and a counter in the browser
 ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md));
 a deployed space and the production board are not measured, and stage 5 is
-not measured at all. Stages 6 to 8 are not started.
+not measured at all. Stages 6 to 9 are not started; stage 9, marking by
+path, is designed under "Marking by path".
 [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)
 continues this plan for a piece that reads another space or a wish, and its
 steps 1 to 3 come before stage 5.
@@ -669,6 +670,444 @@ wrong. `record` starts what is upstream of a running piece that is stale, as
 Under `skip`, `currency.refused["stale-upstream"]` counts the roots
 `start-upstream` would have held.
 
+## Marking by path
+
+Not started. This section is the design, and stage 9 and acceptance tests
+30 to 41 are how it is built.
+
+A mark is decided per document instance: any revision of an instance a
+slice read marks the slice, whichever part of the document the revision
+wrote. One write that changes nothing a computation read therefore marks in
+three places. A follow that finds the same source at a later release time
+moves `confirmed.releasedAt` in the `pieceReconciliation` field of the
+piece's result document (`piece-source-lifecycle.md`), and every deploy
+states a later release time, so each followed piece gets one such revision
+per deploy. That revision:
+
+1. marks every slice of the followed piece, through the read of its own
+   result document that every slice holds;
+2. marks every slice in the same space that read any part of that result
+   document;
+3. moves the head the space reports of the result document to each space
+   that registered it, which marks each slice there that read it, and
+   through the first mark reports every registered instance the followed
+   piece writes as stale upstream.
+
+So a deploy starts each followed piece and each piece that reads a followed
+piece's result, in any space. A Topics board whose slice for each viewer
+reads that viewer's profile through the Home piece's result document is
+started once per deploy for each viewer. Such a piece stays unstarted only
+once all three marks are removed: removing the second and third alone
+leaves the reader marked `1` through the first.
+
+The rule this section adds: a revision is ahead of a row only where it
+wrote a path the row's slice read, or a path its computations write for a
+vouch row. Where the index cannot tell, the revision is ahead of the row,
+as every revision is today.
+
+### What a row holds
+
+A read row gains the paths its slice read in the instance, in one nullable
+column of the row it already is. A row that holds none is a read of the
+whole document, which is what every row means today.
+
+The paths are the ones the scheduler holds for the computation: the
+addresses of its read log after the scheduler's own compaction
+(`setSchedulerDependencies()`), with the two kinds it keeps apart. A
+**deep** path was read with everything beneath it. A **shallow** path was
+read for its own value and its keys, which is how a key enumeration and a
+test for presence are logged. The index adds no mapping of its own from a
+schema to paths, because that set is what a running scheduler runs the
+computation again for:
+
+- a read that traverses under a schema is logged at each path it visits,
+  and compaction drops a path that a deep path above it covers;
+- a read that follows a link is logged as a read of the slot that holds
+  the link, in the document that holds it, and as reads in the target
+  document, which are rows for the target;
+- a read of an array's length or of one element is a path beneath the
+  array;
+- a read of a path the document does not hold is logged at that path.
+
+A path starts at the document's root, so a read of a cell's content starts
+with `value`, and a read of a meta field with the field's name.
+`CurrencyReadPaths` in `runtime/memory/v2/currency-index.ts` is the type,
+and `CurrencyRead.paths` carries it from the snapshot to the index.
+
+A row holds at most 8 paths and 256 bytes of them encoded. A slice whose
+reads of one instance exceed either bound has its longest paths shortened
+by one component, compacted again, and so on until they fit. A shortened
+path is deep, whichever kind it was: a deep read of a path above covers
+every write a shallow or a deep read beneath it is sensitive to. A read of
+the document's root is stored as no paths. So the bound costs precision and
+never a mark. Both numbers are to be set from what stage 9c measures.
+
+Rejected:
+
+- **One row per path.** The index would hold several times the rows, the
+  table's key would change, which drops every stored record, and nothing
+  looks a row up by path: an advance finds rows by the instance that
+  changed.
+- **Exact paths with no bound.** A computation that visits each element of
+  a list of 3,000 logs thousands of paths in one document.
+- **A digest of the paths.** Overlap is a prefix test, which a digest
+  cannot decide.
+
+A vouch row gains the paths the slice's clean computations declare they
+write in the document, from the scheduling write surface the snapshot
+already reads. A vouch row that holds none covers the whole document.
+
+### What a revision touched
+
+The index reads what a revision wrote from the revision itself, when it
+advances, and stores nothing new for it:
+
+- a `patch` revision touched the paths its operations name, as
+  `touchedPointerPaths()` reads them, with the parent of a path whose key
+  the operation adds or removes for a shallow read
+  (`docs/specs/memory-v2/08-conflict-granularity.md`);
+- a `set` and a `delete` touched every path;
+- the first revision of an instance touched every path, so a row that read
+  an instance the store did not hold is behind whatever creates it;
+- a revision whose operations the index cannot read paths from touched
+  every path;
+- more than 64 revisions of one instance above the cursor, or more than
+  256 KiB of their patch data, touched every path.
+
+A `set` is not diffed against the document it replaced. A document is
+written whole when a transaction creates it, writes its root, or commits an
+effect's result (`getNativeCommit()` in
+`runtime/runner/src/storage/v2-transaction.ts`). The first is covered by
+the rule for a first revision. A diff for the other two costs reading and
+comparing two whole documents on the memory server's thread for each such
+revision, to spare the readers of a builtin's result document that read a
+part of it the completion left as it was. `currency.pathWhole` counts the
+revisions that touched every path, by reason, and a diff is added if `set`
+is the most frequent reason on a measured space.
+
+Storing each revision's touched paths when the commit is admitted is
+rejected: every commit of every space would pay for it, the spaces with no
+index among them, and the revision already holds its operations.
+
+Two rules decide a write outside `value`:
+
+- **A write to a root field that is neither `value` nor a record-only
+  field touches every path.** The pattern pointer, the argument and result
+  links, the stored schema, the label field `cfc` and a root field no build
+  has classified all decide how a document is read or what its piece runs.
+  Such a write marks as it does today.
+- **A write inside a record-only field touches only a row that names a
+  path in that field.** A record-only field holds a record about the piece
+  that no start and no computation reads to decide what the piece computes
+  or writes. `pieceReconciliation` is one: the follow reads it to order
+  releases, and a follow that changes what the piece runs writes the
+  pattern pointer. The list is to live beside `META_FIELDS` in
+  `runtime/runner/src/meta-seam.ts`, as a classification of every meta
+  field, so that a field added later does not compile until it is
+  classified:
+
+```ts
+// Shown at module scope.
+
+/** The meta fields, as `META_FIELDS` lists them. */
+type MetaField = "patternIdentity" | "pieceReconciliation" | "schema";
+
+/**
+ * Whether a write inside each meta field alone leaves what a start of the
+ * piece derives, and what a reader of the document reads, as it was.
+ */
+const META_FIELD_IS_RECORD_ONLY: Record<MetaField, boolean> = {
+  patternIdentity: false,
+  pieceReconciliation: true,
+  schema: false,
+};
+```
+
+Only `pieceReconciliation` is proposed as record-only.
+`pieceSourceHistory`, `patternRepository` and `displacedPattern` are
+candidates, each to be argued before it joins.
+
+### When a revision is ahead of a row
+
+A revision above a row's sequence number is ahead of the row where it
+touched every path, where the row holds no paths, or where a path it
+touched matches a path of the row. The match is the one that decides
+whether a commit's read conflicts with a stored patch
+(`docs/specs/memory-v2/08-conflict-granularity.md`), from the same code:
+
+- a deep path matches a touched path that is the same path, a path above
+  it, or a path beneath it, and no sibling;
+- a shallow path matches a touched path that is the same path or above it,
+  and the path itself where an operation adds or removes one of its keys;
+- an insertion into an array, a removal from one and a move within one
+  reach the store as a `splice` or a `replace` at the array's own path, so
+  a read of any element, or of the length, is matched by the array's path
+  above it. The index adds one guard of its own: an `add`, a `remove` or a
+  `move` whose last component is a non-negative integer is taken to touch
+  its parent, in case a writer other than the runner sends one for an
+  array;
+- a removal of a key touches the key's path, and a `delete` of the document
+  touches every path;
+- a write that replaces a link is a write at the slot that holds it, which
+  the read that followed the link logged, so it matches that read's row
+  for the document that holds the slot.
+
+The engine exports what the commit check builds, for one instance:
+
+```ts
+// Shown at module scope.
+
+type Engine = { readonly database: unknown };
+
+/** What the revisions of one instance above a seq wrote. */
+type RevisionsTouched =
+  /** One of them touched every path. `seq` is the newest such revision. */
+  | { whole: true; seq: number }
+  | {
+    whole: false;
+
+    /** The first component of each path touched. */
+    roots: ReadonlySet<string>;
+
+    /**
+     * Returns the seq of the newest revision that touched a path matching
+     * `path`, read deep or `shallow`, or `undefined` when none did.
+     */
+    newestMatching(
+      path: readonly string[],
+      shallow: boolean,
+    ): number | undefined;
+  };
+
+/**
+ * Returns what the revisions of the instance `(id, scopeKey)` above
+ * `afterSeq` wrote, or `undefined` when there are none. `limit` bounds the
+ * revisions and the bytes of patch data read, past which it returns that
+ * every path was touched.
+ */
+declare function revisionsTouchedSince(
+  engine: Engine,
+  options: {
+    id: string;
+    scopeKey: string;
+    afterSeq: number;
+    limit: { revisions: number; bytes: number };
+  },
+): RevisionsTouched | undefined;
+```
+
+An advance asks once for each instance that changed above the cursor and
+has a row behind it, from the cursor: every row stands at or below the
+cursor, and each revision at or below the cursor was decided by the advance
+that passed it. A row that no revision is ahead of keeps its sequence
+number and is not written. Asking from each row's own sequence number
+instead would read, at every advance, every revision since the oldest
+untouched row was stored, and moving each untouched row up would write
+every reader of a document at each commit to it.
+
+Two more places compare a row with its instance's head, and use the same
+result. The store of a record does not move a vouch row up to a head that
+no derivation put there: the head it tests is the newest revision that is
+ahead of the vouch row, so a write inside a record-only field of a document
+the piece vouches for is no overwrite of it. And the check behind
+`currency.falseClean` asks it, as "Checking it" below says. The store of a
+record still leaves a read row behind any commit above `as_of` that the
+record does not name as seen, whatever that commit wrote, which costs one
+further record and no start.
+
+### A slice's read of its own result document
+
+Every slice of a piece reads the piece's result document, so that a change
+to what the piece runs marks each of them. That read becomes a deep read of
+`value`. With the rule for root fields above, such a row is behind a write
+to the pattern pointer, to the argument and result links, to the setup
+records, to the stored schema, to `cfc`, to any root field not classified,
+and to anything under `value`, and is not behind a write inside a
+record-only field. So the reconcile write marks no slice of its piece, and
+every write that can change what a start derives marks them all.
+
+The same holds for a read row the log supplies for an instance of the
+piece's own result document, as it does for a piece whose result each
+viewer holds an instance of: the row is widened to a deep read of `value`,
+whatever paths the log named, since a start reads that instance's pattern
+pointer by a read the log does not hold.
+
+The pieces a slice reads the result of need no such widening. A change to
+another piece's pattern pointer is a write to a root field that touches
+every path, so it marks the reader as it does today.
+
+### Checking it
+
+`currency.falseClean` is what checks this rule, and its check changes with
+it. The check counts a slice that was clean and wrote an instance it
+answered for again, to another value, with no input changed, and today any
+revision of a document the slice read is a changed input. Under that test
+every revision that marking by path leaves a slice clean across would
+count as a changed input, and the check would count none of the judgments
+the new rule can get wrong. So an input is changed where a revision above
+its row is ahead of the row by the rule above, asked from the row's own
+sequence number. Where the bound on revisions is passed the check cannot
+decide, and counts the slice in `currency.falseCleanUndecided` and not in
+`falseClean`.
+
+`SERVER_EXECUTION_CURRENCY_INDEX=record` on a space whose documents take
+writes beside what its pieces read is then the check: a path the snapshot
+left out of a row shows as a piece counted false clean.
+
+### What stays per document
+
+- **A mark that travels from a producer.** A marked slice marks `1` every
+  slice that reads a document it writes, whichever paths either names. A
+  write row holds no paths.
+- **A slot a run at another key decides.** A decide row is behind any
+  revision of its slot.
+- **A `set`, a `delete`, a first revision, a write to a root field that is
+  not `value` or record-only, a row past its bound and a run of revisions
+  past theirs**, as above.
+- **A plain root.** A parked plain root is loaded by any commit to its
+  document, since the load is what tests the document for a back-link and
+  a pattern pointer.
+- **A read row behind an unseen commit when its record is stored.**
+- **A document no record accounts for.** It marks its readers by path when
+  it changes, as an input. A reader of the result of a piece that is not
+  started still reads what that piece's setup last left there after the
+  piece's pattern pointer moved: the write to the pointer marks the reader,
+  and the start it causes derives from the same stored result.
+
+### The rules it leaves as they are
+
+- **A plain root** is judged on its stored document and not on any row, so
+  nothing here reaches it.
+- **A derived document no recorded piece writes** is still an input: its
+  readers are marked through their read rows when it changes, now only
+  where the change wrote a path they read. That is the direction the
+  exception at the head of this plan accepts, a reader that serves what it
+  derived from such a document in preference to a start. Whether such a
+  document may be one no computation has produced yet is still asked of
+  the whole document.
+- **An absent instance of an owned cell with a scalar default** is judged
+  from the demand rows and the write rows. The write that creates the
+  instance is its first revision, which touches every path, so a slice
+  that read the absent instance is marked by it.
+- **A piece created from its origin is recorded as following it**, so its
+  first follow writes nothing where the origin still offers that source.
+  That saves the revision; this section is what keeps a later follow's
+  revision, which each deploy causes, from marking.
+- **A vouch row** is behind an overwrite of a path its piece writes, and
+  not behind a write beside those paths.
+- **`markDownstream()` and `clearDownstream()`** walk from a slice to the
+  readers of the documents it writes, by document. Fewer slices are
+  marked `2`, so fewer walks start, and each walk reaches what it reaches
+  today.
+
+### Rows that earlier builds stored
+
+No row changes meaning, so the epoch stays and no record is dropped. A row
+stored before this holds no paths, which reads as the whole document: more
+marks, and no stored value served that today's rule would refuse. The new
+columns are added to the tables where they stand. A build from before this
+that serves the same store ignores the columns: it marks on every revision,
+and the rows it stores hold no paths.
+
+A row keeps the paths it was stored with until its slice is recorded
+again. So the first deploy after this is built still marks each slice
+through the rows the build before it stored, and starts its piece once.
+
+### What it costs
+
+Stored. The row counts do not change. A read row is about 0.5 KB with its
+index entry, by the widths of its columns. A board of 3,281 Topics holds
+some 59,000 to 79,000 read rows in its `space` slices, by the 9 to 12 rows
+for each piece and two pieces for each Topic that the synthetic board
+measured, and a viewer's slice of the board is taken here as 26,000 rows,
+the number of roots such a viewer watches; no count of either is measured
+on the production board. That is 30 to 40 MB of read rows and 13 MB for
+each viewer today. Stage 9a stores one path of one component in nearly
+every row, about 20 bytes, which adds 1.2 to 1.6 MB and 0.5 MB for each
+viewer, about 4%. Stage 9c is bounded by 256 bytes a row, which is 15 to
+20 MB and 6.7 MB for each viewer, about half as much again, and is
+expected at two to four paths of about 25 bytes, 10 to 20%.
+
+At a commit. Admission does nothing new. An advance does nothing new for
+an instance with no row behind it. For one with rows behind it, it reads
+the patch data of the revisions above the cursor once, about 10 to 30 µs
+for a patch under 1 KB, and decides each row from its paths, about 2 to
+5 µs a row. A document 3,281 slices read costs some 10 ms an advance,
+where today the same advance marks 3,281 slices and their pieces start.
+These are estimates from the sizes involved, and
+`currency.advancePathMicros` is to replace them.
+
+### Measuring it
+
+Counters, among the `currency` counters (`serving-loop.md` §7):
+
+- `pathSpared`: the rows a revision was above that it was not ahead of.
+- `pathWhole`: the revisions that touched every path, by reason: `set`,
+  `delete`, `first`, `root-field`, `unreadable`, `revisions`.
+- `pathRowsWhole`: the read rows stored with no paths, by reason: `root`
+  for a read of the document's root and `none` for a read the snapshot
+  named no paths for.
+- `pathRowsShortened`: the read rows stored with a path shortened to fit.
+- `pathBytes`: the bytes of paths stored.
+- `advancePathMicros`: the time advances spent reading revisions and
+  deciding rows.
+- `falseCleanUndecided`, as above.
+
+The experiment, on a clone of a board's space and of a viewer's home space
+served on loopback (`docs/development/space-clone-rehearsal.md`):
+
+1. Serve the clones under `skip` with `TOOLSHED_RELEASED_AT` set to a time
+   T1, open the board as the viewer until it is recorded, and stop the
+   server.
+2. Serve them again with `TOOLSHED_RELEASED_AT` set to a later T2 and open
+   the board again.
+3. After that open, the Home piece's result document holds T2 in its
+   reconciliation record, `currency.servedFromStore` counts the board's
+   root and the Home piece's, `currency.rearmed` and `currency.refused`
+   count neither, and `pathSpared` counts the rows for the Home piece's
+   result document.
+4. Repeat under `record`: `falseClean` and `falseCleanUndecided` stay at
+   zero.
+5. Change the viewer's profile name in the home space and open the board:
+   it starts, and shows the new name.
+
+### The order to build it in
+
+Stage 9 has four parts.
+
+- **9a. Paths of one component, in one space.** The columns, the snapshot's
+  paths shortened to their first component, what a revision touched, the
+  two rules for a write outside `value`, the read of a piece's own result
+  document, vouch rows, the check behind `falseClean`, and the counters.
+  A path of one component names a field of the document's root, which is
+  an object, so this part needs no rule for arrays and none for shallow
+  reads. This removes the
+  start of a followed piece at each deploy, and of each piece in its space
+  that reads its result. Tests 30 to 36, 39 and 40.
+- **9b. Across spaces**, as
+  [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)
+  says under "A read registered with its paths", also with paths of one
+  component. This is the part that removes the start of a piece that reads
+  a followed piece's result in another space, the board among them, and it
+  needs 9a in the space that is read.
+- **9c. Paths at their full depth**, to the bound, with the match for deep
+  and shallow paths and the guard for arrays. Tests 37 and 38. It is built
+  if `pathSpared` and the starts that remain on a measured space show
+  slices marked by writes beside what they read under `value`.
+- **9d. Measure**, as above. Test 41.
+
+9a and 9b together are the smallest change that removes the start at each
+deploy, and they are the mechanism itself with the bound on a path's
+length set to one component: the columns, the rule for what a revision
+touched, the registration and the check are the ones 9c uses, and 9c
+changes the bound and adds the match beneath `value`.
+
+A smaller change is rejected: leaving a revision that wrote only inside a
+record-only field out of every comparison, with no paths stored. It is
+sound only while no recorded computation reads a record-only field or a
+document's root, which nothing enforces. With paths in the rows the index decides it for
+each row.
+
 ## What changes in the specifications
 
 - `serving-loop.md` §3b and §6: the persisted scheduler state gains the
@@ -684,6 +1123,20 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
 - §6 step 3: an effect whose result never landed is re-fired by a start, so a
   piece is not recorded while any effect is outstanding.
 - §8: the exception that names the basis tables names these too.
+- For marking by path: §3b says the index's rows hold ids and sequence
+  numbers, and they come to hold the paths read and written as well, which
+  are addresses and no payload; its account of the reader, "a commit to an
+  instance marks `2` each slice with a read row for that instance", becomes
+  the rule under "When a revision is ahead of a row"; and §7 gains the
+  counters.
+  `docs/specs/memory-v2/08-conflict-granularity.md` names the index as a
+  further user of its match, with the guard for arrays.
+  `piece-source-lifecycle.md` says of the reconciliation record that a
+  write to it marks no stored output. `runtime/runner/src/cfc/` is not
+  expected to change: a write to a document's `cfc` field touches every
+  path, so a change to a label marks each reader of the document as it
+  does today. That classification is settled through
+  `docs/development/cfc-spec-correspondence.md` before 9a is built.
 
 ## Known limits
 
@@ -753,6 +1206,11 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
   its structure load alone: where a board's own piece starts, every demanded
   computation of the pieces it lists runs again, and `servedFromStore`
   counts the roots that were not loaded, not the pieces that did not run.
+- **A slice is marked by any revision of a document it read**, whichever
+  part of the document the revision wrote, so a deploy starts each followed
+  piece and each piece that reads a followed piece's result. "Marking by
+  path" is the plan for it, and lists what stays per document once it is
+  built.
 - **A slice is marked whole.** A computation that is not live when a record
   is taken contributes no reads and no vouch, so an undemanded part of a
   piece does not keep it marked. Where that leaves a live computation at the
@@ -858,6 +1316,10 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
    an origin followed without a start. Reads across spaces have a plan of
    their own
    ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)).
+9. **Marking by path.** Not started. In four parts, as "Marking by path"
+   says under "The order to build it in": 9a, paths of one component in
+   one space; 9b, the same across spaces; 9c, paths at their full depth;
+   9d, the measurement.
 
 ## Acceptance tests
 
@@ -983,6 +1445,56 @@ of which exist:
     holds no instance of; loads it once a client commits to it, and at once
     where that commit was admitted while the judgment ran; and loads a root
     demanded at a narrower scope (`space-server-currency.test.ts`).
+
+For marking by path, none of which exist. In the index tests:
+
+30. A patch revision that writes only inside a record-only field of an
+    instance marks no slice whose read row for the instance names paths
+    outside that field, and marks a slice whose row names none.
+31. A patch revision that writes a root field other than `value` and the
+    record-only fields, the pattern pointer, the stored schema and `cfc`
+    each, marks every slice with a read row for the instance.
+32. A `set`, a `delete`, the first revision of an instance a row saw
+    absent, and a run of revisions past the bound each mark every slice
+    with a read row for the instance.
+33. Every slice of a piece is marked by a change to its result document's
+    pattern pointer and by a write under that document's `value`, and none
+    by a write of its reconciliation record, for a result document in the
+    space and for one each viewer holds an instance of.
+34. A slice that vouches for a document is marked by a client's write at a
+    path its computations declare, and not by a write inside a record-only
+    field of it; a record stored after the second is clean.
+35. An advance after a revision that is ahead of no row writes no read row,
+    and a later revision that touches a row's path marks its slice.
+36. A slice held clean across a revision that touched none of its paths,
+    which then writes an instance it vouches for to another value, is
+    counted in `falseClean`; one whose revisions pass the bound is counted
+    in `falseCleanUndecided`.
+37. With paths at their full depth: a write to a sibling of a deep path
+    marks nothing, and a write above it, at it or beneath it marks. A
+    `splice` at an array marks a slice that read one element of it and one
+    that read its length. A key added to an object marks a slice that read
+    the object shallow, and a write to the value of a key it holds does
+    not. A write that replaces a link marks a slice that followed it.
+38. A row whose paths pass the bound is stored with paths shortened until
+    they fit, each of which covers the paths it stands for, and a read of
+    the document's root is stored with none.
+
+For the snapshot, in `runtime/runner/test/scheduler/piece-currency.test.ts`:
+
+39. A snapshot names, for each instance a slice read, the paths read, deep
+    and shallow apart, those taken over from a writer that names no piece
+    among them.
+
+For the serving loop, in `space-server-currency.test.ts`:
+
+40. Under `skip`, a recorded piece that follows an origin, and a second
+    piece of its space that reads its result, are both left unstarted by
+    the next tenure when the origin offers the same source at a later
+    release time, and the first piece's reconciliation record holds that
+    time. Both start when the first piece's pattern pointer moves.
+41. The experiment under "Measuring it", run on a clone of a board's space
+    and of a viewer's home space, with its counts recorded.
 
 ## Related
 
