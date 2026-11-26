@@ -1,5 +1,9 @@
 import { expect } from "@std/expect";
-import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import {
+  CFC_ATOM_TYPE,
+  cfcAtom,
+  type CfcJsonValue,
+} from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
 import {
   commitmentAwareEquals,
@@ -333,6 +337,76 @@ describe("CFC label representation transform (inv-12 Stage 1)", () => {
         }],
       };
       expect(transformCfcLabelForCrossSpacePersist(label)).toBe(label);
+    });
+
+    describe("with the destination space given", () => {
+      const share = "did:key:share";
+      const policyFor = (subject: CfcJsonValue) => ({
+        type: CFC_ATOM_TYPE.Policy,
+        policyRefKind: "module",
+        moduleIdentity: "sha256:module",
+        symbol: "releaseRules",
+        policyDigest: "sha256:manifest",
+        subject,
+      });
+
+      it("keeps a module policy's subject naming that space in plaintext", () => {
+        const label = {
+          confidentiality: [{
+            anyOf: [
+              { type: CFC_ATOM_TYPE.User, subject: alice },
+              policyFor(share),
+            ],
+          }],
+        };
+        expect(transformCfcLabelForCrossSpacePersist(label, share)).toEqual({
+          confidentiality: [{
+            anyOf: [
+              { type: CFC_ATOM_TYPE.User, subject: commitCfcFieldValue(alice) },
+              policyFor(share),
+            ],
+          }],
+        });
+      });
+
+      it("commits a subject naming any other space or principal", () => {
+        const transformed = transformCfcLabelForCrossSpacePersist({
+          confidentiality: [policyFor(bob), policyFor(alice)],
+          integrity: [{
+            type: CFC_ATOM_TYPE.HasRole,
+            principal: alice,
+            space: bob,
+            role: "reader",
+          }],
+        }, share);
+        expect(transformed).toEqual({
+          confidentiality: [
+            policyFor(commitCfcFieldValue(bob)),
+            policyFor(commitCfcFieldValue(alice)),
+          ],
+          integrity: [{
+            type: CFC_ATOM_TYPE.HasRole,
+            principal: commitCfcFieldValue(alice),
+            space: commitCfcFieldValue(bob),
+            role: "reader",
+          }],
+        });
+      });
+
+      it("commits the kept subject at a later hop into another space", () => {
+        const atShare = transformCfcLabelForCrossSpacePersist({
+          confidentiality: [policyFor(share)],
+        }, share);
+        expect(atShare.confidentiality).toEqual([policyFor(share)]);
+        const onward = transformCfcLabelForCrossSpacePersist(atShare, bob);
+        expect(onward.confidentiality).toEqual([
+          policyFor(commitCfcFieldValue(share)),
+        ]);
+        // Idempotent at the same destination.
+        expect(transformCfcLabelForCrossSpacePersist(atShare, share)).toBe(
+          atShare,
+        );
+      });
     });
   });
 });

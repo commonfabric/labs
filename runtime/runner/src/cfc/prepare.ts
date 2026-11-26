@@ -2547,6 +2547,22 @@ type ReclassificationContext = {
 };
 
 /**
+ * The destination the cross-space persist transform keeps verbatim where a
+ * commitment-classified field names it (`transformCfcLabelForCrossSpacePersist`):
+ * the space being written, while the `patternReclassification` dial is on,
+ * and none otherwise, so every such field is committed as it always was. The
+ * reclassification mints `PolicyOf<Rules>` with the written space as its
+ * subject, and that subject must stay plaintext there for the policy's
+ * `HasRole(reader, THIS_POLICY.subject)` guard to reach a reader.
+ */
+// SPEC-PENDING specs PR not yet filed; see patterns/dev/test/share-space-declassify/PROPOSAL.md
+const crossSpacePersistDestination = (
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+): MemorySpace | undefined =>
+  tx.getCfcState().patternReclassification === true ? space : undefined;
+
+/**
  * The confidentiality of the flow join `join` as the written document
  * `target` stores it. A reclassification under a policy `P` that a writer's
  * own schema declares (`ifc.reclassify`, the lowered form of `Reclassified`)
@@ -11338,13 +11354,17 @@ const createLinkLabelDeriver = (
       }
       yield;
       // A downstream hop sees the representation the upstream hop persists,
-      // including protected fields when it crosses a space boundary.
+      // including protected fields when it crosses a space boundary, and the
+      // upstream target's own identity kept as the persist step keeps it.
       const entries =
         tx.getCfcState().labelMetadataProtectionMode === "enforce" &&
           upstream.source.space !== upstream.target.space
           ? resolved.entries.map((entry) => ({
             ...entry,
-            label: transformCfcLabelForCrossSpacePersist(entry.label),
+            label: transformCfcLabelForCrossSpacePersist(
+              entry.label,
+              crossSpacePersistDestination(tx, upstream.target.space),
+            ),
           }))
           : resolved.entries;
       // Pending entries persist as `origin: "link"`, which stored link
@@ -15897,7 +15917,10 @@ export function* prepareBoundaryCommitSteps(
       for (let i = 0; i < persistedLabelEntries.length; i++) {
         const entry = persistedLabelEntries[i];
         if (!crossSpaceEligible.has(entry)) continue;
-        const transformed = transformCfcLabelForCrossSpacePersist(entry.label);
+        const transformed = transformCfcLabelForCrossSpacePersist(
+          entry.label,
+          crossSpacePersistDestination(tx, space),
+        );
         // Copy-on-write transform: same reference back = nothing to commit
         // in this entry (already-committed forms pass through idempotently).
         if (transformed === entry.label) continue;

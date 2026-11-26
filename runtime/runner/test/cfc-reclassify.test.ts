@@ -450,8 +450,10 @@ describe("cfc-reclassify", () => {
       const { shared } = await sharePiece(client, source, elsewhere);
 
       expect(shared.getAsNormalizedFullLink().space).toBe(elsewhere);
-      // Stored outside the owner's space, both subjects are commitments
-      // (label-metadata protection), which the release keeps as they are.
+      // Stored outside the owner's space, the owner's subject is a commitment
+      // (label-metadata protection), which the release keeps as it is. The
+      // policy's subject is the space it is stored in, which that protection
+      // keeps in plaintext.
       const stored = storedConfidentiality(client, shared) as {
         anyOf?: { type: string; subject: unknown; policyDigest?: string }[];
       }[];
@@ -468,7 +470,8 @@ describe("cfc-reclassify", () => {
       expect(stored).not.toContainEqual(user);
       const policy = clause!.anyOf!.find((alternative) =>
         alternative.type === CFC_ATOM_TYPE.Policy
-      ) as { policyDigest: string };
+      ) as { policyDigest: string; subject: unknown };
+      expect(policy.subject).toBe(elsewhere);
       const installed = client.getCellFromEntityId(
         elsewhere,
         cfcPolicyManifestDocId(policy.policyDigest),
@@ -479,19 +482,16 @@ describe("cfc-reclassify", () => {
         policyDigest: policy.policyDigest,
       });
     });
-    // Reduced repro from the two-browser share test
-    // (patterns/integration/share-space-reclassify-two-browsers.test.ts),
-    // pinning a gap rather than the goal. What the reclassification is for is
-    // a reader of the share space seeing the released value at their display.
+    // Reduced from the two-browser share test
+    // (patterns/integration/share-space-reclassify-two-browsers.test.ts).
     // The owner's secret is in the owner's space and the share elsewhere, so
-    // the flow join is cross-space, and label-metadata protection commits
-    // every subject on the stamped label, the policy's own included, although
-    // the reclassification minted that one for the target's own space. The
-    // display resolver never opens a committed subject (`render-ceiling.ts`,
-    // `membershipSpacesInConfidentiality`), so it mints no
-    // `HasRole(reader, elsewhere)`, and the value stays sealed for every
-    // reader but the owner. The same label with plaintext subjects releases.
-    it("keeps a value placed elsewhere sealed at a reader's display, its policy subject committed", async () => {
+    // the flow join is cross-space, and label-metadata protection commits the
+    // subjects on the stamped label. It keeps the policy's subject in
+    // plaintext, since that subject is the space being written, and the
+    // display resolver lists only a plaintext subject for its membership point
+    // query (`membershipSpacesInConfidentiality` in `render-ceiling.ts`).
+    // A reader of that space sees the value; anyone else does not.
+    it("releases a value placed elsewhere to a reader of that space at their display", async () => {
       const client = connect(alice);
       const elsewhere = bob.did();
       const source = await storeSecret(client, secretSchema(alice), "fix");
@@ -511,37 +511,33 @@ describe("cfc-reclassify", () => {
       );
       await installed.sync();
       const reader = service.did();
-      const resolve = createRenderConfidentialityResolver({
-        actingPrincipal: reader,
-        membershipProvider: {
-          readerRole: (id) => id === elsewhere ? "reader" : null,
-          load: () => Promise.resolve(),
-          subscribe: () => () => {},
-        },
-        modulePolicyResolver: createRuntimeCfcModulePolicySource(client)
-          .resolve,
-      });
-      // The same label with its subjects in plaintext releases to the
-      // reader, so the commitment is the only difference.
-      const plaintext = JSON.parse(
-        JSON.stringify(stored),
-        (_key, value) =>
-          value?.type === CFC_ATOM_TYPE.Policy
-            ? { ...value, subject: elsewhere }
-            : value?.type === CFC_ATOM_TYPE.User
-            ? { ...value, subject: alice.did() }
-            : value,
-      );
+      const resolverFor = (readerRole: (id: string) => "reader" | null) =>
+        createRenderConfidentialityResolver({
+          actingPrincipal: reader,
+          membershipProvider: {
+            readerRole,
+            load: () => Promise.resolve(),
+            subscribe: () => () => {},
+          },
+          modulePolicyResolver: createRuntimeCfcModulePolicySource(client)
+            .resolve,
+        });
+
       expect(atomsOutsideCeiling(
-        resolve({ confidentiality: plaintext, spaces: () => [elsewhere] }),
+        resolverFor((id) => id === elsewhere ? "reader" : null)({
+          confidentiality: stored,
+          spaces: () => [elsewhere],
+        }),
         [cfcAtom.user(reader)],
       )).toEqual([]);
-      const resolved = resolve({
-        confidentiality: stored,
-        spaces: () => [elsewhere],
-      });
-      expect(atomsOutsideCeiling(resolved, [cfcAtom.user(reader)]))
-        .not.toEqual([]);
+      // A principal who reads no space the label names stays sealed out.
+      expect(atomsOutsideCeiling(
+        resolverFor(() => null)({
+          confidentiality: stored,
+          spaces: () => [elsewhere],
+        }),
+        [cfcAtom.user(reader)],
+      )).not.toEqual([]);
     });
   });
 
