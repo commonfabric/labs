@@ -557,6 +557,10 @@ Policy rules:
   script as for a registry one, and replaces neither of those two conditions. It
   runs in the sandbox; a run whose skill-script execution target is the host
   refuses it.
+- `run_skill_script` is a side-effect tool, and the child that holds an acquired
+  skill runs as `quote`, so under an enforce mode the call is refused before
+  either gate is reached. Nothing yet lets a reviewed skill's script run under
+  enforcement.
 - What backs `run_skill_script` for an acquired script is the mount that puts it
   at a path, so a run given no `--skills-root` still offers the tool to a child
   whose sandbox carries that mount, and `--allow-skill-script` takes an acquired

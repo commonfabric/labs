@@ -265,8 +265,8 @@ work under way, the item links to it.
    - `acquire_skill` becomes source entry plus a reference;
    - `read_skill_resource` becomes `read_value`;
    - `run_skill_script` becomes `invokeTool`;
-   - the `skill-context` capability becomes a prompt-slot role. That is `quote`
-     for third-party text (top/3606).
+   - the `skill-context` capability becomes a prompt-slot role. Handle-delivered
+     text already binds as `quote`.
 
    The tool names can stay as thin aliases, because models are trained on
    skill-shaped tools. (Ties to 1.4 and 1.6; Topics 1900 and 1771.)
