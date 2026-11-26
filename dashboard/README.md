@@ -567,32 +567,33 @@ repository's default branch, the branch its `HEAD` names, as a shallow Git
 repository under `offcuts-scan` in the cache directory, holding only its
 newest commit, and searches every file of that commit with `git grep`, binary
 files and lockfiles included. A search fetches only when the branch has moved,
-and then reads only what changed since the last fetch. Git's automatic garbage
-collection, once enough has built up, removes what earlier fetches left
-behind. The copies of every repository take a few hundred megabytes. Processes
-sharing the cache directory take turns, by the lock file of the record
-described below, so that no two fetch into one copy at once. Git runs with
-none of the dashboard's environment beyond what it needs, so it never sees the
-dashboard's credentials, and with no configuration of the system's, the
-user's, or a repository the cache directory sits in. The token it fetches with
-is sent to GitHub alone. A default branch with no commits holds no references.
+and the fetch transfers only what changed since the last one, though the
+search reads the whole tree. Git's automatic garbage collection, once enough
+has built up, removes what earlier fetches left behind. The copies of every
+repository take a few hundred megabytes. Processes sharing the cache directory
+take turns, by the lock file of the record described below, so that no two
+fetch into one copy at once. Git runs with none of the dashboard's environment
+beyond what it needs, so it never sees the dashboard's credentials, and with
+no configuration of the system's, the user's, or a repository the cache
+directory sits in. The token it fetches with is sent to GitHub alone. A
+default branch with no commits holds no references.
 
-A reference is one of two things. The first is a path into the offcuts
-organization, the organization's name followed by a slash, as a URL, a Git
-remote, an Actions `uses:` line, or an npm dependency writes it, an npm scope
-of the same name included. The second is a path to a repository of this
-organization under the name of a repository that is now in the offcuts
-organization and not in this one, archived repositories included, or under a
-name `repository-names.ts` says such a repository had before it was renamed.
-GitHub redirects such a path, its `.wiki` included, to wherever the repository
-went. A name is matched whole, and not as a scoped package such as
-`@commonfabric/name`. The organization's name written alone, as prose writes
-it, is not a reference. The scan sees the offcuts organization's repositories
-that the dashboard's credential can see, which is all of them while they are
-public. Both organizations' repositories are listed again whenever any
-repository is due to be searched, and every repository is searched again when
-the list changes, so a repository transferred there turns the existing paths
-to it red.
+A reference is one of two things. The first is a path to a repository of the
+offcuts organization, the organization's name followed by a slash and a
+repository name, as a URL, a Git remote, an Actions `uses:` line, or an npm
+dependency writes it, an npm scope of the same name included. The second is a
+path to a repository of this organization under the name of a repository that
+is now in the offcuts organization and not in this one, archived repositories
+included, or under a name `repository-names.ts` says such a repository had
+before it was renamed. GitHub redirects such a path, its `.wiki` included, to
+wherever the repository went. A name is matched whole, and not as a scoped
+package such as `@commonfabric/name`. The organization's name written alone,
+as prose writes it, is not a reference. The scan sees the offcuts
+organization's repositories that the dashboard's credential can see, which is
+all of them while they are public. Both organizations' repositories are listed
+again whenever any repository is due to be searched, and every repository is
+searched again when the list changes, so a repository transferred there turns
+the existing paths to it red.
 
 A red row counts the lines that reference the offcuts organization, and links
 to the first. It is dated from the first search that found references there,
@@ -1003,7 +1004,7 @@ installation with the same permissions; see [Credentials](#credentials).
 
 | tile | source | needs |
 |---|---|---|
-| ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest run on that repository's own default branch that passed or failed, however many runs that judged nothing came after it, among the workflow's newest thousand runs of any branch. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `cfs failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and cfs main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. Every repository also has an `offcuts references` job, which is the dashboard's own search of its default branch for references into the `commonfabric-offcuts` organization (see [The offcuts scan](#the-offcuts-scan)). It fails while any file names a repository of that organization, and stays red however old the failure is. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions read across the organization, and check runs read in private repositories (see [Credentials](#credentials)) |
+| ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest run on that repository's own default branch that passed or failed, however many runs that judged nothing came after it, among the workflow's newest thousand runs of any branch. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `cfs failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and cfs main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. Every repository also has an `offcuts references` job, which is the dashboard's own search of its default branch for references into the `commonfabric-offcuts` organization (see [The offcuts scan](#the-offcuts-scan)). It fails while any file names a repository of that organization, and stays red however old the failure is. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions and Contents read across the organization, and check runs read in private repositories (see [Credentials](#credentials)) |
 | CI jobs → `/ci` | every job the ci tile read, at full width: the repository, linked to its page, and the workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read, each linked to its page and to its actions on GitHub. A workflow with a run in progress on its default branch carries a blue dot after its name, which links to that run, and the summary above the table counts them. Only a run in progress carries one: a queued run, or one waiting for approval, does not. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows, running dots included: a run that starts or ends between collections shows at the next one. The page is live: an open copy shows each collection within a serving tick of the tile finishing it, without reloading, and in whatever order the reader sorted it | none |
 | labs ci trust, labs ci duration | GitHub Actions (`deno.yml` in `commonfabric/labs`), via the REST API. Trust reads the runs on main; duration reads the pull request runs. Each trust tile opens its repository's page, and each cell of its strip opens its run | `GH_TOKEN` (or `GITHUB_TOKEN`) |
 | cfs ci trust, cfs ci duration | the same two tiles for `commonfabric/cfs` (`test-fast.yml`) | `GH_TOKEN` (read access to cfs); optional `DASHBOARD_CFS_REPO`, or `DASHBOARD_LOOM_REPO` when that is unset |

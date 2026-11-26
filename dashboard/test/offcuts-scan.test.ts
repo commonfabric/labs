@@ -112,6 +112,8 @@ describe("offcuts-scan", () => {
             dotted: `github.com/${ORG}/retired.js`,
             prefixed: `github.com/not${ORG}/retired`,
             hyphenated: `github.com/not-${OFFCUTS}/lib`,
+            underscored: `see under_${OFFCUTS}/lib`,
+            root: `https://github.com/${OFFCUTS}/`,
             shared: `github.com/${ORG}/live`,
           });
 
@@ -300,6 +302,38 @@ describe("offcuts-scan", () => {
             { app: "bad", web: "good" },
             { app: "bad", web: "good" },
           ]);
+        });
+
+        it("keeps the copies in a directory only its owner can read, even one that was readable by others", async () => {
+          await Deno.mkdir(join(root, "scans"));
+          await Deno.chmod(join(root, "scans"), 0o755);
+          await commit("app", { "README.md": "nothing" });
+
+          await scanned(scanner(new FakeRelay()), [target("app")]);
+
+          expect((await Deno.stat(join(root, "scans"))).mode! & 0o777).toBe(
+            0o700,
+          );
+        });
+
+        it("refuses a directory that is a symbolic link", async () => {
+          using errors = stub(console, "error");
+          await Deno.mkdir(join(root, "elsewhere"));
+          await Deno.symlink(join(root, "elsewhere"), join(root, "link"));
+          await commit("app", { "README.md": "nothing" });
+          const scan = new OffcutsScan({
+            webhooks: new FakeRelay().webhooks,
+            directory: join(root, "link"),
+            remote: (repo) => toFileUrl(source(repo.split("/")[1])).href,
+            repositoryNames: () => Promise.resolve([]),
+          });
+
+          const [job] = await scanned(scan, [target("app")]);
+
+          expect(job.status).toBe("warn");
+          expect(errors.calls[0].args.join(" ")).toContain(
+            "is not a directory",
+          );
         });
 
         it("reports every repository as unreadable, once, when the directory cannot be used", async () => {

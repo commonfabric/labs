@@ -379,7 +379,7 @@ export class OffcutsScan {
       });
     };
     try {
-      await Deno.mkdir(this.#directory, { recursive: true });
+      await privateDirectory(this.#directory);
       await this.#failingSince.locked(async () => {
         let held: Record<string, number> | undefined;
         try {
@@ -592,16 +592,16 @@ export function gitEnvironment(
 
 /**
  * The extended regular expressions a line referencing the offcuts
- * organization matches: a path into the organization, and a path under this
- * organization's name to each of `offcuts`, the names of the offcuts
- * organization's repositories. A name is matched whole, so a longer name
+ * organization matches: a path to a repository of the organization, and a
+ * path under this organization's name to each of `offcuts`, the names of the
+ * offcuts organization's repositories. A name is matched whole, so a longer name
  * beginning with it, or a scoped package such as `@org/name`, does not match.
  */
 function referencePatterns(offcuts: readonly string[]): string[] {
   const end = `(\\.wiki)?(\\.git)?` +
     `([^${NAME_CHARACTERS}]|\\.([^${NAME_CHARACTERS}]|$)|$)`;
   return [
-    `(^|[^A-Za-z0-9-])${OFFCUTS_ORGANIZATION}/`,
+    `(^|[^${NAME_CHARACTERS}])${OFFCUTS_ORGANIZATION}/[${NAME_CHARACTERS}]`,
     ...offcuts.map((name) =>
       `(^|[^@${NAME_CHARACTERS}])${GITHUB_ORGANIZATION.name}/` +
       `${name.replaceAll(".", "\\.")}${end}`
@@ -709,4 +709,19 @@ function shown(standing: Standing | undefined): string {
     scan?.failingSince,
     standing?.error,
   ]);
+}
+
+/**
+ * Makes `directory`, and any directory above it that is missing, and makes
+ * `directory` readable by its owner alone, since the copies it holds can be of
+ * private repositories. Throws when `directory` is a symbolic link or not a
+ * directory.
+ */
+async function privateDirectory(directory: string): Promise<void> {
+  await Deno.mkdir(directory, { recursive: true, mode: 0o700 });
+  const info = await Deno.lstat(directory);
+  if (!info.isDirectory) {
+    throw new Error(`\`${directory}\` is not a directory`);
+  }
+  await Deno.chmod(directory, 0o700);
 }

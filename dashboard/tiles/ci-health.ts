@@ -439,7 +439,8 @@ function ciHealthView(collected: CiJobs, now = Date.now()): TileView {
   const repoCount = repos.length;
   const rows = ciJobRows(collected);
   // A job that is failing is counted as failing however old the failure is;
-  // its age decides the color, not whether it is named.
+  // its age decides the color, not whether it is named. An offcuts row stays
+  // red however old it is (offcuts-scan.ts).
   const failing = rows.filter((row) => row.failing);
   const blind = rows.filter((row) => row.status === "warn" && !row.failing);
   // A job the tile has no verdict for is not one it can call passing, so the
