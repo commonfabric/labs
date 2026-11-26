@@ -10,11 +10,12 @@
 // of that principal's own, so the union holds both principals' documents. A
 // change to one of them, the first load into the serving replica included,
 // reaches the node as a cause with no instance key. `dirtyFanOutForCause()`
-// (`src/scheduler/fan-out.ts`) then dirties every instance, and
-// `causesForInstance()` (`src/scheduler/run.ts`) hands the cause to every
-// instance's run as a CFC trigger read (§8.9.2). The flow join of the other
-// principal's run takes the profile's `User` clause from that trigger read
-// and stamps it on what the run writes in its own instance.
+// (`src/scheduler/fan-out.ts`) dirties the instances whose run read the
+// changed document, and `causesForInstance()` (`src/scheduler/run.ts`) hands
+// the cause to those instances' runs alone as a CFC trigger read (§8.9.2).
+// Were it handed to the other principal's run, that run's flow join would
+// take the profile's `User` clause from it and stamp the clause on what the
+// run writes in its own instance.
 
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";

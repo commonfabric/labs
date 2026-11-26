@@ -1,0 +1,1 @@
+{"date": "2026-11-25", "from": {"k": "unit", "s": "runner", "n": "fan-out > dirtyFanOutForCause() > dirties every instance for a cause that names no instance"}, "to": {"k": "unit", "s": "runner", "n": "fan-out > dirtyFanOutForCause() > dirties the instances whose latest run read the document of a cause that names no instance, and no other"}}

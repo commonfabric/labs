@@ -6,9 +6,17 @@ import {
   fanOutInstances,
   newFanOutNodeState,
 } from "../../src/scheduler/fan-out.ts";
+import type { IMemorySpaceAddress } from "../../src/storage/interface.ts";
 
 const alice = { principal: "did:key:alice", sessionId: "alice-1" };
 const bob = { principal: "did:key:bob", sessionId: "bob-1" };
+
+/** The address of the document `id` of a space, at the scope `space`. */
+const documentAt = (id: string): IMemorySpaceAddress => ({
+  space: "did:key:fan-out-space",
+  id: `of:${id}`,
+  path: [],
+});
 
 describe("fan-out", () => {
   describe("fanOutInstances()", () => {
@@ -28,8 +36,11 @@ describe("fan-out", () => {
     // ones missing from `clean` afterwards.
 
     /** A node holding a probe instance and a user instance each for Alice
-     * (known by principal alone) and Bob, all clean. */
-    const cleanNode = () => {
+     * (known by principal alone) and Bob, all clean. The latest run of each
+     * read the documents `read` names for its key, where it names any. */
+    const cleanNode = (
+      read: (key: ScopeKey) => readonly string[] | undefined = () => undefined,
+    ) => {
       const state = newFanOutNodeState();
       const sessionless = { principal: alice.principal };
       const instances: [ScopeKey, typeof alice | typeof sessionless][] = [
@@ -38,7 +49,13 @@ describe("fan-out", () => {
         [resolveScopeKey("user", bob), bob],
       ];
       for (const [key, identity] of instances) {
-        state.instances.set(key, { identity });
+        const ids = read(key);
+        state.instances.set(key, {
+          identity,
+          ...(ids !== undefined && {
+            log: { reads: ids.map(documentAt), shallowReads: [], writes: [] },
+          }),
+        });
         state.clean.add(key);
       }
       return state;
@@ -48,6 +65,7 @@ describe("fan-out", () => {
       const state = cleanNode();
 
       dirtyFanOutForCause(state, {
+        ...documentAt("keyed"),
         scope: "user",
         scopeKey: resolveScopeKey("user", alice),
       });
@@ -62,6 +80,7 @@ describe("fan-out", () => {
       const state = cleanNode();
 
       dirtyFanOutForCause(state, {
+        ...documentAt("keyed"),
         scope: "user",
         scopeKey: resolveScopeKey("user", bob),
       });
@@ -70,10 +89,25 @@ describe("fan-out", () => {
       expect(state.clean.has(resolveScopeKey("user", bob))).toBe(false);
     });
 
-    it("dirties every instance for a cause that names no instance", () => {
+    it("dirties the instances whose latest run read the document of a cause that names no instance, and no other", () => {
+      const state = cleanNode((key) =>
+        key === resolveScopeKey("user", bob) ? ["shared", "of-bob"] : ["shared"]
+      );
+
+      dirtyFanOutForCause(state, { ...documentAt("of-bob"), scope: "space" });
+      expect([...state.clean]).toEqual([
+        "space",
+        resolveScopeKey("user", { principal: alice.principal }),
+      ]);
+
+      dirtyFanOutForCause(state, documentAt("shared"));
+      expect([...state.clean]).toEqual([]);
+    });
+
+    it("dirties every instance that holds no record of its reads for a cause that names no instance", () => {
       const state = cleanNode();
 
-      dirtyFanOutForCause(state, { scope: "space" });
+      dirtyFanOutForCause(state, { ...documentAt("any"), scope: "space" });
 
       expect([...state.clean]).toEqual([]);
     });
