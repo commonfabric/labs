@@ -264,6 +264,52 @@ describe("github", () => {
       expect(requests[0].init.headers).not.toHaveProperty("Authorization");
     });
 
+    it("resolves with the repository's default branch, with the token when there is one", async () => {
+      for (const token of ["t0k", null]) {
+        const { send, requests } = fakeFetch(
+          200,
+          JSON.stringify({ full_name: "octo/repo", default_branch: "trunk" }),
+        );
+
+        expect(
+          await githubApi(() => token, send).defaultBranch(
+            "octo/repo",
+            new AbortController().signal,
+          ),
+        ).toBe("trunk");
+        expect(requests[0].url).toBe("https://api.github.com/repos/octo/repo");
+        expect(requests[0].init.method).toBe("GET");
+        if (token === null) {
+          expect(requests[0].init.headers).not.toHaveProperty("Authorization");
+        } else {
+          expect(requests[0].init.headers).toMatchObject({
+            Authorization: "Bearer t0k",
+          });
+        }
+      }
+    });
+
+    it("rejects when GitHub names no default branch, and with a refusal that cannot succeed when GitHub refuses to say", async () => {
+      const ask = (status: number, body: string) =>
+        githubApi(() => null, fakeFetch(status, body).send).defaultBranch(
+          "octo/repo",
+          new AbortController().signal,
+        );
+
+      for (const body of ["{}", JSON.stringify({ default_branch: "" }), "[]"]) {
+        const error = await ask(200, body).catch((error) => error);
+        expect(error).not.toBeInstanceOf(GitHubRefusal);
+        expect(error.message).toBe(
+          "GitHub did not say which branch is octo/repo's default",
+        );
+      }
+      const refusal = await ask(404, JSON.stringify({ message: "Not Found" }))
+        .catch((error) => error);
+      expect(refusal).toBeInstanceOf(GitHubRefusal);
+      expect(refusal.status).toBe(404);
+      expect(refusal.retryable).toBe(false);
+    });
+
     it("creates a pull request and resolves with its address", async () => {
       const url = "https://github.com/octo/repo/pull/12";
       const { send, requests } = fakeFetch(

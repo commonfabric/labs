@@ -92,14 +92,15 @@ export interface PushedBranch {
  * pushes, and returns one line saying how that ended.
  * Shows a step that says which branch it pushes before git starts, and that
  * is done once git succeeds. Once the push succeeds, calls `onPushed` with
- * the branch's name and the address of the page the server offers for
- * creating a pull request, or null when it offers none; by default, it opens
- * the page, and the line it returns ends with what `onPushed` returns. When
- * git fails to push, or to say which branch is the default, calls `onFailed`
- * with what the push printed, which is nothing in the second case, and
- * `origin`'s default branch, in the first case; the line it returns says the
- * push was aborted when it failed after `signal` aborted; git's own output has
- * been shown by then.
+ * the branch's name, the address of the page the server offers for creating
+ * a pull request, or null when it offers none, and `origin`'s default branch,
+ * which `onPushed` can use rather than ask `origin` again; by default, it
+ * opens the page, and the line it returns ends with what `onPushed` returns.
+ * When git fails to push, or to say which branch is the default, calls
+ * `onFailed` with what the push printed, which is nothing in the second case,
+ * and `origin`'s default branch, in the first case; the line it returns says
+ * the push was aborted when it failed after `signal` aborted; git's own output
+ * has been shown by then.
  */
 export async function pushBranch<Asked = never>(
   io: PushIo,
@@ -107,6 +108,7 @@ export async function pushBranch<Asked = never>(
   onPushed: (
     branch: string,
     url: string | null,
+    main: string,
   ) => Promise<TaskText> | TaskText = (_, url) =>
     url === null ? [] : openPage(io, url),
   onFailed: (output: string, main?: string) => void = () => {},
@@ -165,7 +167,11 @@ export async function pushBranch<Asked = never>(
       : say`Pushing ${branch} to ${name("origin")} failed.`;
   }
   pushing();
-  const then = await onPushed(branch, offeredPullRequestUrl(push.output));
+  const then = await onPushed(
+    branch,
+    offeredPullRequestUrl(push.output),
+    named,
+  );
   const pushed = say`Pushed ${branch} to ${name("origin")}.`;
   return then.length === 0 ? pushed : say`${pushed} ${then}`;
 }
@@ -174,7 +180,7 @@ export async function pushBranch<Asked = never>(
  * names as its default, showing a step with `io` that asks, which is done
  * once it answers, or with null when it names none, git cannot ask it, or
  * `signal` aborts first. */
-export async function askDefaultBranch(
+async function askDefaultBranch(
   io: Pick<PushIo, "step" | "queryAsync">,
   remote: string,
   signal?: AbortSignal,
