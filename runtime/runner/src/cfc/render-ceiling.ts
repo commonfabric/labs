@@ -209,7 +209,7 @@ export type RenderConfidentialityResolverConfig = {
  * candidate whether or not the resolver was told to consult it, which costs a
  * subscription and decides nothing). Order-preserving and deduped.
  */
-// SPEC-PENDING specs PR not yet filed; see patterns/dev/test/share-space-declassify/PROPOSAL.md
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/110
 export const membershipSpacesInConfidentiality = (
   confidentiality: readonly CfcConfClause[],
   readFrom?: () => readonly string[],

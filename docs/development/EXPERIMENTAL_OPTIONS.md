@@ -1136,10 +1136,11 @@ holds the measurements and the conditions for revisiting.
   `runtime/runner/src/cfc/render-ceiling.ts`), so a reader of the share space
   sees a reclassified value whose flow join was cross-space.
 - **Current default and planned end state.** Off by default. The rule is a
-  semantic gap under the CFC correspondence procedure, and its deciding site
-  in `runtime/runner/src/cfc/prepare.ts`, and the display's candidate in
-  `runtime/runner/src/cfc/render-ceiling.ts`, carry `SPEC-PENDING` markers
-  whose specs pull request is not yet filed. The flag must stay off in every
+  semantic gap under the CFC correspondence procedure. Its deciding site in
+  `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker whose
+  specs pull request is not yet filed; the display's candidate in
+  `runtime/runner/src/cfc/render-ceiling.ts` carries one naming
+  commonfabric/specs#110, stacked on #49. The flag must stay off in every
   deployment until the store itself admits a `creator` record only when it
   names the commit's authenticated actor: commit preparation alone checks the
   record today, so a modified client could write a piece naming another
