@@ -214,6 +214,7 @@ import {
   type HarnessRunState,
   isTerminalHarnessRunStatus,
 } from "./run-state.ts";
+import { skillsShValueDigest } from "./skills-sh/acquisition.ts";
 import {
   acquiredSkillForHandle,
   acquiredSkillScriptBacking,
@@ -224,6 +225,7 @@ import {
   loadHarnessSkillContext,
   loadHarnessSkillContextFromText,
 } from "./skills/registry.ts";
+import { reviewEvidenceForDelegatedSkill } from "./skills/reviewed-skills.ts";
 import { isSealedOpaqueLinkObject } from "./structured-result.ts";
 import { resolveHandleValue } from "./tools/handle-values.ts";
 import {
@@ -5220,7 +5222,12 @@ export class CfHarnessPromptLoop {
       };
     }
     let delegateInput: DelegateTaskToolInput | undefined;
-    let resolvedDelegateSkill: { text: string; token: string } | undefined;
+    let resolvedDelegateSkill: {
+      text: string;
+      token: string;
+      servedDigest: string;
+      acquisition?: HarnessSkillAcquisition;
+    } | undefined;
     if (toolId === "delegate_task") {
       const parsedDelegateInput = parseDelegateTaskInput(input);
       if ("invalid" in parsedDelegateInput) {
@@ -5396,6 +5403,10 @@ export class CfHarnessPromptLoop {
         resolvedDelegateSkill = {
           text: resolution.value.trimEnd(),
           token: entry!.token,
+          // Of the value untrimmed, since that is what acquisition digested.
+          servedDigest: skillsShValueDigest(
+            new TextEncoder().encode(resolution.value),
+          ),
           ...(entry!.acquisition !== undefined
             ? { acquisition: entry!.acquisition }
             : {}),
@@ -6161,6 +6172,9 @@ export class CfHarnessPromptLoop {
     resolvedSkill?: {
       text: string;
       token: string;
+
+      /** The acquisition digest encoding, over the handle's whole value. */
+      servedDigest: string;
       acquisition?: HarnessSkillAcquisition;
     };
 
@@ -6327,6 +6341,10 @@ export class CfHarnessPromptLoop {
       ...(this.engine.config.allowSkillScripts === true
         ? { allowSkillScripts: true }
         : {}),
+      // What this run accepts as reviewed, it accepts for every child too.
+      ...(this.engine.config.reviewedSkills !== undefined
+        ? { reviewedSkills: this.engine.config.reviewedSkills }
+        : {}),
       ...(profileConfig.skillScriptExecutionTarget !== undefined
         ? {
           skillScriptExecutionTarget: profileConfig.skillScriptExecutionTarget,
@@ -6424,10 +6442,27 @@ export class CfHarnessPromptLoop {
     // enforce-explicit it may only read, and under enforce-strict it may call
     // only its return channels. This holds even when the person asked for the
     // skill to be used.
+    //
+    // The exception is a skill an accepted review fully covers: its pinned
+    // bundle, `SKILL.md` and every script, matches by digest a statement this
+    // run accepts for `prompt-injection-free`. That child keeps the
+    // delegating run's binding. The skill's text is still `quote`, and what
+    // the child reads while it works is still injectable; the review vouches
+    // only that the skill itself steers nowhere it should not.
     // TODO(jkomoros): Let a delegation the person started keep their
-    // authority, once a tool call can carry evidence of who started it.
+    // authority, and delete both arms of this choice, once a tool call
+    // carries the authority of the intent it serves rather than the run's.
+    const reviewedSkill = options.resolvedSkill === undefined
+      ? undefined
+      : reviewEvidenceForDelegatedSkill(
+        this.engine.config.reviewedSkills,
+        options.resolvedSkill,
+        childAcquiredSkill,
+        new Date(childCreatedState.createdAt),
+      );
     const childPromptSlotBinding = options.resolvedSkill === undefined ||
-        options.promptSlotBinding === undefined
+        options.promptSlotBinding === undefined ||
+        reviewedSkill !== undefined
       ? options.promptSlotBinding
       : promptSlotBindingAtMost(options.promptSlotBinding, "quote");
     const manifest: HarnessSubagentRunManifest = {
@@ -6480,6 +6515,7 @@ export class CfHarnessPromptLoop {
         : {}),
       maxModelTurns,
       returnPolicy: profileConfig.returnPolicy,
+      ...(reviewedSkill !== undefined ? { reviewedSkill } : {}),
       createdAt: childCreatedState.createdAt,
       inputSummary: await createSubagentInputSummary(delegateInput),
     };

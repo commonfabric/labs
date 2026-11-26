@@ -15,6 +15,7 @@ import type {
 import type { HarnessCredentialOwnerRef } from "./run-manifest.ts";
 import type {
   HarnessAllowedSkillScript,
+  HarnessReviewedSkillEvidence,
   HarnessSkillScriptExecutionTarget,
 } from "./skill.ts";
 import type { BuiltinToolId } from "./tool-descriptor.ts";
@@ -563,6 +564,14 @@ export interface HarnessSubagentRunManifest {
   skillScriptExecutionTarget?: HarnessSkillScriptExecutionTarget;
   maxModelTurns: number;
   returnPolicy: HarnessSubagentReturnPolicy;
+
+  /**
+   * The review that let this child keep its parent's prompt-slot binding
+   * although it holds skill text from a handle. Absent for a child given no
+   * skill through a handle, which keeps that binding without one, and for a
+   * child whose skill no review covered, which ran as `quote`.
+   */
+  reviewedSkill?: HarnessReviewedSkillEvidence;
   createdAt: string;
   inputSummary: HarnessSubagentInputSummary;
   confidentialityCeiling?: HarnessSubagentConfidentialityCeiling;

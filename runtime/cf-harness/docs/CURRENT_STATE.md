@@ -934,14 +934,17 @@ The current package provides:
   `cfcPromptRole: "quote"`. The child runs with its prompt-slot binding lowered
   to `quote`, so a parent's `direct-command` does not reach it: under
   `enforce-explicit` it may only read, and under `enforce-strict` it may call
-  only its return channels. Where the handle came from an acquisition, the
-  context header carries its `pin="owner/repo/slug@<commit sha>"` for
-  `run_skill_script`, and the child mounts that one skill's acquired scripts
-  read-only at `/acquired-skill` and no other skill's, in a sandbox of its own
-  built from the parent's configuration plus that mount. That holds for the
-  child of a run whose engine built its runtime: every such child has a sandbox
-  of its own, and this one differs only by the mount. The child of a run handed
-  its runtime shares that runtime, and gets no mount of the skill;
+  only its return channels. A child whose acquired skill an accepted review
+  covers (`--reviewed-skills`) keeps the parent's binding instead, and its
+  manifest records the review as `reviewedSkill`. Where the handle came from an
+  acquisition, the context header carries its
+  `pin="owner/repo/slug@<commit sha>"` for `run_skill_script`, and the child
+  mounts that one skill's acquired scripts read-only at `/acquired-skill` and no
+  other skill's, in a sandbox of its own built from the parent's configuration
+  plus that mount. That holds for the child of a run whose engine built its
+  runtime: every such child has a sandbox of its own, and this one differs only
+  by the mount. The child of a run handed its runtime shares that runtime, and
+  gets no mount of the skill;
 - pattern references by trusted record: `delegate_task` takes up to eight
   optional `{ patternId, note? }` entries and resolves each id only from the
   records that run already holds — successful `search_patterns` results retained

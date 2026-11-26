@@ -10,25 +10,24 @@ citations are to `commonfabric/specs` `cfc/` at `aab6afa4`.
 ## Why
 
 A cf-harness `delegate_task` child that receives skill text through
-`skillHandle` binds that text as `quote` (branch `alex/skill-quote-binding`,
-which closes top/3606). The child's whole run binding is lowered with it. Under
-the default `enforce-strict` mode the child can then only report back, and under
-`enforce-explicit` it can read but not act. Falling back to `observe` and
-switching skills off were both rejected.
+`skillHandle` binds that text as `quote` (top/3606). The child's whole run
+binding is lowered with it. Under the default `enforce-strict` mode the child
+can then only report back, and under `enforce-explicit` it can read but not act.
+Falling back to `observe` and switching skills off were both rejected.
 
 A skill can itself carry prompt injection, and that is what the lowering guards
 against. If someone the person trusts has reviewed the exact text and found
 none, that reason is gone. The review should use the same mechanism as trusting
 connectors: a reviewed set in a GitHub repository or organization the person
-trusts, naming each skill by pin and digest. What the skill reads while it runs
-is a different matter. Emails from third parties, web pages and script output
-can still carry injection, and they stay tainted however trustworthy the skill
-is.
+trusts, naming each skill by its id and digest. What the skill reads while it
+runs is a different matter. Emails from third parties, web pages and script
+output can still carry injection, and they stay tainted however trustworthy the
+skill is.
 
 ## The answer in brief
 
 - **Authority comes from the person, per call.** A run does not lose it by
-  reading third-party text (section 1). The lowering on the branch is a harness
+  reading third-party text (section 1). The lowering is a harness
   stand-in for checks the runtime does not make yet.
 - **A review is a trust statement over exact bytes.** Its concept is
   `prompt-injection-free`, and the person accepts it the way they accept a
@@ -36,7 +35,7 @@ is.
 - **The interim:** a child whose skill is fully covered by a review the person
   accepted is not lowered. It keeps the delegating run's binding, and the
   skill's text keeps the `quote` role (section 3). Everything else falls back to
-  the branch's lowering.
+  the lowering.
 - **Scripts are a separate claim.** A sealed script run is a `read`, whether or
   not it was reviewed. A reviewed descriptor makes other effect classes
   believable later (section 4).
@@ -80,7 +79,7 @@ child because of a prompt role, and `quote` text "provides no action authority"
 Today's harness has none of the three. `evaluateToolPolicy`
 (`runtime/cf-harness/src/prompt-loop.ts`) admits a call on the run's binding
 alone and ignores what the model observed (H9 / CT-2175). The harness puts prompt
-caveats only on browser output. The branch's lowering stands in for all of it:
+caveats only on browser output. The lowering stands in for all of it:
 text nobody vouched for, in an instruction position, costs the run its
 authority. The harness already skips the lowering where someone did vouch. A
 skill the operator configured from `--skills-root` binds as `context`, which
@@ -94,10 +93,14 @@ A reviewed skill entry is a §4.8.2 trust statement:
   load from the bundle (`SKILL.md`, every resource, every script) with its
   digest, keyed by its path relative to the bundle root. The `concrete` is the
   digest of that sorted list, so the bundle is reviewed as a whole and an old
-  `SKILL.md` cannot be paired with a new resource. The entry also names the pin
-  (`owner/repo/slug@<commit sha>`), which must match too: the digests are the
-  identity and the pin is where the bytes live, so the same bytes under another
-  repository fail closed;
+  `SKILL.md` cannot be paired with a new resource. The entry also names the
+  skill's discovery id (`owner/repo/slug`), which must match too, compared
+  without regard to case: the digests are the identity and the id is where
+  the bytes live, so the same bytes under another repository fail closed. The
+  commit the reviewer read is recorded, and is not matched. Acquisition pins
+  whatever commit the default branch points at, so matching it would void
+  every review at the repository's next commit, while the same bytes at a
+  later commit are the bundle that was reviewed;
 - `implements` is `https://commonfabric.org/cfc/concepts/prompt-injection-free`,
   a concept §4.8.1 already lists;
 - `verifier` is the organization whose reviewed set holds the entry.
@@ -113,16 +116,20 @@ organization's branch protection is the signing key.
 Revocation and expiry belong to the set, not to new fields on the entry.
 Revoking an entry is a new commit of the set that drops it or lists it in the
 set's revocation file, as for connectors. Expiry is §4.8.2's optional
-`scope.validUntil`. Both are checked when the child starts and again at each
-file load. A failure fails closed with the generic "not accepted" status of
-§18.3.2. `CfcTrustStatement` in `trust.ts` has no `scope` yet, so it gains
-§4.8.2's `scope: { validUntil }`.
+`scope.validUntil`. Both are checked when the child starts. A failure fails
+closed with the generic "not accepted" status of §18.3.2. The harness checks
+them itself before it asks the closure: `trust.ts`'s resolver is a pure
+function of its configuration and consults no clock, so `CfcTrustStatement`
+gains no `scope`.
 
-Every listed file is fetched from the pinned commit at acquisition. Only putting
-a resource into the model's context is lazy. Each load re-checks that file's
-digest, and a path the entry does not list is refused. Acquisition today admits
-only `SKILL.md` and `scripts/<name>` and refuses symlinks and nested directories
-(`isAdmittedScript`). Admitting resources reuses that rule.
+Every file is fetched from the pinned commit at acquisition, and the bundle
+digest covers every file fetched. `SKILL.md` reaches the child as the text the
+handle resolves to, checked against acquisition's digest when the child starts.
+`run_skill_script` re-checks a script's digest at each run and refuses a script
+the acquisition did not fetch. Acquisition admits only `SKILL.md` and
+`scripts/<name>` and refuses symlinks and nested directories
+(`isAdmittedScript`). Admitting resources reuses that rule, with a digest
+re-check at each load like a script's.
 
 The frontmatter, `allowed-tools` included, is not part of what the entry
 vouches for beyond its bytes. It stays free-form labeled data (primitives §2).
@@ -215,22 +222,24 @@ names, and swapping a script voids the review.
 
 ## 3. The interim: a reviewed child keeps its binding
 
-The branch lowers a child to `quote` when its skill arrived through a handle
+The harness lowers a child to `quote` when its skill arrived through a handle
 (`promptSlotBindingAtMost` in `prompt-loop.ts`). The interim changes that
 predicate to: _when its skill arrived through a handle without accepted review
 evidence_. Provisionally decided by Alex on 2026-11-26.
 
-- **When the child is not lowered.** The pin matches, and every file the run can
-  load from the bundle matches by digest a statement the acting person's closure
-  accepts for `prompt-injection-free`. A missing file, a digest mismatch, an
-  expired or revoked entry, or a verifier the person has not accepted: the
-  branch's lowering applies unchanged.
+- **When the child is not lowered.** The skill id matches, and every file the
+  run can load from the bundle matches by digest a statement the acting person's
+  closure accepts for `prompt-injection-free`. A missing file, a digest
+  mismatch, an expired or revoked entry, or a verifier the person has not
+  accepted: the lowering applies unchanged.
 - **The role stays `quote`.** Only the lowering predicate changes. The skill's
   text is still third-party text, and §18.3.1 declares a role "by the runtime
   input route, not by the text".
 - **Uncovered files are refused.** A reviewed child does not load a bundle
-  file the entry does not cover, through `read_skill_resource` or
-  `run_skill_script`.
+  file the entry does not cover. Acquisition fetches only `SKILL.md` and
+  `scripts/`, the bundle digest covers every file it fetched, and
+  `run_skill_script` refuses a script the acquisition did not fetch or whose
+  bytes changed since, so the review covers every file the child can load.
 - **The decision is recorded** on the child's run manifest: the statement, the
   verifier, the entry and the file digests.
 
@@ -259,7 +268,7 @@ cannot write a file. Its safety margin is also smaller than it looks. The
 child's report returns to a parent that holds `direct-command` and ignores what
 it observes. `scrubHandleSkillText` removes the skill's text from that report,
 and nothing removes what the text made the child write. The margin is one model
-hop, not a boundary, and that holds for unreviewed skills on the branch too.
+hop, not a boundary, and that holds for unreviewed skills too.
 
 ### 3.3 How the interim is retired
 
@@ -338,15 +347,39 @@ same for the parent run.
 
 | Step | Piece                                                                                          | Exists?                                                                                                                                           |
 | ---- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | Reviewed-set entries as trust statements, and a delegation for each accepted set               | Partly. `trust.ts` has statements with pattern concretes, delegations and the closure, as deployment config. Per-person acceptance is question 3. |
-| 2    | A digest of the served bytes to match against                                                  | Yes: `acquire_skill`'s `valueDigest`, the external-ingest stamp, `run_skill_script`'s digest check.                                               |
-| 3    | The lowering predicate consults the closure; the manifest records the evidence; uncovered files refused | No. The `childPromptSlotBinding` computation in `prompt-loop.ts`, plus the resource and script tools.                                     |
+| 1    | Reviewed-set entries as trust statements, and a delegation for each accepted set               | Yes, as an operator file: `--reviewed-skills`, read by `runtime/cf-harness/src/skills/reviewed-skills.ts`, evaluated through `trust.ts`'s closure. Per-person acceptance is question 3. |
+| 2    | A digest of the served bytes to match against                                                  | Yes: `acquire_skill`'s `valueDigest`, the external-ingest stamp, `run_skill_script`'s digest check, and a bundle digest over all of them. |
+| 3    | The lowering predicate consults the closure; the manifest records the evidence; uncovered files refused | Yes. The `childPromptSlotBinding` computation in `prompt-loop.ts`; the manifest's `reviewedSkill`.                          |
 | 4    | Sealed `run_skill_script`, classed `read`; the literal `"side-effect"` replaced                | No. Independent of review; built after steps 1 to 3 or alongside them. It lets a lowered child run scripts under `enforce-explicit` only: under the default `enforce-strict`, even a `read` needs `direct-command`. |
 | 5    | Source entry assigns prompt caveats to fetched text and script output; then the review mints `CaveatScreened` and `CaveatAssessment`, and the tier rules check `detector` | No (cleanup 4, top/1892). The tier rules in `standard-profile.ts` ignore `detector` today. |
 | 6    | Per-call authority: `PromptSlotInfluence` on invocation records, argument labels, `IntentOnce` | No (H9 / CT-2175). This deletes the lowering.                                                                                                     |
 | 7    | Script descriptors, registry snapshots, `ToolDescriptorBound`, the sink check                  | No (cleanups 5 and 6).                                                                                                                            |
 
 Steps 1 to 3 are the 20%.
+
+## CFC debt
+
+The intended policy: a skill's own bytes, reviewed by a verifier the acting
+person accepts, carry no prompt injection, so holding them does not cost a run
+its authority. Nothing the skill reads is cleared, and the review grants
+nothing the person lacked. Steps 1 to 3 cut these corners:
+
+1. **The atom.** A statement's `concrete` names an atom of type
+   `https://commonfabric.org/cf-harness/atom/SkillBundle` (skill id and bundle
+   digest), which the harness builds to ask the closure and nothing carries on
+   a label. Real CFC has source entry mint an atom on the fetched bytes, of a
+   type the specification names. No registered type names "the digest of a
+   text" (Berni's question 3).
+2. **Acceptance.** The operator's file accepts its verifiers with
+   deployment-root delegations (`delegator: "*"`), for everyone the run acts
+   for. Real CFC has each person delegate in their profile, and a set file
+   separate from acceptance (question 3).
+3. **Expiry and revocation** are checked by the harness before the closure,
+   once, when the child starts. A review that expires mid-run keeps covering
+   that child. Real CFC checks §4.8.2 `scope.validUntil` against the trust
+   snapshot each decision is made under.
+4. **The decision is the run's binding,** not each call's. That is section 3's
+   interim, deleted by step 6.
 
 ## Decisions for Alex
 
@@ -359,11 +392,15 @@ These are provisional until Berni reviews the package, like the bridge plan's.
    connector entries, with no separate skill registry. Decided 2026-11-26:
    1. a digest per file, keyed by bundle-relative path, and the digest of that
       sorted list as the `concrete`;
-   2. the pin required, and matched as well as the digests;
+   2. the skill's discovery id required, and matched as well as the digests;
+      the commit the reviewer read recorded but not matched, since
+      acquisition pins the default branch's current commit (revised
+      2026-11-26);
    3. every listed file fetched at acquisition, each load re-checked, and
       unlisted paths refused;
-   4. revocation and expiry kept in the set, with `scope: { validUntil }`
-      added to the runtime's trust statements;
+   4. revocation and expiry kept in the set, and checked by the harness
+      before it asks the closure, so `trust.ts` stays clock-free (decided
+      2026-11-26);
    5. script bytes in the list, and what a script does claimed separately by a
       tool descriptor in the same set file;
    6. a versioned review checklist in the set's repository, cited from each

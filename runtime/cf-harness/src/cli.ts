@@ -148,6 +148,7 @@ import {
   parseAllowedSkillScriptSpec,
   uniqueAllowedSkillScripts,
 } from "./skills/scripts.ts";
+import { parseHarnessReviewedSkills } from "./skills/reviewed-skills.ts";
 import { resolveHarnessSkillsRoot } from "./skills/root.ts";
 import {
   describeHarnessSkillsRoot,
@@ -229,6 +230,7 @@ const CLI_STRING_FLAGS = [
   "focus-root",
   "allow-tool",
   "allow-skill-script",
+  "reviewed-skills",
   "allow-subagent-profile",
   "output-mode",
   "prompt-slot-role",
@@ -676,6 +678,9 @@ Options:
   --allow-skill-script <spec>   Allow one exact skill script (repeatable: skill:scripts/path,
                                 where skill is a registry name or an acquired pin owner/repo/slug@<commit sha>;
                                 a registry name requires --skills-root, a pin does not)
+  --reviewed-skills <path>      JSON file of reviewed skill bundles and the verifiers this run
+                                accepts. A child handed an acquired skill one of them fully
+                                covers keeps the delegating run's authority instead of quote
   --allow-subagent-profile <p>  Authorize delegate_task to spawn a profile (repeatable: default | browser | web_fetch | web_search)
   --output-mode <mode>          operator | batch (default: operator)
   --stream-events               Print transcript events as they happen
@@ -1960,6 +1965,11 @@ export const parseCfHarnessCliArgs = async (
     );
   }
   const readTextFile = deps.readTextFile ?? Deno.readTextFile;
+  const reviewedSkills = typeof args["reviewed-skills"] === "string"
+    ? parseHarnessReviewedSkills(
+      JSON.parse(await readTextFile(resolve(cwd, args["reviewed-skills"]))),
+    )
+    : undefined;
   const loomAuthoring = await readLoomAuthoringConfig(
     typeof args["loom-authoring-config"] === "string"
       ? args["loom-authoring-config"]
@@ -2253,6 +2263,7 @@ export const parseCfHarnessCliArgs = async (
     skillNames,
     allowSkillScripts: args["allow-skill-scripts"] === true,
     allowedSkillScripts,
+    ...(reviewedSkills !== undefined ? { reviewedSkills } : {}),
     skillScriptExecutionTarget,
     skillCatalogEnabled: args["no-skill-catalog"] !== true,
     ...(typeof args.model === "string"
