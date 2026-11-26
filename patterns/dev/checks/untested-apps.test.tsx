@@ -12,8 +12,8 @@
  * which is what runs the derived expressions inside it.
  */
 import { assert, NAME, pattern, TESTS, UI } from "commonfabric";
-import ActivityLog from "../../apps/activity-log/activity-log.tsx";
-import Agent from "../../apps/agent/agent.tsx";
+import ActivityLog from "../../apps/activity-log/main.tsx";
+import Agent from "../../apps/agent/main.tsx";
 import CfcPromptInjectionDemo from "../../examples/cfc-agent-prompt-injection-demo/main.tsx";
 import CfcRowLabelRecords from "../../examples/cfc-row-label-records/main.tsx";
 import VoiceNote from "../../system/notes/voice-note.tsx";

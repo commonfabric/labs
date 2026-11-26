@@ -12,8 +12,7 @@
  *
  * It also holds each `main.tsx` under `patterns/` to the standalone floor: a
  * `main.tsx` entry is offered to people to place alone, so one that requires
- * an input with no default fails, unless `PENDING_STANDALONE_RENAMES` names it
- * as an entry still waiting to be renamed out of `main.tsx`.
+ * an input with no default fails.
  *
  *   deno task pattern-compat             # check (what CI runs)
  *   deno task pattern-compat --update    # record contracts that have no baseline
@@ -64,7 +63,6 @@ import {
   parseArgs,
   partitionAcceptedBreaks,
   type PatternContract,
-  PENDING_STANDALONE_RENAMES,
   readBaselines,
   selectItems,
   shouldRecord,
@@ -91,9 +89,6 @@ export interface CompatGateInput {
 
   /** Patterns known to fail evaluation, keyed as `patternKey()` keys them. */
   unevaluable: ReadonlySet<string>;
-
-  /** `main.tsx` entries known not to run alone while their rename waits. */
-  pendingStandaloneRenames: ReadonlySet<string>;
 
   /** Compiles and evaluates one pattern file, returning its module's exports. */
   evaluate(file: string): Promise<unknown>;
@@ -237,7 +232,6 @@ export async function judgeCompatibility(
         key,
         item.startsWith(`${PATTERNS_DIR}/`) && basename(item) === "main.tsx",
         current,
-        input.pendingStandaloneRenames,
       ),
     ];
     const checkMs = performance.now() - checkStarted;
@@ -389,11 +383,6 @@ export async function judgeCompatibility(
             `or rename the file: main.tsx is kept for a pattern that stands ` +
             `alone.`,
         );
-      } else if (finding.kind === "stale-pending-rename") {
-        err.push(
-          `\n${finding.pattern}\n  runs alone now. Remove it from ` +
-            `PENDING_STANDALONE_RENAMES in tasks/pattern-compat-lib.ts.`,
-        );
       } else if (finding.kind === "invalid-schema") {
         err.push(
           `\n${finding.pattern}\n  ${finding.role} schema is not valid on its ` +
@@ -522,7 +511,6 @@ export async function runPatternCompat(
       baselinesDir: `${REPO_ROOT}/${BASELINES_DIR}`,
       acceptedBreaks: ACCEPTED_CONTRACT_BREAKS,
       unevaluable: UNEVALUABLE_PATTERNS,
-      pendingStandaloneRenames: PENDING_STANDALONE_RENAMES,
       evaluate: async (file) => {
         const program = await resolveLocalProgram(
           (resolver) => engine.resolve(resolver),

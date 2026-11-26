@@ -23,7 +23,7 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
-import StoreMapper from "../store-mapper/store-mapper.tsx";
+import StoreMapper from "../store-mapper/main.tsx";
 
 // Item with optional aisle override for manual corrections
 interface ShoppingItem {

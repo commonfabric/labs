@@ -16,7 +16,7 @@ import {
   showsNone,
   sortedIds,
 } from "./classifier-test-fixture.ts";
-import SelfImprovingClassifier from "./self-improving-classifier.tsx";
+import SelfImprovingClassifier from "./main.tsx";
 
 // The model fails the request for rules.
 export const llmMocks = [

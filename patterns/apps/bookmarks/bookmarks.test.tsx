@@ -29,7 +29,7 @@ import {
   readValue,
   typeInto,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Bookmarks from "./bookmarks.tsx";
+import Bookmarks from "./main.tsx";
 
 interface Bookmark {
   url: string;

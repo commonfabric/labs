@@ -16,7 +16,7 @@ import {
   hasText,
   readValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import ShoppingList, { searchItemsPattern } from "./shopping-list.tsx";
+import ShoppingList, { searchItemsPattern } from "./main.tsx";
 
 const titles = (items: readonly { title: string }[]) =>
   items.map((item) => item.title).join(",");

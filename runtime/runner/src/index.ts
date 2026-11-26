@@ -316,6 +316,7 @@ export {
   setPatternRepository,
   setPatternSource,
   setPieceReconciliation,
+  stampCreatedFromOrigin,
   STORED_ARGUMENT_SCHEMA_REFUSAL,
 } from "./runner.ts";
 export {

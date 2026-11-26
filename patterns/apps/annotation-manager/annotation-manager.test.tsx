@@ -25,7 +25,7 @@ import type {
   AnnotationKind,
   AnnotationStatus,
 } from "../annotation/annotation.tsx";
-import AnnotationManager from "./annotation-manager.tsx";
+import AnnotationManager from "./main.tsx";
 import {
   findElements,
   findNode,

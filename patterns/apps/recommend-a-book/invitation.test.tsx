@@ -16,7 +16,7 @@ import {
   readValue,
 } from "../../tools/test-support/vnode-helpers.ts";
 import { type LibrarySeed, prioritizeCandidateBooks } from "./agents.tsx";
-import Invitation from "./main.tsx";
+import Invitation from "./invitation.tsx";
 import type { Profile } from "./views.tsx";
 
 export default pattern(() => {

@@ -84,18 +84,22 @@ export interface PushedBranch {
  * when given, and otherwise what {@link defaultBranch} asks `origin`, with a
  * step, shown with `io`, that says so. The push refuses when `origin` names
  * none or cannot be asked. When `origin` already has the branch and there is
- * an `ask`, pushes nothing, and returns what `ask` returns, given the
- * branch's name, how `origin`'s branch stands, and `origin`'s default branch;
- * otherwise it pushes, and returns one line saying how that ended. Shows a
- * step that says which branch it pushes before git starts, and that is done
- * once git succeeds. Once the push succeeds, calls `onPushed` with the
- * branch's name and the address of the page the server offers for creating a
- * pull request, or null when it offers none; by default, it opens the page,
- * and the line it returns ends with what `onPushed` returns. When git fails
- * to push, or to say which branch is the default, calls `onFailed` with what
- * the push printed, which is nothing in the second case, and `origin`'s
- * default branch, in the first case; the line it returns says the push was aborted when it failed after `signal` aborted;
- * git's own output has been shown by then.
+ * a `prepareAsk`, unless the branch is the given `main`, calls it with the
+ * branch's name and how `origin`'s branch stands, while it asks `origin` for
+ * its default branch when there is no `main`; then, unless the push refuses,
+ * pushes nothing, and returns what the `ask` function that `prepareAsk`
+ * resolves with returns, given `origin`'s default branch. Otherwise it
+ * pushes, and returns one line saying how that ended.
+ * Shows a step that says which branch it pushes before git starts, and that
+ * is done once git succeeds. Once the push succeeds, calls `onPushed` with
+ * the branch's name and the address of the page the server offers for
+ * creating a pull request, or null when it offers none; by default, it opens
+ * the page, and the line it returns ends with what `onPushed` returns. When
+ * git fails to push, or to say which branch is the default, calls `onFailed`
+ * with what the push printed, which is nothing in the second case, and
+ * `origin`'s default branch, in the first case; the line it returns says the
+ * push was aborted when it failed after `signal` aborted; git's own output has
+ * been shown by then.
  */
 export async function pushBranch<Asked = never>(
   io: PushIo,
@@ -106,11 +110,10 @@ export async function pushBranch<Asked = never>(
   ) => Promise<TaskText> | TaskText = (_, url) =>
     url === null ? [] : openPage(io, url),
   onFailed: (output: string, main?: string) => void = () => {},
-  ask?: (
+  prepareAsk?: (
     branch: string,
     remote: PushedBranch,
-    main: string,
-  ) => Promise<Asked>,
+  ) => Promise<(main: string) => Asked>,
   main?: string,
 ): Promise<TaskText | Asked> {
   const gitDir = io.query(["rev-parse", "--absolute-git-dir"])?.trim();
@@ -128,27 +131,24 @@ export async function pushBranch<Asked = never>(
   if (!branch) {
     return say`This checkout is not on a branch. Check out or create a branch first.`;
   }
-  if (main === undefined) {
-    const asking = io.step(
-      say`Asking ${name("origin")} which branch is its default`,
-    );
-    const named = await defaultBranch(io.queryAsync, "origin");
-    if (named === null || signal?.aborted) {
-      onFailed("");
-      return signal?.aborted
-        ? say`Push aborted.`
-        : say`Not pushing: ${name("origin")}'s default branch is unknown.`;
-    }
-    asking();
-    main = named;
+  const remote = prepareAsk && branch !== main
+    ? pushedBranch(io.query, branch)
+    : null;
+  const answer = main ?? askDefaultBranch(io, "origin", signal);
+  const question = prepareAsk && remote
+    ? prepareAsk(branch, remote)
+    : undefined;
+  const [named, ask] = await settleBoth(answer, question);
+  if (named === null) {
+    onFailed("");
+    return signal?.aborted
+      ? say`Push aborted.`
+      : say`Not pushing: ${name("origin")}'s default branch is unknown.`;
   }
-  if (branch === main) {
-    return say`Rename the branch first. You were about to push your ${main} branch.`;
+  if (branch === named) {
+    return say`Rename the branch first. You were about to push your ${named} branch.`;
   }
-  if (ask) {
-    const remote = pushedBranch(io.query, branch);
-    if (remote !== null) return await ask(branch, remote, main);
-  }
+  if (ask) return ask(named);
   const pushing = io.step(say`Pushing ${branch} to ${name("origin")}`);
   const push = await io.run([
     "push",
@@ -159,7 +159,7 @@ export async function pushBranch<Asked = never>(
     `HEAD:refs/heads/${branch}`,
   ]);
   if (!push.success) {
-    onFailed(push.output, main);
+    onFailed(push.output, named);
     return signal?.aborted
       ? say`Push aborted.`
       : say`Pushing ${branch} to ${name("origin")} failed.`;
@@ -168,6 +168,40 @@ export async function pushBranch<Asked = never>(
   const then = await onPushed(branch, offeredPullRequestUrl(push.output));
   const pushed = say`Pushed ${branch} to ${name("origin")}.`;
   return then.length === 0 ? pushed : say`${pushed} ${then}`;
+}
+
+/** Resolves with the branch that the server of the remote named `remote`
+ * names as its default, showing a step with `io` that asks, which is done
+ * once it answers, or with null when it names none, git cannot ask it, or
+ * `signal` aborts first. */
+export async function askDefaultBranch(
+  io: Pick<PushIo, "step" | "queryAsync">,
+  remote: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const asking = io.step(
+    say`Asking ${name(remote)} which branch is its default`,
+  );
+  const named = await defaultBranch(io.queryAsync, remote);
+  if (named === null || signal?.aborted) return null;
+  asking();
+  return named;
+}
+
+/**
+ * Resolves with what `first` and `second` resolve with once both have
+ * settled, or rejects with the reason of the first of them that rejects, in
+ * that order, also only once both have settled, so that neither is still
+ * running when the caller goes on.
+ */
+export async function settleBoth<A, B>(
+  first: A,
+  second: B,
+): Promise<[Awaited<A>, Awaited<B>]> {
+  const [a, b] = await Promise.allSettled([first, second]);
+  if (a.status === "rejected") throw a.reason;
+  if (b.status === "rejected") throw b.reason;
+  return [a.value, b.value];
 }
 
 /**

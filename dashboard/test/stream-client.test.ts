@@ -263,7 +263,12 @@ describe("stream-client", () => {
         },
         SILENCE,
         () => paints++,
-        { page: (data) => received.push(data) },
+        {
+          page: (data) => {
+            if (data === "unreadable") throw new Error("cannot take this page");
+            received.push(data);
+          },
+        },
       );
       return { sources, received, updates, paints: () => paints };
     }
@@ -293,6 +298,30 @@ describe("stream-client", () => {
       source.deliver("ping", "2");
       expect(page.updates.check(Date.now())).toBe(true);
       expect(page.received).toEqual([]);
+    });
+
+    it("closes a stream whose event the page cannot take, and opens another once the interval passes", () => {
+      const page = follow();
+      page.updates.check(Date.now());
+      const [first] = page.sources;
+      first.readyState = OPEN;
+      first.deliver("page", "<main>one</main>");
+      expect(() => first.deliver("page", "unreadable")).toThrow("cannot take this page");
+      expect(first.readyState).toBe(CLOSED);
+      expect(page.paints()).toBe(2);
+      expect(page.updates.check(Date.now())).toBe(false);
+      expect(page.sources.length).toBe(1);
+      expect(page.updates.check(Date.now() + SILENCE)).toBe(false);
+      expect(page.sources.length).toBe(2);
+
+      // A stream whose events the page takes is left open.
+      const second = page.sources[1];
+      second.readyState = OPEN;
+      second.deliver("page", "<main>two</main>");
+      expect(second.readyState).toBe(OPEN);
+      expect(page.updates.check(Date.now())).toBe(true);
+      expect(page.sources.length).toBe(2);
+      expect(page.received).toEqual(["<main>one</main>", "<main>two</main>"]);
     });
   });
 });

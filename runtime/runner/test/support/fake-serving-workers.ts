@@ -79,6 +79,8 @@ export class FakeServingWorker implements PortLike {
   #onerror: ((event: ErrorEvent) => void) | null = null;
   #init: ServingWorkerInit | undefined;
   #beacon: RunBeacon | undefined;
+  /** The actions of the runs started so far, which no collection takes. */
+  readonly #actions: (() => void)[] = [];
   #terminated = false;
   #occupancy: HostOccupancy = "vacant";
   #finalStats: ServingLoopStats = emptyServingLoopStats();
@@ -277,13 +279,17 @@ export class FakeServingWorker implements PortLike {
    * Plays the body of a run of `action` in `space` starting to hold the
    * worker's thread, for `event` where given: the worker posts what the run's
    * number stands for, and marks the beacon the pool handed it, until
-   * `endRun()`. Throws before the host has taken its `worker.init`.
+   * `endRun()`. The stand-in holds the run's action for as long as it lives,
+   * so the garbage collector never reports it collected; `collected()` does.
+   * Throws before the host has taken its `worker.init`.
    */
   startRun(space: MemorySpace, action: string, event?: RunEvent): void {
     if (this.#beacon === undefined) {
       throw new Error("the stand-in worker's host has not been started");
     }
-    this.#beacon.accessForTestingOnly.enter(space, () => {}, action, event);
+    const body = () => {};
+    this.#actions.push(body);
+    this.#beacon.accessForTestingOnly.enter(space, body, action, event);
   }
 
   /** Plays the end of the body `startRun()` started. */

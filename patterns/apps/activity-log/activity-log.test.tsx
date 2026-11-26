@@ -26,7 +26,7 @@ import {
   propValue,
   readValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import ActivityLog, { type ActivityEvent } from "./activity-log.tsx";
+import ActivityLog, { type ActivityEvent } from "./main.tsx";
 
 interface Mention {
   mentioned: Mention[];

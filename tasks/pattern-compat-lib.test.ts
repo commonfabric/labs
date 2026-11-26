@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { existsSync } from "@std/fs/exists";
 import { type JSONSchema, patternKeyMovesIn } from "@commonfabric/runner";
 import { describe, it } from "@commonfabric/test-support/test";
 import {
@@ -14,7 +13,6 @@ import {
   parseArgs,
   partitionAcceptedBreaks,
   type PatternContract,
-  PENDING_STANDALONE_RENAMES,
   readBaselines,
   selectItems,
   shouldRecord,
@@ -26,8 +24,6 @@ import {
   baselineKeysByPattern,
   collectBaselineKeys,
   collectCompatibilityPaths,
-  PATTERNS_DIR,
-  REPO_ROOT,
 } from "./pattern-files.ts";
 
 const contract = (
@@ -816,20 +812,5 @@ describe("unusedAcceptances", () => {
     const entries = [entry(["v1"], ["result.x"])];
     expect(unusedAcceptances(entries, new Set(["b.tsx"]), []))
       .toEqual({ pairs: [], paths: [] });
-  });
-});
-
-describe("PENDING_STANDALONE_RENAMES", () => {
-  it("names only main.tsx files the patterns tree holds", () => {
-    // An entry whose file is gone yields no contract, so the gate can never
-    // find it stale; its rename landed and the entry has to leave.
-
-    for (const key of PENDING_STANDALONE_RENAMES) {
-      expect({
-        key,
-        main: key.endsWith("/main.tsx"),
-        exists: existsSync(`${REPO_ROOT}/${PATTERNS_DIR}/${key}`),
-      }).toEqual({ key, main: true, exists: true });
-    }
   });
 });

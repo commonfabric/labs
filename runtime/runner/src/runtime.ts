@@ -124,6 +124,7 @@ import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
 import type { SpaceRunBeacon } from "./executor/run-beacon.ts";
 import {
   type DelegatedCarriage,
+  type SupersededOutput,
   waveRunActorOf,
   waveRunContextOf,
 } from "./executor/wave.ts";
@@ -191,6 +192,7 @@ import {
 } from "./scheduler/backpressure.ts";
 import { entityKey, entityNameKey } from "./scheduler/keys.ts";
 import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
+import { supersedingCommitsTaken } from "./scheduler/superseded-output.ts";
 import {
   getContentAddressedSchemasConfig,
   setContentAddressedSchemasConfig,
@@ -4082,7 +4084,10 @@ export class Runtime {
    * concurrently in their declared scopes. The gate covers the watched view;
    * a validation dependency outside that view needs its own pull. Entries
    * without scope use the space instance. If no array entry names a usable
-   * address, the singular conflict supplies the recovery target.
+   * address, the singular conflict supplies the recovery target. With
+   * `superseded`, the documents a wave dropped writes to over concurrent
+   * commits, the wait also lasts until the replica has taken each such
+   * commit, so that the retry reads what its write lost to.
    *
    * A policy manifest is pulled with the documents its rules live in, since
    * a retry verifies the whole artifact.
@@ -4098,6 +4103,7 @@ export class Runtime {
   async awaitCommitRetryReadiness(
     error: unknown,
     teardownSignal?: AbortSignal,
+    superseded: readonly SupersededOutput[] = [],
   ): Promise<CommitRetryPullFailure[]> {
     const waitUnlessTeardown = async (
       operation: PromiseLike<unknown>,
@@ -4131,6 +4137,8 @@ export class Runtime {
       }
     }
     if (teardownSignal?.aborted) return [];
+    const taking = supersedingCommitsTaken(this, superseded, teardownSignal);
+    if (taking !== undefined && !await waitUnlessTeardown(taking)) return [];
     type ConflictAddress = { space: MemorySpace; of: URI; scope?: CellScope };
     const isPullableConflict = (value: unknown): value is ConflictAddress => {
       const conflict = value as Partial<ConflictAddress> | null | undefined;

@@ -545,6 +545,8 @@ export class StoreCurrency {
         vouched: reasons.length === 0,
         writes: taken.writes,
         owned: facts?.owned ?? [],
+        ...(facts !== undefined && facts.absentAsDefault.length > 0 &&
+          { absentAsDefault: facts.absentAsDefault }),
         // The loop follows a recorded origin before it leaves a root that
         // rests on the piece unstarted (serving-loop.md §3e).
         ...(facts?.followsOrigin === true && taken.rootScope === "space" &&
