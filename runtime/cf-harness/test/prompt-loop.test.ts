@@ -8,6 +8,7 @@ import {
 import type { HarnessRunDepth } from "../src/contracts/run-depth.ts";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
+import { observedImageRead } from "./support/observed-image.ts";
 import { decodeBase64 } from "@std/encoding/base64";
 import { parentToolIdsForBacking } from "../src/contracts/tool-descriptor.ts";
 import { join } from "@std/path";
@@ -4470,7 +4471,9 @@ test("CfHarnessPromptLoop attaches images loaded by view_image on the next model
   const loop = new CfHarnessPromptLoop({
     apiKey: "test-key",
     engine: new CfHarnessEngine({
-      sandboxRuntime: new FakeSandboxRuntime(),
+      sandboxRuntime: new FakeSandboxRuntime([
+        observedImageRead(ONE_PIXEL_PNG),
+      ]),
       workspaceHostPath: workspace,
       runId: "run-view-image",
       model: "gpt-5.4",
@@ -12635,6 +12638,86 @@ describe("CfHarnessPromptLoop web_fetch results", () => {
   });
 });
 
+test("image-review returns prose with only the author's previously observed frames", async () => {
+  const workspace = await Deno.realPath(await Deno.makeTempDir());
+  try {
+    await Deno.writeFile(join(workspace, "frame.png"), ONE_PIXEL_PNG);
+    const label = { confidentiality: ["fixture"] };
+    const runId = "review-frames";
+    const sandbox = new FakeSandboxRuntime([
+      observedImageRead(ONE_PIXEL_PNG, label),
+    ]);
+    const frame = runId + ":view_image:1";
+    const delegate = (args: Record<string, unknown>) =>
+      toolCallsTurn([["delegate_task", {
+        profile: "image-review",
+        goal: "Review the second viewer's phone.",
+        ...args,
+      }]]);
+    const finding = "The large Return button belongs to the current borrower.";
+    const turns = [
+      delegate({ imageOutputIds: [frame] }),
+      toolCallsTurn([["view_image", { path: "frame.png" }]]),
+      delegate({ imageOutputIds: [frame], skillHandle: "unseen" }),
+      delegate({ imageOutputIds: [frame] }),
+      { role: "assistant" as const, content: finding },
+      { role: "assistant" as const, content: "Done." },
+    ];
+    let reviews = 0;
+    const loop = new CfHarnessPromptLoop({
+      engine: new CfHarnessEngine({
+        sandboxRuntime: sandbox,
+        runId,
+        workspaceHostPath: workspace,
+        model: "gpt-test",
+      }),
+      allowedSubagentProfiles: ["image-review"],
+      modelClient: {
+        providerId: "openai-compatible-gateway",
+        complete(request) {
+          if (request.runId !== runId) {
+            reviews++;
+            expect(request.tools).toEqual([]);
+            expect(request.nativeModelToolIds).toEqual([]);
+            const images = request.transcript.flatMap((m) =>
+              m.role === "user" ? m.imageAttachments ?? [] : []
+            );
+            expect(images.map((i) => i.bytes)).toEqual([ONE_PIXEL_PNG.length]);
+          }
+          const assistant = turns.shift();
+          if (!assistant) throw new Error("unexpected model call");
+          return Promise.resolve({ assistant });
+        },
+      },
+    });
+    const result = await loop.runPrompt({
+      prompt: "Review",
+      promptSlotBinding: directPromptSlotBinding,
+    });
+    expect(reviews).toBe(1);
+    expect(result.runState.cfcModelContext?.observations[0]).toMatchObject({
+      label,
+      toolId: "view_image",
+      channels: ["output"],
+    });
+    const replies = result.transcript.filter((m) =>
+      m.role === "tool" && m.toolName === "delegate_task"
+    ).map((m) => JSON.parse(m.content));
+    expect(replies[0]).toMatchObject({
+      reason: "invalid-argument",
+      field: "imageOutputIds",
+    });
+    expect(replies[1]).toMatchObject({ reason: "invalid-argument" });
+    expect(replies[2].subagent).toMatchObject({
+      status: "completed",
+      summary: finding,
+      manifest: { allowedToolIds: [] },
+    });
+  } finally {
+    await Deno.remove(workspace, { recursive: true });
+  }
+});
+
 describe("CfHarnessPromptLoop transcript events", () => {
   it("reports the image a view_image call attaches to the transcript listener", async () => {
     const workspace = await Deno.realPath(await Deno.makeTempDir());
@@ -12642,7 +12725,9 @@ describe("CfHarnessPromptLoop transcript events", () => {
       await Deno.writeFile(join(workspace, "capture.png"), ONE_PIXEL_PNG);
       const loop = new CfHarnessPromptLoop({
         engine: new CfHarnessEngine({
-          sandboxRuntime: new FakeSandboxRuntime(),
+          sandboxRuntime: new FakeSandboxRuntime([
+            observedImageRead(ONE_PIXEL_PNG),
+          ]),
           workspaceHostPath: workspace,
           runId: "run-view-image-event",
           model: "gpt-test",

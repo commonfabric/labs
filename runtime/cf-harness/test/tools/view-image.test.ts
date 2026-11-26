@@ -1,4 +1,7 @@
 import { expect } from "@std/expect";
+import { observedImageRead } from "../support/observed-image.ts";
+import { encodeBase64 } from "@std/encoding/base64";
+import { deniedCfcResult } from "../../src/sandbox/runsc-cfc-result.ts";
 import { join } from "@std/path";
 
 import {
@@ -9,6 +12,7 @@ import {
 import { RESERVED_ARTIFACT_PATH_DETAIL } from "../../src/tools/reserved-artifacts.ts";
 import {
   createToolsSmallContext,
+  ScriptedSandbox,
   type ToolsSmallContextOptions,
 } from "../support/tools-small-context.ts";
 import {
@@ -110,7 +114,11 @@ describe("view-image", () => {
     options: Omit<ToolsSmallContextOptions, "workspaceHostPath"> = {},
   ): Promise<ViewImageToolOutput> =>
     viewImageTool.invoke(
-      createToolsSmallContext({ ...options, workspaceHostPath: workspace }),
+      createToolsSmallContext({
+        sandbox: new ScriptedSandbox([{ stdout: "", stderr: "", exitCode: 0 }]),
+        ...options,
+        workspaceHostPath: workspace,
+      }),
       { path },
     );
 
@@ -133,6 +141,106 @@ describe("view-image", () => {
       bytes: ONE_PIXEL_PNG.byteLength,
     });
     expect(output.imageAttachment.hostPath).toBe(join(workspace, "pixel.png"));
+  });
+
+  it("attaches exactly the observed pixels and retains their source label", async () => {
+    // The file was replaced after the sandbox read. Its current bytes cannot
+    // stand for the observation retained in the receipt.
+    await Deno.writeTextFile(join(workspace, "pixel.png"), "replacement");
+    const label = { confidentiality: ["review-fixture"] };
+    const sandbox = new ScriptedSandbox([{
+      stdout: "unmediated",
+      stderr: "",
+      exitCode: 0,
+      cfcResult: {
+        ...deniedCfcResult("test", "test"),
+        stdout: {
+          channel: "stdout",
+          policy: "observed",
+          label,
+          segments: [{ text: encodeBase64(ONE_PIXEL_PNG), label }],
+        },
+        exitCode: { policy: "observed", label, value: 0 },
+      },
+    }]);
+    const output = await view("pixel.png", {
+      sandbox,
+      imageAttachmentSnapshotDir: join(tempDir, "snapshots"),
+    });
+    expect(output).toMatchObject({
+      bytes: ONE_PIXEL_PNG.length,
+      sourceLabel: label,
+    });
+    if (!isViewImageToolSuccessOutput(output)) {
+      throw new Error("expected pixels");
+    }
+    expect(await Deno.readFile(output.imageAttachment.snapshotPath!)).toEqual(
+      ONE_PIXEL_PNG,
+    );
+  });
+
+  it("withholds pixels and metadata for a withheld sandbox read", async () => {
+    await Deno.writeFile(join(workspace, "pixel.png"), ONE_PIXEL_PNG);
+    for (const policy of ["opaque", "denied"] as const) {
+      const sandbox = new ScriptedSandbox([{
+        stdout: encodeBase64(ONE_PIXEL_PNG),
+        stderr: "",
+        exitCode: 0,
+        cfcResult: {
+          ...deniedCfcResult("test", "test"),
+          stdout: { channel: "stdout", policy, label: {} },
+        },
+      }]);
+      expect(errorOf(await view("pixel.png", { sandbox })).code).toBe(
+        "permission_denied",
+      );
+    }
+  });
+
+  it("reports public file status and withholds a labeled error", async () => {
+    for (
+      const { label, expected } of [
+        { label: {}, expected: "file_not_found" },
+        {
+          label: { confidentiality: ["fixture"] },
+          expected: "permission_denied",
+        },
+      ]
+    ) {
+      const observed = observedImageRead(ONE_PIXEL_PNG, label);
+      if (!observed.cfcResult) throw new Error("expected receipt");
+      const sandbox = new ScriptedSandbox([{
+        ...observed,
+        cfcResult: {
+          ...observed.cfcResult,
+          exitCode: { policy: "observed", label, value: 10 },
+        },
+      }]);
+      expect(errorOf(await view("missing.png", { sandbox })).code).toBe(
+        expected,
+      );
+    }
+  });
+
+  it("withholds missing evidence in enforcing modes and reads outside the run's ceiling", async () => {
+    await Deno.writeFile(join(workspace, "pixel.png"), ONE_PIXEL_PNG);
+    for (
+      const evidence of [
+        { stdout: "", stderr: "", exitCode: 0 },
+        observedImageRead(ONE_PIXEL_PNG, { confidentiality: ["fixture"] }),
+      ]
+    ) {
+      const context = createToolsSmallContext({
+        workspaceHostPath: workspace,
+        sandbox: new ScriptedSandbox([evidence]),
+      });
+      const result = await viewImageTool.invoke({
+        ...context,
+        cfcEnforcementMode: "enforce-strict",
+        cfcReadMaxConfidentiality: [],
+      }, { path: "pixel.png" });
+      expect(errorOf(result).code).toBe("permission_denied");
+    }
   });
 
   it("returns path_outside_workspace for a path that escapes the workspace", async () => {
