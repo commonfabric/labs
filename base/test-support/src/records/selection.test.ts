@@ -417,6 +417,21 @@ describe("selection", () => {
       }
     });
 
+    it("carries the last failure an entry names, and drops one that is not a day", () => {
+      // Nothing selects by it, so a malformed one must not cost every lane
+      // the manifest it obeys.
+      const manifest = sampleManifest();
+      manifest.entries[0]!.lastFailure = "2026-08-19";
+      expect(parseManifest(JSON.stringify(manifest))?.entries[0]?.lastFailure)
+        .toBe("2026-08-19");
+      for (const lastFailure of [7, "", "2026-02-31", "2026-08-19T04:00Z"]) {
+        Object.assign(manifest.entries[0]!, { lastFailure });
+        const parsed = parseManifest(JSON.stringify(manifest));
+        expect(parsed?.entries.length).toBe(manifest.entries.length);
+        expect(parsed?.entries[0]?.lastFailure).toBeUndefined();
+      }
+    });
+
     it("carries the disagreements an entry names, and drops one that does not read", () => {
       // Nothing selects by these, so a malformed one must not cost every
       // lane the manifest it obeys.
@@ -632,12 +647,25 @@ describe("selection", () => {
         }, "entry"),
       ],
       [
+        "a last new real test failure that is a time rather than a day",
+        withField("inputs", {
+          catches: 0,
+          sources: 0,
+          churn: 0,
+          lastCatch: "2026-08-20T04:00:00Z",
+        }, "entry"),
+      ],
+      [
         "a last run that is not a day",
         withField("lastRun", 7, "entry"),
       ],
       [
         "a last run that names no day at all",
         withField("lastRun", "", "entry"),
+      ],
+      [
+        "a last run that is a time rather than a day",
+        withField("lastRun", "2026-08-20T04:00:00Z", "entry"),
       ],
 
       // The lists a manifest carries beside its entries. Each has its own
@@ -869,6 +897,7 @@ describe("selection", () => {
         }],
       });
       manifest.entries[0]!.lastRun = "2026-08-20";
+      manifest.entries[0]!.lastFailure = "2026-08-19";
       manifest.entries[0]!.inputs.lastCatch = "2026-08-20";
       expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);
     });

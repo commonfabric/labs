@@ -21,6 +21,7 @@ import {
   firstDay,
   Fold,
   foldReports,
+  lastFailure,
   lastReadDay,
   lastRun,
   localReporter,
@@ -1372,6 +1373,29 @@ describe("build", () => {
       expect(parseAggregate(JSON.stringify(older))?.files).toEqual({});
     });
 
+    it("reads a state written before failures on main were counted as holding none", () => {
+      // Its last failure is then read from its disagreements alone, until
+      // `main` fails it again.
+      const aggregate = emptyAggregate("2026-08-20");
+      const held: Partial<IdentityState> = {
+        ...emptyState(),
+        flakesByDay: { "2026-08-19": 1 },
+      };
+      delete held.mainFailuresByDay;
+      Object.assign(aggregate.states, { [KEY]: held });
+      const read = parseAggregate(JSON.stringify(aggregate))!.states[KEY]!;
+      expect(read.mainFailuresByDay).toEqual({});
+      expect(lastFailure(read)).toBe("2026-08-19");
+      const fold = new Fold(
+        parseAggregate(JSON.stringify(aggregate))!,
+        NO_ALIASES,
+        "2026-08-20",
+      );
+      fold.add([stored(CI_NAME, context(), [record({ outcome: "fail" })])]);
+      expect(fold.finish().states.get(KEY)?.mainFailuresByDay)
+        .toEqual({ "2026-08-20": 1 });
+    });
+
     it("gives back the cost a day carrying a percentile was giving", () => {
       // The shape a state written before the samples were kept carries.
       const aggregate = emptyAggregate("2026-08-20");
@@ -2521,6 +2545,39 @@ describe("build", () => {
       expect(lastRun(emptyState())).toBeUndefined();
     });
 
+    it("takes the last day an identity failed on main, not the last day it ran", () => {
+      // Someone deciding whether a flaky test is fixed is asking when it
+      // last failed, and the days it passed since are the answer.
+      expect(lastFailure({
+        ...emptyState(),
+        runsByDay: { "2026-08-18": 3, "2026-08-20": 5 },
+        mainFailuresByDay: {
+          "2026-08-17": 1,
+          "2026-08-18": 2,
+          "2026-08-20": 0,
+        },
+      })).toBe("2026-08-18");
+    });
+
+    it("takes a disagreement anywhere as a failure", () => {
+      expect(lastFailure({
+        ...emptyState(),
+        mainFailuresByDay: { "2026-08-10": 1 },
+        flakesByDay: { "2026-08-12": 1 },
+      })).toBe("2026-08-12");
+    });
+
+    it("has no last failure for an identity that failed only off main", () => {
+      // A failure on a pull request or a workstation may be the change
+      // being worked on breaking the test, which says nothing about
+      // whether the test fails where every test runs.
+      expect(lastFailure({
+        ...emptyState(),
+        runsByDay: { "2026-08-20": 5 },
+        failuresByDay: { "2026-08-20": 2 },
+      })).toBeUndefined();
+    });
+
     it("carries the last day anything ran an identity", () => {
       // The exploration draw takes the longest-unrun first, so without
       // this it has nothing to order by and sweeps nothing.
@@ -2550,6 +2607,61 @@ describe("build", () => {
         runs: 2,
       });
       expect(manifest.entries[0]!.lastRun).toBe("2026-08-20");
+    });
+
+    it("carries the last day a held-back identity failed, through its own validator", () => {
+      // "writes" fails and passes at one commit, which holds it back, and
+      // fails again today on a workstation fixing it, which may be the fix
+      // in progress breaking it. "reads" fails once and is fixed by the
+      // next commit, so nobody is asked to fix it and every lane is spared
+      // its last failure.
+      const reads = { k: "unit", s: "memory", n: "space > reads" };
+      const yesterday = context({ startedAt: "2026-08-19T00:00:00.000Z" });
+      const rerun = context({ startedAt: "2026-08-19T01:00:00.000Z" });
+      rerun.ci = { ...rerun.ci!, runAttempt: 2 };
+      const fixing = context({
+        env: "local",
+        branch: "fix-writes",
+        commit: "c3",
+      });
+      delete fixing.ci;
+      const folded = foldReports(
+        emptyAggregate("2026-08-19"),
+        [
+          stored(CI_NAME, yesterday, [
+            record({ outcome: "fail" }),
+            record({ test: reads, outcome: "fail" }),
+          ]),
+          stored(CI_NAME.replace("-a.", "-b."), rerun, [record()]),
+          stored(`${CI_NAME}2`, context({ commit: "c2" }), [
+            record(),
+            record({ test: reads }),
+          ]),
+          stored(LOCAL_NAME, fixing, [record({ outcome: "fail" })]),
+        ],
+        NO_ALIASES,
+        "2026-08-20",
+      );
+      const manifest = buildManifest({
+        states: folded.states,
+        surfaces: folded.surfaces,
+        today: "2026-08-20",
+        generatedAt: "2026-08-20T04:00:00.000Z",
+        seed: "01K3",
+        commit: "c2",
+        runs: 2,
+      });
+      const byName = new Map(
+        manifest.entries.map((entry) => [entry.test.n, entry]),
+      );
+      expect(manifest.withheld.map((held) => held.test.n)).toEqual([
+        "space > writes",
+      ]);
+      expect(byName.get("space > writes")?.lastFailure).toBe("2026-08-19");
+      expect(byName.get("space > writes")?.lastRun).toBe("2026-08-20");
+      expect(byName.get("space > reads")?.lastRun).toBe("2026-08-20");
+      expect(byName.get("space > reads")?.lastFailure).toBeUndefined();
+      expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);
     });
   });
 });

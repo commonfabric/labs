@@ -10,7 +10,11 @@
  */
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import type { Manifest, SeenRun } from "@commonfabric/test-support/records";
+import type {
+  CiJob,
+  Manifest,
+  SeenRun,
+} from "@commonfabric/test-support/records";
 import { REPO } from "./config.ts";
 import { collectionSub } from "./test-selection-history.ts";
 import {
@@ -24,6 +28,13 @@ import {
 /** Where the flaky tests are served. */
 export const FLAKY_TESTS_JSON_PATH = "/test-selection/flaky.json";
 
+/** Where a job's run attempt is opened on GitHub. */
+export function runUrl(ci: CiJob, repo = REPO): string {
+  return `https://github.com/${repo}/actions/runs/${
+    encodeURIComponent(ci.runId)
+  }/attempts/${ci.runAttempt}`;
+}
+
 /** One run, with where to open it on GitHub when it has a page there. */
 function runJson(run: SeenRun, repo: string) {
   const ci = run.ci;
@@ -32,9 +43,7 @@ function runJson(run: SeenRun, repo: string) {
     runId: ci?.runId ?? null,
     runAttempt: ci?.runAttempt ?? null,
     job: ci?.job ?? null,
-    url: ci === undefined ? null : `https://github.com/${repo}/actions/runs/${
-      encodeURIComponent(ci.runId)
-    }/attempts/${ci.runAttempt}`,
+    url: ci === undefined ? null : runUrl(ci, repo),
   };
 }
 
@@ -72,6 +81,7 @@ export function flakyTestsJson(
       flakeShare: entry?.flakeRate ?? null,
       flakes: entry?.flakeEvidence?.flakes ?? null,
       runs: entry?.flakeEvidence?.runs ?? null,
+      lastFailure: entry?.lastFailure ?? null,
       lastRun: entry?.lastRun ?? null,
       // Newest first, which is the order someone fixing the test opens
       // them in.

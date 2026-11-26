@@ -425,6 +425,13 @@ export function parseAggregate(value: unknown): AggregateState | undefined {
     readCostsForward(identity);
     readNewRealTestFailuresForward(identity);
     readDisagreementsForward(identity);
+    // An aggregate written before failures on `main` were counted apart
+    // holds none, and an empty count is the truthful reading of it: the
+    // last failure is then read from the disagreements alone until `main`
+    // fails the test again.
+    if (!isObjectNotArray(identity.mainFailuresByDay)) {
+      identity.mainFailuresByDay = {};
+    }
     // Only what reads as a day is kept, and the next record of the
     // identity on `main` adds to it.
     const held: unknown = identity.ordersOnMain;
@@ -1001,10 +1008,31 @@ export interface BuildInput {
  * reads as the longest unrun of all.
  */
 export function lastRun(state: IdentityState): string | undefined {
+  return latestDay([state.runsByDay]);
+}
+
+/**
+ * The last day this identity is known to have failed on `main`, for
+ * whatever reason, or to have disagreed with itself anywhere. A failure on
+ * a pull request or a workstation counts only as part of a disagreement,
+ * since on its own it may be the change being worked on breaking the
+ * test. A test held back has a disagreement inside the flake window, so it
+ * always has an answer here.
+ */
+export function lastFailure(state: IdentityState): string | undefined {
+  return latestDay([state.mainFailuresByDay, state.flakesByDay]);
+}
+
+/** The latest day any of `counts` has counted anything on. */
+function latestDay(
+  counts: readonly Record<string, number>[],
+): string | undefined {
   let latest: string | undefined;
-  for (const [day, runs] of Object.entries(state.runsByDay)) {
-    if (runs <= 0) continue;
-    if (latest === undefined || day > latest) latest = day;
+  for (const byDay of counts) {
+    for (const [day, count] of Object.entries(byDay)) {
+      if (count <= 0) continue;
+      if (latest === undefined || day > latest) latest = day;
+    }
   }
   return latest;
 }
@@ -1028,6 +1056,7 @@ export function buildManifest(input: BuildInput): Manifest {
     // shows one to a person rounds it there.
     const rate = flakeRate(state, input.today);
     const ran = lastRun(state);
+    const failed = lastFailure(state);
     const flaky = rate > FLAKE_EXCLUSION_RATE;
     entries.push({
       test,
@@ -1043,6 +1072,7 @@ export function buildManifest(input: BuildInput): Manifest {
       ...(state.disagreements === undefined || !flaky
         ? {}
         : { disagreements: state.disagreements }),
+      ...(failed === undefined || !flaky ? {} : { lastFailure: failed }),
       repeats: executionsFor(rate),
       ...(ran === undefined ? {} : { lastRun: ran }),
     });
