@@ -40,13 +40,15 @@ const POLICY = {
   subject: space,
 };
 
-const TARGET_SCHEMA = {
-  type: "object",
-  properties: {
-    out: { type: "string", ifc: { maxConfidentiality: [] } },
-  },
-  required: ["out"],
-} as JSONSchema;
+/** A target whose `out` field admits the clauses in `ceiling`. */
+const targetSchema = (ceiling: readonly unknown[]): JSONSchema =>
+  ({
+    type: "object",
+    properties: {
+      out: { type: "string", ifc: { maxConfidentiality: ceiling } },
+    },
+    required: ["out"],
+  }) as JSONSchema;
 
 describe("prepare", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate> | undefined;
@@ -64,8 +66,12 @@ describe("prepare", () => {
   // `installed` says so, then copies the source into a field whose ceiling
   // admits no clause, with policy evaluation enforced. Returns the reasons
   // the preparation refused it for, each with whether it is a verdict, and
-  // the diagnostics naming a module policy.
-  const copyUnderCeiling = async (installed: boolean) => {
+  // the diagnostics naming a module policy. `ceiling` widens the field's
+  // ceiling.
+  const copyUnderCeiling = async (
+    installed: boolean,
+    ceiling: readonly unknown[] = [],
+  ) => {
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
@@ -113,7 +119,7 @@ describe("prepare", () => {
     expect((await seed.commit().settled).error).toBeUndefined();
     const tx = runtime.edit();
     const value = source.withTx(tx).get();
-    runtime.getCell(space, "target", TARGET_SCHEMA, tx).set(
+    runtime.getCell(space, "target", targetSchema(ceiling), tx).set(
       { out: value } as never,
     );
     tx.prepareCfc();
@@ -149,6 +155,30 @@ describe("prepare", () => {
 
     it("is no verdict, and names the missing manifest, where the manifest does not resolve", async () => {
       const { reasons, diagnostics } = await copyUnderCeiling(false);
+      expect(reasons).toEqual([{
+        reason: "maxConfidentiality failed at /out",
+        verdict: false,
+      }]);
+      expect(diagnostics).toEqual([
+        `policy-evaluation(enforce): module policy missing-manifest digest ${artifact.policyDigest} at input requirement /out`,
+      ]);
+    });
+  });
+
+  describe("a ceiling the unrewritten clause fits", () => {
+    // A manifest's rules may drop an alternative, so a label its rules never
+    // saw can fit a ceiling the rewritten label would not. A manifest that
+    // does not resolve fails the gate, retryably (spec §5.3.2, §4.4.1).
+
+    it("passes the ceiling where the manifest resolves", async () => {
+      const { reasons } = await copyUnderCeiling(true, [POLICY]);
+      expect(
+        reasons.filter(({ reason }) => reason.includes("maxConfidentiality")),
+      ).toEqual([]);
+    });
+
+    it("refuses the write, as no verdict, where the manifest does not resolve", async () => {
+      const { reasons, diagnostics } = await copyUnderCeiling(false, [POLICY]);
       expect(reasons).toEqual([{
         reason: "maxConfidentiality failed at /out",
         verdict: false,

@@ -9223,8 +9223,14 @@ const verifyInputRequirements = (
         if (mode === "enforce") {
           // Exhaustion fails closed; otherwise subsumption-fit the REWRITTEN
           // label (spec §8.10.3 clause fit — flat ceilings keep their
-          // conjunctive meaning through atomsOutsideCeiling).
+          // conjunctive meaning through atomsOutsideCeiling). A module
+          // manifest that did not resolve fails the gate even where the
+          // unrewritten label fits (spec §5.3.2): a rule may drop an
+          // alternative, so the manifest's rules could have made the label
+          // stricter, and the consultation binds nothing at commit that
+          // would catch a replica that has not received it (§4.4.1).
           const fits = outcome.exhausted === false &&
+            outcome.resolutionFailures.length === 0 &&
             atomsOutsideCeiling(outcome.confidentiality, maxConfidentiality)
                 .length === 0;
           if (
@@ -12477,8 +12483,8 @@ const passManifestLookup = (
   tx: IExtendedStorageTransaction,
 ): ManifestLookup => {
   const resolved = new Map<string, unknown>();
-  // A lookup is not an observation of the manifest: the commit is bound to
-  // the manifest it found by a precondition, and like every other policy
+  // A lookup is not an observation of the manifest: the manifest is bound by
+  // its digest rather than by the commit (§4.4.1), and like every other policy
   // lookup it reads under `internalVerifierRead`. Read plainly, a flow join
   // that made it would walk the manifest document as an unlabeled input,
   // whose empty integrity ends the hereditary meet.
@@ -12765,11 +12771,8 @@ const verifySinkRequestCeilings = (
           .sort();
         if (spaces.length === 0) return undefined;
         // Every consumed label origin must carry its own exact local copy.
-        // Bind every origin into the commit, so a concurrent change in any
-        // one of them rejects the release before its post-commit effect can
-        // flush. Precondition-only origin commits are harmless to split; the
-        // effect runs only after the complete transaction succeeds.
-        tx.enableMultiSpaceWrites?.(spaces);
+        // A copy is bound by its digest, and a missing one fails the
+        // release below, so no origin is bound into the commit (§4.4.1).
         for (const space of spaces) {
           if (tx.resolveCfcPolicyManifest(reference, space) === undefined) {
             return undefined;
@@ -12796,9 +12799,23 @@ const verifySinkRequestCeilings = (
           );
           continue;
         }
+        if (outcome.resolutionFailures.length > 0) {
+          // A manifest that did not resolve fails the release even where the
+          // unrewritten label fits (spec §5.3.2, §4.4.1), as the write gate
+          // does. Retryable: the manifest may arrive.
+          noteModulePolicyResolutionFailures(
+            tx,
+            `sink-request ${sink}`,
+            outcome.resolutionFailures,
+          );
+          reasons.push(
+            `cfcPolicyManifest: module policy did not resolve for ` +
+              `sink-request ${sink}`,
+          );
+          continue;
+        }
         effective = outcome.confidentiality;
-        verdict = outcome.resolutionFailures.length === 0 &&
-          !outcome.grantResolutionUnavailable;
+        verdict = !outcome.grantResolutionUnavailable;
       } else {
         // observe: decide exactly as `off` would; diagnose what enforce
         // would have done differently.
