@@ -85,7 +85,9 @@ Confirmation alone does not establish freshness. An accepted mutable document
 that has never been delivered can remain at that accepted version while other
 sessions change it. Such a read returns `confirmed: true` without a `seq`:
 loading the document with `sync()` establishes its watch and brings in current
-state. Immutable content needs no continuing watch. Every read counts, a
+state, and so does the first read that reaches the document through a link,
+which starts that load without waiting for it. Immutable content needs no
+continuing watch. Every read counts, a
 `sample()` as much as a `get()`. When they all are confirmed and the replica
 can say, it also
 returns the commit sequence the read is complete through: the `toSeq` of the

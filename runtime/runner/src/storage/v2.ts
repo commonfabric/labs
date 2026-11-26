@@ -3727,7 +3727,9 @@ export class StorageManager implements IStorageManager {
     // A value the replica holds from its own commit alone is served, but no
     // watch brings in what other sessions store there after it. The pull
     // registers that watch.
-    return replica.holdsUnwatchedWrite?.(id, scope, instance) === true;
+    const zz = replica.holdsUnwatchedWrite?.(id, scope, instance) === true;
+    console.log("ZZARM", zz, id, scope ?? "space", (globalThis as any).zzSchema ?? "other");
+    return zz;
   }
 
   /** @inheritDoc */

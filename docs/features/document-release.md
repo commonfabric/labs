@@ -4,12 +4,16 @@ A runtime holds a stored document because its memory session watches it. A
 watch names a root document and a selector (a path and a schema); the server
 keeps the session up to date with the root and with every document the schema
 reaches from it through links. The union of a session's watches is what the
-runtime's replica of the space holds, apart from a document the server retracted
-while something here still read it, which the replica keeps for that reader
-until the next release pass. This document describes how the runtime removes
-the watches nothing needs any more, and drops the documents they kept loaded, so
-that a long-lived runtime that opens and closes many pieces does not hold every
-document it ever loaded.
+runtime's replica of the space holds, apart from two kinds of document. One is a
+document the server retracted while something here still read it, which the
+replica keeps for that reader until the next release pass. The other is a
+document the runtime's own commit stored and nothing here has loaded, which the
+replica holds as that commit left it, unwatched, until a cell of its own loads
+it or a read reaches it through a link and starts that load
+(`IStorageManager.shouldPullDoc()`). This document describes how the runtime
+removes the watches nothing needs any more, and drops the documents they kept
+loaded, so that a long-lived runtime that opens and closes many pieces does not
+hold every document it ever loaded.
 
 The implementation is `SpaceReplica.releaseUnread()` in
 `runtime/runner/src/storage/v2.ts`, driven by
