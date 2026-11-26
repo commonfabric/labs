@@ -612,14 +612,14 @@ Findings, the coordinator's confirmation said for each. None is fixed.
 ## Rounds thirty and thirty-one, and what their reviews found
 
 The build branch `claude/compiled-pattern-scoped-rows` is pushed at
-`860154a073` (round thirty), with no pull request. The comparison is on
+`a04632cb2c` (round thirty and the merged comparison), with no pull
+request. The comparison was built on
 `claude/compiled-pattern-two-principal-gate` (worktree
-`compiled-pattern-two-principal-gate`, local, cut from `dcaad56391`), where
-round thirty-two repairs it. An investigation of today's path is on
+`compiled-pattern-two-principal-gate`, local, cut from `dcaad56391`) and
+is merged into the build branch. An investigation of today's path is on
 `claude/served-two-principal-clause-crossing` (worktree of the same name,
-local, cut from `main` at `f51440a49c`). Next numbers: notes from 1125 on
-the build branch and from 1160 on the gate branch, provisional decisions
-from P495 and from P530.
+local, cut from `main` at `f51440a49c`). Next numbers: notes from 1173,
+provisional decisions from P535 (P495 to P519 are unused).
 
 **Round thirty** (`860154a073`, notes 1119 to 1124, P491 to P494). The
 coordinator reran the gates (239 in compare and exec, 71 of 71 in
@@ -698,6 +698,52 @@ relied on:
 - 35 corpus modules that `emit --corpus` accepts are refused by the serving
   compiler, which compiles the whole program; the corpus acceptance figures
   taken per module overstate what a server runs.
+
+**Round thirty-two and the merge.** Round thirty-two (`73705b041e`, notes
+1160 to 1172, P530 to P534) repaired the comparison: a rule for positions of
+a scope that each path is held to by itself, reads repeated until a pass
+writes nothing, clauses compared by value hash, flow atoms as a kind of
+their own, a run of no scenario failing. The gate branch is merged into the
+build branch at `a04632cb2c` (pushed; 244 tests of `compare/test` and
+`exec/test` pass). The command, from the repository root:
+`deno run -A --no-check base/pattern-compiler/compare/both-paths.ts <results.jsonl> [--sets=hand,named,corpus] [--only=a,b]`.
+Two full runs gave the same counts for `commit` (23 in 17 scenarios),
+`policy` (63 in 25), `message` (11 in 8), `error-state` (4 modules),
+`read-failed` (2) and, but for Topics, `flow` (about 14,200: 13,765
+positions where only the compiled path stores a flow atom, about 433 where
+only today's does, 63 where both do). Every kind that depends on which
+principal's clause is stored where varies between runs, in about a dozen
+scenarios, on both paths. Its reviewer's limits: in 9 corpus scenarios
+today's path refuses the start, which supplies a protected field, and the
+later findings of those scenarios compare against nothing (about 17 of the
+24 `policy` findings whose today's side is empty); the scope rule is the
+ship criteria's and flags a clause that arrives by a conforming flow, so
+`today-foreign-clause` is no list of defects of `main`; the exemption for a
+declared `User` clause covers the wrong principal too; the loop that waits
+for the store can end early; the exit status is not yet a gate. On the
+merged head one run of the named scenarios gives, for the Topics board on
+the compiled path, 172 foreign and 111 crossed clauses where the run before
+round thirty gave 724 and 192: fewer, not none, and both are among the
+kinds that vary.
+
+**Today's path crosses clauses between principals** (branch
+`claude/served-two-principal-clause-crossing`, `91993233fa`, local; the
+test `runtime/runner/test/executor-two-principal-profile-clauses.test.ts`
+fails on `main` on purpose, 20 of 20 runs, and the coordinator reran it). A
+node with an instance per user reads, per principal, that principal's home
+root and profile, documents of the scope `space`. A change or first load of
+one arrives as a cause with no scope key; `dirtyFanOutForCause`
+(`scheduler/fan-out.ts`) dirties every instance, `causesForInstance`
+(`scheduler/run.ts`) hands each run the cause, and the trigger reads of
+`deriveFlowJoin` join the other principal's `User` clause. Clauses cross,
+values did not. `docs/specs/server-side-execution/serving-loop.md` states
+the fan-out and two scheduler tests assert it. A fix that dirties, and
+hands the cause to, only the instances whose last log read the document
+makes the test pass and consumes less label; it waits for the owner. The
+reviewer of round thirty-two reads the Topics crossing on today's path as
+partly a second mechanism: the handler that files a topic reads the
+creator's labeled profile and writes shared documents under that label,
+which is the class Z100 is about.
 
 ## Open lines of work
 
