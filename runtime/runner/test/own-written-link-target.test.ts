@@ -329,7 +329,10 @@ describe("own-written link target", () => {
     it("returns `false` for content the manager's own commit stored under the id its hash gives", async () => {
       const id: URI = `cid:${taggedHashStringOf(targetSchema)}`;
       const tx = reader.edit();
-      tx.writeValueOrThrow({ space, id, path: [] }, targetSchema);
+      tx.writeValueOrThrow(
+        { space, id, path: [], scope: "space" },
+        targetSchema,
+      );
       expect((await tx.commit().settled).error).toBeUndefined();
       await storage.synced();
 
