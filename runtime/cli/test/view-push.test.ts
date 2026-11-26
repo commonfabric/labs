@@ -2370,6 +2370,20 @@ describe("view-push", () => {
         expect(session.taskSpinning).toBe(true);
       });
 
+      it("gives the pull request's address only once when how the task ended already gives it", () => {
+        const session = editableSession();
+        session.resize(80, 24);
+        session.beginTask("Land", () => {});
+        session.finishTask(say`Merged ${link(PULL_REQUEST)}`);
+
+        session.quitForPullRequest(PULL_REQUEST, 2000);
+
+        expect(shown(session)).toEqual([
+          `Merged ${PULL_REQUEST}`,
+          "Quitting... ◐",
+        ]);
+      });
+
       it("shows the end of its output when it says it is quitting for the pull request, however far it was scrolled back", () => {
         const session = editableSession();
         session.beginTask("Push", () => {});
@@ -4062,8 +4076,9 @@ describe("view-push", () => {
         );
         expect(quitting).toBeGreaterThan(-1);
         expect(harness.writes[quitting]).toContain(
-          `Pull request: ${OCTO_PULL_REQUEST}`,
+          `Created ${OCTO_PULL_REQUEST}`,
         );
+        expect(harness.writes[quitting]).not.toContain("Pull request:");
         expect(harness.writes[quitting]).toContain(" Close ");
         expect(harness.timers).toContain(250);
         expect(harness.timers).not.toContain(2000);
@@ -4964,7 +4979,8 @@ describe("view-push", () => {
           text.includes("Quitting...")
         )!;
         expect(quitting).toContain(" Land ");
-        expect(quitting).toContain(`Pull request: ${OCTO_PULL_REQUEST}`);
+        expect(quitting).toContain(`Merged ${OCTO_PULL_REQUEST}`);
+        expect(quitting).not.toContain("Pull request:");
         expect(harness.timers).toContain(7900);
         expect(harness.timers).not.toContain(2000);
         expect(harness.writes.at(-1)).toMatch(
