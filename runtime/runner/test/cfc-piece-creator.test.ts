@@ -20,7 +20,7 @@ import {
 import type { Cell } from "../src/cell.ts";
 import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
-import { getMetaLink } from "../src/link-utils.ts";
+import { getMetaLink, parseLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import type { RunnerRunOptions } from "../src/runner.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -229,20 +229,62 @@ describe("cfc-piece-creator", () => {
   it("records the parent's creator on a child set up in a space of its own", async () => {
     // A child placed with `inSpace()` lives in another space than its parent,
     // so the parent's record is read where the parent lives.
-
-    const parent = await createPiece(client, alice.did());
-    await serving.getCellFromLink(parent.getAsNormalizedFullLink()).sync();
-    const tx = servedHandlerTx(bob);
-    const child = await createPiece(serving, service.did(), {
-      tx,
-      run: {
-        parentPieceRootId: parent.getAsNormalizedFullLink().id,
-        parentPieceSpace: alice.did(),
-      },
-    });
+    const home = alice.did();
+    const compiled = await client.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+import { action, pattern, type Stream, type Writable } from "commonfabric";
+const Room = pattern<{ title: string }, { title: string }>(
+  ({ title }) => ({ title }),
+);
+export default pattern<
+  { rooms: Writable<unknown[]> },
+  { rooms: unknown[]; create: Stream<{ title: string }> }
+>(({ rooms }) => ({
+  rooms,
+  create: action(({ title }: { title: string }) => {
+    rooms.push(Room.inSpace("lobby")({ title }));
+  }),
+}));`,
+      }],
+    }, { space: home });
+    const name = `piece-${pieces++}`;
+    const argument = client.getCell<{ rooms: unknown[] }>(
+      home,
+      `${name}-argument`,
+    );
+    const parent = client.getCell<{ rooms: unknown[]; create: unknown }>(
+      home,
+      `${name}-result`,
+      compiled.resultSchema,
+    );
+    const tx = client.edit();
+    argument.withTx(tx).set({ rooms: [] });
+    client.run(tx, compiled, argument, parent);
     expect((await tx.commit().settled).error).toBeUndefined();
+    await client.idle();
 
-    expect(await storedCreator(child)).toBe(alice.did());
+    parent.key("create").send({ title: "lobby" });
+    await client.idle();
+    await argument.key("rooms").pull();
+    // `rooms` holds a link to the child's result, which a link of its own
+    // puts in the child's space.
+    const alias = client.getCellFromLink(
+      parseLink(
+        (argument.getRaw() as { rooms: unknown[] }).rooms[0],
+        argument.getAsNormalizedFullLink(),
+      )!,
+    );
+    await alias.sync();
+    const child = client.getCellFromLink(
+      parseLink(alias.getRaw(), alias.getAsNormalizedFullLink())!,
+    );
+    expect(child.getAsNormalizedFullLink().space).not.toBe(home);
+    expect(await storedCreator(child as unknown as Cell<Piece>)).toBe(
+      alice.did(),
+    );
   });
 
   it("records nothing for a served run that acts for no one", async () => {
