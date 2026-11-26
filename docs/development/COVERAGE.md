@@ -1059,7 +1059,8 @@ Three things read them:
   and belongs to a run created no more than a day before that day, and
   charts the mean of each day's figures. The record store
   does not say whether an attempt passed, so the tile reads that from the
-  dashboard's shared lists of GitHub workflow runs.
+  dashboard's shared lists of GitHub workflow runs, and asks GitHub for
+  the record of a run whose attempt is newer than those lists hold.
 - The report a `main` run posts on the pull request behind it
   (`tasks/post-main-report.ts`) reads the figures out of the newest coverage
   artifact of the run and of the run before it, and compares the two. A run
