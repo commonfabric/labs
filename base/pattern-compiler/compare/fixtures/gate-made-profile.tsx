@@ -19,6 +19,7 @@ interface CardResult {
   [UI]: VNode;
   title: string;
   viewer: string;
+  size: number;
   touches: number;
   touch: Stream<void>;
 }
@@ -32,11 +33,13 @@ const touch = handler<void, { touches: Writable<number> }>(
 const Card = pattern<{ title: string }, CardResult>(({ title }) => {
   const profile = wish<Writable<{ name: string }>>({ query: "#profile" });
   const viewer = computed(() => profile.result?.get()?.name ?? "");
+  const size = computed(() => (profile.result?.get()?.name ?? "").length);
   const touches = new Writable(0);
   return {
     [UI]: <div>{title} for {viewer}</div>,
     title,
     viewer,
+    size,
     touches,
     touch: touch({ touches }),
   };

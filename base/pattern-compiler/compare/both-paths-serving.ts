@@ -93,6 +93,8 @@ import {
 } from "../../../runtime/runtime-client/src/backends/runtime-processor.ts";
 import {
   errorStatesOf,
+  lastSeqOf,
+  movedSince,
   snapshotOf,
   type SpaceSnapshot,
   type Written,
@@ -170,6 +172,25 @@ export type GateStep = {
   shares?: string[];
 };
 
+/**
+ * A value derived from each principal's own scoped value, at a path of a
+ * result, with what each principal's inputs produce there. The scenario's
+ * inputs are chosen so that the two differ. Check (b) reports a place one
+ * principal reads that holds what only the other's inputs produce.
+ */
+export type DerivedValue = {
+  /** The piece, the member, and the path below it; `*` for any member. */
+  path: readonly string[];
+  /** What each principal's inputs produce, by a scenario's name. */
+  values: Record<string, FabricValue>;
+  /**
+   * The checkpoint from which on both principals have given their inputs,
+   * where they give them in steps: before it a principal's value is what an
+   * empty input produces, which can equal the other's.
+   */
+  from?: string;
+};
+
 /** One pattern or several, and what the principals do with them. */
 export type GateScenario = {
   name: string;
@@ -181,6 +202,8 @@ export type GateScenario = {
    * principal's profile name is always such text.
    */
   scoped?: Record<string, string[]>;
+  /** Values derived from each principal's scoped values, for check (b). */
+  derived?: DerivedValue[];
   /** Why the scenario cannot run under this harness, where it cannot. */
   skip?: string;
 };
@@ -214,6 +237,18 @@ export type Checkpoint = {
   written: Written;
   /** The text of each principal's scope that is shared from this step on. */
   shared: string[];
+  /**
+   * How many passes of reads the checkpoint took: a pass reads every member
+   * for each principal and waits for the serving loop and every client to
+   * settle, and the reads of the last pass are the checkpoint's.
+   */
+  passes: number;
+  /**
+   * Where the passes did not come to one that moved nothing: the documents
+   * the last pass moved, a set an earlier pass of the checkpoint moved as
+   * well.
+   */
+  unsettled?: string[];
 };
 
 /** What one path did with a scenario. */
@@ -226,6 +261,11 @@ export type PathRun = {
   checkpoints: Checkpoint[];
   /** The result document of each piece. */
   results: Record<string, string>;
+  /**
+   * The binding each event was sent to, by the document its stream
+   * resolved to: `<piece>/<path>`.
+   */
+  streams: Record<string, string>;
   /** The identifiers of the run, for the comparison's names. */
   identities: Identities;
   /** Each principal's text of its own scope. */
@@ -271,10 +311,14 @@ const identitiesOf = () =>
     };
   })();
 
-/** The name of each principal's profile: text of that principal's scope. */
+/**
+ * The name of each principal's profile: text of that principal's scope. The
+ * two differ in length, so that a count or a predicate derived from a name
+ * differs between the principals as well.
+ */
 export const PROFILE_NAMES: Record<Who, string> = {
   A: "Profile name of A, 7151",
-  B: "Profile name of B, 2862",
+  B: "Profile name of B, 28",
 };
 
 /** Resolves the program of each piece of `scenario` from the repository. */
@@ -418,6 +462,54 @@ const gateOf = (
   });
 };
 
+/**
+ * The first error of a message the serving compiler gives, where its lines
+ * hold one (`<file>:<line>:<col>: error ...`), and its first line where they
+ * do not: a refusal lists the warnings of a module before its errors.
+ */
+export const firstErrorOf = (message: string): string => {
+  const lines = message.split("\n").map((line) => line.trim()).filter((
+    line,
+  ) => line !== "");
+  const error = lines.find((line) => /(^|: )error(\b|\[| )/.test(line));
+  const first = lines[0] ?? "";
+  return (error === undefined || error === first ? first : `${first} ${error}`)
+    .slice(0, 600);
+};
+
+/** What `readUntilStill` gives. */
+export type Settling<T> = {
+  reads: T;
+  passes: number;
+  /** What the last pass moved, where it repeated an earlier pass's. */
+  unsettled?: string[];
+};
+
+/**
+ * Reads with `read`, waits with `settle`, and asks `moved` what the pass
+ * moved since the pass before, until a pass moves nothing; the reads of
+ * that pass are the ones given. The loop ends on a state, not on a time or
+ * a count: where a pass moves a set of documents an earlier pass moved as
+ * well, the reads are not coming to rest, and the set is given as
+ * `unsettled`.
+ */
+export const readUntilStill = async <T>(
+  read: () => Promise<T>,
+  settle: () => Promise<void>,
+  moved: () => string[],
+): Promise<Settling<T>> => {
+  const seen = new Set<string>();
+  for (let passes = 1;; passes++) {
+    const reads = await read();
+    await settle();
+    const now = moved();
+    if (now.length === 0) return { reads, passes };
+    const key = now.join("\n");
+    if (seen.has(key)) return { reads, passes, unsettled: now };
+    seen.add(key);
+  }
+};
+
 /** What `runPath` takes beside the scenario. */
 export type RunPathOptions = {
   path: "today" | "compiled";
@@ -458,6 +550,7 @@ export const runPath = async (
     refused: [],
     checkpoints: [],
     results: {},
+    streams: {},
     identities: {
       space: ids.space,
       principals: ids.principals,
@@ -494,9 +587,9 @@ export const runPath = async (
                   ? "refused"
                   : "not started"
               }: ${
-                (error instanceof Error ? error.message : String(error))
-                  .split("\n").filter((line) => line.trim() !== "")
-                  .slice(0, 3).join(" | ").slice(0, 400)
+                firstErrorOf(
+                  error instanceof Error ? error.message : String(error),
+                )
               }`,
             );
           },
@@ -525,10 +618,14 @@ export const runPath = async (
   const cancels: (() => void)[] = [];
   const space = ids.space as MemorySpace;
   const results: Record<string, string> = {};
+  // The serving loop, the server and each client at rest: each client's
+  // scheduler idle and its storage synced, then the loop and the server
+  // again for what a client's sync sent.
   const settled = async () => {
     await host.whenQuiescent();
     await server.idle();
     for (const client of Object.values(clients)) {
+      await client.idle();
       await client.storageManager.synced();
     }
     await host.whenQuiescent();
@@ -576,7 +673,52 @@ export const runPath = async (
     committed: boolean,
     message: string | undefined,
   ) => {
+    const spaces = [
+      ids.space,
+      ids.homes.A.home,
+      ids.homes.B.home,
+      ids.homes.A.profile,
+      ids.homes.B.profile,
+    ];
     await settled();
+    // The documents of every space written since the last call.
+    let marks = spaces.map((space) => lastSeqOf(store, space));
+    const moved = () => {
+      const now = spaces.flatMap((space, index) =>
+        movedSince(store, space, marks[index]).map((document) =>
+          `${space === ids.space ? "space" : space} ${document}`
+        )
+      );
+      marks = spaces.map((space) => lastSeqOf(store, space));
+      return now;
+    };
+    const settling = await readUntilStill(readAll, settled, moved);
+    const reads = settling.reads;
+    const written = writtenSince(store, ids.space, seq);
+    seq = written.seq;
+    const point: Checkpoint = {
+      at,
+      actor,
+      committed,
+      ...(message === undefined ? {} : { message }),
+      reads,
+      snapshot: snapshotOf(store, ids.space),
+      errors: errorStatesOf(store, spaces),
+      written: {
+        documents: written.documents,
+        bytes: written.bytes,
+        writes: written.writes,
+      },
+      shared: [...shared],
+      passes: settling.passes,
+      ...(settling.unsettled === undefined
+        ? {}
+        : { unsettled: settling.unsettled }),
+    };
+    run.checkpoints.push(point);
+  };
+  // What each principal reads at every member of every result, one pass.
+  const readAll = async (): Promise<Checkpoint["reads"]> => {
     const reads: Checkpoint["reads"] = { A: {}, B: {} };
     for (const who of WHO) {
       const client = clients[who];
@@ -603,33 +745,7 @@ export const runPath = async (
         }
       }
     }
-    // Reading may have demanded more of the piece.
-    await settled();
-    const spaces = [
-      ids.space,
-      ids.homes.A.home,
-      ids.homes.B.home,
-      ids.homes.A.profile,
-      ids.homes.B.profile,
-    ];
-    const written = writtenSince(store, ids.space, seq);
-    seq = written.seq;
-    const point: Checkpoint = {
-      at,
-      actor,
-      committed,
-      ...(message === undefined ? {} : { message }),
-      reads,
-      snapshot: snapshotOf(store, ids.space),
-      errors: errorStatesOf(store, spaces),
-      written: {
-        documents: written.documents,
-        bytes: written.bytes,
-        writes: written.writes,
-      },
-      shared: [...shared],
-    };
-    run.checkpoints.push(point);
+    return reads;
   };
   try {
     // Each principal's home and profile, written by that principal.
@@ -727,7 +843,10 @@ export const runPath = async (
           stream = stream.key(member as never) as Cell<unknown>;
           await stream.sync();
         }
-        await (stream.resolveAsCell() as Cell<unknown>).sync();
+        const resolved = stream.resolveAsCell() as Cell<unknown>;
+        await resolved.sync();
+        run.streams[resolved.getAsNormalizedFullLink().id] = [piece, ...path]
+          .join("/");
         const handled = Promise.withResolvers<
           ReturnType<ReturnType<Runtime["edit"]>["status"]>
         >();

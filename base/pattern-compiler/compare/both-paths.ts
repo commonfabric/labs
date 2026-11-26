@@ -299,12 +299,14 @@ const policyLines = (ifc: Record<string, unknown>): string[] => {
  * record. A `$ref` into `$defs` of the document a node is in is followed,
  * and with `load` one into another schema document (`cid:<hash>#/$defs/…`),
  * which `load` gives by its hash: today's path stores the definitions of a
- * type in documents of their own.
+ * type in documents of their own. `linesOf` gives the lines of one `ifc`
+ * record, the write policies by default.
  */
 export const policiesOf = (
   root: unknown,
   path: readonly string[],
   load?: (hash: string) => unknown,
+  linesOf: (ifc: Record<string, unknown>) => string[] = policyLines,
 ): Record<string, string[]> => {
   const found: Record<string, string[]> = {};
   type Defs = Record<string, unknown>;
@@ -351,7 +353,7 @@ export const policiesOf = (
     // A reference that names no definition that was found is not read.
     if (typeof node.$ref === "string") return;
     if (isObjectNotArray(node.ifc)) {
-      const lines = policyLines(node.ifc);
+      const lines = linesOf(node.ifc);
       if (lines.length > 0) found[at] = lines;
     }
     if (isObjectNotArray(node.properties)) {
@@ -869,13 +871,63 @@ type Planned = {
   skipNotCompiled?: boolean;
 };
 
-/** The scenarios of the gate, of the sets named, holding `part` where given. */
+/** The sets of scenarios a full run plans. */
+export const ALL_SETS = ["hand", "named", "corpus"] as const;
+
+/** What the command of the gate was asked for. */
+export type GateArguments = {
+  file: string;
+  sets: string[];
+  /** The parts of a name `--only` lists; a scenario holding one runs. */
+  only?: string[];
+  ledger?: string;
+  /** Whether every set runs and no `--only` narrows them. */
+  full: boolean;
+};
+
+/**
+ * The arguments of the command of the gate, or the reason they are refused:
+ * a set no one knows, or an empty part of `--only`.
+ */
+export const gateArguments = (
+  args: readonly string[],
+): GateArguments | { refused: string } => {
+  const file = args.find((argument) => !argument.startsWith("--"));
+  const option = (name: string) =>
+    args.find((argument) => argument.startsWith(`--${name}=`))?.slice(
+      name.length + 3,
+    );
+  if (file === undefined) return { refused: "no results file is named" };
+  const sets = (option("sets") ?? ALL_SETS.join(",")).split(",");
+  const unknown = sets.filter((set) =>
+    !(ALL_SETS as readonly string[]).includes(set)
+  );
+  if (unknown.length > 0) {
+    return { refused: `no set is named ${unknown.join(", ")}` };
+  }
+  const listed = option("only");
+  const only = listed?.split(",").map((part) => part.trim());
+  if (only !== undefined && only.some((part) => part === "")) {
+    return { refused: "`--only` lists an empty part" };
+  }
+  const ledger = option("ledger");
+  return {
+    file,
+    sets,
+    ...(only === undefined ? {} : { only }),
+    ...(ledger === undefined ? {} : { ledger }),
+    full: only === undefined && ALL_SETS.every((set) => sets.includes(set)),
+  };
+};
+
+/** The scenarios of the gate, of the sets named, holding a part of `only`. */
 const plannedScenarios = async (
   sets: readonly string[],
-  part: string | undefined,
+  only: readonly string[] | undefined,
 ): Promise<Planned[]> => {
   const planned: Planned[] = [];
-  const holds = (name: string) => part === undefined || name.includes(part);
+  const holds = (name: string) =>
+    only === undefined || only.some((part) => name.includes(part));
   if (sets.includes("hand")) {
     for (const scenario of SCENARIOS.map(gateScenarioOf)) {
       if (!holds(scenario.name)) continue;
@@ -942,24 +994,19 @@ const lineOf = (result: ScenarioResult): string => {
 
 /** The command of the two-principal gate. */
 const runGate = async (args: string[]): Promise<number> => {
-  const file = args.find((argument) => !argument.startsWith("--"));
-  const option = (name: string) =>
-    args.find((argument) => argument.startsWith(`--${name}=`))?.slice(
-      name.length + 3,
-    );
-  if (file === undefined) {
+  const parsed = gateArguments(args);
+  if ("refused" in parsed) {
     console.error(
-      "usage: both-paths.ts <results.jsonl> [--sets=hand,named,corpus] [--only=<part of a name>] [--ledger=<file>]",
+      `${parsed.refused}\nusage: both-paths.ts <results.jsonl> [--sets=hand,named,corpus] [--only=<part of a name>[,<part>...]] [--ledger=<file>]`,
     );
     return 2;
   }
-  const sets = (option("sets") ?? "hand,named,corpus").split(",");
-  const part = option("only");
-  const ledgerFile = option("ledger") ?? fromFileUrl(LEDGER);
+  const { file, sets, only, full } = parsed;
+  const ledgerFile = parsed.ledger ?? fromFileUrl(LEDGER);
   const ledger = JSON.parse(await Deno.readTextFile(ledgerFile)) as Ledger;
   const covered = ledger.entries.map(() => 0);
   const compiler = new PatternCompiler();
-  const planned = await plannedScenarios(sets, part);
+  const planned = await plannedScenarios(sets, only);
   await Deno.writeTextFile(file, "");
   const { warn, error, log, info, debug } = console;
   const results: ScenarioResult[] = [];
@@ -1061,7 +1108,21 @@ const runGate = async (args: string[]): Promise<number> => {
       `  a ledger entry covers nothing: ${entry.scenario} ${entry.step} ${entry.position} ${entry.kind}`,
     );
   }
-  return exitStatusOf(results.map(({ outcome }) => outcome), stale);
+  if (summary.ran === 0) console.log("  no scenario ran");
+  if (
+    full && ledger.fullRun !== undefined &&
+    (summary.scenarios < ledger.fullRun.scenarios ||
+      summary.ran < ledger.fullRun.ran)
+  ) {
+    console.log(
+      `  a full run must plan ${ledger.fullRun.scenarios} scenarios and run ${ledger.fullRun.ran}; this one planned ${summary.scenarios} and ran ${summary.ran}`,
+    );
+  }
+  return exitStatusOf(
+    results.map(({ outcome }) => outcome),
+    stale,
+    full ? ledger.fullRun : undefined,
+  );
 };
 
 if (import.meta.main) {

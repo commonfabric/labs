@@ -13,10 +13,37 @@ import { type GateScenario, PROFILE_NAMES } from "./both-paths-serving.ts";
 
 const FIXTURES = "base/pattern-compiler/compare/fixtures";
 
+// The nicknames differ in length (23 and 21 characters), so that each count
+// and predicate the fixtures derive from one differs between the principals.
 const NICKNAMES = {
   alice: "Nickname of alice, 4410",
   bob: "Nickname of bob, 3307",
 };
+
+/**
+ * What a row's members derived from the nickname hold for each principal:
+ * the nickname's length, and whether it is longer than 22 characters, from
+ * the step at which both principals have written a nickname on. Text
+ * that holds the nickname itself, such as the row's `seen`, is found by the
+ * search for the nickname.
+ */
+const rowsDerived = (
+  piece: string,
+): NonNullable<GateScenario["derived"]> => [
+  {
+    path: [piece, "rows", "*", "size"],
+    values: {
+      alice: NICKNAMES.alice.length,
+      bob: NICKNAMES.bob.length,
+    },
+    from: "step 1",
+  },
+  {
+    path: [piece, "rows", "*", "long"],
+    values: { alice: true, bob: false },
+    from: "step 1",
+  },
+];
 
 /** A step by `as` that writes its nickname, a value of the scope `user`. */
 const nickname = (as: "alice" | "bob") => ({
@@ -34,6 +61,16 @@ export const NAMED_SCENARIOS: GateScenario[] = [
       as: "alice",
     }],
     steps: [],
+    derived: [
+      {
+        path: ["view", "size"],
+        values: {
+          alice: PROFILE_NAMES.A.length,
+          bob: PROFILE_NAMES.B.length,
+        },
+      },
+      { path: ["view", "long"], values: { alice: true, bob: false } },
+    ],
   },
   {
     // A cell of the scope `user` and one of the scope `session` that a
@@ -78,6 +115,7 @@ export const NAMED_SCENARIOS: GateScenario[] = [
       as: "alice",
     }],
     scoped: { alice: [NICKNAMES.alice], bob: [NICKNAMES.bob] },
+    derived: rowsDerived("rows"),
     steps: [nickname("alice"), nickname("bob")],
   },
   {
@@ -91,6 +129,7 @@ export const NAMED_SCENARIOS: GateScenario[] = [
       as: "alice",
     }],
     scoped: { alice: [NICKNAMES.alice], bob: [NICKNAMES.bob] },
+    derived: rowsDerived("rows"),
     steps: [nickname("alice"), nickname("bob")],
   },
   {
@@ -110,6 +149,7 @@ export const NAMED_SCENARIOS: GateScenario[] = [
       as: "alice",
     }],
     scoped: { alice: [NICKNAMES.alice], bob: [NICKNAMES.bob] },
+    derived: rowsDerived("rows"),
     steps: [nickname("alice"), nickname("bob")],
   },
   {
@@ -144,6 +184,15 @@ export const NAMED_SCENARIOS: GateScenario[] = [
       argument: { cards: [] },
       as: "alice",
     }],
+    derived: [
+      {
+        path: ["cards", "cards", "*", "size"],
+        values: {
+          alice: PROFILE_NAMES.A.length,
+          bob: PROFILE_NAMES.B.length,
+        },
+      },
+    ],
     steps: [
       { stream: "make", event: { title: "Card of alice" }, as: "alice" },
       { stream: ["cards", 0, "touch"], as: "bob" },

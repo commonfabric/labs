@@ -310,6 +310,40 @@ export const writtenSince = (
   }
 };
 
+/** The last sequence number of `space`'s store, 0 where it has none. */
+export const lastSeqOf = (store: URL, space: string): number => {
+  const db = opened(store, space);
+  if (db === undefined) return 0;
+  try {
+    return db.get<{ seq: number | null }>(
+      "SELECT MAX(seq) AS seq FROM revision",
+    )?.seq ?? 0;
+  } finally {
+    db.close();
+  }
+};
+
+/**
+ * The scope instances of documents of `space` that revision rows after
+ * `since` wrote, each as `<id> <scope key>`, sorted.
+ */
+export const movedSince = (
+  store: URL,
+  space: string,
+  since: number,
+): string[] => {
+  const db = opened(store, space);
+  if (db === undefined) return [];
+  try {
+    return db.all<{ id: string; scope_key: string }>(
+      "SELECT DISTINCT id, scope_key FROM revision WHERE seq > ? ORDER BY id, scope_key",
+      since,
+    ).map(({ id, scope_key }) => `${id} ${scope_key}`);
+  } finally {
+    db.close();
+  }
+};
+
 /**
  * Each link a stored value holds, by its path in the value, with its
  * target's space, id and scope filled in from the document it is in where
