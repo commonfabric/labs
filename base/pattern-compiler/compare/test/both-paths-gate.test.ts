@@ -372,7 +372,8 @@ describe("a scenario the harness cannot drive", () => {
     }, { roles: ROLES, compiler });
 
     expect(result.outcome.status).toBe("skipped");
-    expect(exitStatusOf([result.outcome], [])).toBe(0);
+    // A run in which nothing ran is no evidence, so it fails.
+    expect(exitStatusOf([result.outcome], [])).toBe(1);
   });
 
   it("is skipped where the scenario says why it cannot run", async () => {

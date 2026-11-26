@@ -1316,7 +1316,7 @@ export const compareRuns = (
           position: where,
           principal: clause.principal,
           on: path,
-          document: `${normalized(clause.document, run)}${clause.path}`,
+          document: `${clause.document}${clause.path}`,
           [path]: clause.clause,
         });
       }
@@ -1350,9 +1350,7 @@ export const compareRuns = (
           position: where,
           principal: value.reader,
           on: path,
-          ...(value.document === undefined
-            ? {}
-            : { document: normalized(value.document, run) }),
+          ...(value.document === undefined ? {} : { document: value.document }),
           [path]: `${value.of}'s ${
             value.text.startsWith('"') ? value.text : `"${value.text}"`
           } readable by ${value.reader}`,
