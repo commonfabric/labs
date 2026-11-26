@@ -3940,6 +3940,264 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    for (const alias of ["Integrity", "Confidential"]) {
+      it(`labels nothing with \`${alias}\` written around the members an \`Omit\` under bindings leaves out`, async () => {
+        // The value holds none of the data the policy was written around.
+        const { value, diagnostics } = await generate(`
+          type Outer<T> = Confidential<
+            { inner: Omit<${alias}<T, readonly ["l"]>, "x" | "z"> },
+            readonly ["b"]
+          >;
+          interface Holder { value: Outer<{ x: string; z: 1 }> }
+        `);
+        expect((value as any).properties.inner).toEqual({
+          type: "object",
+          properties: {},
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    for (
+      const [shape, inner] of [
+        ['Pick<Confidential<T, readonly ["c"]>, "x" | "y">', "a `Pick`"],
+        ['Confidential<T, readonly ["c"]> & { y: number }', "an intersection"],
+      ] as const
+    ) {
+      it(`labels the whole of ${inner} under bindings with a restriction whose payload's index signature supplies a key it does not name`, async () => {
+        // The payload may hold its data under `y` through its index
+        // signature, so the restriction reaches `y` as well as `x`.
+        const { value, diagnostics } = await generate(`
+          type Outer<T> = Confidential<{ inner: ${shape} }, readonly ["b"]>;
+          interface Holder { value: Outer<{ x: string; [key: string]: unknown }> }
+        `);
+        const { ifc, properties } = (value as any).properties.inner;
+        expect(ifc).toEqual({ confidentiality: ["c"] });
+        expect(properties.x.ifc).toBeUndefined();
+        expect(properties.y.ifc).toBeUndefined();
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("labels the whole of an `Omit` under bindings whose payload intersects a bound parameter with a member of its own", async () => {
+      // The policy was written around `T & { y: number }`, read with `T`
+      // bound to its argument, so it reaches `x` as well as `y`.
+      const { value, diagnostics } = await generate(`
+        type Outer<T> = Confidential<
+          { inner: Omit<Confidential<T & { y: number }, readonly ["c"]>, never> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<{ x: string }> }
+      `);
+      const { ifc, properties } = (value as any).properties.inner;
+      expect(ifc).toEqual({ confidentiality: ["c"] });
+      expect(properties.x.ifc).toBeUndefined();
+      expect(properties.y.ifc).toBeUndefined();
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("labels the whole of an `Omit` under bindings whose payload intersects a mapped wrapper of a bound parameter with a member of its own", async () => {
+      // `Readonly<T>` maps over `T`, read as its argument, so the policy
+      // reaches `x` as well as `y`.
+      const { value, diagnostics } = await generate(`
+        type Outer<T> = Confidential<
+          {
+            inner: Omit<
+              Confidential<Readonly<T> & { y: number }, readonly ["c"]>,
+              never
+            >;
+          },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<{ x: string }> }
+      `);
+      const { ifc, properties } = (value as any).properties.inner;
+      expect(ifc).toEqual({ confidentiality: ["c"] });
+      expect(properties.x.ifc).toBeUndefined();
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("labels the whole of an `Omit` under bindings with a restriction whose payload holds data under keys no member names", async () => {
+      // The payload's index signature may hold its data under any key, the
+      // keys the `Omit` keeps among them.
+      const { value, diagnostics } = await generate(`
+        type Outer<T> = Confidential<
+          { inner: Omit<Confidential<T, readonly ["c"]>, "x" | "z"> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<{ x: string; z: 1; [k: string]: unknown }> }
+      `);
+      expect((value as any).properties.inner).toEqual({
+        type: "object",
+        properties: {},
+        additionalProperties: { type: "unknown" },
+        ifc: { confidentiality: ["c"] },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    for (
+      const [alias, argument, ifc] of [
+        [
+          'Pick<Sec<T>, "x">',
+          'Confidential<{ x: string }, readonly ["c"]> | { x: string; z: 1 }',
+          { confidentiality: ["a", "c"] },
+        ],
+        [
+          'Omit<Sec<T>, "z">',
+          'Confidential<{ x: string }, readonly ["c"]> | { x: string; z: 1 }',
+          { confidentiality: ["a", "c"] },
+        ],
+        [
+          'Pick<T | Sec<{ x: string; z: 1 }>, "x">',
+          'Confidential<{ x: string }, readonly ["c"]>',
+          { confidentiality: ["c", "a"] },
+        ],
+        [
+          'Pick<T | Integrity<{ x: string; z: 1 }, readonly ["j"]>, "x">',
+          'Integrity<{ x: string }, readonly ["i"]>',
+          undefined,
+        ],
+        [
+          'Omit<Integrity<T, readonly ["i"]> | Sec<T>, never>',
+          "{ x: string }",
+          { confidentiality: ["a"] },
+        ],
+        [
+          'Pick<Sec<T>, "x">',
+          "Labeled | { x: string; z: 1 }",
+          { confidentiality: ["a", "c"] },
+        ],
+        ['Pick<T, "x">', "Labeled", { confidentiality: ["c"] }],
+      ] as const
+    ) {
+      it(`joins the labels of the members \`${alias}\` may be read from under bindings, \`T\` bound to \`${argument}\``, async () => {
+        // The picked members are those of whichever member the value is.
+        const { value, diagnostics } = await generate(`
+          type Sec<T> = Confidential<T, readonly ["a"]>;
+          type Labeled = Confidential<{ x: string }, readonly ["c"]>;
+          type Outer<T> = Confidential<{ inner: ${alias} }, readonly ["b"]>;
+          interface Holder { value: Outer<${argument}> }
+        `);
+        expect((value as any).properties.inner).toEqual({
+          type: "object",
+          properties: { x: { type: "string" } },
+          required: ["x"],
+          ...(ifc ? { ifc } : {}),
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    for (
+      const [alias, argument] of [
+        [
+          'Pick<T | Sec<{ x: string; z: 1 }>, "x">',
+          "Integrity<{ x: string }, readonly [string]>",
+        ],
+        [
+          'Pick<T | Sec<{ x: string; z: 1 }>, "x">',
+          "Confidential<{ x: string }, readonly [string]>",
+        ],
+        [
+          'Pick<Integrity<T, readonly [string]>, "x">',
+          "{ x: string } | { x: string; z: 1 }",
+        ],
+      ] as const
+    ) {
+      it(`reads \`${alias}\` under bindings unlabeled, \`T\` bound to \`${argument}\`, a label it cannot read`, async () => {
+        // The members' labels are read in full, or none of them is.
+        const { value, diagnostics } = await generate(`
+          type Sec<T> = Confidential<T, readonly ["a"]>;
+          type Outer<T> = Confidential<{ inner: ${alias} }, readonly ["b"]>;
+          interface Holder { value: Outer<${argument}> }
+        `);
+        expect((value as any).properties.inner).toEqual({
+          type: "object",
+          properties: { x: { type: "string" } },
+          required: ["x"],
+        });
+        expect(diagnostics.map((diagnostic) => diagnostic.type)).toContain(
+          "cfc-label:unread",
+        );
+      });
+    }
+
+    for (
+      const [alias, ifc] of [
+        ["Omit<T | Sec<{ x: string; z: 1 }>, never>", undefined],
+        [
+          "Omit<(T | { x: string }) | Sec<{ x: string; z: 1 }>, never>",
+          undefined,
+        ],
+        ["Omit<T, never>", undefined],
+        [
+          'Omit<Confidential<T | Sec<{ x: string; z: 1 }>, readonly ["c"]>, never>',
+          { confidentiality: ["c"] },
+        ],
+        ["Omit<T | Sec<T>, never>", { confidentiality: ["a"] }],
+        [
+          'Omit<T | Confidential<unknown, readonly ["c"]>, never>',
+          { confidentiality: ["c"] },
+        ],
+      ] as const
+    ) {
+      it(`reads \`${alias}\` under bindings as an object with no members, \`T\` bound to \`unknown\``, async () => {
+        // `keyof unknown` is `never`. A bare `unknown` is a member with no
+        // labels of its own, beside which the other members' labels stay,
+        // landing where they reach: nowhere for one written around members
+        // the object does not have, and on all of it for one written around a
+        // payload that names none.
+        const { value, diagnostics } = await generate(`
+          type Sec<T> = Confidential<T, readonly ["a"]>;
+          type Outer<T> = Confidential<{ inner: ${alias} }, readonly ["b"]>;
+          interface Holder { value: Outer<unknown> }
+        `);
+        expect((value as any).properties.inner).toEqual({
+          type: "object",
+          properties: {},
+          ...(ifc ? { ifc } : {}),
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("keeps the label of a labeled `unknown` among the members of an `Omit` under bindings", async () => {
+      // `Confidential<unknown, …>` is its carrier, written around a payload
+      // that names no members, so its label lands on the whole object.
+      const { value, diagnostics } = await generate(`
+        type Sec<T> = Confidential<T, readonly ["a"]>;
+        type Outer<T> = Confidential<
+          { inner: Omit<Confidential<T, readonly ["c"]> | Sec<{ x: string; z: 1 }>, never> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<unknown> }
+      `);
+      expect((value as any).properties.inner.ifc.confidentiality).toContain(
+        "c",
+      );
+      expect(diagnostics).toEqual([]);
+    });
+
+    it('reads `Pick<T | Sec<{ x: string; z: 1 }>, "x">` under bindings unlabeled, `T` bound to an `ExactCopy` it cannot read in full', async () => {
+      // Every value of a member's policy is read in full, label lists or not,
+      // or none of the members' labels are.
+      const { value } = await generate(`
+        type ExactCopy<T, P extends readonly string[]> = Cfc<T, { exactCopyOf: P }>;
+        type Sec<T> = Confidential<T, readonly ["a"]>;
+        type Outer<T> = Confidential<
+          { inner: Pick<T | Sec<{ x: string; z: 1 }>, "x"> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<ExactCopy<{ x: string }, readonly [string]>> }
+      `);
+      expect((value as any).properties.inner).toEqual({
+        type: "object",
+        properties: { x: { type: "string" } },
+        required: ["x"],
+      });
+    });
+
     it("reads a nesting of an alias in its own argument as written", async () => {
       const { value, diagnostics } = await generate(`
         type Wrap<B> = Confidential<{ w: B }, readonly ["w"]>;
@@ -4043,10 +4301,17 @@ describe("Schema: CFC authoring aliases", () => {
     // no schema holds the carrier as a member.
 
     const ALIASES = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+      type CfcStamp<T, Meta> = { readonly meta?: Meta; readonly of?: T };
+      type CfcTag<T, Meta, Stamp = CfcStamp<T, Meta>> = [T] extends [unknown]
+        ? { readonly __ct_cfc__?: Stamp } | Extract<T, null | undefined>
+        : { readonly __ct_cfc__?: Stamp } | Extract<T, null | undefined>;
+      type Cfc<T, Meta> = T & CfcTag<T, Meta>;
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
       type Sec<T> = Confidential<T, readonly ["a"]>;
       type Pair = { x?: string; y: number };
+      type One = { x: string };
+      type Two = { x: string; z: 1 };
     `;
 
     const generate = async (value: string, declarations = "") => {
@@ -4132,6 +4397,10 @@ describe("Schema: CFC authoring aliases", () => {
         [
           "Partial<Readonly<Sec<Pair>>>",
           { type: "object", properties: { x, y }, ifc: secret },
+        ],
+        [
+          'Pick<Confidential<Pair, readonly []>, "x">',
+          { type: "object", properties: { x }, ifc: { confidentiality: [] } },
         ],
         [
           '{ readonly [K in keyof Confidential<Sec<{ y: number }>, readonly ["b"]>]: Confidential<Sec<{ y: number }>, readonly ["b"]>[K] }',
@@ -4302,6 +4571,147 @@ describe("Schema: CFC authoring aliases", () => {
       });
     });
 
+    describe("a union operand", () => {
+      // `Pick` and `Omit` build one object from a union operand, whichever
+      // member the value is, so it has the labels of every member joined:
+      // each confidentiality label any member carries, and each other label
+      // every member carries alike. Each member's carriers are read in full,
+      // or the object is unlabeled.
+
+      const picked = (ifc?: Record<string, unknown>) => ({
+        type: "object",
+        properties: { x },
+        required: ["x"],
+        ...(ifc ? { ifc } : {}),
+      });
+
+      for (
+        const [value, ifc] of [
+          ['Pick<Sec<One | Two>, "x">', secret],
+          ['Pick<Sec<One> | Sec<Two>, "x">', secret],
+          [
+            'Pick<Sec<Confidential<One, readonly ["b"]> | Two>, "x">',
+            { confidentiality: ["b", "a"] },
+          ],
+          [
+            'Pick<Sec<One> | Confidential<Two, readonly ["b"]>, "x">',
+            { confidentiality: ["a", "b"] },
+          ],
+          ['Pick<Sec<One> | Two, "x">', secret],
+          [
+            'Pick<Readonly<Sec<One> | Confidential<Two, readonly ["b"]>>, "x">',
+            { confidentiality: ["a", "b"] },
+          ],
+          [
+            'Omit<Sec<One> | Confidential<Two, readonly ["b"]>, "z">',
+            { confidentiality: ["a", "b"] },
+          ],
+          // `Omit` keeps the carrier every member holds, folding their policies
+          // into one carrier, though the value is only one of the members.
+          ['Omit<Integrity<One, readonly ["i"]> | Sec<One>, never>', secret],
+          [
+            'Pick<Integrity<One, readonly ["i"]> | Integrity<Two, readonly ["i"]>, "x">',
+            { integrity: ["i"] },
+          ],
+          [
+            'Pick<Integrity<Sec<One>, readonly ["i"]> | Integrity<Sec<Two>, readonly ["j"]>, "x">',
+            secret,
+          ],
+          [
+            'Pick<Integrity<One, readonly ["i"]> | Integrity<Two, readonly ["j"]>, "x">',
+            undefined,
+          ],
+          [
+            'Pick<Sec<One> | Confidential<Two, readonly [string]>, "x">',
+            undefined,
+          ],
+          ['Pick<One | Two, "x">', undefined],
+        ] as const
+      ) {
+        it(`reads \`${value}\` ${ifc ? "with its members' labels joined" : "unlabeled"}`, async () => {
+          const { schema, diagnostics } = await generate(value);
+          expect(schema).toEqual(picked(ifc));
+          expect(diagnostics).toEqual([]);
+        });
+      }
+
+      it("keeps a label on a member of the value where every member places it there or on the whole value", async () => {
+        // The first member's integrity was written around `One`, so it lands
+        // on `x` alone; the second's around both members, so it lands on the
+        // whole value.
+        const { schema, diagnostics } = await generate(
+          'Pick<(Integrity<One, readonly ["i"]> & { y: number }) | Integrity<{ x: string; y: number }, readonly ["i"]>, "x" | "y">',
+        );
+        expect(schema).toEqual({
+          type: "object",
+          properties: { x: { ...x, ifc: { integrity: ["i"] } }, y },
+          required: ["x", "y"],
+        });
+        expect(diagnostics).toEqual([]);
+      });
+
+      it("labels a value by a member that is a lone carrier", async () => {
+        // `Confidential<unknown, …>` is its carrier alone, labeled like any
+        // other member. The value holds no member of `One`, around which `a`
+        // was written, so `a` lands nowhere.
+        const { schema, diagnostics } = await generate(
+          'Omit<Confidential<unknown, readonly ["b"]> | Sec<One>, never>',
+        );
+        expect(schema).toEqual({
+          type: "object",
+          properties: {},
+          ifc: { confidentiality: ["b"] },
+        });
+        expect(diagnostics).toEqual([]);
+      });
+
+      it("places a policy written around a union with a member that lists no members on the whole value, past the members its other members name", async () => {
+        // `w` is no member of `{} | One`, though `{}` may hold its data there.
+        const { schema, diagnostics } = await generate(
+          "Omit<Sec<{} | One> & { w: number }, never>",
+        );
+        expect(schema).toEqual({
+          type: "object",
+          properties: { w: y },
+          required: ["w"],
+          ifc: secret,
+        });
+        expect(diagnostics).toEqual([]);
+      });
+
+      it("places a policy written around a union with a member that lists no members on the whole value", async () => {
+        // `a` was written around `Confidential<unknown, …> | Two`, whose first
+        // member may hold its data under any key.
+        const { schema, diagnostics } = await generate(
+          'Omit<Sec<Confidential<unknown, readonly ["b"]> | Two>, never>',
+        );
+        const { confidentiality } = (schema as {
+          ifc: { confidentiality: string[] };
+        }).ifc;
+        expect([...confidentiality].sort()).toEqual(["a", "b"]);
+        expect(diagnostics).toEqual([]);
+      });
+
+      it("reads an alias the checker distributes over a union operand as a union of its members, each with its own labels", async () => {
+        const { schema, diagnostics } = await generate(
+          'Readonly<Sec<One> | Confidential<Two, readonly ["b"]>>',
+        );
+        // The members are in the checker's order for the union, which is not
+        // the order they are written in.
+        const { anyOf, ...rest } = schema as { anyOf: unknown[] };
+        expect(rest).toEqual({});
+        expect(anyOf).toHaveLength(2);
+        expect(anyOf).toContainEqual(picked(secret));
+        expect(anyOf).toContainEqual({
+          type: "object",
+          properties: { x, z: { type: "number", enum: [1] } },
+          required: ["x", "z"],
+          ifc: { confidentiality: ["b"] },
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    });
+
     describe("a user's generic alias of one", () => {
       // The checker names a `Pick` or an `Omit` over literal keys by a user's
       // alias of it, and holds that alias's arguments. The alias is followed,
@@ -4333,6 +4743,107 @@ describe("Schema: CFC authoring aliases", () => {
           SelectSec<Confidential<T, readonly ["c"]>>;
         type Id<X> = X;
         type ForwardThroughId<T extends { x?: string }> = SelectSec<Id<T>>;
+        type SelectUnion<T extends { x?: string }, U extends { x?: string }> =
+          Pick<Sec<T> | Sec<U>, "x">;
+        type SelectIntegrity<T extends { x?: string }, U extends { x?: string } | null> =
+          Pick<Integrity<T, readonly ["i"]> | Integrity<U, readonly ["j"]>, "x">;
+        type SelectOr<T extends { x?: string }> = Pick<T | Sec<Two>, "x">;
+        type SelectOrIntegrity<T extends { x?: string }> =
+          Pick<T | Integrity<Two, readonly ["i"]>, "x">;
+        type SelectSecOr<T extends { x?: string }> = SelectSec<T | Two>;
+        type View<T> = Omit<T | Sec<Two>, never>;
+        type OmitSec<T> = Omit<Sec<T>, never>;
+        type OmitSecOr<T> = OmitSec<T | Confidential<Two, readonly ["b"]>>;
+        type OmitSecNested<U> = OmitSec<
+          Confidential<U, readonly ["b"]> | Confidential<Two, readonly ["c"]>
+        >;
+        type OmitSecEither<T, U> =
+          OmitSec<T | U | Confidential<Two, readonly ["b"]>>;
+        type ReadonlyUnion<T, U> = Readonly<Sec<T> | Sec<U>>;
+        type OmitCompound<T> =
+          Omit<Confidential<T & { y: number }, readonly ["c"]>, never>;
+        type OmitCompoundIntegrity<T> =
+          Omit<Integrity<T & { y: number }, readonly ["i"]>, never>;
+        type OmitCompoundOr<T> = Omit<
+          | Confidential<T & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitReadonly<T> =
+          Omit<Confidential<Readonly<T> & { y: number }, readonly ["c"]>, never>;
+        type OmitReadonlyIntegrity<T> =
+          Omit<Integrity<Readonly<T> & { y: number }, readonly ["i"]>, never>;
+        type OmitPartial<T> =
+          Omit<Confidential<Partial<T> & { y: number }, readonly ["c"]>, never>;
+        type OmitPickAll<T> = Omit<
+          Confidential<Pick<T, keyof T> & { y: number }, readonly ["c"]>,
+          never
+        >;
+        type OmitReadonlyOr<T> = Omit<
+          | Confidential<Readonly<T> & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitReadonlyIntegrityOr<T> = Omit<
+          | Integrity<Readonly<T> & { y: number }, readonly ["i"]>
+          | Integrity<{ x: string; y: number }, readonly ["i"]>,
+          never
+        >;
+        type OmitRenamedOr<T> = Omit<
+          | Confidential<
+            { [K in keyof T as \`get_\${K & string}\`]: T[K] } & { y: number },
+            readonly ["c"]
+          >
+          | Sec<{ get_x: string; y: number }>,
+          never
+        >;
+        type OmitPickKeysOr<T, K extends keyof T> = Omit<
+          | Confidential<Pick<T, K> & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitPickXOr<T> = Omit<
+          | Confidential<Pick<T, "x"> & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type Same<X> = X extends object ? X : never;
+        type OmitDeferredOr<T> = Omit<
+          | Confidential<(T extends object ? T : never) & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitSameOr<T> = Omit<
+          | Confidential<Same<T> & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitExtractOr<T> = Omit<
+          | Confidential<Extract<T, object> & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitAwaitedOr<T> = Omit<
+          | Confidential<Awaited<T> & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitIndexedOr<T extends { data: object }> = Omit<
+          | Confidential<T["data"] & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitDeferredIntegrityOr<T> = Omit<
+          | Integrity<(T extends object ? T : never) & { y: number }, readonly ["i"]>
+          | Integrity<{ x: string; y: number }, readonly ["i"]>,
+          never
+        >;
+        type OmitConditional<T> =
+          Omit<Confidential<Same<T> & { y: number }, readonly ["c"]>, never>;
+        type OmitOpen<T> = Omit<T | Sec<T>, never>;
+        type OmitOpenLabeled<T> =
+          Omit<T | Confidential<unknown, readonly ["c"]>, never>;
+        type OmitSecOpen<T> = OmitSec<T | Confidential<unknown, readonly ["c"]>>;
       `;
 
       for (
@@ -4355,6 +4866,11 @@ describe("Schema: CFC authoring aliases", () => {
             'SelectPair<Confidential<{ x?: string }, readonly ["b"]>>',
             'Pick<Sec<Confidential<{ x?: string }, readonly ["b"]> & { y: number }>, "x">',
             { confidentiality: ["b", "a"] },
+          ],
+          [
+            'SelectPair<Confidential<{ x?: string }, readonly ["b"]> | Confidential<{ x?: string; z: 1 }, readonly ["c"]>>',
+            'Pick<Sec<(Confidential<{ x?: string }, readonly ["b"]> | Confidential<{ x?: string; z: 1 }, readonly ["c"]>) & { y: number }>, "x">',
+            { confidentiality: ["b", "a", "c"] },
           ],
           [
             "SelectPair<never>",
@@ -4417,6 +4933,55 @@ describe("Schema: CFC authoring aliases", () => {
             'Pick<Confidential<Pair, readonly [...string[], "b"]>, "x">',
             undefined,
           ],
+          [
+            "Select<Sec<One> | Sec<Two>>",
+            'Pick<Sec<One> | Sec<Two>, "x">',
+            secret,
+          ],
+          ["SelectSec<One | Two>", 'Pick<Sec<One | Two>, "x">', secret],
+          [
+            'SelectSec<Confidential<One, readonly ["b"]> | Two>',
+            'Pick<Sec<Confidential<One, readonly ["b"]> | Two>, "x">',
+            { confidentiality: ["b", "a"] },
+          ],
+          [
+            'SelectUnion<One, Confidential<Two, readonly ["b"]>>',
+            'Pick<Sec<One> | Sec<Confidential<Two, readonly ["b"]>>, "x">',
+            { confidentiality: ["a", "b"] },
+          ],
+          [
+            "SelectIntegrity<One, null>",
+            'Pick<Integrity<One, readonly ["i"]> | Integrity<null, readonly ["j"]>, "x">',
+            undefined,
+          ],
+          [
+            "SelectUnion<One, any>",
+            'Pick<Sec<One> | Sec<any>, "x">',
+            undefined,
+          ],
+          [
+            'SelectOr<Confidential<One, readonly ["b"]>>',
+            'Pick<Confidential<One, readonly ["b"]> | Sec<Two>, "x">',
+            { confidentiality: ["b", "a"] },
+          ],
+          ["SelectOr<any>", 'Pick<any | Sec<Two>, "x">', undefined],
+          [
+            "SelectOrIntegrity<never>",
+            'Pick<Integrity<Two, readonly ["i"]>, "x">',
+            { integrity: ["i"] },
+          ],
+          ["SelectSecOr<any>", 'Pick<Sec<any | Two>, "x">', undefined],
+          ["View<unknown>", "Omit<unknown | Sec<Two>, never>", undefined],
+          [
+            'OmitSec<Confidential<unknown, readonly ["b"]> | Two>',
+            'Omit<Sec<Confidential<unknown, readonly ["b"]> | Two>, never>',
+            { confidentiality: ["b", "a"] },
+          ],
+          [
+            "OmitSecOr<unknown>",
+            'Omit<Sec<unknown | Confidential<Two, readonly ["b"]>>, never>',
+            secret,
+          ],
         ] as const
       ) {
         it(`reads \`${alias}\` as \`${written}\`, ${ifc ? "labeled" : "unlabeled"}`, async () => {
@@ -4428,22 +4993,192 @@ describe("Schema: CFC authoring aliases", () => {
         });
       }
 
-      it("keeps the operand's own label for a union argument, which the alias written out distributes over", async () => {
-        // Every member of the union carries the operand's carrier. Written
-        // out, the intersection distributes over the union and is read as
-        // no one labeled operand.
+      for (
+        const [alias, ifc] of [
+          ["OmitCompound<{ x: string }>", { confidentiality: ["c"] }],
+          ["OmitCompoundIntegrity<{ x: string }>", { integrity: ["i"] }],
+          ["OmitCompoundOr<{ x: string }>", { confidentiality: ["a", "c"] }],
+          [
+            "OmitCompound<{ x: string } | { x: string; w: 1 }>",
+            { confidentiality: ["c"] },
+          ],
+        ] as const
+      ) {
+        it(`labels the whole of \`${alias}\`, whose payload intersects a bound parameter with a member of its own`, async () => {
+          // The policy was written around `T & { y: number }`, read with `T`
+          // bound to its argument, so it reaches `x` as well as `y`.
+          const { schema, diagnostics } = await generate(alias, DECLARATIONS);
+          const { ifc: whole, properties } = schema as {
+            ifc: Record<string, string[]>;
+            properties: Record<string, { ifc?: unknown }>;
+          };
+          expect(
+            Object.fromEntries(
+              Object.entries(whole).map(([key, atoms]) => [
+                key,
+                [...atoms].sort(),
+              ]),
+            ),
+          ).toEqual(ifc);
+          expect(Object.keys(properties).sort()).toEqual(["x", "y"]);
+          for (const property of Object.values(properties)) {
+            expect(property.ifc).toBeUndefined();
+          }
+          expect(diagnostics).toEqual([]);
+        });
+      }
+
+      for (
+        const [alias, ifc] of [
+          ["OmitReadonly<{ x: string }>", { confidentiality: ["c"] }],
+          ["OmitReadonlyIntegrity<{ x: string }>", { integrity: ["i"] }],
+          ["OmitPartial<{ x: string }>", { confidentiality: ["c"] }],
+          ["OmitPickAll<{ x: string }>", { confidentiality: ["c"] }],
+          ["OmitReadonlyOr<{ x: string }>", { confidentiality: ["a", "c"] }],
+          ["OmitReadonlyIntegrityOr<{ x: string }>", { integrity: ["i"] }],
+          ["OmitConditional<{ x: string }>", { confidentiality: ["c"] }],
+          // A member's payload intersecting a type the checker defers, as a
+          // conditional type, lists its own members only, so the payload is
+          // not read and its restriction goes on the whole value.
+          ["OmitDeferredOr<{ x: string }>", { confidentiality: ["a", "c"] }],
+          ["OmitSameOr<{ x: string }>", { confidentiality: ["a", "c"] }],
+          ["OmitExtractOr<{ x: string }>", { confidentiality: ["a", "c"] }],
+          ["OmitAwaitedOr<{ x: string }>", { confidentiality: ["a", "c"] }],
+          [
+            "OmitIndexedOr<{ data: { x: string } }>",
+            { confidentiality: ["a", "c"] },
+          ],
+        ] as const
+      ) {
+        it(`labels the whole of \`${alias}\`, whose payload intersects a wrapped bound parameter with a member of its own`, async () => {
+          // The policy was written around what wraps `T`, read with `T` bound
+          // to its argument, so it reaches `x` as well as `y`. A mapped
+          // wrapper is read as what it maps over; any other wrapper is read
+          // from the carrier the checker folded into the object, which is the
+          // one member's, instantiated.
+          const { schema, diagnostics } = await generate(alias, DECLARATIONS);
+          const whole = (schema as { ifc: Record<string, string[]> }).ifc;
+          expect(
+            Object.fromEntries(
+              Object.entries(whole).map(([key, atoms]) => [
+                key,
+                [...atoms].sort(),
+              ]),
+            ),
+          ).toEqual(ifc);
+          expect(diagnostics).toEqual([]);
+        });
+      }
+
+      for (
+        const [alias, keys] of [
+          ["OmitRenamedOr<{ x: string }>", ["get_x", "y"]],
+          ['OmitPickKeysOr<{ x: string; z: 1 }, "x">', ["x", "y"]],
+          ["OmitPickXOr<{ x: string; z: 1 }>", ["x", "y"]],
+        ] as const
+      ) {
+        it(`labels the whole of \`${alias}\`, whose member's payload maps a bound parameter to keys it does not hold as they are`, async () => {
+          // A mapping that lists its keys is read by them, and one whose keys
+          // the bindings alone cannot name, as a renaming `as` clause's, as
+          // reaching all of the object, so `c` reaches every member either
+          // way.
+          const { schema, diagnostics } = await generate(alias, DECLARATIONS);
+          const { ifc, properties } = schema as {
+            ifc: { confidentiality: string[] };
+            properties: Record<string, { ifc?: unknown }>;
+          };
+          expect([...ifc.confidentiality].sort()).toEqual(["a", "c"]);
+          expect(Object.keys(properties).sort()).toEqual(keys);
+          for (const property of Object.values(properties)) {
+            expect(property.ifc).toBeUndefined();
+          }
+          expect(diagnostics).toEqual([]);
+        });
+      }
+
+      it("reads `OmitDeferredIntegrityOr<{ x: string }>`, whose member's payload intersects a conditional type, with no evidence", async () => {
+        // Its payload is not read, so where the payload's data must be is
+        // unknown, and evidence goes nowhere on that member, so on no member.
+
+        const { schema, diagnostics } = await generate(
+          "OmitDeferredIntegrityOr<{ x: string }>",
+          DECLARATIONS,
+        );
+        const { ifc, properties } = schema as {
+          ifc?: unknown;
+          properties: Record<string, { ifc?: unknown }>;
+        };
+        expect(ifc).toBeUndefined();
+        for (const property of Object.values(properties)) {
+          expect(property.ifc).toBeUndefined();
+        }
+        expect(diagnostics).toEqual([]);
+      });
+
+      it("reads `ReadonlyUnion<string, null>` as `Readonly<Sec<string> | Sec<null>>`, labeling the `string` member alone", async () => {
+        // A CFC alias holds `null` beside its carrier, so `Sec<null>` is a
+        // `null` no policy labels, and `Readonly` leaves both members as they
+        // are.
         const read = await generate(
-          "SelectSec<{ x: string } | { x: string; z: 1 }>",
+          "ReadonlyUnion<string, null>",
           DECLARATIONS,
         );
         const direct = await generate(
-          'Pick<Sec<{ x: string } | { x: string; z: 1 }>, "x">',
+          "Readonly<Sec<string> | Sec<null>>",
           DECLARATIONS,
         );
-        expect((read.schema as Record<string, unknown>).ifc).toEqual(secret);
-        expect((direct.schema as Record<string, unknown>).ifc)
-          .toBeUndefined();
+        expect(read.schema).toEqual(direct.schema);
+        expect(read.schema).toEqual({
+          anyOf: [{ type: "string", ifc: secret }, { type: "null" }],
+        });
         expect(read.diagnostics).toEqual([]);
+      });
+
+      for (
+        const [alias, ifc] of [
+          ["OmitOpen<unknown>", secret],
+          ["OmitOpenLabeled<unknown>", { confidentiality: ["c"] }],
+          ["OmitSecOpen<unknown>", { confidentiality: ["a", "c"] }],
+        ] as const
+      ) {
+        it(`keeps the labels of the members beside the \`unknown\` \`${alias}\` binds into a union`, async () => {
+          // A bare `unknown` is a member with no labels of its own, beside
+          // which the others' labels stay, though the checker reduces the
+          // union written out to `unknown`. Each is written around a payload
+          // that names no members, so it labels the whole object.
+          const { schema, diagnostics } = await generate(alias, DECLARATIONS);
+          expect(schema).toEqual({ type: "object", properties: {}, ifc });
+          expect(diagnostics).toEqual([]);
+        });
+      }
+
+      it("reads a union argument that holds `unknown` before `any` unlabeled, as the `any` makes it", async () => {
+        // `any` absorbs every member of a union, `unknown` among them.
+        const read = await generate(
+          "OmitSecEither<unknown, any>",
+          DECLARATIONS,
+        );
+        const direct = await generate(
+          'Omit<Sec<unknown | any | Confidential<Two, readonly ["b"]>>, never>',
+          DECLARATIONS,
+        );
+        expect((read.schema as Record<string, unknown>).ifc).toBeUndefined();
+        expect((direct.schema as Record<string, unknown>).ifc).toBeUndefined();
+        expect(read.diagnostics).toEqual([]);
+      });
+
+      it("keeps the labels of a member whose labeled payload is `unknown`", async () => {
+        // `Omit` over the union keeps the keys every member has, here none:
+        // `c`, written around `Two`, lands on no member of the value, while `a`
+        // and `b`, written around payloads that list no members, land on all
+        // of it.
+        const { schema, diagnostics } = await generate(
+          "OmitSecNested<unknown>",
+          DECLARATIONS,
+        );
+        const ifc = (schema as { ifc: { confidentiality: string[] } }).ifc;
+        expect([...ifc.confidentiality].sort()).toEqual(["a", "b"]);
+        expect(diagnostics).toEqual([]);
       });
     });
   });

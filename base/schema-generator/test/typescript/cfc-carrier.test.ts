@@ -3,6 +3,7 @@ import ts from "typescript";
 
 import {
   carrierStamps,
+  carrierStampsOf,
   isCfcCarrierMember,
 } from "../../src/typescript/cfc-carrier.ts";
 import { createTestProgram } from "../utils.ts";
@@ -89,6 +90,39 @@ describe("cfc-carrier", () => {
 
     it("returns `false` for an alias of the tag's name whose branch holds the payload beside the carrier", async () => {
       expect(isCfcCarrierMember((await probes()).get("bare")!)).toBe(false);
+    });
+  });
+
+  describe("carrierStampsOf", () => {
+    // As for `carrierStamps()`, the cases compare checker types as booleans.
+
+    it("returns the stamp the deferred `CfcTag` is given, its metadata and its payload", async () => {
+      const { checker, types } = await probesAndChecker();
+      const stamps = carrierStampsOf(types.get("deferred")!, checker);
+
+      expect(stamps?.length).toBe(1);
+      expect(checker.typeToString(stamps![0]!.meta)).toBe(
+        '{ confidentiality: ["x"]; }',
+      );
+      expect(checker.typeToString(stamps![0]!.of!)).toBe("T");
+    });
+
+    it("returns the stamp the carrier member holds", async () => {
+      const { checker, types } = await probesAndChecker();
+      const stamps = carrierStampsOf(types.get("carrier")!, checker);
+
+      expect(stamps?.length).toBe(1);
+      expect(checker.typeToString(stamps![0]!.meta)).toBe('["x"]');
+      expect(stamps![0]!.of === undefined).toBe(true);
+    });
+
+    it("returns `undefined` for another deferred conditional, an object holding more than the carrier, and an alias of the tag's name", async () => {
+      const { checker, types } = await probesAndChecker();
+
+      for (const name of ["other", "beside", "authored", "bare"]) {
+        expect(carrierStampsOf(types.get(name)!, checker) === undefined)
+          .toBe(true);
+      }
     });
   });
 
