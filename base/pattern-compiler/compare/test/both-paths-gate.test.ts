@@ -271,6 +271,43 @@ describe("the two-principal gate", () => {
   });
 });
 
+describe("a start the write policies of the argument type refuse", () => {
+  // The room of `patterns/dev/test/writer-policy/main.tsx`, started with a
+  // value for `frozen`, which the argument type lets the handler `freeze`
+  // alone write.
+  const SUPPLIED: GateScenario = {
+    name: "a room with a protected field supplied",
+    pieces: [{
+      name: "room",
+      module: "patterns/dev/test/writer-policy/main.tsx",
+      argument: { frozen: { seat: 7, digest: "supplied" } },
+      as: "alice",
+    }],
+    steps: [],
+  };
+
+  it("is refused on both paths with the refusal of the policy, and is no difference of the commit", async () => {
+    const { findings, runs } = await runScenario(SUPPLIED, {
+      roles: ROLES,
+      compiler: new PatternCompiler(),
+    });
+
+    const refusal = "writeAuthorizedBy requires a trusted verified binding " +
+      "identity at /frozen";
+    for (const run of [runs!.today, runs!.compiled]) {
+      expect(run.checkpoints[0].committed).toBe(false);
+      expect(run.checkpoints[0].message).toContain(refusal);
+    }
+    expect(
+      found(
+        findings.filter(({ kind }) =>
+          ["commit", "message", "not-compiled"].includes(kind)
+        ),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("the error states of a store", () => {
   let directory: string;
 

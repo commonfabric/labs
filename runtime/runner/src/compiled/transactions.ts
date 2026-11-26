@@ -37,6 +37,7 @@ import {
   type FabricValue,
   isWalkableObjectNotArray,
 } from "@commonfabric/data-model";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { StoredArray } from "../../../../base/pattern-compiler/exec/stored-units.ts";
 import {
@@ -469,6 +470,50 @@ export type Restored = {
    * transaction that wrote it carried one (`RuntimeTransactions.actingFor`).
    */
   acting?: ScopeKeyIdentity;
+};
+
+/**
+ * The paths of `value` at which `schema`, a schema reduced to its write
+ * policies (`writePoliciesOf`), declares a policy and `value` holds
+ * something that `isLink` does not take for a reference: each is a
+ * position whose policy a writer of `value` is held to. A member of an
+ * array or of a record is named by its own index or key, as a write of it
+ * is. `skipped` names the members of `value` itself that are left out.
+ */
+const suppliedUnderPolicy = (
+  schema: unknown,
+  value: unknown,
+  skipped: readonly string[],
+  isLink: (value: unknown) => boolean,
+): string[][] => {
+  const found: string[][] = [];
+  const walk = (node: unknown, held: unknown, path: string[]): void => {
+    if (!isObjectNotArray(node) || held === undefined || isLink(held)) return;
+    if (
+      isObjectNotArray(node.ifc) || Array.isArray(node.anyOf) ||
+      Array.isArray(node.oneOf)
+    ) found.push(path);
+    if (Array.isArray(held)) {
+      held.forEach((member, index) =>
+        walk(node.items, member, [...path, `${index}`])
+      );
+      return;
+    }
+    if (!isObjectNotArray(held)) return;
+    const properties = isObjectNotArray(node.properties) ? node.properties : {};
+    for (const [name, member] of Object.entries(held)) {
+      if (path.length === 0 && skipped.includes(name)) continue;
+      walk(
+        Object.hasOwn(properties, name)
+          ? properties[name]
+          : node.additionalProperties,
+        member,
+        [...path, name],
+      );
+    }
+  };
+  walk(schema, value, []);
+  return found;
 };
 
 /** Keeps the documents of one executor in one space of a runtime. */
@@ -3963,9 +4008,10 @@ export class RuntimeTransactions implements TransactionHooks {
    * argument leaves out, each protected one among them as a seed, and the
    * write policies of the argument type, which the stored envelope then
    * names for every later writer. A plain value that the stored argument
-   * holds at a path the type protects is the write of whoever set the
-   * piece up, as a field the maker supplies is: the transaction is held to
-   * the policy of the path for it, as for an attempt to write the value.
+   * holds at a field the type protects, or protects a part of, is the
+   * write of whoever set the piece up, as a field the maker supplies is:
+   * the transaction is held to the policies of the field for it, as for an
+   * attempt to write the value.
    * Does nothing for a resumed piece, whose argument document was
    * completed when it was first started, and for a document whose type
    * declares no write policy.
@@ -3995,11 +4041,11 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     this.#seedFilledDefaults(tx, doc, whole);
     this.#recordDeclaredPolicy(tx, doc, [], store, true);
-    for (const claimed of declared.policy.claimed) {
-      if (claimed.length === 0 || filled.includes(claimed[0])) continue;
-      const supplied = store.peek(doc, claimed);
-      if (supplied === undefined || isLink(supplied)) continue;
-      tx.readValueOrThrow(this.#address(doc, claimed), {
+    // The reduced schema holds a node for each position at or below which
+    // the type declares a policy (`writePoliciesOf`).
+    const reduced = writePoliciesOf(declared.policy.schema)?.schema;
+    for (const at of suppliedUnderPolicy(reduced, held, filled, isLink)) {
+      tx.readValueOrThrow(this.#address(doc, at), {
         meta: { ...ignoreReadForScheduling, ...markReadAsAttemptedWrite },
       });
     }

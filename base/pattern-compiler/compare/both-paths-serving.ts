@@ -29,7 +29,14 @@
  *   On the compiled path the client writes the source and the argument
  *   (`setUpCompiledPiece`), and the serving runtime compiles the source and
  *   starts the piece. These are the two ways a client creates a piece today
- *   (`cf piece new` takes the second for a compiled pattern).
+ *   (`cf piece new` takes the second for a compiled pattern). A start of
+ *   the compiled path counts as committed where the client's setup commit
+ *   and the serving runtime's start both committed: a start the commit
+ *   preparation refuses, as for an argument that supplies a value its type
+ *   protects, is compared with the refusal today's path gives the client's
+ *   setup commit, by its message. What the client's setup commit stored of
+ *   such a piece stays stored on the compiled path, and nothing is stored
+ *   on today's.
  * - **An event** is sent by the acting principal's client with
  *   `sendEvent(..., { echo: false })`, and the serving loop stamps the run
  *   of its handler with that principal, as it stamps any event. Whether the
@@ -90,6 +97,7 @@ import { servingRuntimeFactory } from "../../../runtime/runner/src/executor/serv
 import { resolveLocalProgram } from "../../../runtime/runner/src/harness/local-program.deno.ts";
 import type { RuntimeProgram } from "../../../runtime/runner/src/harness/types.ts";
 import { parseLink } from "../../../runtime/runner/src/link-utils.ts";
+import { isCfcRejectedCommitError } from "../../../runtime/runner/src/scheduler/cfc-rejection-report.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import {
   EmulatedStorageManager,
@@ -597,6 +605,10 @@ export const runPath = async (
   // did not start one, by its result document.
   let started = 0;
   const refusedFor = new Map<string, string>();
+  // The refusal of the commit preparation for the start of a compiled
+  // piece, by its result document: a verdict on what the client stored for
+  // the piece, which today's path gives for the client's own setup commit.
+  const startRefusedFor = new Map<string, string>();
   const host = new ExecutorHost({
     policy: { storeReadThrough: true },
     ensureSpaceRoots: false,
@@ -609,6 +621,10 @@ export const runPath = async (
           compile: (program) => compiler.compile(program),
           started: () => started += 1,
           failed: (result, error) => {
+            if (isCfcRejectedCommitError(error as { name?: string })) {
+              startRefusedFor.set(result, firstLine(error));
+              return;
+            }
             refusedFor.set(
               result,
               `${
@@ -816,14 +832,21 @@ export const runPath = async (
         cancels.push(resultCell(clients[who], piece.name).sink(() => {}));
       }
       await settled();
-      run.compiled[piece.name] = started > before;
+      const startRefused = startRefusedFor.get(id);
+      // A piece whose start the commit preparation refused was compiled
+      // and started as a compiled piece is, and does not run.
+      run.compiled[piece.name] = started > before || startRefused !== undefined;
       const refusal = refusedFor.get(id);
       if (refusal !== undefined) run.refused.push(`${piece.name}: ${refusal}`);
+      // On the compiled path a client's setup commit and the serving
+      // runtime's start together bring a piece into being, as the client's
+      // one commit does on today's path: the start counts as committed
+      // where both did.
       await checkpoint(
         `start ${piece.name}`,
         actor,
-        error === undefined,
-        error === undefined ? undefined : firstLine(error),
+        error === undefined && startRefused === undefined,
+        error === undefined ? startRefused : firstLine(error),
       );
     }
     for (const [index, step] of scenario.steps.entries()) {
