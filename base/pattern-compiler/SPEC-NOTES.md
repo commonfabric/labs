@@ -29016,15 +29016,14 @@ decisions from P530.
       and a cause on today's, is spelled in no stored value, so a row is matched
       only by its value. At the last checkpoint of the first full run 427
       unreached documents were matched on each path; unmatched were, on today's
-      path, 6,321 content documents (schemas, labels, sources; not compared, as
-      they hold no label), 5,123 other documents of the space (process,
-      argument, element and computed documents whose values repeat or differ),
-      235 watermarks, 151 receipts, 575 instances of the scopes `user` and
-      `session` and one stream sidecar; on the compiled path 4,148 other
-      documents of the space (the piece's records: counts by key, its basis, its
-      source), 1,804 content documents, 235 watermarks, 160 receipts, 293
-      instances and 13 stream sidecars whose binding the harness did not send
-      to.
+      path, 6,321 content documents (schemas, labels, sources; never matched),
+      5,123 other documents of the space (process, argument, element and
+      computed documents whose values repeat or differ), 235 watermarks, 151
+      receipts, 575 instances of the scopes `user` and `session` and one stream
+      sidecar; on the compiled path 4,148 other documents of the space (the
+      piece's records: counts by key, its basis, its source), 1,804 content
+      documents, 235 watermarks, 160 receipts, 293 instances and 13 stream
+      sidecars whose binding the harness did not send to.
 1166. **Check (b) beyond text (review finding 5, partly).** The profile names
       now differ in length (`Profile name of B, 28`), the gate's fixtures derive
       a count and a predicate from the scoped value (`size`, and `long`, true
