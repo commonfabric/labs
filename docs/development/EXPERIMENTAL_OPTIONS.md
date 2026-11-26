@@ -1162,11 +1162,17 @@ holds the measurements and the conditions for revisiting.
   `Reclassified<T, Rules>` on a computation's result (`ifc.reclassify`).
   Commit preparation replaces each clause of the flow join that is a `User`
   clause the written piece's recorded creator alone may release
-  (`clauseReleasableBy`) with `anyOf(User(creator), PolicyOf<Rules>)`, the
-  policy's subject resolved to the written document's space, before the join
-  is measured against the target and stamped. Every other clause and all
-  integrity are kept. With the flag off, with no recorded creator, or with no
-  such clause, the join is stored as derived, and a diagnostic says why.
+  (`clauseReleasableBy`) with that clause or `PolicyOf<Rules>`, the policy's
+  subject resolved to the written document's space, before the join is
+  measured against the target and stamped. Every other clause and all
+  integrity are kept. A declaration is honored only from a schema a writer
+  brought, where one declaration covers every path the transaction wrote on
+  the document and every writer there is the module the piece's
+  `patternIdentity` names. Otherwise, with the flag off, with no recorded
+  creator, or with no such clause, the join is stored as derived, and a
+  diagnostic says why. Whatever the flag, a malformed declaration, or one a
+  writer adds to a stored envelope that had none at its path, refuses the
+  write.
 - **Current default and planned end state.** Off by default. The rule is a
   semantic gap under the CFC correspondence procedure, and its deciding site
   in `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker whose
