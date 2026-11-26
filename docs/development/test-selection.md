@@ -199,7 +199,8 @@ test the passes could choose would be charged needs no more room than that,
 so a large scale opens no lanes that nothing could fill.
 So a change that forces a great deal of work in takes more lanes, and still
 runs the tests chosen by score. A change with nothing mandatory takes the
-fewest lanes that hold `DISCRETIONARY_SECONDS`, which is eight. The passes
+fewest lanes that hold `DISCRETIONARY_SECONDS`, which is eight wherever
+there are that many seconds of tests to choose from. The passes
 spend the target and no more however many lanes there are, and less where
 `LANES_MAX` leaves them less room.
 
