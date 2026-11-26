@@ -2675,14 +2675,19 @@ const summarizeExitCodeObservation = (
 ) => {
   const { policy, label } = observation;
   switch (observation.policy) {
-    case "observed":
-      return { policy, label, value: observation.value };
+    case "observed": {
+      const value = observation.value;
+      let outcome = "unavailable";
+      if (value !== null) outcome = value === 0 ? "passed" : "failed";
+      return { policy, label, value, outcome };
+    }
     case "opaque":
-      return { policy, label };
+      return { policy, label, outcome: "unavailable" };
     case "denied":
       return {
         policy,
         label,
+        outcome: "unavailable",
         ...(observation.reason !== undefined
           ? { reason: observation.reason }
           : {}),

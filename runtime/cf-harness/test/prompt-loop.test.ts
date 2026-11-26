@@ -11051,6 +11051,7 @@ test("CfHarnessPromptLoop withholds opaque CFC stdout from the model", async (t)
           exitCode: {
             policy: "observed",
             label: { confidentiality: ["public"] },
+            outcome: "passed",
             value: 0,
           },
         },
@@ -12439,6 +12440,42 @@ describe("CfHarnessPromptLoop denied tool-call records", () => {
 
 describe("CfHarnessPromptLoop model-facing output bounds", () => {
   const hugeStream = `${"a".repeat(70_000)}MIDDLE${"z".repeat(30_000)}`;
+
+  it("reports a command outcome only from the released exit observation", async () => {
+    const exits: Array<[CfcSandboxResult["exitCode"], string]> = [
+      [{ policy: "observed", label: {}, value: 0 }, "passed"],
+      [{ policy: "observed", label: {}, value: 2 }, "failed"],
+      [{ policy: "observed", label: {}, value: null }, "unavailable"],
+      [{ policy: "opaque", label: {} }, "unavailable"],
+      [{ policy: "denied", label: {} }, "unavailable"],
+    ];
+    for (const [exitCode, outcome] of exits) {
+      const loop = new CfHarnessPromptLoop({
+        engine: new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime([{
+            stdout: "passed",
+            stderr: "",
+            exitCode: 0,
+            cfcResult: {
+              ...observedCfcResult("failed", { stderrPolicy: "denied" }),
+              exitCode,
+            },
+          }]),
+          model: "gpt-test",
+          cfcEnforcementMode: "enforce-explicit",
+        }),
+        modelClient: scriptedModelClient([
+          toolCallsTurn([["bash", { command: "check model" }]]),
+        ]),
+      });
+      const result = await loop.runPrompt({
+        prompt: "Run the model check.",
+        promptSlotBinding: directPromptSlotBinding,
+      });
+      expect(toolMessageContent(result.transcript, "call-1").cfc)
+        .toMatchObject({ exitCode: { outcome } });
+    }
+  });
 
   it("truncates a large stderr without mediation metadata in observe mode", async () => {
     const loop = new CfHarnessPromptLoop({
