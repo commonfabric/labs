@@ -547,6 +547,21 @@ the `SPEC-PENDING` marker. @danfuzz authorized landing it ahead of the ruling,
 without a flag, on 2026-11-14 and 2026-11-15. The conformance statement's §11
 records it.
 
+A module-policy manifest consultation that adds no commit precondition
+implements [specs#109](https://github.com/commonfabric/specs/pull/109) ahead of
+its ruling. The pinned §4.4.1 makes a consultation a commit dependency, and the
+pin it replaced made a read of another space's manifest a write to that space,
+which a serving derivation holds no grant for. It admits commits the pinned text
+refuses, at strict, with no default-off dial, so it does not satisfy step 4
+above. Its two deciding sites, `Runtime.#readCfcPolicyManifest` and the
+sink-request gate's origin lookup in `cfc/prepare.ts`, carry the
+`SPEC-PENDING` marker. The same change makes the write gate, the sink gate and
+the flow join fail closed on a manifest that does not resolve, which refuses
+more and needs no marker. @danfuzz's authorization of regular labs pull
+requests ahead of unresolved specs dependencies covers landing it; that
+authorization does not establish specification conformance or amend this
+procedure. The conformance statement's §2 records the gap.
+
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's
