@@ -212,6 +212,38 @@ describe("own-written link target", () => {
 
       expect(await readPastMarker(linking, "far target", otherSpace)).toBe(2);
     });
+
+    it("reads another client's change of an array element, where the reader's own `Cell.set()` under no schema stored the element", async () => {
+      // A cell write gives each object element of an array a document of its
+      // own and stores a link to it in the array. The other client changes
+      // the element and appends to the array in one commit, so the frame
+      // that brings the reader the longer array is the one the element's
+      // change is in.
+
+      type Row = { n: number };
+      const tx = reader.edit();
+      reader.getCell<Row[]>(space, "rows", undefined, tx).set([{ n: 1 }]);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const rows = reader.getCell<Row[]>(space, "rows");
+      expect((await rows.pull())?.[0]?.n).toBe(1);
+
+      const theirs = other.getCell<Row[]>(space, "rows", {
+        type: "array",
+        items: { type: "object", properties: { n: { type: "number" } } },
+      });
+      await theirs.pull();
+      const change = other.edit();
+      theirs.withTx(change).key(0).key("n").set(2);
+      theirs.withTx(change).push({ n: 0 });
+      expect((await change.commit().settled).error).toBeUndefined();
+
+      const value = await waitForCellValue<Row[]>(
+        reader,
+        rows,
+        (held) => held?.length === 2,
+      );
+      expect(value[0]?.n).toBe(2);
+    });
   });
 
   describe("read through a link under a schema", () => {
