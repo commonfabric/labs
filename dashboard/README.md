@@ -1314,7 +1314,9 @@ published manifests; unchanged objects reuse the cached inventory or counts.
 ### Flaky tests as JSON
 
 **`/test-selection/flaky.json`** serves the tests the flaky tests tile counts,
-for an agent or a script setting out to fix one. It reads the newest manifest
+for an agent or a script setting out to fix one. On the deployed dashboard it is
+`https://dashboard.<tailnet>.ts.net/test-selection/flaky.json` (see
+[Deploying](#deploying-stage-gke-tailnet-only)). It reads the newest manifest
 the tiles already hold, so a request costs no GitHub requests. The tile's tooltip
 names it and the test selection page links to it. The response carries `generatedAt`,
 when it was assembled, and `manifest`, which is `null` when the store holds no
