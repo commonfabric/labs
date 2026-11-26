@@ -362,6 +362,56 @@ export interface HarnessAcquiredSkill {
   scripts: HarnessAcquiredSkillScript[];
 }
 
+/** One reviewed bundle, as a reviewed-skills file lists it. */
+export interface HarnessReviewedSkillEntry {
+  /** Who vouches for the bundle: the organization whose set holds it. */
+  verifier: string;
+
+  /** `owner/repo/slug@<commit sha>`, the pin the bundle was read at. */
+  pin: string;
+
+  /** {@link skillBundleDigest} over every file the bundle holds. */
+  bundleDigest: string;
+
+  /** The version of the review checklist the bundle was read against. */
+  checklist?: string;
+
+  /** When the review stops counting (ISO 8601). */
+  validUntil?: string;
+}
+
+/**
+ * The reviewed bundles a run knows of, and whose reviews it accepts.
+ *
+ * Entries and acceptance travel in one file for now, so the operator who
+ * supplies the file is the one who accepts its verifiers. A verifier in no
+ * `acceptedVerifiers` entry vouches for nothing, and a bundle digest in
+ * `revoked` is covered by no entry.
+ */
+export interface HarnessReviewedSkills {
+  entries: HarnessReviewedSkillEntry[];
+  acceptedVerifiers: string[];
+  revoked: string[];
+}
+
+/** One file of a bundle, keyed by its path relative to the bundle root. */
+export interface HarnessSkillBundleFile {
+  path: string;
+  valueDigest: string;
+}
+
+/** What a review that covers a delegated skill's bundle is recorded as. */
+export interface HarnessReviewedSkillEvidence {
+  /** The concept the review statement implements. */
+  concept: string;
+  verifier: string;
+  pin: string;
+  bundleDigest: string;
+  files: HarnessSkillBundleFile[];
+  checklist?: string;
+  validUntil?: string;
+}
+
 /** Every skill this run acquired scripts for. */
 export interface HarnessAcquiredSkills {
   type: typeof HARNESS_ACQUIRED_SKILLS_TYPE;
