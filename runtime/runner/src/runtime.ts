@@ -2072,11 +2072,12 @@ export class Runtime {
   }
 
   // A consultation is an ordinary read, which adds no precondition of its own
-  // (spec §4.4.1). A present manifest is verified against its digest here, so
-  // a later read finds this body or none. An absent one fails the label's
-  // resolution, which fails the write and sink gates (prepare.ts), and a
-  // reactive run reads it again when the manifest arrives. Neither releases
-  // more than the manifest at its digest allows.
+  // (spec §4.4.1 as commonfabric/specs#109 proposes; the ruling is pending). A
+  // present manifest is verified against its digest here, so a later read finds
+  // this body or none. An absent one fails the label's resolution, which fails
+  // the write and sink gates (prepare.ts), and a reactive run reads it again
+  // when the manifest arrives. Neither releases more than the manifest at its
+  // digest allows.
   #readCfcPolicyManifest(
     space: MemorySpace,
     reference: unknown,

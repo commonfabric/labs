@@ -692,8 +692,8 @@ describe("exchange at observation", () => {
     it("refuses a derivation whose manifest the space lacks, rather than join the clause as read", async () => {
       // The rules a manifest carries may drop an alternative, and here they
       // could only fire where the value is observed. A replica without the
-      // manifest holds each alternative on its own, as an evaluation that
-      // runs out of fuel does (§5.3.2, §4.4.1).
+      // manifest holds each alternative on its own, as an evaluation that runs
+      // out of fuel does (§5.3.2; §4.4.1, commonfabric/specs#109, pending).
       await withRuntime(async (runtime) => {
         // Known to the runtime, so the derived write can install it, but not
         // stored in the space the label was read from.

@@ -170,8 +170,9 @@ describe("prepare", () => {
 
   describe("a ceiling the unrewritten clause fits", () => {
     // A manifest's rules may drop an alternative, so a label its rules never
-    // saw can fit a ceiling the rewritten label would not. A manifest that
-    // does not resolve fails the gate, retryably (spec §5.3.2, §4.4.1).
+    // saw can fit a ceiling the rewritten label would not. A manifest that does
+    // not resolve fails the gate, retryably (spec §5.3.2; §4.4.1,
+    // commonfabric/specs#109, pending).
 
     it("passes the ceiling where the manifest resolves", async () => {
       const { reasons } = await copyUnderCeiling(true, [POLICY]);

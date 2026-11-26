@@ -183,10 +183,10 @@ describe("PolicyOf label-time binding", () => {
     deletion.abort();
   });
 
-  // A consultation adds no precondition (spec §4.4.1): a present manifest
-  // is verified against its digest when read, and a missing one fails the
-  // resolution closed. A change after prepare leaves the decision no less
-  // safe, and a fresh consultation sees it.
+  // A consultation adds no precondition (spec §4.4.1, commonfabric/specs#109,
+  // pending): a present manifest is verified against its digest when read, and
+  // a missing one fails the resolution closed. A change after prepare leaves
+  // the decision no less safe, and a fresh consultation sees it.
   it("commits a zero-write prepared decision after manifest tampering", async () => {
     runtime.registerCfcPolicyManifests(space, [artifact]);
     const installTx = runtime.edit();
@@ -865,7 +865,7 @@ describe("PolicyOf label-time binding", () => {
       cfcPolicyEvaluation: "enforce",
       // The ceiling admits the clause unrewritten, so only the missing
       // manifest refuses: its rules could have dropped an alternative
-      // (spec §5.3.2, §4.4.1).
+      // (spec §5.3.2; §4.4.1, commonfabric/specs#109, pending).
       cfcSinkMaxConfidentiality: { fetchJson: [reference] },
     });
     try {
@@ -911,10 +911,10 @@ describe("PolicyOf label-time binding", () => {
   });
 
   it("releases a prepared sink after a consumed manifest origin changes", async () => {
-    // A consultation adds no precondition (spec §4.4.1). This release writes
-    // nothing, and its ceiling admits both origins' clauses as read, so what
-    // it pins is that a change in an origin's manifest after prepare does not
-    // reject it at commit.
+    // A consultation adds no precondition (spec §4.4.1, commonfabric/specs#109,
+    // pending). This release writes nothing, and its ceiling admits both
+    // origins' clauses as read, so what it pins is that a change in an origin's
+    // manifest after prepare does not reject it at commit.
     runtime.registerCfcPolicyManifests(undefined, [artifact]);
     for (
       const [origin, id] of [
