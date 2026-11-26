@@ -110,8 +110,8 @@ and unrevoked. The default set comes pre-accepted. Adding another set is a
 potentially dangerous action, and the UI treats it as one; the delegation's
 scope bounds what the added organization can vouch for. A call is trusted when
 the person whose authority it runs under has accepted the set. An entry that
-loosens a confidentiality rule is judged instead by the reviewers that rule's
-owner accepted (question 3).
+loosens a confidentiality rule acts only on that person's own data, because
+only a rule's owner can release it (question 3).
 A person's own unreviewed draft stays in their own space, and it is never a set.
 
 ### Unreviewed tools are usable, under worst-case assumptions
@@ -228,8 +228,9 @@ Each step is the long-term mechanism in a smaller form.
    first:
    - [handler-callable egress](handler-callable-egress.md), because today a
      handler cannot issue a request and await its result. Its "through the
-     commit boundary" route is the runtime outbox of question 1, which carries a
-     click's evidence to the effect and writes the result back to a cell. The
+     commit boundary" route is the runtime outbox of question 1. The release
+     decision and intent check run before the handler commits, the outbox send
+     re-verifies them, and the result is written back to a cell. The
      verb's caller reads the result from that cell, so `call_verb` must be
      notified when the cell settles rather than when the handler returns, and
      that is part of this step;
@@ -244,8 +245,8 @@ Each step is the long-term mechanism in a smaller form.
    reviewed adapters into a snapshot that the fabric accepts. Reviewed reads
    become free for agents.
 4. **`cf import skill`** builds the same wrapper for a skill. Its scripts run in
-   the sandbox, with each channel out of it either mediated like any other sink
-   or switched off (question 7). Skill scripts and stdio MCP servers then reach
+   the sandbox sealed, with every channel out of it switched off (question 7).
+   Skill scripts and stdio MCP servers then reach
    patterns.
 
 **Later:**

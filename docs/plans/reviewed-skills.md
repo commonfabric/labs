@@ -80,14 +80,14 @@ MUST NOT determine these parameters" when they decide destination, audience or
 scope. So an intent's routing is fixed before the run reads third-party text,
 copied exactly from the person's own words (§8.4), or confirmed by the person.
 "Reply to whoever emailed me" needs a confirmation. `pc` integrity is not where
-authority lives, but §3.4 still consults it at two points: where an intent is
-minted or refined, and at declassification gates.
+authority lives, but it is still consulted: §3.4 keeps it for minting intents
+and policy-state transitions, and §3.8.4 checks it at declassification gates.
 
 "Derives from the named prompt-slot binding" (§18.3) has a broad reading: every
 call the kernel run that the slot seeded makes derives from it. The narrow
 reading, only calls whose arguments trace back to the command, is not reachable
-even later: a value the model writes carries the whole `pc` (D4-A), so argument
-labels can never tell "from the command" apart from "from the email". What
+even later: a value the model writes carries the whole `pc`, so under D4-A
+argument labels cannot tell "from the command" apart from "from the email". What
 narrows a call's authority is `IntentOnce` binding its operation and route,
 plus the caveats checked at the sink.
 
@@ -136,7 +136,7 @@ code" (§15), and its name does not say "skill".
 
 A person accepts a set with a §4.8.3 verifier delegation to the organization
 that keeps it, and each later snapshot of the set is then accepted while it is
-unexpired and unrevoked. This is the trust
+unexpired and unrevoked (§18.3.2). This is the trust
 closure (§4.8.9) that also trusts a connector, and `runtime/runner/src/cfc/trust.ts`
 already implements it as deployment config. A reviewed set is a list of such
 statements, kept wherever connectors live: a default set, plus organizations a
@@ -176,7 +176,7 @@ concepts it covers (§4.8.3 `scope.concepts`).
 At source entry, fetched skill text is to get `Origin`,
 `Caveat(prompt-injection-risk-unscreened, s)` and `Caveat(prompt-influence, s)`
 (§5.6.1). That is primitives cleanup 4, and it is not built. A review clears
-both caveats for the reviewed bytes, each by its own existing route.
+both caveats for the reviewed bytes, each by a route this plan proposes.
 
 1. **Material risk, by an exchange rule guarded by the concept.** The
    injection-risk caveat for source `s` is discharged when the exact current
@@ -189,7 +189,10 @@ both caveats for the reviewed bytes, each by its own existing route.
    is instructions by design. What the review establishes is §14.1.3's other
    half, that the instructions are not "attacker-provided". Whether §10.1's
    "positive injection-safe integrity such as `InjectionSafe`" admits integrity
-   that satisfies the concept is a question for Berni.
+   that satisfies the concept is a question for Berni, alongside §10.1's
+   requirement that prompt-caveat release be "expressible entirely through"
+   caveats, boundary contexts, `InjectionSafe`, the generic evidence atoms and
+   ordinary exchange rules.
 2. **Steering, by an assessment minted at each decision.** Every call a run
    makes while following the skill has arguments that carry
    `Caveat(prompt-influence, s)`. §8.10.5 clears influence "only through
@@ -206,16 +209,17 @@ both caveats for the reviewed bytes, each by its own existing route.
    - `result`: `supported`.
 
    Minting at each decision also checks expiry and revocation against the trust
-   snapshot the decision is made under. §13.13.3 is the precedent for an
-   assessment with no intent, trusted through §4.8.
+   snapshot the decision is made under. §13.13.3's proposed rules are the
+   precedent for an assessment with no intent, trusted through §4.8.
 
    The clearing covers content fields only, never a public audience, and only
-   source `s`. It never covers routing. Routing evidence needs an intent binding
-   anyway (§8.10.5: "routing-scoped evidence and an already-verified intent
-   binding"), a route copied exactly from the intent carries no skill caveat,
-   and a fixed destination belongs in a reviewed tool descriptor's `sink`, not
-   in prose. An argument that an email also steered keeps the email's clause,
-   so the review never launders what the skill reads.
+   source `s`. Keeping it off routing is a policy choice. A route copied
+   exactly from the intent (§8.4) carries no skill caveat, so there is nothing
+   to clear, and a fixed destination belongs in a reviewed tool descriptor's
+   `sink`, not in prose. A routing field the skill did steer still needs
+   "routing-scoped evidence and an already-verified intent binding" (§8.10.5).
+   An argument that an email also steered keeps the email's clause, so the
+   review never launders what the skill reads.
 
    Until a rule admits a review-derived assessment, the profile clears influence
    only with source- and sink-bound disclosure, acknowledgment or disclaimer
@@ -452,8 +456,7 @@ These are provisional until Berni reviews the package, like the bridge plan's.
    `CaveatScreened`, and its steering of content fields, by an assessment
    minted at each decision. It never clears routing, never for a public
    audience, and only for the skill's own source. One concept covers both.
-   Decided 2026-11-26, and revised the same day: routing at sinks the entry
-   declares was dropped, because routing needs an intent binding anyway.
+   Decided 2026-11-26.
 4. **Sealed scripts.** Built as a separate track, after steps 1 to 3 or
    alongside them, for reviewed and unreviewed skills alike. The effect class is
    computed from the sandbox profile, never declared. Decided 2026-11-26.
@@ -468,15 +471,15 @@ as one package. Each has a provisional answer to confirm or correct.
 1. **Authority per invocation.** _Provisional, a reading:_ `direct-command`
    authority is carried per invocation (`PromptSlotInfluence` plus
    `IntentOnce`), not stored in `pc` integrity (§3.4, §13.11.6). `pc` integrity
-   is still consulted where an intent is minted or refined and at
-   declassification gates. Reading `quote` text removes no slot record or
-   minted intent, but an intent refined afterward has tainted parameters, which
-   may not decide routing (§3.8.4). So routing is fixed before the read, copied
+   is still consulted for minting intents and policy-state transitions (§3.4)
+   and at declassification gates (§3.8.4). Reading `quote` text removes no slot
+   record or minted intent, but an intent refined afterward has tainted
+   parameters, which may not decide routing (§3.8.4). So routing is fixed before the read, copied
    exactly, or confirmed. _Confirm._
 2. **"Derives from the named prompt-slot binding"** (§18.3). _Provisional, a
    reading:_ every call the kernel run that the slot seeded makes, permanently.
-   The narrow per-argument reading cannot be reached, because a value the model
-   writes carries the whole `pc` (D4-A); `IntentOnce` and sink caveats narrow
+   Under D4-A the narrow per-argument reading cannot be reached, because a value
+   the model writes carries the whole `pc`; `IntentOnce` and sink caveats narrow
    authority instead. A child after `spawnSubagent` is its own run with its own
    `PromptSlotInfluence` and holds only the intents handed to it (§15).
    _Confirm._
@@ -492,24 +495,29 @@ as one package. Each has a provisional answer to confirm or correct.
      the semantic gap: §14.1.3 defines the risk as "attacker-provided
      instruction-like content".
    - _Ask:_ does §10.1's "positive injection-safe integrity such as
-     `InjectionSafe`" admit concept-satisfying integrity?
+     `InjectionSafe`" admit concept-satisfying integrity, given that §10.1 also
+     requires prompt-caveat release to be "expressible entirely through"
+     caveats, boundary contexts, `InjectionSafe`, the generic evidence atoms and
+     ordinary exchange rules?
 4. **Steering by a reviewed source.** _Provisional, a reading:_ a
    `CaveatAssessment` minted by the trusted boundary at each release decision,
    binding that decision's sink and purpose, with the verifier as assessor
-   (§8.10.5; §13.13.3 is the precedent). It covers content fields only, never a
-   public audience, and only the skill's own source. Routing is never cleared
-   by it, since routing needs an intent binding anyway. The alternative Berni
-   may prefer is to treat reviewed text like slot-bound text, clearing both
-   caveats when it is observed (D4: the slot binding "is not an untrusted
-   influence source"). That is simpler but clears globally, so it would change
-   §8.10.5. _Confirm or choose._
+   (§8.10.5; §13.13.3's proposed rules are the precedent). It covers content
+   fields only, never a public audience, and only the skill's own source.
+   Keeping it off routing is a policy choice: a route copied exactly from the
+   intent (§8.4) carries no skill caveat. The alternative Berni may prefer is to
+   treat reviewed text like slot-bound text, which under D4 "is not an
+   untrusted influence source": source entry would assign the reviewed bytes no
+   prompt caveats at all. That is simpler, but §10.1 says "Verifier-issued
+   influence evidence is policy evidence, not a global implicit caveat clear",
+   so it needs a rule change. _Confirm or choose._
 5. **Tool choice as routing.** _Provisional, a reading:_ tool choice is
-   routing-sensitive (§8.10.5.1), and it is cleared the way routing always is,
-   by intent binding, never by an acknowledgment for each call.
+   routing-sensitive (§8.10.5.1). It needs no acknowledgment for each call,
+   because a committing call's tool choice is an exact copy (§8.4) of the
+   operation the intent binds, and carries no caveat to clear.
    - **A call with no release site,** such as a fabric-internal read or a
      sealed run, has nothing to clear.
-   - **A committing tool's choice** is authorized by the intent's operation and
-     route.
+   - **A committing tool's choice** must equal the intent's operation and route.
    - **A read that sends its arguments out,** such as `web_fetch`, releases them
      to a destination, which is a routing field. A reviewed descriptor that
      fixes the destination covers it. A destination the model chose needs a rule

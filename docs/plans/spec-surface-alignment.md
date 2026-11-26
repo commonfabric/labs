@@ -174,8 +174,9 @@ message twice" cannot be expressed, and a click handler's gesture does not reach
 the commit of the fetch that a reactive node issues later. The spec concept
 exists; the runtime does not express it. The provisional answer to how authority
 crosses that reactive hop is appendix question 1: reactive nodes stay `pure` or
-`readOnly`, and effects leave through a runtime outbox that carries the click's
-evidence.
+`readOnly`. A handler's release decision and intent check run before its
+transaction commits, and the runtime outbox sends the effect afterward,
+re-verifying them (§8.10.7).
 
 ## 2. Skills and MCP in these terms
 
@@ -217,7 +218,7 @@ that child keeps the delegating run's binding, and the skill's text is still
   this sense.
 - **Reviewed files:** "a declarative file checked in by someone you trust" is a
   registry snapshot that the node context accepts. Each person accepts the
-  reviewer that issues the snapshots, once, in their profile (appendix question
+  verifier that issues the snapshots, once, in their profile (appendix question
   3, provisional).
 - **Calls:** each call is `invokeTool`, and each external write is
   `commitEffect`.
@@ -228,7 +229,7 @@ that child keeps the delegating run's binding, and the skill's text is still
 It is a node with a measured identity. One process may serve many calls. Its
 state is a store that holds the labels of what went into it, so its `pc` only
 grows. A restart from the measured image is a new node, and state crosses into
-it only by opaque handle or as a labeled store (§18.3, appendix question 5).
+it only by opaque handle or as a labeled store (§18.2.4, appendix question 5).
 
 ### Unreviewed servers and skills
 
@@ -331,11 +332,11 @@ several answers on 2026-11-26. Every answer is provisional: the plans build on i
 now, without waiting, and Berni confirms or corrects the whole package when he
 reviews it.
 
-The check found that the spec already decides most of these. Seven answers are
-readings of rules the spec already has, so for those the ask is only whether we
-read the spec correctly. Question 7 also names a gap: §18.2 says nothing about
-network traffic out of a sandbox. Question 4 makes one policy choice, the
-default for unreviewed outputs.
+The check found that the spec already decides these. All eight answers are
+readings of rules the spec already has, so the ask is only whether we read the
+spec correctly. Question 7 also names a gap: §18.2 says nothing about network
+traffic out of a sandbox. Question 4 makes one policy choice, the default for
+unreviewed outputs.
 
 1. **Authority across the reactive hop.** A click mints gesture evidence in a
    handler, but an effect issued by a reactive node commits in a later
@@ -386,24 +387,26 @@ default for unreviewed outputs.
    (§4.8.2)? This is also cfs#11124's open question.
 
    _Provisional, a reading of existing rules:_
-   - **A person accepts a reviewer, not each snapshot.** Acceptance is a §4.8.3
+   - **A person accepts a verifier, not each snapshot.** Acceptance is a §4.8.3
      verifier delegation to the organization that keeps the set, made once in the
      person's profile. Each snapshot that verifier issues is then accepted while
-     it is unexpired and unrevoked, and §18.3.2 pinning keeps a plan on the
-     snapshot it was planned against. The default set's verifier comes
+     it is unexpired and unrevoked, and pinning keeps a plan on the snapshot it
+     was planned against (§18.3.2). The default set's verifier comes
      pre-accepted.
    - **Adding an organization is bounded.** It is a potentially dangerous action,
      and the UI treats it as one. The delegation's existing `scope.concepts` and
      `maxConfidentiality` (§4.8.3: "Upper bound on what this verifier can
      authorize") limit what the added organization can vouch for.
-   - **Whose acceptance counts depends on what the entry does.** An entry that
-     only states a tool's effect class or schema is judged under the closure of
-     the person the call runs as, so in a shared space each person's calls use
-     their own accepted reviewers. An entry that relaxes a confidentiality clause
-     (a declassifying filter, an audience taken from a server field, a
-     pattern-declared policy) is judged under the closure of that clause's owner,
-     because "one principal's trust choices do not silently authorize another
-     principal's data release" (§5.7.5, and §5.3.3's clause-local authority).
+   - **The acting person's acceptance counts.** Every entry is judged under the
+     closure of the person the call runs as: "The runtime MUST evaluate release
+     rules against the acting principal's trust set (or explicit multi-party
+     policy)" (§5.7.5). In a social space each person's calls therefore use the
+     verifiers they accepted. That cannot release someone else's data: under
+     §5.3.3 a clause is released only by its own owner's authority, so an entry
+     that relaxes a confidentiality clause (a declassifying filter, an audience
+     taken from a server field, a pattern-declared policy) acts only when the
+     person the call runs as owns that clause, or under an explicit multi-party
+     policy.
    - **A trust statement names a file by its content hash,** with an extension
      atom for content digests (§4.1.2) that reviewed skills share
      ([reviewed skills](reviewed-skills.md), Berni question 3). A changed file is
@@ -413,8 +416,8 @@ default for unreviewed outputs.
    pattern-declared policies: it is the verification mechanism that top/3599
    says comes later.
 
-   _For Berni:_ confirm, in particular that a declassifying entry is judged
-   under the clause owner's closure.
+   _For Berni:_ confirm, in particular that §5.3.3 is what keeps a declassifying
+   entry from releasing another person's clause.
 4. **Owner confinement.** Should outputs of unreviewed bridges be confined to
    the owner by default?
 
@@ -436,12 +439,13 @@ default for unreviewed outputs.
 5. **Long-lived sandbox sessions.** Under what rule may a session be
    re-baselined, so its `pc` does not grow without bound?
 
-   _Provisional, a reading of existing rules:_ §18.3 already names the rule:
+   _Provisional, a reading of existing rules:_ a session's state is a store that
+   holds the labels of what went into it, and its `pc` only grows. A restart from
+   the measured image, with scratch discarded, is "a new explicitly recorded
+   invocation boundary" (§18.2.4), and a cache that survives the restart is a
+   store and keeps its label. This follows the agent-kernel rule of §18.3,
    "Re-baselining creates a new node; outputs from the prior node cross into it
-   only by opaque handle." A session's state is a store that holds the labels of
-   what went into it, and its `pc` only grows. A restart from the measured image,
-   with scratch discarded, is "a new explicitly recorded invocation boundary"
-   (§18.2.4). A cache that survives the restart is a store and keeps its label.
+   only by opaque handle", applied to a sandbox by analogy.
 
    _For Berni:_ confirm the reading.
 6. **Commits with unknown outcome, and effects that outlast the call.**
@@ -511,9 +515,9 @@ default for unreviewed outputs.
    derived from stored content is an audience parameter", allowed only over
    content within the writer's own release authority. The field must meet the
    integrity threshold, which here is `ConnectorObserved` plus trusted parsing
-   (§13.12.6 covers forged fields). The owner accepting the reviewed
-   configuration is the owner choosing an audience for their own content, which
-   is why question 3 judges such entries under the clause owner's closure. A
+   (§13.12.6 covers forged fields). When the call runs as the owner (question
+   4), the owner's acceptance of the reviewed configuration is the owner choosing
+   an audience for their own content, within their own release authority. A
    prerequisite is binding a person's DID to the `did:mailto:` principals that a
    connector mints; until that exists, `audienceFrom` stays Loom host policy.
 
