@@ -166,6 +166,29 @@ needs a declassification. SC-57 in
 [the CFC spec change list](../specs/cfc-spec-changes.md) records the rule for
 the spec.
 
+## A requirement naming `CurrentPrincipal`
+
+A schema's input requirements, its `maxConfidentiality` ceilings and its
+`requiredIntegrity` floors, may name `CurrentPrincipal` too, and a ceiling may
+name a policy with `PolicyOf`. A requirement is a check on one attempt rather
+than a label stored with the value, so before the check compares it with what
+the attempt read or wrote, `CurrentPrincipal` binds to the principal the
+attempt acts for and the subject of a `PolicyOf` to the space that owns the
+document (CFC spec §8.10.3). The schema the document stores keeps the
+requirement symbolic, so each later attempt binds it to its own principal. A
+bare `CurrentPrincipal` where a ceiling names a reader, as a clause or as an
+alternative in an `anyOf`, names that principal as the reader `User(<DID>)`.
+
+A ceiling of `[User(CurrentPrincipal)]` therefore admits a value labeled for
+the principal writing it and nothing else. An attempt that acts for no one,
+whether its trust snapshot names no principal or it is a served run with no
+actor, binds nothing, and a requirement naming `CurrentPrincipal` fails closed
+for it, even where the attempt read nothing the requirement applies to.
+
+This differs from [a reader named `CurrentPrincipal`](#a-reader-named-currentprincipal),
+which binds to a store's creator, or to the readers of the private parent it is
+created beneath, because that declaration is persisted as the store's label.
+
 ## Why only in a handler
 
 `currentPrincipal()` throws in a pattern body, a `computed()`, and a `lift()`.
@@ -216,6 +239,11 @@ the owner's own append, a list whose policy names no `User` reader, an
 existing document linked into the list, both one stored as present but
 `undefined` and one whose id the transaction also creates in another scope,
 and an existing store another principal writes.
+`runtime/runner/test/cfc-input-requirement-bindings.test.ts` covers ceilings
+and floors that name `CurrentPrincipal`, and ceilings that name `PolicyOf`: a
+value labeled for what the requirement names is admitted and one labeled for
+anything else is refused, under each policy-evaluation mode, and an attempt
+that acts for no one, a served run with no actor among them, is refused.
 `patterns/integration/owner-private-inbox-multi-runtime.test.ts`
 drives the same append through compiled patterns in separate runtimes, under
 either server-execution posture. With server execution on, it also refuses a
