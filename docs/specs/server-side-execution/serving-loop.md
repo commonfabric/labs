@@ -416,7 +416,13 @@ demand row of every session whose id the piece writes or owns, or a recorded
 piece beneath it does, is vouched for: each slice of the owner the row's
 instance is resolved under, the one at its scope key and each broader one,
 is clean and of the epoch, with a vouch row in the slice at that key for a
-written id, and a live document for an owned cell. A written instance that a
+written id, and a live document for an owned cell whose default is not a
+scalar. A reader of an owned cell's absent instance reads its schema
+default, which is what the arrival seed writes there, and a write to a
+scalar replaces it whole, so an absent instance of a cell with a scalar
+default needs no seed to be current. An object or array default is not
+taken so, since a first write into part of an absent instance creates it
+without the rest of the default. A written instance that a
 run at another key wrote, as the redirect a viewer's run leaves at the
 space's key is, is answered for by the slice of that run. For each session
 that demands the instance, each row a slice of the session's own chain holds
@@ -2557,7 +2563,10 @@ views under server execution runs no piece and follows nothing, the space
 root included; the serving runtime is the opener of every piece it serves.
 Tenure activation owes its space the EXISTENCE of a root, without following
 that root's source; the root's origin is followed on the first start of the
-root, as any piece's is. A served wish explicitly opens the runtime-supplied
+root, as any piece's is. A root the activation creates is recorded as
+following its origin, since creating it ran what the origin offered
+(piece-source-lifecycle.md), so that first follow writes nothing where the
+origin still offers the same source. A served wish explicitly opens the runtime-supplied
 sidecars it needs through `openSidecarSurface` and `SourceReconciler.open`;
 existing sidecars follow their origins on that open. The SWAP is the
 server's: a pattern-pointer

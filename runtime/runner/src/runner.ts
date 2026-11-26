@@ -1542,6 +1542,23 @@ function ownedCellOwesSeed(
 }
 
 /**
+ * Whether a reader of an absent instance of `link`, a cell owed a default
+ * (`ownedCellOwesSeed`), reads exactly what the seed writes there: the
+ * default is a scalar. A reader of an absent instance reads the schema's
+ * default, the seed writes that default whole, and a write to a scalar
+ * replaces it whole. An object or an array default is not one: a viewer's
+ * first write into part of an absent instance creates the instance holding
+ * that part alone, where a seed would have written the rest of the default
+ * beside it.
+ */
+function absentReadsAsSeed(link: NormalizedFullLink): boolean {
+  if (!isObjectOrArray(link.schema)) return false;
+  const schemaDefault = link.schema.default;
+  return schemaDefault === null || typeof schemaDefault === "string" ||
+    typeof schemaDefault === "number" || typeof schemaDefault === "boolean";
+}
+
+/**
  * Whether the gate before the start of a piece a resume pre-sync has named
  * takes the record of `link`, a cell an instance in the piece's tree owns,
  * for the cell; the owning instance's result cell is at `ownerScope`. It does
@@ -13121,9 +13138,11 @@ export class Runner {
   /**
    * What the currency index needs to know of the piece running at
    * `resultCell` that its computations do not say (serving-loop.md §3b):
-   * whether the piece records a source origin, which a start follows, and
-   * the ids of the cells it owns that are owed a default
-   * (`ownedCellOwesSeed`). For a piece whose result document is narrower
+   * whether the piece records a source origin, which a start follows, the
+   * ids of the cells it owns that are owed a default
+   * (`ownedCellOwesSeed`), and those of them a reader of an absent instance
+   * reads as what the seed writes there (`absentReadsAsSeed`), under every
+   * program that owns them. For a piece whose result document is narrower
    * than the space, `resultCell` is at that scope, and the answer is taken
    * over every viewer's instance: whether any of them records an origin,
    * and the cells owned under any program the instances point at. Returns
@@ -13132,19 +13151,32 @@ export class Runner {
    */
   pieceCurrencyFacts(
     resultCell: Cell<any>,
-  ): { followsOrigin: boolean; owned: string[] } | undefined {
+  ):
+    | { followsOrigin: boolean; owned: string[]; absentAsDefault: string[] }
+    | undefined {
     const link = resultCell.getAsNormalizedFullLink();
     const rootCell = link.path.length > 0
       ? this.#runtime.getCellFromLink({ ...link, path: [] })
       : resultCell;
     if (!this.isRunning(rootCell)) return undefined;
     const ownerScope = rootCell.getAsNormalizedFullLink().scope;
-    const ownedBy = (pattern: Pattern): string[] =>
-      (pattern.derivedInternalCells ?? []).map((descriptor) =>
-        getDerivedInternalCell(rootCell, descriptor).getAsNormalizedFullLink()
-      ).filter((derived) => ownedCellOwesSeed(derived, ownerScope)).map((
-        derived,
-      ) => derived.id);
+    const ownedBy = (patterns: readonly Pattern[]) => {
+      const owned = new Set<string>();
+      const notAsDefault = new Set<string>();
+      for (const pattern of patterns) {
+        for (const descriptor of pattern.derivedInternalCells ?? []) {
+          const derived = getDerivedInternalCell(rootCell, descriptor)
+            .getAsNormalizedFullLink();
+          if (!ownedCellOwesSeed(derived, ownerScope)) continue;
+          owned.add(derived.id);
+          if (!absentReadsAsSeed(derived)) notAsDefault.add(derived.id);
+        }
+      }
+      return {
+        owned: [...owned],
+        absentAsDefault: [...owned].filter((id) => !notAsDefault.has(id)),
+      };
+    };
     // A piece whose result document is narrower than the space holds a
     // pattern pointer in each viewer's instance of it, and runs a program
     // for each pointer those instances hold.
@@ -13153,13 +13185,11 @@ export class Runner {
       if (scoped.programs.size === 0) return undefined;
       return {
         followsOrigin: scoped.originInstances.size > 0,
-        owned: [
-          ...new Set(
-            [...scoped.programs.values()].flatMap((program) =>
-              ownedBy(this.#resolveToPattern(program))
-            ),
+        ...ownedBy(
+          [...scoped.programs.values()].map((program) =>
+            this.#resolveToPattern(program)
           ),
-        ],
+        ),
       };
     }
     const read = this.#runtime.readTx();
@@ -13187,7 +13217,7 @@ export class Runner {
     if (loaded === undefined) return undefined;
     return {
       followsOrigin,
-      owned: ownedBy(this.#resolveToPattern(loaded as Pattern)),
+      ...ownedBy([this.#resolveToPattern(loaded as Pattern)]),
     };
   }
 
@@ -16626,6 +16656,22 @@ export class Runner {
       setCfcImplementationIdentity(tx, builtinIdentity);
     }
 
+    // The node's identity: the cause the builtin's stores derive from, and the
+    // cause of the frame each of its runs carries (below).
+    const nodeCause: RawNodeCause = {
+      inputs: inputsCell,
+      parents: resultCell.entityId,
+      ...(resolvedOutputSpot
+        ? {
+          outputSpot: {
+            space: resolvedOutputSpot.space,
+            id: resolvedOutputSpot.id,
+            path: [...resolvedOutputSpot.path],
+          },
+        }
+        : {}),
+    };
+
     const builtinFrame = builtinIdentity
       ? pushFrameFromCause(undefined, {
         runtime: this.#runtime,
@@ -16670,19 +16716,7 @@ export class Runner {
           );
         },
         addCancel,
-        {
-          inputs: inputsCell,
-          parents: resultCell.entityId,
-          ...(resolvedOutputSpot
-            ? {
-              outputSpot: {
-                space: resolvedOutputSpot.space,
-                id: resolvedOutputSpot.id,
-                path: [...resolvedOutputSpot.path],
-              },
-            }
-            : {}),
-        } satisfies RawNodeCause,
+        nodeCause,
         // The parent cell under the pattern's result schema, whatever schema
         // the caller started the piece with: builtins copy it into the
         // `result` back-links of the cells they mint, and every runtime
@@ -16773,23 +16807,50 @@ export class Runner {
     );
     const rawName = schedulerRawActionName(rawTargetName, rawInstanceKey);
 
-    const action: Action = (tx: IExtendedStorageTransaction) => {
+    // Each run carries a frame of its own whose cause is the node's identity,
+    // in a frame context of its own, as a lift's run does. The ids the run
+    // mints come from that frame: an object it writes as an array element
+    // becomes a document whose id derives from the node's cause and from what
+    // the write writes (`frameAnchorIds()`), so every runtime running this
+    // node mints the same documents for the same write. Drawn from the
+    // runtime's own frame instead, they
+    // differ from runtime to runtime, and a client's speculative echo of the
+    // run then waits for documents the served run never writes
+    // (speculation.md §2, "A speculative run mints the ids the served run
+    // mints").
+    const action: Action = (tx: IExtendedStorageTransaction) =>
+      runInFrameContext(() => runBuiltin(tx));
+    const runBuiltin = (tx: IExtendedStorageTransaction) => {
       if (schedulerRehydration.implementationSelection?.matches(tx) === false) {
         return;
       }
+      const frame = pushFrameFromCause(nodeCause, {
+        builtinRun: true,
+        runtime: this.#runtime,
+        tx,
+        space: nodeResultCell.space,
+        ...(builtinIdentity ? { implementationIdentity: builtinIdentity } : {}),
+      });
       logger.timeStart("raw", "run", rawTargetName);
+      let popFrameAfterReturn = true;
       try {
         const result = builtinAction(tx);
         if (result instanceof Promise) {
-          return result.finally(() =>
-            logger.timeEnd("raw", "run", rawTargetName)
-          );
+          // The frame stays pushed until the run settles, in this run's own
+          // frame context, where nothing else running meanwhile sees it.
+          popFrameAfterReturn = false;
+          return result.finally(() => {
+            popFrame(frame);
+            logger.timeEnd("raw", "run", rawTargetName);
+          });
         }
         logger.timeEnd("raw", "run", rawTargetName);
         return result;
       } catch (error) {
         logger.timeEnd("raw", "run", rawTargetName);
         throw error;
+      } finally {
+        if (popFrameAfterReturn) popFrame(frame);
       }
     };
     setRunnableName(action, rawName, { setSrc: true });
@@ -18328,6 +18389,31 @@ export function setPatternSource(
 }
 
 /**
+ * Stamp `origin` on a piece that `tx` creates from it, with the record that
+ * the piece follows that origin: the piece runs what the origin offered,
+ * which is what a later follow that finds the same source concludes. That
+ * follow then writes nothing (`samePieceReconciliation()`), so the piece's
+ * result document gets no new revision on its account. `pattern` is the
+ * pattern the piece was created running, or `undefined` where the caller
+ * cannot name one, which stamps the origin alone.
+ */
+export function stampCreatedFromOrigin(
+  resultCell: Cell<unknown>,
+  tx: IExtendedStorageTransaction,
+  origin: string,
+  pattern: { identity: string; symbol: string } | undefined,
+): void {
+  setPatternSource(resultCell, tx, origin);
+  if (pattern === undefined) return;
+  setPieceReconciliation(resultCell, tx, {
+    outcome: "followed",
+    at: Date.now(),
+    origin,
+    offered: { identity: pattern.identity, symbol: pattern.symbol },
+  });
+}
+
+/**
  * The entries of one list of {@link PieceSourceDelegations}, or `undefined`
  * where it is malformed: anything but an array of entries each naming a
  * module once, with at least one predecessor, none of them the module.
@@ -18758,7 +18844,7 @@ function initializePieceSourceHistory(
     throw new Error("piece source history exists without a pattern identity");
   }
   if (origin !== undefined) {
-    candidate.setMetaRaw("patternSource", origin, rawMetaWriteAuthorization);
+    stampCreatedFromOrigin(resultCell, tx, origin, pattern);
   }
   // The creation revision links the retained source, so it waits for a space
   // that holds it: a cross-space child's closure replicates after its run.

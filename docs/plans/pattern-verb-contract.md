@@ -870,7 +870,7 @@ client-side sugar, not protocol.
 | `battleship/` | `fire` | conditional rejection ("not your turn") | yes — a typed code lets the agent decide whether to wait or stop |
 | `scoped-group-chat/` | `postMessage` | append-only under concurrency | yes, and this is where the idempotency key earns its keep: a blind retry double-posts today |
 | `lunch-poll/` | `vote` | naturally idempotent update | yes; the key is harmless where it is unnecessary |
-| `deep-research.tsx` | LLM-backed verb | result unavailable at return time | yes — the verb settles with a reference and the caller waits on that cell separately |
+| `deep-research/main.tsx` | LLM-backed verb | result unavailable at return time | yes — the verb settles with a reference and the caller waits on that cell separately |
 | `counter/` | `increment` | single-user, trivial verb | yes |
 
 The chat case is the sharpest test: it is the one where today's behavior is not

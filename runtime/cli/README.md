@@ -878,25 +878,28 @@ first, lets go of the button without activating it. Printable keys enter text
 while a filter is active.
 
 Some dialogs also hold check boxes, radio buttons, and input lines, drawn as
-Turbo Vision draws them. On a screen too short for all of a dialog's fields, its
-buttons stay in view and its fields scroll to show the focused one. Tab and
-Shift-Tab, like the navigation keys, move the focus through those first and then
-through the buttons. Space toggles the focused check box, and so does a click on
-it. Moving the focus to an input line selects its text, so that typing replaces
-it. While an input line is focused, every key but Tab, Shift-Tab, Enter, Escape,
-and Alt with a shortcut letter goes to it: typed text goes in, Backspace and
-Delete (or Ctrl-D) delete a character, Alt-Backspace deletes the word before the
-cursor, and Left, Right, Home, and End (or Ctrl-B, Ctrl-F, Ctrl-A, and Ctrl-E)
-move its cursor. A click on an input line puts its cursor where the click lands,
-and a click on its label selects its text. An arrow at either end of the line
-says that its text runs on past that end. A check box's highlighted letter
-toggles it, an input line's moves the focus to it, a radio button's selects it
-and moves the focus to its set, and a button's activates it. Alt with the letter
-does the same wherever the focus is, including on an input line or among radio
-buttons. Alt with a letter that is no control's shortcut types into a focused
-input line the character the terminal says it typed, if any, and otherwise does
-nothing. Enter activates the default button wherever the focus is, unless it is
-on another button.
+Turbo Vision draws them, and sliders. On a screen too short for all of a
+dialog's fields, its buttons stay in view and its fields scroll to show the
+focused one. Tab and Shift-Tab, like the navigation keys, move the focus through
+those first and then through the buttons. Space toggles the focused check box,
+and so does a click on it. Moving the focus to an input line selects its text,
+so that typing replaces it. While an input line is focused, every key but Tab,
+Shift-Tab, Enter, Escape, and Alt with a shortcut letter goes to it: typed text
+goes in, Backspace and Delete (or Ctrl-D) delete a character, Alt-Backspace
+deletes the word before the cursor, and Left, Right, Home, and End (or Ctrl-B,
+Ctrl-F, Ctrl-A, and Ctrl-E) move its cursor. A click on an input line puts its
+cursor where the click lands, and a click on its label selects its text. An
+arrow at either end of the line says that its text runs on past that end. While
+a slider is focused, the arrow keys move its thumb to the stop before or after
+the one it is at, and Home and End move it to its ends. A click on a slider's
+track moves it to the stop nearest the click. A check box's highlighted letter
+toggles it, an input line's or a slider's moves the focus to it, a radio
+button's selects it and moves the focus to its set, and a button's activates it.
+Alt with the letter does the same wherever the focus is, including on an input
+line or among radio buttons. Alt with a letter that is no control's shortcut
+types into a focused input line the character the terminal says it typed, if
+any, and otherwise does nothing. Enter activates the default button wherever the
+focus is, unless it is on another button.
 
 While a dialog is up, the viewer asks the terminal to report every key in full,
 as the kitty keyboard protocol defines. In that mode, iTerm2 reports Option with
@@ -1009,10 +1012,12 @@ the checkout does not have, or leave it as it is. In a shallow checkout, whose
 history git cannot count to the end, it says so in place of the counts. It also
 gives the number and address of the pull request open from the branch, which it
 looks for as `L` does, below, or says that there is none, or why it could not
-look; Abort stops that search, and the dialog asks without it. Push (`u`) then
-pushes, its output following the question, and Cancel takes the dialog down. No
-button is the default, so Enter does nothing until a button has the focus, and
-pressing `P` again does not push.
+look. It looks for the pull request while it asks `origin`'s server for its
+default branch, and asks whether to push once both are done. Once the server has
+answered, Abort stops the search, and the dialog asks without it; before then,
+Abort stops the push. Push (`u`) then pushes, its output following the question,
+and Cancel takes the dialog down. No button is the default, so Enter does
+nothing until a button has the focus, and pressing `P` again does not push.
 
 When git fails to push or is aborted, as it can when the network is unreliable,
 or does not learn which branch is `origin`'s default, a Retry push button (`P`)
@@ -1031,10 +1036,12 @@ succeeds, including one that had nothing new to push, unless the branch already
 has an open pull request, which they look for as `L` does, below. The pull
 request goes to the GitHub repository of the remote named `upstream`, `github`,
 or `origin`, whichever is the first to name one, and merges into that remote's
-default branch, as its server names it then, from the branch on `origin`. Its
-title and description are the subject and the rest of the message of the
-branch's oldest commit that the default branch, as last fetched, does not have,
-leaving out merges and commits whose changes that branch already has.
+default branch, as its server names it then, from the branch on `origin`. When
+the viewer has to ask GitHub for the open pull request, it asks that remote's
+server for its default branch at the same time. The created pull request's title
+and description are the subject and the rest of the message of the branch's
+oldest commit that the default branch, as last fetched, does not have, leaving
+out merges and commits whose changes that branch already has.
 
 - "Just push, and link to them": the summary gives the page's address, which the
   status line makes a link for terminals that open links.
@@ -1046,15 +1053,23 @@ leaving out merges and commits whose changes that branch already has.
 - "Use touch-gate and a security key": the viewer asks a touch-gate server to
   create the pull request with the token the settings name. The dialog asks for
   the named security key to be touched, as "Touch the “carthusian” security key
-  to create a PR.", and the server acts only once it is. As soon as the security
-  key is touched, that step is done, and the dialog shows a step that sends the
-  server the approval. When a security key fails, the summary says what
-  libfido2's error means, as "the security key stopped answering", followed by
-  the tool and the error's name, or else gives what the tool printed. The
-  server's address, its certificate, the secret its clients share, and the
-  registered security keys come from `~/.config/touch-gate`, as the touch-gate
-  project's client keeps them, and the viewer talks to the security key through
-  libfido2's `fido2-token` and `fido2-assert` tools.
+  to create a PR.", and the server acts only once it is. While it asks, a
+  drawing of a security key with a yellow touch pad comes in from past the right
+  edge of the screen and plugs into the dialog's right side, speeding up as it
+  goes and taking 350 milliseconds, and then the green light along the key's top
+  and bottom edges blinks. On a terminal too narrow for the plugged-in key
+  beside the centered dialog, the dialog moves left, and narrows if it must, to
+  make room. A dialog too short to hold the key draws none. As soon as the
+  security key is touched, the light stops blinking and stays lit in blue, that
+  step is done, and the dialog shows a step that sends the server the approval.
+  If the step fails instead, the key is shown plugged in with its light out.
+  When a security key fails, the summary says what libfido2's error means, as
+  "the security key stopped answering", followed by the tool and the error's
+  name, or else gives what the tool printed. The server's address, its
+  certificate, the secret its clients share, and the registered security keys
+  come from `~/.config/touch-gate`, as the touch-gate project's client keeps
+  them, and the viewer talks to the security key through libfido2's
+  `fido2-token` and `fido2-assert` tools.
 
 When creating the pull request with the GitHub API or touch-gate fails, or is
 aborted, the dialog says what went wrong, and a Create PR button (`P`) tries
@@ -1115,28 +1130,42 @@ page once it has connected or failed to. While it connects, Abort, or an
 interrupt, gives up on the connection. When a delivery reports that a pull
 request was opened from the pushed branch, at the pushed commit, in the GitHub
 repository that `origin` names, or that the pull request `L` found merged, the
-dialog gives the pull request's address and says it is quitting, and two seconds
-later the viewer closes the dialog and quits as Quit does, unless the dialog was
-closed meanwhile. Pressing Quit in that moment quits at once, for the pull
-request all the same. Quitting once the viewer creates or merges the pull
-request works the same way. Once the screen is restored, it prints the pull
-request's address on the terminal. The address is printed only when the viewer
-quit for it, so a quit after cancelling the save prompt it raised prints
-nothing. When the viewer would watch the relay, in the cases above where it
-connects to it, the dialog shows, under how the task ended, a step that connects
-to the relay and then one that waits for the pull request, or says why it is not
-watching: no relay is set, `origin` is not on GitHub, or the connection failed
-or ended. Closing the dialog stops the watch.
+dialog gives the pull request's address, unless how the task ended already gave
+it, and says it is quitting, and once the delay that the "Delay before quitting"
+slider below sets has passed the viewer closes the dialog and quits as Quit
+does, unless the dialog was closed meanwhile. Pressing Quit in that moment quits
+at once, for the pull request all the same. With no delay, the viewer quits at
+once, without giving the address in the dialog. Quitting once the viewer creates
+or merges the pull request works the same way. Once the screen is restored, it
+prints the pull request's address on the terminal. The address is printed only
+when the viewer quit for it, so a quit after cancelling the save prompt it
+raised prints nothing. When the viewer would watch the relay, in the cases above
+where it connects to it, the dialog shows, under how the task ended, a step that
+connects to the relay and then one that waits for the pull request, or says why
+it is not watching: no relay is set, `origin` is not on GitHub, or the
+connection failed or ended. Closing the dialog stops the watch.
+
+Under the check box, the "Delay before quitting" slider sets how long the dialog
+says it is quitting before the viewer quits, from none to 10 seconds on a
+logarithmic scale, and two seconds unless it is set. Its stops are ten to each
+power of ten from 16 milliseconds up, rounded to two significant digits. The
+first, 16 milliseconds, counts as no delay: the dialog shows it as `none`, and
+the viewer quits at once. It shows the others as `20 ms`, `25 ms`, `32 ms`, and
+so on up to `7.9 s` and `10 s`.
 
 The viewer keeps these settings in git's configuration, as the strings
 `cf-view.pullRequestTool` (`link`, `api`, `browser`, or `touch-gate`) and
-`cf-view.touchGateToken`, the boolean `cf-view.quitOnPullRequest`, and the
-string `cf-view.webhookRelay`, so the `git config` command can set them too. OK
-saves each setting that differs from what the dialog opened showing. It saves it
-in the configuration file that git read the setting's value from, which may be a
-file another one includes, so that git then reads the new value. A value read
-from the machine's own configuration file, or set nowhere, is saved in the
-user's global configuration file instead.
+`cf-view.touchGateToken`, the boolean `cf-view.quitOnPullRequest`, the number of
+milliseconds `cf-view.quitDelay`, and the string `cf-view.webhookRelay`, so the
+`git config` command can set them too. A delay outside the slider's range is
+read as the nearer end of it, so that 16 or less is none, and one that git
+cannot read as a whole number as two seconds. A delay that is not one of the
+slider's stops is kept until the slider moves. OK saves each setting that
+differs from what the dialog opened showing. It saves it in the configuration
+file that git read the setting's value from, which may be a file another one
+includes, so that git then reads the new value. A value read from the machine's
+own configuration file, or set nowhere, is saved in the user's global
+configuration file instead.
 
 In the main view, `b` shows or hides the blame column in place of paging up;
 Page Up and Ctrl-B still page up there. The column takes the right 20 columns of

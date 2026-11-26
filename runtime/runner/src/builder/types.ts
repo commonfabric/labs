@@ -346,6 +346,17 @@ export type Frame = {
   frameKind?: "lift" | "handler";
 
   /**
+   * Set on the frame a builtin's run carries (runner.ts). A write by a cell
+   * made under it anchors the array elements it writes from what it writes
+   * (`frameAnchorIds()` in cell.ts) rather than from this frame's counter,
+   * which restarts with every run: a builtin keeps stores that its later runs
+   * read back and write again, and a restarted counter would hand a new
+   * element the id an earlier run gave another. Not inherited by frames
+   * pushed under it.
+   */
+  builtinRun?: boolean;
+
+  /**
    * The wall-clock instant (ms) bound to the event that opened this handler
    * frame. A handler's ambient clock reads this FROZEN value, coarsened, rather
    * than the live wall clock, so time does not advance during a handler's own

@@ -250,6 +250,26 @@ describe("piece source reconciliation", () => {
     return piece;
   }
 
+  /** A piece created running v1 of the tracked pattern from `origin`. */
+  async function createPieceFrom(fetch: RuntimeFetch, origin: string) {
+    createRuntime(fetch);
+    const space = signer.did();
+    const initial = await runtime.patternManager.compilePattern(
+      parentProgram(source("v1")),
+      { space },
+    );
+    const piece = runtime.getCell<{ marker?: string }>(
+      space,
+      `reconcile-${crypto.randomUUID()}`,
+    );
+    await runtime.setup(undefined, initial, {}, piece, {
+      initializePieceSourceHistory: true,
+      initialPieceSourceOrigin: origin,
+    });
+    await runtime.idle();
+    return piece;
+  }
+
   async function compileMarkerPattern(marker: string) {
     return await runtime.patternManager.compilePattern(
       parentProgram(source(marker)),
@@ -1836,6 +1856,42 @@ describe("piece source reconciliation", () => {
 
       // Opening a piece that is up to date stays a read.
       expect(getPieceReconciliation(piece)).toEqual(first);
+    });
+
+    it("rewrites nothing on the first follow of a piece created from its origin that finds it current", async () => {
+      // Creating a piece from its origin is its first follow, and records
+      // what it concluded. A later follow that finds the same source writes
+      // nothing, so a reader of the result document sees no new revision.
+      const v1Identity = await identityFor(source("v1"));
+      const piece = await createPieceFrom(
+        servingFetch(() => v1Identity, () => source("v1")),
+        PARENT_SOURCE,
+      );
+      const created = getPieceReconciliation(piece);
+      expect(created).toMatchObject({
+        outcome: "followed",
+        origin: PARENT_SOURCE,
+        offered: { identity: v1Identity, symbol: SYMBOL },
+      });
+
+      expect(await reconcile(piece)).toBe("current");
+
+      expect(getPieceReconciliation(piece)).toEqual(created);
+    });
+
+    it("records a first follow of a piece created from its origin that concludes otherwise", async () => {
+      const piece = await createPieceFrom(
+        () => Promise.resolve(new Response("nope", { status: 503 })),
+        PARENT_SOURCE,
+      );
+
+      expect(await reconcile(piece)).toBe("unavailable");
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "unreachable",
+        origin: PARENT_SOURCE,
+        detail: "the origin answered 503",
+      });
     });
 
     it("records an origin it could not reach, and what it answered", async () => {

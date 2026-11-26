@@ -515,7 +515,7 @@ describe("touchgate", () => {
       );
     });
 
-    it("begins the step asking for the touch as one that waits for a person, and the step sending the approval with the default kind", async () => {
+    it("begins the step asking for the touch as one that waits for the touch of a security key, and the step sending the approval with the default kind", async () => {
       const request = encodeRequest(2, "laptop", [
         "work",
         "octo/repo",
@@ -534,7 +534,7 @@ describe("touchgate", () => {
       );
       await server.done;
 
-      expect(kinds).toEqual(["person", undefined]);
+      expect(kinds).toEqual(["touch", undefined]);
     });
 
     it("says the security key was touched before it sends the server the approval", async () => {

@@ -748,7 +748,7 @@ test(
   async () => {
     const source = await Deno.readTextFile(
       new URL(
-        "../../../patterns/apps/self-improving-classifier/self-improving-classifier.tsx",
+        "../../../patterns/apps/self-improving-classifier/main.tsx",
         import.meta.url,
       ),
     );
@@ -814,7 +814,7 @@ test(
   async () => {
     const source = await Deno.readTextFile(
       new URL(
-        "../../../patterns/apps/shopping-list/shopping-list.tsx",
+        "../../../patterns/apps/shopping-list/main.tsx",
         import.meta.url,
       ),
     );
