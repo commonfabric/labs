@@ -19,7 +19,8 @@ These files model that case with `cf test`. No real location data is involved.
 | `share.tsx`         | The share pattern. It reads the owner's fixes and publishes the window into `shared`, a store that admits only unlabeled values, so B's access list alone decides who reads it.                                              |
 | `share-policy.tsx`  | A policy for B itself: readable by the readers of the space the label is created in (`HasRole(reader, THIS_POLICY.subject)`).                                                                                                |
 | `share-readers.tsx` | The share pattern with its store under `share-policy.tsx`: "readers of B" rather than "anyone the value reaches".                                                                                                            |
-| `main.test.tsx`     | The four cases below. Each share runs in a new space that grants everyone READ.                                                                                                                                              |
+| `share-live.tsx`    | The share as `PROPOSAL.md` writes it: a `lift` typed `Reclassified<Fix[], typeof shareSpaceRules>`, and a store whose ceiling admits the owner or the share space's readers.                                                 |
+| `main.test.tsx`     | The four cases below, and `share-live.tsx` over the connector's label with reclassification off. Each share runs in a new space that grants everyone READ.                                                                   |
 | `readers.test.tsx`  | The labeled store, which `cf test` can only partly decide (finding 4).                                                                                                                                                       |
 | `sqlite-source.tsx` | The same fixes as SQLite rows, under three row rules: the policy alone, `any(dbOwner(), policy)`, and `dbOwner()`.                                                                                                           |
 | `sqlite.test.tsx`   | The share pattern fed from those rows (finding 6).                                                                                                                                                                           |
@@ -118,6 +119,26 @@ the server-execution serving loop, which is the `cf test` default.
    on the sharing path depends on this. It stays recorded because a row rule
    that names a policy is silently inert, with no error. The test asserts
    today's behavior.
+
+7. **Reclassification lands its label but not yet its share.** With
+   `EXPERIMENTAL_PIECE_CREATOR_RECORD=true` and
+   `EXPERIMENTAL_CFC_PATTERN_RECLASSIFICATION=true`, commit preparation stores a
+   `Reclassified` value's creator-releasable `User` clauses as
+   `anyOf(User(creator), PolicyOf<rules>)`
+   (`runtime/runner/test/cfc-reclassify.test.ts`). `main.test.tsx` shows the
+   flags-off half: `share-live.tsx` over the connector's label is refused at its
+   store. The flags-on half, the same publish landing, is blocked by two runtime
+   gaps, each found by tracing a run rather than by a passing test:
+   - A share placed with `inSpace()` from an action records no creator. Its
+     parent is the action's receipt, whose keyless pattern gets no record, so
+     the child inherits none. With the creator taken from the nearest ancestor
+     on the child's demand chain that records one (an experiment, not
+     committed), the window is stored as
+     `anyOf(User(owner), PolicyOf<shareSpaceRules>)`, as proposed.
+   - A store's `maxConfidentiality` ceiling is compared with its
+     `CurrentPrincipal` and `PolicyOf` placeholders unresolved, so a ceiling
+     that names either fits no stored clause. That is the likely cause of
+     finding 4's refused ceiling as well.
 
 ## Runtime behavior found along the way
 

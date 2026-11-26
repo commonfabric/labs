@@ -23,6 +23,7 @@ import {
 } from "commonfabric";
 import { type Fix, type OwnerLocation, type OwnerOnly } from "./policy.tsx";
 import Share, { type ShareOutput } from "./share.tsx";
+import ShareLive, { type ShareLiveOutput } from "./share-live.tsx";
 
 const NOW = 1_800_000_000_000;
 const MINUTE = 60 * 1000;
@@ -54,6 +55,8 @@ interface Shares {
   connector?: ShareOutput;
   /** Owner's policy, second space, published by a function no rule names. */
   plain?: ShareOutput;
+  /** The connector's label, reclassified by the owner's live share. */
+  live?: ShareLiveOutput;
 }
 
 export default pattern(() => {
@@ -78,6 +81,10 @@ export default pattern(() => {
       }),
       plain: Share.inSpace(undefined, EVERYONE_READS)({
         fixes: policyFixes,
+        now: NOW,
+      }),
+      live: ShareLive.inSpace(undefined, EVERYONE_READS)({
+        fixes: connectorFixes,
         now: NOW,
       }),
     })
@@ -121,6 +128,13 @@ export default pattern(() => {
         assertion: assert(() =>
           lats(shares.get().connector?.shared).length === 0
         ),
+      },
+      { action: action(() => shares.get().live?.publish.send()) },
+      {
+        // Reclassification is off, so the window stays the owner's alone and
+        // its store, which admits the owner or the share space's readers,
+        // refuses it.
+        assertion: assert(() => lats(shares.get().live?.shared).length === 0),
       },
     ],
     // Each refused publish logs the CFC refusal; the refusals are findings.

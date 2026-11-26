@@ -1132,8 +1132,9 @@ holds the measurements and the conditions for revisiting.
   principal as its creator and release that principal's data.
 - **Status on 2026-11-25.** Implemented and off. The substitution is covered
   by `runtime/runner/test/cfc-reclassify.test.ts`, the plumbing by
-  `runtime/runner/test/experimental-options.test.ts`, and the end-to-end case
-  by `patterns/dev/test/share-space-declassify/live.test.tsx`.
+  `runtime/runner/test/experimental-options.test.ts`. The end-to-end share in
+  `patterns/dev/test/share-space-declassify/` does not land yet: its README,
+  finding 7, names the two gaps.
 - **Path to removal.** Once the ruling merges and the store admits the
   record, remove the env mapping, the runtime option and its authority and
   shell-source entries, the default, and the transaction dial; the
