@@ -1003,8 +1003,8 @@ are MOOT while (d′) stands.*
   (`v2-transaction.ts:1400–1413`); the union carries N copies of the
   space prefix, each ~5–10× redundant; `sortAndCompactPaths`
   collapses the space copies only.
-- **Dirtiness:** a space-doc cause dirties every instance that read
-  the document (`dirtyFanOutForCause` in `fan-out.ts`); a keyed cause
+- **Dirtiness:** a space-doc cause dirties every instance
+  (`invalidation.ts:262–285`; `fan-out.ts:220–235`); a keyed cause
   dirties the instances whose identity chain contains the key.
 - **Resubscribe cost:** O(union) — `registration.ts:238–319` →
   `setSchedulerDependencies` (sort/compact ×2) → `updateDependents`
