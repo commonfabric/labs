@@ -1,0 +1,458 @@
+[
+  {
+    "module": "compare/fixtures/own-write-policy.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {
+            "0": {
+              "captures": [],
+              "named": true
+            },
+            "1": {
+              "captures": [],
+              "named": true
+            }
+          },
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/own-write-policy.tsx",
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst record = $rt.data(handler(\n  (event, { note }) => {\n    note.set(event.text);\n  },\n));\nconst overwrite = $rt.data(handler((event, { note }) => {\n  note.set(event.text);\n}));\nconst $default = $rt.data((pattern(\"sha256:f8375629fc6d1e2160e5cdd9ff2e3fc8a74a83b685c87a3da9c1ae31f1349cbc\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ note: $h.slot(2), record: $h.stream(0), overwrite: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((event, { note }) => {\n    note.set(event.text);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((event, { note }) => {\n  note.set(event.text);\n})($e, $s));"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [],
+          "valuesWithoutOutput": []
+        },
+        "line": 41,
+        "name": "default",
+        "plan": {
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/3",
+              "handler": {
+                "body": 0
+              },
+              "name": "record",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "note"
+                  ],
+                  "place": {
+                    "slot": 2
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                }
+              ],
+              "within": []
+            },
+            {
+              "eventSchema": "unhashed:schema/3",
+              "handler": {
+                "body": 1
+              },
+              "name": "overwrite",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "note"
+                  ],
+                  "place": {
+                    "slot": 2
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "code": {
+                "binding": [
+                  "record"
+                ],
+                "module": "sha256:b28a962bfa2d568e162b67b099b10e899216d29dca19c571f9725bf126b7574c"
+              },
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "record",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "text"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "note"
+                  ],
+                  "handle": true,
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 1
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 0
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 1
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "overwrite",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "text"
+                  ],
+                  "slot": 3
+                },
+                {
+                  "at": [
+                    "binding",
+                    "note"
+                  ],
+                  "handle": true,
+                  "slot": 4
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 4
+                  },
+                  "template": {
+                    "by": {
+                      "body": 1
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 3
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 4
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/own-write-policy.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [
+            {
+              "anyOf": [
+                {
+                  "body": {
+                    "binding": "record",
+                    "identity": "sha256:b28a962bfa2d568e162b67b099b10e899216d29dca19c571f9725bf126b7574c",
+                    "module": "compare/fixtures/own-write-policy.tsx"
+                  }
+                }
+              ],
+              "kind": "writer"
+            },
+            {
+              "kind": "writerFit"
+            }
+          ],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [
+                0,
+                1
+              ],
+              "kept": true,
+              "path": [
+                "note"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 2
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:f8375629fc6d1e2160e5cdd9ff2e3fc8a74a83b685c87a3da9c1ae31f1349cbc"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/0",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "text"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "note"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "text"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "note"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "note",
+              "schema": "unhashed:schema/4",
+              "scope": "space",
+              "within": []
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "$defs": {
+                "t0": {
+                  "asCell": [
+                    "stream"
+                  ],
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ],
+                  "type": "object"
+                }
+              },
+              "properties": {
+                "note": {
+                  "ifc": {
+                    "confidentiality": [
+                      {
+                        "subject": {
+                          "__ctCurrentPrincipal": true
+                        },
+                        "type": "https://commonfabric.org/cfc/atom/User"
+                      }
+                    ],
+                    "writeAuthorizedBy": {
+                      "__ctWriterIdentityOf": {
+                        "file": "compare/fixtures/own-write-policy.tsx",
+                        "moduleIdentity": "sha256:b28a962bfa2d568e162b67b099b10e899216d29dca19c571f9725bf126b7574c",
+                        "path": [
+                          "record"
+                        ]
+                      }
+                    }
+                  },
+                  "type": "string"
+                },
+                "overwrite": {
+                  "$ref": "#/$defs/t0"
+                },
+                "record": {
+                  "$ref": "#/$defs/t0"
+                }
+              },
+              "required": [
+                "note",
+                "record",
+                "overwrite"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "ifc": {
+                "confidentiality": [
+                  {
+                    "subject": {
+                      "__ctCurrentPrincipal": true
+                    },
+                    "type": "https://commonfabric.org/cfc/atom/User"
+                  }
+                ]
+              },
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "default": "",
+              "ifc": {
+                "confidentiality": [
+                  {
+                    "subject": {
+                      "__ctCurrentPrincipal": true
+                    },
+                    "type": "https://commonfabric.org/cfc/atom/User"
+                  }
+                ],
+                "writeAuthorizedBy": {
+                  "__ctWriterIdentityOf": {
+                    "file": "compare/fixtures/own-write-policy.tsx",
+                    "moduleIdentity": "sha256:b28a962bfa2d568e162b67b099b10e899216d29dca19c571f9725bf126b7574c",
+                    "path": [
+                      "record"
+                    ]
+                  }
+                }
+              },
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

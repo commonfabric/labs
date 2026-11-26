@@ -30,7 +30,7 @@ const fixture = (name: string, extension: string): URL =>
     import.meta.url,
   );
 
-const FIXTURES = ["write-policy", "argument-policy"];
+const FIXTURES = ["write-policy", "argument-policy", "own-write-policy"];
 const ARTIFACTS = new Map<string, Artifact>();
 const PROGRAMS = new Map<string, PatternProgram>();
 for (const name of FIXTURES) {
@@ -212,6 +212,29 @@ describe("a write policy of a compiled piece a serving runtime starts from a sto
       "writeAuthorizedBy requires a trusted verified binding identity at /",
     );
     expect(pieces()[0].instance.result()).toMatchObject({ note: "" });
+  });
+
+  // `fixtures/own-write-policy.tsx`: the state cell `note` declares the
+  // same policy, and that the principal who creates it alone reads it.
+  describe("for a cell its type declares readable by the principal who creates it", () => {
+    type Held = { note: string };
+
+    it.ignore("tells the principal who set the piece up the refusal of a handler the policy does not name", async () => {
+      // Ignored: the start a serving runtime makes from a stored argument
+      // acts for no principal, so the cell stores the `User` clause of the
+      // serving runtime's identity where today's setup stores that of the
+      // principal who created the piece. The space admits no reader of
+      // that clause, and the outcome of every event that reads the cell is
+      // withheld from its sender. The clause is a stored label, which
+      // waits for the design of the labels of each principal.
+
+      const read = await setUp<Held>("own-write-policy", {}, "overwrite");
+
+      expect(await send(read, "overwrite", { text: "overwritten" }))
+        .toContain(
+          "writeAuthorizedBy requires a trusted verified binding identity at /",
+        );
+    });
   });
 
   // `fixtures/argument-policy.tsx`: the argument field `note` declares
