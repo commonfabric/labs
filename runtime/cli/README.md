@@ -1040,8 +1040,8 @@ repository's default branch from the branch on `origin`. When that remote is
 `origin`, its default branch is the one the push already asked `origin`'s server
 for. Otherwise, when the viewer has to ask GitHub for the open pull request, it
 asks GitHub for the repository's default branch at the same time, which makes no
-connection to the remote's server. Create PR, after a creation fails, keeps to
-that default branch once it has learned it. The created pull request's title and
+git connection to the remote. Create PR, after a creation fails, keeps to that
+default branch once it has learned it. The created pull request's title and
 description are the subject and the rest of the message of the branch's oldest
 commit that the default branch, as last fetched, does not have, leaving out
 merges and commits whose changes that branch already has.

@@ -4502,6 +4502,43 @@ describe("view-push", () => {
         expect(shown).toContain("To retry, press Create PR.");
       });
 
+      it("keeps the branch GitHub named as upstream's default when the search for the open pull request fails, asking only for the pull request when Create PR is pressed", async () => {
+        const created: CreateRequest[] = [];
+        let searches = 0;
+        let asks = 0;
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+            github: {
+              ...unusedGitHub,
+              find: () =>
+                ++searches === 1
+                  ? Promise.reject(new Error("no network"))
+                  : Promise.resolve(null),
+              defaultBranch: () => {
+                asks++;
+                return Promise.resolve("main");
+              },
+              create: (request) => {
+                created.push(request);
+                return Promise.resolve(OCTO_PULL_REQUEST);
+              },
+            },
+          },
+        );
+        const failed = harness.frame((text) => text.includes("P Create PR"));
+        const retried = harness.frame((text) =>
+          text.includes(`Created ${OCTO_PULL_REQUEST}`)
+        );
+
+        await harness.run(["P", () => failed, "p", () => retried, "c"]);
+
+        expect(searches).toBe(2);
+        expect(asks).toBe(1);
+        expect(created.map(({ base }) => base)).toEqual(["main"]);
+      });
+
       it("gives the created pull request's address in the dialog, saying it is quitting, for the delay the settings set before it quits", async () => {
         const harness = pagerHarness(
           () => fakeIo({ pushOutput: GITHUB_OFFER }).io,

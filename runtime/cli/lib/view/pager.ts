@@ -884,7 +884,8 @@ export async function runPager(
   // is the default branch of the remote the pull request goes to: `known`
   // when that is the remote it names, as origin's default branch is once the
   // push has learned it; otherwise GitHub is asked for it while it is asked
-  // for the open pull request, and trying again keeps to its answer.
+  // for the open pull request, and trying again keeps to its answer once it
+  // has given one.
   const createPullRequest = async (
     settings: ViewSettings,
     branch: string,
@@ -906,6 +907,7 @@ export async function runPager(
             );
             const named = await deps.github.defaultBranch(repository, signal);
             asking();
+            learned = { remote, branch: named };
             return named;
           },
       );
@@ -914,7 +916,6 @@ export async function runPager(
           pullRequest(open.number, open.url)
         } is open: ${link(open.url)}`;
       }
-      learned = { remote, branch: base };
       const { title, body } = pullRequestText(deps.git, target, base);
       const creating = step(
         say`Creating a pull request in ${repository} from ${head} into ${base}`,
