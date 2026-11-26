@@ -26,9 +26,10 @@ skill is.
 
 ## The answer in brief
 
-- **Authority comes from the person, per call.** A run does not lose it by
-  reading third-party text (section 1). The lowering is a harness
-  stand-in for checks the runtime does not make yet.
+- **Authority comes from the person, per call.** Reading third-party text
+  removes no authority the run holds, but it taints everything the run writes
+  afterward, the details of a later intent included (section 1). The lowering
+  is a harness stand-in for checks the runtime does not make yet.
 - **A review is a trust statement over exact bytes.** Its concept is
   `prompt-injection-free`, and the person accepts it the way they accept a
   connector (section 2). It clears the skill's own caveats and none other.
@@ -70,11 +71,33 @@ In the hardened design, three things admit a call together:
    sink. §8.10.5.1 asks stronger evidence for routing-sensitive fields, and it
    names "recipients, destinations, tool choices" among them.
 
+Reading `quote` text removes no slot record and no intent already minted, and
+`quote` text "provides no action authority" (§14.2.2.1) without taking away the
+authority of the command beside it. It does cost something. Everything the run
+writes after reading it carries its taint (D4-A), and that includes the
+parameters of an intent refined later. §3.8.4 says "Low-integrity values …
+MUST NOT determine these parameters" when they decide destination, audience or
+scope. So an intent's routing is fixed before the run reads third-party text,
+copied exactly from the person's own words (§8.4), or confirmed by the person.
+"Reply to whoever emailed me" needs a confirmation. `pc` integrity is not where
+authority lives, but §3.4 still consults it at two points: where an intent is
+minted or refined, and at declassification gates.
+
+"Derives from the named prompt-slot binding" (§18.3) has a broad reading: every
+call the kernel run that the slot seeded makes derives from it. The narrow
+reading, only calls whose arguments trace back to the command, is not reachable
+even later: a value the model writes carries the whole `pc` (D4-A), so argument
+labels can never tell "from the command" apart from "from the email". What
+narrows a call's authority is `IntentOnce` binding its operation and route,
+plus the caveats checked at the sink.
+
 A delegated child is §14.2.2's `spawnSubagent`: an attenuated context that
 commits only the intents its parent hands it. In §13.6.1 the research child
-"cannot send email because it does not have the `IntentOnce`". No rule lowers a
-child because of a prompt role, and `quote` text "provides no action authority"
-(§14.2.2.1) without taking away the authority of the command beside it.
+"cannot send email because it does not have the `IntentOnce`". The child is its
+own kernel run. It does not inherit the parent's slot role: "derivatives get
+fresh influence evidence from their own runs" (§15 `PromptSlotInfluence`), and
+"slot authority must not extend to derivatives" (§15 `PromptSlotBound`). No
+rule lowers a child because of a prompt role.
 
 Today's harness has none of the three. `evaluateToolPolicy`
 (`runtime/cf-harness/src/prompt-loop.ts`) admits a call on the run's binding
@@ -105,7 +128,15 @@ A reviewed skill entry is a §4.8.2 trust statement:
   a concept §4.8.1 already lists;
 - `verifier` is the organization whose reviewed set holds the entry.
 
-A person accepts a set with a §4.8.3 verifier delegation. This is the trust
+The atom the `concrete` names is an extension atom (§4.1.2) for a content
+digest, minted on the exact bytes by source entry. It is the same atom a
+reviewed descriptor file uses (primitives question 3). It is not `CodeHash`,
+which the registry defines for "trusted runtime / handler / refiner / endorser
+code" (§15), and its name does not say "skill".
+
+A person accepts a set with a §4.8.3 verifier delegation to the organization
+that keeps it, and each later snapshot of the set is then accepted while it is
+unexpired and unrevoked. This is the trust
 closure (§4.8.9) that also trusts a connector, and `runtime/runner/src/cfc/trust.ts`
 already implements it as deployment config. A reviewed set is a list of such
 statements, kept wherever connectors live: a default set, plus organizations a
@@ -144,54 +175,58 @@ concepts it covers (§4.8.3 `scope.concepts`).
 
 At source entry, fetched skill text is to get `Origin`,
 `Caveat(prompt-injection-risk-unscreened, s)` and `Caveat(prompt-influence, s)`
-(§5.6.1). That is primitives cleanup 4, and it is not built. When the bytes'
-digest matches a statement the acting person's closure accepts, the trusted
-boundary mints evidence for two exchange rules:
+(§5.6.1). That is primitives cleanup 4, and it is not built. A review clears
+both caveats for the reviewed bytes, each by its own existing route.
 
-1. **Material risk.** Value-stage `CaveatScreened{kind, source: s, stage:
-   "value", valueRef, detector, verdict: "pass"}` over the exact bytes (§10.1:
-   evidence "from a detector/profile the governing policy accepts", "binding the
-   **exact current value**"). A node whose observation policy refuses
-   unscreened text may then hold the skill.
-2. **Steering.** Every call a run makes while following the skill has
-   arguments, and a tool choice, that carry `Caveat(prompt-influence, s)`.
-   §8.10.5 clears influence "only through ordinary exchange rules guarded by
-   disclosure/acknowledgment/disclaimer/assessment evidence that binds the same
-   `kind`, `source`, and sink context". Without evidence here, a reviewed skill
-   would need the person's acknowledgment for every routing field it steers,
-   like an unreviewed one. The atom that fits is a `CaveatAssessment` minted
-   from the review, binding:
+1. **Material risk, by an exchange rule guarded by the concept.** The
+   injection-risk caveat for source `s` is discharged when the exact current
+   value carries integrity that satisfies `Concept(prompt-injection-free)`
+   under the acting person's closure (§4.8.9: "Policy guards MAY require
+   concepts"). The rule fires when the value is observed, so the caveat never
+   enters `pc`. The review does not mint `CaveatScreened`. A passing
+   `CaveatScreened` "MAY be normalized into `InjectionSafe`" (§10.1), and
+   `InjectionSafe` means "instruction-inert", which a skill never is: its text
+   is instructions by design. What the review establishes is §14.1.3's other
+   half, that the instructions are not "attacker-provided". Whether §10.1's
+   "positive injection-safe integrity such as `InjectionSafe`" admits integrity
+   that satisfies the concept is a question for Berni.
+2. **Steering, by an assessment minted at each decision.** Every call a run
+   makes while following the skill has arguments that carry
+   `Caveat(prompt-influence, s)`. §8.10.5 clears influence "only through
+   ordinary exchange rules guarded by disclosure/acknowledgment/disclaimer/
+   assessment evidence that binds the same `kind`, `source`, and sink context".
+   An assessment minted once, at source entry, cannot bind a sink. So the
+   trusted boundary mints a `CaveatAssessment` at each release decision,
+   binding:
    - `kind`: prompt-influence;
    - `source`: the source-entry reference of the reviewed bytes;
+   - `sink` and `purpose`: the decision's own;
    - `assessor`: the statement's verifier;
    - `evidenceDigest`: the digest of the entry and its file list;
-   - `sink`: the sinks the entry declares;
-   - `result`: `supported`;
-   - the time of the set commit.
+   - `result`: `supported`.
 
-   It carries no `intentId`, because it is minted at source entry, before any
-   intent exists. Whether an assessment minted from a review, rather than from
-   one output, is admissible is a question for Berni. Until a rule admits it,
-   the profile clears influence only with source- and sink-bound disclosure,
-   acknowledgment or disclaimer evidence (§8.10.5), never `InjectionSafe`. The
-   interim does not depend on it: no sink checks influence yet, and the
-   reviewed child's binding rests on the trust statement alone.
+   Minting at each decision also checks expiry and revocation against the trust
+   snapshot the decision is made under. §13.13.3 is the precedent for an
+   assessment with no intent, trusted through §4.8.
 
-   The clearing is scoped by kind of field, following §8.10.5.2, under which
-   evidence sufficient for one sink class "MUST NOT be treated as sufficient for
-   routing-sensitive or public-release fields unless the policy explicitly says
-   so":
-   - content fields, at action and display sinks;
-   - routing fields, only at the sinks the entry declares;
-   - never for a public audience.
+   The clearing covers content fields only, never a public audience, and only
+   source `s`. It never covers routing. Routing evidence needs an intent binding
+   anyway (§8.10.5: "routing-scoped evidence and an already-verified intent
+   binding"), a route copied exactly from the intent carries no skill caveat,
+   and a fixed destination belongs in a reviewed tool descriptor's `sink`, not
+   in prose. An argument that an email also steered keeps the email's clause,
+   so the review never launders what the skill reads.
 
-   It is also scoped by source. An argument that an email also steered keeps
-   the email's clause, so the review never launders what the skill reads.
+   Until a rule admits a review-derived assessment, the profile clears influence
+   only with source- and sink-bound disclosure, acknowledgment or disclaimer
+   evidence (§8.10.5), never `InjectionSafe`. The interim does not depend on
+   it: no sink checks influence yet, and the reviewed child's binding rests on
+   the trust statement alone.
 
-One concept covers both jobs. Accepting a set for `prompt-injection-free`
-mints both the screening evidence and the assessment.
+One concept covers both jobs. Accepting a set for `prompt-injection-free` lets
+both the exchange rule and the assessment fire.
 
-Both are value-bound or source-bound. They never cover a summary of the skill,
+Both are bound to the reviewed bytes. They never cover a summary of the skill,
 a script's output, a fetched page, or anything else whose `source` is not the
 reviewed bytes.
 
@@ -213,7 +248,7 @@ review if it:
    unrelated to the skill's purpose;
 3. hides text, such as HTML comments, zero-width characters or encoded blobs;
 4. steers toward a tool or destination it does not name, or one that does not
-   fit its purpose (the routing scope in section 2.1 relies on this);
+   fit its purpose;
 5. refers to a file the entry does not list.
 
 Scripts are code, so what they do is a separate claim (section 4). Their bytes
@@ -242,6 +277,11 @@ evidence_. Provisionally decided by Alex on 2026-11-26.
   bytes changed since, so the review covers every file the child can load.
 - **The decision is recorded** on the child's run manifest: the statement, the
   verifier, the entry and the file digests.
+- **Keeping the binding is itself a cut corner.** In the spec a child never
+  inherits its parent's slot role; it holds only the intents handed to it
+  (section 1). Every child, reviewed or not, carries the parent's binding today,
+  and the lowering is the only thing that takes it away. That is CFC-debt item
+  4, retired with the lowering by step 6.
 
 ### 3.1 What it costs today
 
@@ -276,8 +316,8 @@ Each piece becomes part of the hardened design:
 
 - the entry and digest match become the trust statement checked at source
   entry;
-- the manifest record becomes the minted `CaveatScreened` and
-  `CaveatAssessment`;
+- the manifest record becomes the concept-guarded exchange rule and the
+  assessment minted at each decision;
 - both arms of the lowering are deleted once calls carry `PromptSlotInfluence`
   and sinks check caveats.
 
@@ -351,7 +391,7 @@ same for the parent run.
 | 2    | A digest of the served bytes to match against                                                  | Yes: `acquire_skill`'s `valueDigest`, the external-ingest stamp, `run_skill_script`'s digest check, and a bundle digest over all of them. |
 | 3    | The lowering predicate consults the closure; the manifest records the evidence; uncovered files refused | Yes. The `childPromptSlotBinding` computation in `prompt-loop.ts`; the manifest's `reviewedSkill`.                          |
 | 4    | Sealed `run_skill_script`, classed `read`; the literal `"side-effect"` replaced                | No. Independent of review; built after steps 1 to 3 or alongside them. It lets a lowered child run scripts under `enforce-explicit` only: under the default `enforce-strict`, even a `read` needs `direct-command`. |
-| 5    | Source entry assigns prompt caveats to fetched text and script output; then the review mints `CaveatScreened` and `CaveatAssessment`, and the tier rules check `detector` | No (cleanup 4, top/1892). The tier rules in `standard-profile.ts` ignore `detector` today. |
+| 5    | Source entry assigns prompt caveats to fetched text and script output, and mints the content-digest atom; then the concept-guarded rule clears the skill's material risk, and the boundary mints a `CaveatAssessment` at each decision | No (cleanup 4, top/1892). |
 | 6    | Per-call authority: `PromptSlotInfluence` on invocation records, argument labels, `IntentOnce` | No (H9 / CT-2175). This deletes the lowering.                                                                                                     |
 | 7    | Script descriptors, registry snapshots, `ToolDescriptorBound`, the sink check                  | No (cleanups 5 and 6).                                                                                                                            |
 
@@ -367,19 +407,20 @@ nothing the person lacked. Steps 1 to 3 cut these corners:
 1. **The atom.** A statement's `concrete` names an atom of type
    `https://commonfabric.org/cf-harness/atom/SkillBundle` (skill id and bundle
    digest), which the harness builds to ask the closure and nothing carries on
-   a label. Real CFC has source entry mint an atom on the fetched bytes, of a
-   type the specification names. No registered type names "the digest of a
-   text" (Berni's question 3).
+   a label. Real CFC has source entry mint a content-digest extension atom on
+   the fetched bytes, shared with reviewed descriptor files (section 2).
 2. **Acceptance.** The operator's file accepts its verifiers with
    deployment-root delegations (`delegator: "*"`), for everyone the run acts
-   for. Real CFC has each person delegate in their profile, and a set file
-   separate from acceptance (question 3).
+   for. Real CFC has each person delegate to a verifier in their profile, with
+   a set file separate from acceptance (primitives question 3).
 3. **Expiry and revocation** are checked by the harness before the closure,
    once, when the child starts. A review that expires mid-run keeps covering
    that child. Real CFC checks §4.8.2 `scope.validUntil` against the trust
-   snapshot each decision is made under.
-4. **The decision is the run's binding,** not each call's. That is section 3's
-   interim, deleted by step 6.
+   snapshot each decision is made under, which minting the assessment at each
+   decision does (section 2.1).
+4. **The decision is the run's binding,** not each call's, and the reviewed
+   child keeps its parent's binding, which a spec child never inherits. That is
+   section 3's interim, deleted by step 6.
 
 ## Decisions for Alex
 
@@ -407,10 +448,12 @@ These are provisional until Berni reviews the package, like the bridge plan's.
       entry;
    7. frontmatter and `allowed-tools` left as free-form labeled data.
 3. **What a review vouches for.** An accepted review clears the skill's own
-   injection risk and its steering. Steering is cleared for content fields, for
-   routing fields only at the sinks the entry declares, never for a public
+   injection risk, by a concept-guarded exchange rule rather than
+   `CaveatScreened`, and its steering of content fields, by an assessment
+   minted at each decision. It never clears routing, never for a public
    audience, and only for the skill's own source. One concept covers both.
-   Decided 2026-11-26.
+   Decided 2026-11-26, and revised the same day: routing at sinks the entry
+   declares was dropped, because routing needs an intent binding anyway.
 4. **Sealed scripts.** Built as a separate track, after steps 1 to 3 or
    alongside them, for reviewed and unreviewed skills alike. The effect class is
    computed from the sandbox profile, never declared. Decided 2026-11-26.
@@ -419,29 +462,58 @@ These are provisional until Berni reviews the package, like the bridge plan's.
 
 ## For Berni
 
-1. **Authority per invocation.** Confirm that `direct-command` authority is
-   carried per invocation (`PromptSlotInfluence` plus `IntentOnce`), that `pc`
-   integrity is not consulted for it (§3.4, §13.11.6), and that observing
-   `quote` text never removes it.
-2. **"Derives from the named prompt-slot binding"** (§18.3). What does it
-   require for a call the model writes, and for a child's calls after
-   `spawnSubagent`: every call of a run the slot seeded, or something narrower?
-3. **A trust statement over text.** May a trust statement's `concrete` be a
-   content digest of text rather than code, with `implements:
-   prompt-injection-free`, and what atom type names it? `CodeHash` is defined
-   for code. May accepting it mint value-stage `CaveatScreened`
-   for text that is instructions by design? §14.1.3 defines material risk as
-   "attacker-provided instruction-like content", and the registry defines
-   `InjectionSafe` as "instruction-inert", so the spec answers two ways. This is
-   a semantic gap.
-4. **Steering by a reviewed source.** Which evidence clears
-   `Caveat(prompt-influence, s)` for a reviewed source at action sinks, routing
-   fields and tool choice included? The options are a `CaveatAssessment` from
-   the reviewer not scoped to one sink, a rule guarded by the concept, or
-   nothing short of `DisclosureAcknowledged`.
-5. **Tool choice as routing.** Is tool choice a routing-sensitive field of every
-   call (§8.10.5.1)? If so, a run steered by any unreviewed text needs an
-   acknowledgment for each call.
-6. **Sealed runs.** Confirm that a run whose every channel out is off or
-   mediated (§18.2.3) is an untrusted transition needing no authority, reviewed
-   or not (question 7).
+These go with the [primitives appendix](spec-surface-alignment.md#appendix-provisional-answers-for-berni-to-confirm)
+as one package. Each has a provisional answer to confirm or correct.
+
+1. **Authority per invocation.** _Provisional, a reading:_ `direct-command`
+   authority is carried per invocation (`PromptSlotInfluence` plus
+   `IntentOnce`), not stored in `pc` integrity (§3.4, §13.11.6). `pc` integrity
+   is still consulted where an intent is minted or refined and at
+   declassification gates. Reading `quote` text removes no slot record or
+   minted intent, but an intent refined afterward has tainted parameters, which
+   may not decide routing (§3.8.4). So routing is fixed before the read, copied
+   exactly, or confirmed. _Confirm._
+2. **"Derives from the named prompt-slot binding"** (§18.3). _Provisional, a
+   reading:_ every call the kernel run that the slot seeded makes, permanently.
+   The narrow per-argument reading cannot be reached, because a value the model
+   writes carries the whole `pc` (D4-A); `IntentOnce` and sink caveats narrow
+   authority instead. A child after `spawnSubagent` is its own run with its own
+   `PromptSlotInfluence` and holds only the intents handed to it (§15).
+   _Confirm._
+3. **A trust statement over text.** _Provisional:_
+   - **Concrete:** a trust statement's `concrete` may be a content digest of
+     text (§4.8.2 says "e.g., code hash"), named by an extension atom (§4.1.2)
+     that reviewed descriptor files share. This half is a reading.
+   - **Material risk:** accepting the statement does not mint `CaveatScreened`,
+     because §10.1 lets a pass normalize into `InjectionSafe`, which means
+     "instruction-inert". Instead, one exchange rule discharges the skill's own
+     material-risk caveat when the exact current value satisfies
+     `Concept(prompt-injection-free)` under the acting person's closure. This is
+     the semantic gap: §14.1.3 defines the risk as "attacker-provided
+     instruction-like content".
+   - _Ask:_ does §10.1's "positive injection-safe integrity such as
+     `InjectionSafe`" admit concept-satisfying integrity?
+4. **Steering by a reviewed source.** _Provisional, a reading:_ a
+   `CaveatAssessment` minted by the trusted boundary at each release decision,
+   binding that decision's sink and purpose, with the verifier as assessor
+   (§8.10.5; §13.13.3 is the precedent). It covers content fields only, never a
+   public audience, and only the skill's own source. Routing is never cleared
+   by it, since routing needs an intent binding anyway. The alternative Berni
+   may prefer is to treat reviewed text like slot-bound text, clearing both
+   caveats when it is observed (D4: the slot binding "is not an untrusted
+   influence source"). That is simpler but clears globally, so it would change
+   §8.10.5. _Confirm or choose._
+5. **Tool choice as routing.** _Provisional, a reading:_ tool choice is
+   routing-sensitive (§8.10.5.1), and it is cleared the way routing always is,
+   by intent binding, never by an acknowledgment for each call.
+   - **A call with no release site,** such as a fabric-internal read or a
+     sealed run, has nothing to clear.
+   - **A committing tool's choice** is authorized by the intent's operation and
+     route.
+   - **A read that sends its arguments out,** such as `web_fetch`, releases them
+     to a destination, which is a routing field. A reviewed descriptor that
+     fixes the destination covers it. A destination the model chose needs a rule
+     like §13.13's, which would be new (top/3595).
+
+   _Confirm, and say whether the model-chosen destination rule is wanted._
+6. **Sealed runs.** This is primitives question 7.
