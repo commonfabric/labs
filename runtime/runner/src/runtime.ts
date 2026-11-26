@@ -2071,6 +2071,7 @@ export class Runtime {
     return true;
   }
 
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/109
   // A consultation is an ordinary read, which adds no precondition of its own
   // (spec §4.4.1 as commonfabric/specs#109 proposes; the ruling is pending). A
   // present manifest is verified against its digest here, so a later read finds

@@ -12775,6 +12775,7 @@ const verifySinkRequestCeilings = (
         const spaces = [...(consumed.modulePolicySpaces.get(key) ?? [])]
           .sort();
         if (spaces.length === 0) return undefined;
+        // SPEC-PENDING https://github.com/commonfabric/specs/pull/109
         // Every consumed label origin must carry its own exact local copy. A
         // copy is bound by its digest, and a missing one fails the release
         // below, so no origin takes a precondition (§4.4.1,
