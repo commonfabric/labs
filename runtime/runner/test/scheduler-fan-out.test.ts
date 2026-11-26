@@ -312,20 +312,77 @@ describe("fan-out stage B: run outcomes and B7 precise dirtiness", () => {
       expect(state.clean.size).toBe(0);
     });
 
-    it("keeps an instance that is running not current, whatever its earlier run read", () => {
-      // The running run's reads are not recorded until it finishes, so a
-      // cause that arrives meanwhile cannot be told to miss it.
-
+    it("leaves current an instance whose run was under way when the cause arrived and did not read its document", () => {
       const state = narrowed();
       finish(state, alice, ["of:alice-only"]);
-      finish(state, bob, ["of:bob-only"]);
-      dirtyFanOutForCause(state, readOf("of:bob-only"));
       const startGen = fanOutRunStarted(state, bob);
       dirtyFanOutForCause(state, readOf("of:alice-only"));
       fanOutRunFinished(state, bob, {
         discovered: "user",
         startGen,
         log: { ...emptyLog(), reads: [readOf("of:bob-only")] },
+      });
+
+      expect(state.clean.has(bob.key)).toBe(true);
+      expect(takeFanOutTriggers(state, bob.key)).toBeUndefined();
+    });
+
+    it("re-runs an instance whose run was under way when the cause arrived and read its document for the first time, and hands that run the cause", () => {
+      // The reads of a run are recorded when it finishes, so the cause
+      // cannot be told to concern the run until then.
+
+      const state = narrowed();
+      finish(state, alice, ["of:alice-only"]);
+      finish(state, bob, ["of:bob-only"]);
+      const aliceOnly = readOf("of:alice-only");
+      dirtyFanOutForCause(state, readOf("of:bob-only"));
+      takeFanOutTriggers(state, bob.key);
+      const startGen = fanOutRunStarted(state, bob);
+      dirtyFanOutForCause(state, aliceOnly);
+      fanOutRunFinished(state, bob, {
+        discovered: "user",
+        startGen,
+        log: { ...emptyLog(), reads: [readOf("of:bob-only"), aliceOnly] },
+      });
+
+      expect(state.clean.has(bob.key)).toBe(false);
+      expect(takeFanOutTriggers(state, bob.key)).toEqual(
+        new Set([invalidCauseKey(aliceOnly)]),
+      );
+    });
+
+    it("leaves current an instance whose run started after the cause arrived, though the run read its document for the first time", () => {
+      // The run read the document as the change left it.
+
+      const state = narrowed();
+      finish(state, alice, ["of:alice-only"]);
+      finish(state, bob, ["of:bob-only"]);
+      dirtyFanOutForCause(state, readOf("of:bob-only"));
+      dirtyFanOutForCause(state, readOf("of:alice-only"));
+      takeFanOutTriggers(state, bob.key);
+      const startGen = fanOutRunStarted(state, bob);
+      fanOutRunFinished(state, bob, {
+        discovered: "user",
+        startGen,
+        log: {
+          ...emptyLog(),
+          reads: [readOf("of:bob-only"), readOf("of:alice-only")],
+        },
+      });
+
+      expect(state.clean.has(bob.key)).toBe(true);
+      expect(takeFanOutTriggers(state, bob.key)).toBeUndefined();
+    });
+
+    it("re-runs an instance whose first run was under way when the cause arrived and read its document", () => {
+      const state = narrowed();
+      finish(state, alice, ["of:alice-only"]);
+      const startGen = fanOutRunStarted(state, bob);
+      dirtyFanOutForCause(state, readOf("of:alice-only"));
+      fanOutRunFinished(state, bob, {
+        discovered: "user",
+        startGen,
+        log: { ...emptyLog(), reads: [readOf("of:alice-only")] },
       });
 
       expect(state.clean.has(bob.key)).toBe(false);

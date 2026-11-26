@@ -81,6 +81,15 @@ interface InstanceRecord {
   triggers?: Set<string>;
 
   /**
+   * The causes naming no instance that arrived since the instance's latest
+   * run started, for a document the run recorded before it did not read:
+   * the document of each (`entityNameKey()`) by the cause's key. The run
+   * that is under way may have read the document, which is known once it
+   * finishes (`fanOutRunFinished()`).
+   */
+  arrived?: Map<string, SpaceScopeAndURI>;
+
+  /**
    * The node's count of changes (`FanOutNodeState.changes`) as the
    * instance's latest run left it: at the handing over of its writes, and
    * again once the replica applied them.
@@ -327,9 +336,9 @@ function readsDocument(
  * take as a trigger read (`takeFanOutTriggers()`). The node's subscription
  * is the union of its instances' reads, so such a cause can be for a
  * document only one viewer's run read, and an instance that did not read it
- * cannot depend on it. An instance that is not current is dirtied whatever
- * its record says, without the cause being recorded for it: it may be
- * running, and the reads of a run are not recorded until it finishes.
+ * cannot depend on it. An instance that is not current may be running, and
+ * the reads of a run are not recorded until it finishes, so the cause is
+ * kept for `fanOutRunFinished()` to decide by that run's reads.
  */
 export function dirtyFanOutForCause(
   state: FanOutNodeState,
@@ -341,9 +350,13 @@ export function dirtyFanOutForCause(
   if (namesNoInstance(cause)) {
     const document = entityNameKey(cause);
     for (const [key, record] of state.instances) {
-      const read = readsDocument(record, document);
-      if (read) (record.triggers ??= new Set()).add(invalidCauseKey(cause));
-      if (read || record.log === undefined || !state.clean.has(key)) {
+      if (readsDocument(record, document)) {
+        (record.triggers ??= new Set()).add(invalidCauseKey(cause));
+        dirtyFanOutKey(state, key);
+      } else if (!state.clean.has(key)) {
+        (record.arrived ??= new Map()).set(invalidCauseKey(cause), document);
+      } else if (record.log === undefined) {
+        // Current with no recorded reads: what it read is unknown.
         dirtyFanOutKey(state, key);
       }
     }
@@ -442,13 +455,17 @@ export function pruneFanOutInstances(
 }
 
 /** Record that `instance` is starting a run: its dirtiness generation at
- * start, compared at finalize. */
+ * start, compared at finalize. A cause that arrived before the start is one
+ * the run reads the outcome of, so none is kept for its finish to weigh. */
 export function fanOutRunStarted(
   state: FanOutNodeState,
   instance: FanOutInstance,
 ): number {
-  if (!state.instances.has(instance.key)) {
+  const record = state.instances.get(instance.key);
+  if (record === undefined) {
     state.instances.set(instance.key, { identity: instance.identity });
+  } else {
+    record.arrived = undefined;
   }
   return state.dirtyGen.get(instance.key) ?? 0;
 }
@@ -528,7 +545,10 @@ export function fanOutHoldsSlot(
  * Record a finished run's outcome: the ratchet learns the discovered
  * scope; the run's key at the (possibly moved) ratchet is marked clean —
  * unless a cause dirtied the STAMPED key while it ran — and holds the
- * committed log. Returns whether the ratchet moved.
+ * committed log. A cause naming no instance that arrived while the run was
+ * under way, for a document the run turns out to have read, leaves the key
+ * dirty as well and is recorded for the instance's next run to take.
+ * Returns whether the ratchet moved.
  *
  * Reached only from a run whose commit was KICKED (a thrown non-retry
  * error still commits its transaction through the ordinary path — OFF's
@@ -549,13 +569,14 @@ export function fanOutRunFinished(
 ): boolean {
   const moved = ratchetDiscovered(state, instance.identity, outcome.discovered);
   const key = keyAtRatchet(state, instance.identity) ?? instance.key;
-  const dirtiedMeanwhile =
+  let dirtiedMeanwhile =
     (state.dirtyGen.get(instance.key) ?? 0) !== outcome.startGen;
-  // The causes that arrived for the stamped instance while it ran are its
-  // next run's, under whichever key that run has.
-  const arrived = key === instance.key
-    ? undefined
-    : state.instances.get(instance.key)?.triggers;
+  // What arrived for the stamped instance while it ran is its next run's,
+  // under whichever key that run has.
+  const stamped = state.instances.get(instance.key);
+  const taken = key === instance.key ? undefined : stamped?.triggers;
+  const arrived = stamped?.arrived;
+  if (stamped !== undefined) stamped.arrived = undefined;
   if (key !== instance.key) {
     // Re-keyed by the ratchet: the stamped instance has left the set.
     state.instances.delete(instance.key);
@@ -563,11 +584,16 @@ export function fanOutRunFinished(
     state.dirtyGen.delete(instance.key);
   }
   const record = state.instances.get(key) ?? { identity: instance.identity };
-  if (arrived !== undefined) {
-    record.triggers = new Set([...(record.triggers ?? []), ...arrived]);
+  if (taken !== undefined) {
+    record.triggers = new Set([...(record.triggers ?? []), ...taken]);
   }
   record.identity = instance.identity;
   if (outcome.log !== undefined) record.log = outcome.log;
+  for (const [cause, document] of arrived ?? []) {
+    if (!readsDocument(record, document)) continue;
+    (record.triggers ??= new Set()).add(cause);
+    dirtiedMeanwhile = true;
+  }
   record.settledAt = state.changes;
   const run = outcome.transaction === undefined
     ? undefined

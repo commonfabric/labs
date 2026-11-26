@@ -1316,10 +1316,21 @@ executing:
   its record keeps, per instance, the last committed reactivity log
   and a clean bit — a change dirties exactly the instances whose reads
   covered it (a keyed notification address names the instance; a
-  space doc dirties all), the node's ONE subscription is the union of
-  the instance logs (a pass that skips clean instances keeps their
-  reads registered), and an N-user space costs O(affected instances)
-  per change, not O(N) per node — the load-bearing property that keeps
+  change that names none, a space doc's, dirties the instances whose
+  recorded run read that document; for an instance whose run is under
+  way when it arrives, that is decided when the run finishes and its
+  reads are recorded), the
+  node's ONE subscription is the union of the instance logs (a pass
+  that skips clean instances keeps their reads registered), and an
+  N-user space costs O(affected instances) per change, not O(N) per
+  node. A change is a trigger read (CFC §8.9.2) of the runs it
+  scheduled and of no other: a run of one instance takes a change
+  that names no instance only where that instance's recorded run read
+  the changed document, so a document one viewer's run read — that
+  viewer's profile, in a space of their own — joins no label to
+  another viewer's instance. An instance that has never run takes no
+  such change: demand runs it, and its own reads label it. This is the
+  load-bearing property that keeps
   waves draining under sustained multi-user input (an exhausted wave
   holds W; a pinned W stalls the client's coverage-of-basis
   retirement).

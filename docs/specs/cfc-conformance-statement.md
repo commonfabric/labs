@@ -528,7 +528,15 @@ is their current labels, whatever the gating dial says. A trigger at the
 sub-path where a link exposes its recognizable form is the invalidation of a
 link probe, and is read as a shallow read of the slot the probe asked about,
 since that sub-path's segments are not child segments (§4.6.3)
-(`triggerReadAt`). With
+(`triggerReadAt`). A node the serving loop runs once for each viewer is one
+node with one subscription, the union of its instances' reads, so the
+addresses whose writes scheduled a run are decided for each instance:
+`causesForInstance` in `scheduler/run.ts` hands a run the changes that name an
+instance on its own chain, and of the changes that name no instance those
+that arrived for a document the instance's recorded run read
+(`dirtyFanOutForCause` in `scheduler/fan-out.ts`). A change to a document only
+another viewer's run read scheduled no run of this instance, and is not
+joined. With
 `cfcTriggerReadGating` on, the shipped default, `triggerReadSources` adds them
 to the egress and sink consumed set and to the `requiredIntegrity` input gate
 as well. `cfc-enforcement-matrix.md` §2, item 4, records that multi-hop closure

@@ -1079,6 +1079,9 @@ describe("stage P2-F per-(action × instance) run supply", () => {
     const register = (
       demanders: () => Array<typeof alice>,
       readsOf: (principal: string) => readonly string[],
+      // Resolves when a run as `principal` may go on to its reads.
+      mayRead: (principal: string) => Promise<void> | undefined = () =>
+        undefined,
     ) => {
       runtime.installSealDestination(passThroughDestination(), {
         runStamper: recordingStamper,
@@ -1093,7 +1096,7 @@ describe("stage P2-F per-(action × instance) run supply", () => {
       });
       const runs: Run[] = [];
       const action = Object.assign(
-        (tx: IExtendedStorageTransaction) => {
+        async (tx: IExtendedStorageTransaction) => {
           const principal = waveRunContextOf(tx)?.scopeKeyIdentity?.principal;
           if (principal === undefined) return;
           runs.push({
@@ -1101,6 +1104,8 @@ describe("stage P2-F per-(action × instance) run supply", () => {
             triggers: tx.getCfcState().triggerReads.map((read) => read.id),
           });
           userDoc.withTx(tx).get();
+          const waited = mayRead(principal);
+          if (waited !== undefined) await waited;
           for (const name of readsOf(principal)) {
             spaceDocOf(name).withTx(tx).get();
           }
@@ -1282,6 +1287,65 @@ describe("stage P2-F per-(action × instance) run supply", () => {
       } finally {
         cancel();
       }
+    });
+
+    describe("changed while a run of another instance is under way", () => {
+      /**
+       * Registers the node, holds Bob's next run before its reads, changes
+       * Alice's document, and lets the run go on. Returns who ran from the
+       * held run on.
+       */
+      const changedDuringBobsRun = async (bobReadsAlicesNext: boolean) => {
+        let bobReadsAlices = false;
+        let held: PromiseWithResolvers<void> | undefined;
+        const reached = Promise.withResolvers<void>();
+        const { action, cancel, taken } = register(
+          () => [alice, bob],
+          (principal) =>
+            principal === bob.principal && bobReadsAlices
+              ? ["of-bob", "of-alice"]
+              : ownDocument(principal),
+          (principal) => {
+            if (principal !== bob.principal || held === undefined) return;
+            const waited = held.promise;
+            held = undefined;
+            reached.resolve();
+            return waited;
+          },
+        );
+        try {
+          await runtime.scheduler.idleWithPendingCommits();
+          taken();
+
+          bobReadsAlices = bobReadsAlicesNext;
+          const release = held = Promise.withResolvers<void>();
+          runtime.scheduler.invalidateAction(action, { instances: [bob] });
+          await reached.promise;
+          await runtime.editWithRetry((tx) =>
+            spaceDocOf("of-alice").withTx(tx).set(1)
+          );
+          release.resolve();
+          await runtime.scheduler.idleWithPendingCommits();
+          return taken().map((run) => run.as);
+        } finally {
+          cancel();
+        }
+      };
+
+      it("re-runs the instance under way where its run read the document for the first time", async () => {
+        expect(await changedDuringBobsRun(true)).toEqual([
+          bob.principal,
+          alice.principal,
+          bob.principal,
+        ]);
+      });
+
+      it("leaves the instance under way current where its run did not read the document", async () => {
+        expect(await changedDuringBobsRun(false)).toEqual([
+          bob.principal,
+          alice.principal,
+        ]);
+      });
     });
 
     it("gives a run retried after `RetryImmediately` the trigger read its failed attempt took, and its sibling none", async () => {

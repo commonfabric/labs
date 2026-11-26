@@ -719,7 +719,8 @@ read. Under (d′) liveness must come from demand DIRECTLY:
   resolves P at whatever depth W holds for p), the event actor's
   transient demand — all act on demanders and instances, none on the
   walk. Per-instance keyed causes still dirty only that demander's
-  instances (`dirtyFanOutForCause`); a space cause dirties all.
+  instances (`dirtyFanOutForCause`); a space cause dirties the
+  instances that read its document.
 - **Anonymous sessions and the service session** as today: keys, no
   demanders; excluded, respectively.
 
@@ -1002,8 +1003,8 @@ are MOOT while (d′) stands.*
   (`v2-transaction.ts:1400–1413`); the union carries N copies of the
   space prefix, each ~5–10× redundant; `sortAndCompactPaths`
   collapses the space copies only.
-- **Dirtiness:** a space-doc cause dirties every instance
-  (`invalidation.ts:262–285`; `fan-out.ts:220–235`); a keyed cause
+- **Dirtiness:** a space-doc cause dirties every instance that read
+  the document (`dirtyFanOutForCause` in `fan-out.ts`); a keyed cause
   dirties the instances whose identity chain contains the key.
 - **Resubscribe cost:** O(union) — `registration.ts:238–319` →
   `setSchedulerDependencies` (sort/compact ×2) → `updateDependents`
@@ -1280,7 +1281,7 @@ counted (§7).
 ```
 
 Optionally append to B7 (serving-loop.md §3b): *"(A STRUCTURAL change
-in a space doc dirties every instance of the walk over it — one
+in a space doc dirties every instance of the walk that read it — one
 re-traversal per demanding instance; a value-only change dirties none.
 The walk over unnarrowed structure has ONE instance by §1.)"*
 
