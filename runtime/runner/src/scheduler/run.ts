@@ -1100,7 +1100,8 @@ function parkUnavailableRun(state: SchedulerActionRunState, args: {
     // demander resolver anywhere else), and a serving runtime restricts no
     // run to local reads: `Scheduler.prepareViewAction()` does so for a
     // client that replicates by view, which a serving runtime is not, and
-    // for the view nodes such a client starts. The wake below is the node's
+    // for the view nodes such a client starts (`Runner.startViewPiece()`,
+    // which rejects on a serving runtime). The wake below is the node's
     // and the next pass cancels it, so an instance parked here would wait
     // with nothing to run it; it is reported rather than left to.
     if (args.fanOutRun !== undefined) {

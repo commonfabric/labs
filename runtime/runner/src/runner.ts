@@ -8145,12 +8145,23 @@ export class Runner {
     return cancel;
   }
 
-  /** Installs resident JavaScript graph bindings without setup or output writes. */
+  /**
+   * Installs resident JavaScript graph bindings without setup or output
+   * writes. Its nodes run restricted to what the replica holds locally, which
+   * is a view-replicating client's arrangement; a serving runtime starts
+   * pieces whole, and the scheduler relies on none of its runs being
+   * restricted that way, so this rejects there.
+   */
   async startViewPiece(
     resultCell: Cell<unknown>,
     expectedIdentity: string,
     current: () => boolean,
   ): Promise<ViewPieceRegistration | undefined> {
+    if (this.#runtime.servingPosture) {
+      throw new Error(
+        "A view piece is a client's; a serving runtime starts pieces whole",
+      );
+    }
     if (!current()) return undefined;
     const key = this.#getDocKey(resultCell);
     if (this.#cancels.has(key)) return undefined;

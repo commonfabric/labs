@@ -275,4 +275,20 @@ describe("view-piece-registration", () => {
     registration!();
     expect(root.get()).toEqual({ $UI: "confirmed" });
   });
+
+  it("rejects on a serving runtime, which starts pieces whole and restricts no run to local reads", async () => {
+    const serving = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: StorageManager.emulate({ as: signer }),
+      servingPosture: true,
+    });
+    try {
+      const served = serving.getCell(space, "stored root", undefined);
+
+      await expect(serving.runner.startViewPiece(served, identity, () => true))
+        .rejects.toThrow("serving runtime");
+    } finally {
+      await serving.dispose();
+    }
+  });
 });

@@ -372,6 +372,37 @@ function readsDocument(
 }
 
 /**
+ * The document a cause that names no instance is for
+ * (`entityNameKey()`), and `undefined` for a cause that names one.
+ */
+const documentOf = (
+  cause: Pick<IMemorySpaceAddress, "space" | "id" | "scope" | "scopeKey">,
+): SpaceScopeAndURI | undefined =>
+  namesNoInstance(cause) ? entityNameKey(cause) : undefined;
+
+/**
+ * How `cause` concerns the instance at `key`, and `undefined` where it does
+ * not. A cause that names an instance concerns the instances on that
+ * instance's chain (`named`), never the probe. One that names none, for
+ * `document`, concerns an instance recorded to have read the document
+ * (`read`), and one whose run is under way and may have (`running`).
+ */
+function concernOf(
+  key: ScopeKey,
+  record: InstanceRecord,
+  cause: Pick<IMemorySpaceAddress, "scopeKey">,
+  document: SpaceScopeAndURI | undefined,
+): "named" | "read" | "running" | undefined {
+  if (document === undefined) {
+    return key !== "space" && keysOnChain(record.identity).has(cause.scopeKey!)
+      ? "named"
+      : undefined;
+  }
+  if (readsDocument(record, document)) return "read";
+  return record.running === true ? "running" : undefined;
+}
+
+/**
  * B7 — precise per-instance dirtiness. A cause address that NAMES its
  * instance (`scopeKey`, stage A's keyed notification addresses) dirties
  * exactly the instances whose identity resolves that address's scope to
@@ -401,29 +432,18 @@ export function dirtyFanOutForCause(
   >,
 ): boolean {
   let concerned = state.instances.size === 0;
-  if (namesNoInstance(cause)) {
-    const document = entityNameKey(cause);
-    const trigger = invalidCauseKey(cause);
-    for (const [key, record] of state.instances) {
-      if (readsDocument(record, document)) {
-        (record.triggers ??= new Set()).add(trigger);
-        dirtyFanOutKey(state, key);
-      } else if (record.running === true) {
-        (record.arrived ??= new Map()).set(trigger, document);
-      } else {
-        continue;
-      }
-      concerned = true;
-    }
-    return concerned;
-  }
-  const causeKey = cause.scopeKey;
+  const document = documentOf(cause);
+  const trigger = invalidCauseKey(cause);
   for (const [key, record] of state.instances) {
-    if (key === "space") continue;
-    if (keysOnChain(record.identity).has(causeKey!)) {
-      dirtyFanOutKey(state, key);
-      concerned = true;
+    const concern = concernOf(key, record, cause, document);
+    if (concern === undefined) continue;
+    concerned = true;
+    if (concern === "running") {
+      (record.arrived ??= new Map()).set(trigger, document!);
+      continue;
     }
+    if (concern === "read") (record.triggers ??= new Set()).add(trigger);
+    dirtyFanOutKey(state, key);
   }
   return concerned;
 }
@@ -484,19 +504,9 @@ export function fanOutCauseConcerns(
   cause: Pick<IMemorySpaceAddress, "space" | "id" | "scope" | "scopeKey">,
 ): boolean {
   if (state.instances.size === 0) return true;
-  if (namesNoInstance(cause)) {
-    const document = entityNameKey(cause);
-    for (const record of state.instances.values()) {
-      if (record.running === true || readsDocument(record, document)) {
-        return true;
-      }
-    }
-    return false;
-  }
+  const document = documentOf(cause);
   for (const [key, record] of state.instances) {
-    if (key !== "space" && keysOnChain(record.identity).has(cause.scopeKey!)) {
-      return true;
-    }
+    if (concernOf(key, record, cause, document) !== undefined) return true;
   }
   return false;
 }
@@ -513,8 +523,10 @@ export function fanOutOwesRun(state: FanOutNodeState, key: ScopeKey): boolean {
 
 /**
  * Records that each instance at `keys` that is not current is owed a run,
- * or every such instance where `keys` is absent: demand for it arrived. An
- * instance whose run is under way is not made to run again by this.
+ * or every such instance where `keys` is absent: demand for it arrived. A
+ * run under way that finishes current settles what this owed, and the
+ * instance does not run again for it. One that is given up leaves the
+ * instance owed, and it runs once more, with a fresh retry budget.
  */
 export function oweFanOutRuns(
   state: FanOutNodeState,
