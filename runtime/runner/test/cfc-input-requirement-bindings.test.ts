@@ -172,6 +172,18 @@ describe("cfc-input-requirement-bindings", () => {
           ).toContain("unbound placeholder in maxConfidentiality at /out");
         });
 
+        it("refuses a write whose snapshot names an empty principal", async () => {
+          expect(
+            await copy(mode, {
+              confidentiality: [cfcAtom.user(signer.did())],
+            }, {
+              maxConfidentiality: [
+                { type: CFC_ATOM_TYPE.User, subject: CURRENT_PRINCIPAL },
+              ],
+            }, ""),
+          ).toContain("unbound placeholder in maxConfidentiality at /out");
+        });
+
         it("refuses a write a serving runtime makes for no one", async () => {
           // The ambient snapshot such a run carries names the serving
           // runtime itself, which the run does not act for.

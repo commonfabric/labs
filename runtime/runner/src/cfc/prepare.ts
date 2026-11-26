@@ -9740,9 +9740,10 @@ const bindRequirementPlaceholders = (
 
 /**
  * The bindings `tx`'s attempt to write a document in `owningSpace` checks its
- * input requirements under. A run that acts for no one
- * (`servedRunActsForNoOne()`) binds no principal, whatever its trust snapshot
- * names, so a requirement naming the current principal fails closed for it.
+ * input requirements under. A snapshot naming no principal, an empty one
+ * included, binds none, and neither does a run that acts for no one
+ * (`servedRunActsForNoOne()`), whatever its snapshot names. A requirement
+ * naming the current principal then fails closed.
  */
 const inputRequirementBindings = (
   tx: IExtendedStorageTransaction,
@@ -9750,10 +9751,10 @@ const inputRequirementBindings = (
 ): InputRequirementBindings => {
   const snapshot = tx.getCfcState().trustSnapshot;
   return {
-    actingPrincipal:
-      snapshot === undefined || servedRunActsForNoOne(tx, snapshot)
-        ? undefined
-        : snapshot.actingPrincipal,
+    actingPrincipal: !snapshot?.actingPrincipal ||
+        servedRunActsForNoOne(tx, snapshot)
+      ? undefined
+      : snapshot.actingPrincipal,
     owningSpace,
   };
 };
