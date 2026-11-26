@@ -1311,7 +1311,10 @@ executing:
   inspection decides instance sets (D11). Discovery RE-ARM: a run
   that moves the ratchet has its new siblings run in the same pass,
   before the wave settles. Arrival RE-ARM: a new demanding pair on a
-  root re-arms every NARROWED node beneath it for that pair only.
+  root re-arms every NARROWED node beneath it for that pair, and
+  for any instance of the node whose run was given up (below); a
+  node that has not narrowed is re-armed only where its one
+  instance was given up.
   Precise per-instance dirtiness (B7): the node is singular (C11b) but
   its record keeps, per instance, the last committed reactivity log
   and a clean bit — a change dirties exactly the instances whose reads

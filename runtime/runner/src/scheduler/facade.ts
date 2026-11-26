@@ -1410,10 +1410,14 @@ export class Scheduler {
    * that did not exist when it last ran — so the SpaceServer calls this
    * when its demand registry gains a (principal, session) pair for a
    * root. Every NARROWED node whose demand roots intersect `rootIds` is
-   * marked invalid and queued, with its per-instance record KEPT: only
-   * the arriving principal's instances are not clean, so only those run
-   * (B7 — the siblings stay current). A node that ran with demanders and
-   * did not narrow needs nothing (its one output is shared). A node that
+   * marked invalid and queued, with its per-instance record KEPT: the
+   * siblings that are current stay current (B7), so the arriving
+   * principal's instances run, and with them any sibling whose run was
+   * given up, its retries spent, which the arrival owes a run as well,
+   * since which instance the arriving pair asks for is not known here. A
+   * node that ran with demanders and did not narrow needs nothing (its one
+   * output is shared), unless its one instance was given up, which the
+   * arrival runs again. A node that
    * ran with NO demander reachable — the wave-level fallback, before the
    * first demand reached its roots — has no fan-out record and no known
    * scope, so it re-arms too: its next run is the probe that learns
