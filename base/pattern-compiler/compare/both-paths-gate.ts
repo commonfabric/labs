@@ -431,7 +431,9 @@ export const walkPositions = (
     const key = placeKey(document, at);
     if (reached.has(key)) return;
     reached.set(key, position);
-    if (!places.has(position)) places.set(position, { document, path: at });
+    // The target of a link is what the position holds, rather than the
+    // entry of the link itself.
+    places.set(position, { document, path: at });
     mountedDocuments.add(instanceKey(document));
     const schema = document.metadata === undefined
       ? undefined
