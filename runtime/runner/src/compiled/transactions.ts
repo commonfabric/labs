@@ -2325,7 +2325,10 @@ export class RuntimeTransactions implements TransactionHooks {
   ): void {
     const tx = this.#open();
     this.#store = store;
-    if (path.length === 0 && this.#heldWhole.delete(doc)) return;
+    if (path.length === 0 && this.#heldWhole.delete(doc)) {
+      this.#completeStoredArgument(tx, doc, store);
+      return;
+    }
     this.#listsWritten = [];
     this.#markersMade = [];
     // The records of the arrays of rows the change wrote, which give the
@@ -2423,27 +2426,7 @@ export class RuntimeTransactions implements TransactionHooks {
           buckets,
         );
         tx.writeValueOrThrow(this.#address(doc, []), whole);
-        // A protected field of an argument document that the argument left
-        // out, and that holds the default of its type, is a seed, and one
-        // the maker supplies is the maker's write
-        // (`recordNewDocumentProtectedDefaults`).
-        const filled = this.#filledDefaults.get(doc);
-        const declaredFor = this.#declared.of(doc);
-        if (
-          filled !== undefined && declaredFor !== undefined &&
-          isWalkableObjectNotArray(whole)
-        ) {
-          recordNewDocumentProtectedDefaults(
-            tx,
-            this.#address(doc, []),
-            declaredFor.policy.schema,
-            whole,
-            Object.fromEntries(
-              Object.entries(whole).filter(([name]) => !filled.includes(name)),
-            ),
-            whole,
-          );
-        }
+        this.#seedFilledDefaults(tx, doc, whole);
         if (isStateCellSeed(document, path, schema, writes)) {
           const seeded = this.#address(doc, []);
           recordStateCellSeed(tx, seeded, whole);
@@ -3940,6 +3923,85 @@ export class RuntimeTransactions implements TransactionHooks {
         target: { space: at.space, id: at.id, scope: at.scope, path: at.path },
         value: this.#encode(held),
       }, runtimeWritePolicyAuthorization);
+    }
+  }
+
+  /**
+   * Records each protected field of the argument document `doc`, whose
+   * value is `whole`, that the argument left out and that holds the default
+   * of its type as a seed (`filledDefaults`,
+   * `recordNewDocumentProtectedDefaults`). A field the maker supplies is
+   * the maker's write.
+   */
+  #seedFilledDefaults(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+    whole: FabricValue,
+  ): void {
+    const filled = this.#filledDefaults.get(doc);
+    const declared = this.#declared.of(doc);
+    if (
+      filled === undefined || declared === undefined ||
+      !isWalkableObjectNotArray(whole)
+    ) return;
+    recordNewDocumentProtectedDefaults(
+      tx,
+      this.#address(doc, []),
+      declared.policy.schema,
+      whole,
+      Object.fromEntries(
+        Object.entries(whole).filter(([name]) => !filled.includes(name)),
+      ),
+      whole,
+    );
+  }
+
+  /**
+   * Stores for the argument document `doc`, which a client wrote and the
+   * piece is started from for the first time, what the write that makes an
+   * argument document stores: the default of each field the stored
+   * argument leaves out, each protected one among them as a seed, and the
+   * write policies of the argument type, which the stored envelope then
+   * names for every later writer. A plain value that the stored argument
+   * holds at a path the type protects is the write of whoever set the
+   * piece up, as a field the maker supplies is: the transaction is held to
+   * the policy of the path for it, as for an attempt to write the value.
+   * Does nothing for a resumed piece, whose argument document was
+   * completed when it was first started, and for a document whose type
+   * declares no write policy.
+   */
+  #completeStoredArgument(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+    store: Store,
+  ): void {
+    const declared = this.#declared.of(doc);
+    if (this.#resume || declared?.of !== "argument") return;
+    const stored = this.#readStored(this.#address(doc, []));
+    const held = store.docs.get(doc)?.value;
+    if (
+      !isWalkableObjectNotArray(stored) || typeof held !== "object" ||
+      held === null || Array.isArray(held)
+    ) return;
+    if (this.#heldBefore.delete(doc)) this.#enroll(tx, doc);
+    const filled = this.#filledDefaults.get(doc) ?? [];
+    const whole: Record<string, FabricValue> = { ...stored };
+    const written = this.#written.get(doc) ?? [];
+    this.#written.set(doc, written);
+    for (const name of filled) {
+      whole[name] = this.#encode((held as Record<string, unknown>)[name]);
+      tx.writeValueOrThrow(this.#address(doc, [name]), whole[name]);
+      written.push([name]);
+    }
+    this.#seedFilledDefaults(tx, doc, whole);
+    this.#recordDeclaredPolicy(tx, doc, [], store, true);
+    for (const claimed of declared.policy.claimed) {
+      if (claimed.length === 0 || filled.includes(claimed[0])) continue;
+      const supplied = store.peek(doc, claimed);
+      if (supplied === undefined || isLink(supplied)) continue;
+      tx.readValueOrThrow(this.#address(doc, claimed), {
+        meta: { ...ignoreReadForScheduling, ...markReadAsAttemptedWrite },
+      });
     }
   }
 

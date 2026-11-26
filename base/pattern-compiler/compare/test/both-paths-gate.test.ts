@@ -241,6 +241,23 @@ describe("the two-principal gate", () => {
     ).toEqual([]);
   });
 
+  it("reports an outcome one path withholds from the sender as withheld, and none where neither does", () => {
+    // Today's path tells the sender of the step that it committed.
+    expect(ran.today.checkpoints[1].withheld).toBeUndefined();
+    const withheld = (told: boolean) =>
+      compareRuns(edited((compiled) => {
+        if (told) delete compiled.checkpoints[1].withheld;
+        else compiled.checkpoints[1].withheld = true;
+      })).findings.filter(({ kind }) => kind === "withheld").map((
+        { at, position, today, compiled },
+      ) => [at, position, today, compiled]);
+
+    expect(withheld(false)).toEqual([
+      ["step 0", "A", "committed", "outcome withheld"],
+    ]);
+    expect(withheld(true)).toEqual([]);
+  });
+
   it("reports a read one path refuses as hidden", () => {
     const runs = edited((compiled) => {
       compiled.checkpoints[1].reads.A["item.name"] = {

@@ -24,6 +24,7 @@
 import type { Artifact } from "../../../../base/pattern-compiler/exec/executor.ts";
 import { getLogger } from "@commonfabric/logger";
 import { stampWaveRunContext } from "../executor/wave.ts";
+import { isCfcRejectedCommitError } from "../scheduler/cfc-rejection-report.ts";
 import type { JSONSchema } from "../builder/types.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -75,6 +76,8 @@ const loading = new WeakMap<
 >();
 /** The pieces a runtime runs. */
 const running = new WeakMap<Runtime, CompiledPiece[]>();
+/** The pieces whose start did not commit. */
+const notStarted = new WeakSet<CompiledPiece>();
 
 /**
  * What each compiler of this process gave, by the entity that holds the
@@ -330,10 +333,17 @@ const start = async (
   }
   runtime.prepareTxForCommit(tx);
   const started = piece;
-  tx.commit().settled.then(({ error }) => {
+  tx.commit().settled.then(async ({ error }) => {
     if (error === undefined) return;
     started.stop();
     failed(started, error);
+    // A verdict of the commit preparation on what the start wrote is the
+    // same for every start from the same stored documents, such as an
+    // argument that supplies a value its type lets one handler alone
+    // write: the client that set the piece up reads it as the reason.
+    if (!isCfcRejectedCommitError(error)) return;
+    await brought(runtime, space, compiledFailureOf(id));
+    refuse(runtime, root, error.message);
   });
   return piece;
 };
@@ -360,6 +370,7 @@ export const serveCompiledPieces = (
     if (piece === undefined) {
       const failed = (stopped: CompiledPiece, error: Error) => {
         pieces.delete(root.id);
+        notStarted.add(stopped);
         const list = running.get(runtime) ?? [];
         const at = list.indexOf(stopped);
         if (at >= 0) list.splice(at, 1);
@@ -372,8 +383,11 @@ export const serveCompiledPieces = (
       const refused = (error: unknown) => options.failed?.(root.id, error);
       piece = start(runtime, root, failed, refused, options).then((started) => {
         if (started === undefined) pieces.delete(root.id);
-        else if (started instanceof CompiledPiece) runs(started);
-        else {
+        else if (started instanceof CompiledPiece) {
+          // A commit that the preparation refused has settled by now.
+          if (notStarted.has(started)) return undefined;
+          runs(started);
+        } else {
           options.resumed?.(root.id, started);
           // The piece runs once it is woken: here for an event, or by a
           // change of a document its basis names.

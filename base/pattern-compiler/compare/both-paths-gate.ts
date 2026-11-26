@@ -75,6 +75,11 @@
  *   principal; on either path.
  * - `event-payload`: the same text in the payload of an event in a stream's
  *   sidecar, which holds what a client sent: reported apart, as Z100's case.
+ * - `withheld`: the sender of an event was told on one path alone that the
+ *   outcome of its handling is withheld, which a sender is told where the
+ *   handling read data the stream's space does not admit. Such a handling
+ *   counts as committed for `commit` and `message`, as the sender is told
+ *   neither that it committed nor why it did not.
  * - `unsettled`: a checkpoint whose passes of reads did not come to one that
  *   moved nothing, with what kept moving.
  * - `failure`: a run ended with an error; `not-compiled`: a piece of the
@@ -1212,6 +1217,21 @@ export const compareRuns = (
           compiled: tb,
         });
       }
+    }
+    if ((a.withheld === true) !== (b.withheld === true)) {
+      const told = (checkpoint: Checkpoint, run: PathRun) =>
+        checkpoint.withheld === true
+          ? "outcome withheld"
+          : checkpoint.committed
+          ? "committed"
+          : normalized(checkpoint.message ?? "", run);
+      find({
+        at,
+        kind: "withheld",
+        position: a.actor,
+        today: told(a, today),
+        compiled: told(b, compiled),
+      });
     }
     for (const who of WHO) {
       const members = sorted([

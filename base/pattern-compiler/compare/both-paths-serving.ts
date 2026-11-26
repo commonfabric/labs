@@ -68,7 +68,11 @@ import {
 } from "@commonfabric/data-model";
 
 import type { Cell, MemorySpace } from "../../../runtime/runner/src/cell.ts";
-import { isStream, sendEvent } from "../../../runtime/runner/src/cell.ts";
+import {
+  isStream,
+  isWithheldDelivery,
+  sendEvent,
+} from "../../../runtime/runner/src/cell.ts";
 import { defaultDisplayCeiling } from "../../../runtime/runner/src/cfc/default-display-ceiling.ts";
 import {
   markRendererTrustedEvent,
@@ -234,6 +238,13 @@ export type Checkpoint = {
   committed: boolean;
   /** The first line of the message of a refusal. */
   message?: string;
+  /**
+   * Whether the sender was told that the outcome of the handling is
+   * withheld (`isWithheldDelivery`): the handling read data the stream's
+   * space does not admit, so the sender is told neither that it committed
+   * nor why it did not, and `committed` holds as for a handling that did.
+   */
+  withheld?: true;
   /** What each principal reads, by `piece.member`. */
   reads: Record<Who, Record<string, Read>>;
   /** The scenario's space after the step. */
@@ -371,6 +382,12 @@ const firstLine = (error: unknown): string => {
     : String(error);
   return text.split("\n")[0].slice(0, 300);
 };
+
+/** The message of an error, which a storage error holds as a plain record. */
+const messageOf = (error: unknown): string =>
+  typeof (error as { message?: unknown } | undefined)?.message === "string"
+    ? (error as { message: string }).message
+    : String(error);
 
 /** Whether `value` is a link a host read holds in the place of a cell. */
 const linkIn = (value: unknown) => {
@@ -598,11 +615,7 @@ export const runPath = async (
                 error instanceof CompiledPieceRefused
                   ? "refused"
                   : "not started"
-              }: ${
-                firstErrorOf(
-                  error instanceof Error ? error.message : String(error),
-                )
-              }`,
+              }: ${firstErrorOf(messageOf(error))}`,
             );
           },
         });
@@ -684,6 +697,7 @@ export const runPath = async (
     actor: Who | "space",
     committed: boolean,
     message: string | undefined,
+    withheld = false,
   ) => {
     const spaces = [
       ids.space,
@@ -713,6 +727,7 @@ export const runPath = async (
       actor,
       committed,
       ...(message === undefined ? {} : { message }),
+      ...(withheld ? { withheld: true as const } : {}),
       reads,
       snapshot: snapshotOf(store, ids.space),
       errors: errorStatesOf(store, spaces),
@@ -819,6 +834,7 @@ export const runPath = async (
       const cells = cellsOf(client, pending);
       let committed = true;
       let message: string | undefined;
+      let outcomeWithheld = false;
       if (step.write !== undefined) {
         const target = cells.at(piece, step.write.path);
         cancels.push(target.sink(() => {}));
@@ -859,17 +875,23 @@ export const runPath = async (
         await resolved.sync();
         run.streams[resolved.getAsNormalizedFullLink().id] = [piece, ...path]
           .join("/");
-        const handled = Promise.withResolvers<
-          ReturnType<ReturnType<Runtime["edit"]>["status"]>
-        >();
+        const handled = Promise.withResolvers<{
+          status: ReturnType<ReturnType<Runtime["edit"]>["status"]>;
+          withheld: boolean;
+        }>();
         try {
           sendEvent(
             stream,
             sent as never,
-            (tx) => handled.resolve(tx.status()),
+            (tx) =>
+              handled.resolve({
+                status: tx.status(),
+                withheld: isWithheldDelivery(tx),
+              }),
             { echo: false },
           );
-          const status = await handled.promise;
+          const { status, withheld } = await handled.promise;
+          if (withheld) outcomeWithheld = true;
           if (status.status === "error") {
             committed = false;
             const error = status.error as { reason?: string } & Error;
@@ -881,7 +903,13 @@ export const runPath = async (
         }
       }
       if (step.shares !== undefined) shared = [...shared, ...step.shares];
-      await checkpoint(`step ${index}`, actor, committed, message);
+      await checkpoint(
+        `step ${index}`,
+        actor,
+        committed,
+        message,
+        outcomeWithheld,
+      );
     }
   } catch (error) {
     run.failure = firstLine(error);
