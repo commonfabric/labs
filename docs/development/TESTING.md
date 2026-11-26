@@ -294,10 +294,10 @@ The tests withheld as flaky, with the runs each one passed and failed in at one
 commit, are served by the dashboard as JSON at `/test-selection/flaky.json`, on
 the dashboard's tailnet host, `https://dashboard.<tailnet>.ts.net`.
 ["Flaky tests as JSON"](../../dashboard/README.md#flaky-tests-as-json)
-defines its fields. Start fixing a flaky test from there. A test whose
-`lastFailure` is recent still fails; one whose `lastFailure` is weeks old has
-probably been fixed and is waiting for its share to fall; one whose `lastRun` is
-old is likely no longer in the tree. A failing run's `url` opens its workflow
+defines its fields. Start fixing a flaky test from there. A recent
+`lastFailure` says the test failed lately, so it has probably not been fixed;
+one weeks old suggests it has been, and is waiting for its share to fall; an old
+`lastRun` suggests the test is no longer in the tree. A failing run's `url` opens its workflow
 run attempt on GitHub, and the failure is in the log of the job its `job` names.
 A run on a workstation has no `url`.
 
