@@ -62,12 +62,13 @@ export const FULL_LANE_BUDGET_SECONDS = FULL_LANE_BOUND_SECONDS -
  * passes share between them. A pull request takes the fewest lanes that
  * hold its mandatory work and this much more, so a change that forces a
  * great deal of work in takes more lanes rather than running nothing chosen
- * by score. Set so that a pull request whose mandatory work fits in five
- * lanes with room to spare most often takes five, under the cost model the
- * manifests carry; a change with nothing mandatory takes three. A pull
- * request labelled `ci: <n>x` runs `n` times this.
+ * by score. Written as seven and a half lanes' budget, so it moves with
+ * `LANE_BUDGET_SECONDS`. A change with nothing mandatory takes eight lanes.
+ * Eight lanes hold half a lane's budget more than this, so a ninth opens
+ * only once mandatory work is charged more than that. A pull request
+ * labelled `ci: <n>x` runs `n` times this.
  */
-export const DISCRETIONARY_SECONDS = 575;
+export const DISCRETIONARY_SECONDS = 7.5 * LANE_BUDGET_SECONDS;
 
 /**
  * The most lanes a run that is not the full run is split into. Half the sixty
@@ -580,9 +581,9 @@ export const DIALS: readonly Dial[] = [
     why: "Up when regressions reach the default branch past pull requests " +
       "that did not run the test chosen by score that would have caught " +
       "them; down when pull requests take more lanes than runner minutes " +
-      "allow. A pull request whose mandatory work fits in five lanes with " +
-      "room to spare most often takes five at this figure. The label " +
-      "`ci: <n>x` multiplies it by n for one pull request.",
+      "allow. It is written as seven and a half lanes' budget, so a change " +
+      "with nothing mandatory takes eight lanes however the lane budget " +
+      "moves. The label `ci: <n>x` multiplies it by n for one pull request.",
   },
   {
     name: "LANES_MAX",
