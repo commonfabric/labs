@@ -169,7 +169,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       status: "warn",
       value: "78,101 lines",
       valueLabel: "78,101 lines",
-      sub: "+214 per day (median) · last 21 days",
+      sub: "+214 per day, doubles in 12mo",
       extra: history(),
       duration: 56 * DAY,
     },
