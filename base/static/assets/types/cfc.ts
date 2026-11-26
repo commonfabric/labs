@@ -558,6 +558,11 @@ export type AnyOf<X extends readonly unknown[]> = {
 export type PolicyOf<Rules> = {
   readonly __ct_cfc_policy_of__?: Rules;
 };
+export type Reclassified<T, Rules> = Cfc<T, {
+  reclassify: readonly [
+    PolicyOf<Rules>,
+  ];
+}>;
 export type ExactCopy<T, P extends readonly string[]> = Cfc<T, {
   exactCopyOf: P;
 }>;

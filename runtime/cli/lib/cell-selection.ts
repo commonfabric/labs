@@ -1684,6 +1684,9 @@ const SELECTION_IFC_KEYS: {
   exactCopyOf: "dropped",
   projection: "dropped",
   collection: "dropped",
+  // A release the position's own computation makes for its piece's creator.
+  // The selection is not that computation, so its copy releases nothing.
+  reclassify: "dropped",
   // What the writer claimed about the precision of its own flow.
   flowPrecisionClaim: "dropped",
 };

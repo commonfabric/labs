@@ -2112,6 +2112,9 @@ export type JSONSchemaObj = {
       readonly uiContract?: NonNullable<JSONSchemaObj["ifc"]>["uiContract"];
     }[];
     readonly exactCopyOf?: readonly string[];
+    // The lowered form of `Reclassified`: the module policy a value's
+    // creator-releasable `User` clauses are stored beside.
+    readonly reclassify?: readonly JSONValue[];
     // §8.3 projection claim (the lowered form of `Projection` /
     // `ProjectionOf` / `ProjectionPath`): this value is the field at JSON
     // pointer `path` inside the structured value at logical path `from`.

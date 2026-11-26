@@ -30,6 +30,7 @@ const SAMPLES = {
   exactCopyOf: ["draft"],
   projection: { from: "/draft", path: "/name" },
   collection: { subsetOf: ["all"] },
+  reclassify: [{ type: "policy" }],
   flowPrecisionClaim: { kind: "pointwise" },
 } satisfies Record<IfcKey | "observes", unknown>;
 
@@ -53,6 +54,7 @@ const EXPECTED = {
   exactCopyOf: "dropped",
   projection: "dropped",
   collection: "dropped",
+  reclassify: "dropped",
   flowPrecisionClaim: "dropped",
 } satisfies Record<IfcKey | "observes", "carried" | "dropped">;
 
