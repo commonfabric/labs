@@ -574,17 +574,17 @@ export const runHarnessJob = async (
       if (!(error instanceof Deno.errors.NotFound)) throw error;
     }
   }
-  let task = spec.task;
+  let filePrompt: string | undefined;
   if (spec.taskDelivery === "file" && spec.continueFrom === undefined) {
-    await Deno.writeTextFile(join(workspace, ".job-task"), task, {
+    await Deno.writeTextFile(join(workspace, ".job-task"), spec.task, {
       createNew: true,
       mode: 0o400,
     });
-    task =
+    filePrompt =
       "Your task is in .job-task in the workspace. Follow the job instructions to use it.";
   }
   const argv = argvOf(
-    { ...spec, task },
+    spec,
     workspace,
     join(options.runRoot, "artifacts"),
     resultPath,
@@ -714,13 +714,21 @@ export const runHarnessJob = async (
       };
       return {
         runPrompt: (promptOptions) =>
-          run(promptOptions, (wrapped) => loop.runPrompt(wrapped)),
+          run(
+            promptOptions,
+            (wrapped) =>
+              loop.runPrompt(
+                filePrompt === undefined
+                  ? wrapped
+                  : { ...wrapped, prompt: filePrompt },
+              ),
+          ),
         runTranscript: (transcriptOptions) =>
           run(transcriptOptions, (wrapped) => loop.runTranscript(wrapped)),
-        // Orientation follows the submitted task even when the prompt gives its location.
+        // The harness classifies the submitted task before it assembles the prompt.
         ...(loop.classifyTask !== undefined
           ? {
-            classifyTask: () => loop.classifyTask!(spec.task),
+            classifyTask: (task: string) => loop.classifyTask!(task),
           }
           : {}),
       };

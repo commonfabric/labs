@@ -64,6 +64,7 @@ const SCRIPTED_ENV = {
 interface Seen {
   loopOptions?: CreateHarnessPromptLoopOptions;
   prompt?: string;
+  openingResearchTask?: string;
   images?: readonly HarnessImageAttachment[];
   role?: string;
   systemPrompt?: string;
@@ -148,6 +149,7 @@ describe("runHarnessJob()", () => {
           return {
             runPrompt: (prompt) => {
               seen.prompt = prompt.prompt;
+              seen.openingResearchTask = prompt.openingResearchTask;
               seen.images = prompt.imageAttachments;
               seen.systemPrompt = prompt.systemPrompt;
               seen.maxModelTurns = prompt.maxModelTurns ??
@@ -204,6 +206,7 @@ describe("runHarnessJob()", () => {
 
     expect(seen.prompt).toContain(".job-task");
     expect(seen.prompt).not.toContain(task);
+    expect(seen.openingResearchTask).toBe(task);
     expect(seen.role).toBe("direct-command");
     await expect(runScripted(spec, answering("Titan"))).rejects.toThrow(
       Deno.errors.AlreadyExists,
