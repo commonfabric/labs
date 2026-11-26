@@ -1322,15 +1322,28 @@ executing:
   reads are recorded), the
   node's ONE subscription is the union of the instance logs (a pass
   that skips clean instances keeps their reads registered), and an
-  N-user space costs O(affected instances) per change, not O(N) per
-  node. A change is a trigger read (CFC §8.9.2) of the runs it
-  scheduled and of no other: a run of one instance takes a change
-  that names no instance only where that instance's recorded run read
-  the changed document, so a document one viewer's run read — that
-  viewer's profile, in a space of their own — joins no label to
-  another viewer's instance. An instance that has never run takes no
-  such change: demand runs it, and its own reads label it. This is the
-  load-bearing property that keeps
+  N-user space costs O(affected instances) runs per change, not O(N)
+  runs per node; deciding which instances a change that names none
+  affects is one set lookup per instance of the node. The decision is
+  by document: an instance that read any path of the changed document
+  is affected. A change that affects no instance, and arrives while no
+  run of the node is under way, leaves the node as it was: it queues
+  no pass and re-arms no gate. An instance that is not current is run
+  by a pass only where it is owed a run: it never ran, a change
+  affected it, an invalidation that names no cause or a retry asked
+  for it, or demand for it arrived. An instance whose retries were
+  spent is owed none, and a change to a document only another
+  instance read does not start it. A run of one instance takes, as its
+  trigger reads (CFC §8.9.2), the changes that name an instance on its
+  own chain and the changes that name none and affected it, those that
+  arrived since the pass began included; so a document only one
+  viewer's run read — that viewer's profile, in a space of their own —
+  joins no label to another viewer's instance. An instance that has
+  never run takes no change that names no instance: demand runs it,
+  and its own reads label it. The node's freshness gates are the
+  node's and not an instance's, so a change that affects one instance
+  re-arms the debounce a pass for another instance waits behind.
+  Running O(affected instances) is the load-bearing property that keeps
   waves draining under sustained multi-user input (an exhausted wave
   holds W; a pinned W stalls the client's coverage-of-basis
   retirement).

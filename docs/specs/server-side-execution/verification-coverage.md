@@ -10727,7 +10727,7 @@ supply; OW29/OW32/OW34 closed):
   `runtime/runner/test/scheduler-fan-out.test.ts` ("a cause that names
   no instance": which instances it dirties, by the reads of each one's
   latest run, an instance whose run is under way, one that never ran,
-  one that left,
+  one whose retries were spent, one that left,
   one the ratchet re-keyed, and which runs take it as a trigger read,
   a retry included), `runtime/runner/test/scheduler-run-cov.test.ts`
   (`causesForInstance()`),

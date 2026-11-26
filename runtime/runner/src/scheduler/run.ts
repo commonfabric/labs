@@ -1423,7 +1423,14 @@ function finalizeReactiveActionCommit(
     tx: args.tx,
   }, () => {
     const log = txToReactivityLog(args.tx);
-    if (validateLocalReadBasisForCommit(args.tx) !== undefined) return log;
+    if (validateLocalReadBasisForCommit(args.tx) !== undefined) {
+      // The run hands nothing over. What it read is what a change has to
+      // reach to run its instance again.
+      if (args.fanOutRun !== undefined) {
+        fanOutRunAborted(args.fanOutRun.state, args.fanOutRun.instance, log);
+      }
+      return log;
+    }
     warnOnWriteSurfaceViolations(state, args, log);
     echoRun = state.captureRemoteEcho(args.tx, log, args.invalidCauses);
     hasPostCommitEffects = args.tx.hasPendingPostCommitEffects();

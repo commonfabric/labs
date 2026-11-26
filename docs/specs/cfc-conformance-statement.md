@@ -533,10 +533,20 @@ node with one subscription, the union of its instances' reads, so the
 addresses whose writes scheduled a run are decided for each instance:
 `causesForInstance` in `scheduler/run.ts` hands a run the changes that name an
 instance on its own chain, and of the changes that name no instance those
-that arrived for a document the instance's recorded run read
-(`dirtyFanOutForCause` in `scheduler/fan-out.ts`). A change to a document only
-another viewer's run read scheduled no run of this instance, and is not
-joined. With
+that arrived for a document a run of the instance is recorded to have read
+(`dirtyFanOutForCause` in `scheduler/fan-out.ts`), whether they arrived before
+the pass the run is in began or during it. A pass starts a run of an instance
+only where the instance never ran, one of those changes or an invalidation
+that names no cause reached it, a retry of its own run is due, or demand for
+it arrived (`fanOutInstancesToRun`), so a change to a document only another
+viewer's run read starts no run of this instance, and is not joined. Two
+things such a change can still do to this instance are not trigger reads
+under this reading. Where it also reaches an instance that read the
+document, it re-arms the node's debounce, which is the node's and not an
+instance's, and a run this instance was already owed starts later. And the
+match is by document, not by path: an instance that read one path of a
+document takes a change at another path of it, at the read path the cause
+names. With
 `cfcTriggerReadGating` on, the shipped default, `triggerReadSources` adds them
 to the egress and sink consumed set and to the `requiredIntegrity` input gate
 as well. `cfc-enforcement-matrix.md` §2, item 4, records that multi-hop closure
