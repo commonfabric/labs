@@ -76,6 +76,26 @@ export default pattern<{ secret: string }, { shared: string }>(
 );
 `;
 
+/**
+ * `SHARING_SOURCE` with a lift that keeps some of its argument's items, as a
+ * window over a list does, so the items it returns are the argument's own.
+ */
+const FILTERING_SOURCE = SHARING_SOURCE
+  .replace(
+    `const share = lift(
+  (secret: string): Reclassified<string, typeof rules> => secret + "!",
+);`,
+    `type Item = { lat: number };
+const share = lift(
+  (secret: Item[]): Reclassified<Item[], typeof rules> =>
+    secret.filter((item) => item.lat > 0),
+);`,
+  )
+  .replace(
+    "pattern<{ secret: string }, { shared: string }>",
+    "pattern<{ secret: { lat: number }[] }, { shared: { lat: number }[] }>",
+  );
+
 const artifact = buildCfcPolicyArtifactManifest({
   formatVersion: 1,
   moduleIdentity: "sha256:reclassify-module",
@@ -190,7 +210,7 @@ describe("cfc-reclassify", () => {
   };
 
   /**
-   * Creates a piece of `SHARING_SOURCE` in `at` whose secret argument links
+   * Creates a piece of `source` in `at` whose secret argument links
    * the cell `secret` of `space`, and returns the cell its lift writes, once
    * the lift has run.
    */
@@ -198,9 +218,10 @@ describe("cfc-reclassify", () => {
     runtime: Runtime,
     secret: string,
     at: MemorySpace = space,
+    source: string = SHARING_SOURCE,
   ): Promise<{ piece: Cell<unknown>; shared: Cell<unknown> }> => {
     const piece = await createPiece(runtime, {
-      source: SHARING_SOURCE,
+      source,
       at,
       argument: (tx) => ({
         secret: runtime.getCell(space, secret, undefined, tx),
@@ -382,6 +403,38 @@ describe("cfc-reclassify", () => {
           moduleIdentity: patternModule(piece),
         }),
       }));
+    });
+
+    it("stores the creator's clause or the policy on items it keeps from its argument", async () => {
+      expect(FILTERING_SOURCE).toContain("secret.filter");
+      const client = connect(alice);
+      const source = await storeSecret(client, {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { lat: { type: "number" } },
+        },
+        ifc: { confidentiality: [cfcAtom.user(alice.did())] },
+      }, [{ lat: 1 }, { lat: -1 }, { lat: 2 }] as never);
+
+      const { shared } = await sharePiece(
+        client,
+        source,
+        space,
+        FILTERING_SOURCE,
+      );
+
+      expect(shared.get()).toEqual([{ lat: 1 }, { lat: 2 }]);
+      // The kept items are the lift's own values, not references into the
+      // argument, whose own label would still say the creator alone.
+      const entries = storedEntries(client, shared);
+      expect(entries.filter((entry) => entry.origin === "link")).toEqual([]);
+      const stored = entries.flatMap((entry) =>
+        entry.label.confidentiality ?? []
+      );
+      expect(stored.some((clause) => releasesTo(clause, alice, space)))
+        .toBe(true);
+      expect(stored).not.toContainEqual(cfcAtom.user(alice.did()));
     });
 
     it("installs its policy's manifest in the space of a piece placed elsewhere", async () => {
