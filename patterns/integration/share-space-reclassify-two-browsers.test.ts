@@ -19,15 +19,12 @@
  * the window; otherwise the window stays the owner's alone and the reader sees
  * none of it. The owner sees the window and the source on either arm.
  *
- * The reclassifying arm fails today, at the reader's wait for the window. The
- * window is stored as `anyOf(User(owner), PolicyOf<shareSpaceRules>)` as
- * intended, but its flow join read the owner's fixes from the owner's space,
- * so label-metadata protection stores both subjects as commitments, the
- * policy's own included, and the reader's display cannot mint the
- * `HasRole(reader, shareSpace)` fact the policy's rule needs: the reader sees
- * "Content hidden by policy". `runtime/runner/test/cfc-reclassify.test.ts`
- * ("keeps a value placed elsewhere sealed ...") is the reduced form. Run that
- * arm by hand; continuous integration runs the other.
+ * The window's flow join reads the owner's fixes from the owner's space, so
+ * label-metadata protection stores its policy's subject as a commitment. The
+ * reader's display finds the share space as the membership candidate for it
+ * because the label was read from that space and the commitment is its digest
+ * (`membershipSpacesInConfidentiality`). Continuous integration runs the other
+ * arm; run the reclassifying one by hand.
  */
 
 import { createTestSpace, env, type Page } from "@commonfabric/integration";
