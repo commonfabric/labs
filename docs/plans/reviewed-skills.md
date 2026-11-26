@@ -474,8 +474,8 @@ as one package. Each has a provisional answer to confirm or correct.
    is still consulted for minting intents and policy-state transitions (§3.4)
    and at declassification gates (§3.8.4). Reading `quote` text removes no slot
    record or minted intent, but an intent refined afterward has tainted
-   parameters, which may not decide routing (§3.8.4). So routing is fixed before the read, copied
-   exactly, or confirmed. _Confirm._
+   parameters, which may not decide routing (§3.8.4). So routing is fixed
+   before the read, copied exactly, or confirmed. _Confirm._
 2. **"Derives from the named prompt-slot binding"** (§18.3). _Provisional, a
    reading:_ every call the kernel run that the slot seeded makes, permanently.
    Under D4-A the narrow per-argument reading cannot be reached, because a value
