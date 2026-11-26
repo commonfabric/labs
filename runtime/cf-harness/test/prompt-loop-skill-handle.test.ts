@@ -1048,6 +1048,88 @@ describe("prompt-loop delegate_task skillHandle", () => {
     }, oneLine);
   });
 
+  describe("the child's authority", () => {
+    const bashCallTurn = (id: string) => ({
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [{
+            id,
+            type: "function",
+            function: {
+              name: "bash",
+              arguments: JSON.stringify({ command: "touch planned.txt" }),
+            },
+          }],
+        },
+      }],
+    });
+
+    /**
+     * Runs a direct-command parent under `enforce-explicit` that delegates
+     * once, with `skillHandle` set when `withSkill` is, to a child whose first
+     * act is a `bash` call. Returns the tool message the child's model read
+     * back for that call.
+     */
+    const childBashResult = async (withSkill: boolean): Promise<string> => {
+      let toolContent = "";
+      await withSkillCell(async ({ pieces, ref }) => {
+        const runId = `run-skill-handle-authority-${withSkill}`;
+        const minted = await mintAddressHandle(
+          createHarnessHandleTable(runId),
+          ref,
+        );
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runId,
+          model: "gpt-5.4",
+          cfcEnforcementMode: "enforce-explicit",
+          fabricSessionFactory: () => Promise.resolve({ pieces }),
+        });
+        await engine.recordHandleTable(minted.table);
+        const requestBodies: unknown[] = [];
+        const loop = new CfHarnessPromptLoop({
+          apiKey: "test-key",
+          engine,
+          fetchFn: scriptedFetch([
+            delegateCallTurn("call-delegate", {
+              goal: "Plan the trip.",
+              ...(withSkill ? { skillHandle: minted.token } : {}),
+            }),
+            bashCallTurn("call-child-bash"),
+            assistantTurn("Child finished."),
+            assistantTurn("Parent finished."),
+          ], requestBodies),
+        });
+
+        await loop.runPrompt({
+          prompt: "Delegate the plan.",
+          promptSlotBinding: directPromptSlotBinding,
+        });
+
+        // The child's second request carries what its `bash` call returned.
+        const toolMessage = chatViewOfRequest(requestBodies[2]).messages
+          .find((message) => message.role === "tool");
+        toolContent = String(toolMessage?.content ?? "");
+      });
+      return toolContent;
+    };
+
+    it("refuses a side effect to a child that holds handle-delivered skill text", async () => {
+      expect(await childBashResult(true)).toContain(
+        "bash requires direct-command authorization in enforce-explicit",
+      );
+    });
+
+    it("leaves a child with no skill text the parent's direct-command authority", async () => {
+      expect(await childBashResult(false)).not.toContain(
+        "requires direct-command authorization",
+      );
+    });
+  });
+
   it("records the table token on the activation when the handle is passed as a reference", async () => {
     await withSkillCell(async ({ pieces, ref }) => {
       const runId = "run-skill-handle-ref-spelling";

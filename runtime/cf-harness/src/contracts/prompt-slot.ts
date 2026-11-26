@@ -44,11 +44,28 @@ export interface CreateCliPromptSlotBindingOptions {
   targetPath?: string;
 }
 
+// Strongest first: `promptSlotBindingAtMost` reads the order.
 const PROMPT_SLOT_ROLES: readonly PromptSlotRole[] = [
   "direct-command",
   "context",
   "quote",
 ];
+
+/**
+ * Returns `binding` with its role lowered to `ceiling` when the ceiling is the
+ * weaker of the two, and `binding` itself otherwise. Roles are ordered by the
+ * action authority they carry: `direct-command` carries it, and `context` and
+ * `quote` carry none, `quote` being the role for third-party text (§14.2.2.1).
+ * A run whose prompt holds text of a weaker role than its task runs with the
+ * weaker role, so lowering is the only direction this goes.
+ */
+export const promptSlotBindingAtMost = (
+  binding: PromptSlotBinding,
+  ceiling: PromptSlotRole,
+): PromptSlotBinding =>
+  PROMPT_SLOT_ROLES.indexOf(ceiling) > PROMPT_SLOT_ROLES.indexOf(binding.role)
+    ? { ...binding, role: ceiling }
+    : binding;
 
 const isPromptSlotRole = (input: unknown): input is PromptSlotRole =>
   typeof input === "string" &&

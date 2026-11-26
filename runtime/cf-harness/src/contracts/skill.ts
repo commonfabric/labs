@@ -28,7 +28,12 @@ export type HarnessSkillResourceKind =
 
 export type HarnessSkillResourceContentKind = "text" | "binary";
 
-export type HarnessSkillCfcPromptRole = "context";
+/**
+ * The prompt-slot role a skill's text holds in the run it is loaded into:
+ * `context` for a skill the operator configured, and `quote` for one delivered
+ * through a handle, whose author nothing vouches for.
+ */
+export type HarnessSkillCfcPromptRole = "context" | "quote";
 
 export type HarnessSkillScriptRuntime = "deno" | "shebang" | "unknown";
 export type HarnessSkillScriptExecutionTarget = "sandbox" | "host";

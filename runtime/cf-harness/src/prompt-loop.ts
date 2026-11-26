@@ -75,7 +75,10 @@ import {
   type HarnessPolicyDecisionReasonCode,
 } from "./contracts/policy-trace.ts";
 import type { HarnessToolInputSummary } from "./contracts/policy.ts";
-import type { PromptSlotBinding } from "./contracts/prompt-slot.ts";
+import {
+  type PromptSlotBinding,
+  promptSlotBindingAtMost,
+} from "./contracts/prompt-slot.ts";
 import { harnessCredentialOwnersEqual } from "./contracts/run-manifest.ts";
 import {
   createHarnessRunReport,
@@ -6412,6 +6415,19 @@ export class CfHarnessPromptLoop {
     }
     const childCreatedState = childEngine.getRunState();
     const childSkillContextMessages: string[] = [];
+    // A handle-delivered skill is text from a cell, and nothing shows the
+    // person wrote it: an acquired skill came from a third party, and any
+    // other handle names whatever its cell holds. That text shares every turn
+    // of the child with the task, and text of unknown authorship is `quote`,
+    // which carries no action authority (§14.2.2.1, §18.3.1). So the child
+    // runs as `quote` whatever role the parent's task holds, and under an
+    // enforce mode it may only read. Nothing yet tells a call the person
+    // started apart from one the model chose, so this holds even when the
+    // person asked for the skill to be used.
+    const childPromptSlotBinding = options.resolvedSkill === undefined ||
+        options.promptSlotBinding === undefined
+      ? options.promptSlotBinding
+      : promptSlotBindingAtMost(options.promptSlotBinding, "quote");
     const manifest: HarnessSubagentRunManifest = {
       type: "cf-harness.subagent-run-manifest",
       version: 1,
@@ -6597,7 +6613,9 @@ export class CfHarnessPromptLoop {
         contextMessages: childSkillContextMessages,
         model: childModel.model,
         maxModelTurns,
-        promptSlotBinding: options.promptSlotBinding,
+        ...(childPromptSlotBinding !== undefined
+          ? { promptSlotBinding: childPromptSlotBinding }
+          : {}),
         signal: options.signal,
         onModelUsage: ({ usage }) => options.recordModelUsage(usage),
         ...(options.onTranscriptEvent !== undefined

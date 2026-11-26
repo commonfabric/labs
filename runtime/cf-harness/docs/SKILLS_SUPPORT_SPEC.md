@@ -526,6 +526,14 @@ Skills are retrieved context. They are not direct operator commands.
 context/provenance in run artifacts. They must not be treated as
 `direct-command` prompt-slot evidence.
 
+A skill the operator configured holds the `context` role. A skill delivered
+through `delegate_task.skillHandle` holds the `quote` role, because it is text
+from a cell and nothing shows the person wrote it: an acquired skill came from a
+third party. A child given one runs with its prompt-slot binding lowered to
+`quote`, whatever the parent's task holds, so under an enforce mode it may only
+read. Nothing yet tells a delegation the person started apart from one the model
+chose, so the lowering applies to both.
+
 Policy rules:
 
 - A skill cannot grant a tool that the run did not already allow.
@@ -650,7 +658,7 @@ either has moved.
       "runId": "...",
       "digest": "sha256:...",
       "activatedAt": "...",
-      "cfcPromptRole": "context",
+      "cfcPromptRole": "quote",
       "handleToken": "cfh:a:3kk78"
     },
     {
@@ -659,7 +667,7 @@ either has moved.
       "runId": "...",
       "digest": "sha256:...",
       "activatedAt": "...",
-      "cfcPromptRole": "context",
+      "cfcPromptRole": "quote",
       "handleToken": "cfh:a:f4ecd",
       "acquisition": {
         "registryId": "owner/repo/slug",
