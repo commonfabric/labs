@@ -10,7 +10,6 @@
 
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
@@ -21,6 +20,12 @@ import {
 } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
