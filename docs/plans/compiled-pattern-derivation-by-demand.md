@@ -1,53 +1,26 @@
 # Derivation by demand on the compiled path: a design for the owner to rule on
 
-Second version, 2026-11-25. The first version was written against the build
-branch `claude/compiled-pattern-scoped-rows` at `a04632cb2c`. This one takes in
-the measuring round (round thirty-four, branch
-`claude/compiled-pattern-derivation-split` at `6743be8f25`, notes 1190 to 1207
-of `base/pattern-compiler/SPEC-NOTES.md` there). Nothing in it is built beyond
-that round's instruments, and nothing in it is a ruling. Paths are relative to
-the repository root. Whenever a statement is about a per-element construct
-(`map`, `filter`, another), it names the case: an array of references, an array
-of plain values held in place, or the result of another construct.
-
-## What changed since the first version
-
-The measuring round found the first version's second round not implementable as
-written and its cost premise wrong. I checked each of its seven points against
-the code and accept all seven; where I add to one, the section says so.
-
-- **The problem is restated.** A create evaluates the shared part once at every
-  number of sessions (31 entries) and writes 74 to 88 shared documents at every
-  number of sessions and topics. What multiplies with the sessions is
-  transactions (4, 18, 31 and 114 at 1, 3, 5 and 9 sessions), failed commits
-  (0, 4, 10 and 35) and the labels a session's run leaves on shared documents.
-  Sections 1 and 4 are stated on those.
-- **The `wish` action is outside the split** and is now decided (section 3.3,
-  question 7). 156 of 228 crossed clauses are in documents it wrote.
-- **The plan's scope does not reach the executor,** and misses two static rules
-  (section 3.1). Until it does, the refused read is how every scoped cone
-  instance is found, and the probing evaluations stay.
-- **The scoped action stays an effect** and keeps P355's
-  `resetNarrowestReadScope`. The first version removed both; that was wrong
-  (section 3.2).
-- **Three rules are added:** for an instance a scoped cone makes (section 3.1),
-  for what a handler's transaction may write (L1 is a rule for derivations,
-  section 3.3), and for the load, which is under the refusal from the first
-  implementation round (section 3.1).
-- **Dropping a departed key's state** is triggered by the demand pass and needs
-  no run (section 3.2).
-- **The rounds are reordered.** The first implementation round is now the
-  refusal under the load alone. Each round names the measured number it must
-  move (section 6).
-- **Two scaling findings the design does not address** are named in section 8:
-  the bytes and the time of a create grow with the topics held.
+Written 2026-11-25 against the build branch
+`claude/compiled-pattern-scoped-rows` at `a04632cb2c` and the measuring round
+(round thirty-four, branch `claude/compiled-pattern-derivation-split` at
+`6743be8f25`, notes 1190 to 1207 of `base/pattern-compiler/SPEC-NOTES.md`
+there). Nothing in it is built beyond that round's instruments, and nothing in
+it is a ruling. Paths are relative to the repository root. Whenever a statement
+is about a per-element construct (`map`, `filter`, another), it names the case:
+an array of references, an array of plain values held in place, or the result
+of another construct.
 
 ## 1. What this decides
 
-A compiled piece is derived today by one scheduler action that the serving loop
-runs once for each session that demands the piece. Each run is one transaction
-stamped with that session's identity, and it is allowed to write anything the
-piece owns. Measured on the real Topics board (note 1198):
+A compiled piece is derived today by one scheduler action, which the scheduler
+fans out as it does any action of today's path: one run keyed `space` until a
+run read something scoped, then one run per demanding principal where the
+narrowest scope read is `user`, or per demanding session where it is `session`
+(section 2.2). A piece that has named a document of a scope raises its
+narrowest read scope to that scope (section 2.1), so a piece with a
+`session`-scoped document, as the board is, runs once for each session that
+demands it. Each run is one transaction stamped with its fan-out instance's
+identity, and it is allowed to write anything the piece owns. Measured on the real Topics board (note 1198):
 
 - The first run of a pass evaluates the shared part and the later runs find it
   current, so the shared evaluations do not multiply. The **transactions** do,
@@ -71,16 +44,19 @@ The design replaces the one action by two.
 2. A **scoped derivation**: one transaction per demanding scope key, behind the
    space derivation's commit, which derives only the scoped places whose
    documents that key's sessions watch, and writes only documents at its own
-   scope key.
+   scope key or at the `user` key of that key's principal.
 
 The partition between the two is found from what an evaluation read, as today's
 path finds it, with the plan's static scopes used where the plan has them.
 Demand comes from the registry the serving loop already keeps
 (`SpaceServer.#demandersByKey`). The labels follow from one rule a store dump
 can check: **a transaction of a compiled derivation writes only documents at
-the scope key it runs for**. The built-ins' own actions, the `wish` first, are
-actions of today's path and are held to that rule by the fix on `main`
-(#10262), not by the split.
+the scope key it runs for, and a keyed run may also write at the `user` key of
+its key's principal** (L1, section 3.3). The built-ins' own actions, the `wish` first, are
+actions of today's path and outside the split, and L1 is not a rule for them.
+#10262 on `main` changes which fan-out instances a cause reaches as a trigger
+read; it enforces nothing about where an action writes (section 3.3, question
+7).
 
 This is what `docs/specs/compiled-pattern-language/scheduler-and-serving-loop.md`
 §4 and §10.3 and `execution-and-storage.md` §1.8 describe. The design is the
@@ -176,8 +152,13 @@ note; I checked the names), **[search]** (a read-only search agent read it),
 ### 2.2 Today's path, as far as the design uses it
 
 - The memory server reports one row per demanded document and scope key, with
-  the demanding principal and session and the piece root
-  (`Server.demandForSpace`). **[search]** On the board, a session that holds
+  the demanding principal and session, whether the row is a watch root, and
+  whether its document is one of a piece's values (`Server.demandForSpace`,
+  `DemandedInstanceRow` in `runtime/memory/v2/server.ts`). The row does not
+  name the piece root the document belongs to: the serving loop resolves it and
+  keeps two indexes, `#keysByRootId` (the keys whose id is that root) and
+  `#keysByResolvedRoot` (the keys resolved to a root, and to the roots of the
+  pieces enclosing it). **[search; the type and the indexes read]** On the board, a session that holds
   the rendered tree as a renderer does demands 54 shared documents and 6 scope
   instances at every size; a session with a sink on the whole result demands 22
   scope instances for each topic. **[r34: 1199, 1204]**
@@ -287,8 +268,8 @@ the cost is 257 withdrawn evaluations. With source 1 and its two rules, six
 remain for the refusal, all of one pattern. A scope only narrows.
 
 *The alternative: a static partition only.* The compiler refuses, or plans as
-scoped, every read whose scope it cannot show. The measurement speaks for it
-more than the first version did: the two rules leave 6 of 257. It still fails
+scoped, every read whose scope it cannot show. The measurement speaks for it:
+the two rules leave 6 of 257. It still fails
 for those six and for any read through a link in data, and it differs from
 today's discovered scope. I keep the recommendation: static where the plan
 knows, the refusal otherwise, and the refusal always on, so that a wrong static
@@ -318,7 +299,7 @@ scope cannot let a scoped read through.
   (P492). The space derivation behind the batch makes the first derivation of
   its shared part. No session's part is derived at the create.
   `settleMade()` as a transaction of its own and `#madePending` go.
-- *An instance a scoped cone makes.* New in this version. Two cases.
+- *An instance a scoped cone makes.* Two cases.
   - The instantiation is shared and only its argument holds scoped values
     (`<Row name={perUserValue} />`): the scoped value is a hoisted cone, the
     argument holds the reference, and the instance is of the space. Nothing new
@@ -348,8 +329,7 @@ collection below a row each have their own. Demand per kept path (S&SL §4.2) is
 left out, because the document is what the registry holds.
 
 **The scoped action.** `CompiledPiece.#deriveScoped`, registered with the
-`observationIdentity` of the piece, **as an effect**. The first version said
-"not an effect"; the measuring round is right that such an action carries no
+`observationIdentity` of the piece, **as an effect**. An action that is not an effect carries no
 demand (`isDemandRoot`) and would not run. As an effect it is always live, the
 run supply gives it one run per demander of the piece root, and each run asks
 what its key demands. A run whose key demands nothing derives nothing and writes
@@ -367,7 +347,11 @@ demand code:
 
 - A resolver the `SpaceServer` installs beside `runDemanderResolver`: for a
   piece root and one (principal, session), the documents under that root the
-  pair demands. `#demandersByKey` and `#keysByRootId` hold what it needs.
+  pair demands. It reads `#demandersByKey` through both root indexes,
+  `#keysByRootId` and `#keysByResolvedRoot`, as `#demandersFor` does: the keys
+  that name the root and the keys resolved to it, which include the keys of
+  pieces nested in it. With the direct index alone, a piece nested in a
+  watched piece would have no demanded document and would stay underived.
 - A callback from the demand pass to a compiled piece: where a key that arrives
   or departs lies under the piece's root, the pass tells the piece the pair and
   which. On an arrival the piece dirties `#deriveScoped` for that key
@@ -393,13 +377,13 @@ key with demand elsewhere in the piece, a change that reaches such a place marks
 it due and nothing more. This holds alike for the place of a row over an array
 of references, over plain values in place, and over another construct's result.
 
-**A session no client holds, and the trigger for dropping its state.** New in
-this version. A session produces demand rows until the memory server prunes it,
+**A session no client holds, and the trigger for dropping its state.** A
+session produces demand rows until the memory server prunes it,
 30 seconds after it disconnects and then at the next read of the registry, and
 nobody is told. The serving loop sees the keys gone at the next demand pass that
-another cause starts. The first version dropped a key's state "when the fan-out
-prunes its key", which needs a run of the action that nothing causes. The
-trigger is instead the demand pass's callback above: when `#retireDemandKey`
+another cause starts. Dropping a key's state when the fan-out prunes its key
+would need a run of the action that nothing causes. The trigger is instead the
+demand pass's callback above: when `#retireDemandKey`
 retires the pair's last key under the piece's root, the piece drops that pair's
 memo entries, set-aside tables, copies of scoped documents, due marks and
 counts, in memory, with no transaction. Due marks are kept per key with demand
@@ -457,13 +441,13 @@ read carries it. *Check:* `crossed-clause`. The split removes the source
 compiled transaction wrote or the 30 that follow from them
 (`read-labeled-instance`): those come from the `wish` action.
 
-**The `wish` action.** New in this version. The runtime's `wish` runs as an
+**The `wish` action.** The runtime's `wish` runs as an
 action of today's path, fanned out per demander, and a change to one
 principal's home or profile, a document of the scope `space` in another space,
 is handed to every instance's run as a trigger read. That is the crossing on
-`main`, and the compiled piece inherits it through this action. The first
-version's sentence that the compiled path gets the trigger rule "by
-construction" holds for the piece's own actions and not for this one. Two ways
+`main`, and the compiled piece inherits it through this action. The
+compiled path gets the trigger rule by construction for the piece's own
+actions and not for this one. Two ways
 to close it:
 
 - *(a) Depend on #10262.* The `wish` stays the runtime's action. With #10262 a
@@ -771,8 +755,8 @@ The rest.
 - That removing the whole resume brings the first edit after a restart to
   2.3 s.
 - The classification of each label rule against the specification's text.
-- The first version's five other open points are answered by notes 1200 to
-  1204 and are in section 2; I read the code for `isDemandRoot`, the fan-out,
+- Notes 1200 to 1204 are the source of the remaining statements of section 2;
+  I read the code for `isDemandRoot`, the fan-out,
   P355's reset, the `wish` registration, the observer the serving host installs
   and the session time to live, and took the rest from the round's notes.
 - No experiment was run for this document.

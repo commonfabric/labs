@@ -821,14 +821,14 @@ after round 34 measured it; nothing in it is a ruling, and its recommended
 answers are the working assumption. Round 34's numbers, on the corpus and
 the real Topics board with two principals:
 
-- A create evaluates the shared part once (31 evaluations) and writes 72 to
+- A create evaluates the shared part once (31 evaluations) and writes 74 to
   88 shared documents at every session count and from 0 to 40 topics.
   Transactions per create are 4, 18, 31, 114 at 1, 3, 5, 9 sessions held,
   with 0, 4, 10, 35 failed commits.
 - 182 of 187 `foreign-clause` findings sit where a keyed derivation wrote
-  into a document of the space; 544 of the 604 uncovered keyed writes are
-  bookkeeping. The other five are a handler writing event input into a
-  per-user cell (Z100's case).
+  into a document of the space; the other five of the 187 are a handler
+  writing event input into a per-user cell (Z100's case). Of the 604 keyed
+  writes that no plan record covers, 544 are bookkeeping.
 - 156 of 228 `crossed-clause` findings are in documents no compiled
   transaction wrote; the traced ones are the `wish` action
   (`compiled/wish.ts`), a fanned-out action of today's path, so they wait on
@@ -836,7 +836,7 @@ the real Topics board with two principals:
 - The plan gives no scope to 106 of 257 cone instances found scoped; two
   static rules would cover 100.
 - A renderer-like session watches 6 scope instances at every size; a
-  watcher of the board's result 6 plus 22 per topic.
+  session with a sink on the board's whole result watches 22 per topic.
 - Not explained: with one session a create takes 4.3 s at 10 topics and 29 s
   at 40 and writes 130 kB at 0 topics against 871 kB at 40, with the
   document count flat. Times include the harness's clients.
