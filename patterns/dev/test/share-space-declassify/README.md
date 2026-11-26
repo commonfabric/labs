@@ -55,14 +55,17 @@ the server-execution serving loop, which is the `cf test` default.
    - The custody seal and `cf-share-snapshot` release one snapshot, through a
      host gesture.
 
-   Berni's direction (top/3599, 2026-11-25): the owner, `User(A)`, reclassifies
-   their own data to `anyOf(User(A), PolicyOf<rules>)`, from a handler attached
-   to a trusted gesture. Under that label the policy's rules must add readers
-   (`addAlternatives`), not drop the clause: `dropClause` removes only the
-   alternative it matched (§4.4.5), so `anyOf(User(A), P)` narrows back to
-   `User(A)` and releases nothing. This fixture's `locationRules` drops because
-   its source is `[PolicyOf<locationRules>]` alone, a custody shape in which
-   only the blessed output is ever readable.
+   Berni's direction (top/3599, comments 4 and 10): a pattern the owner
+   installed as trusted, `lift`s included and not only handlers, reads the
+   owner's `User(A)` data and derives new data labeled
+   `anyOf(User(A), PolicyOf<rules>)`. A confirming gesture is the pattern's own
+   optional choice: it may store one with integrity and gate on it. No grants,
+   and the connector's labels stay as they are. Under that label the policy's
+   rules must add readers (`addAlternatives`), not drop the clause: `dropClause`
+   removes only the alternative it matched (§4.4.5), so `anyOf(User(A), P)`
+   narrows back to `User(A)` and releases nothing. This fixture's
+   `locationRules` drops because its source is `[PolicyOf<locationRules>]`
+   alone, a custody shape in which only the blessed output is ever readable.
 3. **A pattern can name other people, but only at creation or by a gesture.**
    `inSpace()` grants take DIDs computed at run time, so one share space per
    person works (Robin's pairwise spaces). `grantSpaceAccess()` and
@@ -94,8 +97,8 @@ the server-execution serving loop, which is the `cf test` default.
    pattern language.
 
 6. **A `PolicyOf` atom in a SQLite row rule releases nothing.** Loom's
-   connectors label SQLite rows, so the connector change top/3599 proposes
-   (`anyOf(User{owner}, PolicyOf<rules>)` at ingest) goes through a row rule.
+   connectors label SQLite rows, so a connector writing
+   `anyOf(User{owner}, PolicyOf<rules>)` at ingest would go through a row rule.
    `sqlite.test.tsx` writes the compiled `PolicyOf<locationRules>` atom into row
    rules with `constant()`. A row whose rule names the policy alone, the same
    label that releases from a cell in `main.test.tsx`, is refused at the share
@@ -111,11 +114,10 @@ the server-execution serving loop, which is the `cf test` default.
    the row. A connector writing its label profile from outside the pattern
    language is in the same position, with no compiler to lower the atom at all.
 
-   The connector label change in loom therefore waits on two labs changes: a
-   policy whose reference a connector can write (a system policy with a pinned
-   digest and a concrete subject), and the row-label path resolving that
-   reference and loading its manifest. The test asserts today's behavior and
-   says at the assertion what to expect once both land.
+   Berni's direction (finding 2) leaves connector labels unchanged, so nothing
+   on the sharing path depends on this. It stays recorded because a row rule
+   that names a policy is silently inert, with no error. The test asserts
+   today's behavior.
 
 ## Runtime behavior found along the way
 
