@@ -3184,9 +3184,9 @@ run goes on, so that kind is never the run's `primaryFailure`.
 
 The `image-review` profile takes an ordered list of `imageOutputIds` from
 earlier `view_image` calls in the same run. Each ID names the exact pixels
-released by the sandbox and attached to the author's turn. Give the child a
-goal describing those frames. It receives them on its first turn, has no tools
-and returns prose in `subagent.summary`. The harness checks the child's
+released by the sandbox and attached to the author's turn. Give the child a goal
+describing those frames. It receives them on its first turn, has no tools and
+returns prose in `subagent.summary`. The harness checks the child's
 confidentiality against the author's prior observations and configured read
 ceiling before releasing the reply. An opaque or truncated image read supplies
 no frame. An image shown without a CFC receipt in observe or disabled mode is
