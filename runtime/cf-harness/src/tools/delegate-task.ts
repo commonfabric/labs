@@ -119,7 +119,7 @@ const delegateTaskDescriptor = (
               uniqueItems: true,
               items: { type: "string" },
               description:
-                "For image-review only. Supply the view_image output IDs from earlier turns in the order described in your goal. This reviewer sees those frames and has no tools.",
+                "Required for image-review. Supply distinct view_image output IDs from earlier turns in the order described in your goal. Omit patternRefs, returnSchema and skillHandle. The child sees the frames and your text, has no tools, and returns prose in subagent.summary.",
             },
           }
           : {}),

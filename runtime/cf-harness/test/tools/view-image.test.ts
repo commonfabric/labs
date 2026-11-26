@@ -200,6 +200,15 @@ describe("view-image", () => {
     }
   });
 
+  it("reports image validation errors for a released public stream", async () => {
+    await Deno.writeFile(join(workspace, "empty.png"), new Uint8Array());
+    const sandbox = new ScriptedSandbox([observedImageRead(new Uint8Array())]);
+    expect(errorOf(await view("empty.png", { sandbox }))).toMatchObject({
+      code: "unknown",
+      detail: "path is empty",
+    });
+  });
+
   it("reports public file status and withholds a labeled error", async () => {
     for (
       const { label, expected } of [

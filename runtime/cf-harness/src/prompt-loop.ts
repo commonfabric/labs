@@ -1036,7 +1036,7 @@ type ParsedDelegateTaskInput =
 
 const parseDelegateTaskInput = (
   input: Record<string, unknown>,
-  reviewFrames: ReadonlyMap<string, HarnessImageAttachment>,
+  reviewFrames: Readonly<Record<string, HarnessImageAttachment>>,
 ): ParsedDelegateTaskInput => {
   if (typeof input.goal !== "string" || input.goal.trim().length === 0) {
     return {
@@ -1121,7 +1121,7 @@ const parseDelegateTaskInput = (
       !Array.isArray(input.imageOutputIds) ||
       input.imageOutputIds.length === 0 ||
       !input.imageOutputIds.every((id): id is string =>
-        typeof id === "string" && reviewFrames.has(id)
+        typeof id === "string" && Object.hasOwn(reviewFrames, id)
       ) ||
       new Set(input.imageOutputIds).size !== input.imageOutputIds.length
     ) {
@@ -3249,7 +3249,6 @@ export class CfHarnessPromptLoop {
    * one turn are numbered in that order rather than the order the model wrote
    * them; the run's subagent refs pair each child with its parent tool call.
    */
-  readonly #reviewFrames = new Map<string, HarnessImageAttachment>();
   #lastReservedSubagentSequence = 0;
 
   /**
@@ -4428,6 +4427,7 @@ export class CfHarnessPromptLoop {
           break;
         }
         const followupMessages: HarnessTranscriptMessage[] = [];
+        const observedFrames: Record<string, HarnessImageAttachment> = {};
         const pendingCfcModelContextObservations:
           HarnessCfcModelContextObservationInput[] = [];
         options.signal?.throwIfAborted();
@@ -4544,7 +4544,7 @@ export class CfHarnessPromptLoop {
           }
           if (invokedToolCall.reviewFrame !== undefined) {
             const { outputId, attachment } = invokedToolCall.reviewFrame;
-            this.#reviewFrames.set(outputId, attachment);
+            observedFrames[outputId] = attachment;
           }
           const observations = invokedToolCall.cfcModelContextObservations;
           if (observations !== undefined) {
@@ -4570,6 +4570,7 @@ export class CfHarnessPromptLoop {
         if (pendingCfcModelContextObservations.length > 0) {
           await this.engine.recordCfcModelContextObservations(
             pendingCfcModelContextObservations,
+            Object.keys(observedFrames).length > 0 ? observedFrames : undefined,
           );
         }
         options.signal?.throwIfAborted();
@@ -5279,7 +5280,7 @@ export class CfHarnessPromptLoop {
     if (toolId === "delegate_task") {
       const parsedDelegateInput = parseDelegateTaskInput(
         input,
-        this.#reviewFrames,
+        this.engine.getRunState().observedImageFrames ?? {},
       );
       if ("invalid" in parsedDelegateInput) {
         return await this.#rejectInvalidToolCall({
@@ -6687,7 +6688,7 @@ export class CfHarnessPromptLoop {
         ),
         ...(delegateInput.imageOutputIds === undefined ? {} : {
           imageAttachments: delegateInput.imageOutputIds.map((id) =>
-            this.#reviewFrames.get(id)!
+            parentRunState.observedImageFrames![id]
           ),
         }),
         contextMessages: childSkillContextMessages,

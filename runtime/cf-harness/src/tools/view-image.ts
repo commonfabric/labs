@@ -239,8 +239,21 @@ export const viewImageTool: HarnessToolDefinition<
         ...(sourceLabel === undefined ? {} : { sourceLabel }),
       };
     } catch (error) {
-      if (sourceLabel !== undefined) return withheld();
       const detail = describeFailure(error);
+      if (sourceLabel !== undefined) {
+        if (sourceLabel.confidentiality?.length) return withheld();
+        const problem = [
+          "path is empty",
+          "path is too large",
+          "not a supported image type",
+        ].find((reason) => detail.includes(reason));
+        if (problem === undefined) return withheld();
+        return createStructuredFileToolErrorOutput(context, "view_image", {
+          path: resolvedPath,
+          code: "unknown",
+          detail: problem,
+        });
+      }
       return createStructuredFileToolErrorOutput(context, "view_image", {
         path: resolvedPath,
         code: detail.includes("not a file")

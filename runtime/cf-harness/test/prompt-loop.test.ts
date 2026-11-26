@@ -12713,6 +12713,28 @@ test("image-review returns prose with only the author's previously observed fram
       summary: finding,
       manifest: { allowedToolIds: [] },
     });
+    const resumed = new CfHarnessPromptLoop({
+      engine: new CfHarnessEngine({
+        runState: result.runState,
+        sandboxRuntime: new FakeSandboxRuntime(),
+        workspaceHostPath: workspace,
+      }),
+      allowedSubagentProfiles: ["image-review"],
+      modelClient: scriptedModelClient([delegate({ imageOutputIds: [frame] }), {
+        role: "assistant",
+        content: finding,
+      }]),
+    });
+    const continued = await resumed.runPrompt({
+      prompt: "Review the same frame again.",
+      promptSlotBinding: directPromptSlotBinding,
+    });
+    const reply = continued.transcript.find((m) =>
+      m.role === "tool" && m.toolName === "delegate_task"
+    );
+    expect(JSON.parse(reply?.content ?? "{}")).toMatchObject({
+      subagent: { summary: finding },
+    });
   } finally {
     await Deno.remove(workspace, { recursive: true });
   }
