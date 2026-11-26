@@ -189,6 +189,7 @@ export const localJobSpecOf = async (
       ? { imageAttachments: runRequest.imageAttachments }
       : {}),
     taskRole: profile.taskRole,
+    ...(profile.taskDelivery ? { taskDelivery: profile.taskDelivery } : {}),
     resultSchema: request.resultSchema as HarnessJobSpec["resultSchema"],
     tools: [
       ...new Set([
