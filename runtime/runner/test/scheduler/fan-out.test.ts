@@ -103,13 +103,5 @@ describe("fan-out", () => {
       dirtyFanOutForCause(state, documentAt("shared"));
       expect([...state.clean]).toEqual([]);
     });
-
-    it("dirties every instance that holds no record of its reads for a cause that names no instance", () => {
-      const state = cleanNode();
-
-      dirtyFanOutForCause(state, { ...documentAt("any"), scope: "space" });
-
-      expect([...state.clean]).toEqual([]);
-    });
   });
 });

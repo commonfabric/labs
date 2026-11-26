@@ -361,30 +361,37 @@ export interface MarkInvalidOptions {
  * instances whose latest run read its document, and only their next runs
  * take it as a trigger read; no cause at all dirties every instance. A
  * caller that says `keep` dirties none, with a cause or without one.
+ *
+ * Returns whether the node was invalidated. A cause for a document that no
+ * instance of a fanned-out node is recorded to have read, arriving while no
+ * run of the node is under way, concerns no instance: it is not recorded,
+ * and the node is left as it was, so that it starts no run and moves the
+ * time of none.
  */
 export function markInvalid(
   nodes: NodeRegistry,
   action: Action,
   cause?: IMemorySpaceAddress,
   options: MarkInvalidOptions = {},
-): void {
+): boolean {
   const record = nodes.get(action);
-  if (!record) return;
+  if (!record) return false;
+  if (record.fanOut !== undefined && options.fanOutInstances !== "keep") {
+    if (cause === undefined) {
+      dirtyFanOutAll(record.fanOut);
+    } else if (!dirtyFanOutForCause(record.fanOut, cause)) {
+      return false;
+    }
+  }
   if (cause !== undefined) {
     addInvalidCause(record, cause);
-  }
-  if (record.fanOut !== undefined && options.fanOutInstances !== "keep") {
-    if (cause !== undefined) {
-      dirtyFanOutForCause(record.fanOut, cause);
-    } else {
-      dirtyFanOutAll(record.fanOut);
-    }
   }
   // Status transition goes through the registry so the invalid-node index
   // stays in lockstep; never-ran nodes keep their status (already indexed).
   if (record.status === "clean" || record.status === "unavailable") {
     nodes.setStatus(action, "invalid");
   }
+  return true;
 }
 
 /**
@@ -412,6 +419,26 @@ export function takeInvalidCauses(
   const causes = [...record.invalidCauses.values()];
   record.invalidCauses.clear();
   return causes;
+}
+
+/**
+ * The causes a run that starts now was scheduled by: `taken`, which the pass
+ * it runs in took when it began, and those recorded since, which stay
+ * recorded for the pass they queued. A fanned-out node's pass runs one
+ * instance after another, and a cause that arrives during one instance's run
+ * can be what makes a later one in the same pass run.
+ */
+export function invalidCausesSoFar(
+  record: SchedulerNode | undefined,
+  taken: readonly IMemorySpaceAddress[] | undefined,
+): readonly IMemorySpaceAddress[] | undefined {
+  if (record === undefined || record.invalidCauses.size === 0) return taken;
+  if (taken === undefined) return [...record.invalidCauses.values()];
+  const causes = new Map(taken.map((cause) => [invalidCauseKey(cause), cause]));
+  for (const [key, cause] of record.invalidCauses) {
+    if (!causes.has(key)) causes.set(key, cause);
+  }
+  return [...causes.values()];
 }
 
 /**

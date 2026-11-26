@@ -133,7 +133,12 @@ import {
   type SettlingTracker,
   summarizeNonSettlingWindow,
 } from "./execution.ts";
-import { dirtyFanOutKey, fanOutInstances, keyAtRatchet } from "./fan-out.ts";
+import {
+  dirtyFanOutKey,
+  fanOutInstances,
+  keyAtRatchet,
+  oweFanOutRuns,
+} from "./fan-out.ts";
 import { SchedulerGates } from "./gates.ts";
 import {
   buildSchedulerGraphSnapshot,
@@ -1425,6 +1430,8 @@ export class Scheduler {
       if (record.fanOut === undefined) {
         if (record.status === "never-ran") continue;
       } else if (!record.fanOut.narrowed) continue;
+      // Demand arrived: an instance that was given up runs for it as well.
+      if (record.fanOut !== undefined) oweFanOutRuns(record.fanOut);
       this.#markActionInvalid(record.action, undefined, {
         fanOutInstances: "keep",
       });
@@ -1554,6 +1561,7 @@ export class Scheduler {
       // Current for the actor: her instance ran at the ratchet and no
       // cause dirtied it — nothing to materialize.
       if (record.fanOut.clean.has(actorKey)) continue;
+      oweFanOutRuns(record.fanOut, [actorKey]);
       this.#markActionInvalid(writer, undefined, { fanOutInstances: "keep" });
       this.#pending.add(writer);
       rearmed.push(writer);
@@ -1807,6 +1815,7 @@ export class Scheduler {
       const pairKey = keyAtRatchet(fanOut, demander);
       if (pairKey === undefined) continue;
       if (fanOut.clean.has(pairKey)) continue;
+      oweFanOutRuns(fanOut, [pairKey]);
       this.#markActionInvalid(writer, undefined, { fanOutInstances: "keep" });
       this.#pending.add(writer);
       rearmed += 1;
@@ -4204,17 +4213,19 @@ export class Scheduler {
     action: Action,
     cause?: IMemorySpaceAddress,
     options?: MarkInvalidOptions,
-  ): void {
+  ): boolean {
     const record = this.#nodes.get(action);
-    if (!record) return;
-    markInvalidRecord(this.#nodes, action, cause, options);
+    if (!record) return false;
+    // A cause that concerns no instance of a fanned-out node leaves the node
+    // as it was: its gates are not re-armed, and nothing is queued for it.
+    if (!markInvalidRecord(this.#nodes, action, cause, options)) return false;
     // A scheduler-owed retry (`options.retry`: a refused run re-queued after
     // its catch-up, or an empty rejection without an accepted result or live
     // demander) is not an input change — it runs past the node's
     // freshness gates, and any armed readiness is released (§8.3).
     if (options?.retry) {
       this.#gates.releaseForRetry(action);
-      return;
+      return true;
     }
     // Trailing computation debounce re-arms when no retry is owed
     // (§8.1: debounceReadyAt resets while gated). Arming here — in the one
@@ -4227,6 +4238,7 @@ export class Scheduler {
         this.#createDebouncedComputationContext(),
       );
     }
+    return true;
   }
 
   #clearInvalidAction(action: Action): void {
@@ -4243,7 +4255,7 @@ export class Scheduler {
     cause?: IMemorySpaceAddress,
     options?: Pick<MarkInvalidOptions, "retry" | "fanOutInstances">,
   ): void {
-    this.#markActionInvalid(action, cause, options);
+    if (!this.#markActionInvalid(action, cause, options)) return;
 
     if (
       this.#nodes.effects.has(action) &&

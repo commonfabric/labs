@@ -65,6 +65,8 @@ import {
   fanOutInstances,
   fanOutInstancesToRun,
   type FanOutNodeState,
+  fanOutRunAborted,
+  fanOutRunEnded,
   fanOutRunFinished,
   fanOutRunOpened,
   fanOutRunStarted,
@@ -77,6 +79,7 @@ import {
 } from "./fan-out.ts";
 import {
   addInvalidCause,
+  invalidCausesSoFar,
   type MarkInvalidOptions,
   restoreInvalidCauses,
   takeInvalidCauses,
@@ -977,10 +980,14 @@ export async function runSchedulerAction(
       const instance = toRun[0];
       const startGen = fanOutRunStarted(fanOut, instance);
       const triggers = takeFanOutTriggers(fanOut, instance.key);
-      const causes = invalidCauses === undefined
+      // A cause that arrived during an earlier instance's run of this pass
+      // can be what this instance runs for.
+      const scheduledBy = invalidCausesSoFar(record, invalidCauses);
+      const causes = scheduledBy === undefined
         ? undefined
-        : causesForInstance(invalidCauses, instance, triggers);
+        : causesForInstance(scheduledBy, instance, triggers);
       const outcome = await runOnce(instance, causes, startGen);
+      fanOutRunEnded(fanOut, instance);
       lastResult = outcome.result;
       ran = true;
       if (outcome.retryImmediately) deferred.add(instance.key);
@@ -1063,6 +1070,7 @@ function parkUnavailableRun(state: SchedulerActionRunState, args: {
   tx: IExtendedStorageTransaction;
   registrationIsCurrent: () => boolean;
   resolve: (value: unknown) => void;
+  fanOutRun?: FanOutRunArgs;
 }): boolean {
   if (usesLocalReads(args.tx) && !args.registrationIsCurrent()) {
     if (args.tx.status().status === "ready") {
@@ -1087,6 +1095,11 @@ function parkUnavailableRun(state: SchedulerActionRunState, args: {
       return true;
     }
     state.pending.delete(args.action);
+    // A change to what the parked run of a fanned-out instance read, the
+    // unavailable document included, is what runs that instance again.
+    if (args.fanOutRun !== undefined) {
+      fanOutRunAborted(args.fanOutRun.state, args.fanOutRun.instance, log);
+    }
     state.parkLocalRead?.(args.action, log);
     state.nodes.setStatus(args.action, "unavailable");
     // Subscribe first, then recheck: delivery may have arrived during an await
@@ -1211,6 +1224,15 @@ function rescheduleActionForImmediateRetry(
     readonly fanOutRun?: FanOutRunArgs;
   },
 ): void {
+  // What the aborted run of a fanned-out instance read is what a change has
+  // to reach to run the instance again once its retries are spent.
+  if (args.fanOutRun !== undefined) {
+    fanOutRunAborted(
+      args.fanOutRun.state,
+      args.fanOutRun.instance,
+      txToReactivityLog(args.tx),
+    );
+  }
   if (args.tx.status().status === "ready") args.tx.abort(args.error);
   // A fanned-out instance's aborted run is DEFERRED for the rest of the
   // calling pass — in both branches below (independent review F1): its
@@ -1252,9 +1274,11 @@ function rescheduleActionForImmediateRetry(
   } else {
     // WATCH(scheduler-v2): exhausted retries can leave a piece registered
     // against rolled-back data (accepted zombie — spec §15 decision 9).
-    // A fanned-out instance's exhausted key stays non-clean and unqueued:
-    // it runs again on the node's next real invalidation, with a fresh
-    // budget — the same "until its input data changes" shape as OFF's.
+    // A fanned-out instance's exhausted key stays non-clean, unqueued and
+    // owed no run: it runs again, with a fresh budget, on a change to a
+    // document it read, on an invalidation that names no cause, or on
+    // demand — the same "until its input data changes" shape as OFF's. A
+    // change to a document only a sibling instance read does not start it.
     state.retries.delete(args.action);
     abandonAction({
       action: args.action,
