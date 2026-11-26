@@ -63,7 +63,24 @@ const ENTRY_KEYS = new Set([
 // A date alone, or a time with no offset, would be read in whatever zone the
 // host runs in, so a review's expiry names its zone.
 const ISO_TIME_WITH_OFFSET =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-](\d{2}):(\d{2}))$/;
+
+/**
+ * Whether `text` is an ISO 8601 time with an offset whose every field is in
+ * range. `Date.parse` alone rolls an out-of-range day over into the next
+ * month, which would keep a mistyped review live past the date its author
+ * wrote.
+ */
+const isIsoTimeWithOffset = (text: string): boolean => {
+  const match = ISO_TIME_WITH_OFFSET.exec(text);
+  if (match === null) return false;
+  const [year, month, day, hour, minute, second, offsetHour, offsetMinute] =
+    match.slice(1).map((field) => field === undefined ? 0 : Number(field));
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth &&
+    hour <= 23 && minute <= 59 && second <= 59 && offsetHour <= 23 &&
+    offsetMinute <= 59;
+};
 
 const fail = (message: string): never => {
   throw new Error(`reviewed skills: ${message}`);
@@ -110,7 +127,7 @@ export const parseHarnessReviewedSkills = (
         : requireString(raw.validUntil, `${where}.validUntil`);
       if (
         validUntil !== undefined &&
-        (!ISO_TIME_WITH_OFFSET.test(validUntil) ||
+        (!isIsoTimeWithOffset(validUntil) ||
           Number.isNaN(Date.parse(validUntil)))
       ) {
         fail(`${where}.validUntil is not an ISO 8601 time with an offset`);

@@ -567,8 +567,9 @@ export interface HarnessSubagentRunManifest {
 
   /**
    * The review that let this child keep its parent's prompt-slot binding
-   * although it holds skill text from a handle. Absent when no review covered
-   * the skill, and the child ran as `quote`.
+   * although it holds skill text from a handle. Absent for a child given no
+   * skill through a handle, which keeps that binding without one, and for a
+   * child whose skill no review covered, which ran as `quote`.
    */
   reviewedSkill?: HarnessReviewedSkillEvidence;
   createdAt: string;

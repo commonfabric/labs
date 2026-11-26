@@ -124,6 +124,35 @@ describe("reviewed-skills", () => {
       );
     });
 
+    it("throws on an expiry whose day is not in its month", () => {
+      expect(() =>
+        parseHarnessReviewedSkills({
+          entries: [{
+            verifier: VERIFIER,
+            registryId: REGISTRY_ID,
+            bundleDigest: "sha256:abc",
+            validUntil: "2027-02-30T00:00:00.000Z",
+          }],
+          acceptedVerifiers: [],
+        })
+      ).toThrow(
+        "entries[0].validUntil is not an ISO 8601 time with an offset",
+      );
+    });
+
+    it("returns an expiry on the last day of a leap February", () => {
+      const parsed = parseHarnessReviewedSkills({
+        entries: [{
+          verifier: VERIFIER,
+          registryId: REGISTRY_ID,
+          bundleDigest: "sha256:abc",
+          validUntil: "2028-02-29T23:59:59+05:30",
+        }],
+        acceptedVerifiers: [],
+      });
+      expect(parsed.entries[0].validUntil).toBe("2028-02-29T23:59:59+05:30");
+    });
+
     it("throws when no verifiers are listed as accepted", () => {
       expect(() => parseHarnessReviewedSkills({ entries: [] })).toThrow(
         "acceptedVerifiers must be an array",

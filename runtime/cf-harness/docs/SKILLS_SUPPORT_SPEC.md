@@ -539,12 +539,13 @@ The exception is an acquired skill that an accepted review fully covers. A
 reviewed-skills file, passed with `--reviewed-skills`, lists reviewed bundles
 and the verifiers the run accepts. Each entry names a verifier, the skill's
 discovery id `owner/repo/slug`, and a bundle digest; it may name the commit the
-reviewer read as `reviewedCommit`, which is recorded and not matched. The bundle digest is taken
-over one line of `<path>\t<file digest>\n` per file, sorted by path, with
-`SKILL.md` and every acquired script listed, and digested the way acquisition
-digests a file. An entry may also name the review checklist it was read against
-and a `validUntil`, an ISO 8601 time with an offset. The file can revoke a bundle by listing its digest in
-`revoked`. A child keeps the delegating run's binding when all of these hold:
+reviewer read as `reviewedCommit`, which is recorded and not matched. The bundle
+digest is taken over one line of `<path>\t<file digest>\n` per file, sorted by
+path, with `SKILL.md` and every acquired script listed, and digested the way
+acquisition digests a file. An entry may also name the review checklist it was
+read against and a `validUntil`, an ISO 8601 time with an offset. The file can
+revoke a bundle by listing its digest in `revoked`. A child keeps the delegating
+run's binding when all of these hold:
 
 - the text its handle resolved to is the text acquisition digested;
 - its bundle's digest matches a live entry for the same skill id, compared
