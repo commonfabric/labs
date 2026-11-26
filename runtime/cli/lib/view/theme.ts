@@ -40,6 +40,10 @@ const C = {
   delBg: hex("#331c22"),
   // The green button face.
   button: hex("#4b9e5f"),
+  // A security key's metal plug and its contacts, and its green light.
+  metal: hex("#9ba5b3"),
+  contacts: hex("#4a5462"),
+  lightOn: hex("#59ff84"),
 } as const;
 
 /** The palette, for a view outside this package drawn to match this one. */
@@ -216,6 +220,21 @@ export const ui = {
 
   /** The mark of a step in the task dialog that ended without being done. */
   dialogFailed: { fg: C.red, bold: true } as Style,
+
+  /** The metal plug of the security key beside the task dialog. */
+  keyPlug: { fg: C.white, bg: C.metal } as Style,
+
+  /** The contacts inside the security key's plug. */
+  keyContacts: { fg: C.contacts, bg: C.metal } as Style,
+
+  /** The color of the security key's touch pad. */
+  keyPad: { fg: C.yellow } as Style,
+
+  /** The security key's light while it blinks on, waiting for a touch. */
+  keyLightOn: { fg: C.lightOn } as Style,
+
+  /** The security key's light once it has been touched. */
+  keyLightTouched: { fg: C.blue } as Style,
 
   /** A Turbo Vision push-button: dark text on a green face. */
   button: { fg: C.ink, bg: C.button } as Style,

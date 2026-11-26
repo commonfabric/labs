@@ -1053,15 +1053,23 @@ out merges and commits whose changes that branch already has.
 - "Use touch-gate and a security key": the viewer asks a touch-gate server to
   create the pull request with the token the settings name. The dialog asks for
   the named security key to be touched, as "Touch the “carthusian” security key
-  to create a PR.", and the server acts only once it is. As soon as the security
-  key is touched, that step is done, and the dialog shows a step that sends the
-  server the approval. When a security key fails, the summary says what
-  libfido2's error means, as "the security key stopped answering", followed by
-  the tool and the error's name, or else gives what the tool printed. The
-  server's address, its certificate, the secret its clients share, and the
-  registered security keys come from `~/.config/touch-gate`, as the touch-gate
-  project's client keeps them, and the viewer talks to the security key through
-  libfido2's `fido2-token` and `fido2-assert` tools.
+  to create a PR.", and the server acts only once it is. While it asks, a
+  drawing of a security key with a yellow touch pad comes in from past the right
+  edge of the screen and plugs into the dialog's right side, speeding up as it
+  goes and taking 350 milliseconds, and then the green light along the key's top
+  and bottom edges blinks. On a terminal too narrow for the plugged-in key
+  beside the centered dialog, the dialog moves left, and narrows if it must, to
+  make room. A dialog too short to hold the key draws none. As soon as the
+  security key is touched, the light stops blinking and stays lit in blue, that
+  step is done, and the dialog shows a step that sends the server the approval.
+  If the step fails instead, the key is shown plugged in with its light out.
+  When a security key fails, the summary says what libfido2's error means, as
+  "the security key stopped answering", followed by the tool and the error's
+  name, or else gives what the tool printed. The server's address, its
+  certificate, the secret its clients share, and the registered security keys
+  come from `~/.config/touch-gate`, as the touch-gate project's client keeps
+  them, and the viewer talks to the security key through libfido2's
+  `fido2-token` and `fido2-assert` tools.
 
 When creating the pull request with the GitHub API or touch-gate fails, or is
 aborted, the dialog says what went wrong, and a Create PR button (`P`) tries
