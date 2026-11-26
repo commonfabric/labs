@@ -26,6 +26,11 @@ import {
   cfcPolicyManifestDocId,
 } from "../src/cfc/policy.ts";
 import type { ImplementationIdentity } from "../src/cfc/types.ts";
+import {
+  atomsOutsideCeiling,
+  createRenderConfidentialityResolver,
+} from "../src/cfc/mod.ts";
+import { createRuntimeCfcModulePolicySource } from "../src/cfc/policy-resolver.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -473,6 +478,70 @@ describe("cfc-reclassify", () => {
       expect(installed.get()).toMatchObject({
         policyDigest: policy.policyDigest,
       });
+    });
+    // Reduced repro from the two-browser share test
+    // (patterns/integration/share-space-reclassify-two-browsers.test.ts),
+    // pinning a gap rather than the goal. What the reclassification is for is
+    // a reader of the share space seeing the released value at their display.
+    // The owner's secret is in the owner's space and the share elsewhere, so
+    // the flow join is cross-space, and label-metadata protection commits
+    // every subject on the stamped label, the policy's own included, although
+    // the reclassification minted that one for the target's own space. The
+    // display resolver never opens a committed subject (`render-ceiling.ts`,
+    // `membershipSpacesInConfidentiality`), so it mints no
+    // `HasRole(reader, elsewhere)`, and the value stays sealed for every
+    // reader but the owner. The same label with plaintext subjects releases.
+    it("keeps a value placed elsewhere sealed at a reader's display, its policy subject committed", async () => {
+      const client = connect(alice);
+      const elsewhere = bob.did();
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+
+      const { shared } = await sharePiece(client, source, elsewhere);
+
+      const stored = storedConfidentiality(client, shared) as never[];
+      const policy = (stored as {
+        anyOf?: { type: string; policyDigest?: string }[];
+      }[])
+        .flatMap((clause) => clause.anyOf ?? [])
+        .find((alternative) => alternative.type === CFC_ATOM_TYPE.Policy)!;
+      const installed = client.getCellFromEntityId(
+        elsewhere,
+        cfcPolicyManifestDocId(policy.policyDigest!),
+        [],
+      );
+      await installed.sync();
+      const reader = service.did();
+      const resolve = createRenderConfidentialityResolver({
+        actingPrincipal: reader,
+        membershipProvider: {
+          readerRole: (id) => id === elsewhere ? "reader" : null,
+          load: () => Promise.resolve(),
+          subscribe: () => () => {},
+        },
+        modulePolicyResolver: createRuntimeCfcModulePolicySource(client)
+          .resolve,
+      });
+      // The same label with its subjects in plaintext releases to the
+      // reader, so the commitment is the only difference.
+      const plaintext = JSON.parse(
+        JSON.stringify(stored),
+        (_key, value) =>
+          value?.type === CFC_ATOM_TYPE.Policy
+            ? { ...value, subject: elsewhere }
+            : value?.type === CFC_ATOM_TYPE.User
+            ? { ...value, subject: alice.did() }
+            : value,
+      );
+      expect(atomsOutsideCeiling(
+        resolve({ confidentiality: plaintext, spaces: () => [elsewhere] }),
+        [cfcAtom.user(reader)],
+      )).toEqual([]);
+      const resolved = resolve({
+        confidentiality: stored,
+        spaces: () => [elsewhere],
+      });
+      expect(atomsOutsideCeiling(resolved, [cfcAtom.user(reader)]))
+        .not.toEqual([]);
     });
   });
 

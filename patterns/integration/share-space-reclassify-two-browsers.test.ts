@@ -18,6 +18,16 @@
  * `EXPERIMENTAL_CFC_PATTERN_RECLASSIFICATION` both `true`, the reader sees
  * the window; otherwise the window stays the owner's alone and the reader sees
  * none of it. The owner sees the window and the source on either arm.
+ *
+ * The reclassifying arm fails today, at the reader's wait for the window. The
+ * window is stored as `anyOf(User(owner), PolicyOf<shareSpaceRules>)` as
+ * intended, but its flow join read the owner's fixes from the owner's space,
+ * so label-metadata protection stores both subjects as commitments, the
+ * policy's own included, and the reader's display cannot mint the
+ * `HasRole(reader, shareSpace)` fact the policy's rule needs: the reader sees
+ * "Content hidden by policy". `runtime/runner/test/cfc-reclassify.test.ts`
+ * ("keeps a value placed elsewhere sealed ...") is the reduced form. Run that
+ * arm by hand; continuous integration runs the other.
  */
 
 import { createTestSpace, env, type Page } from "@commonfabric/integration";
@@ -78,14 +88,17 @@ const screenshot = async (page: Page, name: string) => {
 /** Resolves once `cell` holds a value `ready` accepts. */
 const valueWhere = <T>(cell: Cell<T>, ready: (value: T) => boolean) =>
   new Promise<void>((resolve) => {
+    // The sink can call back before it returns its cancel, so the callback
+    // only marks the value seen and the cancel runs once both exist.
     let done = false;
-    let cancel: (() => void) | undefined;
-    cancel = cell.sink((value) => {
+    let subscribed = false;
+    const cancel: () => void = cell.sink((value) => {
       if (done || !ready(value)) return;
       done = true;
       resolve();
-      cancel?.();
+      if (subscribed) cancel();
     });
+    subscribed = true;
     if (done) cancel();
   });
 
@@ -191,6 +204,11 @@ describe(
       });
       await shareController.ensureDefaultPattern();
       const shareView = { spaceDid: shareSpace, pieceId: sharePieceId };
+      console.log(
+        `[share-two-browsers] owner=${owner.did()} reader=${reader.did()} ` +
+          `home=${homeController.getSpace()} share=${shareSpace} ` +
+          `piece=${sharePieceId}`,
+      );
 
       // The owner sees the window and the source on either arm, and
       // publishes the window.
@@ -226,6 +244,7 @@ describe(
         "#share-heading",
         "Shared location, last five minutes",
       );
+      await screenshot(readerPage, "reader-share-opened");
       if (RECLASSIFYING) {
         await waitForSettledText(readerPage, "#share-window", RECENT, {
           exact: true,
