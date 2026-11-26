@@ -219,6 +219,15 @@ export interface ManifestEntry {
    * same corpus with replacement forever.
    */
   lastRun?: string;
+
+  /**
+   * The last day, "yyyy-mm-dd", it is known to have failed on `main`, for
+   * whatever reason, or to have disagreed with itself anywhere. The share
+   * falls only as the test goes on running, so it does not say how lately
+   * the test failed; this does. Carried only for a test the manifest
+   * withholds as flaky.
+   */
+  lastFailure?: string;
 }
 
 /**
@@ -583,7 +592,7 @@ function parseInputs(value: unknown): ScoreInputs | undefined {
   ) {
     return undefined;
   }
-  if (value.lastCatch !== undefined && !isNonEmptyString(value.lastCatch)) {
+  if (value.lastCatch !== undefined && !isDay(value.lastCatch)) {
     return undefined;
   }
   const inputs: ScoreInputs = {
@@ -617,9 +626,7 @@ function parseEntry(value: unknown): ManifestEntry | undefined {
   ) {
     return undefined;
   }
-  if (value.lastRun !== undefined && !isNonEmptyString(value.lastRun)) {
-    return undefined;
-  }
+  if (value.lastRun !== undefined && !isDay(value.lastRun)) return undefined;
   const evidence = parseFlakeEvidence(value.flakeEvidence);
   if (value.flakeEvidence !== undefined && evidence === undefined) {
     return undefined;
@@ -638,6 +645,7 @@ function parseEntry(value: unknown): ManifestEntry | undefined {
   if (evidence !== undefined) entry.flakeEvidence = evidence;
   // Nothing selects by these, so one that does not read is dropped by
   // itself rather than refusing a manifest every lane obeys.
+  if (isDay(value.lastFailure)) entry.lastFailure = value.lastFailure;
   const disagreements = Array.isArray(value.disagreements)
     ? value.disagreements.map(parseDisagreement).filter((held) =>
       held !== undefined

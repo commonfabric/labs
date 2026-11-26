@@ -16,9 +16,10 @@ import type {
   CalibrationHealth,
   Manifest,
   ManifestEntry,
+  SeenRun,
   TestIdentity,
 } from "@commonfabric/test-support/records";
-import { FLAKY_TESTS_JSON_PATH } from "./flaky-tests-json.ts";
+import { FLAKY_TESTS_JSON_PATH, runUrl } from "./flaky-tests-json.ts";
 import { type LivePageContent, livePageResponse } from "./live-page.ts";
 import {
   compactSpan,
@@ -109,12 +110,15 @@ function identityCells(test: TestIdentity): string {
     `<td class="name">${escapeHtml(test.n)}${variant}</td>`;
 }
 
-/** One test named in a table, under the table's own measurement of it. */
+/** One test named in a table, under the table's own measurements of it. */
 interface TestRow {
   test: TestIdentity;
 
-  /** What the leading column says, absent where nothing measured it. */
-  measure?: string;
+  /**
+   * The leading columns' cells, as markup, one for each of the table's
+   * measures. Absent where nothing measured the test.
+   */
+  cells?: string[];
 }
 
 /** A section listing tests, or nothing at all when the list is empty. */
@@ -123,25 +127,27 @@ function testSection(section: {
   id?: string;
   lead: string;
 
-  /** The leading column's heading. */
-  measure: string;
+  /** The leading columns' headings. */
+  measures: string[];
 
   rows: TestRow[];
 }): string {
   if (section.rows.length === 0) return "";
-  // A row carrying no measurement leaves a gap in the table rather than
+  // A row carrying no measurements leaves a gap in the table rather than
   // shifting it.
+  const gap = section.measures.map(() => "—");
   const body = section.rows.map((row) =>
-    `<tr><td class="measure">${
-      escapeHtml(row.measure ?? "—")
-    }</td>${identityCells(row.test)}</tr>`
+    `<tr>${
+      (row.cells ?? gap).map((cell) => `<td class="measure">${cell}</td>`)
+        .join("")
+    }${identityCells(row.test)}</tr>`
   ).join("");
   const id = section.id === undefined ? "" : ` id="${section.id}"`;
+  const headings = [...section.measures, "kind", "member", "test"]
+    .map((heading) => `<th>${escapeHtml(heading)}</th>`).join("");
   return `<h2${id}>${escapeHtml(section.heading)} · ${section.rows.length}</h2>
   <p class="lead">${escapeHtml(section.lead)}</p>
-  <table><thead><tr><th>${
-    escapeHtml(section.measure)
-  }</th><th>kind</th><th>member</th><th>test</th></tr></thead><tbody>${body}</tbody></table>`;
+  <div class="scroll"><table><thead><tr>${headings}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 /**
@@ -174,15 +180,64 @@ function flakeLead(manifest: Manifest): string {
     `Past ${percent(exclusion)} a test is held back from pull requests, ` +
     "and the share falls again as it goes on running without disagreeing, " +
     "so the exclusion reverses on its own. The counts are flat, so they " +
-    "are not what the share divides.";
+    "are not what the share divides. " +
+    "Since the share falls only as the test goes on running, the next " +
+    "column says how lately it failed: the last day it failed on main, " +
+    "for whatever reason, or was seen disagreeing with itself anywhere. " +
+    "A failure on a pull request or a workstation counts only as part of " +
+    "a disagreement, since on its own it may be the change being worked " +
+    "on breaking the test. The one after says the last day anything ran " +
+    "it, which falls behind for a test the tree no longer holds. The " +
+    "newest flake is the failing run of the last time it was seen " +
+    "disagreeing with itself, linked to that run attempt on GitHub where " +
+    "it ran in continuous integration. A dash is a figure this manifest " +
+    "does not carry.";
 }
 
 /** The tests held back as flaky, worst-measured first. */
-function flakyRows(manifest: Manifest): TestRow[] {
+function flakyRows(manifest: Manifest, now: number): TestRow[] {
   return flakyTests(manifest).map(({ withheld, entry }) => ({
     test: withheld.test,
-    ...(entry === undefined ? {} : { measure: flakeMeasure(entry) }),
+    ...(entry === undefined ? {} : {
+      cells: [
+        escapeHtml(flakeMeasure(entry)),
+        entry.lastFailure === undefined ? "—" : daysAgo(entry.lastFailure, now),
+        entry.lastRun === undefined ? "—" : daysAgo(entry.lastRun, now),
+        newestFlake(entry, now),
+      ],
+    }),
   }));
+}
+
+/** How many whole days before `now` a UTC day was, in words. */
+function daysAgo(day: string, now: number): string {
+  const days = Math.max(
+    0,
+    Math.floor((now - Date.parse(`${day}T00:00:00Z`)) / 86_400_000),
+  );
+  return days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+}
+
+/** What each place a run was made is called in the flaky table. */
+const PLACE_NAMES: Record<SeenRun["place"], string> = {
+  main: "main",
+  pr: "pull request",
+  local: "workstation",
+};
+
+/**
+ * The newest disagreement a manifest kept for a test, as the day of its
+ * failing run and that run's job, linked to the run's log on GitHub. A run
+ * with no job, such as one on a workstation, is named by where it was made.
+ */
+function newestFlake(entry: ManifestEntry, now: number): string {
+  const newest = entry.disagreements?.at(-1);
+  if (newest === undefined) return "—";
+  const ci = newest.failed.ci;
+  const run = ci === undefined
+    ? escapeHtml(PLACE_NAMES[newest.failed.place])
+    : `<a href="${escapeHtml(runUrl(ci))}">${escapeHtml(ci.job)}</a>`;
+  return `${daysAgo(newest.day, now)} · ${run}`;
 }
 
 /**
@@ -373,8 +428,8 @@ export function testSelectionPage(
         heading: "Held back as flaky",
         id: FLAKY_SECTION_ID,
         lead: flakeLead(manifest),
-        measure: "flake share",
-        rows: flakyRows(manifest),
+        measures: ["flake share", "last failed", "last ran", "newest flake"],
+        rows: flakyRows(manifest, now),
       })
     }
   ${
@@ -383,12 +438,12 @@ export function testSelectionPage(
         id: UNSCHEDULABLE_SECTION_ID,
         lead:
           "One execution costs more than a whole lane's budget, so no packing can place them.",
-        measure: "cost",
+        measures: ["cost"],
         rows: [...manifest.unschedulable]
           .sort((a, b) => b.cost - a.cost)
           .map((entry) => ({
             test: entry.test,
-            measure: seconds(entry.cost),
+            cells: [escapeHtml(seconds(entry.cost))],
           })),
       })
     }`,

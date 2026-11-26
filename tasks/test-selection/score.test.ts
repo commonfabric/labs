@@ -389,6 +389,45 @@ describe("score", () => {
       expect(state.prCatches).toBe(1);
     });
 
+    it("counts a failure apart only where it was on main", () => {
+      // A failure on a branch may be the change being worked on breaking
+      // the test; one on the default branch is the test failing where
+      // every test runs.
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-19", commit: "c0" }),
+        saw("fail", { commit: "c2", place: "pr", source: "fix-writes" }),
+      ]);
+      expect(state.failuresByDay).toEqual({ "2026-08-19": 1, "2026-08-20": 1 });
+      expect(state.mainFailuresByDay).toEqual({ "2026-08-19": 1 });
+    });
+
+    it("counts a breakage on main on every day it goes on failing", () => {
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-18", commit: "c1" }),
+        saw("fail", { day: "2026-08-19", commit: "c2" }),
+        saw("fail", { commit: "c3" }),
+      ]);
+      expect(state.mainFailuresByDay).toEqual({
+        "2026-08-18": 1,
+        "2026-08-19": 1,
+        "2026-08-20": 1,
+      });
+    });
+
+    it("counts a disagreement on main as failing there, whichever batch its rerun is in", () => {
+      // The count is of failures, whatever the fold later makes of them,
+      // so where the passing rerun is folded does not change it.
+      const together = stateFrom([saw("pass"), saw("fail")]);
+      const failed = foldObservations([saw("fail")], { prior: holding() });
+      const apart = foldObservations([saw("pass")], { prior: failed }).get(
+        KEY,
+      )!;
+      for (const state of [together, apart]) {
+        expect(state.flakesByDay).toEqual({ "2026-08-20": 1 });
+        expect(state.mainFailuresByDay).toEqual({ "2026-08-20": 1 });
+      }
+    });
+
     it("reads a pass and a failure at one commit as a flake", () => {
       const state = stateFrom([
         saw("pass", { commit: "c1", place: "pr", source: "branch" }),
@@ -1097,9 +1136,12 @@ describe("score", () => {
       const state = emptyState();
       state.runsByDay["2026-01-01"] = 1;
       state.runsByDay["2026-08-20"] = 1;
+      state.mainFailuresByDay["2026-01-01"] = 1;
+      state.mainFailuresByDay["2026-08-20"] = 1;
       sealDay(state, "2026-01-01", samplesOf([10]));
       trimWindows(state, "2026-08-20");
       expect(Object.keys(state.runsByDay)).toEqual(["2026-08-20"]);
+      expect(Object.keys(state.mainFailuresByDay)).toEqual(["2026-08-20"]);
       expect(Object.keys(state.costByDay)).toEqual([]);
     });
 
@@ -1911,6 +1953,19 @@ describe("a run that newly breaks a crowd of tests", () => {
     }
   });
 
+  it("still counts each of them as failing on main when the run is on main", () => {
+    // The count says the test failed there, whatever made it fail.
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+    const folded = foldObservations(
+      failing(crowd, { place: "main", source: "main" }),
+      { prior: holding(crowd) },
+    );
+    for (const test of crowd) {
+      expect(folded.get(testIdentityKey(test))!.mainFailuresByDay)
+        .toEqual({ "2026-08-20": 1 });
+    }
+  });
+
   it("credits each of them when the crowd is one short", () => {
     const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES - 1);
     expect(
@@ -2467,6 +2522,7 @@ describe("moveHistory()", () => {
       runsByDay: { "2026-08-10": 4, "2026-08-14": 5 },
       failuresByDay: { "2026-08-10": 1 },
       flakesByDay: { "2026-08-14": 1 },
+      mainFailuresByDay: { "2026-08-10": 1, "2026-08-14": 2 },
       costByDay: {
         "2026-08-10": { ...samplesOf([40]), rule: COST_RULE },
         "2026-08-14": { ...samplesOf([50]), rule: COST_RULE },
@@ -2483,6 +2539,8 @@ describe("moveHistory()", () => {
     expect(Object.keys(into.newRealTestFailureDays)).toEqual(["2026-08-10"]);
     expect(into.runsByDay).toEqual({ "2026-08-10": 4 });
     expect(into.failuresByDay).toEqual({ "2026-08-10": 1 });
+    expect(into.mainFailuresByDay).toEqual({ "2026-08-10": 1 });
+    expect(from.mainFailuresByDay).toEqual({ "2026-08-14": 2 });
     expect(into.localCatches).toBe(1);
     expect(into.lastCatch).toBe("2026-08-10");
     expect(Object.keys(from.newRealTestFailureDays)).toEqual(["2026-08-14"]);

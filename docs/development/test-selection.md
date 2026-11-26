@@ -1938,8 +1938,15 @@ headlines unknown.
 
 The flake tile's page lists the tests held back, and
 `/test-selection/flaky.json` serves the same list as JSON for an agent or a
-script setting out to fix one. Beside each test's figures it gives the runs the
-test disagreed across. The publisher keeps those runs as it folds the records:
+script setting out to fix one. Beside each test's share, both give the last day
+it failed on the default branch, for whatever reason, or was seen disagreeing
+with itself anywhere, and the last day anything ran it. The share falls only as
+the test goes on running, so these are what say how lately it failed and whether
+the tree still holds it. A failure on a pull request or a workstation counts
+toward the first only as part of a disagreement, since on its own it may be the
+change being worked on breaking the test. The JSON also gives the runs the test
+disagreed across, and the page links the newest of them. The publisher keeps
+those runs as it folds the records:
 for each test, the newest ten disagreements inside `FLAKE_WINDOW_DAYS`, each
 with its commit and order, the job of the failing run, and the job of the first
 run that passed there. A run on a workstation is named only as one. A

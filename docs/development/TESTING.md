@@ -291,11 +291,16 @@ fixes it. The test records carry the seed each run used, and
 agree on it, so a run under an override is not read as a flake either.
 
 The tests withheld as flaky, with the runs each one passed and failed in at one
-commit, are served by the dashboard as JSON at `/test-selection/flaky.json`.
+commit, are served by the dashboard as JSON at `/test-selection/flaky.json`, on
+the dashboard's tailnet host, `https://dashboard.<tailnet>.ts.net`.
 ["Flaky tests as JSON"](../../dashboard/README.md#flaky-tests-as-json)
-defines its fields. Start fixing a flaky test from there: a failing run's `url`
-opens its workflow run attempt on GitHub, and the failure is in the log of the
-job its `job` names. A run on a workstation has no `url`.
+defines its fields. Start fixing a flaky test from there. A recent
+`lastFailure` says the test failed lately, so it has probably not been fixed. A
+`lastFailure` that is weeks old suggests the test has been fixed and is waiting
+for its share to fall. An old `lastRun` suggests the test is no longer in the
+tree. A failing run's `url` opens its workflow
+run attempt on GitHub, and the failure is in the log of the job its `job` names.
+A run on a workstation has no `url`.
 
 #### Tomorrow's seed, run a day ahead
 

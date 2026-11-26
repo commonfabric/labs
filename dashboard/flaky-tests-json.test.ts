@@ -56,6 +56,7 @@ function heldBack(fields: Partial<Manifest> = {}): Manifest {
       flakeRate: 0.42,
       flakeEvidence: { flakes: 84, runs: 180 },
       lastRun: "2026-08-19",
+      lastFailure: "2026-08-19",
       disagreements: [OLDER, NEWER],
     },
   );
@@ -119,9 +120,18 @@ describe("flaky-tests-json", () => {
           flakeShare: 0.42,
           flakes: 84,
           runs: 180,
+          lastFailure: "2026-08-19",
           lastRun: "2026-08-19",
         }],
       });
+    });
+
+    it("gives no last failure where the manifest carries none", () => {
+      // A manifest written before the publisher counted it says nothing
+      // about when the test last failed, which is not that it never has.
+      const manifest = heldBack();
+      delete manifest.entries[0]!.lastFailure;
+      expect(flakyTestsJson(manifest, NOW).tests[0]!.lastFailure).toBeNull();
     });
 
     it("leaves out a test that disagreed without being held back", () => {
@@ -194,6 +204,7 @@ describe("flaky-tests-json", () => {
         flakeShare: null,
         flakes: null,
         runs: null,
+        lastFailure: null,
         lastRun: null,
         disagreements: [],
       }]);

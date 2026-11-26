@@ -162,6 +162,15 @@ export interface IdentityState {
   flakesByDay: Record<string, number>;
 
   /**
+   * Failures on `main` per day, whatever caused them. The default branch
+   * runs every test, the held-back ones included, and a failure there is
+   * the test failing where every test runs rather than a change still
+   * being worked on breaking it. This and `flakesByDay` say when a test
+   * held back as flaky last failed.
+   */
+  mainFailuresByDay: Record<string, number>;
+
+  /**
    * The day's passing durations, counted by bucket. Counted rather than
    * kept, because keeping every duration would make the state object
    * grow with the number of runs rather than with the number of tests.
@@ -405,6 +414,7 @@ export function emptyState(): IdentityState {
     failuresByDay: {},
     runsByDay: {},
     flakesByDay: {},
+    mainFailuresByDay: {},
     costByDay: {},
     pendingMain: [],
   };
@@ -528,6 +538,7 @@ export function daysHeld(state: IdentityState): Set<string> {
     ...Object.keys(state.failuresByDay),
     ...Object.keys(state.runsByDay),
     ...Object.keys(state.flakesByDay),
+    ...Object.keys(state.mainFailuresByDay),
     ...Object.keys(state.costByDay),
   ]);
   for (const pending of state.pendingMain) days.add(pending.day);
@@ -565,7 +576,12 @@ export function moveHistory(
     delete from.newRealTestFailureDays[day];
   }
   for (
-    const field of ["failuresByDay", "runsByDay", "flakesByDay"] as const
+    const field of [
+      "failuresByDay",
+      "runsByDay",
+      "flakesByDay",
+      "mainFailuresByDay",
+    ] as const
   ) {
     for (const [day, count] of Object.entries(from[field])) {
       if (!moves(day)) continue;
@@ -1406,6 +1422,7 @@ export function foldObservations(
     if (observation.outcome === "pass") continue;
 
     bump(state.failuresByDay, day);
+    if (observation.place === "main") bump(state.mainFailuresByDay, day);
 
     if (disagreed(key, observation)) {
       disagreedAt(
@@ -1707,6 +1724,7 @@ export function trimWindows(state: IdentityState, today: string): void {
   drop(state.runsByDay, LONGEST_WINDOW_DAYS);
   drop(state.failuresByDay, CHURN_WINDOW_DAYS);
   drop(state.flakesByDay, FLAKE_WINDOW_DAYS);
+  drop(state.mainFailuresByDay, FLAKE_WINDOW_DAYS);
   drop(state.costByDay, COST_WINDOW_DAYS);
   keepDisagreements(
     state,
