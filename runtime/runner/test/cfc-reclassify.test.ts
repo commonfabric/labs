@@ -542,6 +542,15 @@ describe("cfc-reclassify", () => {
         }),
         [cfcAtom.user(reader)],
       )).not.toEqual([]);
+      // Read from a space the subject is not the digest of, a reader of the
+      // subject space stays sealed out too.
+      expect(atomsOutsideCeiling(
+        resolverFor((id) => id === elsewhere ? "reader" : null)({
+          confidentiality: stored,
+          spaces: () => [space],
+        }),
+        [cfcAtom.user(reader)],
+      )).not.toEqual([]);
       // Without the dial the committed subject nominates nothing.
       expect(atomsOutsideCeiling(
         resolverFor((id) => id === elsewhere ? "reader" : null, false)({
