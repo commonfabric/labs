@@ -51,6 +51,7 @@ import {
 import {
   type CfcConfClause,
   clauseAlternatives,
+  clauseReleasableBy,
   commitmentAwareEquals,
   isOrClause,
 } from "@commonfabric/memory/v2/cfc-release-authority";
@@ -2413,6 +2414,95 @@ const pieceCreatorOfDocument = (
     id: result.id,
     scope: normalizeCellScope(result.scope),
   });
+};
+
+/**
+ * The module policy a schema's root declares its value reclassified under
+ * (`ifc.reclassify`, the lowered form of `Reclassified`), as the compiler
+ * lowered it, or `undefined` where the root declares none.
+ */
+const declaredReclassification = (schema: JSONSchema): unknown => {
+  if (!isObjectOrArray(schema) || !isObjectOrArray(schema.ifc)) {
+    return undefined;
+  }
+  const declared = (schema.ifc as Record<string, unknown>).reclassify;
+  return Array.isArray(declared) && declared.length === 1
+    ? declared[0]
+    : undefined;
+};
+
+/**
+ * Whether `clause` is the piece creator's alone to release and names them
+ * only as a `User`: `clauseReleasableBy` admits it for `creator`, and every
+ * alternative is a `User` atom. The creator's `Context`, `Resource`, home
+ * `Space` and `PersonalSpace` clauses are kept as they are.
+ */
+const isCreatorUserClause = (
+  clause: CfcConfClause,
+  creator: string,
+): boolean =>
+  clauseReleasableBy(clause, creator) &&
+  clauseAlternatives(clause).every((alternative) =>
+    isObjectOrArray(alternative) &&
+    (alternative as { type?: unknown }).type === CFC_ATOM_TYPE.User
+  );
+
+/**
+ * The confidentiality of the flow join `join` as the written document
+ * `target` stores it, where `schema` is the schema the document is written
+ * through. A root that declares a reclassification under a policy `P`
+ * replaces each clause the piece's recorded creator alone may release as a
+ * `User` (`isCreatorUserClause`) with `anyOf(User(creator), P)`, `P`'s
+ * subject resolved to the target's space, whose manifest the resolution
+ * installs there. Every other clause is kept. With the transaction's
+ * `patternReclassification` dial off, with no recorded creator, or with no
+ * such clause in the join, the join is returned as it is and a diagnostic
+ * says why.
+ *
+ * The creator is the authority because a computation has no acting user:
+ * the creator installed the pattern that computes the value, and releasing a
+ * clause that is theirs alone is choosing the audience of their own content
+ * (§8.12.7's `canReleaseStoredClause`, applied to a new value).
+ */
+// SPEC-PENDING specs PR not yet filed; see patterns/dev/test/share-space-declassify/PROPOSAL.md
+const reclassifiedFlowConfidentiality = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  schema: JSONSchema,
+  join: readonly CfcConfClause[],
+): readonly CfcConfClause[] => {
+  const declared = declaredReclassification(schema);
+  if (declared === undefined || join.length === 0) return join;
+  const unchanged = (why: string): readonly CfcConfClause[] => {
+    tx.noteCfcDiagnostic(
+      `reclassify: ${target.id} keeps its flow join: ${why}`,
+    );
+    return join;
+  };
+  if (tx.getCfcState().patternReclassification !== true) {
+    return unchanged("the cfcPatternReclassification dial is off");
+  }
+  const creator = pieceCreatorOfDocument(tx, target);
+  if (creator === undefined) {
+    return unchanged("its piece records no creator");
+  }
+  if (!join.some((clause) => isCreatorUserClause(clause, creator))) {
+    return unchanged(`no clause is ${creator}'s alone to release`);
+  }
+  const policy = resolvePolicyOfValue(
+    tx,
+    declared,
+    target.space,
+  ) as CfcConfClause;
+  return join.map((clause) =>
+    isCreatorUserClause(clause, creator)
+      ? { anyOf: [cfcAtom.user(creator), policy] } as CfcConfClause
+      : clause
+  );
 };
 
 /**
@@ -13404,7 +13494,7 @@ export function* prepareBoundaryCommitSteps(
       // atoms.
       collectSources: writerFitRejects,
     });
-  const flowConfidentiality = flowJoin.confidentiality;
+  const joinConfidentiality = flowJoin.confidentiality;
   // The join's own sources, and not the egress collector's: that one counts
   // every entry a read overlaps, whatever its observation class, so it can
   // name a read whose entries the join left out. The join is the same for
@@ -13419,7 +13509,7 @@ export function* prepareBoundaryCommitSteps(
   // function that computed what it labels.
   const flowTransformedBy = flowIntegrity.filter(isTransformedByAtom);
   const flowLabeledSpaces = flowJoin.labeledSpaces;
-  const flowHasJoin = flowConfidentiality.length > 0 ||
+  const flowHasJoin = joinConfidentiality.length > 0 ||
     flowIntegrity.length > 0;
   // What the reads declared onward consumed counts as taint to land: the
   // persist loop runs and lands it on the target even when the join itself
@@ -13449,7 +13539,7 @@ export function* prepareBoundaryCommitSteps(
     flowHasLabels
   ) {
     tx.noteCfcDiagnostic(
-      `flow-labels(observe): would derive ${flowConfidentiality.length} ` +
+      `flow-labels(observe): would derive ${joinConfidentiality.length} ` +
         `confidentiality / ${flowIntegrity.length} integrity atom(s) onto ` +
         `${flowTargets.size} written doc(s)`,
     );
@@ -13770,6 +13860,20 @@ export function* prepareBoundaryCommitSteps(
         reasons.push(verdictReason(dropped));
         continue;
       }
+    }
+    // The join as this document stores it, which a reclassification its
+    // schema declares changes; everything below measures and stamps this.
+    let flowConfidentiality: readonly CfcConfClause[];
+    try {
+      flowConfidentiality = reclassifiedFlowConfidentiality(
+        tx,
+        target,
+        mergedSchema,
+        joinConfidentiality,
+      );
+    } catch (error) {
+      reasons.push(describeFailure(error));
+      continue;
     }
 
     const linkWriteInputs = linkWrites.get(key) ?? [];
