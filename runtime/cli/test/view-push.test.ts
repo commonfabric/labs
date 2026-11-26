@@ -2549,14 +2549,23 @@ describe("view-push", () => {
         expect(edge(person) + KEY_REACH).toBeGreaterThan(59);
       });
 
-      it("draws no key beside a dialog too short to hold it", () => {
-        const { session } = landing({ height: 7 });
-        const { session: taller } = landing({ height: 8 });
-        advance(session, 350);
+      it("draws no key beside a dialog too short to hold it, makes no room for one, and sets no frame for it", () => {
+        const { session } = landing({ width: 80, height: 7 });
+        const { session: person } = landing({
+          kind: "person",
+          width: 80,
+          height: 7,
+        });
+        const { session: taller } = landing({ width: 80, height: 8 });
+        const edge = (session: Session) =>
+          cellOf(drawnRows(session).map(stripAnsi), "╗").x;
         advance(taller, 350);
 
+        expect(session.keyFrameDelay).toBe(null);
         expect(drawnRows(session).join("")).not.toContain("┃");
+        expect(edge(session)).toBe(edge(person));
         expect(drawnRows(taller).join("")).toContain("┃");
+        expect(edge(taller)).toBeLessThan(edge(person));
       });
 
       it("blinks the light along the plugged-in key's top and bottom edges while the step waits, and leaves it lit in another color once the key is touched, with a yellow touch pad", () => {

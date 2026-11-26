@@ -1724,6 +1724,17 @@ export interface DialogBox {
   innerH: number;
 }
 
+/** How many rows tall a dialog box is on a screen as tall as `view`, when it
+ * holds `contentRows` rows of body and fields: those, its title and bottom
+ * edges, a blank row on each side of them, and its buttons and their
+ * shadow, leaving a row for the box's own shadow. */
+export function dialogHeight(
+  view: Pick<ViewState, "height">,
+  contentRows: number,
+): number {
+  return Math.max(0, Math.min(contentRows + 6, view.height - 1));
+}
+
 /** Geometry of the centered dialog box, sized to its content (title, body and
  * button row) or to the body's fixed width, and clamped to leave two cells for
  * the drop shadow. */
@@ -1746,10 +1757,7 @@ export function dialogBox(
     0,
     Math.min(contentW + 2 * DIALOG_HMARGIN + 2, view.width - 2),
   );
-  const boxH = Math.max(
-    0,
-    Math.min(contentRows(dialog) + 6, view.height - 1),
-  );
+  const boxH = dialogHeight(view, contentRows(dialog));
   // A box with a security key beside it moves left as far as the key needs.
   const room = view.width - boxW - (dialog.securityKey ? KEY_REACH : 0);
   return {
@@ -2149,9 +2157,7 @@ function applyDialog(
   }
 
   if (view.color) castShadow(rows, view, x, y, boxW, boxH);
-  // The key's face reaches from the row under the top edge to the row above
-  // the bottom edge of the shortest box it is drawn beside.
-  if (dialog.securityKey && boxH >= KEY_FACE.length + 2) {
+  if (dialog.securityKey) {
     drawSecurityKey(
       rows,
       view,
@@ -2174,6 +2180,11 @@ const KEY_JOINS = "╟║║║╟";
 
 /** The plug of a security key, its contacts' cells marked `*`. */
 const KEY_PLUG = ["╭────", "│ ** ", "╰────"];
+
+/** How many rows a dialog box needs to have a security key beside it: the
+ * key's face reaches from the row under the box's top edge to the row above
+ * its bottom edge. */
+export const KEY_ROWS = KEY_FACE.length + 2;
 
 /** How many columns past a dialog's right edge a security key plugged into
  * it reaches, its shadow included. */
