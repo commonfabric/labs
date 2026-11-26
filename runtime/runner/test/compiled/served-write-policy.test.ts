@@ -18,7 +18,7 @@ import {
 } from "../../src/compiled/setup.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
 import { servingRuntimeFactory } from "../../src/executor/serving-runtime.ts";
-import { Runtime } from "../../src/runtime.ts";
+import { type ExperimentalOptions, Runtime } from "../../src/runtime.ts";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -69,7 +69,7 @@ describe("a write policy of a compiled piece a serving runtime starts from a sto
     const service = await Identity.fromPassphrase(
       "compiled piece served policy service",
     );
-    const experimental = { compiledPatterns: true };
+    const experimental: ExperimentalOptions = { compiledPatterns: true };
     server = newLoopbackServer({
       subscriptionRefreshDelayMs: 0,
       delegatingDids: [service.did()],
