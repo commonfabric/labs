@@ -1542,6 +1542,23 @@ function ownedCellOwesSeed(
 }
 
 /**
+ * Whether a reader of an absent instance of `link`, a cell owed a default
+ * (`ownedCellOwesSeed`), reads exactly what the seed writes there: the
+ * default is a scalar. A reader of an absent instance reads the schema's
+ * default, the seed writes that default whole, and a write to a scalar
+ * replaces it whole. An object or an array default is not one: a viewer's
+ * first write into part of an absent instance creates the instance holding
+ * that part alone, where a seed would have written the rest of the default
+ * beside it.
+ */
+function absentReadsAsSeed(link: NormalizedFullLink): boolean {
+  if (!isObjectOrArray(link.schema)) return false;
+  const schemaDefault = link.schema.default;
+  return schemaDefault === null || typeof schemaDefault === "string" ||
+    typeof schemaDefault === "number" || typeof schemaDefault === "boolean";
+}
+
+/**
  * Whether the gate before the start of a piece a resume pre-sync has named
  * takes the record of `link`, a cell an instance in the piece's tree owns,
  * for the cell; the owning instance's result cell is at `ownerScope`. It does
@@ -13121,9 +13138,11 @@ export class Runner {
   /**
    * What the currency index needs to know of the piece running at
    * `resultCell` that its computations do not say (serving-loop.md §3b):
-   * whether the piece records a source origin, which a start follows, and
-   * the ids of the cells it owns that are owed a default
-   * (`ownedCellOwesSeed`). For a piece whose result document is narrower
+   * whether the piece records a source origin, which a start follows, the
+   * ids of the cells it owns that are owed a default
+   * (`ownedCellOwesSeed`), and those of them a reader of an absent instance
+   * reads as what the seed writes there (`absentReadsAsSeed`), under every
+   * program that owns them. For a piece whose result document is narrower
    * than the space, `resultCell` is at that scope, and the answer is taken
    * over every viewer's instance: whether any of them records an origin,
    * and the cells owned under any program the instances point at. Returns
@@ -13132,19 +13151,32 @@ export class Runner {
    */
   pieceCurrencyFacts(
     resultCell: Cell<any>,
-  ): { followsOrigin: boolean; owned: string[] } | undefined {
+  ):
+    | { followsOrigin: boolean; owned: string[]; absentAsDefault: string[] }
+    | undefined {
     const link = resultCell.getAsNormalizedFullLink();
     const rootCell = link.path.length > 0
       ? this.#runtime.getCellFromLink({ ...link, path: [] })
       : resultCell;
     if (!this.isRunning(rootCell)) return undefined;
     const ownerScope = rootCell.getAsNormalizedFullLink().scope;
-    const ownedBy = (pattern: Pattern): string[] =>
-      (pattern.derivedInternalCells ?? []).map((descriptor) =>
-        getDerivedInternalCell(rootCell, descriptor).getAsNormalizedFullLink()
-      ).filter((derived) => ownedCellOwesSeed(derived, ownerScope)).map((
-        derived,
-      ) => derived.id);
+    const ownedBy = (patterns: readonly Pattern[]) => {
+      const owned = new Set<string>();
+      const notAsDefault = new Set<string>();
+      for (const pattern of patterns) {
+        for (const descriptor of pattern.derivedInternalCells ?? []) {
+          const derived = getDerivedInternalCell(rootCell, descriptor)
+            .getAsNormalizedFullLink();
+          if (!ownedCellOwesSeed(derived, ownerScope)) continue;
+          owned.add(derived.id);
+          if (!absentReadsAsSeed(derived)) notAsDefault.add(derived.id);
+        }
+      }
+      return {
+        owned: [...owned],
+        absentAsDefault: [...owned].filter((id) => !notAsDefault.has(id)),
+      };
+    };
     // A piece whose result document is narrower than the space holds a
     // pattern pointer in each viewer's instance of it, and runs a program
     // for each pointer those instances hold.
@@ -13153,13 +13185,11 @@ export class Runner {
       if (scoped.programs.size === 0) return undefined;
       return {
         followsOrigin: scoped.originInstances.size > 0,
-        owned: [
-          ...new Set(
-            [...scoped.programs.values()].flatMap((program) =>
-              ownedBy(this.#resolveToPattern(program))
-            ),
+        ...ownedBy(
+          [...scoped.programs.values()].map((program) =>
+            this.#resolveToPattern(program)
           ),
-        ],
+        ),
       };
     }
     const read = this.#runtime.readTx();
@@ -13187,7 +13217,7 @@ export class Runner {
     if (loaded === undefined) return undefined;
     return {
       followsOrigin,
-      owned: ownedBy(this.#resolveToPattern(loaded as Pattern)),
+      ...ownedBy([this.#resolveToPattern(loaded as Pattern)]),
     };
   }
 

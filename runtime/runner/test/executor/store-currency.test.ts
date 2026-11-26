@@ -229,7 +229,9 @@ describe("StoreCurrency", () => {
             };
           },
         },
-        runner: { pieceCurrencyFacts: () => ({ owned: [] }) },
+        runner: {
+          pieceCurrencyFacts: () => ({ owned: [], absentAsDefault: [] }),
+        },
         getCellFromLink: () => ({}),
       } as unknown as Runtime;
 
@@ -305,7 +307,11 @@ describe("StoreCurrency", () => {
         const following = {
           ...runtime,
           runner: {
-            pieceCurrencyFacts: () => ({ owned: [], followsOrigin: true }),
+            pieceCurrencyFacts: () => ({
+              owned: [],
+              absentAsDefault: [],
+              followsOrigin: true,
+            }),
           },
         } as unknown as Runtime;
 
@@ -327,6 +333,7 @@ describe("StoreCurrency", () => {
         /** A runtime whose runner reports `facts` for every piece. */
         const scopedRuntime = (facts: {
           owned: string[];
+          absentAsDefault: string[];
           followsOrigin?: boolean;
         }) =>
           ({
@@ -346,22 +353,24 @@ describe("StoreCurrency", () => {
 
         it("asks the runner about the root at its own scope, and vouches for the piece", () => {
           const snapshot = currency.snapshot(
-            scopedRuntime({ owned: ["of:owned"] }),
+            scopedRuntime({
+              owned: ["of:owned"],
+              absentAsDefault: ["of:owned"],
+            }),
             0,
             [],
           );
 
           expect(asked).toBe("session");
           expect(
-            snapshot?.records.map(({ piece, vouched, owned }) => ({
-              piece,
-              vouched,
-              owned,
-            })),
+            snapshot?.records.map((
+              { piece, vouched, owned, absentAsDefault },
+            ) => ({ piece, vouched, owned, absentAsDefault })),
           ).toEqual([{
             piece: "of:piece",
             vouched: true,
             owned: ["of:owned"],
+            absentAsDefault: ["of:owned"],
           }]);
         });
 
@@ -370,7 +379,11 @@ describe("StoreCurrency", () => {
           // piece holds one for each viewer.
 
           const snapshot = currency.snapshot(
-            scopedRuntime({ owned: [], followsOrigin: true }),
+            scopedRuntime({
+              owned: [],
+              absentAsDefault: [],
+              followsOrigin: true,
+            }),
             0,
             [],
           );
