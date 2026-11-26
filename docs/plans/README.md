@@ -23,6 +23,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   tools, candidate tool descriptors trusted only inside an accepted registry
   snapshot, and labeled text. Review unlocks trust, not use, and lowering a
   tool into pattern code is rewriting one handler.
+- [Reviewed skills: trusting a skill's bytes, not what it does](reviewed-skills.md)
+  lets a skill in a reviewed set run its scripts under CFC enforcement. Each
+  reviewed script is a tool descriptor whose stated effect class decides what a
+  call needs, and the prose stays `quote`, gaining only screening evidence over
+  its exact bytes. Everything the skill's run reads stays treated as
+  injectable.
 - [Joining a Loom lists you in it](social-space-join-as-viewer.md) is a
   stopgap so that a browser host's guests are named on a Loom's roster: the
   host lists its guest through the existing `addParticipant`, and then the Loom

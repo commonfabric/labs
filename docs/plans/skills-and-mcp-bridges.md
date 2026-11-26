@@ -140,8 +140,15 @@ instructions" stays `quote`. A person's own skill, which they wrote, may bind as
 `context`. Neither role carries authority for actions. Text can steer an agent,
 but it cannot authorize an effect. Effects need per-call authority
 (`IntentOnce`), and a call that quoted text influenced is not admitted on the
-run's direct-command authority alone. Review would add nothing here, because
-nobody can certify prose as injection-safe.
+run's direct-command authority alone.
+
+Review does not raise the role: a reviewed skill's prose stays `quote`. What a
+review adds is in
+[Reviewed skills: trusting a skill's bytes, not what it does](reviewed-skills.md).
+A reviewed skill's scripts become tool descriptors with measured contracts in
+the same snapshot, and their stated effect class decides what each call needs.
+The prose gains only screening evidence over its exact bytes, which changes who
+may observe it and nothing it may do.
 
 ### Credentials
 
