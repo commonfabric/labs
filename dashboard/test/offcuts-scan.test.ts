@@ -18,6 +18,7 @@ import {
   OFFCUTS_RETRY_MS,
   OFFCUTS_SWEEP_MS,
   OffcutsScan,
+  parseGrepForTest,
   type ScanTarget,
 } from "../offcuts-scan.ts";
 import type { Job } from "../ci-jobs-page.ts";
@@ -837,6 +838,46 @@ describe("offcuts-scan", () => {
         code: 1,
         header: "",
       });
+    });
+  });
+
+  describe("parseGrepForTest()", () => {
+    const tree = "refs/heads/scanned";
+    const match = (path: string, line: string, text: string) =>
+      `${tree}:${path}\0${line}\0${text}\n`;
+
+    it("returns one reference per line, however many matches that line holds", () => {
+      const output = match("deps.txt", "3", `${OFFCUTS}/a`) +
+        match("deps.txt", "3", `${OFFCUTS}/b`) +
+        match("deps.txt", "4", `${OFFCUTS}/a`) +
+        match("odd\nname.md", "3", `${OFFCUTS}/a`);
+
+      expect(parseGrepForTest(output)).toEqual([
+        { path: "deps.txt", line: 3 },
+        { path: "deps.txt", line: 4 },
+        { path: "odd\nname.md", line: 3 },
+      ]);
+    });
+
+    it("returns no references for empty output", () => {
+      expect(parseGrepForTest("")).toEqual([]);
+    });
+
+    it("throws, quoting the rest of the output, on a match outside the scanned tree", () => {
+      const stray = `refs/heads/other:deps.txt\x003\0${OFFCUTS}/a\n`;
+
+      expect(() => parseGrepForTest(match("deps.txt", "1", "x") + stray))
+        .toThrow(`Unexpected \`git grep\` output: ${JSON.stringify(stray)}`);
+    });
+
+    it("throws on a line number that is not an integer", () => {
+      expect(() => parseGrepForTest(match("deps.txt", "three", "x")))
+        .toThrow("Unexpected `git grep` output");
+    });
+
+    it("throws on output that ends before a match's newline", () => {
+      expect(() => parseGrepForTest(`${tree}:deps.txt\x003\0x`))
+        .toThrow("Unexpected `git grep` output");
     });
   });
 });

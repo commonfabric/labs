@@ -644,6 +644,12 @@ function parseGrep(output: string): OffcutsReference[] {
 }
 
 /**
+ * `parseGrep`, for tests of output that `git grep` does not print and so a
+ * scan cannot produce.
+ */
+export const parseGrepForTest = parseGrep;
+
+/**
  * Runs Git with `env`, in `directory`, with `args`, the first of which names
  * the command, and returns what it printed. Throws, with what it printed as
  * errors, when it exits with a status not in `ok`.
