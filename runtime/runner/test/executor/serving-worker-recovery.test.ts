@@ -25,6 +25,10 @@ import {
   it,
 } from "@commonfabric/test-support/test";
 import { clock } from "@commonfabric/test-support/fake-clock";
+import {
+  collectedMemory,
+  exposeGarbageCollector,
+} from "../../src/collected-memory.ts";
 import { EngineWaveCommitSink } from "../../src/executor/engine-wave-sink.ts";
 import { SpaceNotServedError } from "../../src/executor/host.ts";
 import {
@@ -43,6 +47,9 @@ import {
   type FakeServingWorker,
   fakeServingWorkers,
 } from "../support/fake-serving-workers.ts";
+
+// A case collects garbage while a stand-in worker's run holds its thread.
+exposeGarbageCollector();
 
 const identity = await Identity.fromPassphrase("serving-worker-recovery");
 const space = "did:key:z6MkServingWorkerRecovery" as MemorySpace;
@@ -1136,6 +1143,29 @@ describe("serving-worker-recovery", () => {
         worker.endRun();
         await pass(1);
         expect(started.stats().workers.running).toEqual([]);
+      });
+
+      it("names the run that holds a worker's thread in the kill, whatever the garbage collector does while it runs", async () => {
+        using reported = stub(console, "error", () => {});
+        const started = start();
+        server.openSession(space, "session-1");
+        await clock.settle();
+        const [worker] = workers();
+        worker.startRun(space, "slow-derivation");
+        collectedMemory();
+        await clock.settle();
+
+        await pass(2);
+        expect(started.stats().workers.running.map(({ action }) => action))
+          .toEqual(["slow-derivation"]);
+        await pass(5);
+        expect(worker.terminated).toBe(true);
+        expect(logged(reported.calls, "in a run of `slow-derivation`")).toBe(
+          true,
+        );
+        expect(logged(reported.calls, "which the worker had not named")).toBe(
+          false,
+        );
       });
 
       it("forgets what a number stands for once the worker's realm has collected the action it named", async () => {
