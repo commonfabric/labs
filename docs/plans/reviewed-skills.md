@@ -116,7 +116,7 @@ set's revocation file, as for connectors. Expiry is §4.8.2's optional
 `scope.validUntil`. Both are checked when the child starts and again at each
 file load. A failure fails closed with the generic "not accepted" status of
 §18.3.2. `CfcTrustStatement` in `trust.ts` has no `scope` yet, so it gains
-`validUntil`, an existing spec field.
+§4.8.2's `scope: { validUntil }`.
 
 Every listed file is fetched from the pinned commit at acquisition. Only putting
 a resource into the model's context is lazy. Each load re-checks that file's
@@ -164,7 +164,11 @@ boundary mints evidence for two exchange rules:
 
    It carries no `intentId`, because it is minted at source entry, before any
    intent exists. Whether an assessment minted from a review, rather than from
-   one output, is admissible is a question for Berni.
+   one output, is admissible is a question for Berni. Until a rule admits it,
+   the profile clears influence only with source- and sink-bound disclosure,
+   acknowledgment or disclaimer evidence (§8.10.5), never `InjectionSafe`. The
+   interim does not depend on it: no sink checks influence yet, and the
+   reviewed child's binding rests on the trust statement alone.
 
    The clearing is scoped by kind of field, following §8.10.5.2, under which
    evidence sufficient for one sink class "MUST NOT be treated as sufficient for
@@ -358,8 +362,8 @@ These are provisional until Berni reviews the package, like the bridge plan's.
    2. the pin required, and matched as well as the digests;
    3. every listed file fetched at acquisition, each load re-checked, and
       unlisted paths refused;
-   4. revocation and expiry kept in the set, with `validUntil` added to the
-      runtime's trust statements;
+   4. revocation and expiry kept in the set, with `scope: { validUntil }`
+      added to the runtime's trust statements;
    5. script bytes in the list, and what a script does claimed separately by a
       tool descriptor in the same set file;
    6. a versioned review checklist in the set's repository, cited from each
