@@ -61,15 +61,13 @@ function symrefListing(branch: string): string {
   return `ref: refs/heads/${branch}\tHEAD\n0123456789abcdef\tHEAD\n`;
 }
 
-/** Query answers for a checkout of `feature` whose `origin` and `upstream`
- * have `main` as their default branch, on their servers and, for `origin`, as
- * git cached it on cloning. */
+/** Query answers for a checkout of `feature` whose `origin` has `main` as its
+ * default branch, on its server and as git cached it on cloning. */
 const FEATURE_CHECKOUT: Readonly<Record<string, string | null>> = {
   "rev-parse --absolute-git-dir": "/work/.git\n",
   "symbolic-ref --quiet HEAD": "refs/heads/feature\n",
   "symbolic-ref --quiet refs/remotes/origin/HEAD": "refs/remotes/origin/main\n",
   [ASK_ORIGIN_DEFAULT]: symrefListing("main"),
-  "ls-remote --symref upstream HEAD": symrefListing("main"),
 };
 
 const PUSH_FEATURE = "push --force-with-lease --force-if-includes --progress " +
@@ -331,10 +329,11 @@ function mouseReport(down: boolean, at: { x: number; y: number }): string {
   return `\x1b[<0;${at.x + 1};${at.y + 1}${down ? "M" : "m"}`;
 }
 
-/** A GitHub API that finds no open pull request, says the merge method is
- * squashing, and fails each other request. */
+/** A GitHub API that finds no open pull request, says the default branch is
+ * `main` and the merge method is squashing, and fails each other request. */
 const unusedGitHub: GitHubApi = {
   find: () => Promise.resolve(null),
+  defaultBranch: () => Promise.resolve("main"),
   mergeMethod: () => Promise.resolve("squash"),
   create: () => Promise.reject(new Error("this test creates nothing")),
   merge: () => Promise.reject(new Error("this test merges nothing")),
@@ -597,9 +596,11 @@ describe("view-push", () => {
     });
 
     it("hands what follows the push to its callback, with no page when the server offers none, and appends what it says", async () => {
-      const handed: Array<[string, string | null]> = [];
-      const then = (branch: string, url: string | null) => {
-        handed.push([branch, url]);
+      // The callback is also handed origin's default branch: the one the
+      // push was given, or else the one origin's server names.
+      const handed: Array<[string, string | null, string]> = [];
+      const then = (branch: string, url: string | null, main: string) => {
+        handed.push([branch, url, main]);
         return url === null ? [] : say`Then this.`;
       };
 
@@ -612,12 +613,15 @@ describe("view-push", () => {
             fakeIo({ pushOutput: GITHUB_OFFER }).io,
             undefined,
             then,
+            undefined,
+            undefined,
+            "trunk",
           ),
         ),
       ).toBe("Pushed feature to origin. Then this.");
       expect(handed).toEqual([
-        ["feature", null],
-        ["feature", "https://github.com/fork/repo/pull/new/feature"],
+        ["feature", null, "main"],
+        ["feature", "https://github.com/fork/repo/pull/new/feature", "trunk"],
       ]);
     });
 
@@ -4327,16 +4331,11 @@ describe("view-push", () => {
         );
       });
 
-      it("creates it into the branch upstream's server names as its default, titled as the first commit that branch lacks, whatever git cached on cloning", async () => {
+      it("creates it into the branch GitHub names as upstream's default, titled as the first commit that branch lacks, whatever git cached on cloning", async () => {
         const created: CreateRequest[] = [];
+        const asked: string[] = [];
         const harness = pagerHarness(
-          () =>
-            fakeIo({
-              pushOutput: GITHUB_OFFER,
-              answers: {
-                "ls-remote --symref upstream HEAD": symrefListing("trunk"),
-              },
-            }).io,
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
           {
             git: viewerGit({ "cf-view.pullRequestTool": "api" }, {
               ...UPSTREAM,
@@ -4351,6 +4350,10 @@ describe("view-push", () => {
             }),
             github: {
               ...unusedGitHub,
+              defaultBranch: (repository) => {
+                asked.push(repository);
+                return Promise.resolve("trunk");
+              },
               create: (request) => {
                 created.push(request);
                 return Promise.resolve(OCTO_PULL_REQUEST);
@@ -4362,6 +4365,10 @@ describe("view-push", () => {
 
         await harness.run(["P", () => closable, "c"]);
 
+        expect(asked).toEqual(["octo/repo"]);
+        expect(harness.writes.join("")).toContain(
+          "Asking GitHub which branch is the default of octo/repo... ✓",
+        );
         expect(created).toEqual([{
           repository: "octo/repo",
           head: "fork:feature",
@@ -4371,44 +4378,128 @@ describe("view-push", () => {
         }]);
       });
 
-      it("fails, offering to retry, when upstream's server names no default branch or cannot be asked", async () => {
-        for (const listing of ["0123456789abcdef\tHEAD\n", null]) {
+      it("creates it, and again when Create PR is pressed, into origin's default branch as the push learned it, or else the one GitHub names for upstream, asking for each once", async () => {
+        for (const fork of [false, true]) {
           const created: CreateRequest[] = [];
-          const harness = pagerHarness(
-            () =>
-              fakeIo({
-                pushOutput: GITHUB_OFFER,
-                answers: { "ls-remote --symref upstream HEAD": listing },
-              }).io,
-            {
-              git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
-              github: {
-                ...unusedGitHub,
-                create: (request) => {
-                  created.push(request);
-                  return Promise.resolve(OCTO_PULL_REQUEST);
-                },
+          const asked: string[] = [];
+          const askedGitHub: string[] = [];
+          const harness = pagerHarness(() => {
+            const { io } = fakeIo({
+              pushOutput: GITHUB_OFFER,
+              answers: { [ASK_ORIGIN_DEFAULT]: symrefListing("trunk") },
+            });
+            return {
+              ...io,
+              queryAsync: (args) => {
+                asked.push(args.join(" "));
+                return io.queryAsync(args);
+              },
+            };
+          }, {
+            git: viewerGit(
+              { "cf-view.pullRequestTool": "api" },
+              fork ? UPSTREAM : {
+                [
+                  "rev-list --reverse --no-merges --right-only --cherry-pick " +
+                  "--end-of-options refs/remotes/origin/trunk...HEAD --"
+                ]: "c2\n",
+                "-c log.showSignature=false log -1 --format=%s%x00%b c2 --":
+                  "Add the widget\0",
+              },
+            ),
+            github: {
+              ...unusedGitHub,
+              defaultBranch: (repository) => {
+                askedGitHub.push(repository);
+                return Promise.resolve("main");
+              },
+              create: (request) =>
+                created.push(request) === 1
+                  ? Promise.reject(new Error("no network"))
+                  : Promise.resolve(OCTO_PULL_REQUEST),
+            },
+          });
+          const failed = harness.frame((text) => text.includes("P Create PR"));
+          // The retry ends with the pull request created, or with git unable
+          // to compare the branch with a base branch it never fetched.
+          const retried = harness.frame((text) =>
+            text.includes(`Created ${OCTO_PULL_REQUEST}`) ||
+            text.includes("git cannot compare")
+          );
+
+          await harness.run(["P", () => failed, "p", () => retried, "c"]);
+
+          expect(asked).toEqual([ASK_ORIGIN_DEFAULT]);
+          expect(askedGitHub).toEqual(fork ? ["octo/repo"] : []);
+          const request = fork
+            ? {
+              repository: "octo/repo",
+              head: "fork:feature",
+              base: "main",
+              title: "Fix the frobnicator",
+              body: "It was broken.",
+            }
+            : {
+              repository: "fork/repo",
+              head: "feature",
+              base: "trunk",
+              title: "Add the widget",
+              body: "",
+            };
+          expect(created).toEqual([request, request]);
+        }
+      });
+
+      it("fails, offering to retry, when GitHub cannot say which branch is upstream's default, and asks again when Create PR is pressed", async () => {
+        const created: CreateRequest[] = [];
+        let asks = 0;
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+            github: {
+              ...unusedGitHub,
+              defaultBranch: () =>
+                ++asks === 1
+                  ? Promise.reject(new Error("no network"))
+                  : Promise.resolve("main"),
+              create: (request) => {
+                created.push(request);
+                return Promise.resolve(OCTO_PULL_REQUEST);
               },
             },
-          );
-          const closable = harness.frame((text) => text.includes(" Close "));
+          },
+        );
+        const failed = harness.frame((text) => text.includes("P Create PR"));
+        let createdWhenFailed = -1;
+        const retried = harness.frame((text) =>
+          text.includes(`Created ${OCTO_PULL_REQUEST}`)
+        );
 
-          await harness.run(["P", () => closable, "c"]);
+        await harness.run([
+          "P",
+          async () => {
+            await failed;
+            createdWhenFailed = created.length;
+          },
+          "p",
+          () => retried,
+          "c",
+        ]);
 
-          expect(created).toEqual([]);
-          const shown = harness.writes.find((text) =>
-            text.includes(" Close ")
-          )!;
-          expect(shown).toContain(
-            "Asking upstream which branch is its default... ✗",
-          );
-          expect(shown).toContain(
-            "Creating the pull request failed: upstream's",
-          );
-          expect(shown).toContain(
-            "default branch is unknown. To retry, press Create PR.",
-          );
-        }
+        expect(createdWhenFailed).toBe(0);
+        expect(asks).toBe(2);
+        expect(created.map(({ base }) => base)).toEqual(["main"]);
+        const shown = harness.writes.find((text) =>
+          text.includes("P Create PR")
+        )!;
+        expect(shown).toContain(
+          "Asking GitHub which branch is the default of octo/repo... ✗",
+        );
+        expect(shown).toContain(
+          "Creating the pull request failed: no network.",
+        );
+        expect(shown).toContain("To retry, press Create PR.");
       });
 
       it("gives the created pull request's address in the dialog, saying it is quitting, for the delay the settings set before it quits", async () => {
@@ -4549,32 +4640,33 @@ describe("view-push", () => {
               : `Pushed feature to origin. Created ${OCTO_PULL_REQUEST}`,
           );
           expect(shown).toContain(OCTO_PULL_REQUEST);
-          if (listed) expect(shown).not.toContain("Asking upstream");
+          if (listed) expect(shown).not.toContain("Asking GitHub");
         }
       });
 
-      it("shows the search for the open pull request done once GitHub answers, while upstream's server has not", async () => {
+      it("shows the search for the open pull request done once GitHub answers it, while GitHub has not said which branch is upstream's default", async () => {
         let looked = Promise.resolve();
-        const harness = pagerHarness(() => {
-          const { io } = fakeIo({ pushOutput: GITHUB_OFFER });
-          return {
-            ...io,
-            queryAsync: async (args) => {
-              if (args.includes("upstream")) await looked;
-              return io.queryAsync(args);
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+            github: {
+              ...unusedGitHub,
+              defaultBranch: async () => {
+                await looked;
+                return "main";
+              },
+              create: () => Promise.resolve(OCTO_PULL_REQUEST),
             },
-          };
-        }, {
-          git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
-          github: {
-            ...unusedGitHub,
-            create: () => Promise.resolve(OCTO_PULL_REQUEST),
           },
-        });
+        );
         looked = harness.frame((text) =>
           text.includes(
             "Looking for the pull request of feature in octo/repo... ✓",
-          ) && text.includes("Asking upstream which branch is its default...")
+          ) &&
+          text.includes(
+            "Asking GitHub which branch is the default of octo/repo...",
+          )
         );
         const closable = harness.frame((text) => text.includes(" Close "));
 
@@ -4584,55 +4676,52 @@ describe("view-push", () => {
           `Created ${OCTO_PULL_REQUEST}`,
         );
         expect(harness.writes.join("")).toContain(
-          "Asking upstream which branch is its default... ✓",
+          "Asking GitHub which branch is the default of octo/repo... ✓",
         );
       });
 
-      it("asks upstream's server for its default branch while it asks GitHub for the open pull request, once the user's list names none", async () => {
+      it("asks GitHub for upstream's default branch while it asks for the open pull request, once the user's list names none", async () => {
         const events: string[] = [];
-        const harness = pagerHarness(() => {
-          const { io } = fakeIo({ pushOutput: GITHUB_OFFER });
-          return {
-            ...io,
-            queryAsync: (args) => {
-              if (!args.includes("upstream")) return io.queryAsync(args);
-              events.push("ask upstream");
-              return io.queryAsync(args).then((answer) => {
-                events.push("upstream answered");
-                return answer;
-              });
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+            pullRequestList: () => {
+              events.push("read the list");
+              return Promise.resolve(null);
             },
-          };
-        }, {
-          git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
-          pullRequestList: () => {
-            events.push("read the list");
-            return Promise.resolve(null);
-          },
-          github: {
-            ...unusedGitHub,
-            find: () => {
-              events.push("ask GitHub");
-              return Promise.resolve(null).then((found) => {
-                events.push("GitHub answered");
-                return found;
-              });
+            github: {
+              ...unusedGitHub,
+              find: () => {
+                events.push("ask for the pull request");
+                return Promise.resolve(null).then((found) => {
+                  events.push("pull request answered");
+                  return found;
+                });
+              },
+              defaultBranch: () => {
+                events.push("ask for the default branch");
+                return Promise.resolve("main").then((branch) => {
+                  events.push("default branch answered");
+                  return branch;
+                });
+              },
+              create: () => Promise.resolve(OCTO_PULL_REQUEST),
             },
-            create: () => Promise.resolve(OCTO_PULL_REQUEST),
           },
-        });
+        );
         const closable = harness.frame((text) => text.includes(" Close "));
 
         await harness.run(["P", () => closable, "c"]);
 
         expect(events[0]).toBe("read the list");
         expect(events.slice(1, 3).sort()).toEqual([
-          "ask GitHub",
-          "ask upstream",
+          "ask for the default branch",
+          "ask for the pull request",
         ]);
         expect(events.slice(3).sort()).toEqual([
-          "GitHub answered",
-          "upstream answered",
+          "default branch answered",
+          "pull request answered",
         ]);
         expect(harness.writes.join("")).toContain(
           `Created ${OCTO_PULL_REQUEST}`,
@@ -4659,7 +4748,7 @@ describe("view-push", () => {
         expect(shown).toContain("Pull request 7 is open:");
         expect(shown).toContain(OCTO_PULL_REQUEST);
         expect(shown).toContain(
-          "Asking upstream which branch is its default... ✓",
+          "Asking GitHub which branch is the default of octo/repo... ✓",
         );
       });
 
