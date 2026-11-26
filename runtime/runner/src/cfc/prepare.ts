@@ -67,7 +67,7 @@ import {
 import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { encodePointer } from "../../../memory/v2/path.ts";
-import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
+import type { JSONSchema, JSONSchemaObj, JSONValue } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import { areLinksSame } from "../link-equality.ts";
 import { literalMemberMatches } from "../schema-literal-match.ts";
@@ -241,6 +241,7 @@ import { createTxCfcModulePolicyResolver } from "./policy-resolver.ts";
 import {
   type CfcDeclaringSchema,
   cfcSchemaEntries,
+  type CfcSchemaEntry,
 } from "./schema-label-view.ts";
 import { sinkClassOf } from "./sink-inventory.ts";
 import {
@@ -8933,7 +8934,10 @@ const verifyInputRequirements = (
   // while producing the current view. Refresh after that inspection so every
   // envelope resolution observes those writes.
   metadataResolver.refresh();
-  const schemaEntries = cfcSchemaEntries(schema);
+  const schemaEntries = requirementBoundEntries(
+    schema,
+    inputRequirementBindings(tx, target.space),
+  );
   // The stored envelope of each read's document is resolved here, ahead of
   // the label: `storedMetadataFor` refuses an envelope this build cannot
   // interpret, by version or by shape, and a transaction that consumed such
@@ -8986,6 +8990,13 @@ const verifyInputRequirements = (
     );
     if (disallowedClause !== undefined) {
       return { reason: disallowedClause, verdict: true };
+    }
+    const unboundRequirement = unboundInputRequirementReason(
+      entry.schema,
+      entry.path,
+    );
+    if (unboundRequirement !== undefined) {
+      return { reason: unboundRequirement, verdict: true };
     }
     const currentPrincipalFailure = currentPrincipalIntegrityReason(
       tx,
@@ -9593,6 +9604,22 @@ const resolvePolicyOfConfidentiality = (
     resolvePolicyOfValue(tx, value, owningSpace) as CfcConfClause
   );
 
+/**
+ * Whether `value` is a `PolicyOf` reference as the compiler lowers it: a
+ * module policy whose subject is the space owning the document, written as a
+ * placeholder, with the identity of the policy it names.
+ */
+const isOwningSpacePolicyMarker = (
+  value: Record<string, unknown>,
+): boolean =>
+  value.type === CFC_ATOM_TYPE.Policy &&
+  value.policyRefKind === "module" &&
+  isObjectOrArray(value.subject) &&
+  value.subject[OWNING_SPACE_PLACEHOLDER] === true &&
+  typeof value.moduleIdentity === "string" &&
+  typeof value.symbol === "string" &&
+  typeof value.policyDigest === "string";
+
 const resolvePolicyOfValue = (
   tx: IExtendedStorageTransaction,
   value: unknown,
@@ -9653,6 +9680,173 @@ const resolvePolicyOfValue = (
       resolvePolicyOfValue(tx, entry, owningSpace),
     ]),
   );
+};
+
+/**
+ * The schema annotations that state input requirements (spec §8.10.3): what a
+ * value must be screened by, and how confidential it may be, to land where the
+ * schema describes.
+ */
+const INPUT_REQUIREMENT_KEYS = [
+  "requiredIntegrity",
+  "maxConfidentiality",
+] as const;
+
+/**
+ * The trusted bindings an attempt's input requirements are instantiated
+ * against: the principal it acts for, and the space that owns the document
+ * being written.
+ */
+type InputRequirementBindings = {
+  readonly actingPrincipal: string | undefined;
+  readonly owningSpace: MemorySpace;
+};
+
+/**
+ * `value` with each placeholder it holds bound by `bindings`: a
+ * `CurrentPrincipal` to the acting principal, and the subject of a lowered
+ * `PolicyOf` to the owning space. A placeholder `bindings` cannot bind is left
+ * as it is, for `unboundInputRequirementReason()` to refuse.
+ */
+const bindRequirementPlaceholders = (
+  value: JSONValue,
+  bindings: InputRequirementBindings,
+): JSONValue => {
+  if (isCurrentPrincipalPlaceholder(value)) {
+    return bindings.actingPrincipal ?? value;
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((entry) => {
+      const bound = bindRequirementPlaceholders(entry, bindings);
+      changed ||= bound !== entry;
+      return bound;
+    });
+    return changed ? next : value;
+  }
+  if (!isObjectOrArray(value)) return value;
+  if (isOwningSpacePolicyMarker(value)) {
+    return { ...value, subject: bindings.owningSpace };
+  }
+  let changed = false;
+  const next: Record<string, JSONValue> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const bound = bindRequirementPlaceholders(entry as JSONValue, bindings);
+    changed ||= bound !== entry;
+    next[key] = bound;
+  }
+  return changed ? next : value;
+};
+
+/**
+ * The bindings `tx`'s attempt to write a document in `owningSpace` checks its
+ * input requirements under. A run that acts for no one
+ * (`servedRunActsForNoOne()`) binds no principal, whatever its trust snapshot
+ * names, so a requirement naming the current principal fails closed for it.
+ */
+const inputRequirementBindings = (
+  tx: IExtendedStorageTransaction,
+  owningSpace: MemorySpace,
+): InputRequirementBindings => {
+  const snapshot = tx.getCfcState().trustSnapshot;
+  return {
+    actingPrincipal:
+      snapshot === undefined || servedRunActsForNoOne(tx, snapshot)
+        ? undefined
+        : snapshot.actingPrincipal,
+    owningSpace,
+  };
+};
+
+/**
+ * `ceiling`, a `maxConfidentiality` list, bound by `bindings`. A bare
+ * `CurrentPrincipal` where a ceiling names a reader, as a clause or as an
+ * alternative of one, names that principal as a reader, `User(<DID>)`, as a
+ * database ceiling's does (`row-label-read.ts`).
+ */
+const bindCeilingClauses = (
+  ceiling: readonly JSONValue[],
+  bindings: InputRequirementBindings,
+): JSONValue => {
+  const reader = (value: JSONValue): JSONValue =>
+    isCurrentPrincipalPlaceholder(value) &&
+      bindings.actingPrincipal !== undefined
+      ? cfcAtom.user(bindings.actingPrincipal) as JSONValue
+      : bindRequirementPlaceholders(value, bindings);
+  let changed = false;
+  const bound = ceiling.map((clause) => {
+    const next = isOrClause(clause)
+      ? { anyOf: clause.anyOf.map((alternative) => reader(alternative)) }
+      : reader(clause);
+    changed ||= !deepEqual(next, clause);
+    return next;
+  });
+  return changed ? bound : ceiling;
+};
+
+/**
+ * The entries of `schema` (`cfcSchemaEntries()`), each with the placeholders
+ * in the input requirements it declares bound by `bindings`. These are the
+ * entries every check of an input requirement walks, so a requirement is
+ * compared with what an attempt read or wrote only once it names concrete
+ * principals and spaces (spec §8.10.3).
+ *
+ * A requirement is a check on one attempt, so it binds to that attempt's
+ * principal. A declared label is persisted with the value, and binds by the
+ * creator rule `creatorBinding()` applies instead. The schema a document
+ * stores keeps its requirements symbolic, so each later attempt binds them to
+ * itself.
+ */
+const requirementBoundEntries = (
+  schema: JSONSchema,
+  bindings: InputRequirementBindings,
+): readonly CfcSchemaEntry[] =>
+  cfcSchemaEntries(schema).map((entry) => {
+    const declared = entry.schema.ifc as Record<string, JSONValue>;
+    let ifc = declared;
+    for (const key of INPUT_REQUIREMENT_KEYS) {
+      const requirement = declared[key];
+      if (requirement === undefined) continue;
+      const bound = key === "maxConfidentiality" && Array.isArray(requirement)
+        ? bindCeilingClauses(requirement, bindings)
+        : bindRequirementPlaceholders(requirement, bindings);
+      if (bound !== requirement) ifc = { ...ifc, [key]: bound };
+    }
+    return ifc === declared
+      ? entry
+      : { ...entry, schema: { ...entry.schema, ifc } as CfcDeclaringSchema };
+  });
+
+/**
+ * Why the input requirements `schema` declares at `path` cannot be checked, or
+ * `undefined` when they can: a placeholder `requirementBoundEntries()` left
+ * unbound, a `CurrentPrincipal` in an attempt no principal acts for or a
+ * malformed `PolicyOf`. Such a requirement fails closed, whether or not the
+ * attempt read anything it would apply to (spec §8.10.3).
+ */
+const unboundInputRequirementReason = (
+  schema: CfcDeclaringSchema,
+  path: readonly string[],
+): string | undefined => {
+  const ifc = schema.ifc as Record<string, unknown>;
+  for (const key of INPUT_REQUIREMENT_KEYS) {
+    if (holdsRequirementPlaceholder(ifc[key])) {
+      return `unbound placeholder in ${key} at /${path.join("/")}`;
+    }
+  }
+  return undefined;
+};
+
+const holdsRequirementPlaceholder = (value: unknown): boolean => {
+  if (Array.isArray(value)) return value.some(holdsRequirementPlaceholder);
+  if (!isObjectOrArray(value)) return false;
+  if (
+    isCurrentPrincipalPlaceholder(value) ||
+    value[OWNING_SPACE_PLACEHOLDER] === true
+  ) {
+    return true;
+  }
+  return Object.values(value).some(holdsRequirementPlaceholder);
 };
 
 const modulePolicyReferencesIn = (value: unknown): unknown[] => {
@@ -12768,7 +12962,10 @@ const verifyWriteFloor = function* (
   // principal are tx-wide. Concept floors on the written value resolve through
   // it; plain floors ignore it (Epic D5).
   const trust = cfcFloorTrustContext(tx);
-  const entries = cfcSchemaEntries(schema);
+  const entries = requirementBoundEntries(
+    schema,
+    inputRequirementBindings(tx, target.space),
+  );
   const entryLabels = new Map<string, IFCLabel>(
     entries.map((entry) => [pathKey(entry.path), entry.label]),
   );
