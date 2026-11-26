@@ -9900,7 +9900,7 @@ const installCarriedPolicyManifests = (
     // space it just read. Resolve first so the runtime verifies and indexes
     // that exact artifact, then atomically install it beside the destination
     // label in this transaction.
-    tx.resolveCfcPolicyManifest(reference, undefined, false);
+    tx.resolveCfcPolicyManifest(reference);
     if (
       !tx.hasCfcPolicyManifest(destination, reference) &&
       !tx.installCfcPolicyManifest(destination, reference)

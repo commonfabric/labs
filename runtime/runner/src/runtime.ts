@@ -19,7 +19,6 @@ import { aclDocId } from "@commonfabric/memory/acl";
 import {
   acquireServerExecutionEnabler,
   type CellScope,
-  commitPreconditionValueHash,
   type GenesisRoot,
   getCommitPreconditionsConfig,
   getServerExecutionConfig,
@@ -1969,33 +1968,21 @@ export class Runtime {
     reference: unknown,
     tx?: IExtendedStorageTransaction,
     destinationSpace?: MemorySpace,
-    bindCommit = true,
   ): PolicyArtifactManifestV1 | undefined {
     if (tx === undefined) return this.#registeredCfcPolicyManifest(reference);
     if (destinationSpace !== undefined) {
-      return this.#readCfcPolicyManifest(
-        destinationSpace,
-        reference,
-        tx,
-        bindCommit,
-      );
+      return this.#readCfcPolicyManifest(destinationSpace, reference, tx);
     }
-    let artifact: PolicyArtifactManifestV1 | undefined;
     const spaces = new Set<MemorySpace>();
     const log = tx.getReactivityLog();
     for (const address of [...log.writes, ...log.reads]) {
       spaces.add(address.space);
     }
     for (const space of spaces) {
-      artifact = this.#readCfcPolicyManifest(space, reference, tx);
-      if (artifact !== undefined) {
-        if (bindCommit) {
-          artifact = this.#readCfcPolicyManifest(space, reference, tx, true);
-        }
-        break;
-      }
+      const artifact = this.#readCfcPolicyManifest(space, reference, tx);
+      if (artifact !== undefined) return artifact;
     }
-    return artifact;
+    return undefined;
   }
 
   #registeredCfcPolicyManifest(
@@ -2084,11 +2071,16 @@ export class Runtime {
     return true;
   }
 
+  // A consultation is an ordinary read, bound to no commit (spec §4.4.1). A
+  // present manifest is immutable at its digest, so the body read here is the
+  // body any later read would find. An absent one fails the label's
+  // resolution, which fails the boundary, and the read wakes the run again
+  // when the manifest arrives. Neither can release more than a fresh
+  // consultation would, so neither needs a precondition.
   #readCfcPolicyManifest(
     space: MemorySpace,
     reference: unknown,
     tx: IExtendedStorageTransaction,
-    bindCommit = false,
   ): PolicyArtifactManifestV1 | undefined {
     if (
       !reference || typeof reference !== "object" || Array.isArray(reference)
@@ -2103,35 +2095,6 @@ export class Runtime {
       tx,
     );
     const stored = snapshotQueryResult(cell.get());
-    if (bindCommit) {
-      const link = cell.getAsNormalizedFullLink();
-      const rawStored = tx.readOrThrow({
-        space: link.space,
-        id: link.id,
-        scope: link.scope,
-        type: "application/json",
-        path: ["value"],
-      });
-      const alreadyWritten = tx.getReactivityLog().writes.some((address) =>
-        address.space === link.space && address.id === link.id &&
-        address.scope === link.scope
-      );
-      if (!alreadyWritten) {
-        if (!tx.addCommitPrecondition) {
-          throw new Error(
-            "cfcPolicyManifest: storage cannot bind manifest consultation",
-          );
-        }
-        tx.addCommitPrecondition(space, {
-          kind: "entity-value-hash",
-          id: link.id,
-          scope: link.scope,
-          valueHash: rawStored === undefined
-            ? null
-            : commitPreconditionValueHash(rawStored),
-        });
-      }
-    }
     if (stored === undefined) return undefined;
     let artifact: PolicyArtifactManifestV1;
     try {
@@ -3099,18 +3062,8 @@ export class Runtime {
           );
         assertCfcReadCeiling(readingTx, address, ceiling, options);
       },
-      resolvePolicyManifest: (
-        reference,
-        tx,
-        destinationSpace,
-        bindCommit,
-      ) =>
-        this.resolveCfcPolicyManifest(
-          reference,
-          tx,
-          destinationSpace,
-          bindCommit,
-        ),
+      resolvePolicyManifest: (reference, tx, destinationSpace) =>
+        this.resolveCfcPolicyManifest(reference, tx, destinationSpace),
       hasPolicyManifest: (space, reference, tx) =>
         this.hasCfcPolicyManifest(space, reference, tx),
       installPolicyManifest: (space, reference, tx) =>

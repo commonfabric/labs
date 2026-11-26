@@ -182,7 +182,11 @@ describe("PolicyOf label-time binding", () => {
     deletion.abort();
   });
 
-  it("rejects a zero-write prepared decision after manifest tampering", async () => {
+  // A consultation binds nothing at commit (spec §4.4.1): a present manifest
+  // is verified against its digest when read, and a missing one fails the
+  // resolution closed. A change after prepare leaves the decision no less
+  // safe, and a fresh consultation sees it.
+  it("commits a zero-write prepared decision after manifest tampering", async () => {
     runtime.registerCfcPolicyManifests(space, [artifact]);
     const installTx = runtime.edit();
     runtime.getCell(space, "tamper-policy", schema, installTx).set("secret");
@@ -216,10 +220,18 @@ describe("PolicyOf label-time binding", () => {
     expect(tamperResult.ok).toBeDefined();
     expect((await tamper.commit().settled).ok).toBeDefined();
 
-    expect((await decision.commit().settled).error).toBeDefined();
+    expect((await decision.commit().settled).error).toBeUndefined();
+    const fresh = runtime.edit();
+    const freshResolver = createTxCfcModulePolicyResolver(
+      fresh,
+      (candidate) => fresh.resolveCfcPolicyManifest(candidate, space),
+    );
+    expect(freshResolver(reference), "a forged body fails closed")
+      .toBeUndefined();
+    fresh.abort();
   });
 
-  it("rejects a zero-write prepared miss when the manifest appears", async () => {
+  it("commits a zero-write prepared miss when the manifest appears", async () => {
     const missingReference = {
       type: CFC_ATOM_TYPE.Policy,
       policyRefKind: "module",
@@ -247,7 +259,7 @@ describe("PolicyOf label-time binding", () => {
     expect(writeResult.ok).toBeDefined();
     expect((await writer.commit().settled).ok).toBeDefined();
 
-    expect((await decision.commit().settled).error).toBeDefined();
+    expect((await decision.commit().settled).error).toBeUndefined();
   });
 
   it("rejects a raw module-policy object in authored schema metadata", async () => {

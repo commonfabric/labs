@@ -494,24 +494,6 @@ describe("module-policy manifest consultation", () => {
         ),
       ).toBeUndefined();
       malformedReference.abort();
-
-      // A transaction over storage that cannot take a commit precondition.
-      class NoPrecondition extends TransactionWrapper {}
-      Object.defineProperty(
-        NoPrecondition.prototype,
-        "addCommitPrecondition",
-        { value: undefined },
-      );
-      const binding = runtime.edit();
-      const noPrecondition = new NoPrecondition(binding);
-      expect(() =>
-        runtime.resolveCfcPolicyManifest(
-          reference,
-          noPrecondition,
-          validSpace,
-        )
-      ).toThrow("storage cannot bind manifest consultation");
-      binding.abort();
     } finally {
       await runtime.dispose();
       await storageManager.close();
