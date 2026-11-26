@@ -3709,10 +3709,10 @@ export class StorageManager implements IStorageManager {
       return false;
     }
     this.#docPullKicks.add(key);
-    // State the local replica can already serve needs no pull. getState is
-    // undefined both for never-pulled docs and for docs known to hold no
-    // value (deleted / genuinely absent) — the second kind gets one harmless
-    // kick and is then held off by the kick set above.
+    // A doc the replica holds no value for is pulled. `get()` is undefined
+    // both for never-pulled docs and for docs known to hold no value (deleted
+    // / genuinely absent) — the second kind gets one harmless kick and is
+    // then held off by the kick set above.
     const { replica } = this.open(space);
     if (
       replica.get({
@@ -3724,9 +3724,10 @@ export class StorageManager implements IStorageManager {
     ) {
       return true;
     }
-    // A value the replica holds from its own commit alone is served, but no
-    // watch brings in what other sessions store there after it. The pull
-    // registers that watch.
+    // A value the replica can serve needs no pull where a frame delivered it
+    // or a watch is rooted at it. One it holds from its own commit alone is
+    // served too, but nothing shows that a watch brings in what other
+    // sessions store there after it. The pull registers that watch.
     return replica.holdsUnwatchedWrite?.(id, scope, instance) === true;
   }
 
@@ -8294,10 +8295,12 @@ export class SpaceReplica
    * rooted at it, and no release pass or retraction has settled what the
    * session keeps of it. The server sends a session the documents its
    * watches reach, so such a document stays at the replica's own version
-   * while other sessions change it, until something loads it. Content under
-   * a content-addressed id cannot change and needs no watch, and a replica
-   * that reads its store directly learns of every write to a document it
-   * holds.
+   * while other sessions change it, until something loads it, unless a
+   * watch rooted at another document reaches it. Content under a
+   * content-addressed id cannot change and needs no watch, a document held
+   * only in this replica has no stored copy another session could change,
+   * and a replica that reads its store directly learns of every write to a
+   * document it holds.
    */
   holdsUnwatchedWrite(
     id: URI,

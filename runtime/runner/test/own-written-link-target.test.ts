@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/api";
+import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -213,6 +214,28 @@ describe("own-written link target", () => {
     });
   });
 
+  describe("read through a link under a schema", () => {
+    it("reads another client's change by `key()`, where the schema lists no property holding the link and the reader's own commit stored the target", async () => {
+      // The load of the linking document carries this schema, so the server
+      // follows no link from it, and `key()` hands the load on to the cells
+      // it returns.
+
+      await store(reader, "target", { v: 1 });
+      await store(reader, "linking", linkTo("target"));
+      const linking = await readLinking({
+        type: "object",
+        properties: { mark: { type: "number" } },
+      });
+      const held = () => linking.key("inner").key("v").get();
+      expect(held()).toBe(1);
+
+      await change("target", { v: 2 });
+      await readPastMarker(linking);
+
+      expect(held()).toBe(2);
+    });
+  });
+
   describe("read of the target's own cell", () => {
     it("reads another client's change, where the reader's own commit stored the target", async () => {
       await store(reader, "target", { v: 1 });
@@ -267,6 +290,51 @@ describe("own-written link target", () => {
       });
       expect(linking.get()?.inner?.v).toBe(1);
       await storage.synced();
+
+      expect(storage.shouldPullDoc(space, idOf(reader, "target"))).toBe(false);
+    });
+
+    it("returns `false` for content the manager's own commit stored under the id its hash gives", async () => {
+      const id: URI = `cid:${taggedHashStringOf(targetSchema)}`;
+      const tx = reader.edit();
+      tx.writeValueOrThrow({ space, id, path: [] }, targetSchema);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await storage.synced();
+
+      expect(storage.shouldPullDoc(space, id)).toBe(false);
+    });
+
+    it("returns `false` for a session-scoped document of a runtime that keeps those to itself", async () => {
+      const keptStorage = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const keeping = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: keptStorage,
+        experimental: { localSessionDocuments: true, serverExecution: false },
+      });
+      try {
+        const id = idOf(keeping, "target");
+        const tx = keeping.edit();
+        tx.writeValueOrThrow({ space, id, path: [], scope: "session" }, 42);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await keptStorage.synced();
+
+        expect(keptStorage.shouldPullDoc(space, id, "session")).toBe(false);
+      } finally {
+        await keeping.dispose();
+      }
+    });
+
+    it("returns `false` for a document its own commit stored, of a manager that reads the space's store directly", async () => {
+      // A serving runtime's manager reads the store it runs beside, and
+      // learns from that store's feed of each write to a document it holds.
+      // This one is handed a read that finds nothing, which is never asked
+      // about a document the replica holds.
+
+      await store(reader, "target", { v: 1 });
+      await storage.synced();
+      storage.installStoreReadThrough(space, () => undefined);
 
       expect(storage.shouldPullDoc(space, idOf(reader, "target"))).toBe(false);
     });

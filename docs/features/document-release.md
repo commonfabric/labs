@@ -7,10 +7,13 @@ reaches from it through links. The union of a session's watches is what the
 runtime's replica of the space holds, apart from two kinds of document. One is a
 document the server retracted while something here still read it, which the
 replica keeps for that reader until the next release pass. The other is a
-document the runtime's own commit stored and nothing here has loaded, which the
-replica holds as that commit left it, unwatched, until a cell of its own loads
-it or a read reaches it through a link and starts that load
-(`IStorageManager.shouldPullDoc()`). This document describes how the runtime
+document the runtime's own commit stored that no watch reaches, which the
+replica holds as that commit left it until a cell of its own loads it or a read
+reaches it through a link and starts that load
+(`IStorageManager.shouldPullDoc()`). The server sends a session no frame for
+the session's own write, so the replica cannot tell such a document from one
+its own commit stored within a watch's reach, and the first read through a link
+loads either, once for each document. This document describes how the runtime
 removes the watches nothing needs any more, and drops the documents they kept
 loaded, so that a long-lived runtime that opens and closes many pieces does not
 hold every document it ever loaded.

@@ -872,15 +872,20 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   pendingCrossSpacePromiseCount?(): number;
 
   /**
-   * Whether a link target in `space` should be background-pulled because this
-   * replica has never seen the doc (fresh-replica read asymmetry): selector
+   * Whether a link target in `space` should be background-pulled, because
+   * nothing shows that the replica's session watches the doc. One case is a
+   * doc the replica has never seen (fresh-replica read asymmetry): selector
    * driven syncs only deliver what a schema covered, so a link can point at a
    * same-space doc no selector ever walked — without a pull such reads mask
-   * as `undefined`, indistinguishable from absence. Returns true exactly once
-   * per (space, id, scope) per manager lifetime and only when the local
-   * replica holds no state for the doc; the caller kicks the actual sync (see
-   * the link-resolution hop loop). Optional: managers without lazy remote
-   * replication (e.g. test mocks) simply don't implement it.
+   * as `undefined`, indistinguishable from absence. The other is a doc the
+   * replica holds from its own commit alone
+   * (`ISpaceReplica.holdsUnwatchedWrite()`): the read is served, and without
+   * a pull it keeps returning the replica's own version while other sessions
+   * change the doc. Returns true at most once per (space, id, scope) per
+   * manager lifetime, and only in those two cases; the caller kicks the
+   * actual sync (see the link-resolution hop loop). Optional: managers
+   * without lazy remote replication (e.g. test mocks) simply don't implement
+   * it.
    */
   shouldPullDoc?(
     space: MemorySpace,
@@ -4116,11 +4121,15 @@ export interface ISpaceReplica extends ISpace {
   ): Promise<Error | PullError | undefined>;
 
   /**
-   * Whether the replica holds the document only because its own commit wrote
-   * it, with no watch that brings in what other sessions store there
-   * afterwards. Such a document stays at the replica's own version until
-   * something loads it. `instance` names a scoped document's instance where
-   * it is not the replica's own.
+   * Whether the replica holds the document from its own commit alone, with
+   * nothing to show that its session watches it: no frame has delivered the
+   * document, and no watch of the replica's is rooted at it. Where no watch
+   * reaches such a document, it stays at the replica's own version while
+   * other sessions change it, until something loads it. The replica cannot
+   * rule out that a watch rooted at another document reaches it, since the
+   * server sends a session no frame for the session's own write, so this
+   * returns `true` for such a document too. `instance` names a scoped
+   * document's instance where it is not the replica's own.
    */
   holdsUnwatchedWrite?(
     id: URI,
