@@ -4116,6 +4116,19 @@ export interface ISpaceReplica extends ISpace {
   ): Promise<Error | PullError | undefined>;
 
   /**
+   * Whether the replica holds the document only because its own commit wrote
+   * it, with no watch that brings in what other sessions store there
+   * afterwards. Such a document stays at the replica's own version until
+   * something loads it. `instance` names a scoped document's instance where
+   * it is not the replica's own.
+   */
+  holdsUnwatchedWrite?(
+    id: URI,
+    scope?: CellScope,
+    instance?: ScopeKey,
+  ): boolean;
+
+  /**
    * Whether the replica holds a known stored version of the document, with
    * no pending local write, refused local fold, or incomplete wave promotion.
    * A watched delivery establishes it, including absence; a newer own write

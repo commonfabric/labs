@@ -3713,12 +3713,21 @@ export class StorageManager implements IStorageManager {
     // undefined both for never-pulled docs and for docs known to hold no
     // value (deleted / genuinely absent) — the second kind gets one harmless
     // kick and is then held off by the kick set above.
-    return this.open(space).replica.get({
-      id,
-      type: DOCUMENT_MIME as MIME,
-      scope,
-      ...(instance !== undefined ? { scopeKey: instance } : {}),
-    }) === undefined;
+    const { replica } = this.open(space);
+    if (
+      replica.get({
+        id,
+        type: DOCUMENT_MIME as MIME,
+        scope,
+        ...(instance !== undefined ? { scopeKey: instance } : {}),
+      }) === undefined
+    ) {
+      return true;
+    }
+    // A value the replica holds from its own commit alone is served, but no
+    // watch brings in what other sessions store there after it. The pull
+    // registers that watch.
+    return replica.holdsUnwatchedWrite?.(id, scope, instance) === true;
   }
 
   /** @inheritDoc */
@@ -8276,6 +8285,38 @@ export class SpaceReplica
       return undefined;
     }
     return this.#completeThroughSeq;
+  }
+
+  /**
+   * @inheritDoc
+   *
+   * No frame has delivered such a document, no watch of this replica's is
+   * rooted at it, and no release pass or retraction has settled what the
+   * session keeps of it. The server sends a session the documents its
+   * watches reach, so such a document stays at the replica's own version
+   * while other sessions change it, until something loads it. Content under
+   * a content-addressed id cannot change and needs no watch, and a replica
+   * that reads its store directly learns of every write to a document it
+   * holds.
+   */
+  holdsUnwatchedWrite(
+    id: URI,
+    scope?: CellScope,
+    instance?: ScopeKey,
+  ): boolean {
+    if (this.#storeReadThrough() !== undefined) return false;
+    const address = {
+      id,
+      scope,
+      ...(instance !== undefined ? { scopeKey: instance } : {}),
+    };
+    if (this.#isLocalSessionDocument(address)) return false;
+    const key = this.#docKeyOf(address);
+    const record = this.#docs.get(key);
+    return record !== undefined && !this.#delivered.has(key) &&
+      (this.#rootWatches.get(key)?.watches.size ?? 0) === 0 &&
+      !this.#owedWatches.has(key) && !this.#retractedHeld.has(key) &&
+      !holdsImmutableContent(id, scope, record);
   }
 
   /** ISpaceReplica.isConfirmedDocument. */
