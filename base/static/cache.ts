@@ -32,7 +32,8 @@ export interface CachedAsset {
 /**
  * The cache of static assets served from one base location, holding each
  * asset's content together with a strong ETag over that content. An asset is
- * read at most once per instance: from a `file:` base it is read off the file
+ * read successfully at most once per instance, and a failed read is tried
+ * again on the next request. From a `file:` base it is read off the file
  * system, and from any other base it is fetched over the network.
  */
 export class StaticCache {
