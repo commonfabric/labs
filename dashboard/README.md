@@ -1818,7 +1818,8 @@ API. [Anthropic instructions](https://platform.claude.com/docs/en/manage-claude/
 
 3. Copy the rule ID, the service account ID, and the organization ID into the
    stage overlay's `dev-dashboard-anthropic-wif` ConfigMap in the infra
-   repository, land that change, and deploy it.
+   repository and land that change. Flux applies it, and the changed ConfigMap
+   restarts the pod.
 
 4. The wizard waits 15 minutes for a successful exchange. The tile exchanges on
    its first collection after the pod starts. If the wizard window has passed,
@@ -2382,10 +2383,12 @@ The deploy artifacts follow the golink pattern. `dashboard/Dockerfile` (labs rep
 root) builds the image; the manifests, ExternalSecrets, and tofu secret
 containers live in the **infra** repo (`k8s/manifests/dev-dashboard/`,
 `k8s/overlays/stage/external-secrets/dashboard-secrets.yaml`,
-`tofu/gke/secrets.tf`), and it is wired into `make apply-dev-dashboard-stage` and
-`apply-all.sh`. Access is tailnet-only at `https://dashboard.<tailnet>.ts.net`
-via a userspace Tailscale sidecar (the one adaptation golink gets for free from
-its embedded tsnet).
+`tofu/gke/secrets.tf`). Flux, which applies infra `main` to the stage cluster,
+deploys the manifests and each new image. `make apply-dev-dashboard-stage`,
+which infra's `apply-all.sh` also runs, installs the dashboard the first time
+and applies its secrets. Access is tailnet-only at
+`https://dashboard.<tailnet>.ts.net` via a userspace Tailscale sidecar (the one
+adaptation golink gets for free from its embedded tsnet).
 
 **One-time setup (human steps):**
 
@@ -2424,15 +2427,17 @@ its embedded tsnet).
 `.github/workflows/dashboard-image.yml` publishes the image, and it publishes
 only from `main`. A push to `main` starts it when the dashboard image, the
 dashboard package, a package the dashboard imports, the Gantt drill-down, the
-Deno dependency metadata, or the workflow itself changes. You can also start it
-by hand from the repository's Actions tab, which is how to publish a `main`
-commit whose files fall outside that path list. A manual run can name any branch
-or tag, so the workflow's first step fails a run that is not on `main`:
-publishing moves the `latest` tag the stage deployment follows. That step runs
-before anything from the named ref is checked out.
+Deno dependency metadata, or the workflow itself changes. Someone can also start
+it by hand from the repository's Actions tab. A manual run can name any branch
+or tag, so the workflow's first step fails a run that is not on `main`, before
+anything from the named ref is checked out. A manual run on `main` publishes an
+image, but stage never deploys it. The image pin roller described below takes
+only images that a push to `main` published, and infra's provenance check
+refuses any other image.
 
 The workflow runs the dashboard tests, then builds the amd64 image and pushes
-it under both the immutable `dev-dashboard:<full-sha>` tag and `latest`. The
+it under both the immutable `dev-dashboard:<full-sha>` tag and `latest`. Nothing
+deploys `latest`; stage runs the image whose digest infra pins. The
 image carries labels naming the repository, the ref, the event, the workflow,
 the run, and the commit it was built from. The infra repository's
 `k8s/scripts/verify-image-provenance.sh` reads those labels back and checks them
@@ -2446,7 +2451,7 @@ dashboard is a workspace package and CI's `Test` job runs each package's test
 task. The publish workflow runs them again rather than leaning on that. The two
 workflows are independent — neither waits for the other, and this one cannot
 read CI's verdict — so its own test job is the only thing standing between a
-dashboard that fails its tests and the `latest` tag. Leave it in place even
+dashboard that fails its tests and a published image. Leave it in place even
 though it looks redundant.
 
 What that test job does not do is record what it runs. CI records the same
@@ -2461,23 +2466,71 @@ The publish job authenticates with GitHub OIDC and GCP Workload Identity
 Federation. It emits the immutable `sha256:` image reference in the workflow
 summary; no service-account JSON key is used.
 
-The manual trigger publishes whatever `main` currently points at. Stage runs
-only an image this workflow published from `main`, because the infra
-repository deploys a first-party image only when its build metadata shows
-such a publish. A commit that has not landed on `main` therefore cannot be deployed
-there.
+Stage runs whatever image infra `main` pins. The infra stage overlay,
+`k8s/overlays/stage/dev-dashboard/kustomization.yaml`, names the image by its
+`sha256:` digest in `images[].digest`. Infra's image pin roller, a scheduled
+infra workflow (`.github/workflows/roll-image-pins.yml`, described in infra's
+`scripts/image-pins/README.md`), moves that pin forward each time this workflow
+publishes from a push to `main`. Nobody has to act:
 
-Copy the published digest from the workflow summary into the infra stage
-overlay's `images[].digest`, commit that immutable pin, then run
-`make apply-dev-dashboard-stage` from `infra/k8s`. The node then appears in the
-Tailscale console as `tag:dashboard`; open
-`https://dashboard.<tailnet>.ts.net/`. (The sidecar image is already pinned by
-`@sha256` digest in `03-deployment.yaml`, matching golink.)
+1. The roller runs at 7, 22, 37, and 52 minutes past each hour. When one of
+   those runs finds this workflow running on labs `main`, it watches that run
+   and starts the roller again within about a minute of the run finishing. A
+   run that starts and finishes between two scheduled roller runs waits for
+   the next one.
+2. The roller picks the newest run of this workflow that a push to `main`
+   started, whose commit is ahead of the commit pinned now, and whose latest
+   attempt succeeded. It never moves the pin back. It checks the image's labels against GitHub with
+   infra's `k8s/scripts/verify-image-provenance.sh --strict`, then opens an
+   infra pull request that changes only the digest. Its title is
+   `Pin dev-dashboard-stage at labs <commit>`, where `<commit>` is the first
+   twelve hex digits of the labs commit.
+3. When infra's Checks workflow passes on that pull request, the roller lands
+   it on infra `main`. If a newer image was published in the meantime, the
+   roller closes the pull request and proposes the newer image instead.
+4. Landing starts infra's "Publish Flux manifests" workflow, which publishes
+   the dashboard's manifests and overlay as a signed artifact. Flux, which
+   checks for a new artifact every minute, applies it: the Deployment replaces
+   the pod and Flux waits for the new pod to become ready.
+
+The stage dashboard usually changes 15 to 25 minutes after a labs pull request
+that touches it merges. Most of that time is the publish run, the wait for the
+next roller run, and infra's Checks on the pin pull request.
+
+To see that a deploy happened, or where one is held up:
+
+- The pin pull request, which the roller opens and lands as the
+  `common-tools-ci` GitHub App, is in the infra repository's closed pull
+  requests. A pull request that is
+  still open is waiting for infra's Checks.
+- The "Roll image pins" runs in infra's Actions tab say why the roller did
+  not propose an image, for example a failed provenance check.
+- Someone with access to the stage cluster can run
+  `kubectl -n flux-system get kustomization dev-dashboard-stage`, which reports
+  the artifact revision Flux last applied and whether the rollout finished.
+- The dashboard serves its labs commit as its compatibility version: it is in
+  the page source and in the `dashboard-version` header of each drill-down
+  response. An open page reloads itself when that commit changes.
+
+`make apply-dev-dashboard-stage`, run from `k8s/` in a clean checkout of infra
+`main`, does what the roll does not:
+
+- The first install. The target creates the dashboard's ExternalSecrets, the
+  objects that copy its provider credentials from Secret Manager into the
+  cluster, which Flux does not apply. The node then appears in the Tailscale
+  console as `tag:dashboard`; open `https://dashboard.<tailnet>.ts.net/`. (The
+  sidecar image is pinned by `@sha256` digest in `03-deployment.yaml`, matching
+  golink.)
+- Adding or rotating a provider secret. The pod reads its secrets as
+  environment variables, which do not change in a running pod, so the target
+  syncs the ExternalSecrets and restarts the pod.
+- Deploying by hand while the Flux sync is suspended.
 
 **Provider-gated tiles** stay gray until their credential or public configuration
 is wired: add the Secret Manager *value* (the container already exists from
-`tofu apply`), enable the matching ExternalSecret/env when needed, then re-run
-`make apply-dev-dashboard-stage`. Stage's Cloud Billing table is already wired;
+`tofu apply`), enable the matching ExternalSecret or environment variable in the
+infra manifests when needed, then run `make apply-dev-dashboard-stage` so that
+the pod restarts with the value. Stage's Cloud Billing table is already wired;
 during Google's initial export backfill it reports `no billing data yet` rather
 than a false zero.
 
