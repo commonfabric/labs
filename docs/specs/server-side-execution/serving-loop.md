@@ -1934,6 +1934,18 @@ write, and the seed runs once more against the viewer's instance loaded
 fresh, filling the default's missing fields under what the viewer wrote
 (scopes.md §2). A fourth kind is a spec edit here first.
 
+The runner retries a dropped piece start once in place. The settlement of a
+bookkeeping contribution dropped whole over a concurrent write it cannot
+rebase over names every document it wrote, each with the store's head
+when it was dropped, as the settlement of a superseded derivation write
+does (below). The retry waits until the
+replica has taken each of those commits
+(`Runtime.awaitCommitRetryReadiness`). A retry started sooner writes
+every document again over what the replica holds, past a commit the
+replica has not taken. A client's start that stored a computed document
+then loses that document's `value`, and a send that resolves its target
+through the document addresses a place no handler is registered for.
+
 **The flag-ON client's speculative-consequence deferred start
 (RULED 2026-08-13; the Phase-4 P1-5 flag).** A flag-ON CLIENT's
 deferred piece-start transaction minted as a SPECULATIVE
