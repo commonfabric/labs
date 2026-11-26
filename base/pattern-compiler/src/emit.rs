@@ -822,7 +822,9 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 match root {
                     Root::Index(_) => code,
                     _ if *class == "identity" => Self::wanted(want, code),
-                    _ => format!("$h.v({code}).length"),
+                    // The place may hold nothing, as the candidates of a
+                    // `wish` that has not answered: nothing has no length.
+                    _ => format!("$h.v({code})?.length"),
                 }
             }
             Place::Value(value, path) => {
