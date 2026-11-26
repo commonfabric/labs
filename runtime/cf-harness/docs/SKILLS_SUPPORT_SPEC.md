@@ -526,6 +526,15 @@ Skills are retrieved context. They are not direct operator commands.
 context/provenance in run artifacts. They must not be treated as
 `direct-command` prompt-slot evidence.
 
+A skill the operator configured holds the `context` role. A skill delivered
+through `delegate_task.skillHandle` holds the `quote` role, because it is text
+from a cell and nothing shows the person wrote it: an acquired skill came from a
+third party. A child given one runs with its prompt-slot binding lowered to
+`quote`, whatever the parent's task holds: under `enforce-explicit` it may only
+read, and under `enforce-strict` it may call only its return channels. Nothing
+yet tells a delegation the person started apart from one the model chose, so the
+lowering applies to both.
+
 Policy rules:
 
 - A skill cannot grant a tool that the run did not already allow.
@@ -549,6 +558,10 @@ Policy rules:
   script as for a registry one, and replaces neither of those two conditions. It
   runs in the sandbox; a run whose skill-script execution target is the host
   refuses it.
+- `run_skill_script` is a side-effect tool, and the child that holds an acquired
+  skill runs as `quote`, so under an enforce mode the call is refused before
+  either gate is reached. Nothing yet lets a reviewed skill's script run under
+  enforcement.
 - What backs `run_skill_script` for an acquired script is the mount that puts it
   at a path, so a run given no `--skills-root` still offers the tool to a child
   whose sandbox carries that mount, and `--allow-skill-script` takes an acquired
@@ -650,7 +663,7 @@ either has moved.
       "runId": "...",
       "digest": "sha256:...",
       "activatedAt": "...",
-      "cfcPromptRole": "context",
+      "cfcPromptRole": "quote",
       "handleToken": "cfh:a:3kk78"
     },
     {
@@ -659,7 +672,7 @@ either has moved.
       "runId": "...",
       "digest": "sha256:...",
       "activatedAt": "...",
-      "cfcPromptRole": "context",
+      "cfcPromptRole": "quote",
       "handleToken": "cfh:a:f4ecd",
       "acquisition": {
         "registryId": "owner/repo/slug",
