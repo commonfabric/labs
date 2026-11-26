@@ -28887,3 +28887,566 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    output (the record of the body's inputs) and leaves the content's label in
    the item's document. With items that declare no clause the comparison with
    today's path shows no difference; with a clause it is blocked by note 1079.
+
+## Round thirty-one: the comparison of both paths with two principals, as a standing gate
+
+The round of 2026-11-25 on the first item of the order of work the owner agreed
+to that day ("that order seems right, proceed please"): the comparison of
+section 1 of `docs/plans/compiled-pattern-language-ship-criteria.md`, with two
+principals, as a gate. It builds an instrument and fixes nothing of the compiled
+path. Its logs and results are in the folder of the round,
+`r31-two-principal-gate/`. It changes no file under `runtime/`, `patterns/`,
+`exec/` or `src/`, and no deciding site, so it has no class under
+`docs/development/cfc-spec-correspondence.md` and adds no `SPEC-PENDING` marker.
+Its branch, `claude/compiled-pattern-two-principal-gate`, was cut from
+`dcaad56391`, the head before round thirty, and numbers its notes from 1150 and
+its provisional decisions from P520.
+
+1150. **Findings, first.** The gate at the compiled path of `dcaad56391` (the
+      command at the round's code head `4731e569a0`, `full-3.jsonl` of the
+      round's folder; note 1155 has the figures): 419 scenarios, of which 276
+      ran, none is equal, 276 differ, and 143 are skipped; the run exits 1. The
+      ledger's one entry, the module identities, accepted 86 findings.
+      - _Soundness: the compiled path commits writes today's path refuses._
+        Under the serving loop, with the piece set up by a client: the handler
+        of `dev/test/cfc-trusted-write/main.tsx` that overwrites the pinned note
+        without the named writer's identity, and its `pin` sent with no gesture;
+        `examples/cfc-authorized-save/main.tsx`'s `save` with no gesture; a room
+        of `dev/test/writer-policy/main.tsx` started with a value for a field
+        its argument type names a writer for (today's path refuses the start,
+        "writeAuthorizedBy requires a trusted verified binding identity at
+        /frozen"). The write policies of the argument type are not stored on the
+        compiled path where the client wrote the argument (`policy` at
+        `room/entries` and `room/frozen`: today's path stores
+        `writeAuthorizedBy submit` and `freeze`, the compiled path none). This
+        is note 900's open item "a piece a serving runtime starts from a stored
+        argument", which the harness of note 900 did not reach, since it started
+        each piece with `Runtime.run` on the serving runtime itself.
+      - _A clause of one principal where the other reads (round thirty's
+        defect)._ In the Topics scenario, after A files a topic from the
+        composer, documents of the space of the compiled path hold B's `User`
+        clause where today's path holds none (`board/crossrefs/0`,
+        `board/crossrefs/0/mentionedBy`, and the topic's made documents that no
+        member reaches; 449 findings), and from that step on the compiled path
+        refuses A, the topic's creator, the whole board, which today's path
+        gives her. Instances of the scope `user` of one principal hold the
+        other's clause (`crossed-clause`, among them the instance of B's board
+        view at `board/mentionable/0/piece/$UI@A/...`). The same holds for the
+        corpus copy of the board (`apps/topics/main.tsx`), and foreign clauses
+        are also stored by `apps/recommend-a-book/shared-invitation.tsx`,
+        `examples/group-chat-lobby/group-chat-lobby.tsx` and
+        `dev/test/cfc-trusted-write/other-writer.tsx` (600 findings in 5
+        scenarios; 196 crossed clauses in 2). In the scenario of an instance a
+        handler makes, the defect cannot show yet: the compiled card's `wish`
+        for the profile is never answered (its state holds the request and no
+        outcome, for A alone), its `viewer` is empty, A reads the list of cards
+        empty and B reads nothing, and A's `touch` of the card is dropped ("no
+        handler registered ... after starting its piece"); today's path gives
+        each principal the card with that principal's own profile name.
+      - _A clause of the serving loop's identity._ The compiled path stores
+        `User(service)` at `note/pinned` of `cfc-trusted-write/main.tsx`, where
+        today's path stores `User` of the acting principal, so neither principal
+        reads the pinned note on the compiled path.
+      - _The principal that set a compiled piece up reads the argument as its
+        client wrote it._ After events add to a list of the argument, A, whose
+        client set the piece up, reads the list empty on the compiled path where
+        B reads the entries (the Z100 scenario, the per-user and per-session
+        cells), and reads nothing new in the made instance's list.
+      - _Labels missing on the compiled path._ The confidential clause of a
+        view: `apps/budget-tracker/confidential.tsx` stores `expense-note` at
+        the positions of its rendered expenses on today's path and not on the
+        compiled path, so both principals read on the compiled path what today's
+        path refuses them; the same for `examples/cfc-spec-gallery` and
+        `apps/redactor/vault.tsx` (a module policy's clause). 1,220 findings in
+        47 scenarios.
+      - _Labels extra on the compiled path._ 14,243 findings in 274 scenarios,
+        of which 13,843 are the atom `TransformedBy` naming the compiled pattern
+        at positions where today's path stores no flow atom (CFC question 5
+        below); the rest are `User` clauses (344) and other clauses.
+      - _Values._ 666 findings in 163 scenarios, among them the reads of the
+        principal that set the piece up, time-dependent values
+        (`examples/reactive-now`, `apps/reward-spinner`), and a view value of
+        the space whose value differs by form (`crossrefIndex.source` is `{}` on
+        today's path and `[]` on the compiled path).
+      - _Error states._ Four modules store error states on the compiled path and
+        none on today's: `apps/weekly-calendar/event.tsx` ("Cannot read
+        properties of undefined (reading 'toString')", two current),
+        `examples/suggestable/event-list.tsx` and `people-list.tsx` ("...
+        (reading 'length')", one current and three over all revisions), and
+        `dev/test/silent-computed-crash.tsx`, whose crash today's path stores as
+        no error state.
+      - _Not stable between runs._ The last two full runs differ in the harness
+        only in how the message of a refused commit is read, and the counts of 9
+        scenarios differ between them: the Topics scenario's foreign clauses
+        were 223 and 449 and its crossed clauses 76 and 160; crossed clauses of
+        `examples/fair-share/main.tsx` and `shared-profile-roster/main.tsx`
+        appear in one run and not the other (in the run before, those of
+        `profile-group-chat`, `shared-profile-demo` and
+        `profile-roster-live-demo` did); and in the scenario of an instance a
+        handler makes, today's path gave each principal its card in one run and
+        refused both principals in the other. Values that follow the clock
+        (`examples/reactive-now`, `apps/contacts/contact-book.tsx`) differ as
+        well. The derivations for two principals are not deterministic in what
+        they store, on either path.
+
+1151. **The gate (P520 to P527).** `compare/both-paths.ts` is now the command of
+      the gate; the harness of note 900, one principal with no serving loop,
+      runs behind `--one-principal` and its test is unchanged.
+      - _The serving posture (`compare/both-paths-serving.ts`)._ Each path of
+        each scenario has a memory server of its own reached in-process only
+        (`newLoopbackServer`, as `startServingMemoryServer` makes one), over a
+        store of SQLite files in a temporary directory, with a serving loop
+        (`ExecutorHost`) whose runtimes come from `servingRuntimeFactory`, with
+        `storeReadThrough` on, as a toolshed has it. The compiled path's serving
+        runtimes have the option `compiledPatterns` and `serveCompiledPieces`
+        with one `PatternCompiler`; today's have neither. Three clients connect
+        in-process with server execution on: one for each of the principals A
+        and B and one for the space's own identity, which acts for a start or a
+        step that names no principal. From the start of a piece on, A's and B's
+        clients each hold a sink on its result, which is the demand a client
+        showing the piece makes. `listenCompiledServingMemoryServer` was not
+        used: it opens a port, and its store is not a directory the harness can
+        read.
+      - _A piece is set up as a client sets one up (P520)._ On today's path the
+        acting client compiles the program and calls `Runtime.run`, which under
+        server execution writes the piece and leaves its running to the serving
+        loop. On the compiled path it writes the source and the argument
+        (`setUpCompiledPiece`), and the serving runtime compiles and starts the
+        piece. The two paths therefore differ in what the client writes (a
+        process document and today's argument under the argument schema, against
+        the source document, the pointer and an argument document under no
+        schema), which is the difference a deployment has, and is the case of
+        note 900's open item "a piece a serving runtime starts from a stored
+        argument". Stamping and storage are the same: the serving loop stamps
+        each handler's run with the principal whose client appended the event,
+        on both paths, and no harness stamps anything.
+      - _Events and writes._ An event is appended by the acting principal's
+        client (`sendEvent` with `echo: false`), and whether the handling
+        committed, with the message where it did not, is what the client's
+        commit callback is told (`EventDeliveryError`). A write sets the cell a
+        link at a member of the result leads to, as the shell's `$value` binding
+        does.
+      - _Reads._ Each principal's client reads every member of every result as
+        the worker hands a host a value (`HostReadGate` of
+        `runtime/runtime-client`, under `defaultDisplayCeiling` of that
+        principal, with the exchange resolver, membership and module policies
+        the worker builds), following a link in a value two links deep. A
+        refused read is compared as hidden. Where the whole result is refused,
+        each member is still read on its own.
+      - _The homes._ Each principal has a home whose root lists a profile of its
+        own in a space of its own (`seedHome` of `wish-home.ts`, now with the
+        space and the name as options), under a schema whose confidentiality is
+        that principal's `User` atom. The profile's name is text of that
+        principal's scope for check (b).
+      - _The store (`compare/both-paths-store.ts`)._ After each start and step
+        the scenario's space is read from its SQLite file with the state
+        inspector: every document at its current revision in every scope
+        instance, with its envelope resolved by `interpretStoredEnvelope` and
+        `resolveStoredCfcMetadata`; the error states (`isErrorState` and an
+        encoded `FabricError`) of every space of the store, over the current
+        revisions and over the data of every revision row; and the documents,
+        bytes and rows written since the last checkpoint.
+      - _Positions (`compare/both-paths-gate.ts`, P521)._ A position is the
+        piece and the path from its result document, followed through every link
+        a stored value holds, the target mounted at the link. A link of the
+        scope `user` or `session` is followed into each principal's instance
+        (`@A`, `@B`). A document is mounted once for each path into it a link
+        names, at the first position a walk in order of the members' names
+        reaches it by. An entry above the linked path counts at the link, marked
+        `above`. Documents no walk reaches (argument and process documents
+        nothing links, a compiled piece's own documents, stream markers and
+        sidecars, schema and label documents) are pooled by the kind of their
+        scope and its principal, and a clause in one path's pool and not the
+        other's is a difference of that pool.
+      - _What is compared (P522)._ Commit and message; each principal's read of
+        each member (`valueEqual`); at each position the confidentiality clauses
+        and the integrity atoms as `toCompactDebugString` gives them, with
+        principals, entities and hashes named; the write policies of the stored
+        schema by binding path (`policiesOf`); and the modules writer claims
+        name, a kind of its own. A finding made again at a later checkpoint is
+        reported once, with the first and the last.
+      - _Derived checks._ (a) A clause naming A or B in a document of the scope
+        `space` on the compiled path where today's path holds no such clause at
+        the same position (`foreign-clause`); today's own such clauses are
+        listed, and are no finding. The same for a clause naming one principal
+        in an instance of the other's scope (`crossed-clause`, P523). A clause
+        names a principal by the identifier or by its committed form
+        `{ digestOf: hashStringOf(did) }`, which is how both paths store a
+        `User` atom. (b) Text of one principal's scope (the profile name, and
+        what a scenario lists) in a read of the other, or in a document of the
+        space or of the other's scope at a path whose label names no clause of
+        the first; on each path alone; text a step writes into the space on
+        purpose is listed as shared from that step on (P524).
+      - _The ledger (`compare/both-paths-accepted.json`)._ One entry, the module
+        identities of note 764 (P310). The run fails on an entry that covers
+        nothing among the scenarios that ran.
+      - _Scenarios._ The 16 scenarios of `both-paths-scenarios.ts` (note 900
+        counted 14; the two of `get-iterated` came with note 1079), each with
+        alice as A and again as B; the corpus (`gateCorpusScenarios`); and nine
+        named scenarios (`compare/both-paths-named.ts`, fixtures `gate-*.tsx`).
+
+1152. **Tests of the instrument** (`compare/test/both-paths-gate.test.ts`). The
+      cases of the label, the derived checks and the reads run one scenario,
+      `fixtures/labeled-item.tsx` started by A and named once, on both paths,
+      and edit a copy of what the compiled run read from its store (the `edit`
+      seam of `runScenario`) before comparing: a clause removed from the stored
+      envelope of the title is reported missing; a clause added is reported
+      extra; B's `User` clause added there is reported by check (a) with the
+      document, the position, the clause and the step; A's profile name in B's
+      read, and in a document of the space at a path whose label names no clause
+      of A, is reported by check (b), and nothing is where no one reads it; a
+      value that differs for B is reported for B and not for A, and nothing is
+      where neither differs; a read refused on one path is reported as hidden. A
+      store written by a runtime with an error state that a later revision
+      replaces counts it in every revision and not in the current one. A ledger
+      entry that covers the one difference makes the outcome equal and the exit
+      status 0; a difference no entry covers, and an entry that covers nothing,
+      make it 1. A scenario whose module does not resolve, and one of the corpus
+      that requests an effect, are skipped with the reason and never equal.
+      - _Seen failing._ Four failed at their first run for a defect of the
+        instrument or of the case: check (a)'s case edited every document that
+        held the clause (the stream sidecar and the receipt as well), check
+        (b)'s case in a document was reported at no position, since a path with
+        no label of its own had none (`positionOf` now finds the nearest reached
+        path above), and the two read cases read `item.title`, which both paths
+        refuse both principals, so the edit made no difference of its kind. The
+        other ten passed at their first run, since they were written after the
+        code. Nine of them were then seen to fail against the instrument with
+        the detection each tests removed (`mutations.log` of the round's
+        folder): label-missing not reported, label-extra not reported, reads not
+        searched for another principal's text, older revisions not counted,
+        stale entries not found, ledger acceptance ignored, a differing scenario
+        given exit status 0, a skipped scenario counted equal, an unresolvable
+        module counted equal. The tenth, that both paths store the same clause
+        at the title and no label difference is reported there, states the
+        starting point of the edited cases and was not seen to fail.
+1153. **What the instrument does not compare.** The labels of a document no walk
+      reaches, beyond its confidentiality clauses in the pool of its scope: its
+      integrity and its write policies; the origin and the observation class of
+      a label entry, and the document-rooted label-metadata templates; a value
+      read through more than two links (`<link>`); the serving runtime's own
+      start on today's path (a start is the client's setup commit; on the
+      compiled path a start the serving runtime refused is a `not-compiled`
+      finding); the documents of the homes and the profile spaces, whose error
+      states are counted; more than one session for a principal, and a session
+      that closes; what each step wrote, which is reported beside each path and
+      not compared; times. A walk of a stored value stops at a depth of 64 and
+      at an object it is already inside of: a value of
+      `examples/fair-share/main.tsx` that the state inspector reconstructs on
+      today's path leads from a view's `props.bytes` back to the view (not
+      traced: whether the store or the reconstruction makes the cycle).
+1154. **Provisional decisions; not verified.** P520: a piece is set up on each
+      path as a client sets one up, `Runtime.run` under server execution on
+      today's path and `setUpCompiledPiece` on the compiled path, under one
+      serving harness built for both, and not under
+      `listenCompiledServingMemoryServer` with today's piece set up beside it
+      (the arm `serving-today` of `topics/serving.ts`), which runs today's piece
+      in serving runtimes that have the option on. P521: a position is named by
+      its path from a result through stored links, per principal for a link of a
+      scope; a document no walk reaches is pooled by its scope. P522: a finding
+      made again at a later checkpoint is one finding; the ledger matches by
+      scenario, step, position and kind, each with `*`. P523: a clause naming
+      one principal in an instance of the other's scope is a finding of the
+      compiled path (`crossed-clause`) where today's path does not hold it at
+      the same position. P524: text of a principal's scope that a step's handler
+      writes into the space on purpose is declared shared by the step. P525: a
+      start or a step that names no principal is made by a client of the space's
+      own identity, which holds no sink. P526: the profile carries the
+      principal's `User` atom as its confidentiality, as `wish-home.ts` writes
+      it; `BOTH_PATHS_PROFILE=public` writes it under no schema. P527: a module
+      of the corpus that exports no pattern, has no value code, requests an
+      effect, or that the serving runtime does not start compiled is skipped
+      with the reason, and an event whose binding no member of the result names
+      is counted as not sendable. _Not verified:_ the same comparison against a
+      browser; a second session of one principal; whether the module identities
+      of the ledger's entry are all the module identities that differ (the
+      policy atoms of a module policy differ in form as well and are not
+      covered); the scenarios' stability across runs beyond the two full runs of
+      the round.
+
+1155. **The command and its figures.** From the repository root, after
+      `cargo build --release` in `base/pattern-compiler`:
+      `deno run -A --no-check base/pattern-compiler/compare/both-paths.ts <results.jsonl>`
+      (`--sets=hand,named,corpus`, `--only=<part of a name>`,
+      `--ledger=<file>`). The package has no `deno.jsonc` and so no task. A full
+      run took 5 minutes 3 seconds and 5 minutes 59 seconds on an Apple M5 Max
+      with the load of other sessions, and 9 minutes 4 seconds beside the
+      repository's type check and test runs; the crate's `emit --corpus` that
+      lists the corpus is part of it. At the round's code head: 419 scenarios
+      (32 hand-written, 9 named, 378 of the corpus), 276 ran, 0 equal, 276
+      differing, 143 skipped (69 export no pattern, 31 request an effect, 39 the
+      serving runtime did not run compiled, 35 of them because the serving
+      compiler refused a program the corpus emit accepted, 4 have no value
+      code). Unexplained findings by kind: `label-extra` 14,243 in 274
+      scenarios, `label-missing` 1,220 in 47, `value` 666 in 163,
+      `foreign-clause` 600 in 5, `crossed-clause` 196 in 2, `hidden` 123 in 25,
+      `policy` 63 in 25, `commit` 23 in 17, `message` 11 in 8, `foreign-value` 4
+      in 1, `error-state` 4 in 4, `read-failed` 2 in 1; 86 findings accepted by
+      the ledger's one entry. Exit status 1.
+
+### CFC questions deferred, round thirty-one
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. Today's path, the reference of the comparison, stores one principal's `User`
+   clause where the other reads: in the scenario of an instance a handler makes,
+   a document of the space (the state of the card's `wish`) holds A's clause and
+   B's, and a computed document of A's scope holds B's; in the Topics scenario
+   B's per-session drafts of a topic (`editingBody`, `bodyDraft`, `titleDraft`)
+   hold A's clause, and with the profile confidential today's path refuses A the
+   board after she files a topic. Whether today's labels are the reference for
+   these positions.
+2. The compiled path stores the clause `User(service)`, the serving loop's own
+   identity, at `note/pinned` of `dev/test/cfc-trusted-write/main.tsx`, where
+   today's path stores `User` of the acting principal. Which principal a clause
+   of the current principal names in a run the serving loop stamps.
+3. Z100: neither path stores a clause for a payload a user typed that a handler
+   writes into a list of the space; the payload stays in the space's stream
+   sidecar, where the other principal reads it (both paths, the scenario of a
+   scoped collection in a row).
+4. A policy atom of a module policy: today's path stores it with the module's
+   identity and the policy's digest, the compiled path as
+   `{ policyOf: { binding, module } }`. Whether the second is a form the
+   specification admits, or the module identity alone differs by construction as
+   for a writer claim.
+5. The flow atoms (round fourteen's deferred question 4): the compiled path
+   stores `TransformedBy` naming the compiled pattern at nearly every position
+   it writes, today's path `TransformedBy` naming code at fewer positions.
+
+## Round thirty-two: the readings of the two-principal gate made reliable
+
+The round of 2026-11-25 that repairs the instrument of round thirty-one for the
+findings of an independent review of it. It fixes no defect of either path and
+changes no file under `runtime/`, `patterns/`, `exec/` or `src/`: it changes
+`compare/both-paths*.ts`, the ledger, the gate's own fixtures
+`compare/fixtures/gate-*.tsx`, and adds
+`compare/test/both-paths-gate-readings.test.ts`. Its logs and results are in the
+folder of the round, `r32-gate-repair/` (`full-1.jsonl` and `full-2.jsonl` are
+the two runs at the code head `8ce76ca03f`, `trial.jsonl` a third at
+`7bf39a9904`, whose comparison is the same). Notes from 1160, provisional
+decisions from P530.
+
+1160. **What is stable across runs.** Two full runs at `8ce76ca03f` (4 minutes
+      52 seconds and 4 minutes 58 seconds; both exit 1): 419 scenarios, 276 ran,
+      0 equal, 276 differing, 143 skipped, with the same skip reasons, in both.
+      The same in both runs, per scenario: `commit` 23 in 17 scenarios,
+      `message` 11 in 8, `policy` 63 in 25, `error-state` 4 in 4,
+      `event-payload` 4 in 1, `read-failed` 2 in 1; `flow` in every scenario but
+      `apps/topics/main.tsx` (213 and 215), 14,198 and 14,200 in all. Not the
+      same: `foreign-clause` 865 and 861, `crossed-clause` 425 and 341,
+      `today-foreign-clause` 258 and 133, `today-crossed-clause` 193 and 84,
+      `label-missing` 955 and 787, `label-extra` 480 and 494, `hidden` 143 and
+      130, `value` 636 and 655. Each of these varies only in the scenarios where
+      both principals derive from a profile or from each one's own scope:
+      `named/Topics board`, `named/instance a handler makes`, and of the corpus
+      `apps/topics/main.tsx`, `apps/cozy-poll/main.tsx`,
+      `apps/recommend-a-book/shared-invitation.tsx`,
+      `examples/group-chat-lobby`, `examples/profile-group-chat`,
+      `examples/shared-profile-demo`, `examples/shared-profile-roster`, and,
+      with the third run, `apps/file-share`, `dev/collaborative-note` and
+      `examples/fair-share`; `apps/person-workbench/main.tsx` varies in one
+      value (`startBlocker`, which B read on today's path as `undefined` in one
+      run). In each such scenario the kinds vary together: in one run a path
+      stores one principal's `User` clause where the other reads, and the reads
+      that clause hides change with it. The crossing happens on both paths: in
+      `named/profile in a view`, run alone six times, the compiled path crossed
+      in one run (31 `crossed-clause`, A and B refused their own names), and in
+      `named/instance a handler makes` today's path crossed in two of three full
+      runs and in none of six runs alone. The instrument gives the same reading
+      for the same stored state; the variation is in what the paths store under
+      two sessions. Its cause was not investigated in this round.
+1161. **Today's path crossing, repeatably.** In `named/Topics board`, at step 1
+      (A files a topic with `submitTopic`), today's path stores A's `User`
+      clause in B's instances of the scope `session` of the new topic
+      (`board/index/0/titleDraft@B`, `bodyDraft@B`, `editingBody@B`,
+      `editingTitle@B`, `referencesDraft@B`, and the view's inputs bound to
+      them), and the same at step 4 for the second topic: these 24 findings of
+      `today-crossed-clause` were made in all six runs that ran the scenario
+      (two full runs, the third run, and three runs alone; 85 more appear in
+      four of the six). The command, from the repository root at `8ce76ca03f`:
+      `deno run -A --no-check base/pattern-compiler/compare/both-paths.ts <out.jsonl> --sets=named "--only=named/Topics board"`.
+      The crossing in `named/instance a handler makes`
+      (`cards/cards/0/$UI/children/2@B` holding A's clause) appeared in two of
+      three full runs and in one of three runs of `--sets=named`, and in none of
+      six runs alone; no ordering was found that makes it repeat.
+1162. **The scope rule on each path by itself (review finding 1, reproduced).**
+      Today's path stored A's and B's clauses in each instance of the card in
+      one of three runs of `--sets=named` and in two of the three full runs of
+      round thirty-one, as the review said. Check (a) is now a rule each path is
+      held to alone (`scopeViolationsOf`): an instance of the scope `user` or
+      `session` of one principal holds no `User` clause of the other
+      (`crossed-clause`), and a document of the scope `space` holds none of
+      either (`foreign-clause`), unless the value at the labeled path holds text
+      a step declared shared (P524) or the stored schema declares a `User`
+      clause at that path or above (`declaresUserClause`; P530). On today's path
+      the kinds are `today-crossed-clause` and `today-foreign-clause`. The
+      declared-policy exception is what removes `note/pinned` of
+      `cfc-trusted-write/main.tsx` (`Confidential<T, CurrentPrincipal>`), which
+      round thirty-one listed among today's clauses. Tests: B's clause stored at
+      the title on both paths is reported once for each path; A's clause in an
+      instance of B's scope is reported for each path; a path whose value holds
+      shared text is not; a declared `User` clause is found at the path and
+      below.
+1163. **Reads until a pass moves nothing (review finding 2, reproduced in one
+      checkpoint).** `settled()` now also waits for each client's `idle()`, and
+      a checkpoint reads in passes (`readUntilStill`): read every member for
+      both principals, wait for everything to be idle, and ask the store which
+      documents of the five spaces of the run revision rows after the last
+      sequence wrote; stop at a pass that wrote none, or at a pass that wrote a
+      set an earlier pass of the checkpoint wrote (`unsettled`, with the set).
+      In the two full runs and the third, 551 or 552 of 552 checkpoints of each
+      path settled in one pass; on today's path the start of
+      `examples/fair-share/main.tsx` took two passes in two of the three runs,
+      which is the claim: the reads of the first pass demanded writes. No
+      checkpoint was `unsettled`. Tests: a fake that moves twice then nothing
+      gives the third pass's reads; one that moves `a`, `b`, `a` ends unsettled
+      with `a`; every checkpoint of a real run records its passes.
+1164. **A run that runs nothing fails (review finding 3, reproduced).**
+      `--sets=named "--only=named/profile in a view,named/Topics board"` ran 0
+      scenarios and exited 0 at `c48a43267a`. `--only` now takes a comma list,
+      an empty part or an unknown set is refused with exit status 2, a run in
+      which no scenario ran (or every one was skipped) exits 1, and a full run
+      (every set, no `--only`) exits 1 when it planned fewer than 419 scenarios
+      or ran fewer than 276, the figures the ledger now records as `fullRun`.
+1165. **Documents no walk reaches (review finding 4, reproduced by a test).** A
+      clause one of two documents of a pool lacks was not reported, since the
+      other carried it. Such documents are now matched by a name both paths give
+      them (`unreachedNames`): a stream's event sidecar by the binding the
+      harness sent to (`stream-events <piece>/<path>`, from the stream document
+      an entry's event id ends with); an instance of another scope of a document
+      a walk reached, by that position and its principal; any other document by
+      its scope and its value with links, entities, principals and hashes
+      masked, where one document of the path holds that value. Matched documents
+      have their clauses, their non-flow integrity, their flow atoms and their
+      write policies compared at `unreached <name>`. The rest are compared by
+      the number of documents of each pool that hold each clause. A row
+      document's name, a hash of its output and element key on the compiled path
+      and a cause on today's, is spelled in no stored value, so a row is matched
+      only by its value. At the last checkpoint of the first full run 427
+      unreached documents were matched on each path; unmatched were, on today's
+      path, 6,321 content documents (schemas, labels, sources; never matched),
+      5,123 other documents of the space (process, argument, element and
+      computed documents whose values repeat or differ), 235 watermarks, 151
+      receipts, 575 instances of the scopes `user` and `session` and one stream
+      sidecar; on the compiled path 4,148 other documents of the space (the
+      piece's records: counts by key, its basis, its source), 1,804 content
+      documents, 235 watermarks, 160 receipts, 293 instances and 13 stream
+      sidecars whose binding the harness did not send to.
+1166. **Check (b) beyond text (review finding 5, partly).** The profile names
+      now differ in length (`Profile name of B, 28`), the gate's fixtures derive
+      a count and a predicate from the scoped value (`size`, and `long`, true
+      for A's 23 characters and false for B's 21), and a named scenario lists in
+      `derived` what each principal's inputs produce at a path, from the
+      checkpoint on which both have given their inputs. A position that B reads
+      or a document of the space or of B's scope holds at a position whose label
+      names no clause of A, holding A's product where B's differs, is a
+      `foreign-value`. Neither full run found one. The four findings of A's
+      nickname in the stream's sidecar are now `event-payload`, on each path,
+      and are not in the ledger. What check (b) still cannot see: a value
+      derived from a scoped value that no scenario lists in `derived` (every
+      scenario of the corpus and of the hand-written set, and the Topics board);
+      a derived value equal for both principals; a scoped value read through
+      more than two links; a copy whose position no walk reaches and whose text
+      holds no scoped string.
+1167. **Labels by value hash (review finding 6).** A clause and an atom are
+      compared by `hashStringOf` of the value with principals, entities and
+      hashes replaced by names; `toCompactDebugString` gives the text shown. In
+      round thirty-one's `full-3.jsonl`, 5 `label-missing` and 5 `label-extra`
+      findings were the same `User` atom with its members in another order (4 at
+      positions, 1 in a pool): 10 findings of 1,220 and 14,243 were this
+      artifact. The policy atom of a module policy is not one of them: today's
+      path stores
+      `{type: Policy, moduleIdentity, policyDigest, policyRefKind,
+      subject, symbol}`
+      and the compiled path `{policyOf: {binding, module}}`, different values
+      (round thirty-one's CFC question 4 stands). Test: a clause stored on both
+      paths with its members in another order is no difference.
+1168. **Flow atoms (review finding 7).** An integrity atom `TransformedBy` is a
+      flow atom, compared by its presence at a position with its identity
+      masked, as the kind `flow`, and not as `label-extra` or `label-missing`.
+      Per run, in positions over every checkpoint: both paths 63, the compiled
+      path alone 13,765, today's path alone 433 and 435. Examples, from
+      `named/Topics
+      board`: both, at step 1, `board/$NAME` (today's
+      `computed:` document with `TransformedBy` of `__cfLift_5`, the compiled
+      result document with `TransformedBy {kind: "compiled"}`),
+      `board/$UI/.../children/1/children/0` (`__cfLift_1`), and at step 2
+      `board/mentionable/0/$NAME` (`mentionableIndex`); the compiled path alone,
+      at the start, `board/$NAME`, `board/$UI` and `board/$UI/children`, all in
+      the compiled result document; today's path alone, at the start,
+      `board/$UI/children/0/children/2/children/0/children/1/props/disabled@A`
+      and `@B` (`__cfLift_6`, in `computed:` instances of the scope `user`), and
+      an unreached `computed:` instance of A's scope matched by value
+      (`__cfLift_3`). The ledger holds nothing for them.
+1169. **Why a module did not run compiled (review finding 8, reproduced).**
+      `apps/food-recipe/viewer.tsx` kept a warning and lost its error. The
+      reason now keeps the refusal's first line and its first diagnostic that is
+      not a warning (`firstErrorOf`). The 39, by that error: 11
+      `the module does
+      not parse` (an import that is not `.ts` or `.tsx`:
+      the iframe examples' `guest.js`, `phonetic-speller`'s JSON, `scrabble`'s
+      words); 10 `subset-type:mismatch`, 10 `subset-type:any`, and one each of
+      `subset-type:mapped`, `subset-type:function-in-data`, `default:not-static`
+      and `function-body:wish`, each in a module the main module imports
+      (`system/profile-home/profile-home.tsx`,
+      `showcase/inductor/shared/rule-grammar.ts`, `system/loom/main.tsx`,
+      `apps/food-recipe/recipe-logic.ts`, ...); 2 `table is not a function`
+      (`cfc-row-label-mailbox`, `cfc-row-label-records`), one
+      `Cannot read
+      properties of undefined (reading 'get')`
+      (`apps/star-chart`) and one
+      `the
+      built-in indexedCollections in a function body`
+      (`examples/indexed-topics`), which the serving runtime refused when it
+      started the piece. `emit
+      --corpus` accepts every one of the 39 main
+      modules, and lists none of the imported modules that hold the errors of
+      the 25 import groups: it checks one module, and the server compiles the
+      whole program.
+1170. **Tests (review finding 9).**
+      `compare/test/both-paths-gate-readings.test.ts`, 23 cases, imports the
+      modules under test whole so that a case naming a function the instrument
+      lacked fails at that case. Run against the instrument of `c48a43267a`
+      (`seen-failing-at-c48a43267a.log`), 20 failed: the key order, flow, the
+      three of unreached documents, the four of the scope rule, the three of
+      check (b), the three of settling, the four of the command, and the end to
+      end run of `named/typed event payload (Z100)` on both paths, which asserts
+      it reports `flow` and `value` (A reads the list empty on the compiled
+      path). The three that passed there (`commit`, `hidden`, `policy`), and
+      three that failed there, were seen failing against the current instrument
+      with the detection they test removed (`mutations.log`): commit not
+      compared, a refused read counted as a value, policies not compared,
+      instances of a scope not checked, unreached documents not matched by name,
+      pool counts not compared; and the first-error case against the first
+      version of `firstErrorOf`, which missed `the module does not parse`. The
+      case of round thirty-one that took a run of only skipped scenarios as exit
+      status 0 now expects 1.
+1171. **What the instrument still cannot see.** Besides note 1166's limits of
+      check (b) and note 1153's (the origin and observation class of a label
+      entry, document-rooted templates, a second session of a principal, times):
+      the labels of an unreached document that is neither matched nor pooled by
+      a clause, beyond the count of documents per clause of its pool, which
+      cannot say which document lacks one; integrity and write policies of an
+      unmatched unreached document; a value a computation has not yet produced
+      when no document moves (the settling loop waits on the store, so a
+      derivation that writes nothing until later is read as it stands); a pass
+      that writes a new set of documents every time would not end (a pattern
+      that creates a document on each turn of a clock); why the crossing of note
+      1160 occurs.
+1172. **Provisional decisions; not verified.** P530: a value a declared policy
+      labels is one whose stored schema declares a `User` clause (any subject,
+      `CurrentPrincipal` among them) at the labeled path or above; such a clause
+      in a document of the space is no violation of the scope rule. P531: an
+      unreached document with no name both paths give it is matched by its scope
+      and its masked value where that value is unique on the path; this is a
+      match by content, not by what names the document. P532: `flow` and
+      `event-payload` findings count toward a scenario's outcome like any other,
+      and the ledger holds none of them until the owner rules (Z100; the
+      placement of flow atoms). P533: a full run is one of every set with no
+      `--only`, and the ledger's `fullRun` holds the figures of the round's runs
+      (419 planned, 276 ran). P534: a named scenario declares a derived value
+      from the checkpoint on which both principals have given their inputs
+      (`from`), since an empty input can produce what the other principal's
+      does. _Not verified:_ the cause of either path's crossing; whether today's
+      crossing in the Topics board is the same defect as round thirty's; the
+      instrument against a browser; more than three full runs.

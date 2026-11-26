@@ -128,18 +128,27 @@ export const memoryHome = async (): Promise<Home> =>
  * is `space`, and returns its documents under the identifiers the storage
  * holds them at. With `confidential` false, the profile is written under
  * no schema, so its label holds the claim of whose it is and no
- * confidentiality.
+ * confidentiality. `profileIn` is the space the profile is written in, and
+ * `name` its name, where the home is not the one of `profileSpace()` with
+ * `PROFILE`'s name.
  */
 export const seedHome = async (
   runtime: Runtime,
   space: MemorySpace,
-  { confidential = true }: { confidential?: boolean } = {},
+  { confidential = true, profileIn, name }: {
+    confidential?: boolean;
+    profileIn?: MemorySpace;
+    name?: string;
+  } = {},
 ): Promise<Home> => {
   const committed = async (tx: ReturnType<Runtime["edit"]>) => {
     const { error } = await tx.commit().settled;
     if (error !== undefined) throw error;
   };
-  const inProfile = await profileSpace();
+  const inProfile = profileIn ?? await profileSpace();
+  const seeded = name === undefined
+    ? structuredClone(PROFILE)
+    : { ...structuredClone(PROFILE), name, initialNameApplied: name };
   const written = runtime.edit();
   const profile = runtime.getCell(
     inProfile,
@@ -147,7 +156,7 @@ export const seedHome = async (
     confidential ? profileSchema(space) : undefined,
     written,
   );
-  profile.set(structuredClone(PROFILE) as never);
+  profile.set(seeded as never);
   await committed(written);
   // The claim joins the label the commit above stored.
   const claimed = runtime.edit();

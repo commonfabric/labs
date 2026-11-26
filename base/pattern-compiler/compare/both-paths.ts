@@ -1,6 +1,53 @@
 /**
- * Runs one pattern on both paths, today's and the compiled one, with the
- * same events, gestures and principals, and compares what each path did
+ * The comparison of both paths, today's and the compiled one, as a standing
+ * gate with two principals.
+ *
+ * Run from the repository root, after `cargo build --release` in
+ * `base/pattern-compiler`:
+ *
+ * `deno run -A --no-check base/pattern-compiler/compare/both-paths.ts <results.jsonl> [--sets=hand,named,corpus] [--only=<part of a name>[,<part>...]] [--ledger=<file>]`
+ *
+ * `--only` takes a comma list: a scenario whose name holds one of the parts
+ * runs. A run of every set with no `--only` is a full run.
+ *
+ * Each scenario runs on both paths under a serving loop with two principals,
+ * A and B, that each hold a session (`both-paths-serving.ts`), and the runs
+ * are compared after each start and each step (`both-paths-gate.ts`): which
+ * events commit, what each principal reads at each member of each result,
+ * the labels stored at each position, two derived checks, every error state
+ * of the store, and what each step wrote. The sets of scenarios:
+ *
+ * - `hand`: the hand-written scenarios of `both-paths-scenarios.ts`, each
+ *   with alice as A and bob as B, and again with the roles exchanged.
+ * - `named`: the named scenarios of `both-paths-named.ts`, one for each
+ *   construct that reads a value of a narrower scope, Z100's case, and the
+ *   real Topics board.
+ * - `corpus`: every module of `patterns/` whose main pattern the crate gives
+ *   value code for, with the argument and the events `runner-corpus.ts`
+ *   derives (`gateCorpusScenarios`). A module the harness cannot drive is
+ *   skipped with its reason.
+ *
+ * The command prints one line for each scenario (equal, differing with the
+ * count of each kind of finding the ledger does not cover, or skipped with
+ * the reason) and a summary, writes each scenario's findings and the summary
+ * as JSON lines to `<results.jsonl>`, and exits 0 only where at least one
+ * scenario ran, no scenario has a finding that no entry of the ledger
+ * (`both-paths-accepted.json`) covers, no entry covers nothing, and, for a
+ * full run, no fewer scenarios were planned and ran than the ledger's
+ * `fullRun` records. The summary counts the scenarios the serving runtime
+ * did not run compiled by the first error of the refusal, and each
+ * scenario's line of results holds the positions with a flow atom on each
+ * path (`flow`), the passes of reads each checkpoint took (`passes`), and
+ * how many documents no walk reached were matched (`unreached`). What the runtimes log goes nowhere unless
+ * `BOTH_PATHS_VERBOSE` is set; the runtimes' banners go to standard error.
+ *
+ * `--one-principal` in front of the arguments runs the harness of one
+ * principal with no serving loop and no session, `runBothPaths` below:
+ * `<results.jsonl> [part of a name] [--corpus]`. The rest of this head
+ * describes that harness.
+ *
+ * It runs one pattern on both paths with the same events, gestures and
+ * principals, and compares what each path did
  * with each event: whether the handler's transaction committed, the message
  * of a refusal, what the result holds afterwards, and the claims stored at
  * each member of the result.
@@ -37,11 +84,6 @@
  *   construction (note 764 of `SPEC-NOTES.md`), so a writer claim is
  *   compared by the path of its binding.
  *
- * Run from the repository root, after `cargo build --release` in
- * `base/pattern-compiler`:
- *
- * `deno run -A --no-check base/pattern-compiler/compare/both-paths.ts <results.jsonl> [part of a scenario name]`
- *
  * With `--corpus` in the place of the part of a name, or behind it, the
  * scenarios are those of `both-paths-corpus.ts`: one for each module of
  * `patterns/` that declares a write policy.
@@ -67,8 +109,24 @@ import { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
 import { setCfcTrustSnapshot } from "../../../runtime/runner/src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../../../runtime/runner/src/storage/interface.ts";
-import { corpusScenarios } from "./both-paths-corpus.ts";
+import { corpusScenarios, gateCorpusScenarios } from "./both-paths-corpus.ts";
+import {
+  applyLedger,
+  exitStatusOf,
+  type Ledger,
+  outcomeOf,
+  runScenario,
+  type ScenarioResult,
+  staleEntries,
+} from "./both-paths-gate.ts";
+import { NAMED_SCENARIOS } from "./both-paths-named.ts";
 import { SCENARIOS } from "./both-paths-scenarios.ts";
+import type {
+  CellsOf,
+  GateScenario,
+  GateStep,
+  Roles,
+} from "./both-paths-serving.ts";
 import { normalize } from "./values.ts";
 
 /** A pattern a scenario starts. */
@@ -250,12 +308,14 @@ const policyLines = (ifc: Record<string, unknown>): string[] => {
  * record. A `$ref` into `$defs` of the document a node is in is followed,
  * and with `load` one into another schema document (`cid:<hash>#/$defs/…`),
  * which `load` gives by its hash: today's path stores the definitions of a
- * type in documents of their own.
+ * type in documents of their own. `linesOf` gives the lines of one `ifc`
+ * record, the write policies by default.
  */
 export const policiesOf = (
   root: unknown,
   path: readonly string[],
   load?: (hash: string) => unknown,
+  linesOf: (ifc: Record<string, unknown>) => string[] = policyLines,
 ): Record<string, string[]> => {
   const found: Record<string, string[]> = {};
   type Defs = Record<string, unknown>;
@@ -302,7 +362,7 @@ export const policiesOf = (
     // A reference that names no definition that was found is not read.
     if (typeof node.$ref === "string") return;
     if (isObjectNotArray(node.ifc)) {
-      const lines = policyLines(node.ifc);
+      const lines = linesOf(node.ifc);
       if (lines.length > 0) found[at] = lines;
     }
     if (isObjectNotArray(node.properties)) {
@@ -716,8 +776,12 @@ export const runBothPaths = async (
   };
 };
 
-if (import.meta.main) {
-  const [file, ...rest] = Deno.args;
+/**
+ * The command of the harness with one principal and no serving loop:
+ * `--one-principal` in front of its arguments.
+ */
+const runOnePrincipal = async (args: string[]) => {
+  const [file, ...rest] = args;
   const corpus = rest.includes("--corpus");
   const part = rest.find((argument) => argument !== "--corpus");
   if (file === undefined) {
@@ -771,5 +835,326 @@ if (import.meta.main) {
     for (const refusal of outcome.compiled.otherRefusals) {
       console.log(`  compiled piece kept: ${refusal}`);
     }
+  }
+};
+
+/** The hand-written scenarios as scenarios of the two-principal gate. */
+export const gateScenarioOf = (scenario: Scenario): GateScenario => ({
+  name: scenario.name,
+  pieces: scenario.pieces.map((piece, index) => ({
+    name: piece.name,
+    module: piece.module,
+    ...(piece.mainExport === undefined ? {} : { mainExport: piece.mainExport }),
+    ...(piece.as === undefined ? {} : { as: piece.as }),
+    ...(piece.argument === undefined ? {} : {
+      argument: ({ at }: CellsOf) =>
+        piece.argument!(
+          Object.fromEntries(
+            scenario.pieces.slice(0, index).map((before) => [
+              before.name,
+              at(before.name),
+            ]),
+          ),
+        ),
+    }),
+  })),
+  steps: scenario.steps.map((step) => ({
+    ...(step.piece === undefined ? {} : { piece: step.piece }),
+    stream: step.stream,
+    ...(step.event === undefined
+      ? {}
+      : { event: step.event as GateStep["event"] }),
+    ...(step.trustedUi === undefined ? {} : { trustedUi: step.trustedUi }),
+    ...(step.as === undefined ? {} : { as: step.as }),
+  })),
+});
+
+/** The ledger of accepted differences. */
+export const LEDGER = new URL("./both-paths-accepted.json", import.meta.url);
+
+/** A scenario of the gate, with the roles it is run with. */
+type Planned = {
+  scenario: GateScenario & { unsent?: number };
+  name: string;
+  roles: Roles;
+  skipNotCompiled?: boolean;
+};
+
+/** The sets of scenarios a full run plans. */
+export const ALL_SETS = ["hand", "named", "corpus"] as const;
+
+/** What the command of the gate was asked for. */
+export type GateArguments = {
+  file: string;
+  sets: string[];
+  /** The parts of a name `--only` lists; a scenario holding one runs. */
+  only?: string[];
+  ledger?: string;
+  /** Whether every set runs and no `--only` narrows them. */
+  full: boolean;
+};
+
+/**
+ * The arguments of the command of the gate, or the reason they are refused:
+ * a set no one knows, or an empty part of `--only`.
+ */
+export const gateArguments = (
+  args: readonly string[],
+): GateArguments | { refused: string } => {
+  const file = args.find((argument) => !argument.startsWith("--"));
+  const option = (name: string) =>
+    args.find((argument) => argument.startsWith(`--${name}=`))?.slice(
+      name.length + 3,
+    );
+  if (file === undefined) return { refused: "no results file is named" };
+  const sets = (option("sets") ?? ALL_SETS.join(",")).split(",");
+  const unknown = sets.filter((set) =>
+    !(ALL_SETS as readonly string[]).includes(set)
+  );
+  if (unknown.length > 0) {
+    return { refused: `no set is named ${unknown.join(", ")}` };
+  }
+  const listed = option("only");
+  const only = listed?.split(",").map((part) => part.trim());
+  if (only !== undefined && only.some((part) => part === "")) {
+    return { refused: "`--only` lists an empty part" };
+  }
+  const ledger = option("ledger");
+  return {
+    file,
+    sets,
+    ...(only === undefined ? {} : { only }),
+    ...(ledger === undefined ? {} : { ledger }),
+    full: only === undefined && ALL_SETS.every((set) => sets.includes(set)),
+  };
+};
+
+/** The scenarios of the gate, of the sets named, holding a part of `only`. */
+const plannedScenarios = async (
+  sets: readonly string[],
+  only: readonly string[] | undefined,
+): Promise<Planned[]> => {
+  const planned: Planned[] = [];
+  const holds = (name: string) =>
+    only === undefined || only.some((part) => name.includes(part));
+  if (sets.includes("hand")) {
+    for (const scenario of SCENARIOS.map(gateScenarioOf)) {
+      if (!holds(scenario.name)) continue;
+      planned.push({
+        scenario,
+        name: scenario.name,
+        roles: { alice: "A", bob: "B" },
+      });
+      planned.push({
+        scenario,
+        name: `${scenario.name} (roles exchanged)`,
+        roles: { alice: "B", bob: "A" },
+      });
+    }
+  }
+  if (sets.includes("named")) {
+    for (const scenario of NAMED_SCENARIOS) {
+      if (!holds(scenario.name)) continue;
+      planned.push({
+        scenario,
+        name: scenario.name,
+        roles: { alice: "A", bob: "B" },
+      });
+    }
+  }
+  if (sets.includes("corpus")) {
+    for (const scenario of await gateCorpusScenarios()) {
+      if (!holds(scenario.name)) continue;
+      planned.push({
+        scenario,
+        name: scenario.name,
+        roles: { alice: "A", bob: "B" },
+        skipNotCompiled: true,
+      });
+    }
+  }
+  return planned;
+};
+
+/** One line of the report for a scenario. */
+const lineOf = (result: ScenarioResult): string => {
+  const { outcome } = result;
+  const time = result.ms === undefined
+    ? ""
+    : ` (${(result.ms / 1000).toFixed(1)} s)`;
+  if (outcome.status === "skipped") {
+    return `${result.scenario}: skipped: ${outcome.reason}`;
+  }
+  const accepted =
+    result.findings.filter((finding) => finding.acceptedBy !== undefined)
+      .length;
+  const unsent = result.unsent === undefined
+    ? ""
+    : `, ${result.unsent} events not sendable`;
+  if (outcome.status === "equal") {
+    return `${result.scenario}: equal${
+      accepted === 0 ? "" : ` (${accepted} accepted)`
+    }${unsent}${time}`;
+  }
+  return `${result.scenario}: differing: ${
+    Object.entries(outcome.counts).map(([kind, n]) => `${kind} ${n}`).join(", ")
+  }${accepted === 0 ? "" : ` (${accepted} accepted)`}${unsent}${time}`;
+};
+
+/** The command of the two-principal gate. */
+const runGate = async (args: string[]): Promise<number> => {
+  const parsed = gateArguments(args);
+  if ("refused" in parsed) {
+    console.error(
+      `${parsed.refused}\nusage: both-paths.ts <results.jsonl> [--sets=hand,named,corpus] [--only=<part of a name>[,<part>...]] [--ledger=<file>]`,
+    );
+    return 2;
+  }
+  const { file, sets, only, full } = parsed;
+  const ledgerFile = parsed.ledger ?? fromFileUrl(LEDGER);
+  const ledger = JSON.parse(await Deno.readTextFile(ledgerFile)) as Ledger;
+  const covered = ledger.entries.map(() => 0);
+  const compiler = new PatternCompiler();
+  const planned = await plannedScenarios(sets, only);
+  await Deno.writeTextFile(file, "");
+  const { warn, error, log, info, debug } = console;
+  const results: ScenarioResult[] = [];
+  const began = performance.now();
+  for (const { scenario, name, roles, skipNotCompiled } of planned) {
+    // What the runtimes log while a scenario runs is not the gate's output,
+    // unless `BOTH_PATHS_VERBOSE` is set.
+    if (Deno.env.get("BOTH_PATHS_VERBOSE") === undefined) {
+      console.warn =
+        console.error =
+        console.log =
+        console.info =
+        console.debug =
+          () => {};
+    }
+    let result: ScenarioResult;
+    try {
+      const { runs: _, ...ran } = await runScenario(
+        { ...scenario, name },
+        { roles, compiler, ...(skipNotCompiled ? { skipNotCompiled } : {}) },
+      );
+      result = ran;
+    } catch (caught) {
+      result = {
+        scenario: name,
+        outcome: { status: "differing", counts: { failure: 1 } },
+        findings: [{
+          scenario: name,
+          at: "run",
+          kind: "failure",
+          position: "harness",
+          today: caught instanceof Error
+            ? `${caught.message.split("\n")[0]} ${
+              Deno.env.get("BOTH_PATHS_VERBOSE") === undefined
+                ? ""
+                : caught.stack
+            }`
+            : String(caught),
+        }],
+      };
+    } finally {
+      Object.assign(console, { warn, error, log, info, debug });
+    }
+    if (scenario.unsent !== undefined) result.unsent = scenario.unsent;
+    if (result.outcome.status !== "skipped") {
+      applyLedger(ledger, result.findings, covered);
+      result.outcome = outcomeOf(result.findings);
+    }
+    results.push(result);
+    console.log(lineOf(result));
+    await Deno.writeTextFile(file, `${JSON.stringify(result)}\n`, {
+      append: true,
+    });
+  }
+  const ran = results.filter(({ outcome }) => outcome.status !== "skipped")
+    .map(({ scenario }) => scenario);
+  const stale = staleEntries(ledger, covered, ran);
+  const by = (status: string) =>
+    results.filter(({ outcome }) => outcome.status === status);
+  const kinds: Record<string, number> = {};
+  for (const result of by("differing")) {
+    const { counts } = result.outcome as { counts: Record<string, number> };
+    for (const [kind, n] of Object.entries(counts)) {
+      kinds[kind] = (kinds[kind] ?? 0) + n;
+    }
+  }
+  const skippedReasons: Record<string, number> = {};
+  // The scenarios the serving runtime did not run compiled, by the code of
+  // the first error of the refusal, or its text where it has no code.
+  const notCompiled: Record<string, number> = {};
+  for (const result of by("skipped")) {
+    const full = (result.outcome as { reason: string }).reason;
+    const reason = full.split(":")[0];
+    skippedReasons[reason] = (skippedReasons[reason] ?? 0) + 1;
+    if (reason === "the serving runtime did not run it compiled") {
+      const code = full.match(/: error \[([^\]]+)\]/)?.[1];
+      const why = code ??
+        full.split(": ").slice(3).join(": ").replace(
+          /^The pattern compiler refused the program: \S+: /,
+          "",
+        ).slice(0, 80);
+      notCompiled[why] = (notCompiled[why] ?? 0) + 1;
+    }
+  }
+  const summary = {
+    summary: true,
+    scenarios: results.length,
+    ran: ran.length,
+    equal: by("equal").length,
+    differing: by("differing").length,
+    skipped: by("skipped").length,
+    skippedReasons,
+    notCompiled,
+    unexplained: kinds,
+    accepted: covered.reduce((sum, n) => sum + n, 0),
+    staleEntries: stale,
+    seconds: Math.round((performance.now() - began) / 1000),
+  };
+  await Deno.writeTextFile(file, `${JSON.stringify(summary)}\n`, {
+    append: true,
+  });
+  console.log(
+    `\n${summary.scenarios} scenarios: ${summary.equal} equal, ${summary.differing} differing, ${summary.skipped} skipped, in ${summary.seconds} s`,
+  );
+  for (const [reason, n] of Object.entries(skippedReasons)) {
+    console.log(`  skipped ${n}: ${reason}`);
+  }
+  for (const [why, n] of Object.entries(notCompiled)) {
+    console.log(`    not run compiled ${n}: ${why}`);
+  }
+  for (const [kind, n] of Object.entries(kinds)) {
+    console.log(`  unexplained ${kind}: ${n}`);
+  }
+  for (const entry of stale) {
+    console.log(
+      `  a ledger entry covers nothing: ${entry.scenario} ${entry.step} ${entry.position} ${entry.kind}`,
+    );
+  }
+  if (summary.ran === 0) console.log("  no scenario ran");
+  if (
+    full && ledger.fullRun !== undefined &&
+    (summary.scenarios < ledger.fullRun.scenarios ||
+      summary.ran < ledger.fullRun.ran)
+  ) {
+    console.log(
+      `  a full run must plan ${ledger.fullRun.scenarios} scenarios and run ${ledger.fullRun.ran}; this one planned ${summary.scenarios} and ran ${summary.ran}`,
+    );
+  }
+  return exitStatusOf(
+    results.map(({ outcome }) => outcome),
+    stale,
+    full ? ledger.fullRun : undefined,
+  );
+};
+
+if (import.meta.main) {
+  if (Deno.args[0] === "--one-principal") {
+    await runOnePrincipal(Deno.args.slice(1));
+  } else {
+    Deno.exit(await runGate(Deno.args));
   }
 }

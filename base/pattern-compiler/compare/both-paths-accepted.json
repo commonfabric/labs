@@ -1,0 +1,18 @@
+{
+  "fullRun": {
+    "scenarios": 419,
+    "ran": 276
+  },
+  "entries": [
+    {
+      "scenario": "*",
+      "step": "*",
+      "position": "*",
+      "kind": "module-identity",
+      "today": "a writer claim names the content-addressed identity of the source module that today's compile gives",
+      "compiled": "a writer claim names the identity the crate gives the same module (`Resolver::module_identity`)",
+      "decision": "P310 (note 764 of `SPEC-NOTES.md`): the identity of a module differs between the paths by construction, and a writer claim is checked by the pair of that identity and the path of the binding; provisional, not ratified",
+      "ratified": false
+    }
+  ]
+}
