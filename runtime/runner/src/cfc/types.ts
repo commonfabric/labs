@@ -1100,6 +1100,17 @@ export const DEFAULT_CFC_CONTENT_ADDRESSED_LABELS: CfcContentAddressedLabels =
   false;
 
 /**
+ * Whether commit preparation stores a reclassified value's creator-releasable
+ * `User` clauses as that clause or the declared policy (the
+ * `cfcPatternReclassification` experimental flag, which a `Runtime` turns on
+ * only beside `pieceCreatorRecord`). Off stores the flow join as derived.
+ */
+export type CfcPatternReclassification = boolean;
+
+export const DEFAULT_CFC_PATTERN_RECLASSIFICATION: CfcPatternReclassification =
+  false;
+
+/**
  * Exchange-rule policy evaluation dial (Epic B5, spec §4.4.5/§5.3),
  * orthogonal to the enforcement ladder: `off` = the gates decide on raw
  * labels exactly as before this dial existed; `observe` = evaluate every
@@ -1184,6 +1195,7 @@ export type CfcTxState = {
   policyEvaluationMode: CfcPolicyEvaluationMode;
   labelMetadataProtectionMode: CfcLabelMetadataProtectionMode;
   declaredMonotonicityMode: CfcDeclaredMonotonicityMode;
+  patternReclassification: CfcPatternReclassification;
   // The one sanctioned per-tx exemption from the declared-monotonicity gate
   // (§8.12.7 route 2b seam). Absent = gate applies. Set only through the
   // privileged `setCfcDeclaredWideningExemption` (trusted-builtin identity),

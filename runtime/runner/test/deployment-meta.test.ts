@@ -1438,6 +1438,7 @@ describe("deployment-meta", () => {
         "viewScopedReplication",
         "webViewScopedReplication",
         "pieceCreatorRecord",
+        "cfcPatternReclassification",
         "sharedMemoryConnection",
         "instanceNames",
       ]);

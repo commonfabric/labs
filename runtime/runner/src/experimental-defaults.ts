@@ -20,6 +20,7 @@ export function applyLocalExperimentalDefaults(
   experimental.agentBuiltin ??= true;
   experimental.localFold ??= false;
   experimental.pieceCreatorRecord ??= false;
+  experimental.cfcPatternReclassification ??= false;
   // TODO(danfuzz): Turn this on once every deployment's posture names
   // instances. Until then a runtime with it on is refused each unmarked space
   // of a deployment whose posture names none (INV-16).

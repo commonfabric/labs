@@ -485,6 +485,17 @@ export interface ExperimentalOptions {
   pieceCreatorRecord?: boolean | undefined;
 
   /**
+   * Let a written value whose schema declares `ifc.reclassify`
+   * (`Reclassified<T, Rules>`) store each clause of its flow join that is
+   * the piece creator's alone to release, a `User` clause naming the
+   * recorded creator, as that clause or the declared policy
+   * (`patterns/dev/test/share-space-declassify/PROPOSAL.md`). Has effect only
+   * with `pieceCreatorRecord` on, since the creator is the authority.
+   * Defaults to off; off, the flow join is stored as derived.
+   */
+  cfcPatternReclassification?: boolean | undefined;
+
+  /**
    * Compile a pattern factory call bound to a `const` as a named sub-pattern
    * instance, whose identity is the binding's name rather than its position
    * among its parent's anonymous roots
@@ -3029,6 +3040,10 @@ export class Runtime {
     wrapped.setCfcPolicyEvaluationMode(this.cfcPolicyEvaluation);
     wrapped.setCfcLabelMetadataProtectionMode(this.cfcLabelMetadataProtection);
     wrapped.setCfcDeclaredMonotonicityMode(this.cfcDeclaredMonotonicity);
+    wrapped.setCfcPatternReclassification(
+      this.experimental.cfcPatternReclassification === true &&
+        this.experimental.pieceCreatorRecord === true,
+    );
     wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
     wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
     wrapped.setCfcTrustConfig(this.cfcTrustConfig);

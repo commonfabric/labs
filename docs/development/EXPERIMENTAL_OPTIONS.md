@@ -42,6 +42,7 @@ was last checked against the code.
 | [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
 | [`pieceCreatorRecord`](#piececreatorrecord) | `EXPERIMENTAL_PIECE_CREATOR_RECORD` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | off | Bernhard Seefeld (2026-11-01) | graduate once the ruling that binds an update-added owner field to the piece's creator merges, then delete the flag | implemented, off by default |
+| [`cfcPatternReclassification`](#cfcpatternreclassification) | `EXPERIMENTAL_CFC_PATTERN_RECLASSIFICATION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment; has effect only beside `pieceCreatorRecord` | off | alex-claude (2026-11-25) | graduate once the specs ruling on a creator's reclassification merges and the store admits the creator record itself, then delete the flag | implemented, off by default, experiment only |
 | [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | make it reachable on servers, turn deployments' posture on, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default, with a runtime whose naming mode differs from its space's refused that space; must not turn on before deployments' posture names instances |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`sessionOpenProofs`](#sessionopenproofs) | Memory hello capability; toolshed withholds it under `MEMORY_ACL_DELEGATIONS=false` or `0` | on | Robin McCollum (2026-10-26) | retain as protocol negotiation while deployments may contain servers that admit no chain | implemented end to end and on by default; a profile space owns itself and its owner's runtime presents the chain Home records |
@@ -1097,6 +1098,46 @@ holds the measurements and the conditions for revisiting.
   authority and shell-source entries, the default, and the gate at the write
   site in `#setupInternal`; the meta field, the transaction mark and the
   admission in `prepare.ts` stay.
+
+### `cfcPatternReclassification`
+
+- **Toggle via.** `EXPERIMENTAL_CFC_PATTERN_RECLASSIFICATION` environment
+  variable (through the canonical env registry) or
+  `RuntimeOptions.experimental.cfcPatternReclassification`. The shell adopts
+  it from its deployment, and it is server-authoritative in
+  `EXPERIMENTAL_FLAG_AUTHORITY`, as `pieceCreatorRecord` is: the label a
+  serving run stores decides who may read the value. The Runtime hands each
+  transaction it creates the flag and `pieceCreatorRecord` together
+  (`setCfcPatternReclassification` in `#newTransaction`, in
+  [`runtime/runner/src/runtime.ts`](../../runtime/runner/src/runtime.ts)), so
+  with `pieceCreatorRecord` off the flag has no effect.
+- **Added by.** alex-claude, 2026-11-25, for the share-space experiment
+  ([`patterns/dev/test/share-space-declassify/PROPOSAL.md`](../../patterns/dev/test/share-space-declassify/PROPOSAL.md)).
+- **Purpose.** Gates the reclassification a pattern declares with
+  `Reclassified<T, Rules>` on a computation's result (`ifc.reclassify`).
+  Commit preparation replaces each clause of the flow join that is a `User`
+  clause the written piece's recorded creator alone may release
+  (`clauseReleasableBy`) with `anyOf(User(creator), PolicyOf<Rules>)`, the
+  policy's subject resolved to the written document's space, before the join
+  is measured against the target and stamped. Every other clause and all
+  integrity are kept. With the flag off, with no recorded creator, or with no
+  such clause, the join is stored as derived, and a diagnostic says why.
+- **Current default and planned end state.** Off by default. The rule is a
+  semantic gap under the CFC correspondence procedure, and its deciding site
+  in `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker whose
+  specs pull request is not yet filed. The flag must stay off in every
+  deployment until the store itself admits a `creator` record only when it
+  names the commit's authenticated actor: commit preparation alone checks the
+  record today, so a modified client could write a piece naming another
+  principal as its creator and release that principal's data.
+- **Status on 2026-11-25.** Implemented and off. The substitution is covered
+  by `runtime/runner/test/cfc-reclassify.test.ts`, the plumbing by
+  `runtime/runner/test/experimental-options.test.ts`, and the end-to-end case
+  by `patterns/dev/test/share-space-declassify/live.test.tsx`.
+- **Path to removal.** Once the ruling merges and the store admits the
+  record, remove the env mapping, the runtime option and its authority and
+  shell-source entries, the default, and the transaction dial; the
+  substitution in `prepare.ts` stays.
 
 ### `instanceNames`
 
