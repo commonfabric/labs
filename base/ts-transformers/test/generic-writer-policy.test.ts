@@ -188,7 +188,7 @@ export default ${
       expect(schema.$ref).toBeDefined();
       const root = valueSchema(schema, schema);
       const next = root.properties?.next as JSONSchemaObj;
-      expect(next.anyOf).toContainEqual({ $ref: schema.$ref });
+      expect(next).toEqual({ $ref: schema.$ref });
     });
 
     for (

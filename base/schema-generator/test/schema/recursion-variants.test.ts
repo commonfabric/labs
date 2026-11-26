@@ -72,7 +72,7 @@ describe("Schema: Recursion variants", () => {
   it("reads an alias that instantiates itself without end to the nesting bound, and reports the rest unread", async () => {
     // Each `Nest<T[]>` is a new type, so no reading of it meets one in
     // progress. The nesting bound ends the reading at a level that accepts
-    // any value, beside the `undefined` the optional member adds.
+    // any value.
 
     const code = `
       type Nest<T> = { v: T; inner?: Nest<T[]> };
@@ -96,9 +96,9 @@ describe("Schema: Recursion variants", () => {
       >;
       values.push(properties.v);
       innermost = properties.inner;
-      level = (properties.inner!.anyOf as Record<string, unknown>[]).find(
-        (member) => member.type === "object",
-      );
+      level = properties.inner!.type === "object"
+        ? properties.inner
+        : undefined;
     }
     let expected: unknown = { type: "string" };
     const expectedValues = values.map(() => {
@@ -109,7 +109,7 @@ describe("Schema: Recursion variants", () => {
 
     expect(values.length).toBeGreaterThan(1);
     expect(values).toEqual(expectedValues);
-    expect(innermost).toEqual({ anyOf: [{}, { type: "undefined" }] });
+    expect(innermost).toEqual({});
     expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
       .toEqual([{ severity: "warning", type: "schema-type:unread" }]);
   });
