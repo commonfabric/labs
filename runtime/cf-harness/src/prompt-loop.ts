@@ -6420,10 +6420,12 @@ export class CfHarnessPromptLoop {
     // other handle names whatever its cell holds. That text shares every turn
     // of the child with the task, and text of unknown authorship is `quote`,
     // which carries no action authority (§14.2.2.1, §18.3.1). So the child
-    // runs as `quote` whatever role the parent's task holds, and under an
-    // enforce mode it may only read. Nothing yet tells a call the person
-    // started apart from one the model chose, so this holds even when the
-    // person asked for the skill to be used.
+    // runs as `quote` whatever role the parent's task holds: under
+    // enforce-explicit it may only read, and under enforce-strict it may call
+    // only its return channels. This holds even when the person asked for the
+    // skill to be used.
+    // TODO(jkomoros): Let a delegation the person started keep their
+    // authority, once a tool call can carry evidence of who started it.
     const childPromptSlotBinding = options.resolvedSkill === undefined ||
         options.promptSlotBinding === undefined
       ? options.promptSlotBinding

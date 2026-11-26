@@ -1068,15 +1068,18 @@ describe("prompt-loop delegate_task skillHandle", () => {
     });
 
     /**
-     * Runs a direct-command parent under `enforce-explicit` that delegates
-     * once, with `skillHandle` set when `withSkill` is, to a child whose first
-     * act is a `bash` call. Returns the tool message the child's model read
-     * back for that call.
+     * Runs a direct-command parent under `mode` that delegates once, with
+     * `skillHandle` set when `withSkill` is, to a child whose first act is a
+     * `bash` call. Returns the tool message the child's model read back for
+     * that call, parsed.
      */
-    const childBashResult = async (withSkill: boolean): Promise<string> => {
+    const childBashResult = async (
+      mode: "enforce-explicit" | "enforce-strict",
+      withSkill: boolean,
+    ): Promise<{ reason?: string; detail?: string }> => {
       let toolContent = "";
       await withSkillCell(async ({ pieces, ref }) => {
-        const runId = `run-skill-handle-authority-${withSkill}`;
+        const runId = `run-skill-handle-authority-${mode}-${withSkill}`;
         const minted = await mintAddressHandle(
           createHarnessHandleTable(runId),
           ref,
@@ -1085,7 +1088,7 @@ describe("prompt-loop delegate_task skillHandle", () => {
           sandboxRuntime: new FakeSandboxRuntime(),
           runId,
           model: "gpt-5.4",
-          cfcEnforcementMode: "enforce-explicit",
+          cfcEnforcementMode: mode,
           fabricSessionFactory: () => Promise.resolve({ pieces }),
         });
         await engine.recordHandleTable(minted.table);
@@ -1114,20 +1117,27 @@ describe("prompt-loop delegate_task skillHandle", () => {
           .find((message) => message.role === "tool");
         toolContent = String(toolMessage?.content ?? "");
       });
-      return toolContent;
+      expect(toolContent).not.toBe("");
+      return JSON.parse(toolContent);
     };
 
-    it("refuses a side effect to a child that holds handle-delivered skill text", async () => {
-      expect(await childBashResult(true)).toContain(
-        "bash requires direct-command authorization in enforce-explicit",
-      );
-    });
+    for (const mode of ["enforce-explicit", "enforce-strict"] as const) {
+      it(`refuses a side effect to a child that holds handle-delivered skill text under ${mode}`, async () => {
+        const result = await childBashResult(mode, true);
+        expect(result.reason).toBe("not-authorized");
+        expect(result.detail).toBe(
+          `bash requires direct-command authorization in ${mode}`,
+        );
+      });
 
-    it("leaves a child with no skill text the parent's direct-command authority", async () => {
-      expect(await childBashResult(false)).not.toContain(
-        "requires direct-command authorization",
-      );
-    });
+      it(`leaves a child with no skill text the parent's direct-command authority under ${mode}`, async () => {
+        // The call ran: the fake sandbox reports no CFC metadata, so the
+        // output is withheld as unobservable rather than refused.
+        expect((await childBashResult(mode, false)).reason).toBe(
+          "not-observable",
+        );
+      });
+    }
   });
 
   it("records the table token on the activation when the handle is passed as a reference", async () => {

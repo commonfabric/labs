@@ -902,8 +902,8 @@ const uniqueSkillNames = (skillNames: readonly string[]): string[] => {
  * Wraps handle-delivered skill text as a quote and records its activation.
  * The text comes from a cell, and nothing shows the person wrote it, so it
  * holds the `quote` role. The source names the handle; acquired text also
- * carries the pin used by `run_skill_script`. The activation digest covers the skill text,
- * which the child-return path scrubs.
+ * carries the pin used by `run_skill_script`. The activation digest covers the
+ * skill text, which the child-return path scrubs.
  */
 export const loadHarnessSkillContextFromText = async (
   options: LoadHarnessSkillContextFromTextOptions,
