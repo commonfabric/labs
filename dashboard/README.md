@@ -2500,9 +2500,10 @@ next roller run, and infra's Checks on the pin pull request.
 To see that a deploy happened, or where one is held up:
 
 - The pin pull request, which the roller opens and lands as the
-  `common-tools-ci` GitHub App, is in the infra repository's closed pull
-  requests. A pull request that is
-  still open is waiting for infra's Checks.
+  `common-tools-ci` GitHub App, is in the infra repository's pull requests. A
+  merged one has been deployed or is being deployed. An open one is waiting
+  for infra's Checks. One closed without merging was replaced by a pin of a
+  newer image.
 - The "Roll image pins" runs in infra's Actions tab say why the roller did
   not propose an image, for example a failed provenance check.
 - Someone with access to the stage cluster can run
