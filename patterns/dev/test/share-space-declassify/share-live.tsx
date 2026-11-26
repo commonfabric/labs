@@ -20,6 +20,8 @@ import {
   type Reclassified,
   spaceOf,
   Stream,
+  UI,
+  type VNode,
   Writable,
 } from "commonfabric";
 import { type PolicyOf } from "commonfabric/cfc";
@@ -51,6 +53,7 @@ export interface ShareLiveInput {
 
 export interface ShareLiveOutput {
   [NAME]: string;
+  [UI]: VNode;
   /** The DID of the space the share was placed in. */
   space: string | undefined;
   /** The last five minutes, reclassified for the share space's readers. */
@@ -75,18 +78,48 @@ const publishWindow = handler<
   shared.set(window as OwnerOrShareReaders<Fix[]>);
 });
 
+/** The latitudes of `fixes`, comma-separated, or "none". */
+const latitudes = (fixes: readonly Fix[] | undefined): string => {
+  const lats = (fixes ?? []).map((fix) => fix?.lat);
+  return lats.length === 0 ? "none" : lats.join(", ");
+};
+
 const ShareLive = pattern<ShareLiveInput, ShareLiveOutput>(
   ({ fixes, now }) => {
     const shared = new Writable<OwnerOrShareReaders<Fix[]>>(
       [] as OwnerOrShareReaders<Fix[]>,
     ).for("shared");
     const window = sharedWindow({ fixes, now });
+    // Each line is its own derived document, so each carries the label of
+    // what it reads: the window's, the published copy's, and the source's,
+    // which stays the owner's alone. A reader's display decides each apart.
+    const windowText = computed(() => latitudes(window));
+    const sharedText = computed(() => latitudes(shared.get()));
+    const sourceText = computed(() => latitudes(fixes));
+    const publish = publishWindow({ window, shared });
     return {
       [NAME]: "Shared location, last five minutes, live",
+      [UI]: (
+        <div>
+          <h2 id="share-heading">Shared location, last five minutes</h2>
+          <p>
+            Window: <span id="share-window">{windowText}</span>
+          </p>
+          <p>
+            Published: <span id="share-shared">{sharedText}</span>
+          </p>
+          <p>
+            Source: <span id="share-source">{sourceText}</span>
+          </p>
+          <cf-button id="share-publish-button" onClick={publish}>
+            Publish
+          </cf-button>
+        </div>
+      ),
       space: computed(() => spaceOf(shared)),
       window,
       shared,
-      publish: publishWindow({ window, shared }),
+      publish,
     };
   },
 );
