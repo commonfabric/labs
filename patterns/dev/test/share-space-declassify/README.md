@@ -127,18 +127,15 @@ the server-execution serving loop, which is the `cf test` default.
    `anyOf(User(creator), PolicyOf<rules>)`
    (`runtime/runner/test/cfc-reclassify.test.ts`). `main.test.tsx` shows the
    flags-off half: `share-live.tsx` over the connector's label is refused at its
-   store. The flags-on half, the same publish landing, is blocked by two runtime
-   gaps, each found by tracing a run rather than by a passing test:
-   - A share placed with `inSpace()` from an action records no creator. Its
-     parent is the action's receipt, whose keyless pattern gets no record, so
-     the child inherits none. With the creator taken from the nearest ancestor
-     on the child's demand chain that records one (an experiment, not
-     committed), the window is stored as
-     `anyOf(User(owner), PolicyOf<shareSpaceRules>)`, as proposed.
-   - A store's `maxConfidentiality` ceiling is compared with its
-     `CurrentPrincipal` and `PolicyOf` placeholders unresolved, so a ceiling
-     that names either fits no stored clause. That is the likely cause of
-     finding 4's refused ceiling as well.
+   store. The flags-on half, the same publish landing, is blocked by one runtime
+   gap, found by tracing a run rather than by a passing test: a store's
+   `maxConfidentiality` ceiling is compared with its `CurrentPrincipal` and
+   `PolicyOf` placeholders unresolved, so a ceiling that names either fits no
+   stored clause, and the publish is refused ("maxConfidentiality failed at /").
+   That is the likely cause of finding 4's refused ceiling as well. A share
+   placed with `inSpace()` from an action does record its owner as creator: its
+   parent is the action's receipt, which records none, so the child takes the
+   record of the piece whose action made it.
 
 ## Runtime behavior found along the way
 
