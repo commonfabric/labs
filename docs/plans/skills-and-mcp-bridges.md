@@ -140,8 +140,15 @@ instructions" stays `quote`. A person's own skill, which they wrote, may bind as
 `context`. Neither role carries authority for actions. Text can steer an agent,
 but it cannot authorize an effect. Effects need per-call authority
 (`IntentOnce`), and a call that quoted text influenced is not admitted on the
-run's direct-command authority alone. Review would add nothing here, because
-nobody can certify prose as injection-safe.
+run's direct-command authority alone.
+
+Review does not raise the role: a reviewed skill's prose stays `quote`. A
+review is a trust statement over the skill's exact bytes, accepted the way a
+connector is, and it clears only the skill's own caveats. Until calls carry
+per-call authority, a child whose skill an accepted review fully covers keeps
+the delegating run's binding. What the skill reads stays tainted.
+[Reviewed skills: trusting a skill's text, not what it reads](reviewed-skills.md)
+has the design.
 
 ### Credentials
 
@@ -246,7 +253,7 @@ has an interim limit that lifts when the gap closes.
 
 | Gap                                                                                                                                                                  | Interim limit                                                                                                                                                                                                                                                                               |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| H9 / CT-2175: side effects are admitted on run-level direct-command authority.                                                                                       | A delegated child that holds skill text runs as `quote`, so under an enforce mode it runs no side effects and no skill scripts. Its reply still reaches a parent that holds `direct-command`. Any other run that holds unreviewed prose runs side effects only when the person starts them. |
+| H9 / CT-2175: side effects are admitted on run-level direct-command authority.                                                                                       | A delegated child that holds skill text no accepted review fully covers runs as `quote`, so under an enforce mode it runs no side effects and no skill scripts. Once sealed script runs exist, classed `read`, such a child may run them under `enforce-explicit`, and `enforce-strict` still refuses them. Its reply still reaches a parent that holds `direct-command` (top/3722). A child whose skill an accepted review fully covers keeps the delegating run's binding ([reviewed skills](reviewed-skills.md)). Any other run that holds unreviewed prose runs side effects only when the person starts them. |
 | `IntentOnce` is unbuilt.                                                                                                                                             | Per-call authority means the person confirms each call.                                                                                                                                                                                                                                     |
 | Registry snapshots, `ToolDescriptorBound` and the sink check against them are unbuilt (primitives cleanups 5 and 6).                                                 | No reviewed sets: every imported tool runs as unreviewed.                                                                                                                                                                                                                                   |
 | Authority-only request fields are declared in policy templates but not enforced, and nothing mints `AuthorizedRequest`.                                              | The bridge stores no tokens; servers that need one wait.                                                                                                                                                                                                                                    |
