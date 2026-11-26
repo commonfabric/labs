@@ -1,0 +1,2386 @@
+[
+  {
+    "module": "compare/fixtures/array-by-key.tsx",
+    "patterns": [
+      {
+        "line": 37,
+        "name": "RepoRow",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/4",
+              "handler": {
+                "body": 0
+              },
+              "name": "note",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "noted"
+                  ],
+                  "place": {
+                    "slot": 2
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "note",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "text"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "noted"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 1
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 0
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 1
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "name"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "noted"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 2
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "stars"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 4
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/array-by-key.tsx#RepoRow"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "text"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "noted"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "repo",
+                "name"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "repo",
+                "stars"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "noted",
+              "schema": "unhashed:schema/5",
+              "scope": "space",
+              "within": []
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "repo": {
+                  "properties": {
+                    "id": {
+                      "type": "number"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "owner": {
+                      "properties": {
+                        "login": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "login"
+                      ],
+                      "type": "object"
+                    },
+                    "stars": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "stars",
+                    "owner"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "repo"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "default": ""
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "line": 83,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/10",
+              "handler": {
+                "body": 2
+              },
+              "name": "note",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "noted"
+                  ],
+                  "place": {
+                    "slot": 5
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 5
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/10",
+              "handler": {
+                "body": 2
+              },
+              "name": "note",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "noted"
+                  ],
+                  "place": {
+                    "slot": 14
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 14
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "element": 3
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/11",
+              "handler": {
+                "body": 3
+              },
+              "name": "pick",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "owner"
+                  ],
+                  "place": {
+                    "slot": 19
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 19
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "picked"
+                  ],
+                  "place": {
+                    "slot": 20
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 20
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "repo"
+                  ],
+                  "place": {
+                    "slot": 21
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 21
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "element": 3
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/11",
+              "handler": {
+                "body": 3
+              },
+              "name": "pick",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "owner"
+                  ],
+                  "place": {
+                    "slot": 19
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 19
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "picked"
+                  ],
+                  "place": {
+                    "slot": 20
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 20
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "repo"
+                  ],
+                  "place": {
+                    "slot": 29
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 29
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "element": 7
+                }
+              ]
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "fetched",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "bonus"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "names"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "names",
+                    "*"
+                  ],
+                  "slot": 2
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "counted",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "names"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "note",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "text"
+                  ],
+                  "slot": 3
+                },
+                {
+                  "at": [
+                    "binding",
+                    "noted"
+                  ],
+                  "slot": 4
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 4
+                  },
+                  "template": {
+                    "by": {
+                      "body": 2
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 3
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 4
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "pick",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "owner"
+                  ],
+                  "slot": 15
+                },
+                {
+                  "at": [
+                    "binding",
+                    "picked"
+                  ],
+                  "slot": 16
+                },
+                {
+                  "at": [
+                    "binding",
+                    "repo"
+                  ],
+                  "slot": 17
+                },
+                {
+                  "at": [
+                    "binding",
+                    "repo",
+                    "owner"
+                  ],
+                  "slot": 18
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 15
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                },
+                {
+                  "constraints": [],
+                  "reference": {
+                    "passes": 18
+                  },
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 15
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                },
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 16
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                },
+                {
+                  "constraints": [],
+                  "reference": {
+                    "passes": 17
+                  },
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 16
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [
+            {
+              "asInstance": true,
+              "callee": {
+                "compiled": "unhashed:pattern/compare/fixtures/array-by-key.tsx#RepoRow"
+              },
+              "name": "map",
+              "within": [
+                {
+                  "element": 2
+                }
+              ]
+            }
+          ],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "map",
+              "keyFields": [
+                "id"
+              ],
+              "membership": {
+                "op": "output",
+                "output": 0
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
+              "source": {
+                "output": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "filter",
+              "keyFields": [
+                "id"
+              ],
+              "membership": {
+                "op": "shared",
+                "template": 1
+              },
+              "name": {
+                "name": "filter",
+                "ordinal": 1
+              },
+              "source": {
+                "output": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "output",
+                "output": 7
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
+              "source": {
+                "collection": 1,
+                "via": "map"
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "keyFields": [
+                "id"
+              ],
+              "membership": {
+                "op": "slot",
+                "slot": 13
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 3
+              },
+              "source": {
+                "slot": 13
+              },
+              "within": []
+            },
+            {
+              "construct": "filter",
+              "membership": {
+                "op": "shared",
+                "template": 2
+              },
+              "name": {
+                "name": "filter",
+                "ordinal": 2
+              },
+              "source": {
+                "output": 1
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "output",
+                "output": 15
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 4
+              },
+              "source": {
+                "collection": 4,
+                "via": "map"
+              },
+              "within": []
+            },
+            {
+              "construct": "filter",
+              "keyFields": [
+                "id"
+              ],
+              "membership": {
+                "op": "shared",
+                "template": 3
+              },
+              "name": {
+                "name": "filter",
+                "ordinal": 3
+              },
+              "source": {
+                "output": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "output",
+                "output": 21
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 5
+              },
+              "source": {
+                "collection": 6,
+                "via": "map"
+              },
+              "within": []
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 2817
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "repos",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1,
+                2
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 2861
+              },
+              "bodies": [
+                1
+              ],
+              "entry": "counts",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3091
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                5,
+                6,
+                7
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3296
+              },
+              "bodies": [],
+              "entry": "filter",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                8,
+                9,
+                10
+              ],
+              "within": [
+                {
+                  "element": 1
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3334
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                11,
+                12
+              ],
+              "within": [
+                {
+                  "element": 2
+                }
+              ],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "child": 0,
+                    "kind": "argument",
+                    "path": [
+                      "repo"
+                    ]
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 11
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3408
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                14,
+                22
+              ],
+              "within": [
+                {
+                  "element": 3
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3632
+              },
+              "bodies": [],
+              "entry": "filter",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                23,
+                24
+              ],
+              "within": [
+                {
+                  "element": 4
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3658
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                25,
+                26
+              ],
+              "within": [
+                {
+                  "element": 5
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3771
+              },
+              "bodies": [],
+              "entry": "filter",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                9,
+                27,
+                28
+              ],
+              "within": [
+                {
+                  "element": 6
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3809
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                30
+              ],
+              "within": [
+                {
+                  "element": 7
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                19
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                31
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                20
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                32
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "repos",
+              "kept": false,
+              "keyFields": [
+                "id"
+              ],
+              "path": [],
+              "template": {
+                "by": {
+                  "body": 0
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "interim": "counts",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "body": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "collection": 0,
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "keyFields": [
+                "id"
+              ],
+              "path": [
+                "rows"
+              ],
+              "template": {
+                "op": "output",
+                "output": 0
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "name"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 6
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "noted"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 5
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "stars"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 7
+              }
+            },
+            {
+              "collection": 1,
+              "cone": 3,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "keyFields": [
+                "id"
+              ],
+              "path": [],
+              "template": {
+                "op": "shared",
+                "template": 1
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 10
+              }
+            },
+            {
+              "collection": 2,
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "keyFields": [
+                "id"
+              ],
+              "path": [
+                "starred"
+              ],
+              "template": {
+                "op": "output",
+                "output": 7
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "starred",
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 12
+              }
+            },
+            {
+              "collection": 3,
+              "cone": 5,
+              "constraints": [],
+              "kept": true,
+              "keyFields": [
+                "id"
+              ],
+              "path": [
+                "kept"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 13
+              }
+            },
+            {
+              "cone": 5,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "kept",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 5,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "kept",
+                "*",
+                "name"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 22
+              }
+            },
+            {
+              "cone": 5,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "kept",
+                "*",
+                "noted"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 14
+              }
+            },
+            {
+              "collection": 4,
+              "cone": 6,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "shared",
+                "template": 2
+              }
+            },
+            {
+              "cone": 6,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 24
+              }
+            },
+            {
+              "collection": 5,
+              "cone": 7,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "tallies"
+              ],
+              "template": {
+                "op": "output",
+                "output": 15
+              }
+            },
+            {
+              "cone": 7,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "tallies",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 7,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "tallies",
+                "*",
+                "count"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 25
+              }
+            },
+            {
+              "cone": 7,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "tallies",
+                "*",
+                "noted"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 26
+              }
+            },
+            {
+              "collection": 6,
+              "cone": 8,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "keyFields": [
+                "id"
+              ],
+              "path": [],
+              "template": {
+                "op": "shared",
+                "template": 3
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 28
+              }
+            },
+            {
+              "collection": 7,
+              "cone": 9,
+              "constraints": [],
+              "kept": true,
+              "keyFields": [
+                "id"
+              ],
+              "path": [
+                "found"
+              ],
+              "template": {
+                "op": "output",
+                "output": 21
+              }
+            },
+            {
+              "cone": 9,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "found",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 9,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "found",
+                "*",
+                "name"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 30
+              }
+            },
+            {
+              "cone": 13,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "owner"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 19
+              }
+            },
+            {
+              "cone": 13,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "ownerLogin"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 31
+              }
+            },
+            {
+              "cone": 13,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "picked"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 20
+              }
+            },
+            {
+              "cone": 13,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "pickedName"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 32
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/array-by-key.tsx#default"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "bonus"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "names"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "names",
+                "*"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "text"
+              ],
+              "root": {
+                "handler": 2,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "noted"
+              ],
+              "root": {
+                "handler": 2,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 2,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "name"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "stars"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "stars"
+              ],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "minStars"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "child": 0,
+                "kind": "child"
+              }
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "saved"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/6"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 3,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "owner"
+              ],
+              "root": {
+                "handler": 3,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/7"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "picked"
+              ],
+              "root": {
+                "handler": 3,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/8"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "repo"
+              ],
+              "root": {
+                "handler": 3,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "repo",
+                "owner"
+              ],
+              "root": {
+                "handler": 3,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/9"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 1,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 3,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "name"
+              ],
+              "root": {
+                "collection": 3,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "collection": 4,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 4,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 5,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 4,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "stars"
+              ],
+              "root": {
+                "collection": 6,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 6,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 7,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "name"
+              ],
+              "root": {
+                "collection": 7,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "login"
+              ],
+              "root": {
+                "cell": 1,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "name"
+              ],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "picked",
+              "schema": "unhashed:schema/12",
+              "scope": "space",
+              "within": []
+            },
+            {
+              "name": "owner",
+              "schema": "unhashed:schema/13",
+              "scope": "space",
+              "within": []
+            },
+            {
+              "name": "noted",
+              "schema": "unhashed:schema/14",
+              "scope": "space",
+              "within": [
+                {
+                  "element": 0
+                }
+              ]
+            },
+            {
+              "name": "noted",
+              "schema": "unhashed:schema/14",
+              "scope": "space",
+              "within": [
+                {
+                  "element": 3
+                }
+              ]
+            },
+            {
+              "name": "noted",
+              "schema": "unhashed:schema/14",
+              "scope": "space",
+              "within": [
+                {
+                  "element": 5
+                }
+              ]
+            }
+          ],
+          "templates": [
+            {
+              "by": {
+                "body": 3
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 15
+                },
+                {
+                  "op": "slot",
+                  "slot": 16
+                },
+                {
+                  "op": "slot",
+                  "slot": 17
+                },
+                {
+                  "op": "slot",
+                  "slot": 18
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 8
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 9
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 1,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 23
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 4,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 27
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 9
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 6,
+              "op": "fold"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "bonus": {
+                  "type": "number"
+                },
+                "minStars": {
+                  "type": "number"
+                },
+                "names": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "saved": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "properties": {
+                      "id": {
+                        "type": "number"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "owner": {
+                        "properties": {
+                          "login": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "login"
+                        ],
+                        "type": "object"
+                      },
+                      "stars": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name",
+                      "stars",
+                      "owner"
+                    ],
+                    "type": "object"
+                  },
+                  "keyFields": [
+                    "id"
+                  ],
+                  "type": "array"
+                }
+              },
+              "required": [
+                "names",
+                "bonus",
+                "minStars",
+                "saved"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "properties": {
+                "id": {
+                  "type": "number"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "owner": {
+                  "properties": {
+                    "login": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "login"
+                  ],
+                  "type": "object"
+                },
+                "stars": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "stars",
+                "owner"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "properties": {
+                  "id": {
+                    "type": "number"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "owner": {
+                    "properties": {
+                      "login": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "login"
+                    ],
+                    "type": "object"
+                  },
+                  "stars": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "stars",
+                  "owner"
+                ],
+                "type": "object"
+              },
+              "keyFields": [
+                "id"
+              ],
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/7",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "properties": {
+                    "login": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "login"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "asCell": [
+                "cell"
+              ]
+            }
+          },
+          {
+            "id": "unhashed:schema/8",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "properties": {
+                    "id": {
+                      "type": "number"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "owner": {
+                      "properties": {
+                        "login": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "login"
+                      ],
+                      "type": "object"
+                    },
+                    "stars": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "stars",
+                    "owner"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "asCell": [
+                "cell"
+              ]
+            }
+          },
+          {
+            "id": "unhashed:schema/9",
+            "schema": {
+              "properties": {
+                "login": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "login"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/10",
+            "schema": {
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/11",
+            "schema": {
+              "type": "unknown"
+            }
+          },
+          {
+            "id": "unhashed:schema/12",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "properties": {
+                    "id": {
+                      "type": "number"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "owner": {
+                      "properties": {
+                        "login": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "login"
+                      ],
+                      "type": "object"
+                    },
+                    "stars": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "stars",
+                    "owner"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": null
+            }
+          },
+          {
+            "id": "unhashed:schema/13",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "properties": {
+                    "login": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "login"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": null
+            }
+          },
+          {
+            "id": "unhashed:schema/14",
+            "schema": {
+              "default": ""
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

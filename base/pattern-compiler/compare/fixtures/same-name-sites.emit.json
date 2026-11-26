@@ -1,0 +1,2101 @@
+[
+  {
+    "module": "compare/fixtures/same-name-sites.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [
+            0,
+            1
+          ],
+          "handlers": {
+            "0": {
+              "captures": [],
+              "named": true
+            }
+          },
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/same-name-sites.tsx",
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst bump = handler((_, { count }) => {\n  count.set(count.get() + 1);\n});\nconst Counter = pattern(\n  \"unhashed:pattern/compare/fixtures/same-name-sites.tsx#Counter\",\n);\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/same-name-sites.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (($h.v($h.slot(1)).toUpperCase())));\n}\n$rt.value(2, ($h) => ($h.output(0)));\n{\n$rt.element(1, ($h) => ($rt.h(\"i\", {  }, [$h.slot(6)])));\n}\n$rt.value(5, ($h) => ($rt.h(\"button\", { \"type\": \"button\", \"onClick\": $h.stream(0) }, [$h.slot(5), \": \", $h.slot(4), $h.output(3)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(6), count: $h.slot(4) })));\n});\n$rt.body(0, ($e, $s) => ((_, { count }) => {\n  count.set(count.get() + 1);\n})($e, $s));"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0
+            },
+            {
+              "collection": 0,
+              "cone": 0,
+              "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 2
+            },
+            {
+              "cone": 2
+            },
+            {
+              "collection": 1,
+              "cone": 2,
+              "output": 3
+            },
+            {
+              "cone": 3,
+              "function": true,
+              "output": 6
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 11,
+        "name": "Counter",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/5",
+              "handler": {
+                "body": 0
+              },
+              "name": "bump",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "count"
+                  ],
+                  "place": {
+                    "slot": 4
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 4
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "bump",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "count"
+                  ],
+                  "slot": 2
+                },
+                {
+                  "at": [
+                    "binding",
+                    "count"
+                  ],
+                  "slot": 3
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 2
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 2
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 3
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 0
+              },
+              "name": "loud",
+              "source": {
+                "slot": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "output",
+                "output": 2
+              },
+              "name": "map",
+              "source": {
+                "output": 2
+              },
+              "within": []
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 569
+              },
+              "bodies": [],
+              "entry": "loud",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 544
+              },
+              "bodies": [],
+              "entry": "loud",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 732
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                6
+              ],
+              "within": [
+                {
+                  "element": 1
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 636
+              },
+              "bodies": [],
+              "entry": "$UI",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4,
+                5
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [
+            {
+              "from": 0,
+              "to": 1,
+              "via": {
+                "kind": "output",
+                "output": 0
+              }
+            },
+            {
+              "from": 2,
+              "to": 3,
+              "via": {
+                "kind": "output",
+                "output": 3
+              }
+            }
+          ],
+          "operations": [],
+          "outputs": [
+            {
+              "collection": 0,
+              "cone": 0,
+              "constraints": [],
+              "interim": "loud",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "loud",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "interim": "loud",
+              "kept": false,
+              "passesCollection": 0,
+              "path": [],
+              "template": {
+                "op": "output",
+                "output": 0
+              }
+            },
+            {
+              "collection": 1,
+              "cone": 2,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "output",
+                "output": 2
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*",
+                "children",
+                "0"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 6
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "0"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 5
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "2"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 4
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "3"
+              ],
+              "template": {
+                "op": "output",
+                "output": 3
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "count"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 4
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/same-name-sites.tsx#Counter"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "words"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "count"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "count"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "label"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/4"
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "count",
+              "schema": "unhashed:schema/6",
+              "scope": "space",
+              "within": []
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "words": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "label",
+                "words"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {}
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "type": "unknown"
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "default": 0
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "handlers": {
+            "0": {
+              "captures": [],
+              "named": true
+            }
+          },
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/same-name-sites.tsx",
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst bump = handler((_, { count }) => {\n  count.set(count.get() + 1);\n});\nconst Counter = pattern(\n  \"unhashed:pattern/compare/fixtures/same-name-sites.tsx#Counter\",\n);\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/same-name-sites.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\nconst label = $rt.at($arg, [\"label\"], $h);\n{\n$rt.element(0, ($h) => (($h.v($h.slot(1)).toUpperCase())));\n}\n$rt.value(2, ($h) => ($h.output(0)));\n{\n$rt.element(1, ($h) => ($rt.h(\"i\", {  }, [$h.slot(5)])));\n}\n$rt.value(5, ($h) => ($rt.h(\"button\", { \"type\": \"button\", \"onClick\": $h.stream(0) }, [(label), \": \", $h.slot(4), $h.output(3)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(6), count: $h.slot(4) })));\n});\n$rt.setup(2, function ($arg, $h) {\nconst label = $rt.at($arg, [\"label\"], $h);\n{\n$rt.element(2, ($h) => (($h.v($h.slot(7)).toUpperCase())));\n}\n$rt.value(8, ($h) => ($h.output(9)));\n{\n$rt.element(3, ($h) => ($rt.h(\"i\", {  }, [$h.slot(9)])));\n}\n$rt.value(11, ($h) => ($rt.h(\"button\", { \"type\": \"button\", \"onClick\": $h.stream(1) }, [(label), \": \", $h.slot(8), $h.output(12)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(15), count: $h.slot(8) })));\n});\n$rt.setup(3, function ($arg, $h) {\n{\n$rt.element(4, ($h) => (($h.v($h.slot(10)).toUpperCase())));\n}\n$rt.value(14, ($h) => ($h.output(18)));\n{\n$rt.element(5, ($h) => ($rt.h(\"i\", {  }, [$h.slot(13)])));\n}\n$rt.value(17, ($h) => ($rt.h(\"button\", { \"type\": \"button\", \"onClick\": $h.stream(2) }, [$h.slot(12), \": \", $h.slot(11), $h.output(21)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(24), count: $h.slot(11) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({ \"label\": \"a\" }, $h);\nconst $s2 = $rt.setups[2]({ \"label\": \"b\" }, $h);\nconst $s3 = $rt.setups[3]({  }, $h);\n$rt.value(18, ($h) => ($rt.h(\"div\", {  }, [$h.at($rt.force($s1, $h), [\"$UI\"]), $h.at($rt.force($s2, $h), [\"$UI\"]), $h.at($rt.force($s3, $h), [\"$UI\"])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(28) })));\n});\n$rt.body(0, ($e, $s) => ((_, { count }) => {\n  count.set(count.get() + 1);\n})($e, $s));"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0
+            },
+            {
+              "collection": 0,
+              "cone": 0,
+              "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 2
+            },
+            {
+              "cone": 2
+            },
+            {
+              "collection": 1,
+              "cone": 2,
+              "output": 3
+            },
+            {
+              "cone": 3,
+              "function": true,
+              "output": 6
+            },
+            {
+              "cone": 4
+            },
+            {
+              "collection": 2,
+              "cone": 4,
+              "output": 9
+            },
+            {
+              "cone": 5,
+              "function": true,
+              "output": 11
+            },
+            {
+              "cone": 6
+            },
+            {
+              "collection": 3,
+              "cone": 6,
+              "output": 12
+            },
+            {
+              "cone": 7,
+              "function": true,
+              "output": 15
+            },
+            {
+              "cone": 8
+            },
+            {
+              "collection": 4,
+              "cone": 8,
+              "output": 18
+            },
+            {
+              "cone": 9,
+              "function": true,
+              "output": 20
+            },
+            {
+              "cone": 10
+            },
+            {
+              "collection": 5,
+              "cone": 10,
+              "output": 21
+            },
+            {
+              "cone": 11,
+              "function": true,
+              "output": 24
+            },
+            {
+              "cone": 12,
+              "function": true,
+              "output": 28
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 29,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/5",
+              "handler": {
+                "body": 0
+              },
+              "name": "bump",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "count"
+                  ],
+                  "place": {
+                    "slot": 4
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 4
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 1
+                  }
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/5",
+              "handler": {
+                "body": 0
+              },
+              "name": "bump",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "count"
+                  ],
+                  "place": {
+                    "slot": 8
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 8
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 2
+                  }
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/5",
+              "handler": {
+                "body": 0
+              },
+              "name": "bump",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "count"
+                  ],
+                  "place": {
+                    "slot": 11
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 11
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 3
+                  }
+                }
+              ]
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "bump",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "count"
+                  ],
+                  "slot": 2
+                },
+                {
+                  "at": [
+                    "binding",
+                    "count"
+                  ],
+                  "slot": 3
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 2
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 2
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 3
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 0
+              },
+              "name": "loud",
+              "source": {
+                "slot": 0
+              },
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 1
+                  }
+                }
+              ]
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "output",
+                "output": 2
+              },
+              "name": "map",
+              "source": {
+                "output": 2
+              },
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 1
+                  }
+                }
+              ]
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 6
+              },
+              "name": "loud",
+              "source": {
+                "slot": 6
+              },
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 2
+                  }
+                }
+              ]
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "output",
+                "output": 11
+              },
+              "name": "map",
+              "source": {
+                "output": 11
+              },
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 2
+                  }
+                }
+              ]
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 0
+              },
+              "name": "loud",
+              "source": {
+                "slot": 0
+              },
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 3
+                  }
+                }
+              ]
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "output",
+                "output": 20
+              },
+              "name": "map",
+              "source": {
+                "output": 20
+              },
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 3
+                  }
+                }
+              ]
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 569
+              },
+              "bodies": [],
+              "entry": "loud",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1
+              ],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 1
+                  }
+                },
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 544
+              },
+              "bodies": [],
+              "entry": "loud",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 1
+                  }
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 732
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                5
+              ],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 1
+                  }
+                },
+                {
+                  "element": 1
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 636
+              },
+              "bodies": [],
+              "entry": "$UI",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4
+              ],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 1
+                  }
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 569
+              },
+              "bodies": [],
+              "entry": "loud",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                7
+              ],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 2
+                  }
+                },
+                {
+                  "element": 2
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 544
+              },
+              "bodies": [],
+              "entry": "loud",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 2
+                  }
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 732
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                9
+              ],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 2
+                  }
+                },
+                {
+                  "element": 3
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 636
+              },
+              "bodies": [],
+              "entry": "$UI",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                8
+              ],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 2
+                  }
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 569
+              },
+              "bodies": [],
+              "entry": "loud",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                10
+              ],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 3
+                  }
+                },
+                {
+                  "element": 4
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 544
+              },
+              "bodies": [],
+              "entry": "loud",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 3
+                  }
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 732
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                13
+              ],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 3
+                  }
+                },
+                {
+                  "element": 5
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 636
+              },
+              "bodies": [],
+              "entry": "$UI",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                11,
+                12
+              ],
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 3
+                  }
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/same-name-sites.tsx",
+                "start": 1105
+              },
+              "bodies": [],
+              "entry": "$UI",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [
+            {
+              "from": 0,
+              "to": 1,
+              "via": {
+                "kind": "output",
+                "output": 0
+              }
+            },
+            {
+              "from": 2,
+              "to": 3,
+              "via": {
+                "kind": "output",
+                "output": 3
+              }
+            },
+            {
+              "from": 3,
+              "to": 12,
+              "via": {
+                "kind": "output",
+                "output": 6
+              }
+            },
+            {
+              "from": 4,
+              "to": 5,
+              "via": {
+                "kind": "output",
+                "output": 9
+              }
+            },
+            {
+              "from": 6,
+              "to": 7,
+              "via": {
+                "kind": "output",
+                "output": 12
+              }
+            },
+            {
+              "from": 7,
+              "to": 12,
+              "via": {
+                "kind": "output",
+                "output": 15
+              }
+            },
+            {
+              "from": 8,
+              "to": 9,
+              "via": {
+                "kind": "output",
+                "output": 18
+              }
+            },
+            {
+              "from": 10,
+              "to": 11,
+              "via": {
+                "kind": "output",
+                "output": 21
+              }
+            },
+            {
+              "from": 11,
+              "to": 12,
+              "via": {
+                "kind": "output",
+                "output": 24
+              }
+            }
+          ],
+          "operations": [],
+          "outputs": [
+            {
+              "collection": 0,
+              "cone": 0,
+              "constraints": [],
+              "interim": "loud",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "loud",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "interim": "loud",
+              "kept": false,
+              "passesCollection": 0,
+              "path": [],
+              "template": {
+                "op": "output",
+                "output": 0
+              }
+            },
+            {
+              "collection": 1,
+              "cone": 2,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "output",
+                "output": 2
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*",
+                "children",
+                "0"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 5
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "interim": "$UI",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "interim": "$UI",
+              "kept": false,
+              "path": [
+                "children",
+                "2"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 4
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "interim": "$UI",
+              "kept": false,
+              "path": [
+                "children",
+                "3"
+              ],
+              "template": {
+                "op": "output",
+                "output": 3
+              }
+            },
+            {
+              "collection": 2,
+              "cone": 4,
+              "constraints": [],
+              "interim": "loud",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "slot",
+                "slot": 6
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "interim": "loud",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 5,
+              "constraints": [],
+              "interim": "loud",
+              "kept": false,
+              "passesCollection": 2,
+              "path": [],
+              "template": {
+                "op": "output",
+                "output": 9
+              }
+            },
+            {
+              "collection": 3,
+              "cone": 6,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "output",
+                "output": 11
+              }
+            },
+            {
+              "cone": 6,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 6,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*",
+                "children",
+                "0"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 9
+              }
+            },
+            {
+              "cone": 7,
+              "constraints": [],
+              "interim": "$UI",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 7,
+              "constraints": [],
+              "interim": "$UI",
+              "kept": false,
+              "path": [
+                "children",
+                "2"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 8
+              }
+            },
+            {
+              "cone": 7,
+              "constraints": [],
+              "interim": "$UI",
+              "kept": false,
+              "path": [
+                "children",
+                "3"
+              ],
+              "template": {
+                "op": "output",
+                "output": 12
+              }
+            },
+            {
+              "collection": 4,
+              "cone": 8,
+              "constraints": [],
+              "interim": "loud",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "interim": "loud",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 10
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 9,
+              "constraints": [],
+              "interim": "loud",
+              "kept": false,
+              "passesCollection": 4,
+              "path": [],
+              "template": {
+                "op": "output",
+                "output": 18
+              }
+            },
+            {
+              "collection": 5,
+              "cone": 10,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "output",
+                "output": 20
+              }
+            },
+            {
+              "cone": 10,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 10,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*",
+                "children",
+                "0"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 13
+              }
+            },
+            {
+              "cone": 11,
+              "constraints": [],
+              "interim": "$UI",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 11,
+              "constraints": [],
+              "interim": "$UI",
+              "kept": false,
+              "path": [
+                "children",
+                "0"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 12
+              }
+            },
+            {
+              "cone": 11,
+              "constraints": [],
+              "interim": "$UI",
+              "kept": false,
+              "path": [
+                "children",
+                "2"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 11
+              }
+            },
+            {
+              "cone": 11,
+              "constraints": [],
+              "interim": "$UI",
+              "kept": false,
+              "path": [
+                "children",
+                "3"
+              ],
+              "template": {
+                "op": "output",
+                "output": 21
+              }
+            },
+            {
+              "cone": 12,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 12,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "0",
+                "children",
+                "2"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 4
+              }
+            },
+            {
+              "cone": 12,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "0",
+                "children",
+                "3"
+              ],
+              "template": {
+                "op": "output",
+                "output": 3
+              }
+            },
+            {
+              "cone": 12,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "1",
+                "children",
+                "2"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 8
+              }
+            },
+            {
+              "cone": 12,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "1",
+                "children",
+                "3"
+              ],
+              "template": {
+                "op": "output",
+                "output": 12
+              }
+            },
+            {
+              "cone": 12,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "2",
+                "children",
+                "0"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 12
+              }
+            },
+            {
+              "cone": 12,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "2",
+                "children",
+                "2"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 11
+              }
+            },
+            {
+              "cone": 12,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "2",
+                "children",
+                "3"
+              ],
+              "template": {
+                "op": "output",
+                "output": 21
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/same-name-sites.tsx#default",
+            "unhashed:pattern/compare/fixtures/same-name-sites.tsx#Counter"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "first"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "count"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "count"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "second"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 1,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 3,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "collection": 4,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 2,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "title"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 5,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/4"
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "count",
+              "schema": "unhashed:schema/6",
+              "scope": "space",
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 1
+                  }
+                }
+              ]
+            },
+            {
+              "name": "count",
+              "schema": "unhashed:schema/6",
+              "scope": "space",
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 2
+                  }
+                }
+              ]
+            },
+            {
+              "name": "count",
+              "schema": "unhashed:schema/6",
+              "scope": "space",
+              "within": [
+                {
+                  "site": {
+                    "name": "Counter",
+                    "ordinal": 3
+                  }
+                }
+              ]
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "$defs": {
+                "t0": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "properties": {
+                "first": {
+                  "$ref": "#/$defs/t0"
+                },
+                "second": {
+                  "$ref": "#/$defs/t0"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "first",
+                "second"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {}
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "type": "unknown"
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "default": 0
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

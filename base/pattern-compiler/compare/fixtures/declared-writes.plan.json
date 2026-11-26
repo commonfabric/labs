@@ -1,0 +1,345 @@
+[
+  {
+    "module": "compare/fixtures/declared-writes.tsx",
+    "patterns": [
+      {
+        "line": 44,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/4",
+              "handler": {
+                "body": 0
+              },
+              "name": "overwrite",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "mine"
+                  ],
+                  "place": {
+                    "slot": 1
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                }
+              ],
+              "within": []
+            },
+            {
+              "eventSchema": "unhashed:schema/4",
+              "handler": {
+                "body": 1
+              },
+              "name": "seal",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "sealed"
+                  ],
+                  "place": {
+                    "slot": 3
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "overwrite",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "mine"
+                  ],
+                  "slot": 0
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 0
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 0
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "seal",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "sealed"
+                  ],
+                  "slot": 2
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [
+                    0
+                  ],
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "*"
+                    ],
+                    "slot": 2
+                  },
+                  "template": {
+                    "by": {
+                      "body": 1
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 2
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [],
+          "constraints": [
+            {
+              "kind": "writerFit"
+            }
+          ],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/declared-writes.tsx#default"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [
+                "mine"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "mine"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "sealed"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "sealed"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "mine": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "ifc": {
+                    "confidentiality": [
+                      "alice"
+                    ]
+                  },
+                  "type": "string"
+                },
+                "sealed": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "ifc": {
+                      "confidentiality": [
+                        {
+                          "policyOf": {
+                            "binding": "rules",
+                            "module": "compare/fixtures/declared-writes.tsx"
+                          }
+                        }
+                      ]
+                    },
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "mine",
+                "sealed"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "properties": {
+                "overwrite": {
+                  "asCell": [
+                    "stream"
+                  ],
+                  "type": "unknown"
+                },
+                "seal": {
+                  "asCell": [
+                    "stream"
+                  ],
+                  "type": "unknown"
+                }
+              },
+              "required": [
+                "overwrite",
+                "seal"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "ifc": {
+                "confidentiality": [
+                  "alice"
+                ]
+              },
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "ifc": {
+                  "confidentiality": [
+                    {
+                      "policyOf": {
+                        "binding": "rules",
+                        "module": "compare/fixtures/declared-writes.tsx"
+                      }
+                    }
+                  ]
+                },
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "type": "unknown"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

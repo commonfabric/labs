@@ -79,5 +79,8 @@ tasks/.write-lcov-uncompiled.*.ts
 # leaves this file behind holding the counts it did observe.
 topics-read-budget-limits.derived
 
+# Build output of the Rust crate in base/pattern-compiler.
+/base/pattern-compiler/target/
+
 # A Weaver user's own patterns (skills/weaver-patterns)
 /my-patterns/

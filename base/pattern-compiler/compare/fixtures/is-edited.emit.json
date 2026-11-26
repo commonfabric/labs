@@ -1,0 +1,299 @@
+[
+  {
+    "module": "compare/fixtures/is-edited.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/is-edited.tsx",
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/is-edited.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(3, ($h) => (((() => {\n    const record = $h.v($h.slot(0));\n    return $h.v($h.selected(\"&&\", ($h.v($h.slot(1)) !== (undefined)), () => ((typeof $h.v($h.slot(2))) === (\"string\"))));\n  })())));\nreturn $rt.thunk(($h) => (({ isEdited: $h.output(0) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0
+            },
+            {
+              "cone": 0
+            },
+            {
+              "cone": 0
+            },
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 17,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/is-edited.tsx",
+                "start": 603
+              },
+              "bodies": [],
+              "entry": "isEdited",
+              "picks": [],
+              "selectors": [
+                0
+              ],
+              "slots": [
+                0,
+                1,
+                2
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "isEdited"
+              ],
+              "template": {
+                "branches": [
+                  {
+                    "by": {
+                      "expression": true
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 2
+                      }
+                    ],
+                    "op": "derive"
+                  },
+                  {
+                    "op": "shared",
+                    "template": 0
+                  }
+                ],
+                "condition": {
+                  "op": "shared",
+                  "template": 0
+                },
+                "op": "select",
+                "selector": 0
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/is-edited.tsx#default"
+          ],
+          "picks": [],
+          "selectors": [
+            {
+              "arity": 2
+            }
+          ],
+          "slots": [
+            {
+              "observes": "shape",
+              "path": [
+                "message"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "declared": {
+                "confidentiality": [
+                  "edited"
+                ]
+              },
+              "observes": "shape",
+              "path": [
+                "message",
+                "editedAt"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "declared": {
+                "confidentiality": [
+                  "body"
+                ]
+              },
+              "observes": "shape",
+              "path": [
+                "message",
+                "body"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            }
+          ],
+          "stateCells": [],
+          "templates": [
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 0
+                },
+                {
+                  "op": "slot",
+                  "slot": 1
+                }
+              ],
+              "op": "derive"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "message": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "properties": {
+                    "body": {
+                      "ifc": {
+                        "confidentiality": [
+                          "body"
+                        ]
+                      },
+                      "type": "string"
+                    },
+                    "editedAt": {
+                      "ifc": {
+                        "confidentiality": [
+                          "edited"
+                        ]
+                      },
+                      "type": "number"
+                    },
+                    "sentAt": {
+                      "ifc": {
+                        "confidentiality": [
+                          "sent"
+                        ]
+                      },
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "body",
+                    "sentAt"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "properties": {
+                "body": {
+                  "ifc": {
+                    "confidentiality": [
+                      "body"
+                    ]
+                  },
+                  "type": "string"
+                },
+                "editedAt": {
+                  "ifc": {
+                    "confidentiality": [
+                      "edited"
+                    ]
+                  },
+                  "type": "number"
+                },
+                "sentAt": {
+                  "ifc": {
+                    "confidentiality": [
+                      "sent"
+                    ]
+                  },
+                  "type": "number"
+                }
+              },
+              "required": [
+                "body",
+                "sentAt"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "ifc": {
+                "confidentiality": [
+                  "edited"
+                ]
+              },
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "ifc": {
+                "confidentiality": [
+                  "body"
+                ]
+              },
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

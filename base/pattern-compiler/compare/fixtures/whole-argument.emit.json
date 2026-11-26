@@ -1,0 +1,337 @@
+[
+  {
+    "module": "compare/fixtures/whole-argument.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/whole-argument.tsx",
+              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Context = pattern(\"unhashed:pattern/compare/fixtures/whole-argument.tsx#Context\");\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/whole-argument.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => ($h.slot(0)));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [],
+          "valuesWithoutOutput": []
+        },
+        "line": 13,
+        "name": "Context",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/whole-argument.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/whole-argument.tsx#Context"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/0",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/0"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "count": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "type": "number"
+                },
+                "input": {
+                  "type": "string"
+                },
+                "jam": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "type": "number"
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "input",
+                "count",
+                "label",
+                "jam"
+              ],
+              "type": "object"
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/whole-argument.tsx",
+              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Context = pattern(\"unhashed:pattern/compare/fixtures/whole-argument.tsx#Context\");\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/whole-argument.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\nconst context = $rt.thunk(($h) => ($rt.at($arg, [], $h)));\nreturn $rt.thunk(($h) => ($rt.force(context, $h)));\n});\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\nconst $s1 = $rt.setups[1]({ \"input\": $rt.thunk(($h) => ($h.output(0))), \"count\": $rt.thunk(($h) => ($h.slot(1))), \"label\": (\"l\"), \"jam\": $rt.thunk(($h) => ($h.slot(1))) }, $h);\nconst context = $rt.thunk(($h) => ($rt.force($s1, $h)));\nreturn $rt.thunk(($h) => (({ context: $rt.force(context, $h) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 18,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/whole-argument.tsx",
+                "start": 639
+              },
+              "bodies": [],
+              "entry": "input",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/whole-argument.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/whole-argument.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "context",
+                "input"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "context",
+                "count"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 1
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "context",
+                "jam"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 1
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/whole-argument.tsx#default",
+            "unhashed:pattern/compare/fixtures/whole-argument.tsx#Context"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "note"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "count"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "count": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "type": "number"
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "note",
+                "count"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "number"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

@@ -1,0 +1,506 @@
+[
+  {
+    "module": "compare/fixtures/handle-passed.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/handle-passed.tsx",
+              "source": "const { \"handler\": handler, \"navigateTo\": navigateTo, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Child = pattern(\"unhashed:pattern/compare/fixtures/handle-passed.tsx#Child\");\nconst join = handler((_event, { mine, other }) => {\n  mine.set(\"joined\");\n  return navigateTo(Child({ mine, other }));\n});\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/handle-passed.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ mine: $h.slot(0), other: $h.slot(1) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [],
+          "valuesWithoutOutput": []
+        },
+        "line": 15,
+        "name": "Child",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/handle-passed.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/handle-passed.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "mine"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "other"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 1
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/handle-passed.tsx#Child"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [
+                "mine"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "other"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "mine": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "type": "string"
+                },
+                "other": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mine",
+                "other"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "additionalProperties": true,
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {
+            "0": {
+              "captures": [],
+              "named": true
+            }
+          },
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/handle-passed.tsx",
+              "source": "const { \"handler\": handler, \"navigateTo\": navigateTo, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Child = pattern(\"unhashed:pattern/compare/fixtures/handle-passed.tsx#Child\");\nconst join = handler((_event, { mine, other }) => {\n  mine.set(\"joined\");\n  return navigateTo(Child({ mine, other }));\n});\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/handle-passed.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ join: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { mine, other }) => {\n  mine.set(\"joined\");\n  return navigateTo(Child({ mine, other }));\n})($e, $s));"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [],
+          "valuesWithoutOutput": []
+        },
+        "line": 40,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/3",
+              "handler": {
+                "body": 0
+              },
+              "name": "join",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "mine"
+                  ],
+                  "place": {
+                    "slot": 2
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "other"
+                  ],
+                  "place": {
+                    "slot": 3
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [
+                {
+                  "builtin": "navigateTo",
+                  "kind": "effect"
+                },
+                {
+                  "child": 0,
+                  "identifiedBy": "order",
+                  "kind": "instantiate"
+                }
+              ],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "join",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "mine"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "other"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "child": 0,
+                    "kind": "argument",
+                    "path": []
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                },
+                {
+                  "constraints": [],
+                  "reference": {
+                    "passes": 0
+                  },
+                  "target": {
+                    "child": 0,
+                    "kind": "argument",
+                    "path": [
+                      "mine"
+                    ]
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                },
+                {
+                  "constraints": [],
+                  "reference": {
+                    "passes": 1
+                  },
+                  "target": {
+                    "child": 0,
+                    "kind": "argument",
+                    "path": [
+                      "other"
+                    ]
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                },
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 0
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                },
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "call": 0
+                    },
+                    "path": []
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [
+            {
+              "name": {
+                "body": "join",
+                "site": 1
+              },
+              "within": []
+            }
+          ],
+          "closures": [],
+          "collections": [],
+          "cones": [],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/handle-passed.tsx#default"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [
+                "mine"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "other"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "mine"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "other"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "templates": [
+            {
+              "by": {
+                "body": 0
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 0
+                },
+                {
+                  "op": "slot",
+                  "slot": 1
+                }
+              ],
+              "op": "derive"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "mine": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "type": "string"
+                },
+                "other": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mine",
+                "other"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "properties": {
+                "join": {
+                  "asCell": [
+                    "stream",
+                    "opaque"
+                  ]
+                }
+              },
+              "required": [
+                "join"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "asCell": [
+                "opaque"
+              ]
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

@@ -1,0 +1,750 @@
+[
+  {
+    "module": "compare/fixtures/reduce.tsx",
+    "patterns": [
+      {
+        "line": 23,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "operation",
+              "membership": {
+                "op": "slot",
+                "slot": 0
+              },
+              "name": {
+                "name": "reduce",
+                "ordinal": 1
+              },
+              "source": {
+                "slot": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "operation",
+              "membership": {
+                "op": "slot",
+                "slot": 3
+              },
+              "name": {
+                "name": "reduce",
+                "ordinal": 2
+              },
+              "source": {
+                "slot": 3
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 3
+              },
+              "name": {
+                "name": "doubled",
+                "ordinal": 2
+              },
+              "source": {
+                "slot": 3
+              },
+              "within": []
+            },
+            {
+              "construct": "operation",
+              "membership": {
+                "op": "output",
+                "output": 2
+              },
+              "name": {
+                "name": "reduce",
+                "ordinal": 3
+              },
+              "source": {
+                "output": 2
+              },
+              "within": []
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/reduce.tsx",
+                "start": 836
+              },
+              "bodies": [],
+              "entry": "total",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "operation": 0
+                    },
+                    "path": [
+                      "initial"
+                    ]
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/reduce.tsx",
+                "start": 849
+              },
+              "bodies": [],
+              "entry": "total",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1,
+                2
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/reduce.tsx",
+                "start": 906
+              },
+              "bodies": [],
+              "entry": "weighted",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "operation": 1
+                    },
+                    "path": [
+                      "initial"
+                    ]
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/reduce.tsx",
+                "start": 926
+              },
+              "bodies": [],
+              "entry": "weighted",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4,
+                5,
+                6
+              ],
+              "within": [
+                {
+                  "element": 1
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/reduce.tsx",
+                "start": 1019
+              },
+              "bodies": [],
+              "entry": "doubled",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                7
+              ],
+              "within": [
+                {
+                  "element": 2
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/reduce.tsx",
+                "start": 1002
+              },
+              "bodies": [],
+              "entry": "doubled",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                8
+              ],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "operation": 2
+                    },
+                    "path": [
+                      "initial"
+                    ]
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 8
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/reduce.tsx",
+                "start": 1055
+              },
+              "bodies": [],
+              "entry": "doubled",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                9,
+                10
+              ],
+              "within": [
+                {
+                  "element": 3
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/reduce.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                11
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/reduce.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                12
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/reduce.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                13
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [
+            {
+              "implementation": {
+                "cone": 1
+              },
+              "input": {
+                "body": {
+                  "op": "shared",
+                  "template": 0
+                },
+                "collection": 0,
+                "op": "fold"
+              },
+              "kind": "reduce",
+              "name": "total",
+              "within": []
+            },
+            {
+              "implementation": {
+                "cone": 3
+              },
+              "input": {
+                "body": {
+                  "op": "shared",
+                  "template": 1
+                },
+                "collection": 1,
+                "op": "fold"
+              },
+              "kind": "reduce",
+              "name": "weighted",
+              "within": []
+            },
+            {
+              "implementation": {
+                "cone": 6
+              },
+              "input": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "body": {
+                      "op": "shared",
+                      "template": 2
+                    },
+                    "collection": 3,
+                    "op": "fold"
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 8
+                  }
+                ],
+                "op": "derive"
+              },
+              "kind": "reduce",
+              "name": {
+                "name": "doubled",
+                "ordinal": 1
+              },
+              "within": []
+            }
+          ],
+          "outputs": [
+            {
+              "cone": 1,
+              "constraints": [],
+              "interim": "total",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "shared",
+                "template": 0
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "interim": "weighted",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "shared",
+                "template": 1
+              }
+            },
+            {
+              "collection": 2,
+              "cone": 4,
+              "constraints": [],
+              "interim": "doubled",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "interim": "doubled",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 7
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 6,
+              "constraints": [],
+              "interim": "doubled",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "shared",
+                "template": 2
+              }
+            },
+            {
+              "cone": 9,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "doubled"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 11
+              }
+            },
+            {
+              "cone": 9,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "total"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 12
+              }
+            },
+            {
+              "cone": 9,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "weighted"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 13
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/reduce.tsx#default"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "amount"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "amounts"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "kind": "operation",
+                "operation": 1
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "collection": 1,
+                "kind": "index"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "bonus"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "kind": "operation",
+                "operation": 2
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "collection": 3,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "kind": "operation",
+                "operation": 2
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "kind": "operation",
+                "operation": 1
+              }
+            }
+          ],
+          "stateCells": [],
+          "templates": [
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "const"
+                },
+                {
+                  "op": "slot",
+                  "slot": 2
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "const"
+                },
+                {
+                  "by": {
+                    "expression": true
+                  },
+                  "inputs": [
+                    {
+                      "op": "slot",
+                      "slot": 5
+                    },
+                    {
+                      "op": "slot",
+                      "slot": 6
+                    }
+                  ],
+                  "op": "derive"
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "const"
+                },
+                {
+                  "op": "slot",
+                  "slot": 10
+                }
+              ],
+              "op": "derive"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "amounts": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "bonus": {
+                  "type": "number"
+                },
+                "items": {
+                  "items": {
+                    "properties": {
+                      "amount": {
+                        "type": "number"
+                      },
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "amount"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "items",
+                "amounts",
+                "bonus"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "items": {
+                "properties": {
+                  "amount": {
+                    "type": "number"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title",
+                  "amount"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

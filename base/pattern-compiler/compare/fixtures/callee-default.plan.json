@@ -1,0 +1,1952 @@
+[
+  {
+    "module": "compare/fixtures/callee-default.tsx",
+    "patterns": [
+      {
+        "line": 30,
+        "name": "Price",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "spell",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "symbol"
+                  ],
+                  "slot": 0
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 851
+              },
+              "bodies": [],
+              "entry": "shown",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 902
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "spelled",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "shown"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "spelled"
+              ],
+              "template": {
+                "by": {
+                  "body": 0
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/callee-default.tsx#Price"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "symbol"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "amount"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "amount": {
+                  "type": "number"
+                },
+                "symbol": {
+                  "default": "$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "amount",
+                "symbol"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "default": "$",
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "line": 39,
+        "name": "Marked",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/3",
+              "handler": {
+                "body": 0
+              },
+              "name": "append",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "symbol"
+                  ],
+                  "place": {
+                    "slot": 2
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "append",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "symbol"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "symbol"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 0
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 0
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 1
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "symbol"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 2
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/callee-default.tsx#Marked"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [
+                "symbol"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "symbol"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "symbol"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "symbol": {
+                  "default": "$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "symbol"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "default": "$",
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "unknown"
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "line": 56,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/8",
+              "handler": {
+                "body": 3
+              },
+              "name": "append",
+              "state": [
+                {
+                  "capture": "link",
+                  "default": "$",
+                  "path": [
+                    "symbol"
+                  ],
+                  "place": {
+                    "slot": 5
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 5
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "site": "marked"
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/8",
+              "handler": {
+                "body": 3
+              },
+              "name": "append",
+              "state": [
+                {
+                  "capture": "link",
+                  "default": "$",
+                  "path": [
+                    "symbol"
+                  ],
+                  "place": {
+                    "slot": 6
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 6
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "site": "markedDefaulted"
+                }
+              ]
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "spell",
+              "outputs": [],
+              "reads": [],
+              "widenings": [],
+              "within": [
+                {
+                  "site": "omitted"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "spell",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "symbol"
+                  ],
+                  "default": "$",
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [
+                {
+                  "site": "bound"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "spell",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "symbol"
+                  ],
+                  "default": "$",
+                  "slot": 2
+                }
+              ],
+              "widenings": [],
+              "within": [
+                {
+                  "site": "defaulted"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "append",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "symbol"
+                  ],
+                  "slot": 3
+                },
+                {
+                  "at": [
+                    "binding",
+                    "symbol"
+                  ],
+                  "slot": 4
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 3
+                  },
+                  "template": {
+                    "by": {
+                      "body": 3
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 3
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 4
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "spell",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "symbol"
+                  ],
+                  "default": "$",
+                  "slot": 8
+                }
+              ],
+              "widenings": [],
+              "within": [
+                {
+                  "element": 0
+                },
+                {
+                  "site": "price"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "spell",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "symbol"
+                  ],
+                  "default": "$",
+                  "slot": 12
+                }
+              ],
+              "widenings": [],
+              "within": [
+                {
+                  "element": 2
+                },
+                {
+                  "site": "price"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "spell",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "symbol"
+                  ],
+                  "default": "$",
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [
+                {
+                  "element": 3
+                },
+                {
+                  "site": "price"
+                }
+              ],
+              "writes": []
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 7
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
+              "source": {
+                "slot": 7
+              },
+              "within": []
+            },
+            {
+              "construct": "filter",
+              "membership": {
+                "op": "shared",
+                "template": 0
+              },
+              "name": "filter",
+              "source": {
+                "slot": 7
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "output",
+                "output": 12
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
+              "source": {
+                "collection": 1,
+                "via": "map"
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 14
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 3
+              },
+              "source": {
+                "slot": 14
+              },
+              "within": []
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 851
+              },
+              "bodies": [],
+              "entry": "shown",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [
+                {
+                  "site": "omitted"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 902
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "spelled",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "omitted"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 851
+              },
+              "bodies": [],
+              "entry": "shown",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [
+                {
+                  "site": "bound"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 902
+              },
+              "bodies": [
+                1
+              ],
+              "entry": "spelled",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1
+              ],
+              "within": [
+                {
+                  "site": "bound"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 851
+              },
+              "bodies": [],
+              "entry": "shown",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                2
+              ],
+              "within": [
+                {
+                  "site": "defaulted"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 902
+              },
+              "bodies": [
+                2
+              ],
+              "entry": "spelled",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "within": [
+                {
+                  "site": "defaulted"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 851
+              },
+              "bodies": [],
+              "entry": "shown",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                8,
+                9
+              ],
+              "within": [
+                {
+                  "element": 0
+                },
+                {
+                  "site": "price"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 902
+              },
+              "bodies": [
+                4
+              ],
+              "entry": "spelled",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                8
+              ],
+              "within": [
+                {
+                  "element": 0
+                },
+                {
+                  "site": "price"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 2232
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 2470
+              },
+              "bodies": [],
+              "entry": "filter",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                10,
+                11
+              ],
+              "within": [
+                {
+                  "element": 1
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 851
+              },
+              "bodies": [],
+              "entry": "shown",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                12,
+                13
+              ],
+              "within": [
+                {
+                  "element": 2
+                },
+                {
+                  "site": "price"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 902
+              },
+              "bodies": [
+                5
+              ],
+              "entry": "spelled",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                12
+              ],
+              "within": [
+                {
+                  "element": 2
+                },
+                {
+                  "site": "price"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 2500
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "element": 2
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 851
+              },
+              "bodies": [],
+              "entry": "shown",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [
+                {
+                  "element": 3
+                },
+                {
+                  "site": "price"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 902
+              },
+              "bodies": [
+                6
+              ],
+              "entry": "spelled",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1
+              ],
+              "within": [
+                {
+                  "element": 3
+                },
+                {
+                  "site": "price"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 2772
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                15
+              ],
+              "within": [
+                {
+                  "element": 3
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                5
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                6
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [
+            {
+              "from": 6,
+              "to": 8,
+              "via": {
+                "kind": "output",
+                "output": 6
+              }
+            },
+            {
+              "from": 7,
+              "to": 8,
+              "via": {
+                "kind": "output",
+                "output": 7
+              }
+            },
+            {
+              "from": 10,
+              "to": 12,
+              "via": {
+                "kind": "output",
+                "output": 14
+              }
+            },
+            {
+              "from": 11,
+              "to": 12,
+              "via": {
+                "kind": "output",
+                "output": 15
+              }
+            },
+            {
+              "from": 13,
+              "to": 15,
+              "via": {
+                "kind": "output",
+                "output": 20
+              }
+            },
+            {
+              "from": 14,
+              "to": 15,
+              "via": {
+                "kind": "output",
+                "output": 21
+              }
+            }
+          ],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "omitted"
+              ],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "const"
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "omittedSpelled"
+              ],
+              "template": {
+                "by": {
+                  "body": 0
+                },
+                "inputs": [],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "bound"
+              ],
+              "template": {
+                "op": "shared",
+                "template": 1
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "boundSpelled"
+              ],
+              "template": {
+                "by": {
+                  "body": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "defaulted"
+              ],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 5,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "defaultedSpelled"
+              ],
+              "template": {
+                "by": {
+                  "body": 2
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 6,
+              "constraints": [],
+              "interim": "shown",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 8
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 9
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 7,
+              "constraints": [],
+              "interim": "spelled",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "body": 4
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 8
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "collection": 0,
+              "cone": 8,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "priced"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 7
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "priced",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "priced",
+                "*",
+                "shown"
+              ],
+              "template": {
+                "op": "output",
+                "output": 6
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "priced",
+                "*",
+                "spelled"
+              ],
+              "template": {
+                "op": "output",
+                "output": 7
+              }
+            },
+            {
+              "collection": 1,
+              "cone": 9,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "shared",
+                "template": 0
+              }
+            },
+            {
+              "cone": 9,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 11
+              }
+            },
+            {
+              "cone": 10,
+              "constraints": [],
+              "interim": "shown",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 12
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 13
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 11,
+              "constraints": [],
+              "interim": "spelled",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "body": 5
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 12
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "collection": 2,
+              "cone": 12,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "cheap"
+              ],
+              "template": {
+                "op": "output",
+                "output": 12
+              }
+            },
+            {
+              "cone": 12,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "cheap",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 12,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "cheap",
+                "*",
+                "shown"
+              ],
+              "template": {
+                "op": "output",
+                "output": 14
+              }
+            },
+            {
+              "cone": 12,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "cheap",
+                "*",
+                "spelled"
+              ],
+              "template": {
+                "op": "output",
+                "output": 15
+              }
+            },
+            {
+              "cone": 13,
+              "constraints": [],
+              "interim": "shown",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "shared",
+                "template": 1
+              }
+            },
+            {
+              "cone": 14,
+              "constraints": [],
+              "interim": "spelled",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "body": 6
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "collection": 3,
+              "cone": 15,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "tagged"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 14
+              }
+            },
+            {
+              "cone": 15,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "tagged",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 15,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "tagged",
+                "*",
+                "shown"
+              ],
+              "template": {
+                "op": "output",
+                "output": 20
+              }
+            },
+            {
+              "cone": 15,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "tagged",
+                "*",
+                "spelled"
+              ],
+              "template": {
+                "op": "output",
+                "output": 21
+              }
+            },
+            {
+              "cone": 15,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "tagged",
+                "*",
+                "word"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 15
+              }
+            },
+            {
+              "cone": 17,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "marked",
+                "symbol"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 5
+              }
+            },
+            {
+              "cone": 17,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "markedDefaulted",
+                "symbol"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 6
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/callee-default.tsx#default",
+            "unhashed:pattern/compare/fixtures/callee-default.tsx#Price",
+            "unhashed:pattern/compare/fixtures/callee-default.tsx#Marked"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "amount"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "sign"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "mark"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "symbol"
+              ],
+              "root": {
+                "handler": 3,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "symbol"
+              ],
+              "root": {
+                "handler": 3,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "sign"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "mark"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "rows"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "sign"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "amount"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "amount"
+              ],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/6"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "sign"
+              ],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "amount"
+              ],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "words"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/7"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 3,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "templates": [
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 10
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 1,
+              "op": "fold"
+            },
+            {
+              "by": {
+                "expression": true,
+                "pattern": 1
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 1
+                },
+                {
+                  "op": "slot",
+                  "slot": 0
+                }
+              ],
+              "op": "derive"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "amount": {
+                  "type": "number"
+                },
+                "mark": {
+                  "default": "#",
+                  "type": "string"
+                },
+                "rows": {
+                  "items": {
+                    "properties": {
+                      "amount": {
+                        "type": "number"
+                      },
+                      "sign": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "amount"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "sign": {
+                  "type": "string"
+                },
+                "words": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "amount",
+                "sign",
+                "mark",
+                "rows",
+                "words"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "default": "#",
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "items": {
+                "properties": {
+                  "amount": {
+                    "type": "number"
+                  },
+                  "sign": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "amount"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "properties": {
+                "amount": {
+                  "type": "number"
+                },
+                "sign": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "amount"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/7",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/8",
+            "schema": {
+              "type": "unknown"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

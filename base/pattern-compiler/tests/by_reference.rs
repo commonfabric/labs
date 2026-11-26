@@ -1,0 +1,425 @@
+//! Arguments bound by reference in tier R (`language-subset.md` §7.5.2): in
+//! the argument of a pattern, of a handler, and of a `lift` result, a value
+//! and a handle of that value stand for each other, position by position.
+
+use pattern_compiler::program::{analyze, SourceFile};
+
+const PRELUDE: &str = "import { Cell, computed, handler, lift, pattern, Stream, UI, Writable, \
+type ComparableCell, type OpaqueCell, type ReadonlyCell, type SqliteDb, type WriteonlyCell } from \"commonfabric\";\n\
+interface Donut { name: string; price: number }\n";
+
+fn mismatches(snippet: &str) -> Vec<String> {
+    let analysis = analyze(&[SourceFile {
+        path: "case.tsx".to_string(),
+        text: format!("{PRELUDE}{snippet}"),
+    }]);
+    assert!(analysis.failures.is_empty(), "{:?}", analysis.failures);
+    analysis.modules[0]
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.id == "subset-type:mismatch")
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect()
+}
+
+fn assert_accepted(snippet: &str) {
+    let found = mismatches(snippet);
+    assert!(found.is_empty(), "{found:?} in:\n{snippet}");
+}
+
+fn assert_refused(snippet: &str, reason: &str) {
+    let found = mismatches(snippet);
+    assert_eq!(found.len(), 1, "{found:?} in:\n{snippet}");
+    assert!(
+        found[0].contains(reason),
+        "`{}` does not contain `{reason}`",
+        found[0]
+    );
+}
+
+const ROW: &str = "const Row = pattern<{ donut: Donut; shop: string; chosen: Writable<string[]> }, { name: string }>(\n\
+  ({ donut }) => ({ name: donut.name }));\n\
+const save = handler<unknown, { donuts: Writable<Donut[]>; shop: string }>((_, state) => { state.donuts.push({ name: state.shop, price: 1 }); });\n\
+const total = lift((input: { donuts: Donut[]; tax: number }) => input.donuts.length * input.tax);\n";
+
+#[test]
+fn value_and_cell_stand_for_each_other_in_the_argument_of_a_pattern() {
+    assert_accepted(&format!(
+        "{ROW}const List = pattern<{{ donuts: Donut[]; shop: Writable<string>; chosen: string[] }}, {{ rows: {{ name: string }}[] }}>(\n\
+           ({{ donuts, shop, chosen }}) => ({{ rows: donuts.map((donut) => Row({{ donut, shop, chosen }})) }}));\n"
+    ));
+}
+
+#[test]
+fn value_and_cell_stand_for_each_other_in_the_state_of_a_handler() {
+    assert_accepted(&format!(
+        "{ROW}const List = pattern<{{ donuts: Donut[]; shop: Writable<string> }}, {{ save: Stream<unknown> }}>(\n\
+           ({{ donuts, shop }}) => ({{ save: save({{ donuts, shop }}) }}));\n"
+    ));
+}
+
+#[test]
+fn cell_stands_for_its_value_in_the_argument_of_a_lift_result() {
+    assert_accepted(&format!(
+        "{ROW}const List = pattern<{{ donuts: Writable<Donut[]>; tax: ReadonlyCell<number> }}, {{ total: number }}>(\n\
+           ({{ donuts, tax }}) => ({{ total: total({{ donuts, tax }}) }}));\n"
+    ));
+}
+
+#[test]
+fn rule_reaches_inside_the_value_type_of_a_handle() {
+    assert_accepted(
+        "const Inner = pattern<{ a: Writable<Cell<Donut>[]>; b: Writable<Donut[]> }, { n: number }>(({ a }) => ({ n: 1 }));\n\
+         const Outer = pattern<{ a: Writable<Donut[]>; b: Writable<Cell<Donut>[]> }, { n: number }>(\n\
+           ({ a, b }) => Inner({ a, b }));\n",
+    );
+}
+
+#[test]
+fn value_of_another_type_is_refused_where_a_cell_is_declared() {
+    assert_refused(
+        &format!(
+            "{ROW}const List = pattern<{{ donuts: string[]; shop: string }}, {{ save: Stream<unknown> }}>(\n\
+               ({{ donuts, shop }}) => ({{ save: save({{ donuts, shop }}) }}));\n"
+        ),
+        "a cell of the value's type would not be assignable to the declared handle",
+    );
+}
+
+#[test]
+fn authored_function_called_in_tier_r_is_checked_without_the_rule() {
+    assert_refused(
+        "function label(shop: string): string { return shop; }\n\
+         const List = pattern<{ shop: Writable<string> }, { label: string }>(({ shop }) => ({ label: label(shop) }));\n",
+        "a cell where a value is declared",
+    );
+    assert_refused(
+        "function first(names: Cell<string[]>): number { return names.get().length; }\n\
+         const List = pattern<{ names: string[] }, { n: number }>(({ names }) => ({ n: first(names) }));\n",
+        "a value where a cell is declared",
+    );
+}
+
+#[test]
+fn rule_does_not_hold_in_a_function_body() {
+    assert_refused(
+        &format!(
+            "{ROW}const add = handler<unknown, {{ donuts: Donut[]; shop: string }}>((_, state) => {{\n\
+               save({{ donuts: state.donuts, shop: state.shop }});\n\
+             }});\n"
+        ),
+        "a value where a cell is declared",
+    );
+    assert_refused(
+        &format!(
+            "{ROW}const List = pattern<{{ donuts: Writable<Donut[]>; tax: number }}, {{ total: number }}>(\n\
+               ({{ donuts, tax }}) => ({{ total: computed(() => total({{ donuts, tax }})) }}));\n"
+        ),
+        "a cell where a value is declared",
+    );
+}
+
+#[test]
+fn rule_does_not_hold_for_a_returned_value_or_an_annotation() {
+    assert_refused(
+        "const List = pattern<{ shop: Writable<string> }, { shop: string }>(({ shop }) => {\n\
+           const out: { shop: string } = { shop };\n\
+           return out;\n\
+         });\n",
+        "a cell where a value is declared",
+    );
+}
+
+#[test]
+fn undefined_is_accepted_where_the_declared_property_is_optional() {
+    assert_accepted(
+        "const Note = pattern<{ note?: Writable<string>; seen: ReadonlyCell<string | undefined> }, { n: number }>(() => ({ n: 1 }));\n\
+         const Outer = pattern<{ note?: string; seen: string }, { n: number }>(({ note, seen }) => Note({ note, seen }));\n",
+    );
+    assert_refused(
+        "const Note = pattern<{ note: Writable<string> }, { n: number }>(() => ({ n: 1 }));\n\
+         const Outer = pattern<{ note: string | undefined }, { n: number }>(({ note }) => Note({ note }));\n",
+        "the value and the cell differ by `undefined`",
+    );
+    assert_refused(
+        "const Note = pattern<{ note: Writable<string | undefined> }, { n: number }>(() => ({ n: 1 }));\n\
+         const Outer = pattern<{ note: string }, { n: number }>(({ note }) => Note({ note }));\n",
+        "the value and the cell differ by `undefined`",
+    );
+}
+
+#[test]
+fn cell_that_cannot_be_read_is_refused_where_a_value_is_declared() {
+    for kind in ["WriteonlyCell", "ComparableCell", "OpaqueCell"] {
+        assert_refused(
+            &format!(
+                "const Show = pattern<{{ name: string }}, {{ n: number }}>(() => ({{ n: 1 }}));\n\
+                 const Outer = pattern<{{ name: {kind}<string> }}, {{ n: number }}>(({{ name }}) => Show({{ name }}));\n"
+            ),
+            "cannot be read, so it does not stand for the value",
+        );
+    }
+}
+
+#[test]
+fn value_is_never_accepted_for_a_stream_or_a_sqlite_handle() {
+    assert_refused(
+        "const Show = pattern<{ go: Stream<string> }, { n: number }>(() => ({ n: 1 }));\n\
+         const Outer = pattern<{ go: string }, { n: number }>(({ go }) => Show({ go }));\n",
+        "a value where a Stream is declared",
+    );
+    assert_refused(
+        "const Show = pattern<{ db: SqliteDb }, { n: number }>(() => ({ n: 1 }));\n\
+         const Outer = pattern<{ db: { name: string } }, { n: number }>(({ db }) => Show({ db }));\n",
+        "a value where a Sqlite is declared",
+    );
+    assert_refused(
+        "const Show = pattern<{ go: string }, { n: number }>(() => ({ n: 1 }));\n\
+         const Outer = pattern<{ go: Stream<string> }, { n: number }>(({ go }) => Show({ go }));\n",
+        "a Stream has no value to read",
+    );
+}
+
+#[test]
+fn literal_is_checked_against_the_value_type_of_the_declared_cell() {
+    assert_accepted(
+        "const Show = pattern<{ title: Writable<string>; rows: Writable<Donut[]>; kind: Writable<\"a\" | \"b\"> }, { n: number }>(() => ({ n: 1 }));\n\
+         const Outer = pattern<{ n: number }, { n: number }>(() => Show({ title: \"ring\", rows: [{ name: \"ring\", price: 1 }], kind: \"a\" }));\n",
+    );
+    assert_refused(
+        "const Show = pattern<{ title: Writable<string> }, { n: number }>(() => ({ n: 1 }));\n\
+         const Outer = pattern<{ n: number }, { n: number }>(() => Show({ title: 3 }));\n",
+        "expected string, found 3",
+    );
+}
+
+#[test]
+fn attributes_of_a_tag_that_names_a_pattern_are_bound_by_reference() {
+    assert_accepted(&format!(
+        "{ROW}const List = pattern<{{ donuts: Donut[]; shop: Writable<string>; chosen: string[] }}, {{ [UI]: unknown }}>(\n\
+           ({{ donuts, shop, chosen }}) => ({{ [UI]: <ul>{{donuts.map((donut) => <Row donut={{donut}} shop={{shop}} chosen={{chosen}} />)}}</ul> }}));\n"
+    ));
+    assert_refused(
+        &format!(
+            "{ROW}const List = pattern<{{ donuts: Donut[]; shop: number; chosen: string[] }}, {{ [UI]: unknown }}>(\n\
+               ({{ donuts, shop, chosen }}) => ({{ [UI]: <ul>{{donuts.map((donut) => <Row donut={{donut}} shop={{shop}} chosen={{chosen}} />)}}</ul> }}));\n"
+        ),
+        "expected string, found number",
+    );
+}
+
+/// The counts of a snippet whose names begin with `prefix`.
+fn counts(snippet: &str, prefix: &str) -> Vec<(String, usize)> {
+    let analysis = analyze(&[SourceFile {
+        path: "case.tsx".to_string(),
+        text: format!("{PRELUDE}{snippet}"),
+    }]);
+    analysis.modules[0]
+        .counts
+        .iter()
+        .filter(|(key, _)| key.starts_with(prefix))
+        .map(|(key, count)| (key[prefix.len()..].to_string(), *count))
+        .collect()
+}
+
+#[test]
+fn value_bound_to_a_writable_handle_is_counted_by_what_it_is() {
+    let found = counts(
+        "const edit = handler<unknown, { name: Writable<string>; seen: ReadonlyCell<string> }>((_, state) => state.name.set(\"\"));\n\
+         const Outer = pattern<{ name: string; donuts: Donut[] }, { a: unknown }>(({ name, donuts }) => {\n\
+           const upper = computed(() => name.toUpperCase());\n\
+           const state = new Writable<string>(\"\");\n\
+           return { a: [edit({ name, seen: name }), edit({ name: upper, seen: name }), edit({ name: name + \"!\", seen: name }),\n\
+             edit({ name: state, seen: name }), donuts.map((donut) => edit({ name: donut.name, seen: name }))] };\n\
+         });\n",
+        "types:by-reference:a writable handle bound to:",
+    );
+    assert_eq!(
+        found,
+        [
+            (
+                "a computed value: the result of a `computed`".to_string(),
+                1
+            ),
+            ("a computed value: the result of an operator".to_string(), 1),
+            ("an input of the pattern".to_string(), 2),
+        ]
+    );
+}
+
+#[test]
+fn write_through_a_handle_of_unknown_is_counted() {
+    let found = counts(
+        "function put(cell: Cell<unknown>, typed: Cell<string>) { cell.set(1); cell.key(\"a\").set(2); typed.set(\"\"); }\n\
+         function run(typed: Cell<string>) { put(typed, typed); }\n",
+        "types:",
+    );
+    let found: Vec<(String, usize)> = found
+        .into_iter()
+        .filter(|(key, _)| key.contains("unknown"))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (
+                "sites:a handle of a known type where `Cell<unknown>` is declared".to_string(),
+                1
+            ),
+            ("sites:a write through a handle of `unknown`".to_string(), 2),
+            ("write through a handle of `unknown`:set".to_string(), 2),
+        ]
+    );
+}
+
+// §7.5.3: the argument of a pattern instantiated in a function body.
+
+const NOTE: &str = "import { type Default } from \"commonfabric\";\n\
+const Note = pattern<{ title?: Writable<string | Default<\"\">>; body: string; tags: Writable<string[]> }, { n: number }>(\n\
+  ({ body }) => ({ n: 1 }));\n";
+
+#[test]
+fn value_is_accepted_where_a_pattern_instantiated_in_a_handler_declares_a_cell() {
+    assert_accepted(&format!(
+        "{NOTE}const add = handler<unknown, {{ notes: Writable<{{ n: number }}[]>; text: Writable<string>; tags: string[] }}>((_, state) => {{\n\
+           state.notes.push(Note({{ title: \"New note\", body: state.text, tags: state.tags }}));\n\
+         }});\n"
+    ));
+}
+
+#[test]
+fn value_is_accepted_where_a_pattern_instantiated_in_a_computed_declares_a_cell() {
+    assert_accepted(&format!(
+        "{NOTE}const P = pattern<{{ text: string }}, {{ note: {{ n: number }} }}>(({{ text }}) => ({{\n\
+           note: computed(() => Note({{ title: text, body: text, tags: [\"a\"] }})),\n\
+         }}));\n"
+    ));
+}
+
+#[test]
+fn instantiation_in_a_function_body_keeps_the_conditions_on_undefined_and_on_the_type() {
+    assert_refused(
+        &format!(
+            "{NOTE}const add = handler<unknown, {{ tag: string | undefined; text: string }}>((_, state) => {{\n\
+               Note({{ body: state.text, tags: [state.tag] }});\n\
+             }});\n"
+        ),
+        "",
+    );
+    assert_refused(
+        &format!(
+            "{NOTE}const add = handler<unknown, {{ count: number; text: string }}>((_, state) => {{\n\
+               Note({{ body: state.text, tags: state.count }});\n\
+             }});\n"
+        ),
+        "a cell of the value's type would not be assignable",
+    );
+}
+
+#[test]
+fn state_of_a_handler_bound_in_a_function_body_stays_strict() {
+    assert_refused(
+        &format!(
+            "{ROW}const outer = handler<unknown, {{ donuts: Donut[]; shop: string }}>((_, state) => {{\n\
+               const stream = save({{ donuts: state.donuts, shop: state.shop }});\n\
+             }});\n"
+        ),
+        "a value where a cell is declared",
+    );
+    assert_refused(
+        &format!(
+            "{ROW}const outer = handler<unknown, {{ donuts: Writable<Donut[]>; shop: Writable<string> }}>((_, state) => {{\n\
+               const stream = save({{ donuts: state.donuts, shop: state.shop }});\n\
+             }});\n"
+        ),
+        "a cell where a value is declared",
+    );
+}
+
+#[test]
+fn readable_cell_stands_for_its_value_where_a_union_of_values_is_declared() {
+    // §7.5.2, the third row: the value type of the cell is compared whole
+    // with the declared type.
+    assert_accepted(
+        "const face = lift((input: { profile: { name?: string } | null | undefined }) => input.profile?.name ?? \"\");\n\
+         const P = pattern<{ profile?: Writable<{ name?: string } | undefined> }, { name: string }>(\n\
+           ({ profile }) => ({ name: face({ profile }) }));\n",
+    );
+}
+
+// By ruling: an argument bound by reference takes the declared type of its
+// path.
+
+const EDIT: &str = "const edit = handler<unknown, { note: Writable<string> }>((_, state) => state.note.set(\"\"));\n\
+const Show = pattern<{ note: string }, { n: number }>(({ note }) => ({ n: 1 }));\n";
+
+#[test]
+fn condition_does_not_narrow_the_place_an_argument_is_bound_to() {
+    assert_refused(
+        &format!(
+            "{EDIT}const P = pattern<{{ note: string | undefined }}, {{ a: unknown }}>(({{ note }}) => ({{\n\
+               a: note ? edit({{ note }}) : undefined,\n\
+             }}));\n"
+        ),
+        "",
+    );
+    assert_refused(
+        &format!(
+            "{EDIT}const P = pattern<{{ row: {{ note: string | undefined }} }}, {{ a: unknown }}>(({{ row }}) => ({{\n\
+               a: row.note !== undefined && edit({{ note: row.note }}),\n\
+             }}));\n"
+        ),
+        "",
+    );
+}
+
+#[test]
+fn non_null_assertion_does_not_change_the_type_of_a_place() {
+    assert_refused(
+        &format!(
+            "{EDIT}const P = pattern<{{ row: {{ note: string | undefined }} }}, {{ a: unknown }}>(({{ row }}) => ({{\n\
+               a: edit({{ note: row.note! }}),\n\
+             }}));\n"
+        ),
+        "",
+    );
+}
+
+#[test]
+fn place_of_the_declared_type_is_accepted_under_a_condition() {
+    assert_accepted(&format!(
+        "{EDIT}const P = pattern<{{ row: {{ note: string; kind: \"a\" | \"b\" }} }}, {{ a: unknown }}>(({{ row }}) => ({{\n\
+           a: row.kind === \"a\" ? edit({{ note: row.note }}) : undefined,\n\
+         }}));\n"
+    ));
+}
+
+#[test]
+fn receiver_of_the_place_keeps_its_narrowing() {
+    assert_accepted(&format!(
+        "{EDIT}const P = pattern<{{ row: {{ note: string }} | undefined }}, {{ a: unknown }}>(({{ row }}) => ({{\n\
+           a: row ? edit({{ note: row.note }}) : undefined,\n\
+         }}));\n"
+    ));
+}
+
+#[test]
+fn argument_of_a_pattern_a_function_body_instantiates_is_an_initial_value() {
+    // Ruling T3: "An argument given to a pattern that a function body
+    // instantiates ... is the initial value of the child's stored argument;
+    // the child writes it freely. This is not a bound computed value."
+    let snippet = "const Note = pattern<{ title: Writable<string> }, { title: string }>(({ title }) => ({ title }));\n\
+         const make = handler<{ name: string }, { notes: Writable<unknown[]> }>((event, state) => {\n\
+           state.notes.push(Note({ title: event.name + \"!\" }));\n\
+         });\n";
+    assert_eq!(
+        counts(snippet, "types:by-reference:a writable handle bound to:"),
+        []
+    );
+    assert_eq!(
+        counts(
+            snippet,
+            "types:by-reference:an initial value of a child's argument:"
+        ),
+        [("a computed value: the result of an operator".to_string(), 1)]
+    );
+}

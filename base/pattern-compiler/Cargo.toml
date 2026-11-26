@@ -1,0 +1,28 @@
+[package]
+name = "pattern-compiler"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Prototype front end of the compiled pattern language"
+
+[lib]
+name = "pattern_compiler"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pattern-compiler"
+path = "src/main.rs"
+
+# The parser crates are pinned to one release: their syntax tree changes
+# between releases, and 0.133.0 is the newest release that builds with the
+# Rust 1.93 toolchain.
+[dependencies]
+oxc_allocator = "=0.133.0"
+oxc_ast = "=0.133.0"
+oxc_ast_visit = "=0.133.0"
+oxc_parser = "=0.133.0"
+oxc_semantic = "=0.133.0"
+oxc_span = "=0.133.0"
+oxc_syntax = "=0.133.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

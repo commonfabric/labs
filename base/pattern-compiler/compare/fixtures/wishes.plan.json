@@ -1,0 +1,523 @@
+[
+  {
+    "module": "compare/fixtures/wishes.tsx",
+    "patterns": [
+      {
+        "line": 7,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [
+            {
+              "callee": {
+                "compiled": null
+              },
+              "name": {
+                "operation": "profile",
+                "sidecar": "profileCreate"
+              },
+              "sidecar": "profileCreate",
+              "within": []
+            },
+            {
+              "callee": {
+                "compiled": null
+              },
+              "name": {
+                "operation": "profile",
+                "sidecar": "profilePicker"
+              },
+              "sidecar": "profilePicker",
+              "within": []
+            }
+          ],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/wishes.tsx",
+                "start": 326
+              },
+              "bodies": [],
+              "entry": "profile",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "operation": 0
+                    },
+                    "path": [
+                      "query"
+                    ]
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wishes.tsx",
+                "start": 391
+              },
+              "bodies": [],
+              "entry": "started",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "operation": 1
+                    },
+                    "path": [
+                      "query"
+                    ]
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wishes.tsx",
+                "start": 442
+              },
+              "bodies": [],
+              "entry": "ticking",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "operation": 2
+                    },
+                    "path": [
+                      "query"
+                    ]
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wishes.tsx",
+                "start": 496
+              },
+              "bodies": [],
+              "entry": "greeting",
+              "picks": [],
+              "selectors": [
+                0
+              ],
+              "slots": [
+                0,
+                1,
+                2
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wishes.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wishes.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wishes.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                5
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wishes.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                6
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wishes.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                7
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [
+            {
+              "why": {
+                "kind": "search",
+                "operation": 0
+              }
+            },
+            {
+              "why": {
+                "kind": "search",
+                "operation": 1
+              }
+            },
+            {
+              "why": {
+                "kind": "search",
+                "operation": 2
+              }
+            }
+          ],
+          "edges": [],
+          "operations": [
+            {
+              "implementation": {
+                "builtin": "wish"
+              },
+              "input": {
+                "op": "const"
+              },
+              "kind": "wish",
+              "name": "profile",
+              "scope": "user",
+              "within": []
+            },
+            {
+              "implementation": {
+                "builtin": "wish"
+              },
+              "input": {
+                "op": "const"
+              },
+              "kind": "wish",
+              "name": "started",
+              "within": []
+            },
+            {
+              "implementation": {
+                "builtin": "wish"
+              },
+              "input": {
+                "op": "const"
+              },
+              "kind": "wish",
+              "name": "ticking",
+              "within": []
+            }
+          ],
+          "outputs": [
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "greeting"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "branches": [
+                      {
+                        "op": "slot",
+                        "slot": 2
+                      },
+                      {
+                        "op": "const"
+                      }
+                    ],
+                    "condition": {
+                      "by": {
+                        "expression": true
+                      },
+                      "inputs": [
+                        {
+                          "op": "slot",
+                          "slot": 0
+                        },
+                        {
+                          "op": "slot",
+                          "slot": 1
+                        }
+                      ],
+                      "op": "derive"
+                    },
+                    "op": "select",
+                    "selector": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "note"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "problem"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 4
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "profile"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 5
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "started"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 6
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "time"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 7
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/wishes.tsx#default"
+          ],
+          "picks": [],
+          "selectors": [
+            {
+              "arity": 2
+            }
+          ],
+          "slots": [
+            {
+              "observes": "shape",
+              "path": [
+                "result"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "shape",
+              "path": [
+                "result",
+                "name"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "result",
+                "name"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "note"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "error"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "result"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "result"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 1
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "result"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 2
+              }
+            }
+          ],
+          "stateCells": [
+            {
+              "name": {
+                "operation": "started",
+                "sidecar": "now"
+              },
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": []
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "note"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {}
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

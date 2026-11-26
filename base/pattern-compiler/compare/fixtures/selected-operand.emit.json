@@ -1,0 +1,439 @@
+[
+  {
+    "module": "compare/fixtures/selected-operand.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/selected-operand.tsx",
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/selected-operand.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.selected(\"??\", $h.slot(1), () => $h.slot(2))));\n$rt.value(1, ($h) => ($h.selected(\"||\", $h.slot(1), () => $h.slot(2))));\n$rt.value(2, ($h) => ($h.selected(\"&&\", $h.slot(4), () => $h.slot(2))));\n$rt.value(3, ($h) => ($h.selected(\"??\", $h.slot(6), () => $h.slot(7))));\nreturn $rt.thunk(($h) => (({ coalesced: $h.output(0), either: $h.output(1), both: $h.output(2), text: $h.output(3) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 1
+            },
+            {
+              "cone": 2,
+              "function": true,
+              "output": 2
+            },
+            {
+              "cone": 3,
+              "function": true,
+              "output": 3
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 22,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/selected-operand.tsx",
+                "start": 710
+              },
+              "bodies": [],
+              "entry": "coalesced",
+              "picks": [],
+              "selectors": [
+                0
+              ],
+              "slots": [
+                0,
+                1,
+                2
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/selected-operand.tsx",
+                "start": 743
+              },
+              "bodies": [],
+              "entry": "either",
+              "picks": [],
+              "selectors": [
+                1
+              ],
+              "slots": [
+                0,
+                1,
+                2
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/selected-operand.tsx",
+                "start": 774
+              },
+              "bodies": [],
+              "entry": "both",
+              "picks": [],
+              "selectors": [
+                2
+              ],
+              "slots": [
+                2,
+                3,
+                4
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/selected-operand.tsx",
+                "start": 805
+              },
+              "bodies": [],
+              "entry": "text",
+              "picks": [],
+              "selectors": [
+                3
+              ],
+              "slots": [
+                5,
+                6,
+                7
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "coalesced"
+              ],
+              "template": {
+                "branches": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                ],
+                "condition": {
+                  "op": "slot",
+                  "slot": 0
+                },
+                "op": "select",
+                "selector": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "either"
+              ],
+              "template": {
+                "branches": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                ],
+                "condition": {
+                  "op": "slot",
+                  "slot": 0
+                },
+                "op": "select",
+                "selector": 1
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "both"
+              ],
+              "template": {
+                "branches": [
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 4
+                  }
+                ],
+                "condition": {
+                  "op": "slot",
+                  "slot": 3
+                },
+                "op": "select",
+                "selector": 2
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "text"
+              ],
+              "template": {
+                "branches": [
+                  {
+                    "op": "slot",
+                    "slot": 6
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                ],
+                "condition": {
+                  "op": "slot",
+                  "slot": 5
+                },
+                "op": "select",
+                "selector": 3
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/selected-operand.tsx#default"
+          ],
+          "picks": [],
+          "selectors": [
+            {
+              "arity": 2
+            },
+            {
+              "arity": 2
+            },
+            {
+              "arity": 2
+            },
+            {
+              "arity": 2
+            }
+          ],
+          "slots": [
+            {
+              "observes": "shape",
+              "path": [
+                "primary"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "primary"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "backup"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "enabled"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "enabled"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "shape",
+              "path": [
+                "label"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "label"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "fallback"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/4"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "$defs": {
+                "t0": {
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "nick": {
+                      "default": "anon",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "nick"
+                  ],
+                  "type": "object"
+                }
+              },
+              "properties": {
+                "backup": {
+                  "$ref": "#/$defs/t0"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "fallback": {
+                  "default": "none",
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "primary": {
+                  "$ref": "#/$defs/t0"
+                }
+              },
+              "required": [
+                "backup",
+                "fallback",
+                "enabled"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "nick": {
+                  "default": "anon",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "nick"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "default": "none",
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]
