@@ -61,6 +61,9 @@ const IFC_KEYS = [
   "exactCopyOf",
   "projection",
   "collection",
+  // The module policy a creator-releasable clause of the value is stored
+  // beside (`Reclassified`).
+  "reclassify",
   // Reserved legacy key: minted by nothing (the list builtins' per-element
   // transactions make pointwise precision structural) and consumed by
   // nothing, but already-persisted link schemas embed it, so merging
@@ -370,6 +373,7 @@ const mergeSetLikeIfcArray = (
     case "exactCopyOf":
     case "projection":
     case "collection":
+    case "reclassify":
     case "ownerPrincipal":
       if (!deepEqual(existing, candidate)) {
         throw new CfcEnvelopeStabilityError(

@@ -1003,6 +1003,20 @@ export type PolicyOf<Rules> = {
   readonly __ct_cfc_policy_of__?: Rules;
 };
 
+/**
+ * `T`, computed by its piece's creator's own trusted pattern and shared under
+ * `Rules`: each clause the value derives that names the creator alone, as a
+ * `User` atom, is stored as that clause or `PolicyOf<Rules>`, with the
+ * policy's subject the space the value is stored in. Every other clause the
+ * value derives is kept. Written as the result type of a `lift` or
+ * `computed`, whose output is then readable by whoever `Rules` admits. The
+ * release takes effect only where the runtime's `cfcPatternReclassification`
+ * experimental flag is on, and needs a piece with a recorded creator.
+ */
+export type Reclassified<T, Rules> = Cfc<T, {
+  reclassify: readonly [PolicyOf<Rules>];
+}>;
+
 export type ExactCopy<T, P extends readonly string[]> = Cfc<T, {
   exactCopyOf: P;
 }>;
