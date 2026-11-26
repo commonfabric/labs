@@ -21,11 +21,18 @@ import {
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
-import { buildCfcPolicyArtifactManifest } from "../src/cfc/policy.ts";
+import {
+  buildCfcPolicyArtifactManifest,
+  cfcPolicyManifestDocId,
+} from "../src/cfc/policy.ts";
+import type { ImplementationIdentity } from "../src/cfc/types.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { Runtime } from "../src/runtime.ts";
-import { setCfcTrustSnapshot } from "../src/storage/extended-storage-transaction.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   EmulatedStorageManager,
@@ -44,6 +51,30 @@ const PIECE_SOURCE = [
   "  ({ count }) => ({ count }),",
   ");",
 ].join("\n");
+
+/**
+ * A pattern whose own lift reclassifies its secret argument under the
+ * module's rules, which no runtime registers ahead: the write installs the
+ * manifest in the space of the lift's output.
+ */
+const SHARING_SOURCE = `/// <cts-enable />
+import { lift, pattern, type Reclassified } from "commonfabric";
+import {
+  cfcPattern, exchangeRule, exchangeRules, THIS_POLICY, v,
+} from "commonfabric/cfc";
+export const release = exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: { integrity: [cfcPattern.hasRole(v("user"), THIS_POLICY.subject, "reader")] },
+  post: { addAlternatives: [cfcPattern.user(v("user"))] },
+});
+export const rules = exchangeRules([release]);
+const share = lift(
+  (secret: string): Reclassified<string, typeof rules> => secret + "!",
+);
+export default pattern<{ secret: string }, { shared: string }>(
+  ({ secret }) => ({ shared: share(secret) }),
+);
+`;
 
 const artifact = buildCfcPolicyArtifactManifest({
   formatVersion: 1,
@@ -89,7 +120,11 @@ describe("cfc-reclassify", () => {
   /** A runtime on the shared server, closed when the test ends. */
   const connect = (
     as: Identity,
-    options: { reclassification?: boolean; servingPosture?: boolean } = {},
+    options: {
+      reclassification?: boolean;
+      creatorRecord?: boolean;
+      servingPosture?: boolean;
+    } = {},
   ): Runtime => {
     const storageManager = EmulatedStorageManager.connectTo(server, { as });
     managers.push(storageManager);
@@ -98,7 +133,7 @@ describe("cfc-reclassify", () => {
       storageManager,
       ...(options.servingPosture ? { servingPosture: true } : {}),
       experimental: {
-        pieceCreatorRecord: true,
+        pieceCreatorRecord: options.creatorRecord ?? true,
         cfcPatternReclassification: options.reclassification ?? true,
       },
     });
@@ -108,29 +143,33 @@ describe("cfc-reclassify", () => {
   };
 
   /**
-   * Creates a piece of `PIECE_SOURCE` in `space` on `runtime`, in `tx` when
-   * given, and returns its result cell once the creation has landed.
+   * Creates a piece of `source` in `at` on `runtime`, in `tx` when given,
+   * with `argument` as its argument, and returns its result cell once the
+   * creation has landed.
    */
   const createPiece = async (
     runtime: Runtime,
-    tx: IExtendedStorageTransaction = runtime.edit(),
+    options: {
+      tx?: IExtendedStorageTransaction;
+      source?: string;
+      argument?: (tx: IExtendedStorageTransaction) => unknown;
+      at?: MemorySpace;
+    } = {},
   ): Promise<Cell<unknown>> => {
+    const tx = options.tx ?? runtime.edit();
+    const at = options.at ?? space;
     const compiled = await runtime.patternManager.compilePattern({
       main: "/main.tsx",
-      files: [{ name: "/main.tsx", contents: PIECE_SOURCE }],
-    }, { space });
+      files: [{ name: "/main.tsx", contents: options.source ?? PIECE_SOURCE }],
+    }, { space: at });
     const name = `piece-${names++}`;
-    const argument = runtime.getCell<{ count: number }>(
-      space,
-      `${name}-argument`,
-      undefined,
-    );
+    const argument = runtime.getCell<unknown>(at, `${name}-argument`);
     const result = runtime.getCell<unknown>(
-      space,
+      at,
       `${name}-result`,
       compiled.resultSchema,
     );
-    argument.withTx(tx).set({ count: 0 });
+    argument.withTx(tx).set(options.argument?.(tx) ?? { count: 0 });
     runtime.run(tx, compiled, argument, result);
     expect((await tx.commit().settled).error).toBeUndefined();
     return result;
@@ -147,7 +186,31 @@ describe("cfc-reclassify", () => {
       acting: { user: actor.did(), session: `${actor.did()}-session` },
     });
     setCfcTrustSnapshot(tx, serving.trustSnapshotForPrincipal(actor.did()));
-    return await createPiece(serving, tx);
+    return await createPiece(serving, { tx });
+  };
+
+  /**
+   * Creates a piece of `SHARING_SOURCE` in `at` whose secret argument links
+   * the cell `secret` of `space`, and returns the cell its lift writes, once
+   * the lift has run.
+   */
+  const sharePiece = async (
+    runtime: Runtime,
+    secret: string,
+    at: MemorySpace = space,
+  ): Promise<{ piece: Cell<unknown>; shared: Cell<unknown> }> => {
+    const piece = await createPiece(runtime, {
+      source: SHARING_SOURCE,
+      at,
+      argument: (tx) => ({
+        secret: runtime.getCell(space, secret, undefined, tx),
+      }),
+    });
+    await runtime.idle();
+    const shared = piece.key("shared" as never).resolveAsCell();
+    await shared.pull();
+    await runtime.idle();
+    return { piece, shared };
   };
 
   /** Stores `value` in a new cell labeled `schema`, and returns its name. */
@@ -163,58 +226,100 @@ describe("cfc-reclassify", () => {
     return name;
   };
 
+  /** The module the pattern of the piece `piece` is defined in. */
+  const patternModule = (piece: Cell<unknown>): string =>
+    (piece.getMetaRaw("patternIdentity") as { identity: string }).identity;
+
   /**
-   * Derives a value from the secret `source` into a new computed cell, as a
-   * lift's output is, written through a schema that declares the
-   * reclassification and belonging to `piece` when given, and returns the
-   * derived cell once the write has landed. A computed cell is one no schema
-   * declares a store policy on, so the derived label lands on it whole.
+   * Derives a value from the secret `source` into a computed cell, as a
+   * lift's output is, written through `schema` by `identity` and belonging to
+   * `piece` when given, and returns the derived cell once the write has
+   * landed, or the commit's error. A computed cell is one no schema declares
+   * a store policy on, so the derived label lands on it whole. `into` writes
+   * the same cell again.
    */
   const deriveFrom = async (
     runtime: Runtime,
     source: string,
-    piece?: Cell<unknown>,
-  ): Promise<Cell<unknown>> => {
+    options: {
+      piece?: Cell<unknown>;
+      identity?: ImplementationIdentity;
+      schema?: JSONSchema;
+      into?: Cell<unknown>;
+      value?: unknown;
+    } = {},
+  ): Promise<{ derived: Cell<unknown>; error?: unknown }> => {
     const tx = runtime.edit();
+    if (options.identity !== undefined) {
+      setCfcImplementationIdentity(tx, options.identity);
+    }
     const secret = runtime.getCell<string>(space, source, undefined, tx).get();
-    const named = runtime.getCell(space, `derived-${names++}`)
-      .getAsNormalizedFullLink();
-    const derived = runtime.getCellFromLink<string>(
-      {
-        ...named,
-        id: named.id.replace(/^of:/, "computed:") as typeof named.id,
-      },
-      RECLASSIFIED_SCHEMA,
+    const named = options.into?.getAsNormalizedFullLink() ?? (() => {
+      const link = runtime.getCell(space, `derived-${names++}`)
+        .getAsNormalizedFullLink();
+      return {
+        ...link,
+        id: link.id.replace(/^of:/, "computed:") as typeof link.id,
+      };
+    })();
+    const derived = runtime.getCellFromLink<unknown>(
+      named,
+      options.schema ?? RECLASSIFIED_SCHEMA,
       tx,
     );
-    derived.set(`${secret}!`);
-    if (piece !== undefined) {
+    derived.set(options.value ?? `${secret}!`);
+    if (options.piece !== undefined && options.into === undefined) {
       derived.setMetaRaw(
         "result",
-        piece.getAsLink(),
+        options.piece.getAsLink(),
         rawMetaWriteAuthorization,
       );
     }
-    expect((await tx.commit().settled).error).toBeUndefined();
-    return derived;
+    const { error } = await tx.commit().settled;
+    return { derived, ...(error !== undefined ? { error } : {}) };
+  };
+
+  /** The verified identity of a writer defined in `moduleIdentity`. */
+  const writer = (moduleIdentity: string): ImplementationIdentity => ({
+    kind: "verified",
+    moduleIdentity,
+    symbol: "share",
+  });
+
+  /** Every label entry of the stored envelope of `cell`. */
+  const storedEntries = (runtime: Runtime, cell: Cell<unknown>) => {
+    const tx = runtime.edit();
+    const metadata = readStoredCfcMetadata(tx, cell.getAsNormalizedFullLink());
+    tx.abort();
+    return metadata?.labelMap.entries ?? [];
   };
 
   /** Every confidentiality clause the stored label of `cell` holds. */
   const storedConfidentiality = (
     runtime: Runtime,
     cell: Cell<unknown>,
-  ): unknown[] => {
-    const tx = runtime.edit();
-    const metadata = readStoredCfcMetadata(tx, cell.getAsNormalizedFullLink());
-    tx.abort();
-    return (metadata?.labelMap.entries ?? []).flatMap((entry) =>
+  ): unknown[] =>
+    storedEntries(runtime, cell).flatMap((entry) =>
       entry.label.confidentiality ?? []
     );
-  };
 
   const released = (owner: Identity, at: MemorySpace = space) => ({
     anyOf: [cfcAtom.user(owner.did()), { ...POLICY, subject: at }],
   });
+
+  /** Whether `clause` names `owner` and a module policy subject to `at`. */
+  const releasesTo = (clause: unknown, owner: Identity, at: MemorySpace) => {
+    const alternatives = (clause as { anyOf?: unknown[] }).anyOf ?? [];
+    return alternatives.length === 2 &&
+      alternatives.some((alternative) =>
+        JSON.stringify(alternative) ===
+          JSON.stringify(cfcAtom.user(owner.did()))
+      ) &&
+      alternatives.some((alternative) =>
+        (alternative as { type?: unknown }).type === CFC_ATOM_TYPE.Policy &&
+        (alternative as { subject?: unknown }).subject === at
+      );
+  };
 
   beforeEach(() => {
     server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
@@ -231,66 +336,362 @@ describe("cfc-reclassify", () => {
     await server.close();
   });
 
-  it("stores the creator's `User` clause alone while the flag is off", async () => {
-    const client = connect(alice, { reclassification: false });
-    const piece = await createPiece(client);
-    const source = await storeSecret(client, secretSchema(alice), "fix");
+  describe("a pattern's own lift", () => {
+    it("stores the creator's `User` clause alone while the flag is off", async () => {
+      const client = connect(alice, { reclassification: false });
+      const source = await storeSecret(client, secretSchema(alice), "fix");
 
-    const derived = await deriveFrom(client, source, piece);
+      const { shared } = await sharePiece(client, source);
 
-    const stored = storedConfidentiality(client, derived);
-    expect(stored).toContainEqual(cfcAtom.user(alice.did()));
-    expect(stored).not.toContainEqual(released(alice));
+      expect(shared.get()).toBe("fix!");
+      const stored = storedConfidentiality(client, shared);
+      expect(stored).toContainEqual(cfcAtom.user(alice.did()));
+      expect(stored.some((clause) => releasesTo(clause, alice, space)))
+        .toBe(false);
+    });
+
+    it("stores nothing released with the flag on and the creator record off", async () => {
+      const client = connect(alice, { creatorRecord: false });
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+
+      const { shared } = await sharePiece(client, source);
+
+      const stored = storedConfidentiality(client, shared);
+      expect(stored).toContainEqual(cfcAtom.user(alice.did()));
+      expect(stored.some((clause) => releasesTo(clause, alice, space)))
+        .toBe(false);
+    });
+
+    it("stores the creator's clause or its module's policy, keeping its `TransformedBy`", async () => {
+      const client = connect(alice);
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+
+      const { piece, shared } = await sharePiece(client, source);
+
+      const entries = storedEntries(client, shared);
+      const stored = entries.flatMap((entry) =>
+        entry.label.confidentiality ?? []
+      );
+      expect(stored.some((clause) => releasesTo(clause, alice, space)))
+        .toBe(true);
+      expect(stored).not.toContainEqual(cfcAtom.user(alice.did()));
+      const integrity = entries.flatMap((entry) => entry.label.integrity ?? []);
+      expect(integrity).toContainEqual(expect.objectContaining({
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: expect.objectContaining({
+          moduleIdentity: patternModule(piece),
+        }),
+      }));
+    });
+
+    it("installs its policy's manifest in the space of a piece placed elsewhere", async () => {
+      const client = connect(alice);
+      const elsewhere = bob.did();
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+
+      const { shared } = await sharePiece(client, source, elsewhere);
+
+      expect(shared.getAsNormalizedFullLink().space).toBe(elsewhere);
+      // Stored outside the owner's space, both subjects are commitments
+      // (label-metadata protection), which the release keeps as they are.
+      const stored = storedConfidentiality(client, shared) as {
+        anyOf?: { type: string; subject: unknown; policyDigest?: string }[];
+      }[];
+      const clause = stored.find((candidate) =>
+        candidate.anyOf?.some((alternative) =>
+          alternative.type === CFC_ATOM_TYPE.Policy
+        )
+      );
+      expect(clause?.anyOf).toHaveLength(2);
+      const user = clause!.anyOf!.find((alternative) =>
+        alternative.type === CFC_ATOM_TYPE.User
+      );
+      expect(user?.subject).toEqual({ digestOf: expect.any(String) });
+      expect(stored).not.toContainEqual(user);
+      const policy = clause!.anyOf!.find((alternative) =>
+        alternative.type === CFC_ATOM_TYPE.Policy
+      ) as { policyDigest: string };
+      const installed = client.getCellFromEntityId(
+        elsewhere,
+        cfcPolicyManifestDocId(policy.policyDigest),
+        [],
+      );
+      await installed.sync();
+      expect(installed.get()).toMatchObject({
+        policyDigest: policy.policyDigest,
+      });
+    });
   });
 
-  it("stores the creator's `User` clause as that clause or the policy", async () => {
-    const client = connect(alice);
-    const piece = await createPiece(client);
-    const source = await storeSecret(client, secretSchema(alice), "fix");
+  describe("a write through a reclassifying schema", () => {
+    it("stores the clause or the policy for a writer of the piece's pattern", async () => {
+      const client = connect(alice);
+      const piece = await createPiece(client);
+      const source = await storeSecret(client, secretSchema(alice), "fix");
 
-    const derived = await deriveFrom(client, source, piece);
+      const { derived } = await deriveFrom(client, source, {
+        piece,
+        identity: writer(patternModule(piece)),
+      });
 
-    const stored = storedConfidentiality(client, derived);
-    expect(stored).toContainEqual(released(alice));
-    expect(stored).not.toContainEqual(cfcAtom.user(alice.did()));
-  });
+      const stored = storedConfidentiality(client, derived);
+      expect(stored).toContainEqual(released(alice));
+      expect(stored).not.toContainEqual(cfcAtom.user(alice.did()));
+    });
 
-  it("keeps a clause naming another principal", async () => {
-    const client = connect(alice);
-    const piece = await createPiece(client);
-    const source = await storeSecret(client, secretSchema(alice, bob), "fix");
+    it("keeps a clause naming another principal, and one either may read", async () => {
+      const client = connect(alice);
+      const piece = await createPiece(client);
+      const either = {
+        anyOf: [cfcAtom.user(alice.did()), cfcAtom.user(bob.did())],
+      };
+      const source = await storeSecret(client, {
+        type: "string",
+        ifc: { confidentiality: [cfcAtom.user(bob.did()), either] },
+      }, "fix");
+      const own = await storeSecret(client, secretSchema(alice), "own");
 
-    const derived = await deriveFrom(client, source, piece);
+      const tx = client.edit();
+      setCfcImplementationIdentity(tx, writer(patternModule(piece)));
+      const a = client.getCell<string>(space, source, undefined, tx).get();
+      const b = client.getCell<string>(space, own, undefined, tx).get();
+      const link = client.getCell(space, `derived-${names++}`)
+        .getAsNormalizedFullLink();
+      const derived = client.getCellFromLink<string>(
+        { ...link, id: link.id.replace(/^of:/, "computed:") as typeof link.id },
+        RECLASSIFIED_SCHEMA,
+        tx,
+      );
+      derived.set(`${a}${b}`);
+      derived.setMetaRaw(
+        "result",
+        piece.getAsLink(),
+        rawMetaWriteAuthorization,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
 
-    const stored = storedConfidentiality(client, derived);
-    expect(stored).toContainEqual(released(alice));
-    expect(stored).toContainEqual(cfcAtom.user(bob.did()));
-    expect(stored).not.toContainEqual(released(bob));
-  });
+      const stored = storedConfidentiality(client, derived);
+      expect(stored).toContainEqual(released(alice));
+      expect(stored).toContainEqual(cfcAtom.user(bob.did()));
+      expect(stored).toContainEqual(either);
+      expect(stored).not.toContainEqual(released(bob));
+    });
 
-  it("releases nothing for a document of no piece", async () => {
-    const client = connect(alice);
-    const source = await storeSecret(client, secretSchema(alice), "fix");
+    it("leaves the envelope as it was when the same value is written again", async () => {
+      const client = connect(alice);
+      const piece = await createPiece(client);
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+      const identity = writer(patternModule(piece));
+      const { derived } = await deriveFrom(client, source, { piece, identity });
+      const before = storedEntries(client, derived);
 
-    const derived = await deriveFrom(client, source);
+      const again = await deriveFrom(client, source, {
+        identity,
+        into: derived,
+      });
 
-    const stored = storedConfidentiality(client, derived);
-    expect(stored).toContainEqual(cfcAtom.user(alice.did()));
-    expect(stored).not.toContainEqual(released(alice));
-  });
+      expect(again.error).toBeUndefined();
+      expect(storedEntries(client, derived)).toEqual(before);
+    });
 
-  it("releases nothing of a principal who did not create the piece", async () => {
-    const client = connect(alice);
-    const served = await createPieceFor(bob);
-    const piece = client.getCellFromLink(served.getAsNormalizedFullLink());
-    await piece.sync();
-    expect(piece.getMetaRaw("creator")).toBe(bob.did());
-    const source = await storeSecret(client, secretSchema(alice), "fix");
+    it("keeps an existence entry first stored with the flag off", async () => {
+      const off = connect(alice, { reclassification: false });
+      const piece = await createPiece(off);
+      const source = await storeSecret(off, secretSchema(alice), "fix");
+      const identity = writer(patternModule(piece));
+      const { derived } = await deriveFrom(off, source, { piece, identity });
+      await off.idle();
+      const on = connect(alice);
+      const rewritten = on.getCellFromLink(derived.getAsNormalizedFullLink());
+      await rewritten.sync();
+      await on.getCell(space, source).sync();
+      await on.getCellFromLink(piece.getAsNormalizedFullLink()).sync();
 
-    const derived = await deriveFrom(client, source, piece);
+      const again = await deriveFrom(on, source, {
+        identity,
+        into: rewritten,
+        value: "fix?",
+      });
 
-    const stored = storedConfidentiality(client, derived);
-    expect(stored).toContainEqual(cfcAtom.user(alice.did()));
-    expect(stored).not.toContainEqual(released(alice));
+      expect(again.error).toBeUndefined();
+      const entries = storedEntries(on, rewritten);
+      const shape = entries.filter((entry) => entry.observes === "shape");
+      const value = entries.filter((entry) => entry.observes !== "shape");
+      expect(value.flatMap((entry) => entry.label.confidentiality ?? []))
+        .toContainEqual(released(alice));
+      // SC-4 freezes a path's existence entry at creation, so the shape
+      // stays the creator's alone: PROPOSAL.md, Risks.
+      expect(shape.flatMap((entry) => entry.label.confidentiality ?? []))
+        .toContainEqual(cfcAtom.user(alice.did()));
+    });
+
+    it("releases nothing for a writer of another module", async () => {
+      const client = connect(alice);
+      const piece = await createPiece(client);
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+
+      const { derived } = await deriveFrom(client, source, {
+        piece,
+        identity: writer("cf:module/mallory"),
+      });
+
+      const stored = storedConfidentiality(client, derived);
+      expect(stored).toContainEqual(cfcAtom.user(alice.did()));
+      expect(stored).not.toContainEqual(released(alice));
+    });
+
+    it("releases nothing for an unattributed writer", async () => {
+      const client = connect(alice);
+      const piece = await createPiece(client);
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+
+      const { derived } = await deriveFrom(client, source, { piece });
+
+      const stored = storedConfidentiality(client, derived);
+      expect(stored).toContainEqual(cfcAtom.user(alice.did()));
+      expect(stored).not.toContainEqual(released(alice));
+    });
+
+    it("releases nothing for another writer that relies on the stored declaration", async () => {
+      const client = connect(alice);
+      const piece = await createPiece(client);
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+      const { derived } = await deriveFrom(client, source, {
+        piece,
+        identity: writer(patternModule(piece)),
+      });
+
+      const again = await deriveFrom(client, source, {
+        identity: writer("cf:module/mallory"),
+        schema: { type: "string" },
+        into: derived,
+        value: "fix?",
+      });
+
+      expect(again.error).toBeUndefined();
+      expect(storedConfidentiality(client, derived)).toContainEqual(
+        cfcAtom.user(alice.did()),
+      );
+    });
+
+    it("refuses a declaration added to a stored envelope that had none", async () => {
+      const client = connect(alice);
+      const piece = await createPiece(client);
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+      const { derived } = await deriveFrom(client, source, {
+        piece,
+        identity: writer("cf:module/mallory"),
+        schema: { type: "string" },
+      });
+
+      const again = await deriveFrom(client, source, {
+        identity: writer(patternModule(piece)),
+        into: derived,
+        value: "fix?",
+      });
+
+      expect(JSON.stringify(again.error)).toContain(
+        "is not in its stored envelope",
+      );
+    });
+
+    it("refuses a malformed declaration with the flag off", async () => {
+      const client = connect(alice, { reclassification: false });
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+
+      const { error } = await deriveFrom(client, source, {
+        schema: {
+          type: "string",
+          ifc: { reclassify: [POLICY_MARKER, POLICY_MARKER] },
+        } as JSONSchema,
+      });
+
+      expect(JSON.stringify(error)).toContain(
+        "exactly one compiler-lowered PolicyOf",
+      );
+    });
+
+    it("releases nothing for a declaration beneath the written path", async () => {
+      const client = connect(alice);
+      const piece = await createPiece(client);
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+
+      const { derived } = await deriveFrom(client, source, {
+        piece,
+        identity: writer(patternModule(piece)),
+        schema: {
+          type: "object",
+          properties: {
+            inner: RECLASSIFIED_SCHEMA,
+            other: { type: "string" },
+          },
+        },
+        value: { inner: "fix!", other: "fix" },
+      });
+
+      const stored = storedConfidentiality(client, derived);
+      expect(stored).toContainEqual(cfcAtom.user(alice.did()));
+      expect(stored).not.toContainEqual(released(alice));
+    });
+
+    it("releases what a write beneath a nested declaration derives", async () => {
+      const client = connect(alice);
+      const piece = await createPiece(client);
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+      const identity = writer(patternModule(piece));
+      const schema = {
+        type: "object",
+        properties: { inner: RECLASSIFIED_SCHEMA },
+      } as const satisfies JSONSchema;
+      const { derived } = await deriveFrom(client, source, {
+        piece,
+        identity,
+        schema,
+        value: { inner: "" },
+      });
+
+      const tx = client.edit();
+      setCfcImplementationIdentity(tx, identity);
+      const secret = client.getCell<string>(space, source, undefined, tx).get();
+      derived.withTx(tx).asSchema(schema).key("inner").set(`${secret}!`);
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      const inner = storedEntries(client, derived).filter((entry) =>
+        entry.path.length === 1 && entry.path[0] === "inner"
+      ).flatMap((entry) => entry.label.confidentiality ?? []);
+      expect(inner).toContainEqual(released(alice));
+      expect(inner).not.toContainEqual(cfcAtom.user(alice.did()));
+    });
+
+    it("releases nothing for a document of no piece", async () => {
+      const client = connect(alice);
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+
+      const { derived } = await deriveFrom(client, source, {
+        identity: writer("cf:module/any"),
+      });
+
+      const stored = storedConfidentiality(client, derived);
+      expect(stored).toContainEqual(cfcAtom.user(alice.did()));
+      expect(stored).not.toContainEqual(released(alice));
+    });
+
+    it("releases nothing of a principal who did not create the piece", async () => {
+      const client = connect(alice);
+      const served = await createPieceFor(bob);
+      const piece = client.getCellFromLink(served.getAsNormalizedFullLink());
+      await piece.sync();
+      expect(piece.getMetaRaw("creator")).toBe(bob.did());
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+
+      const { derived } = await deriveFrom(client, source, {
+        piece,
+        identity: writer(patternModule(piece)),
+      });
+
+      const stored = storedConfidentiality(client, derived);
+      expect(stored).toContainEqual(cfcAtom.user(alice.did()));
+      expect(stored).not.toContainEqual(released(alice));
+    });
   });
 });
