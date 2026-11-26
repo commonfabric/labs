@@ -87,7 +87,7 @@ export interface HarnessSkillResourceRead {
   path: string;
   status: HarnessSkillResourceReadStatus;
   readAt: string;
-  cfcPromptRole: HarnessSkillCfcPromptRole;
+  cfcPromptRole: "context";
   kind?: HarnessSkillResourceKind;
   resourcePath?: string;
   sandboxResourcePath?: string;

@@ -530,9 +530,10 @@ A skill the operator configured holds the `context` role. A skill delivered
 through `delegate_task.skillHandle` holds the `quote` role, because it is text
 from a cell and nothing shows the person wrote it: an acquired skill came from a
 third party. A child given one runs with its prompt-slot binding lowered to
-`quote`, whatever the parent's task holds, so under an enforce mode it may only
-read. Nothing yet tells a delegation the person started apart from one the model
-chose, so the lowering applies to both.
+`quote`, whatever the parent's task holds: under `enforce-explicit` it may only
+read, and under `enforce-strict` it may call only its return channels. Nothing
+yet tells a delegation the person started apart from one the model chose, so the
+lowering applies to both.
 
 Policy rules:
 

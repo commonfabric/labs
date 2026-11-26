@@ -932,8 +932,9 @@ The current package provides:
   selection retired for the delegated path — and the child's activation records
   `source: "skill-handle"` with the token, the digest of the injected text, and
   `cfcPromptRole: "quote"`. The child runs with its prompt-slot binding lowered
-  to `quote`, so a parent's `direct-command` does not reach it, and under an
-  enforce mode it may only read. Where the handle came from an acquisition, the
+  to `quote`, so a parent's `direct-command` does not reach it: under
+  `enforce-explicit` it may only read, and under `enforce-strict` it may call
+  only its return channels. Where the handle came from an acquisition, the
   context header carries its `pin="owner/repo/slug@<commit sha>"` for
   `run_skill_script`, and the child mounts that one skill's acquired scripts
   read-only at `/acquired-skill` and no other skill's, in a sandbox of its own
