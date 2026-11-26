@@ -2194,6 +2194,9 @@ type SetupValidationOptions = {
   /** See `RunnerRunOptions.parentPieceRootId`. */
   parentPieceRootId?: string;
 
+  /** See `RunnerRunOptions.parentPieceSpace`. */
+  parentPieceSpace?: MemorySpace;
+
   /** Optional invariant over the argument stored before setup changes it. */
   validateCurrentArgument?: (argumentCell: Cell<unknown>) => void;
 
@@ -2604,6 +2607,10 @@ export type RunnerRunOptions = {
   // instance) run supply resolves a nested piece's demanded instances
   // through the OUTER piece a client watches.
   parentPieceRootId?: string;
+  // The space `parentPieceRootId` lives in, where it is not the space of the
+  // piece this run sets up: a child placed in a space of its own
+  // (`inSpace()`). A setup reads the parent's creator record there.
+  parentPieceSpace?: MemorySpace;
   // Argument fields a collection builtin fills with a link to a cell that
   // exists already: a list's entry, the list itself. Each one whose staged
   // value is a link that is not a write redirect is recorded as a protected
@@ -5400,15 +5407,15 @@ export class Runner {
    * The principal a piece set up in `tx` records as its creator, or none.
    *
    * A child a piece instantiates names its parent's creator, read from the
-   * parent's record: the actor whose run instantiated it is not the creator
-   * of what the parent's code made, and a parent without a record leaves the
-   * child without one. A piece a builtin instantiates from a continuation of
-   * its action, which declines attribution and names no parent, records
-   * nothing. Any other piece names the acting principal of the transaction's
-   * trust snapshot, which is the principal every attributed claim in the same
-   * transaction names, unless the run acts for no one
-   * (`servedRunActsForNoOne`): a served run with no actor, or one under the
-   * serving runtime's own snapshot.
+   * parent's record in the space the parent lives in: the actor whose run
+   * instantiated it is not the creator of what the parent's code made, and a
+   * parent without a record leaves the child without one. A piece a builtin
+   * instantiates from a continuation of its action, which declines
+   * attribution and names no parent, records nothing. Any other piece names
+   * the acting principal of the transaction's trust snapshot, which is the
+   * principal every attributed claim in the same transaction names, unless
+   * the run acts for no one (`servedRunActsForNoOne`): a served run with no
+   * actor, or one under the serving runtime's own snapshot.
    */
   #pieceCreatorFor(
     tx: IExtendedStorageTransaction,
@@ -5416,7 +5423,8 @@ export class Runner {
     options: SetupValidationOptions,
   ): string | undefined {
     if (options.parentPieceRootId !== undefined) {
-      const { space } = resultCell.getAsNormalizedFullLink();
+      const space = options.parentPieceSpace ??
+        resultCell.getAsNormalizedFullLink().space;
       const recorded = this.#runtime.getCellFromLink(
         { id: options.parentPieceRootId as URI, space, path: [] },
         undefined,
@@ -10579,6 +10587,9 @@ export class Runner {
         droppedArgumentFields: options.droppedArgumentFields,
         attributeInitialization: options.attributeInitialization,
         parentPieceRootId: options.parentPieceRootId,
+        ...(options.parentPieceSpace !== undefined
+          ? { parentPieceSpace: options.parentPieceSpace }
+          : {}),
         ...(creatingPiece
           ? {
             initializePieceSourceHistory: true,
@@ -18194,6 +18205,7 @@ export class Runner {
           schedulerRehydration,
         ),
         parentPieceRootId: parentResultCell.getAsNormalizedFullLink().id,
+        ...(crossSpace ? { parentPieceSpace: parentResultCell.space } : {}),
       };
       if (leftAlone && this.isRunning(childResultCell)) {
         this.#stopResult(childResultCell);

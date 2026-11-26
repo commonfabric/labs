@@ -226,6 +226,25 @@ describe("cfc-piece-creator", () => {
     expect(await storedCreator(child)).toBe(alice.did());
   });
 
+  it("records the parent's creator on a child set up in a space of its own", async () => {
+    // A child placed with `inSpace()` lives in another space than its parent,
+    // so the parent's record is read where the parent lives.
+
+    const parent = await createPiece(client, alice.did());
+    await serving.getCellFromLink(parent.getAsNormalizedFullLink()).sync();
+    const tx = servedHandlerTx(bob);
+    const child = await createPiece(serving, service.did(), {
+      tx,
+      run: {
+        parentPieceRootId: parent.getAsNormalizedFullLink().id,
+        parentPieceSpace: alice.did(),
+      },
+    });
+    expect((await tx.commit().settled).error).toBeUndefined();
+
+    expect(await storedCreator(child)).toBe(alice.did());
+  });
+
   it("records nothing for a served run that acts for no one", async () => {
     const tx = servedHandlerTx();
     const result = await createPiece(serving, service.did(), { tx });
