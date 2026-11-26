@@ -322,6 +322,35 @@ describe("build", () => {
       expect(read.observations[0]!.day).toBe("2026-08-20");
     });
 
+    it("names the job a continuous-integration run recorded with, and none for a workstation", () => {
+      // A workstation's run is identified by a name that names a person.
+      const ci = readReport(
+        stored(CI_NAME, context(), [record(), record()]),
+        NO_ALIASES,
+      );
+      expect(ci.observations[0]!.ci).toEqual({
+        runId: "1",
+        runAttempt: 1,
+        job: "Test (1/8)",
+      });
+      // One object for the job, however many tests it recorded.
+      expect(ci.observations[1]!.ci).toBe(ci.observations[0]!.ci);
+      // An attempt no manifest could carry names no job.
+      const odd = context();
+      odd.ci = { ...odd.ci!, runAttempt: 0 };
+      const unnamed = readReport(stored(CI_NAME, odd, [record()]), NO_ALIASES);
+      expect(unnamed.observations.length).toBe(1);
+      expect(unnamed.observations[0]!.ci).toBeUndefined();
+      const local = context({ env: "local", branch: "fix-writes" });
+      delete local.ci;
+      const read = readReport(
+        stored(LOCAL_NAME, local, [record()]),
+        NO_ALIASES,
+      );
+      expect(read.observations[0]!.place).toBe("local");
+      expect(read.observations[0]!.ci).toBeUndefined();
+    });
+
     it("keeps the durations of the executions that passed", () => {
       const read = readReport(
         stored(CI_NAME, context(), [
@@ -2447,6 +2476,37 @@ describe("build", () => {
       expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);
     });
 
+    it("carries the runs an identity disagreed across, through its own validator", () => {
+      const rerun = context();
+      rerun.ci = { ...rerun.ci!, runAttempt: 2 };
+      const folded = foldReports(
+        emptyAggregate("2026-08-20"),
+        [
+          stored(CI_NAME, context(), [record({ outcome: "fail" })]),
+          stored(CI_NAME.replace("-a.", "-b."), rerun, [record()]),
+        ],
+        NO_ALIASES,
+        "2026-08-20",
+      );
+      const manifest = buildManifest({
+        states: folded.states,
+        surfaces: folded.surfaces,
+        today: "2026-08-20",
+        generatedAt: "2026-08-20T04:00:00.000Z",
+        seed: "01K3",
+        commit: "c1",
+        runs: 2,
+      });
+      const job = { runId: "1", job: "Test (1/8)" };
+      expect(manifest.entries[0]!.disagreements).toEqual([{
+        day: "2026-08-20",
+        commit: "c1",
+        failed: { place: "main", ci: { ...job, runAttempt: 1 } },
+        passed: { place: "main", ci: { ...job, runAttempt: 2 } },
+      }]);
+      expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);
+    });
+
     it("takes the last day an identity actually ran, not the last it holds", () => {
       // A day can be carried with no runs in it once the counters have
       // been aged, and reading that as the last run would tell the
@@ -2551,11 +2611,19 @@ describe("what buildManifest() does with the states it is given", () => {
     state.runsByDay["2026-08-20"] = 10000;
     state.failuresByDay["2026-08-20"] = 1;
     state.flakesByDay["2026-08-20"] = 1;
+    state.disagreements = [{
+      day: "2026-08-20",
+      commit: "c1",
+      failed: { place: "local" },
+    }];
     const manifest = built(new Map([[KEY, state]]));
     expect(manifest.withheld).toEqual([]);
     // Selectable, and still run twice: it has disagreed with itself, and
     // one execution cannot tell a pass from a lucky pass.
     expect(manifest.entries[0]!.repeats).toBe(FLAKE_MIN_EXECUTIONS);
+    // Nobody is asked to fix a test that is not held back, so every lane
+    // is spared the runs it disagreed across.
+    expect(manifest.entries[0]!.disagreements).toBeUndefined();
   });
 
   it("records a share as measured, however small it is", () => {
@@ -2698,6 +2766,7 @@ describe("a run of main under the next day's seed", () => {
       commit: "c1",
       seed: 20260821,
       source: "main",
+      ci: { runId: "2", runAttempt: 1, job: "Test (1/8)" },
     }]);
     expect(lastMainIn(state.lastMainByOrder, 20260821)).toBe("fail");
     expect(lastMainIn(state.lastMainByOrder, 20260820)).toBe("pass");
@@ -2714,6 +2783,7 @@ describe("a run of main under the next day's seed", () => {
       commit: "c1",
       seed: 20260820,
       source: "main",
+      ci: { runId: "1", runAttempt: 1, job: "Test (1/8)" },
     }]);
     expect(lastMainIn(state.lastMainByOrder, 20260821)).toBe("pass");
     expect(lastMainIn(state.lastMainByOrder, 20260820)).toBe("fail");

@@ -16,7 +16,7 @@
  */
 
 import { isObjectNotArray } from "@commonfabric/js-values/types";
-import { type TestIdentity, testIdentityKey } from "./schema.ts";
+import { isSeed, type TestIdentity, testIdentityKey } from "./schema.ts";
 
 /**
  * The inputs behind one identity's score, as a manifest records them.
@@ -201,6 +201,14 @@ export interface ManifestEntry {
    */
   flakeEvidence?: FlakeEvidence;
 
+  /**
+   * The newest of the disagreements `flakeEvidence` counts, oldest first,
+   * so that someone fixing the test can open the runs that disagreed.
+   * Carried only for a test the manifest withholds as flaky, and absent
+   * where the publisher has kept none.
+   */
+  disagreements?: Disagreement[];
+
   /** How many times a lane runs it. Every one of them must pass. */
   repeats: number;
 
@@ -224,6 +232,47 @@ export interface FlakeEvidence {
 
   /** Runs they were seen among, inside the flake window. */
   runs: number;
+}
+
+/** The job of a GitHub Actions workflow run attempt that recorded a test. */
+export interface CiJob {
+  /** The workflow run's id. */
+  runId: string;
+
+  runAttempt: number;
+
+  /** The job's name, including its matrix leg, as in "Test (3/8)". */
+  job: string;
+}
+
+/**
+ * Where one run of a test was made: on the default branch, on a pull
+ * request, or on a workstation. A continuous-integration run also names its
+ * job. A workstation's run names nothing more, since what identifies it
+ * names the person who ran it.
+ */
+export interface SeenRun {
+  place: "main" | "pr" | "local";
+  ci?: CiJob;
+}
+
+/**
+ * One time a test both passed and failed at one commit in one order, which
+ * is what a flake is counted from.
+ */
+export interface Disagreement {
+  /** The UTC day of the failing run, "yyyy-mm-dd". */
+  day: string;
+
+  commit: string;
+
+  /** The seed the runs shuffled their tests by, absent for declared order. */
+  seed?: number;
+
+  failed: SeenRun;
+
+  /** Absent where the passing run was folded before runs were kept. */
+  passed?: SeenRun;
 }
 
 /** Why an identity is not selectable on a pull request. */
@@ -587,7 +636,76 @@ function parseEntry(value: unknown): ManifestEntry | undefined {
   };
   if (value.lastRun !== undefined) entry.lastRun = value.lastRun;
   if (evidence !== undefined) entry.flakeEvidence = evidence;
+  // Nothing selects by these, so one that does not read is dropped by
+  // itself rather than refusing a manifest every lane obeys.
+  const disagreements = Array.isArray(value.disagreements)
+    ? value.disagreements.map(parseDisagreement).filter((held) =>
+      held !== undefined
+    )
+    : [];
+  if (disagreements.length > 0) entry.disagreements = disagreements;
   return entry;
+}
+
+/** Validates one disagreement, or undefined for anything that is not one. */
+export function parseDisagreement(value: unknown): Disagreement | undefined {
+  if (!isRecord(value)) return undefined;
+  const { day, commit, seed } = value;
+  const failed = parseSeenRun(value.failed);
+  const passed = parseSeenRun(value.passed);
+  if (
+    !isDay(day) || !isNonEmptyString(commit) || failed === undefined ||
+    (value.passed !== undefined && passed === undefined)
+  ) {
+    return undefined;
+  }
+  if (seed !== undefined && !isSeed(seed)) return undefined;
+  return {
+    day,
+    commit,
+    ...(seed === undefined ? {} : { seed }),
+    failed,
+    ...(passed === undefined ? {} : { passed }),
+  };
+}
+
+/** Validates one run, or undefined for anything that is not one. */
+export function parseSeenRun(value: unknown): SeenRun | undefined {
+  if (!isRecord(value)) return undefined;
+  const { place, ci } = value;
+  if (place !== "main" && place !== "pr" && place !== "local") return undefined;
+  if (ci === undefined) return { place };
+  const job = parseCiJob(ci);
+  return job === undefined ? undefined : { place, ci: job };
+}
+
+/** Validates one job, or undefined for anything that is not one. */
+export function parseCiJob(value: unknown): CiJob | undefined {
+  if (!isRecord(value)) return undefined;
+  const { runId, runAttempt, job } = value;
+  if (
+    !isNonEmptyString(runId) || typeof runAttempt !== "number" ||
+    !Number.isSafeInteger(runAttempt) || runAttempt < 1 ||
+    !isNonEmptyString(job)
+  ) {
+    return undefined;
+  }
+  return { runId, runAttempt, job };
+}
+
+/**
+ * Whether a value is a "yyyy-mm-dd" day this reader can measure from.
+ * The parse alone is not enough: a date the calendar does not have rolls
+ * into the next month, so "2026-02-31" parses as March 3rd and would be
+ * aged from three days later than it claims. What round-trips is a day.
+ */
+export function isDay(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const at = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(at.getTime()) &&
+    at.toISOString().slice(0, 10) === value;
 }
 
 /**

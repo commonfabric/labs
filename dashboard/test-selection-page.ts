@@ -12,13 +12,13 @@
  */
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import {
-  type CalibrationHealth,
-  type Manifest,
-  type ManifestEntry,
-  type TestIdentity,
-  testIdentityKey,
+import type {
+  CalibrationHealth,
+  Manifest,
+  ManifestEntry,
+  TestIdentity,
 } from "@commonfabric/test-support/records";
+import { FLAKY_TESTS_JSON_PATH } from "./flaky-tests-json.ts";
 import { type LivePageContent, livePageResponse } from "./live-page.ts";
 import {
   compactSpan,
@@ -35,6 +35,7 @@ import {
   FLAKE_EXCLUSION_FALLBACK,
   FLAKE_WINDOW_FALLBACK_DAYS,
   flakyCount,
+  flakyTests,
   laneBudgetOf,
   laneTestCount,
   type ManifestReader,
@@ -178,20 +179,10 @@ function flakeLead(manifest: Manifest): string {
 
 /** The tests held back as flaky, worst-measured first. */
 function flakyRows(manifest: Manifest): TestRow[] {
-  const scored = new Map(
-    manifest.entries.map((entry) => [testIdentityKey(entry.test), entry]),
-  );
-  return manifest.withheld
-    .filter((entry) => entry.reason === "flaky")
-    .map((entry) => ({
-      test: entry.test,
-      scored: scored.get(testIdentityKey(entry.test)),
-    }))
-    .sort((a, b) => (b.scored?.flakeRate ?? 0) - (a.scored?.flakeRate ?? 0))
-    .map(({ test, scored }) => ({
-      test,
-      ...(scored === undefined ? {} : { measure: flakeMeasure(scored) }),
-    }));
+  return flakyTests(manifest).map(({ withheld, entry }) => ({
+    test: withheld.test,
+    ...(entry === undefined ? {} : { measure: flakeMeasure(entry) }),
+  }));
 }
 
 /**
@@ -354,7 +345,7 @@ function frame(head: string, body: string): LivePageContent {
     styles: STYLES,
     head,
     body: `${body}
-  <p class="note">What a pull request runs, from the newest manifest the selection publisher wrote.</p>`,
+  <p class="note">What a pull request runs, from the newest manifest the selection publisher wrote. The tests held back as flaky are served as JSON, with the runs each disagreed across, at <a href="${FLAKY_TESTS_JSON_PATH}">${FLAKY_TESTS_JSON_PATH}</a>.</p>`,
   };
 }
 

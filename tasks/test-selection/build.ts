@@ -12,7 +12,9 @@
 import {
   type AliasResolver,
   enclosingNames,
+  isDay,
   isMainRun,
+  parseCiJob,
   parseReportGroups,
   type RunContext,
   type StoredReport,
@@ -37,7 +39,6 @@ import {
   type FoldContext,
   foldObservations,
   type IdentityState,
-  isDay,
   isDaySamples,
   latestOrdersOnMain,
   MAIN_ORDERS_COUNTED,
@@ -48,6 +49,7 @@ import {
   orderDay,
   parseContext,
   readCostsForward,
+  readDisagreementsForward,
   readNewRealTestFailuresForward,
   renameInContext,
   sampleDuration,
@@ -422,6 +424,7 @@ export function parseAggregate(value: unknown): AggregateState | undefined {
   for (const identity of Object.values(states)) {
     readCostsForward(identity);
     readNewRealTestFailuresForward(identity);
+    readDisagreementsForward(identity);
     // Only what reads as a day is kept, and the next record of the
     // identity on `main` adds to it.
     const held: unknown = identity.ordersOnMain;
@@ -584,6 +587,15 @@ export function readReport(
     const committedOn = group.context.ci?.event === "push"
       ? orderDay(group.context.shuffleSeed)
       : undefined;
+    // One object for the job, shared by every observation it recorded,
+    // and absent where it is not one a manifest can carry. A workstation's
+    // run carries no continuous-integration facts.
+    const ci = group.context.ci;
+    const job = ci === undefined ? undefined : parseCiJob({
+      runId: ci.workflowRunId,
+      runAttempt: ci.runAttempt,
+      job: ci.job,
+    });
     // What a lane spent on its own setup and on each of its batches is
     // not scored, and not discarded either: it is what the packer's
     // charges for both are fitted from. One group is one lane's
@@ -645,6 +657,7 @@ export function readReport(
         ...(committedOn === undefined ? {} : { committedOn }),
         source: where.source,
         place: where.place,
+        ...(job === undefined ? {} : { ci: job }),
         // A cost predicts what a lane will spend running this test again,
         // and only a passing execution measures that. A failure ended
         // where the failure was reached, and where a wait's safety net
@@ -1015,6 +1028,7 @@ export function buildManifest(input: BuildInput): Manifest {
     // shows one to a person rounds it there.
     const rate = flakeRate(state, input.today);
     const ran = lastRun(state);
+    const flaky = rate > FLAKE_EXCLUSION_RATE;
     entries.push({
       test,
       suite: surface.suite,
@@ -1024,10 +1038,15 @@ export function buildManifest(input: BuildInput): Manifest {
       inputs,
       flakeRate: rate,
       flakeEvidence: evidence,
+      // Only for a test held back, which is the one someone is asked to
+      // fix, so that every lane does not download the rest.
+      ...(state.disagreements === undefined || !flaky
+        ? {}
+        : { disagreements: state.disagreements }),
       repeats: executionsFor(rate),
       ...(ran === undefined ? {} : { lastRun: ran }),
     });
-    if (rate > FLAKE_EXCLUSION_RATE) {
+    if (flaky) {
       withheld.push({ test, suite: surface.suite, reason: "flaky" });
     }
   }

@@ -290,6 +290,13 @@ fixes it. The test records carry the seed each run used, and
 [test selection](test-selection.md) compares outcomes only between runs that
 agree on it, so a run under an override is not read as a flake either.
 
+The tests withheld as flaky, with the runs each one passed and failed in at one
+commit, are served by the dashboard as JSON at `/test-selection/flaky.json`.
+["Flaky tests as JSON"](../../dashboard/README.md#flaky-tests-as-json)
+defines its fields. Start fixing a flaky test from there: a failing run's `url`
+opens its workflow run attempt on GitHub, and the failure is in the log of the
+job its `job` names. A run on a workstation has no `url`.
+
 #### Tomorrow's seed, run a day ahead
 
 The order changes with the first commit of each Pacific day, so a test that

@@ -1936,6 +1936,18 @@ caches compact counts across restarts and removes them when their source
 objects leave the listing. A latest manifest with no tests makes both
 headlines unknown.
 
+The flake tile's page lists the tests held back, and
+`/test-selection/flaky.json` serves the same list as JSON for an agent or a
+script setting out to fix one. Beside each test's figures it gives the runs the
+test disagreed across. The publisher keeps those runs as it folds the records:
+for each test, the newest ten disagreements inside `FLAKE_WINDOW_DAYS`, each
+with its commit and order, the job of the failing run, and the job of the first
+run that passed there. A run on a workstation is named only as one. A
+disagreement counted before the publisher kept runs has none listed, and the
+first run that passed is unknown where it was folded before then. The
+[dashboard's README](../../dashboard/README.md#flaky-tests-as-json) defines
+every field.
+
 Both tiles show a running indicator while the publisher workflow is queued or
 running on main. Activity and new manifests are checked every 30 seconds.
 Activity requires the dashboard's GitHub token; the public measurements remain

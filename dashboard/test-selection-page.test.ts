@@ -59,6 +59,12 @@ describe("test-selection-page", () => {
       expect(page).toContain(`id="${FLAKY_SECTION_ID}"`);
     });
 
+    it("links to the flaky tests as JSON", () => {
+      expect(pageHtml(heldBack(), NOW)).toContain(
+        '<a href="/test-selection/flaky.json">',
+      );
+    });
+
     it("shows the counts a rate was taken from beside it", () => {
       // A share without its denominator cannot be weighed, and the
       // exclusion this page explains was decided on the share.
