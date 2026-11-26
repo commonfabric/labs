@@ -147,7 +147,10 @@ describe("view-image", () => {
     // The file was replaced after the sandbox read. Its current bytes cannot
     // stand for the observation retained in the receipt.
     await Deno.writeTextFile(join(workspace, "pixel.png"), "replacement");
-    const label = { confidentiality: ["review-fixture"] };
+    const label = {
+      confidentiality: ["review-fixture"],
+      integrity: ["test-renderer"],
+    };
     const sandbox = new ScriptedSandbox([{
       stdout: "unmediated",
       stderr: "",

@@ -185,11 +185,16 @@ export const viewImageTool: HarnessToolDefinition<
         stdout.policy !== "observed" || stdout.truncated ||
         exitCode.policy !== "observed" || exitCode.value === null
       ) return withheld();
-      sourceLabel = mergeConfidentialityOnlyLabels([
-        stdout.label,
-        exitCode.label,
-        ...stdout.segments.map((segment) => segment.label),
-      ]) ?? {};
+      // Keep the stream's integrity evidence with its pixels. Confidentiality
+      // also covers the status and every segment used to assemble the frame.
+      sourceLabel = {
+        ...stdout.label,
+        ...mergeConfidentialityOnlyLabels([
+          stdout.label,
+          exitCode.label,
+          ...stdout.segments.map((segment) => segment.label),
+        ]),
+      };
       if (
         !cfcObservationFitsCeiling(
           sourceLabel.confidentiality ?? [],
