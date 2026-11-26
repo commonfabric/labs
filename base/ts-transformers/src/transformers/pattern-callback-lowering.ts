@@ -169,7 +169,13 @@ function maybeRegisterBuilderCapabilitySummary(
 ): void {
   const callback = getCapabilitySummaryCallbackArgument(node, context.checker);
   if (callback) {
-    registerCapabilitySummary(callback, context, { interprocedural: true });
+    // A builder callback runs as ordinary JavaScript, so a function nested in
+    // it reads the callback's parameters when it runs: its reads are the
+    // callback's.
+    registerCapabilitySummary(callback, context, {
+      interprocedural: true,
+      includeNestedCallbacks: true,
+    });
   }
 }
 

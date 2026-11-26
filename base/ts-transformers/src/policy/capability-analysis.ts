@@ -3918,6 +3918,26 @@ export function analyzeFunctionCapabilities(
       return handled;
     };
 
+    /**
+     * Visits the expressions `node` evaluates as it binds: its default, and
+     * every computed key and default in the binding pattern it destructures.
+     */
+    const visitBindingExpressions = (
+      node: ts.ParameterDeclaration | ts.BindingElement,
+    ): void => {
+      if (
+        ts.isBindingElement(node) && node.propertyName &&
+        ts.isComputedPropertyName(node.propertyName)
+      ) {
+        visit(node.propertyName.expression);
+      }
+      if (node.initializer) visit(node.initializer);
+      if (ts.isIdentifier(node.name)) return;
+      for (const element of node.name.elements) {
+        if (!ts.isOmittedExpression(element)) visitBindingExpressions(element);
+      }
+    };
+
     const visitScopedFunctionBody = (
       callback: CapabilityAnalyzableFunction & {
         readonly body: ts.ConciseBody;
@@ -3947,6 +3967,12 @@ export function analyzeFunctionCapabilities(
           if (binding) {
             assignBindingAlias(parameter.name, binding);
           }
+        }
+        // A parameter's defaults and computed keys run in the function's
+        // parameter scope when the function is called, so a read in one is the
+        // function's, as one in its body is.
+        for (const parameter of callback.parameters) {
+          visitBindingExpressions(parameter);
         }
 
         const body = callback.body;
@@ -3982,6 +4008,12 @@ export function analyzeFunctionCapabilities(
         );
       }
     };
+
+    // The callbacks an array method's call hands the elements to, which
+    // `visitInlineEagerCallbackArguments()` walks with their parameters bound.
+    // Walking one again as a bare nested function, with nothing bound, would
+    // undo what the first walk recorded, such as the value a `Map#set` stores.
+    const boundCallbacks = new WeakSet<ts.Node>();
 
     const visitInlineEagerCallbackArguments = (
       call: ts.CallExpression,
@@ -4079,6 +4111,7 @@ export function analyzeFunctionCapabilities(
         }
       }
 
+      boundCallbacks.add(callbackArg);
       visitScopedFunctionBody(
         callbackArg,
         paramBindings.size > 0 ? paramBindings : undefined,
@@ -4210,7 +4243,7 @@ export function analyzeFunctionCapabilities(
 
     const visit = (node: ts.Node): void => {
       if (node !== fn && isCapabilityAnalyzableFunction(node)) {
-        if (includeNestedCallbacks) {
+        if (includeNestedCallbacks && !boundCallbacks.has(node)) {
           visitScopedFunctionBody(node);
         }
         return;

@@ -78,6 +78,12 @@ export interface CapabilitySummaryRegistration {
    */
   readonly patternCallback?: boolean;
 
+  /**
+   * Whether functions nested in the callback are analyzed as part of it
+   * (`includeNestedCallbacks` in `CapabilityAnalysisOptions`).
+   */
+  readonly includeNestedCallbacks?: boolean;
+
   /** Static destructuring defaults to merge into one parameter's summary. */
   readonly defaults?: {
     readonly paramName: string;
@@ -92,13 +98,19 @@ export interface CapabilitySummaryRegistration {
 export function registerCapabilitySummary(
   callback: ts.ArrowFunction | ts.FunctionExpression,
   context: TransformationContext,
-  { interprocedural, patternCallback, defaults }: CapabilitySummaryRegistration,
+  {
+    interprocedural,
+    patternCallback,
+    includeNestedCallbacks,
+    defaults,
+  }: CapabilitySummaryRegistration,
 ): void {
   const summary = analyzeFunctionCapabilities(callback, {
     checker: context.checker,
     typeRegistry: context.state.typeRegistry,
     interprocedural,
     patternCallback,
+    includeNestedCallbacks,
   });
 
   if (!defaults) {
