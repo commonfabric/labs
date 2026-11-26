@@ -2482,9 +2482,9 @@ store, which takes a seq and a commit row and wakes that space's
 subscribers, so the gate holds it to the same carriage and grant as
 any other foreign write. A run that only observes a foreign document
 does not seal one. The CFC boundary's consultation of a module-policy
-manifest is such an observation: it binds nothing at commit in any
-space (CFC spec §4.4.1), so a run that reads a policy-labeled value in
-another space commits to its own space alone.
+manifest is such an observation: it adds no precondition to the commit
+(CFC spec §4.4.1), so a run that reads a policy-labeled value in another
+space commits to its own space alone.
 
 **No run writes an access list.** The wave commits engine-direct, past
 the memory server's INV-12 check (`09-invariants.md`), and nothing on

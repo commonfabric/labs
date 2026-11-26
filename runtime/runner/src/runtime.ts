@@ -2071,12 +2071,12 @@ export class Runtime {
     return true;
   }
 
-  // A consultation is an ordinary read, bound to no commit (spec §4.4.1). A
-  // present manifest is immutable at its digest, so the body read here is the
-  // body any later read would find. An absent one fails the label's
-  // resolution, which fails the boundary, and the read wakes the run again
-  // when the manifest arrives. Neither can release more than a fresh
-  // consultation would, so neither needs a precondition.
+  // A consultation is an ordinary read, which adds no precondition of its own
+  // (spec §4.4.1). A present manifest is verified against its digest here, so
+  // a later read finds this body or none. An absent one fails the label's
+  // resolution, which fails the write and sink gates (prepare.ts), and a
+  // reactive run reads it again when the manifest arrives. Neither releases
+  // more than the manifest at its digest allows.
   #readCfcPolicyManifest(
     space: MemorySpace,
     reference: unknown,
