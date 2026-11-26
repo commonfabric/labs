@@ -142,13 +142,13 @@ but it cannot authorize an effect. Effects need per-call authority
 (`IntentOnce`), and a call that quoted text influenced is not admitted on the
 run's direct-command authority alone.
 
-Review does not raise the role: a reviewed skill's prose stays `quote`. What a
-review adds is in
-[Reviewed skills: trusting a skill's bytes, not what it does](reviewed-skills.md).
-A reviewed skill's scripts become tool descriptors with measured contracts in
-the same snapshot, and their stated effect class decides what each call needs.
-The prose gains only screening evidence over its exact bytes, which changes who
-may observe it and nothing it may do.
+Review does not raise the role: a reviewed skill's prose stays `quote`. A
+review is a trust statement over the skill's exact bytes, accepted the way a
+connector is, and it clears only the skill's own caveats. Until calls carry
+per-call authority, a child whose skill an accepted review fully covers keeps
+the delegating run's binding. What the skill reads stays tainted.
+[Reviewed skills: trusting a skill's text, not what it reads](reviewed-skills.md)
+has the design.
 
 ### Credentials
 
