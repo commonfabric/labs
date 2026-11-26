@@ -247,12 +247,6 @@ leave room:
   module the pattern imports is not the module `patternIdentity` names, so its
   declaration is ignored and a diagnostic says so. That fails closed. Admitting
   it needs the module set of the piece's program to be readable at commit.
-- **A served run that reads the released value in another space is refused.**
-  Reading a value labeled with `P` resolves `P`'s manifest in the space the
-  label names. The read records a precondition on that manifest document, and a
-  served wave refuses a commit that carries a precondition on another space's
-  document (`foreign-write-refused`, `runtime/runner/src/executor/wave.ts`). The
-  fixture's home-space assertion that reads the landed window hits this.
 - **A reclassification must cover every path the transaction writes.** The flow
   join is stamped on the whole document, so a declaration on one field is
   honored only when the transaction writes nothing else there.

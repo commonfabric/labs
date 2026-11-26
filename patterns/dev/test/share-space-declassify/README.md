@@ -120,7 +120,7 @@ the server-execution serving loop, which is the `cf test` default.
    that names a policy is silently inert, with no error. The test asserts
    today's behavior.
 
-7. **Reclassification lands the share, with one runtime gap left.** With
+7. **Reclassification lands the share.** With
    `EXPERIMENTAL_PIECE_CREATOR_RECORD=true` and
    `EXPERIMENTAL_CFC_PATTERN_RECLASSIFICATION=true`, commit preparation stores a
    `Reclassified` value's creator-releasable `User` clauses as
@@ -139,11 +139,10 @@ the server-execution serving loop, which is the `cf test` default.
    read of `/0` still misfit the store's ceiling. A reclassified lift's result
    is now stored as a copy (PROPOSAL.md, "The output is a copy").
 
-   The gap: with the flags on, the test's home-space assertion that reads the
-   landed window makes a served commit carrying a precondition on the share
-   space's policy manifest, which the serving wave refuses
-   (`foreign-write-refused`), and `cf test` fails the run on that logged error
-   although every step passes. PROPOSAL.md, Risks.
+   With the flags on, the home-space assertion that reads the landed window
+   records a precondition on the share space's policy manifest. A served commit
+   carrying it was refused as a foreign write until labs#10271 (top/3723); the
+   run now finishes with every step passing either way.
 
 ## Runtime behavior found along the way
 
