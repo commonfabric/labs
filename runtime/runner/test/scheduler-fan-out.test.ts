@@ -648,6 +648,7 @@ describe("fan-out stage B: run outcomes and B7 precise dirtiness", () => {
         finish(state, bob, ["of:bob-only"]);
         dirtyFanOutForCause(state, readOf("of:bob-only"));
         fanOutRunStarted(state, bob);
+        takeFanOutTriggers(state, bob.key);
         const tried = readOf("of:tried");
         dirtyFanOutForCause(state, tried);
         dirtyFanOutForCause(state, readOf("of:other"));
