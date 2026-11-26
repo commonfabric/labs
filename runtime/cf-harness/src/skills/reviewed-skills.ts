@@ -39,7 +39,7 @@ export const PROMPT_INJECTION_FREE_CONCEPT =
 
 /**
  * The type of the atom a review statement's `concrete` names: one skill
- * bundle, by pin and bundle digest.
+ * bundle, by discovery id and bundle digest.
  *
  * CFC debt: no registered atom type names "the digest of a text" (`CodeHash`
  * is defined for code), so the harness builds this atom for the closure to
@@ -53,11 +53,17 @@ export const SKILL_BUNDLE_ATOM_TYPE =
 const FILE_KEYS = new Set(["entries", "acceptedVerifiers", "revoked"]);
 const ENTRY_KEYS = new Set([
   "verifier",
-  "pin",
+  "registryId",
+  "reviewedCommit",
   "bundleDigest",
   "checklist",
   "validUntil",
 ]);
+
+// A date alone, or a time with no offset, would be read in whatever zone the
+// host runs in, so a review's expiry names its zone.
+const ISO_TIME_WITH_OFFSET =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
 
 const fail = (message: string): never => {
   throw new Error(`reviewed skills: ${message}`);
@@ -102,12 +108,24 @@ export const parseHarnessReviewedSkills = (
       const validUntil = raw.validUntil === undefined
         ? undefined
         : requireString(raw.validUntil, `${where}.validUntil`);
-      if (validUntil !== undefined && Number.isNaN(Date.parse(validUntil))) {
-        fail(`${where}.validUntil is not a date`);
+      if (
+        validUntil !== undefined &&
+        (!ISO_TIME_WITH_OFFSET.test(validUntil) ||
+          Number.isNaN(Date.parse(validUntil)))
+      ) {
+        fail(`${where}.validUntil is not an ISO 8601 time with an offset`);
       }
       return {
         verifier: requireString(raw.verifier, `${where}.verifier`),
-        pin: requireString(raw.pin, `${where}.pin`),
+        registryId: requireString(raw.registryId, `${where}.registryId`),
+        ...(raw.reviewedCommit !== undefined
+          ? {
+            reviewedCommit: requireString(
+              raw.reviewedCommit,
+              `${where}.reviewedCommit`,
+            ),
+          }
+          : {}),
         bundleDigest: requireString(raw.bundleDigest, `${where}.bundleDigest`),
         ...(raw.checklist !== undefined
           ? { checklist: requireString(raw.checklist, `${where}.checklist`) }
@@ -139,9 +157,7 @@ export const parseHarnessReviewedSkills = (
 export const skillBundleDigest = (
   files: readonly HarnessSkillBundleFile[],
 ): string => {
-  const sorted = [...files].sort((a, b) =>
-    a.path < b.path ? -1 : a.path > b.path ? 1 : 0
-  );
+  const sorted = sortedByPath(files);
   for (const [index, file] of sorted.entries()) {
     if (/[\t\n]/.test(file.path)) {
       fail(`bundle path ${JSON.stringify(file.path)} holds a tab or newline`);
@@ -157,9 +173,9 @@ export const skillBundleDigest = (
   );
 };
 
-const bundleAtom = (pin: string, bundleDigest: string) => ({
+const bundleAtom = (registryId: string, bundleDigest: string) => ({
   type: SKILL_BUNDLE_ATOM_TYPE,
-  pin,
+  registryId: registryId.toLowerCase(),
   bundleDigest,
 });
 
@@ -172,24 +188,27 @@ const isLive = (
   (entry.validUntil === undefined ||
     now.getTime() <= Date.parse(entry.validUntil));
 
+const sortedByPath = (files: readonly HarnessSkillBundleFile[]) =>
+  [...files].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+
 /**
- * The review that covers the bundle at `pin` made of `files`, or `undefined`
- * when none does: no entry names that pin and digest, the entry is expired or
- * revoked, or its verifier is not accepted.
+ * The review that covers the bundle of skill `registryId` made of `files`,
+ * acquired at `commitSha`, or `undefined` when none does: no entry names that
+ * skill and digest, the entry is expired or revoked, or its verifier is not
+ * accepted.
  */
 export const reviewEvidenceForBundle = (
   reviewed: HarnessReviewedSkills,
-  bundle: { pin: string; files: readonly HarnessSkillBundleFile[] },
+  bundle: {
+    registryId: string;
+    commitSha: string;
+    files: readonly HarnessSkillBundleFile[];
+  },
   now: Date,
 ): HarnessReviewedSkillEvidence | undefined => {
   const bundleDigest = skillBundleDigest(bundle.files);
+  const atom = bundleAtom(bundle.registryId, bundleDigest);
   const revoked = new Set(reviewed.revoked);
-  const live = reviewed.entries.filter((entry) => isLive(entry, revoked, now));
-  const statements: CfcTrustStatement[] = live.map((entry) => ({
-    concrete: bundleAtom(entry.pin, entry.bundleDigest),
-    implements: PROMPT_INJECTION_FREE_CONCEPT,
-    verifier: entry.verifier,
-  }));
   // CFC debt: the operator who supplies the file accepts its verifiers for
   // everyone the run acts for, as a deployment-root delegation. The
   // principled form is a delegation each person makes in their profile.
@@ -200,30 +219,30 @@ export const reviewEvidenceForBundle = (
       concepts: [PROMPT_INJECTION_FREE_CONCEPT],
     }),
   );
-  const covered = createTrustResolver(
-    buildCfcTrustConfig({ statements, delegations }),
-  ).conceptSatisfied(
-    PROMPT_INJECTION_FREE_CONCEPT,
-    [bundleAtom(bundle.pin, bundleDigest)],
-    undefined,
-  );
-  if (!covered) return undefined;
-  const entry = live.find((candidate) =>
-    candidate.pin === bundle.pin &&
-    candidate.bundleDigest === bundleDigest &&
-    reviewed.acceptedVerifiers.includes(candidate.verifier)
-  );
-  if (entry === undefined) {
-    return fail("the trust closure accepted a bundle no live entry names");
-  }
+  // One statement at a time, so the entry recorded is the one the closure
+  // accepted.
+  const entry = reviewed.entries.find((candidate) => {
+    if (!isLive(candidate, revoked, now)) return false;
+    const statement: CfcTrustStatement = {
+      concrete: bundleAtom(candidate.registryId, candidate.bundleDigest),
+      implements: PROMPT_INJECTION_FREE_CONCEPT,
+      verifier: candidate.verifier,
+    };
+    return createTrustResolver(
+      buildCfcTrustConfig({ statements: [statement], delegations }),
+    ).conceptSatisfied(PROMPT_INJECTION_FREE_CONCEPT, [atom], undefined);
+  });
+  if (entry === undefined) return undefined;
   return {
     concept: PROMPT_INJECTION_FREE_CONCEPT,
     verifier: entry.verifier,
-    pin: entry.pin,
+    registryId: entry.registryId,
+    commitSha: bundle.commitSha,
+    ...(entry.reviewedCommit !== undefined
+      ? { reviewedCommit: entry.reviewedCommit }
+      : {}),
     bundleDigest,
-    files: [...bundle.files].sort((a, b) =>
-      a.path < b.path ? -1 : a.path > b.path ? 1 : 0
-    ),
+    files: sortedByPath(bundle.files),
     ...(entry.checklist !== undefined ? { checklist: entry.checklist } : {}),
     ...(entry.validUntil !== undefined ? { validUntil: entry.validUntil } : {}),
   };
@@ -237,7 +256,7 @@ export const reviewEvidenceForBundle = (
  * acquired beside it. `servedDigest` is the digest of the text the handle
  * resolved to, and it must equal the digest acquisition recorded, so what the
  * child reads is the text that was reviewed. Text that reached the child some
- * other way than an acquisition has no pin, and no review covers it.
+ * other way than an acquisition names no skill, and no review covers it.
  */
 export const reviewEvidenceForDelegatedSkill = (
   reviewed: HarnessReviewedSkills | undefined,
@@ -252,7 +271,8 @@ export const reviewEvidenceForDelegatedSkill = (
   if (reviewed === undefined || acquisition === undefined) return undefined;
   if (skill.servedDigest !== acquisition.valueDigest) return undefined;
   return reviewEvidenceForBundle(reviewed, {
-    pin: `${acquisition.registryId}@${acquisition.commitSha}`,
+    registryId: acquisition.registryId,
+    commitSha: acquisition.commitSha,
     files: [
       { path: "SKILL.md", valueDigest: acquisition.valueDigest },
       ...(acquiredSkill?.scripts ?? []).map((script) => ({

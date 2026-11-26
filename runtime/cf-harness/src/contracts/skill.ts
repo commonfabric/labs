@@ -367,8 +367,18 @@ export interface HarnessReviewedSkillEntry {
   /** Who vouches for the bundle: the organization whose set holds it. */
   verifier: string;
 
-  /** `owner/repo/slug@<commit sha>`, the pin the bundle was read at. */
-  pin: string;
+  /**
+   * The skill's discovery id, `owner/repo/slug`, compared without regard to
+   * case as the host resolving it does.
+   */
+  registryId: string;
+
+  /**
+   * The commit the reviewer read the bundle at. A record of the review, not
+   * part of the match: acquisition pins whatever commit the default branch
+   * points at, and the same bytes at a later commit are the same bundle.
+   */
+  reviewedCommit?: string;
 
   /** {@link skillBundleDigest} over every file the bundle holds. */
   bundleDigest: string;
@@ -376,7 +386,7 @@ export interface HarnessReviewedSkillEntry {
   /** The version of the review checklist the bundle was read against. */
   checklist?: string;
 
-  /** When the review stops counting (ISO 8601). */
+  /** When the review stops counting: an ISO 8601 time with an offset. */
   validUntil?: string;
 }
 
@@ -405,7 +415,11 @@ export interface HarnessReviewedSkillEvidence {
   /** The concept the review statement implements. */
   concept: string;
   verifier: string;
-  pin: string;
+  registryId: string;
+
+  /** The commit the child's bundle was acquired at. */
+  commitSha: string;
+  reviewedCommit?: string;
   bundleDigest: string;
   files: HarnessSkillBundleFile[];
   checklist?: string;

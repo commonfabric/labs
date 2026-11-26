@@ -413,7 +413,7 @@ test("parseCfHarnessCliArgs reads the reviewed skills a run accepts from a file"
   const reviewedSkills = {
     entries: [{
       verifier: "github:acme",
-      pin: "acme/skills/trip@0123456789abcdef0123456789abcdef01234567",
+      registryId: "acme/skills/trip",
       bundleDigest: "sha256:abc",
     }],
     acceptedVerifiers: ["github:acme"],

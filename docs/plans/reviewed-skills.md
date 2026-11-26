@@ -10,19 +10,19 @@ citations are to `commonfabric/specs` `cfc/` at `aab6afa4`.
 ## Why
 
 A cf-harness `delegate_task` child that receives skill text through
-`skillHandle` binds that text as `quote` (top/3606). The child's whole run binding is lowered with it. Under
-the default `enforce-strict` mode the child can then only report back, and under
-`enforce-explicit` it can read but not act. Falling back to `observe` and
-switching skills off were both rejected.
+`skillHandle` binds that text as `quote` (top/3606). The child's whole run
+binding is lowered with it. Under the default `enforce-strict` mode the child
+can then only report back, and under `enforce-explicit` it can read but not act.
+Falling back to `observe` and switching skills off were both rejected.
 
 A skill can itself carry prompt injection, and that is what the lowering guards
 against. If someone the person trusts has reviewed the exact text and found
 none, that reason is gone. The review should use the same mechanism as trusting
 connectors: a reviewed set in a GitHub repository or organization the person
-trusts, naming each skill by pin and digest. What the skill reads while it runs
-is a different matter. Emails from third parties, web pages and script output
-can still carry injection, and they stay tainted however trustworthy the skill
-is.
+trusts, naming each skill by its id and digest. What the skill reads while it
+runs is a different matter. Emails from third parties, web pages and script
+output can still carry injection, and they stay tainted however trustworthy the
+skill is.
 
 ## The answer in brief
 
@@ -93,10 +93,14 @@ A reviewed skill entry is a §4.8.2 trust statement:
   load from the bundle (`SKILL.md`, every resource, every script) with its
   digest, keyed by its path relative to the bundle root. The `concrete` is the
   digest of that sorted list, so the bundle is reviewed as a whole and an old
-  `SKILL.md` cannot be paired with a new resource. The entry also names the pin
-  (`owner/repo/slug@<commit sha>`), which must match too: the digests are the
-  identity and the pin is where the bytes live, so the same bytes under another
-  repository fail closed;
+  `SKILL.md` cannot be paired with a new resource. The entry also names the
+  skill's discovery id (`owner/repo/slug`), which must match too, compared
+  without regard to case: the digests are the identity and the id is where
+  the bytes live, so the same bytes under another repository fail closed. The
+  commit the reviewer read is recorded, and is not matched. Acquisition pins
+  whatever commit the default branch points at, so matching it would void
+  every review at the repository's next commit, while the same bytes at a
+  later commit are the bundle that was reviewed;
 - `implements` is `https://commonfabric.org/cfc/concepts/prompt-injection-free`,
   a concept §4.8.1 already lists;
 - `verifier` is the organization whose reviewed set holds the entry.
@@ -118,11 +122,14 @@ them itself before it asks the closure: `trust.ts`'s resolver is a pure
 function of its configuration and consults no clock, so `CfcTrustStatement`
 gains no `scope`.
 
-Every listed file is fetched from the pinned commit at acquisition. Only putting
-a resource into the model's context is lazy. Each load re-checks that file's
-digest, and a path the entry does not list is refused. Acquisition today admits
-only `SKILL.md` and `scripts/<name>` and refuses symlinks and nested directories
-(`isAdmittedScript`). Admitting resources reuses that rule.
+Every file is fetched from the pinned commit at acquisition, and the bundle
+digest covers every file fetched. `SKILL.md` reaches the child as the text the
+handle resolves to, checked against acquisition's digest when the child starts.
+`run_skill_script` re-checks a script's digest at each run and refuses a script
+the acquisition did not fetch. Acquisition admits only `SKILL.md` and
+`scripts/<name>` and refuses symlinks and nested directories
+(`isAdmittedScript`). Admitting resources reuses that rule, with a digest
+re-check at each load like a script's.
 
 The frontmatter, `allowed-tools` included, is not part of what the entry
 vouches for beyond its bytes. It stays free-form labeled data (primitives §2).
@@ -220,11 +227,11 @@ The harness lowers a child to `quote` when its skill arrived through a handle
 predicate to: _when its skill arrived through a handle without accepted review
 evidence_. Provisionally decided by Alex on 2026-11-26.
 
-- **When the child is not lowered.** The pin matches, and every file the run can
-  load from the bundle matches by digest a statement the acting person's closure
-  accepts for `prompt-injection-free`. A missing file, a digest mismatch, an
-  expired or revoked entry, or a verifier the person has not accepted: the
-  lowering applies unchanged.
+- **When the child is not lowered.** The skill id matches, and every file the
+  run can load from the bundle matches by digest a statement the acting person's
+  closure accepts for `prompt-injection-free`. A missing file, a digest
+  mismatch, an expired or revoked entry, or a verifier the person has not
+  accepted: the lowering applies unchanged.
 - **The role stays `quote`.** Only the lowering predicate changes. The skill's
   text is still third-party text, and §18.3.1 declares a role "by the runtime
   input route, not by the text".
@@ -358,7 +365,7 @@ its authority. Nothing the skill reads is cleared, and the review grants
 nothing the person lacked. Steps 1 to 3 cut these corners:
 
 1. **The atom.** A statement's `concrete` names an atom of type
-   `https://commonfabric.org/cf-harness/atom/SkillBundle` (pin and bundle
+   `https://commonfabric.org/cf-harness/atom/SkillBundle` (skill id and bundle
    digest), which the harness builds to ask the closure and nothing carries on
    a label. Real CFC has source entry mint an atom on the fetched bytes, of a
    type the specification names. No registered type names "the digest of a
@@ -385,7 +392,10 @@ These are provisional until Berni reviews the package, like the bridge plan's.
    connector entries, with no separate skill registry. Decided 2026-11-26:
    1. a digest per file, keyed by bundle-relative path, and the digest of that
       sorted list as the `concrete`;
-   2. the pin required, and matched as well as the digests;
+   2. the skill's discovery id required, and matched as well as the digests;
+      the commit the reviewer read recorded but not matched, since
+      acquisition pins the default branch's current commit (revised
+      2026-11-26);
    3. every listed file fetched at acquisition, each load re-checked, and
       unlisted paths refused;
    4. revocation and expiry kept in the set, and checked by the harness
