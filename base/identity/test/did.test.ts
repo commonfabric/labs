@@ -9,12 +9,13 @@ import {
   isWellFormedDID,
   parseDID,
 } from "../src/did.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // The whole rule: the exact prefix `did:`, and nothing else about the string.
 // These tests are the place that rule is pinned, so each case names the
 // property it holds rather than a DID that happens to be handy.
 
-Deno.test("isDID accepts any string carrying the exact `did:` prefix", () => {
+test("isDID accepts any string carrying the exact `did:` prefix", () => {
   assertEquals(isDID("did:key:z6MkExample"), true);
   assertEquals(isDID("did:web:example.com"), true);
   // No second colon, no method-specific id, no method at all: still a DID.
@@ -26,7 +27,7 @@ Deno.test("isDID accepts any string carrying the exact `did:` prefix", () => {
   assertEquals(isDID("did:key:z6Mk\n"), true);
 });
 
-Deno.test("isDID rejects a string whose prefix differs in any character", () => {
+test("isDID rejects a string whose prefix differs in any character", () => {
   assertEquals(isDID("DID:key:z6MkExample"), false);
   assertEquals(isDID("Did:key:z6MkExample"), false);
   assertEquals(isDID(" did:key:z6MkExample"), false);
@@ -35,7 +36,7 @@ Deno.test("isDID rejects a string whose prefix differs in any character", () => 
   assertEquals(isDID(""), false);
 });
 
-Deno.test("isDID rejects a value that is not a string", () => {
+test("isDID rejects a value that is not a string", () => {
   assertEquals(isDID(undefined), false);
   assertEquals(isDID(null), false);
   assertEquals(isDID(42), false);
@@ -43,7 +44,7 @@ Deno.test("isDID rejects a value that is not a string", () => {
   assertEquals(isDID(["did:key:z6Mk"]), false);
 });
 
-Deno.test("isDIDKey accepts only the `did:key:` prefix", () => {
+test("isDIDKey accepts only the `did:key:` prefix", () => {
   assertEquals(isDIDKey("did:key:z6MkExample"), true);
   assertEquals(isDIDKey("did:key:"), true);
   assertEquals(isDIDKey("did:web:example.com"), false);
@@ -52,7 +53,7 @@ Deno.test("isDIDKey accepts only the `did:key:` prefix", () => {
   assertEquals(isDIDKey(undefined), false);
 });
 
-Deno.test("parseDID splits a DID into its method and identifier", () => {
+test("parseDID splits a DID into its method and identifier", () => {
   assertEquals(parseDID("did:key:z6MkExample"), {
     did: "did:key:z6MkExample",
     method: "key",
@@ -71,7 +72,7 @@ Deno.test("parseDID splits a DID into its method and identifier", () => {
   });
 });
 
-Deno.test("parseDID reports an empty identifier when no colon follows the method", () => {
+test("parseDID reports an empty identifier when no colon follows the method", () => {
   assertEquals(parseDID("did:key"), {
     did: "did:key",
     method: "key",
@@ -80,13 +81,13 @@ Deno.test("parseDID reports an empty identifier when no colon follows the method
   assertEquals(parseDID("did:"), { did: "did:", method: "", id: "" });
 });
 
-Deno.test("parseDID returns `undefined` for anything that is not a DID", () => {
+test("parseDID returns `undefined` for anything that is not a DID", () => {
   assertEquals(parseDID("DID:key:z6MkExample"), undefined);
   assertEquals(parseDID("my-space"), undefined);
   assertEquals(parseDID(undefined), undefined);
 });
 
-Deno.test("assertNotDID throws for a DID, naming the role and the value", () => {
+test("assertNotDID throws for a DID, naming the role and the value", () => {
   const error = assertThrows(
     () => assertNotDID("did:key:z6MkExample", "A space name"),
     Error,
@@ -96,23 +97,23 @@ Deno.test("assertNotDID throws for a DID, naming the role and the value", () => 
   assertEquals(error.message.includes("DIDs are not accepted here"), true);
 });
 
-Deno.test("assertNotDID returns for a value that is not a DID", () => {
+test("assertNotDID returns for a value that is not a DID", () => {
   assertNotDID("my-space", "A space name");
   assertNotDID("DID:key:z6MkExample", "A space name");
   assertNotDID("", "A space name");
 });
 
-Deno.test("the prefixes are the literal strings the rule is written against", () => {
+test("the prefixes are the literal strings the rule is written against", () => {
   assertEquals(DID_PREFIX, "did:");
   assertEquals(DID_KEY_PREFIX, "did:key:");
 });
 
-Deno.test("isWellFormedDID accepts a DID in DID Core syntax as written", () => {
+test("isWellFormedDID accepts a DID in DID Core syntax as written", () => {
   assertEquals(isWellFormedDID("did:key:z6MkExample"), true);
   assertEquals(isWellFormedDID("did:web:example.com:user%20a"), true);
 });
 
-Deno.test("isWellFormedDID refuses every other spelling isDID admits", () => {
+test("isWellFormedDID refuses every other spelling isDID admits", () => {
   // Each passes isDID, and each could be shown or compared as a principal it
   // is not.
   for (

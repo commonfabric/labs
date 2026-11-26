@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import { createTestProgramFromFiles } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The types the cases build their cells from, declared in `/types.ts`. */
 const TYPES = `

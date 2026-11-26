@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 
@@ -15,6 +14,7 @@ import {
   OrganizationCommits,
   runOutcome,
 } from "./recent-commits.ts";
+import { afterEach, beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 const ORG = REPO.split("/")[0];
 const CREDENTIAL = staticGitHubCredential("test-token");

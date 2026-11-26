@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   DEFAULT_SETUP,
@@ -63,6 +62,7 @@ import {
   validLayoutOf,
   withPress,
 } from "./model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const layout = ringLayoutOf(DEFAULT_SETUP);
 

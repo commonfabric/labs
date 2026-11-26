@@ -1,7 +1,8 @@
 import { assertEquals } from "@std/assert";
 import { CollectionRequestQueue } from "../src/collection-request-queue.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("GitHub collection requests coalesce while collection runs", async () => {
+test("GitHub collection requests coalesce while collection runs", async () => {
   const firstStarted = Promise.withResolvers<void>();
   const releaseFirst = Promise.withResolvers<void>();
   const secondStarted = Promise.withResolvers<void>();
@@ -29,7 +30,7 @@ Deno.test("GitHub collection requests coalesce while collection runs", async () 
   assertEquals(queue.request("periodic"), "closed");
 });
 
-Deno.test("GitHub collection requests retain an empty reason", async () => {
+test("GitHub collection requests retain an empty reason", async () => {
   const firstStarted = Promise.withResolvers<void>();
   const releaseFirst = Promise.withResolvers<void>();
   const secondStarted = Promise.withResolvers<void>();
@@ -54,7 +55,7 @@ Deno.test("GitHub collection requests retain an empty reason", async () => {
   assertEquals(reasons, ["periodic", ""]);
 });
 
-Deno.test("closing drops a pending GitHub collection request", async () => {
+test("closing drops a pending GitHub collection request", async () => {
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const reasons: string[] = [];
@@ -74,7 +75,7 @@ Deno.test("closing drops a pending GitHub collection request", async () => {
   assertEquals(reasons, ["periodic"]);
 });
 
-Deno.test("a rejected collection does not block its successor", async () => {
+test("a rejected collection does not block its successor", async () => {
   const firstStarted = Promise.withResolvers<void>();
   const releaseFirst = Promise.withResolvers<void>();
   const secondStarted = Promise.withResolvers<void>();

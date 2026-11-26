@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { consoleRunFlow } from "../../console/flow.ts";
 import { type ConsoleHandle, consoleRunSteps } from "../../console/steps.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
 import type { HarnessPolicyEvent } from "../../src/contracts/policy.ts";
 import type { ConsoleCellLabels } from "../../console/cell-labels.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const call = (
   id: string,

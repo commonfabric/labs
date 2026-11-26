@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { duration } from "./duration.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("duration()", () => {
   it("returns minutes and seconds past a minute", () => {

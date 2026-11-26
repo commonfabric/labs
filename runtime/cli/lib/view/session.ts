@@ -55,6 +55,7 @@ import {
   overlayLineAt,
   type OverlayState,
   radioButtonAt,
+  sliderStopAt,
   type ViewState,
 } from "./render.ts";
 import {
@@ -124,7 +125,12 @@ import type {
 } from "./editsource.ts";
 import type { DirEntry, FileGateway } from "./filegateway.ts";
 import { LineEdit } from "./lineedit.ts";
-import { PULL_REQUEST_TOOLS, type ViewSettings } from "./settings.ts";
+import {
+  NO_QUIT_DELAY,
+  PULL_REQUEST_TOOLS,
+  QUIT_DELAYS,
+  type ViewSettings,
+} from "./settings.ts";
 import {
   type MergeMethod,
   type MergeRequest,
@@ -199,8 +205,30 @@ interface RadioButtonsState {
   selected: number;
 }
 
+/** A slider in a dialog that is up, on a logarithmic scale, and the value
+ * it sets. */
+interface SliderState {
+  readonly kind: "slider";
+  readonly label: string;
+  readonly hotkey: string;
+
+  /** The values the slider stops at, all above zero, in ascending order. */
+  readonly stops: readonly number[];
+
+  /** Returns `value` as the dialog shows it. */
+  readonly text: (value: number) => string;
+
+  /** The value the slider sets, which need not be one of its stops until
+   * the slider moves. */
+  value: number;
+}
+
 /** A field of a dialog that is up. */
-type FieldState = CheckBoxState | InputLineState | RadioButtonsState;
+type FieldState =
+  | CheckBoxState
+  | InputLineState
+  | RadioButtonsState
+  | SliderState;
 
 /** The settings dialog while it is up: the settings it opened showing, and
  * its fields. */
@@ -209,7 +237,58 @@ interface SettingsDraft {
   readonly pullRequestTool: RadioButtonsState;
   readonly touchGateToken: InputLineState;
   readonly quitOnPullRequest: CheckBoxState;
+  readonly quitDelay: SliderState;
   readonly webhookRelay: InputLineState;
+}
+
+/** Returns `ms` milliseconds as the settings dialog shows a delay: "none"
+ * for a delay that counts as none, in milliseconds under a second, and in
+ * seconds otherwise. */
+function delayText(ms: number): string {
+  return ms <= NO_QUIT_DELAY
+    ? "none"
+    : ms < 1000
+    ? `${ms} ms`
+    : `${ms / 1000} s`;
+}
+
+/** Returns the index of the stop of `slider` nearest its value on its
+ * logarithmic scale. */
+function nearestStop(slider: SliderState): number {
+  const distance = (i: number) =>
+    Math.abs(Math.log(slider.stops[i] / slider.value));
+  return slider.stops.reduce(
+    (best, _, i) => distance(i) < distance(best) ? i : best,
+    0,
+  );
+}
+
+/** Returns the dialog's view of `field`. */
+function dialogField(field: FieldState): DialogField {
+  switch (field.kind) {
+    case "inputLine":
+      return {
+        kind: "inputLine",
+        label: field.label,
+        hotkey: field.hotkey,
+        value: field.edit.value,
+        cursor: field.edit.cursor,
+        scroll: field.edit.scroll,
+        selected: field.edit.selected,
+      };
+    case "slider":
+      return {
+        kind: "slider",
+        label: field.label,
+        hotkey: field.hotkey,
+        stopCount: field.stops.length,
+        stop: nearestStop(field),
+        text: field.text(field.value),
+      };
+    case "checkBox":
+    case "radioButtons":
+      return { ...field };
+  }
 }
 
 /** The settings dialog's radio button for each way of handling pull
@@ -623,8 +702,10 @@ export class Session {
     | null = null;
 
   /** The address of the pull request that has opened or merged while the
-   * task dialog was up, until a quit that it did not ask for. */
-  #pullRequestUrl: string | null = null;
+   * task dialog was up, and how many milliseconds the dialog gives it before
+   * the viewer quits for it, until a quit that it did not ask for. */
+  #pullRequestQuit: { readonly url: string; readonly delay: number } | null =
+    null;
 
   //
   // editing
@@ -1495,6 +1576,7 @@ export class Session {
         draft.pullRequestTool,
         draft.touchGateToken,
         draft.quitOnPullRequest,
+        draft.quitDelay,
         draft.webhookRelay,
       ]
       : [];
@@ -1603,24 +1685,15 @@ export class Session {
    * The settings dialog: radio buttons that choose how the viewer handles
    * the pushed branch's pull request, the name of the token touch-gate uses,
    * a check box that turns on quitting when the pull request opens or
-   * merges, the address of the webhook relay that says when it does, and OK
-   * and Cancel.
+   * merges, a slider that sets how long the viewer waits before it quits,
+   * the address of the webhook relay that says when the pull request opens
+   * or merges, and OK and Cancel.
    */
   #settingsDialog(): DialogState {
     return {
       title: "Settings",
       body: [],
-      fields: this.#fieldStates().map((field): DialogField =>
-        field.kind !== "inputLine" ? { ...field } : {
-          kind: "inputLine",
-          label: field.label,
-          hotkey: field.hotkey,
-          value: field.edit.value,
-          cursor: field.edit.cursor,
-          scroll: field.edit.scroll,
-          selected: field.edit.selected,
-        }
-      ),
+      fields: this.#fieldStates().map(dialogField),
       buttons: [
         { label: "OK", hotkey: "o", kind: "default" },
         { label: "Cancel", hotkey: "c", kind: "cancel" },
@@ -3910,7 +3983,7 @@ export class Session {
     this.#taskSummary = [];
     this.#confirmation = null;
     this.#watchLog = new TaskLog();
-    this.#pullRequestUrl = null;
+    this.#pullRequestQuit = null;
     this.#abortTask = abort;
     this.#dialogFocus = -1;
   }
@@ -3939,8 +4012,7 @@ export class Session {
     this.#taskSummary = summary;
     this.#taskRetry = retry;
     if (this.#mode === "taskPrompt") this.#dialogFocus = 0;
-    const url = this.#pullRequestUrl;
-    if (url !== null) this.#announcePullRequestQuit(url);
+    this.#beginPullRequestQuit();
   }
 
   /** Add `text` to the task dialog, under how the task ended, as a step of
@@ -3985,22 +4057,33 @@ export class Session {
 
   /**
    * The pull request at `url` has opened or merged. While the task dialog
-   * is up, show the watch's running steps done, and have it give the address
-   * and say it is quitting, once the task has ended; otherwise do nothing.
-   * {@link completePullRequestQuit} then quits.
+   * is up, show the watch's running steps done, and, once the task has
+   * ended, quit for it at once when `delay` counts as none, and otherwise
+   * have the dialog give the address and say it is quitting, for `delay`
+   * milliseconds, after which {@link completePullRequestQuit} quits. While
+   * the dialog is not up, do nothing.
    */
-  quitForPullRequest(url: string): void {
+  quitForPullRequest(url: string, delay: number): void {
     if (this.#mode !== "taskPrompt") return;
-    this.#pullRequestUrl = url;
+    this.#pullRequestQuit = { url, delay };
     this.#watchLog.complete();
-    if (!this.#abortTask) this.#announcePullRequestQuit(url);
+    if (!this.#abortTask) this.#beginPullRequestQuit();
   }
 
   /** Whether the task dialog says it is quitting for the pull request, until
    * {@link completePullRequestQuit} quits or a button takes the dialog down. */
   get pullRequestQuitPending(): boolean {
-    return this.#mode === "taskPrompt" && !this.#abortTask &&
-      this.#pullRequestUrl !== null;
+    return this.pullRequestQuitDelay !== null;
+  }
+
+  /** How many milliseconds the task dialog says it is quitting for the pull
+   * request before {@link completePullRequestQuit} quits, while it says so,
+   * or null. */
+  get pullRequestQuitDelay(): number | null {
+    const quit = this.#pullRequestQuit;
+    return this.#mode === "taskPrompt" && !this.#abortTask && quit !== null
+      ? quit.delay
+      : null;
   }
 
   /** Close the task dialog and quit, as its Quit button does, when it says
@@ -4012,7 +4095,7 @@ export class Session {
   /** What the driver prints once the viewer has closed: the address of the
    * pull request whose opening quit it, or null. */
   get exitMessage(): string | null {
-    return this.quit ? this.#pullRequestUrl : null;
+    return this.quit ? this.#pullRequestQuit?.url ?? null : null;
   }
 
   /** Open the settings dialog, showing `settings`. */
@@ -4041,6 +4124,14 @@ export class Session {
         label: "Quit when the pull request opens or merges",
         hotkey: "q",
         checked: settings.quitOnPullRequest,
+      },
+      quitDelay: {
+        kind: "slider",
+        label: "Delay before quitting",
+        hotkey: "d",
+        stops: QUIT_DELAYS,
+        text: delayText,
+        value: settings.quitDelay,
       },
       webhookRelay: {
         kind: "inputLine",
@@ -4633,7 +4724,7 @@ export class Session {
 
   #requestQuit(): void {
     // A quit asked for afresh is not the pull request's.
-    this.#pullRequestUrl = null;
+    this.#pullRequestQuit = null;
     if (this.#buffer?.dirty()) {
       // A quit signal can arrive with a peek overlay still open; the modal save
       // prompt replaces it rather than drawing over it.
@@ -4777,13 +4868,38 @@ export class Session {
    * returns whether it did. A check box takes Space, which toggles it. A set
    * of radio buttons takes the arrow keys, which select the button before or
    * after the selected one, going round from either end, and Space, which
-   * does nothing, since the selected button is the focused one. An input
-   * line takes
-   * every key but those that move the focus or close the dialog: Tab,
-   * Shift-Tab, Enter, Escape, and Alt with a key that types nothing.
+   * does nothing, since the selected button is the focused one. A slider
+   * takes the arrow keys, which move it to the stop before or after the one
+   * its thumb is at, Home and End, which move it to its first or last stop,
+   * and Space, which does nothing. An input line takes every key but those
+   * that move the focus or close the dialog: Tab, Shift-Tab, Enter, Escape,
+   * and Alt with a key that types nothing.
    */
   #handleFieldKey(key: Key): boolean {
     const field = this.#fieldStates()[this.#dialogFocus];
+    if (field?.kind === "slider") {
+      const { stops } = field;
+      const step = (by: number) =>
+        stops[clamp(nearestStop(field) + by, 0, stops.length - 1)];
+      switch (key.name) {
+        case "left":
+        case "down":
+          field.value = step(-1);
+          return true;
+        case "right":
+        case "up":
+          field.value = step(1);
+          return true;
+        case "home":
+          field.value = stops[0];
+          return true;
+        case "end":
+          field.value = stops[stops.length - 1];
+          return true;
+        default:
+          return key.name === "space";
+      }
+    }
     if (field?.kind === "checkBox") {
       if (key.name !== "space") return false;
       field.checked = !field.checked;
@@ -4815,12 +4931,13 @@ export class Session {
 
   /**
    * Focuses a prompt's control and holds it when the mouse goes down on it,
-   * drawing a button pushed, and puts an input line's cursor where the mouse
-   * went down. The mouse coming up on the control it went down on toggles a
-   * check box, selects the radio button it comes up on, and activates a
-   * button. With no prompt up, the mouse going down on an entry of the file
-   * picker or the jump list selects that entry. The mouse going down or coming
-   * up anywhere else does nothing.
+   * drawing a button pushed, puts an input line's cursor where the mouse
+   * went down, and moves a slider to the stop nearest where the mouse went
+   * down on its track. The mouse coming up on the control it went down on
+   * toggles a check box, selects the radio button it comes up on, and
+   * activates a button. With no prompt up, the mouse going down on an entry
+   * of the file picker or the jump list selects that entry. The mouse going
+   * down or coming up anywhere else does nothing.
    */
   #handleClick(
     mouse: MouseButton,
@@ -4846,6 +4963,9 @@ export class Session {
         const at = inputLineIndexAt(this, dialog, index, mouse.x, mouse.y);
         if (at === null) field.edit.selectAll(this.#inputColumns());
         else field.edit.moveTo(at, this.#inputColumns());
+      } else if (field?.kind === "slider") {
+        const stop = sliderStopAt(this, dialog, index, mouse.x, mouse.y);
+        if (stop !== null) field.value = field.stops[stop];
       }
     } else if (index !== this.#indexOfHeld(dialog, held)) {
       return;
@@ -4946,11 +5066,19 @@ export class Session {
     if (quit) this.#requestQuit();
   }
 
-  /** Have the task dialog give `url`, the address of the pull request that
-   * has opened or merged, and say it is quitting, scrolled to its end. */
-  #announcePullRequestQuit(url: string): void {
+  /** When the pull request has opened or merged, quit for it at once if
+   * its delay counts as none, and otherwise have the task dialog give its
+   * address and say it is quitting, scrolled to its end. */
+  #beginPullRequestQuit(): void {
+    const quit = this.#pullRequestQuit;
+    if (quit === null) return;
+    if (quit.delay <= NO_QUIT_DELAY) {
+      // Quits only while the task dialog is up, not once it has closed.
+      this.completePullRequestQuit();
+      return;
+    }
     this.#taskTop = null;
-    this.#watchLog.say(say`Pull request: ${link(url)}`);
+    this.#watchLog.say(say`Pull request: ${link(quit.url)}`);
     this.#watchLog.step(say`Quitting`);
   }
 
@@ -4958,9 +5086,9 @@ export class Session {
    * merged, keeping its address for the driver to print once the viewer
    * closes. */
   #quitForPullRequest(): void {
-    const url = this.#pullRequestUrl;
+    const quit = this.#pullRequestQuit;
     this.#closeTaskDialog(true);
-    this.#pullRequestUrl = url;
+    this.#pullRequestQuit = quit;
   }
 
   /** OK takes the settings dialog down and asks the driver to save what it
@@ -4976,6 +5104,7 @@ export class Session {
           pullRequestTool: PULL_REQUEST_TOOLS[draft.pullRequestTool.selected],
           touchGateToken: draft.touchGateToken.edit.value.trim(),
           quitOnPullRequest: draft.quitOnPullRequest.checked,
+          quitDelay: draft.quitDelay.value,
           webhookRelay: draft.webhookRelay.edit.value.trim(),
         },
       };

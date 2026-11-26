@@ -6,12 +6,17 @@
  * `test-runner-compile-byte-cache.serial.test.ts`.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { join, resolve } from "@std/path";
 import { createTestCommand } from "../commands/test-command.ts";
 import { compileTestPatterns } from "../lib/test-runner.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const GOOD = resolve(
   import.meta.dirname!,

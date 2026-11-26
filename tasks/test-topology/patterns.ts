@@ -85,11 +85,7 @@ async function patternIntegrationSuites(
     "--v8-flags=--max-old-space-size=4096",
     "--trace-leaks",
   ];
-  const junit = {
-    kind: "integration",
-    scope: "patterns",
-    filePrefix: packageDir,
-  };
+  const records = { kind: "integration", scope: "patterns" };
   // The environment the package's own `integration` task sets, so the
   // suite a lane runs and the suite somebody runs by hand are the same
   // run. `HEADLESS` is not part of it: the task leaves the browser
@@ -118,7 +114,7 @@ async function patternIntegrationSuites(
         packageDir,
         flags,
         env: { ...env, ...defaultLane.environment },
-        junit,
+        records,
         files: defaultLane.enabled
           ? files.filter((file) => !on.excluded.has(file))
           : files,
@@ -139,7 +135,7 @@ async function patternIntegrationSuites(
         packageDir,
         flags,
         env: { ...env, ...oppositeLane.environment },
-        junit,
+        records,
         files: oppositeLane.enabled
           ? files.filter((file) => !on.excluded.has(file))
           : files,
@@ -264,7 +260,6 @@ async function patternReloadSuite(root: string): Promise<Suite> {
           Deno.execPath(),
           "task",
           "integration",
-          `--junit-dir=${context.outputDir}`,
           "patterns-reload",
         ],
         cwd: context.root,
@@ -272,12 +267,7 @@ async function patternReloadSuite(root: string): Promise<Suite> {
           HEADLESS: "1",
           ...coverageEnv(context, "pattern-reload"),
         },
-        junit: [{
-          path: path.join(context.outputDir, "patterns-reload.xml"),
-          kind: "integration",
-          scope: "patterns",
-          filePrefix: "patterns",
-        }],
+        results: { kind: "integration", scope: "patterns" },
       }]);
     },
   };
@@ -321,7 +311,6 @@ async function patternUnitSuite(root: string): Promise<Suite> {
           Deno.execPath(),
           "task",
           "integration",
-          `--junit-dir=${context.outputDir}`,
           `--files=${listPath}`,
           "pattern-tests",
         ],
@@ -342,11 +331,7 @@ async function generatedPatternSuite(root: string): Promise<Suite> {
       packageDir,
       flags: ["--trace-leaks", "-A", "--parallel"],
       env: { LOG_LEVEL: "warn" },
-      junit: {
-        kind: "integration",
-        scope: "generated-patterns",
-        filePrefix: packageDir,
-      },
+      records: { kind: "integration", scope: "generated-patterns" },
       files: await filesIn(root, `${packageDir}/integration/patterns`),
     }],
   });

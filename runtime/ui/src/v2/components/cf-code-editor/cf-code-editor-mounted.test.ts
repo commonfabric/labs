@@ -7,7 +7,6 @@
 // First, so that the document it installs is there when Lit loads.
 import { mount, settle, window } from "../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
@@ -26,6 +25,7 @@ import {
   type PresenceRoomHandle,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   createMockCellHandle,
   pushRefusal,

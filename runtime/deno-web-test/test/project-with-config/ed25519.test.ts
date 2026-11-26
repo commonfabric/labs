@@ -1,3 +1,4 @@
+// deno-lint-ignore-file cf-test/registration -- a fixture testing the browser harness's own `Deno.test`
 import { createEd25519Key } from "./mod.ts";
 
 Deno.test("create ed25519 key", async function () {

@@ -3,11 +3,11 @@
  * test controls, and against a storage server that fails to close.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { resolve } from "@std/path";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   type MultiUserDescriptorMeta,
   ParticipantWorker,

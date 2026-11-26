@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { createModuleCompartmentGlobals } from "../src/sandbox/compartment-globals.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("compartment-globals", () => {
   // Each test file runs in an isolate of its own, and nothing this file loads

@@ -23,7 +23,7 @@ import SelfImprovingClassifier, {
   acceptUndoneClassificationHandler,
   correctUndoneClassificationHandler,
   undoAutoClassificationHandler,
-} from "./self-improving-classifier.tsx";
+} from "./main.tsx";
 
 /** An auto-classified item in the shape stored before `scoring` existed. */
 const storedItem = (id: string, subject: string): AutoClassifiedItem => ({

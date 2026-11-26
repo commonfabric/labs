@@ -16,10 +16,10 @@
  * key -- kept together here because they share that vocabulary.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   schemaWithoutProperties,

@@ -1,14 +1,21 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { valueEqual } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
   judgeCurrencyRoots,
   selectCurrencyPiece,
+  selectCurrencyWriters,
 } from "@commonfabric/memory/v2/currency-index";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { stub } from "@std/testing/mock";
 import { ExecutorHost } from "../../src/executor/host.ts";
@@ -80,6 +87,55 @@ const DRAFT_PROGRAM: RuntimeProgram = {
 };
 
 /**
+ * A piece that owns a per-session note with a scalar default, beside a
+ * derived output that reads none of it, as a board with a per-session field
+ * a viewer types into is.
+ */
+const NOTE_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern, Writable } from 'commonfabric';",
+      "export default pattern<",
+      "  { n: number },",
+      "  { note: Writable<string>; doubled: number }",
+      ">(({ n }) => {",
+      "  const note = new Writable.perSession<string>('');",
+      "  return { note, doubled: computed(() => n * 2) };",
+      "});",
+    ].join("\n"),
+  }],
+};
+
+/**
+ * A piece whose per-session `note`, with a scalar default, is the output of a
+ * computation.
+ */
+const COMPUTED_NOTE_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import {",
+      "  computed,",
+      "  type Default,",
+      "  lift,",
+      "  pattern,",
+      "  type PerSession,",
+      "} from 'commonfabric';",
+      "const noteOf = lift(",
+      "  (n: number): PerSession<Default<string, ''>> => 'n is ' + n,",
+      ");",
+      "export default pattern<",
+      "  { n: number },",
+      "  { note: string; doubled: number }",
+      ">(({ n }) => ({ note: noteOf(n), doubled: computed(() => n * 2) }));",
+    ].join("\n"),
+  }],
+};
+
+/**
  * A piece that encloses another whose result is each session's own: the
  * inner pattern is instantiated at the session's scope, so every session
  * holds an instance of its result document.
@@ -130,6 +186,33 @@ const ENCLOSING_PROGRAM: RuntimeProgram = {
 };
 
 /**
+ * A piece with one derived output, `items`, a list of two rows computed from
+ * its `value`. The lift writes each row through `Writable.for(...).set()`,
+ * which stores it as a document of its own that carries neither a back-link
+ * nor a pattern pointer.
+ */
+const LIST_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { lift, pattern, Writable } from 'commonfabric';",
+      "type Row = { n: number };",
+      "const rowsOf = lift((value: number): Row[] => {",
+      "  const rows: unknown[] = [];",
+      "  for (const factor of [1, 2]) {",
+      "    rows.push(Writable.for<Row>(`row ${factor}`).set({ n: value * factor }));",
+      "  }",
+      "  return rows as Row[];",
+      "});",
+      "export default pattern<{ value: number }, { items: Row[] }>(",
+      "  ({ value }) => ({ items: rowsOf(value) }),",
+      ");",
+    ].join("\n"),
+  }],
+};
+
+/**
  * One demanded document: a watch root, or a document a selector reaches, at
  * the space's instance unless `scopeKey` names another, demanded by the
  * session `viewer` of alice unless `session` names another session or
@@ -161,6 +244,12 @@ describe("SpaceServer", () => {
 
   /** The pieces whose origin a serving runtime followed, and whether each ran. */
   let follows: Array<{ id: string; running: boolean }>;
+
+  /**
+   * The pattern identity a serving runtime's patterns route advertises for
+   * any origin a real follow asks about, or `undefined` to fetch as usual.
+   */
+  let advertised: string | undefined;
   const opened: { runtime: Runtime; manager: EmulatedStorageManager }[] = [];
 
   /** A runtime over the shared server, acting for `as`, that runs nothing. */
@@ -189,6 +278,7 @@ describe("SpaceServer", () => {
     demanded = [];
     followOutcome = undefined;
     follows = [];
+    advertised = undefined;
     // The demand is the documents each case names, as one session of alice's
     // demands them.
     (server as { demandForSpace: unknown }).demandForSpace = () =>
@@ -236,17 +326,27 @@ describe("SpaceServer", () => {
           storageManager: manager,
           servingPosture: true,
           experimental: { serverExecution: true },
+          fetch: (input, init) => {
+            const url = new URL(input instanceof Request ? input.url : input);
+            return advertised !== undefined &&
+                url.searchParams.has("identity")
+              ? Promise.resolve(new Response(advertised))
+              : fetch(input, init);
+          },
         });
         servingRuntime = runtime;
-        if (followOutcome !== undefined) {
-          stub(runtime.sourceReconciler, "reconcile", (cell) => {
-            follows.push({
-              id: cell.getAsNormalizedFullLink().id,
-              running: runtime.runner.isRunning(cell),
-            });
-            return Promise.resolve(followOutcome!);
+        const reconcile = runtime.sourceReconciler.reconcile.bind(
+          runtime.sourceReconciler,
+        );
+        stub(runtime.sourceReconciler, "reconcile", (cell, ...rest) => {
+          follows.push({
+            id: cell.getAsNormalizedFullLink().id,
+            running: runtime.runner.isRunning(cell),
           });
-        }
+          return followOutcome === undefined
+            ? reconcile(cell, ...rest)
+            : Promise.resolve(followOutcome);
+        });
         return Promise.resolve({
           runtime,
           dispose: async () => {
@@ -295,8 +395,8 @@ describe("SpaceServer", () => {
    * the store holds `out` as 6 with nothing running. Returns its root and
    * the document that holds `out`.
    */
-  const setUpTripler = async (): Promise<
-    { root: NormalizedFullLink; out: NormalizedFullLink }
+  const setUpTripler = async (origin?: string): Promise<
+    { root: NormalizedFullLink; out: NormalizedFullLink; identity: string }
   > => {
     const setup = openRuntime(setupSigner);
     const compiled = await setup.patternManager.compilePattern(
@@ -315,10 +415,18 @@ describe("SpaceServer", () => {
     );
     const tx = setup.edit();
     argument.withTx(tx).set({ value: 2 });
-    setup.run(tx, compiled, argument, result);
+    setup.run(
+      tx,
+      compiled,
+      argument,
+      result,
+      origin === undefined ? undefined : { sourceOrigin: origin },
+    );
     expect((await tx.commit().settled).error).toBeUndefined();
     await result.pull();
     const out = result.key("out").resolveAsCell().getAsNormalizedFullLink();
+    const identity = setup.patternManager.getArtifactEntryRef(compiled)!
+      .identity;
     setup.runner.stop(result);
     await setup.idle();
     await setup.storageManager.synced();
@@ -326,6 +434,7 @@ describe("SpaceServer", () => {
     return {
       root: result.getAsNormalizedFullLink(),
       out: { ...out, path: [] } as NormalizedFullLink,
+      identity,
     };
   };
 
@@ -335,6 +444,22 @@ describe("SpaceServer", () => {
     const argument = writer.getCell<{ value: number }>(
       space,
       "currency tripler argument",
+      { type: "object", properties: { value: { type: "number" } } },
+    );
+    await argument.sync();
+    const tx = writer.edit();
+    argument.withTx(tx).key("value").set(value);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await writer.storageManager.synced();
+    await closeLastRuntime();
+  };
+
+  /** Sets the list piece's `value`, as a runtime that runs nothing. */
+  const setListValue = async (value: number) => {
+    const writer = openRuntime(setupSigner);
+    const argument = writer.getCell<{ value: number }>(
+      space,
+      "currency list argument",
       { type: "object", properties: { value: { type: "number" } } },
     );
     await argument.sync();
@@ -592,7 +717,7 @@ describe("SpaceServer", () => {
           servable: 0,
           refused: {},
           servedFromStore: 0,
-          underived: 0,
+          plainRoots: 0,
           rearmed: 0,
           indexWakes: 0,
           expiryWakes: 0,
@@ -728,7 +853,7 @@ describe("SpaceServer", () => {
         await outIs(15);
       });
 
-      it("starts a recorded piece, and seeds the session, when a session demands an owned cell it holds no instance of, under `skip`", async () => {
+      it("starts a recorded piece, and seeds the session, when a session demands an owned cell with an object default it holds no instance of, under `skip`", async () => {
         host = newHost("skip");
         const setup = openRuntime(setupSigner);
         const compiled = await setup.patternManager.compilePattern(
@@ -901,6 +1026,151 @@ describe("SpaceServer", () => {
         expect(serves(root)).toBe(false);
       });
 
+      describe("with a piece that owns a per-session cell", () => {
+        /**
+         * Sets up `program` with `argument` as a runtime that then stops it,
+         * and returns its root and the document that holds `note`.
+         */
+        const setUpNote = async (
+          program: RuntimeProgram,
+          argument: Record<string, unknown>,
+        ): Promise<{ root: NormalizedFullLink; note: NormalizedFullLink }> => {
+          const setup = openRuntime(setupSigner);
+          const compiled = await setup.patternManager.compilePattern(program, {
+            space,
+          });
+          const input = setup.getCell<Record<string, unknown>>(
+            space,
+            "currency note argument",
+            compiled.argumentSchema,
+          );
+          const result = setup.getCell<{ doubled: number }>(
+            space,
+            "currency note result",
+            compiled.resultSchema,
+          );
+          const tx = setup.edit();
+          input.withTx(tx).set(argument);
+          setup.run(tx, compiled, input, result);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await result.pull();
+          const note = {
+            ...result.key("note" as never).resolveAsCell()
+              .getAsNormalizedFullLink(),
+            path: [],
+          } as NormalizedFullLink;
+          setup.runner.stop(result);
+          await setup.idle();
+          await setup.storageManager.synced();
+          await closeLastRuntime();
+          return { root: result.getAsNormalizedFullLink(), note };
+        };
+
+        /** What the session `session` of alice demands of the piece. */
+        const viewOf = (
+          piece: { root: NormalizedFullLink; note: NormalizedFullLink },
+          session: string,
+        ): Demanded[] => [
+          { link: piece.root, root: true, session },
+          {
+            link: piece.note,
+            root: false,
+            scopeKey: resolveScopeKey("session", {
+              principal: aliceSigner.did(),
+              sessionId: session,
+            }),
+            session,
+          },
+        ];
+
+        /**
+         * Serves the piece to alice's session `first` until it has settled
+         * and the session is seeded, parks the space, and has the next
+         * tenure leave the piece unstarted for that session.
+         */
+        const serveFirstSession = async (
+          piece: { root: NormalizedFullLink; note: NormalizedFullLink },
+        ) => {
+          await demand(...viewOf(piece, "first"));
+          await awaitEach(
+            cycles,
+            () =>
+              serves(piece.root) &&
+              host!.stats().demand.ownedDefaultSeeds > 0,
+          );
+          await settled();
+          await host!.spaceServer(space)!.park("test-park");
+          await touchSpace();
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.servedFromStore === 1,
+          );
+          expect(serves(piece.root)).toBe(false);
+        };
+
+        it("leaves a piece unstarted for a new session whose instance of a cell with a scalar default the store does not hold, under `skip`", async () => {
+          host = newHost("skip");
+          const piece = await setUpNote(NOTE_PROGRAM, { n: 2 });
+          await serveFirstSession(piece);
+          const { servable } = host.stats().currency;
+          const seeds = host.stats().demand.ownedDefaultSeeds;
+
+          await demand(
+            ...viewOf(piece, "first"),
+            ...viewOf(piece, "second"),
+          );
+
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.servable > servable,
+          );
+          await settled();
+          expect(serves(piece.root)).toBe(false);
+          expect(host.stats().currency.refused["absent-owned"]).toBeUndefined();
+          expect(host.stats().currency.rearmed).toBe(0);
+          expect(host.stats().demand.ownedDefaultSeeds).toBe(seeds);
+          expect(host.stats().currency.falseClean).toBe(0);
+        });
+
+        it("reads the default of a cell with a scalar default, in a session whose instance of it the store does not hold", async () => {
+          host = newHost("skip");
+          const piece = await setUpNote(NOTE_PROGRAM, { n: 2 });
+          await serveFirstSession(piece);
+
+          // A client in a session of its own, which holds no instance of
+          // the note, reads it through the piece's result.
+          const reader = openRuntime(aliceSigner);
+          const result = reader.getCellFromLink<{ note: string }>(piece.root);
+          await result.sync();
+          const note = result.key("note").resolveAsCell();
+          await note.sync();
+
+          expect(note.getAsNormalizedFullLink().scope).toBe("session");
+          expect(note.getRaw()).toBeUndefined();
+          expect(note.get()).toBe("");
+        });
+
+        it("starts a piece for a new session whose instance of a cell with a scalar default that a computation writes the store does not hold, under `skip`", async () => {
+          host = newHost("skip");
+          const piece = await setUpNote(COMPUTED_NOTE_PROGRAM, { n: 2 });
+          await serveFirstSession(piece);
+          const writers = selectCurrencyWriters(
+            await server.engineForSpace(space),
+            { space, id: piece.note.id },
+          );
+
+          await demand(
+            ...viewOf(piece, "first"),
+            ...viewOf(piece, "second"),
+          );
+
+          await awaitEach(cycles, () => serves(piece.root));
+          expect(writers).toEqual([piece.root.id]);
+          expect(piece.note.scope).toBe("session");
+          expect(host.stats().currency.refused["unvouched-instance"]).toBe(1);
+        });
+      });
+
       it("starts a recorded piece when a session demands an output it never vouched for, under `skip`", async () => {
         host = newHost("skip");
         const piece = await setUpTripler();
@@ -924,7 +1194,7 @@ describe("SpaceServer", () => {
         expect(host.stats().currency.rearmed).toBe(1);
       });
 
-      describe("with a demanded document that nothing derives", () => {
+      describe("with a demanded document a structure load starts no piece from", () => {
         /**
          * Writes, as a client, a document that carries neither a back-link
          * nor a pattern pointer, and returns its link.
@@ -933,7 +1203,7 @@ describe("SpaceServer", () => {
           const writer = openRuntime(setupSigner);
           const data = writer.getCell<{ title: string }>(
             space,
-            "currency underived data",
+            "currency plain data",
             { type: "object", properties: { title: { type: "string" } } },
           );
           await data.sync();
@@ -946,14 +1216,35 @@ describe("SpaceServer", () => {
           return link;
         };
 
-        it("parks it unloaded, as a load that finds no piece would, under `skip`", async () => {
+        /** Gives the document at `data` a `result` back-link to `root`. */
+        const linkToPiece = async (
+          data: NormalizedFullLink,
+          root: NormalizedFullLink,
+        ) => {
+          const writer = openRuntime(setupSigner);
+          const document = writer.getCellFromLink(data);
+          await document.sync();
+          const tx = writer.edit();
+          document.withTx(tx).setMetaRaw(
+            "result",
+            writer.getCellFromLink(root).getAsWriteRedirectLink({
+              includeSchema: true,
+            }),
+            rawMetaWriteAuthorization,
+          );
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await writer.storageManager.synced();
+          await closeLastRuntime();
+        };
+
+        it("parks it unloaded, as a load that finds no piece would, and brings it into the serving replica, under `skip`", async () => {
           host = newHost("skip");
           const data = await writeData();
 
           await demand({ link: data, root: true });
           await awaitEach(
             cycles,
-            () => host!.stats().currency.underived === 1,
+            () => host!.stats().currency.plainRoots === 1,
           );
           await settled();
 
@@ -961,6 +1252,175 @@ describe("SpaceServer", () => {
           expect(stats.structureLoadTerminal).toBe(0);
           expect(stats.currency.servedFromStore).toBe(0);
           expect(stats.currency.refused).toEqual({});
+          // A read that does not sync finds what the load's sync would have
+          // put in the replica.
+          expect(servingRuntime!.getCellFromLink(data).getRaw()).toEqual({
+            title: "typed",
+          });
+        });
+
+        it("loads it, and brings it into the serving replica, where syncing it for the park fails, under `skip`", async () => {
+          host = newHost("skip");
+          const data = await writeData();
+          await awaitEach(cycles, () => host?.spaceServer(space) !== undefined);
+          // The first sync of the document on the serving runtime fails, as
+          // the pull before the pass's loads makes it.
+          const runtime = servingRuntime!;
+          const cellFor = runtime.getCellFromLink.bind(runtime);
+          let failed = false;
+          using _sync = stub(
+            runtime,
+            "getCellFromLink",
+            ((...args: Parameters<typeof runtime.getCellFromLink>) => {
+              const cell = cellFor(...args);
+              if (failed || cell.getAsNormalizedFullLink().id !== data.id) {
+                return cell;
+              }
+              failed = true;
+              return new Proxy(cell, {
+                get: (target, property, receiver) =>
+                  property === "sync"
+                    ? () => Promise.reject(new Error("sync failed"))
+                    : Reflect.get(target, property, receiver),
+              });
+            }) as typeof runtime.getCellFromLink,
+          );
+
+          await demand({ link: data, root: true });
+          await awaitEach(
+            cycles,
+            () => host!.stats().structureLoadTerminal === 1,
+          );
+
+          expect(failed).toBe(true);
+          expect(host.stats().currency.plainRoots).toBe(1);
+          expect(runtime.getCellFromLink(data).getRaw()).toEqual({
+            title: "typed",
+          });
+        });
+
+        it("parks it unloaded where the space holds no instance of it, under `skip`", async () => {
+          host = newHost("skip");
+          const absent = {
+            ...await writeData(),
+            id: "of:currency-plain-absent",
+          } as NormalizedFullLink;
+
+          await demand({ link: absent, root: true });
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.plainRoots === 1,
+          );
+          await settled();
+
+          expect(host.stats().structureLoadTerminal).toBe(0);
+          expect(host.stats().currency.refused).toEqual({});
+        });
+
+        it("parks unloaded an element a lift writes in the loop's derivation, where the one piece recorded as writing it was marked, under `skip`", async () => {
+          host = newHost("skip");
+          const setup = openRuntime(setupSigner);
+          const compiled = await setup.patternManager.compilePattern(
+            LIST_PROGRAM,
+            { space },
+          );
+          const argument = setup.getCell<{ value: number }>(
+            space,
+            "currency list argument",
+            compiled.argumentSchema,
+          );
+          const result = setup.getCell<{ items: Array<{ n: number }> }>(
+            space,
+            "currency list result",
+            compiled.resultSchema,
+          );
+          const tx = setup.edit();
+          argument.withTx(tx).set({ value: 2 });
+          setup.run(tx, compiled, argument, result);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await result.pull();
+          const documentOf = (cell: { getAsNormalizedFullLink(): unknown }) =>
+            ({
+              ...cell.getAsNormalizedFullLink() as NormalizedFullLink,
+              path: [],
+            }) as NormalizedFullLink;
+          const root = result.getAsNormalizedFullLink();
+          const input = argument.getAsNormalizedFullLink().id;
+          const items = documentOf(result.key("items").resolveAsCell());
+          const element = documentOf(
+            result.key("items").key(0).resolveAsCell(),
+          );
+          setup.runner.stop(result);
+          await setup.idle();
+          await setup.storageManager.synced();
+          await closeLastRuntime();
+          expect(element.id).not.toBe(items.id);
+          expect(element.id.startsWith("computed:")).toBe(false);
+
+          // The serving loop runs the piece, whose derivation writes the
+          // element again for the new value.
+          const engine = await server.engineForSpace(space);
+          const stored = () =>
+            Engine.read(engine, { id: element.id as never, scopeKey: "space" })
+              ?.value;
+          await demand(
+            { link: root, root: true },
+            { link: items, root: false },
+            { link: element, root: false },
+          );
+          await awaitEach(cycles, () => serves(root));
+          await setListValue(3);
+          await awaitEach(cycles, () => valueEqual(stored(), { n: 3 }));
+          await settled();
+          await host.spaceServer(space)!.park("test-park");
+          // A write made through `Writable.for()` is outside the lift's
+          // declared surface, so the record names no writer of the element.
+          // This one records the piece as its one writer.
+          await server.storeCurrencyRecords(space, {
+            asOf: Engine.serverSeq(engine),
+            seen: [],
+            epoch: EPOCH,
+            records: [{
+              piece: root.id,
+              under: [],
+              vouched: true,
+              writes: [element.id],
+              owned: [],
+              slices: [{
+                key: "space",
+                vouched: true,
+                reads: [{
+                  space,
+                  id: input,
+                  scopeKey: "space",
+                  derived: false,
+                }],
+                vouches: [element.id],
+              }],
+            }],
+          });
+          expect(selectCurrencyWriters(engine, { space, id: element.id }))
+            .toEqual([root.id]);
+
+          // A viewer demands the element alone, and the next commit marks the
+          // piece that writes it.
+          const before = structuredClone(host.stats());
+          demanded = [{ link: element, root: true }];
+          await setListValue(4);
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.plainRoots === 1,
+          );
+          await settled();
+
+          expect(serves(root)).toBe(false);
+          expect((await recordOf(root))?.mark).toBeGreaterThan(0);
+          expect(host.stats().structureLoadTerminal).toBe(
+            before.structureLoadTerminal,
+          );
+          expect(host.stats().currency.refused).toEqual(
+            before.currency.refused,
+          );
         });
 
         it("loads it once a client commits to it, and starts the piece it then leads to, under `skip`", async () => {
@@ -970,27 +1430,66 @@ describe("SpaceServer", () => {
           await demand({ link: data, root: true });
           await awaitEach(
             cycles,
-            () => host!.stats().currency.underived === 1,
+            () => host!.stats().currency.plainRoots === 1,
           );
           expect(serves(piece.root)).toBe(false);
 
-          const writer = openRuntime(setupSigner);
-          const document = writer.getCellFromLink(data);
-          await document.sync();
-          const tx = writer.edit();
-          document.withTx(tx).setMetaRaw(
-            "result",
-            writer.getCellFromLink(piece.root).getAsWriteRedirectLink({
-              includeSchema: true,
-            }),
-            rawMetaWriteAuthorization,
-          );
-          expect((await tx.commit().settled).error).toBeUndefined();
-          await writer.storageManager.synced();
-          await closeLastRuntime();
+          await linkToPiece(data, piece.root);
 
           await awaitEach(cycles, () => serves(piece.root));
           expect(host.stats().structureLoadRearmed).toBe(1);
+        });
+
+        it("loads it, and starts the piece it then leads to, where a client commits to it while the judgment runs, under `skip`", async () => {
+          host = newHost("skip");
+          const piece = await setUpTripler();
+          const data = await writeData();
+          await awaitEach(cycles, () => host?.spaceServer(space) !== undefined);
+          const loop = host.spaceServer(space)!;
+          // Resolves once the serving loop's feed holds a commit to `data`.
+          const { promise: fed, resolve: feed } = Promise.withResolvers<void>();
+          const enqueue = loop.enqueueCommit.bind(loop);
+          using _feed = stub(loop, "enqueueCommit", (notice) => {
+            enqueue(notice);
+            if (notice.writes.some((write) => write.id === data.id)) feed();
+          });
+          const judge = server.judgeCurrencyRoots.bind(server);
+          let raced = false;
+          using _judge = stub(
+            server,
+            "judgeCurrencyRoots",
+            async (...args: Parameters<typeof server.judgeCurrencyRoots>) => {
+              const judged = await judge(...args);
+              if (!raced && judged.plain?.includes(data.id) === true) {
+                raced = true;
+                await linkToPiece(data, piece.root);
+                await fed;
+              }
+              return judged;
+            },
+          );
+
+          await demand({ link: data, root: true });
+          await awaitEach(cycles, () => serves(piece.root));
+
+          expect(raced).toBe(true);
+          expect(host.stats().structureLoadRearmed).toBe(0);
+        });
+
+        it("loads it, and parks it once the load finds no piece, where its demand is narrower than the space, under `skip`", async () => {
+          host = newHost("skip");
+          const data = await writeData();
+
+          await demand({
+            link: { ...data, scope: "user" } as NormalizedFullLink,
+            root: true,
+          });
+          await awaitEach(
+            cycles,
+            () => host!.stats().structureLoadTerminal === 1,
+          );
+
+          expect(host.stats().currency.plainRoots).toBe(0);
         });
 
         it("loads it, and parks it once the load finds no piece, under `record`", async () => {
@@ -1003,7 +1502,7 @@ describe("SpaceServer", () => {
             () => host!.stats().structureLoadTerminal === 1,
           );
 
-          expect(host.stats().currency.underived).toBe(1);
+          expect(host.stats().currency.plainRoots).toBe(1);
         });
       });
 
@@ -1138,6 +1637,34 @@ describe("SpaceServer", () => {
           await awaitEach(cycles, () => serves(piece.root));
 
           expect(serves(piece.root)).toBe(true);
+        });
+
+        it("leaves a piece created from its origin unstarted when its first follow finds what it runs, under `skip`", async () => {
+          // The first tenure does not follow the origin, as a tenure that
+          // never starts the piece does not. The second follows it for real,
+          // and finds the source the piece was created with: creation
+          // recorded that conclusion, so the follow writes nothing to the
+          // result document every slice of the piece read.
+          followOutcome = "current";
+          host = newHost("skip");
+          const piece = await setUpTripler("system:system/probe/probe.tsx");
+          await serveAndPark(piece);
+          followOutcome = undefined;
+          advertised = piece.identity;
+          follows.length = 0;
+
+          await touchSpace();
+          await awaitEach(
+            cycles,
+            () =>
+              host!.stats().currency.servedFromStore === 1 &&
+              follows.length === 1,
+          );
+          await settled();
+
+          expect(follows).toEqual([{ id: piece.root.id, running: false }]);
+          expect(serves(piece.root)).toBe(false);
+          expect(await recordOf(piece.root)).toEqual({ mark: 0, epoch: EPOCH });
         });
       });
     });

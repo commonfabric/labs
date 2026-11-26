@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { WatchSetResult } from "../v2.ts";
 import { Server } from "../v2/server.ts";
@@ -9,6 +8,12 @@ import {
   request,
   type WirePeer,
 } from "./support/wire-peer.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-anonymous-demand";
 const SHARED = "of:anonymous-demand-shared";

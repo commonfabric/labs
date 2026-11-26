@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -12,6 +11,7 @@ import {
   parseModule,
 } from "../transformed-ast.ts";
 import { validateSource } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HEAD = `/// <cts-enable />
 import { pattern, str, UI } from "commonfabric";

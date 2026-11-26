@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { ImageData } from "commonfabric";
 import { contentParts } from "./content-parts.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const image = (fields: Partial<ImageData>): ImageData => ({
   id: "img",

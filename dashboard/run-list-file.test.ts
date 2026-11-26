@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import type { GitHubRun } from "./github-runs.ts";
 import { RunListFile, type SavedHead } from "./run-list-file.ts";
+import { afterEach, beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 const NOW = Date.UTC(2026, 0, 2);
 

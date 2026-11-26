@@ -6,6 +6,7 @@ import { Identity } from "@commonfabric/identity";
 import { type JSONSchema, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/async/defer";
+import { test } from "@commonfabric/test-support/test";
 
 import app from "../../toolshed/app.ts";
 
@@ -27,7 +28,7 @@ const createRuntime = (identity: Identity, base: URL) =>
     }),
   });
 
-Deno.test(
+test(
   "memory v2 runtime re-establishes subscriptions after server restart",
   async () => {
     const identity = await Identity.fromPassphrase(

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
@@ -13,6 +12,12 @@ import {
   ownerReleaseByIntentSignedBytes,
   type SignedOwnerReleaseByIntentRequest,
 } from "@commonfabric/memory/v2/cfc-owner-release-by-intent";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { ACLManager } from "../../src/acl-manager.ts";
 import {

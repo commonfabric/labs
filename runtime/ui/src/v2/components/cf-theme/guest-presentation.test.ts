@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { GUEST_BASE_SHEET } from "./guest-base-sheet.ts";
 import {
@@ -7,6 +6,7 @@ import {
   guestThemeCss,
   themeVariableNames,
 } from "./guest-presentation.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("guest-presentation", () => {
   describe("themeVariableNames()", () => {

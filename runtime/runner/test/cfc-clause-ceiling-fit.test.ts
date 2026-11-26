@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   atomsOutsideCeiling,
@@ -8,6 +7,7 @@ import {
 } from "../src/cfc/observation.ts";
 import { normalizeClause } from "../src/cfc/clause.ts";
 import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Epic A2 (docs/history/plans/cfc-future-work-implementation.md): the ceiling-fit
 // check becomes CNF clause subsumption (spec §8.10.3). The load-bearing case

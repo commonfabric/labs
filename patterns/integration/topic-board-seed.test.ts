@@ -1,10 +1,10 @@
 /** Verifies the child seeder's persisted board through a fresh reader. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { env } from "@commonfabric/integration";
 import { isCell } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   initializePiecesController,
   type PieceController,

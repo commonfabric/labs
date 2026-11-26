@@ -12,7 +12,6 @@
  * handed still has to produce a value.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -21,6 +20,7 @@ import {
   ProblematicValue,
 } from "@/codec-common";
 import { BigIntCodec } from "@/codec-json/BigIntCodec.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("BigIntCodec", () => {
   const codec = new BigIntCodec();

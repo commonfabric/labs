@@ -2,6 +2,7 @@ import { assertEquals, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 import { applyCommit, close, open, ProtocolError, read } from "../v2/engine.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const createEngine = async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
@@ -9,7 +10,7 @@ const createEngine = async () => {
   return { engine, path };
 };
 
-Deno.test("memory v2 engine drops the records of a currency index laid out before a slice answered for slots at another key", async () => {
+test("memory v2 engine drops the records of a currency index laid out before a slice answered for slots at another key", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const raw = await new Database(path);
   raw.exec(`
@@ -49,7 +50,7 @@ Deno.test("memory v2 engine drops the records of a currency index laid out befor
   }
 });
 
-Deno.test("memory v2 engine drops a currency index laid out one row per piece", async () => {
+test("memory v2 engine drops a currency index laid out one row per piece", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const raw = await new Database(path);
   raw.exec(`
@@ -109,7 +110,7 @@ Deno.test("memory v2 engine drops a currency index laid out one row per piece", 
   }
 });
 
-Deno.test("memory v2 engine bootstraps the revision schema", async () => {
+test("memory v2 engine bootstraps the revision schema", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -162,7 +163,7 @@ Deno.test("memory v2 engine bootstraps the revision schema", async () => {
   }
 });
 
-Deno.test("memory v2 engine drops the observation tables and never backfills scheduler_basis", async () => {
+test("memory v2 engine drops the observation tables and never backfills scheduler_basis", async () => {
   // Server-execution v2 Phase 1 stage C.2 (serving-loop.md §3b): a store that
   // carries any of the SEVEN observation-era tables — scheduler_context_floor
   // included, the one main's old CORE_SCHEDULER_TABLES constant omitted (D6) —
@@ -211,7 +212,7 @@ Deno.test("memory v2 engine drops the observation tables and never backfills sch
   }
 });
 
-Deno.test("memory v2 engine replays identical (sessionId, localSeq) commits and rejects mismatched originals", async () => {
+test("memory v2 engine replays identical (sessionId, localSeq) commits and rejects mismatched originals", async () => {
   const { engine, path } = await createEngine();
 
   try {

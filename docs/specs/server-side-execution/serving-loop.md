@@ -394,22 +394,35 @@ running, whether the store can serve it as it stands. A root that is no
 result document is judged as the piece its `result` back-links lead to,
 which is the piece a load of it would start, and a `computed:` root that
 one recorded piece writes is judged as that piece with no back-link read.
-A root whose stored document carries neither a back-link nor a pattern
-pointer starts no piece when loaded: one that one recorded piece writes is
-judged as that piece, with the root's own instance among the instances it
-is to vouch for, and one nothing derives (no record names it as written,
-no recorded slice read it as derived, and no `derived` commit wrote its
-shared instance) is **underived**. Under `skip` and `start-upstream` an
-underived root is parked as its load would park it, terminal and watching
-the document (a commit to it re-arms it, §3), without the load, unless
-a commit to the document was admitted while the judgment ran.
+A space-scoped root that is no `computed:` document, and whose stored
+document is absent or carries neither a `result` field nor a pattern
+pointer (tested as the load tests it, `asPatternIdentityRef()`), starts no
+piece when loaded, whatever writes it, and is **plain**. Under `skip` and
+`start-upstream` a plain root is parked as its load would park it, terminal
+and watching the document (a commit to it re-arms it, §3), without the
+load, unless a commit to the document was admitted while the judgment ran.
+Its document is still synced into the serving replica, as the load's first
+step syncs it, and a root whose sync fails is loaded in the same pass.
+Whether a plain root's stored value is current is not judged, since a load
+would not change it: a document a recorded piece maintains is current once
+that piece runs, and one written by something the index cannot account
+for, a client or a lift's write through `Writable.for(...).set()`, is read
+as the store holds it until its writer runs for another reason. That
+staleness is accepted in preference to starting a writer for each such
+document. A root demanded at a narrower scope is loaded.
 The store can serve a root
 when the piece's `space` slice is clean and of the current epoch, and every
 demand row of every session whose id the piece writes or owns, or a recorded
 piece beneath it does, is vouched for: each slice of the owner the row's
 instance is resolved under, the one at its scope key and each broader one,
 is clean and of the epoch, with a vouch row in the slice at that key for a
-written id, and a live document for an owned cell. A written instance that a
+written id, and a live document for an owned cell whose default is not a
+scalar. A reader of an owned cell's absent instance reads its schema
+default, which is what the arrival seed writes there, and a write to a
+scalar replaces it whole, so an absent instance of a cell with a scalar
+default needs no seed to be current. An object or array default is not
+taken so, since a first write into part of an absent instance creates it
+without the rest of the default. A written instance that a
 run at another key wrote, as the redirect a viewer's run leaves at the
 space's key is, is answered for by the slice of that run. For each session
 that demands the instance, each row a slice of the session's own chain holds
@@ -1413,8 +1426,12 @@ executing:
   keeps, for each registered instance, the spaces that read it and what it
   last told them, the instance's head and whether a piece there computes
   it and does not answer for it at present, and the reading index keeps
-  what it was last told. A slice is stored
-  marked `2` where its read is behind that head or the space cannot be
+  what it was last told. A document no recorded piece writes is an input
+  to its readers, in the space and across spaces, marking them only when
+  it changes, unless no computation may have produced it yet: a derived
+  document the store holds no instance of, or a cell of a piece (its
+  `result` back-link names the piece) the index holds no record of. A
+  slice is stored marked `2` where its read is behind that head or the space cannot be
   asked, and `1` where the instance is stale there. A judgment that may rest
   on such a slice first pulls, from each space the slices its demand rows
   are resolved under read, what changed since its last pull, and the space
@@ -2546,7 +2563,10 @@ views under server execution runs no piece and follows nothing, the space
 root included; the serving runtime is the opener of every piece it serves.
 Tenure activation owes its space the EXISTENCE of a root, without following
 that root's source; the root's origin is followed on the first start of the
-root, as any piece's is. A served wish explicitly opens the runtime-supplied
+root, as any piece's is. A root the activation creates is recorded as
+following its origin, since creating it ran what the origin offered
+(piece-source-lifecycle.md), so that first follow writes nothing where the
+origin still offers the same source. A served wish explicitly opens the runtime-supplied
 sidecars it needs through `openSidecarSurface` and `SourceReconciler.open`;
 existing sidecars follow their origins on that open. The SWAP is the
 server's: a pattern-pointer
@@ -2853,7 +2873,7 @@ demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
 demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
 structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, currency:
 {recordsStored, unvouched, judged, servable, refused, servedFromStore,
-underived, rearmed, indexWakes, expiryWakes, falseClean, carried,
+plainRoots, rearmed, indexWakes, expiryWakes, falseClean, carried,
 carriedRefused, heldUpstream, upstreamAbandoned},
 settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
@@ -3063,9 +3083,9 @@ mode;
 `servedFromStore` the roots the `skip` and `start-upstream` modes left
 unloaded on it, once each time a root is first left; `rearmed` the roots so left that were then
 loaded, because an input marked the piece or a session's demand reached an
-instance it does not vouch for; `underived` the roots a judgment found
-nothing derives (§1), which the `skip` and `start-upstream` modes park
-without a load; `falseClean` the pieces the index held
+instance it does not vouch for; `plainRoots` the roots a judgment found
+plain (§1), under every mode, which the `skip` and `start-upstream` modes
+park without a load and `record` loads; `falseClean` the pieces the index held
 clean that wrote an instance they answered for again, to a value other than
 the one it held, with no input of theirs changed, each one a judgment that
 would have served a stale value. An instance a slice vouches for at its own

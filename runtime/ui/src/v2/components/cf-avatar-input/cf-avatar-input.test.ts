@@ -2,9 +2,14 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { CFButton } from "../cf-button/index.ts";
 import {
   AVATAR_PIXELS,

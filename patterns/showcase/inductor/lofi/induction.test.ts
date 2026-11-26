@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -36,6 +35,7 @@ import {
   verdictsOf,
 } from "./induction.ts";
 import { type CanonicalRule, checkRule } from "../shared/rule-grammar.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A rule in canonical form, failing the test when it is refused. */
 function rule(field: string, pattern: string, predicts = true): CanonicalRule {

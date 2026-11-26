@@ -5,9 +5,9 @@
  * `one-statement-per-kind` reports and which of its five messages it gives.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import plugin from "./lint-import-list.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const RULE = "cf-import-list/one-statement-per-kind";
 

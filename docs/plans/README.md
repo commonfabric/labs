@@ -14,8 +14,9 @@ a record: archive it to `docs/history/plans/` following the procedure in
   maps the runtime onto the CFC specification's abstract surface (§14.2.2):
   labeled values, references, node contexts, trusted and untrusted transitions
   and their operations. For each it says where the runtime matches, duplicates
-  or drifts from the spec, lists the cleanups that line it back up, and holds
-  the open questions for the specification's author.
+  or drifts from the spec, lists the cleanups that line it back up, and records
+  provisional answers to the questions it raised, for the specification's
+  author to confirm.
 - [Skills and MCP servers in the fabric](skills-and-mcp-bridges.md) brings any
   Agent Skill or MCP server into the fabric through an importer at the edge
   that emits only existing records: a wrapper pattern whose verbs are the
@@ -101,9 +102,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   gain one.
 
 - [Shuffled test order: what is left to build](test-order-shuffle.md) carries
-  the piece the shuffle does not yet have: a shuffle inside this repository's
-  own `describe()` and `it()`, which every test file already resolves to,
-  reordering the cases inside a file that `deno test --shuffle` leaves in
+  the piece the shuffle does not yet have: a shuffle inside the test module
+  every test file registers its tests through, reordering the cases inside a file that `deno test --shuffle` leaves in
   place. Its first stage, a scheduled run under the next day's seed a day
   ahead, is built.
 - [Security and privacy roadmap](security-privacy-roadmap.md) gives an overview

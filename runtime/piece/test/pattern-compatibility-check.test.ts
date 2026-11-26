@@ -6,7 +6,6 @@
  * intact.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { spy } from "@std/testing/mock";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -28,6 +27,12 @@ import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema"
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { readStoredCfcMetadata } from "@commonfabric/runner/cfc";
 import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
 const signer = await Identity.fromPassphrase("pattern compatibility check");

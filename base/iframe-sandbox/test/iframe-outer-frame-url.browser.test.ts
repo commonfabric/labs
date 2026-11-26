@@ -7,6 +7,7 @@ import {
   ContextShim,
   waitForContextValue,
 } from "./utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // The outer frame, as a host serves it from a URL of its own: the outer
 // frame's script as it stands, loaded by URL, and no `data-host-origin`, so
@@ -48,7 +49,7 @@ function place(
 const frameOf = (element: CommonIframeSandboxElement) =>
   element.accessForTestingOnly.iframeRef.value!;
 
-Deno.test("an outer frame served from a URL loads the guest and carries its port", async () => {
+test("an outer frame served from a URL loads the guest and carries its port", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({ a: 1 });
@@ -65,7 +66,7 @@ Deno.test("an outer frame served from a URL loads the guest and carries its port
   }
 });
 
-Deno.test("without a URL the outer frame is inlined as srcdoc", async () => {
+test("without a URL the outer frame is inlined as srcdoc", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({ a: 1 });
@@ -81,7 +82,7 @@ Deno.test("without a URL the outer frame is inlined as srcdoc", async () => {
   }
 });
 
-Deno.test("a URL that arrives after the frame was inlined replaces the frame and loads the guest again", async () => {
+test("a URL that arrives after the frame was inlined replaces the frame and loads the guest again", async () => {
   cleanupFixtures();
   try {
     // Each load of the guest adds one, so the count is the number of frames
@@ -116,7 +117,7 @@ Deno.test("a URL that arrives after the frame was inlined replaces the frame and
   }
 });
 
-Deno.test("a change from one URL to another replaces the frame rather than navigating it", async () => {
+test("a change from one URL to another replaces the frame rather than navigating it", async () => {
   cleanupFixtures();
   try {
     // The same document under a second URL. A frame navigated from one to
@@ -146,7 +147,7 @@ Deno.test("a change from one URL to another replaces the frame rather than navig
   }
 });
 
-Deno.test("the outer frame's URL cannot be set from markup", async () => {
+test("the outer frame's URL cannot be set from markup", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({ a: 1 });

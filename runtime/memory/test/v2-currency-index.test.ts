@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { type Stub, stub } from "@std/testing/mock";
 import {
   advanceCurrencyCursor,
@@ -11,7 +10,6 @@ import {
   type CurrencySliceRecord,
   dropUnreadCurrencyImports,
   forgetCurrencySource,
-  isUnderivedDocument,
   judgeCurrencyRoots,
   pullCurrencyExports,
   registerCurrencyReads,
@@ -24,6 +22,12 @@ import {
   storeCurrencyRecords,
 } from "../v2/currency-index.ts";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   applyCommit,
   applyWaveCommit,
@@ -119,6 +123,8 @@ describe("currency-index", () => {
     /** Ids the piece writes and vouches for the shared instance of. */
     produces?: string[];
     owned?: string[];
+    /** Ids among `owned` an absent instance of which reads as its default. */
+    absentAsDefault?: string[];
     vouches?: Array<{ id: string; scopeKey: string }>;
     slices?: CurrencySliceRecord[];
     /** The time the `space` slice expires at. */
@@ -181,6 +187,8 @@ describe("currency-index", () => {
       vouched: parts.vouched ?? true,
       writes: [...(parts.writes ?? []), ...(parts.produces ?? [])],
       owned: parts.owned ?? [],
+      ...(parts.absentAsDefault !== undefined &&
+        { absentAsDefault: parts.absentAsDefault }),
       ...(parts.followsOrigin === true && { followsOrigin: true }),
       slices: [...slices.values()],
     };
@@ -655,8 +663,16 @@ describe("currency-index", () => {
       expect(markOf("of:piece")).toBe(2);
     });
 
-    it("stores marked `1` a piece that read a derived document no recorded piece writes", () => {
+    it("stores clean a piece that read a derived document no recorded piece writes, which holds a value", () => {
       const asOf = write("computed:b");
+
+      store(asOf, [record("of:pieceC", { reads: [derived("computed:b")] })]);
+
+      expect(markOf("of:pieceC")).toBe(0);
+    });
+
+    it("stores marked `1` a piece that read a derived document no recorded piece writes and no computation has produced", () => {
+      const asOf = write("of:pieceC");
 
       const stored = store(asOf, [
         record("of:pieceC", { reads: [derived("computed:b")] }),
@@ -666,8 +682,28 @@ describe("currency-index", () => {
       expect(stored.blockedBy).toEqual([]);
     });
 
+    it("stores marked `1` a piece that read, at no one instance, a derived document of which the store holds no instance", () => {
+      const asOf = write("of:pieceC");
+
+      store(asOf, [
+        record("of:pieceC", { reads: [derived("computed:b", ANY_INSTANCE)] }),
+      ]);
+
+      expect(markOf("of:pieceC")).toBe(1);
+    });
+
+    it("stores clean a piece that read, at no one instance, a derived document no recorded piece writes, of which the store holds an instance", () => {
+      const asOf = write("of:pieceC", { id: "computed:b", scope: "user" });
+
+      store(asOf, [
+        record("of:pieceC", { reads: [derived("computed:b", ANY_INSTANCE)] }),
+      ]);
+
+      expect(markOf("of:pieceC")).toBe(0);
+    });
+
     it("clears a piece marked `1` once the piece that writes its input is stored clean", () => {
-      const asOf = write("computed:b");
+      const asOf = write("of:pieceC");
       store(asOf, [record("of:pieceC", { reads: [derived("computed:b")] })]);
       expect(markOf("of:pieceC")).toBe(1);
 
@@ -870,7 +906,7 @@ describe("currency-index", () => {
     });
 
     it("settles a piece an earlier batch stored with one that names it and writes its input", () => {
-      const asOf = write("computed:b", "computed:c");
+      const asOf = write("computed:c");
       store(asOf, [
         record("of:pieceC", {
           reads: [derived("computed:b")],
@@ -896,8 +932,8 @@ describe("currency-index", () => {
       expect([markOf("of:pieceB"), markOf("of:pieceC")]).toEqual([0, 0]);
     });
 
-    it("leaves marked `1` a named piece of an earlier batch that reads a document no record writes", () => {
-      const asOf = write("computed:b", "computed:c", "computed:z");
+    it("leaves marked `1` a named piece of an earlier batch that reads a document no record writes and no computation has produced", () => {
+      const asOf = write("computed:c");
       store(asOf, [
         record("of:pieceC", {
           reads: [derived("computed:b"), derived("computed:z")],
@@ -1810,107 +1846,23 @@ describe("currency-index", () => {
         .toBe("of:piece");
     });
 
-    it("returns the one piece recorded as writing a document whose id is no computed one", () => {
-      store(0, [record("of:piece", { writes: ["of:element"] })]);
+    it("returns `undefined` for a document that is no computed one, though one piece is recorded as writing it", () => {
+      store(0, [record("of:piece", { writes: ["of:argument"] })]);
 
-      expect(selectCurrencyDeriver(engine, { space: SPACE, id: "of:element" }))
-        .toBe("of:piece");
+      expect(selectCurrencyDeriver(engine, { space: SPACE, id: "of:argument" }))
+        .toBeUndefined();
     });
 
-    it("returns `undefined` for a document that no piece, or more than one, is recorded as writing", () => {
+    it("returns `undefined` for a computed document that no piece, or more than one, is recorded as writing", () => {
       store(0, [
-        record("of:piece", { writes: ["computed:shared", "of:shared"] }),
-        record("of:other", { writes: ["computed:shared", "of:shared"] }),
+        record("of:piece", { writes: ["computed:shared"] }),
+        record("of:other", { writes: ["computed:shared"] }),
       ]);
 
       expect([
         selectCurrencyDeriver(engine, { space: SPACE, id: "computed:shared" }),
-        selectCurrencyDeriver(engine, { space: SPACE, id: "of:shared" }),
         selectCurrencyDeriver(engine, { space: SPACE, id: "computed:none" }),
-        selectCurrencyDeriver(engine, { space: SPACE, id: "of:none" }),
-      ]).toEqual([undefined, undefined, undefined, undefined]);
-    });
-
-    it("returns `undefined` for a cell a piece owns and does not write", () => {
-      store(0, [record("of:piece", { owned: ["of:state"] })]);
-
-      expect(selectCurrencyDeriver(engine, { space: SPACE, id: "of:state" }))
-        .toBeUndefined();
-    });
-  });
-
-  describe("isUnderivedDocument()", () => {
-    const underived = (id: string) =>
-      isUnderivedDocument(engine, { space: SPACE, id });
-
-    it("returns `true` for a document clients wrote that no record names", () => {
-      write("of:data");
-      store(0, [record("of:piece", { reads: [input("of:data")] })]);
-
-      expect(underived("of:data")).toBe(true);
-    });
-
-    it("returns `false` for a document whose id says a computation derives it", () => {
-      write("computed:value");
-
-      expect(underived("computed:value")).toBe(false);
-    });
-
-    it("returns `false` for a document a recorded piece writes", () => {
-      write("of:element");
-      store(0, [record("of:piece", { writes: ["of:element"] })]);
-
-      expect(underived("of:element")).toBe(false);
-    });
-
-    it("returns `false` for a document a recorded slice read as one a computation writes", () => {
-      // The recording runtime knows a document as derived while a computation
-      // registered there writes it, whether or not any record names that
-      // computation's piece.
-      write("of:element");
-      store(0, [record("of:reader", { reads: [derived("of:element")] })]);
-
-      expect(underived("of:element")).toBe(false);
-    });
-
-    describe("for a document a serving loop's derivation wrote", () => {
-      let holder: string;
-
-      beforeEach(() => {
-        setServerExecutionConfig(true);
-        holder = executionLeaseHolder(`service:${SPACE}`);
-        engine.executionLeases.acquire(SPACE, holder);
-      });
-
-      afterEach(() => {
-        resetServerExecutionConfig();
-      });
-
-      it("returns `false` after that derivation, though clients wrote it before", () => {
-        write("of:element");
-        expect(underived("of:element")).toBe(true);
-        localSeq += 1;
-
-        applyWaveCommit(engine, {
-          sessionId: holder,
-          space: SPACE,
-          commitClass: "derived",
-          holder,
-          commit: {
-            localSeq,
-            reads: { confirmed: [], pending: [] },
-            operations: [{
-              op: "set",
-              id: "of:element",
-              value: { value: { n: localSeq } },
-            }],
-          },
-          annotations: [{ op: 0 }],
-          waveBasis: { basisSeq: serverSeq(engine), rebasedHeads: [] },
-        });
-
-        expect(underived("of:element")).toBe(false);
-      });
+      ]).toEqual([undefined, undefined]);
     });
   });
 
@@ -2060,6 +2012,69 @@ describe("currency-index", () => {
           { id: "of:state", scopeKey: "session:alice:one" },
         ]),
       ).toEqual([]);
+    });
+
+    it("returns a root when the store holds no instance of a demanded owned cell that reads as its default while absent", () => {
+      storeVouching({ owned: ["of:state"], absentAsDefault: ["of:state"] });
+
+      expect(
+        judge(["of:piece"], [
+          ROOT_ROW,
+          { id: "of:state", scopeKey: "session:alice:one" },
+        ]),
+      ).toEqual(["of:piece"]);
+    });
+
+    it("refuses a root for an absent owned cell that reads as its default while absent, when a computation of the piece writes it", () => {
+      storeVouching({
+        writes: ["computed:out", "of:state"],
+        owned: ["of:state"],
+        absentAsDefault: ["of:state"],
+      });
+
+      expect(
+        refusals(["of:piece"], [
+          ROOT_ROW,
+          { id: "of:state", scopeKey: "session:alice:one" },
+        ]),
+      ).toEqual({ "of:piece": "unvouched-instance" });
+    });
+
+    it("refuses a root for an absent owned cell that reads as its default while absent for one owner and not for another", () => {
+      const asOf = storeVouching({
+        owned: ["of:state"],
+        absentAsDefault: ["of:state"],
+      });
+      store(asOf, [
+        record("of:nested", { under: ["of:piece"], owned: ["of:state"] }),
+      ]);
+
+      expect(
+        refusals(["of:piece"], [
+          ROOT_ROW,
+          { id: "of:state", scopeKey: "session:alice:one" },
+        ]),
+      ).toEqual({ "of:piece": "absent-owned" });
+    });
+
+    it("refuses a root for an absent owned cell that reads as its default while absent, when a slice the row is resolved under is marked", () => {
+      storeVouching({
+        owned: ["of:state"],
+        absentAsDefault: ["of:state"],
+        slices: [{
+          key: "session:alice:one",
+          vouched: false,
+          reads: [],
+          vouches: [],
+        }],
+      });
+
+      expect(
+        refusals(["of:piece"], [
+          ROOT_ROW,
+          { id: "of:state", scopeKey: "session:alice:one" },
+        ]),
+      ).toEqual({ "of:piece": "owner-not-clean" });
     });
 
     it("returns a root when the store holds the demanded instance of an owned cell", () => {
@@ -3299,12 +3314,14 @@ describe("currency-index", () => {
         expect(pull()).toEqual([]);
       });
 
-      it("returns stale what a piece computes, once the source's index starts over with its records dropped", () => {
+      it("returns no change to what a piece computed, once the source's index starts over with its records dropped", () => {
         // What `open()` leaves of an index it drops the records of: the rows
-        // the store tells its readers, and no cursor.
+        // the store tells its readers, and no cursor. The instance is then
+        // one no recorded piece writes, which holds a value, and is read as
+        // an input.
 
         storeReading("of:piece", "computed:far");
-        const asOf = storeProducer();
+        storeProducer();
         pull();
         source.database.exec(`
           DELETE FROM currency_slice;
@@ -3323,12 +3340,7 @@ describe("currency-index", () => {
           }),
         });
 
-        expect(pulled.entries).toEqual([{
-          id: "computed:far",
-          scopeKey: "space",
-          head: asOf,
-          stale: true,
-        }]);
+        expect(pulled.entries).toEqual([]);
       });
     });
 
@@ -3401,14 +3413,14 @@ describe("currency-index", () => {
         expect(movedSince(marked)).toEqual([SPACE]);
       });
 
-      it("returns a space that registered an instance a piece no longer writes", () => {
+      it("returns no space for an instance a piece no longer writes, which holds what the piece wrote", () => {
         const asOf = storeProducer();
         register("computed:far");
         const before = position();
 
         storeSource(asOf, [record("of:producer")]);
 
-        expect(movedSince(before)).toEqual([SPACE]);
+        expect(movedSince(before)).toEqual([]);
       });
     });
 
@@ -3459,6 +3471,155 @@ describe("currency-index", () => {
         pull();
 
         expect(markOf("of:piece")).toBe(0);
+      });
+    });
+
+    describe("with instances of the source a serving loop wrote that no recorded piece writes", () => {
+      // What wrote such an instance is something the source's index has no
+      // record of, so it is read as an input. `of:owned` is a cell of
+      // `of:owner`, holding the `result` back-link its piece's setup writes.
+
+      const OWNER = "of:owner";
+      const OWNED = "of:owned";
+      let holder: string;
+
+      beforeEach(() => {
+        setServerExecutionConfig(true);
+        holder = executionLeaseHolder(`service:${SOURCE}`);
+        source.executionLeases.acquire(SOURCE, holder);
+      });
+
+      afterEach(() => {
+        resetServerExecutionConfig();
+      });
+
+      /**
+       * Commits to the source a serving loop's commit that writes `id`, a
+       * value where `produced` is `true` and the back-link alone, as setup
+       * leaves a cell no computation has written yet, where it is `false`.
+       * Returns the commit's seq.
+       */
+      const serve = (id: string, produced = true): number => {
+        localSeq += 1;
+        return applyWaveCommit(source, {
+          sessionId: holder,
+          space: SOURCE,
+          commitClass: "derived",
+          holder,
+          commit: {
+            localSeq,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set" as const,
+              id,
+              value: {
+                ...(produced && { value: { n: localSeq } }),
+                ...(id === OWNED &&
+                  { result: { "/": { "link@1": { id: OWNER, path: [] } } } }),
+              },
+            }],
+          },
+          annotations: [{ op: 0, action: "cf:module/derive" }],
+          waveBasis: { basisSeq: serverSeq(source), rebasedHeads: [] },
+        }).seq;
+      };
+
+      /** Whether the source reports `id` stale to the reading space now. */
+      const reportedStale = (id: string): boolean =>
+        registerCurrencyReads(source, {
+          space: SOURCE,
+          reader: SPACE,
+          reads: [{ id, scopeKey: "space" }],
+        }).entries[0].stale;
+
+      describe("registerCurrencyReads()", () => {
+        it("returns current an instance that holds a value", () => {
+          serve("of:root");
+
+          expect(reportedStale("of:root")).toBe(false);
+        });
+
+        it("returns current a cell that holds a value, of a piece whose record names no write of it", () => {
+          const asOf = serve(OWNED);
+          storeSource(asOf, [record(OWNER)]);
+
+          expect(reportedStale(OWNED)).toBe(false);
+        });
+
+        it("returns stale a cell that holds a value, of a piece the source holds no record of", () => {
+          serve(OWNED);
+
+          expect(reportedStale(OWNED)).toBe(true);
+        });
+
+        it("returns current a cell that holds no value, of a piece whose record names no write of it", () => {
+          const asOf = serve(OWNED, false);
+          storeSource(asOf, [record(OWNER)]);
+
+          expect(reportedStale(OWNED)).toBe(false);
+        });
+
+        it("returns stale a cell that holds no value, of a piece the source holds no record of", () => {
+          serve(OWNED, false);
+
+          expect(reportedStale(OWNED)).toBe(true);
+        });
+
+        it("returns stale an absent `computed:` instance", () => {
+          expect(reportedStale("computed:never")).toBe(true);
+        });
+
+        it("returns stale an instance a recorded piece writes and vouches for none of", () => {
+          const asOf = serve(OWNED);
+          storeSource(asOf, [record(OWNER, { writes: [OWNED] })]);
+
+          expect(reportedStale(OWNED)).toBe(true);
+        });
+      });
+
+      describe("pullCurrencyExports()", () => {
+        it("returns current a cell registered while its piece had no record, once a record of the piece that names no write of it is stored", () => {
+          const asOf = serve(OWNED);
+          register(OWNED);
+
+          storeSource(asOf, [record(OWNER)]);
+
+          expect(
+            pullCurrencyExports(source, {
+              space: SOURCE,
+              reader: SPACE,
+              since: 0,
+            }).entries.map(({ id, stale }) => ({ id, stale })),
+          ).toEqual([{ id: OWNED, stale: false }]);
+        });
+      });
+
+      describe("storeCurrencyRecords()", () => {
+        it("stores clean a slice that read such an instance", () => {
+          const head = serve("of:root");
+          register("of:root");
+
+          store(write("of:piece"), [
+            record("of:piece", { reads: [far("of:root", head)] }),
+          ]);
+
+          expect(markOf("of:piece")).toBe(0);
+        });
+      });
+
+      describe("applyCurrencyImports()", () => {
+        it("marks `2` a slice that read such an instance, once it is written again", () => {
+          const head = serve("of:root");
+          register("of:root");
+          store(write("of:piece"), [
+            record("of:piece", { reads: [far("of:root", head)] }),
+          ]);
+
+          serve("of:root");
+          pull();
+
+          expect(markOf("of:piece")).toBe(2);
+        });
       });
     });
 

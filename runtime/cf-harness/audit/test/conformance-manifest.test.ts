@@ -8,7 +8,6 @@
  * being the progress signal it exists to be.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -25,6 +24,7 @@ import {
 import { loadRunFamily } from "../evidence.ts";
 import type { CheckResult, CheckVerdict } from "../report.ts";
 import { FIXTURE_RUN_ID, FIXTURE_RUNS_DIR } from "./regenerate-fixtures.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const family = await loadRunFamily(join(FIXTURE_RUNS_DIR, FIXTURE_RUN_ID));
 const FIXTURE_RESULTS = auditRunFamily(family, RUN_CHECKS);

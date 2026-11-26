@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import ts from "typescript";
@@ -7,6 +6,7 @@ import type { BuilderSourceSite } from "../src/core/runtime-contract.ts";
 import { CommonFabricTransformerPipeline } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { batchTypeCheckFixtures } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SOURCE = `import {
   computed,

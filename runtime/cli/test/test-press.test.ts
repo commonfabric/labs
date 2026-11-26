@@ -3,11 +3,11 @@
  * that fails to render.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { pressTargetOf } from "../lib/test-press.ts";
 import { runTests } from "../lib/test-runner.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURES = resolve(
   import.meta.dirname!,

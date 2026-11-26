@@ -3,9 +3,9 @@
 // exercised without a live toolshed: the arguments go without their space,
 // and a refusal comes back with the server's code and message.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   followPieceOnServer,
   instantiatePieceOnServer,

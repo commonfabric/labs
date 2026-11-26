@@ -3,10 +3,10 @@
  * `"jsx": "react-jsxdev"` configuration.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Fragment, jsxDEV } from "../src/jsx-dev-runtime.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("jsx-dev-runtime", () => {
   describe("jsxDEV()", () => {

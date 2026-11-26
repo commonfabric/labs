@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import meta from "@/routes/meta/meta.index.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("runtime-cors", () => {
   it("serves public runtime metadata to an independent browser origin without credentials", async () => {

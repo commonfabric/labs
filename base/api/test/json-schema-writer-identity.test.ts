@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import type { JSONSchema } from "../index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const stampedSchema = {
   type: "string",
@@ -26,7 +27,7 @@ const agedUnstampedSchema = {
   },
 } as const satisfies JSONSchema;
 
-Deno.test("JSONSchema represents stamped and aged unstamped writer claims", () => {
+test("JSONSchema represents stamped and aged unstamped writer claims", () => {
   assertEquals(
     stampedSchema.ifc.writeAuthorizedBy.__ctWriterIdentityOf.moduleIdentity,
     "cf:module/profile-home-v1",

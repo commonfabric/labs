@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   aggregateSumLeaf,
@@ -11,6 +10,7 @@ import {
   seededRandom,
   shuffled,
 } from "./combine-order.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Sums leaves in the supplied order without intermediate rounding. */
 function sum(values: number[]): number {

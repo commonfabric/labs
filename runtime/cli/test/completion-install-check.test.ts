@@ -9,6 +9,7 @@ import {
   type PathProbe,
   resolvesOnPath,
 } from "../lib/completion/install-check.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** A probe backed by a literal map, so no real PATH or filesystem is touched. */
 function probeFor(
@@ -17,7 +18,7 @@ function probeFor(
   return (path) => entries[path];
 }
 
-Deno.test("an executable on PATH resolves", () => {
+test("an executable on PATH resolves", () => {
   assert(resolvesOnPath("cf", {
     path: "/usr/bin:/opt/labs/bin",
     separator: ":",
@@ -27,7 +28,7 @@ Deno.test("an executable on PATH resolves", () => {
   }));
 });
 
-Deno.test("a name absent from every PATH entry does not resolve", () => {
+test("a name absent from every PATH entry does not resolve", () => {
   assertFalse(resolvesOnPath("cf", {
     path: "/usr/bin:/opt/labs/bin",
     separator: ":",
@@ -35,7 +36,7 @@ Deno.test("a name absent from every PATH entry does not resolve", () => {
   }));
 });
 
-Deno.test("a non-executable file does not count as installed", () => {
+test("a non-executable file does not count as installed", () => {
   // A stray `cf` data file on PATH must not suppress the warning: the shell
   // would not run it either, so completion would still be dead.
   assertFalse(resolvesOnPath("cf", {
@@ -45,7 +46,7 @@ Deno.test("a non-executable file does not count as installed", () => {
   }));
 });
 
-Deno.test("a directory named cf does not count as installed", () => {
+test("a directory named cf does not count as installed", () => {
   assertFalse(resolvesOnPath("cf", {
     path: "/opt/labs/bin",
     separator: ":",
@@ -53,7 +54,7 @@ Deno.test("a directory named cf does not count as installed", () => {
   }));
 });
 
-Deno.test("an unreported mode is accepted rather than warned about", () => {
+test("an unreported mode is accepted rather than warned about", () => {
   // Filesystems that do not report mode would otherwise produce a confusing
   // warning on a setup that actually works.
   assert(resolvesOnPath("cf", {
@@ -63,7 +64,7 @@ Deno.test("an unreported mode is accepted rather than warned about", () => {
   }));
 });
 
-Deno.test("empty PATH entries are skipped, not read as the root", () => {
+test("empty PATH entries are skipped, not read as the root", () => {
   assertFalse(resolvesOnPath("cf", {
     path: "::",
     separator: ":",
@@ -71,7 +72,7 @@ Deno.test("empty PATH entries are skipped, not read as the root", () => {
   }));
 });
 
-Deno.test("a trailing slash on a PATH entry still resolves", () => {
+test("a trailing slash on a PATH entry still resolves", () => {
   assert(resolvesOnPath("cf", {
     path: "/opt/labs/bin/",
     separator: ":",
@@ -79,7 +80,7 @@ Deno.test("a trailing slash on a PATH entry still resolves", () => {
   }));
 });
 
-Deno.test("an absent PATH resolves nothing rather than throwing", () => {
+test("an absent PATH resolves nothing rather than throwing", () => {
   assertFalse(resolvesOnPath("cf", {
     path: "",
     separator: ":",
@@ -87,7 +88,7 @@ Deno.test("an absent PATH resolves nothing rather than throwing", () => {
   }));
 });
 
-Deno.test("the real filesystem probe is the one that ships", async () => {
+test("the real filesystem probe is the one that ships", async () => {
   // Every other case injects a probe, which leaves the default one — the code
   // that actually runs in production — unexercised. This drives it against a
   // real directory: a hit, a miss (its catch path), and a file the shell would
@@ -108,7 +109,7 @@ Deno.test("the real filesystem probe is the one that ships", async () => {
   }
 });
 
-Deno.test("the warning names the failure and both installs", () => {
+test("the warning names the failure and both installs", () => {
   const warning = missingCommandWarning("cf");
   assertStringIncludes(warning, "not on your PATH");
   assertStringIncludes(warning, "cf completion complete");
@@ -116,14 +117,14 @@ Deno.test("the warning names the failure and both installs", () => {
   assertStringIncludes(warning, "ln -s");
 });
 
-Deno.test("the symlink hint is pasteable from the checkout", () => {
+test("the symlink hint is pasteable from the checkout", () => {
   assertStringIncludes(
     missingCommandWarning("cf"),
     'ln -s "$PWD/bin/cf" ~/.local/bin/cf',
   );
 });
 
-Deno.test("the warning is a single block with no stdout-looking prefix", () => {
+test("the warning is a single block with no stdout-looking prefix", () => {
   // It is printed alongside a shell script on stdout; a line that could be
   // mistaken for script text would be confusing when both land in a terminal.
   const lines = missingCommandWarning("cf").split("\n");

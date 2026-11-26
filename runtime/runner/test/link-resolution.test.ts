@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   linkProbeSubPath,
@@ -13,6 +12,12 @@ import {
   setLoggerCountObserver,
 } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";

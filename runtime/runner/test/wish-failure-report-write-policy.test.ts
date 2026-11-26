@@ -19,7 +19,6 @@
  * throwaway runtime is what learns the address the cases then seed.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "../src/runtime.ts";
@@ -27,6 +26,12 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { defer } from "@commonfabric/async/defer";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { resolveLink } from "../src/link-resolution.ts";
 import { type JSONSchema, UI } from "../src/builder/types.ts";
 import type { IStorageTransaction } from "../src/storage/interface.ts";

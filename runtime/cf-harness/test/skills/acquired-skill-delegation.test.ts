@@ -8,9 +8,9 @@ import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { DEFAULT_SUBAGENT_PROFILE } from "../../src/contracts/subagent.ts";
 import { CfHarnessEngine } from "../../src/engine.ts";

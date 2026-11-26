@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type EffectIntentEntry,
   SERVER_EXECUTION_EFFECTS_DOC_ID,
   type SessionEffectsDocValue,
 } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 import { EffectsChannel } from "../../src/speculation/effects-channel.ts";
 import type {
   IStorageNotification,

@@ -5,11 +5,11 @@
  * the definitions it inherits, and the document a definition map is read as.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { ContextualFlowControl } from "../../src/cfc.ts";
 import {

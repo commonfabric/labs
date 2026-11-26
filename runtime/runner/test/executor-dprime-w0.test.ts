@@ -32,12 +32,18 @@
 //   instance (the per-key not-current re-arm / root arrival re-arm);
 // - T9′ OFF arm: `demandedWriters` empty on a plain client runtime.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
@@ -48,6 +54,13 @@ import {
   awaitEach,
 } from "./support/serving-waits.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up. Its session lifetime is real-time too,
+// and auto-advance turns those policies into a runaway.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("dprime w0 space");
 const space = spaceSigner.did() as MemorySpace;

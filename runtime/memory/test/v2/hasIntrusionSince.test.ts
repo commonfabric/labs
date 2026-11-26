@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   applyCommit,
@@ -14,6 +13,12 @@ import {
   resetServerExecutionConfig,
   setServerExecutionConfig,
 } from "../../v2.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("hasIntrusionSince()", () => {
   // Every case writes the same document at the same address, so what the

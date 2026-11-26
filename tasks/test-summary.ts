@@ -78,7 +78,7 @@ export interface RunSummary {
 }
 
 /**
- * The tests a JUnit report's records stand for, each failing one with the
+ * The tests a run's records stand for, each failing one with the
  * message it failed with and a command that runs it again.
  */
 export function testResults(

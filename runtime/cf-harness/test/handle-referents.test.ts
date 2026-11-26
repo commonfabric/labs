@@ -4,7 +4,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   HARNESS_RESEARCH_HANDLE_TYPE,
@@ -33,6 +32,7 @@ import type {
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
 import type { HarnessToolContext } from "../src/tools/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A sandbox the engine can be built over; nothing here runs in it. */
 class FakeSandboxRuntime implements SandboxRuntime {

@@ -4,7 +4,6 @@
 // references, ATTACH/DETACH/PRAGMA, multiple statements, and references to core
 // engine table names.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 
@@ -18,6 +17,7 @@ import {
   GuardError,
 } from "../v2/sqlite/guard.ts";
 import { open } from "../v2/engine.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("CORE_TABLE_NAMES vs the engine schema", () => {
   // S4: the guard's core-table denylist is hand-maintained, but unqualified

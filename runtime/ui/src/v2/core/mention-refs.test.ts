@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   dedupeByDestination,
@@ -8,6 +7,7 @@ import {
   MentionRefSchema,
   mintRefKey,
 } from "./mention-refs.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("mention-refs", () => {
   describe("mintRefKey()", () => {

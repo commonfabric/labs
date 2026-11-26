@@ -1,4 +1,3 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { nothing } from "lit";
 import type { ConsoleCellLabels } from "../../../console/cell-labels.ts";
@@ -13,6 +12,7 @@ import {
   spaceHoldsNoLabel,
 } from "../../../console/src/cell-chip.ts";
 import { handlerOn, templateBindings, templateText } from "./lit-template.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 describe("console/src/cell-chip", () => {
   describe("cellName", () => {

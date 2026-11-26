@@ -10,8 +10,9 @@ import {
   defaultAgentsHostLockDirectory,
   defaultTargetProcessLockPath,
 } from "../src/process-lock.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("agent host process-lock directories honor runtime settings", () => {
+test("agent host process-lock directories honor runtime settings", () => {
   const linux = { os: "linux" as const, uid: () => 501 };
   assertEquals(
     defaultAgentsHostLockDirectory(
@@ -40,7 +41,7 @@ Deno.test("agent host process-lock directories honor runtime settings", () => {
   );
 });
 
-Deno.test("agent host process-lock directories on Windows need a base directory", () => {
+test("agent host process-lock directories on Windows need a base directory", () => {
   const windows = {
     os: "windows" as const,
     uid: () => {
@@ -61,7 +62,7 @@ Deno.test("agent host process-lock directories on Windows need a base directory"
   );
 });
 
-Deno.test("target process locks use the canonical API and resolved space", async () => {
+test("target process locks use the canonical API and resolved space", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const first = await defaultTargetProcessLockPath(
@@ -97,7 +98,7 @@ Deno.test("target process locks use the canonical API and resolved space", async
   }
 });
 
-Deno.test("AgentsHostProcessLock excludes another host process and releases cleanly", async () => {
+test("AgentsHostProcessLock excludes another host process and releases cleanly", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "agents.lock");
   const child = new Deno.Command(Deno.execPath(), {
@@ -145,7 +146,7 @@ Deno.test("AgentsHostProcessLock excludes another host process and releases clea
   }
 });
 
-Deno.test("AgentsHostProcessLock rejects symbolic links", async () => {
+test("AgentsHostProcessLock rejects symbolic links", async () => {
   if (Deno.build.os === "windows") return;
   const directory = await Deno.makeTempDir();
   const target = join(directory, "target");
@@ -164,7 +165,7 @@ Deno.test("AgentsHostProcessLock rejects symbolic links", async () => {
   }
 });
 
-Deno.test("AgentsHostProcessLock rejects shared lock directories", async () => {
+test("AgentsHostProcessLock rejects shared lock directories", async () => {
   if (Deno.build.os === "windows") return;
   const root = await Deno.makeTempDir();
   const directory = join(root, "shared");
@@ -181,7 +182,7 @@ Deno.test("AgentsHostProcessLock rejects shared lock directories", async () => {
   }
 });
 
-Deno.test("AgentsHostProcessLock rejects invalid existing lock files", async () => {
+test("AgentsHostProcessLock rejects invalid existing lock files", async () => {
   if (Deno.build.os === "windows") return;
   const directory = await Deno.makeTempDir();
   const path = join(directory, "agents.lock");
@@ -206,7 +207,7 @@ Deno.test("AgentsHostProcessLock rejects invalid existing lock files", async () 
   }
 });
 
-Deno.test("AgentsHostProcessLock refuses a lock path another user owns", async () => {
+test("AgentsHostProcessLock refuses a lock path another user owns", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "agents.lock");
   try {
@@ -237,7 +238,7 @@ Deno.test("AgentsHostProcessLock refuses a lock path another user owns", async (
   }
 });
 
-Deno.test("AgentsHostProcessLock leaves ownership and mode unchecked on Windows", async () => {
+test("AgentsHostProcessLock leaves ownership and mode unchecked on Windows", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "agents.lock");
   try {
@@ -269,7 +270,7 @@ Deno.test("AgentsHostProcessLock leaves ownership and mode unchecked on Windows"
   }
 });
 
-Deno.test("AgentsHostProcessLock reports a lock path it cannot inspect", async () => {
+test("AgentsHostProcessLock reports a lock path it cannot inspect", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "x".repeat(300));
   try {

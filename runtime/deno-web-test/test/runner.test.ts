@@ -1,6 +1,5 @@
 import { ConsoleEvent } from "@astral/astral";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { basename, join } from "@std/path";
 
@@ -10,6 +9,12 @@ import {
   RECORDS_DIR_VARIABLE,
 } from "@commonfabric/test-support/records";
 import { removeDirectory } from "@commonfabric/test-support/remove-directory";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { applyDefaults } from "../config.ts";
 import { Manifest } from "../manifest.ts";

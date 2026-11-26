@@ -7,11 +7,12 @@ import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 
 import { deployAgentSessionsDebugView } from "../src/debug-view.ts";
 import { identity, installDefaultPattern } from "./debug_view_support.ts";
 
-Deno.test("debug deployment requires the public piece registry", async () => {
+test("debug deployment requires the public piece registry", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -47,7 +48,7 @@ Deno.test("debug deployment requires the public piece registry", async () => {
   }
 });
 
-Deno.test("debug deployment reports a malformed piece registry", async () => {
+test("debug deployment reports a malformed piece registry", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -85,7 +86,7 @@ Deno.test("debug deployment reports a malformed piece registry", async () => {
   }
 });
 
-Deno.test("debug deployment rejects a replaced default pattern", async () => {
+test("debug deployment rejects a replaced default pattern", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -138,7 +139,7 @@ Deno.test("debug deployment rejects a replaced default pattern", async () => {
   }
 });
 
-Deno.test("debug deployment rejects an in-place registry change", async () => {
+test("debug deployment rejects an in-place registry change", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),

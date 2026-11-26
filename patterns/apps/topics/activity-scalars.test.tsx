@@ -4,6 +4,10 @@
  * that keep them in the writes that change what they summarize. Every
  * assertion reads the input cells the topic was given, because the board's
  * index reads those stored values without running the topic.
+ *
+ * With server execution on, the serving loop runs every assertion before its
+ * own step too, so each one reads a list element through `?.`: the element may
+ * be one a later action adds.
  */
 
 import { action, assert, pattern, TESTS, Writable } from "commonfabric";
@@ -84,7 +88,7 @@ export default pattern(() => {
   );
   const assert_comment_counted = assert(() =>
     commentCount.get() === 1 &&
-    lastActivityAt.get() === comments.get()[0].sentAt &&
+    lastActivityAt.get() === comments.get()[0]?.sentAt &&
     kept.commentCount === 1
   );
 
@@ -93,7 +97,7 @@ export default pattern(() => {
   );
   const assert_second_comment_counted = assert(() =>
     commentCount.get() === 2 &&
-    lastActivityAt.get() === comments.get()[1].sentAt
+    lastActivityAt.get() === comments.get()[1]?.sentAt
   );
 
   const action_edit_comment = action(() =>
@@ -105,7 +109,7 @@ export default pattern(() => {
   );
   const assert_edit_moves_activity_only = assert(() =>
     commentCount.get() === 2 &&
-    lastActivityAt.get() === comments.get()[0].editedAt
+    lastActivityAt.get() === comments.get()[0]?.editedAt
   );
 
   const action_retract_comment = action(() =>
@@ -113,7 +117,7 @@ export default pattern(() => {
   );
   const assert_retraction_uncounted = assert(() =>
     commentCount.get() === 1 &&
-    lastActivityAt.get() === comments.get()[1].removedAt &&
+    lastActivityAt.get() === comments.get()[1]?.removedAt &&
     kept.commentCount === 1
   );
 
@@ -122,14 +126,14 @@ export default pattern(() => {
   );
   const assert_link_moves_activity = assert(() =>
     commentCount.get() === 1 &&
-    lastActivityAt.get() === links.get()[0].addedAt
+    lastActivityAt.get() === links.get()[0]?.addedAt
   );
 
   const action_retract_link = action(() =>
     kept.removeLink.send({ url: "https://example.com/kept", agentName: "Sol" })
   );
   const assert_link_retraction_moves_activity = assert(() =>
-    lastActivityAt.get() === links.get()[0].removedAt
+    lastActivityAt.get() === links.get()[0]?.removedAt
   );
 
   const action_set_body = action(() =>

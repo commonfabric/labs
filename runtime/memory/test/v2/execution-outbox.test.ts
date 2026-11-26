@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Database } from "@db/sqlite";
 
@@ -10,6 +9,12 @@ import {
   type OutboxAppendRow,
   selectPendingExecutionOutboxRows,
 } from "../../v2/execution-outbox.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("execution-outbox", () => {
   let engine: Engine;

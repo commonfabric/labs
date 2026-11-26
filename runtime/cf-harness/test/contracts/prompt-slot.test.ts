@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
   normalizePromptSlotBinding,
 } from "../../src/contracts/prompt-slot.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A binding that passes every check, with every optional field present. */
 const complete = {

@@ -14,13 +14,13 @@
  * 72 changed it to U+202F.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { evaluateFunctionSourceInSES } from "../src/sandbox/ses-runtime.ts";
 import {
   pinLocales,
   sanitizeLocaleMethods,
 } from "../src/sandbox/locale-taming.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const T = 1752192000000; // 2025-07-11T00:00:00Z (Friday)
 

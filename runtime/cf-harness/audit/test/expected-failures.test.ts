@@ -7,7 +7,6 @@
  * separately, so neither can be satisfied by the other.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -19,6 +18,7 @@ import {
   renderReconciliation,
 } from "../expected-failures.ts";
 import type { CheckResult, CheckVerdict } from "../report.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const finding = (
   checkId: string,

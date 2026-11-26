@@ -1,6 +1,5 @@
 import { join } from "@std/path";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { sgr, stripAnsi, term } from "../lib/view/ansi.ts";
 import type { EditableSource } from "../lib/view/editsource.ts";
@@ -21,6 +20,7 @@ import {
   pushRefused,
   realPushIo,
   relayText,
+  settleBoth,
 } from "../lib/view/push.ts";
 import { realFileGateway } from "../lib/view/filegateway.ts";
 import { dialogBox } from "../lib/view/render.ts";
@@ -45,6 +45,7 @@ import {
   pullRequestPayload,
   relayFrame,
 } from "./view-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The question that asks `origin`'s server which branch is its default. */
 const ASK_ORIGIN_DEFAULT = "ls-remote --symref origin HEAD";
@@ -217,6 +218,10 @@ function repositories() {
 }
 
 const PATH_ONLY = { PATH: Deno.env.get("PATH") ?? "" };
+
+/** The step the push dialog shows while git pushes `feature` to `origin`,
+ * which it draws just before git starts. */
+const PUSHING = "Pushing feature to origin...";
 
 /** How a push of `feature` to `origin` that succeeded ends. */
 const PUSHED = say`Pushed ${"feature"} to ${"origin"}.`;
@@ -782,7 +787,7 @@ describe("view-push", () => {
         controller.signal,
         undefined,
         (output) => handed.push(output),
-        () => Promise.resolve(say`asked ${String(++asks)}`),
+        () => Promise.resolve(() => say`asked ${String(++asks)}`),
       );
 
       expect(plainText(summary)).toBe("Push aborted.");
@@ -809,14 +814,17 @@ describe("view-push", () => {
       });
       const asked: Array<[string, PushedBranch, string]> = [];
 
-      const summary = await pushBranch(io, undefined, undefined, undefined, (
-        branch,
-        pushed,
-        main,
-      ) => {
-        asked.push([branch, pushed, main]);
-        return Promise.resolve("asked");
-      });
+      const summary = await pushBranch(
+        io,
+        undefined,
+        undefined,
+        undefined,
+        (branch, pushed) =>
+          Promise.resolve((main: string) => {
+            asked.push([branch, pushed, main]);
+            return "asked";
+          }),
+      );
 
       expect(summary).toBe("asked");
       expect(asked).toEqual([
@@ -846,7 +854,7 @@ describe("view-push", () => {
         undefined,
         undefined,
         undefined,
-        () => Promise.resolve(say`asked ${String(++asks)}`),
+        () => Promise.resolve(() => say`asked ${String(++asks)}`),
       );
 
       expect(plainText(summary)).toBe(
@@ -854,6 +862,41 @@ describe("view-push", () => {
       );
       expect(asks).toBe(0);
       expect(ran).toEqual([]);
+    });
+
+    it("refuses the default branch it is given without preparing to ask, preparing for any other branch origin has", async () => {
+      for (const branch of ["trunk", "feature"]) {
+        const prepared: string[] = [];
+        const { io, ran } = fakeIo({
+          answers: {
+            "symbolic-ref --quiet HEAD": `refs/heads/${branch}\n`,
+            [`rev-parse --verify --quiet refs/remotes/origin/${branch}`]:
+              "0123456789abcdef\n",
+            [`rev-list --left-right --count refs/remotes/origin/${branch}...HEAD`]:
+              "0\t1\n",
+          },
+        });
+
+        const summary = await pushBranch(
+          io,
+          undefined,
+          undefined,
+          undefined,
+          (name) => {
+            prepared.push(name);
+            return Promise.resolve(() => say`asked`);
+          },
+          "trunk",
+        );
+
+        expect(plainText(summary)).toBe(
+          branch === "trunk"
+            ? "Rename the branch first. You were about to push your trunk branch."
+            : "asked",
+        );
+        expect(prepared).toEqual(branch === "trunk" ? [] : ["feature"]);
+        expect(ran).toEqual([]);
+      }
     });
 
     it("keeps to the default branch it is given, asking origin's server nothing", async () => {
@@ -914,6 +957,42 @@ describe("view-push", () => {
       }
     });
 
+    it("asks origin's server which branch is its default while it prepares to ask, before the server answers", async () => {
+      const { io, ran } = fakeIo({ answers: FEATURE_PUSHED });
+      let asked = false;
+      let answered = false;
+      let answeredWhenPrepared: boolean | undefined;
+      let askedWhilePreparing: boolean | undefined;
+
+      const summary = await pushBranch(
+        {
+          ...io,
+          queryAsync: async (args) => {
+            asked = true;
+            const answer = await io.queryAsync(args);
+            answered = true;
+            return answer;
+          },
+        },
+        undefined,
+        undefined,
+        undefined,
+        () => {
+          answeredWhenPrepared = answered;
+          return Promise.resolve().then(() => {
+            askedWhilePreparing = asked;
+            return (main: string) => `asked about ${main}`;
+          });
+        },
+      );
+
+      expect(answeredWhenPrepared).toBe(false);
+      expect(askedWhilePreparing).toBe(true);
+      expect(answered).toBe(true);
+      expect(summary).toBe("asked about main");
+      expect(ran).toEqual([]);
+    });
+
     it("pushes without asking when origin does not have the branch, or there is no `ask`", async () => {
       const cases: ReadonlyArray<
         readonly [Readonly<Record<string, string | null>>, boolean]
@@ -928,7 +1007,7 @@ describe("view-push", () => {
           undefined,
           undefined,
           ask
-            ? (branch) => Promise.resolve(String(asked.push(branch)))
+            ? (branch) => Promise.resolve(() => String(asked.push(branch)))
             : undefined,
         );
 
@@ -936,6 +1015,43 @@ describe("view-push", () => {
         expect(asked).toEqual([]);
         expect(ran).toEqual([PUSH_FEATURE]);
       }
+    });
+  });
+
+  describe("settleBoth()", () => {
+    it("resolves with what each resolves with, in order", async () => {
+      expect(await settleBoth(Promise.resolve(1), "two")).toEqual([1, "two"]);
+    });
+
+    it("rejects with the first rejection, in order, whichever rejects first", async () => {
+      const second = Promise.reject(new Error("second"));
+      second.catch(() => {});
+
+      await expect(
+        settleBoth(Promise.reject(new Error("first")), second),
+      ).rejects.toThrow("first");
+      await expect(settleBoth(Promise.resolve(1), second)).rejects.toThrow(
+        "second",
+      );
+    });
+
+    it("rejects only once the other has settled", async () => {
+      const events: string[] = [];
+      const second = deferred<string>();
+      const both = settleBoth(
+        Promise.reject(new Error("first")),
+        second.promise,
+      )
+        .catch((error) => events.push(`rejected: ${error.message}`));
+
+      // A rejection that does not wait for the second would land within
+      // these turns of the microtask queue.
+      for (let turn = 0; turn < 10; turn++) await null;
+      events.push("second settles");
+      second.resolve("second");
+      await both;
+
+      expect(events).toEqual(["second settles", "rejected: first"]);
     });
   });
 
@@ -1267,7 +1383,7 @@ describe("view-push", () => {
             undefined,
             () => [],
             undefined,
-            (_, pushed) => Promise.resolve(pushed),
+            (_, pushed) => Promise.resolve(() => pushed),
           );
 
         expect(await push()).toEqual(say`Pushed ${"feature"} to ${"origin"}.`);
@@ -1320,7 +1436,7 @@ describe("view-push", () => {
             undefined,
             () => [],
             undefined,
-            (_, remote) => Promise.resolve(remote),
+            (_, remote) => Promise.resolve(() => remote),
           ),
         ).toEqual({
           commit: git(work, env, "rev-parse", "HEAD"),
@@ -1964,7 +2080,7 @@ describe("view-push", () => {
       expect(session.exitMessage).toBeNull();
       expect(session.pullRequestQuitPending).toBe(false);
 
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
 
       expect(session.pullRequestQuitPending).toBe(true);
       expect(session.taskDialogUp).toBe(true);
@@ -1987,7 +2103,7 @@ describe("view-push", () => {
       const session = editableSession();
       session.beginTask("Push", () => {});
 
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
       expect(session.pullRequestQuitPending).toBe(false);
       expect(session.view().dialog!.body.join("\n")).not.toContain("Quitting");
       session.finishTask(PUSHED);
@@ -1999,11 +2115,37 @@ describe("view-push", () => {
       expect(session.exitMessage).toBe(PULL_REQUEST);
     });
 
+    it("quits for the pull request at once, without saying it is quitting, when its delay is 16 ms or less, waiting for a push still running to end", () => {
+      const ended = editableSession();
+      ended.beginTask("Push", () => {});
+      ended.finishTask(PUSHED);
+      const running = editableSession();
+      running.beginTask("Push", () => {});
+      const longer = editableSession();
+      longer.beginTask("Push", () => {});
+      longer.finishTask(PUSHED);
+
+      ended.quitForPullRequest(PULL_REQUEST, 16);
+      running.quitForPullRequest(PULL_REQUEST, 5);
+      longer.quitForPullRequest(PULL_REQUEST, 17);
+
+      expect(ended.quit).toBe(true);
+      expect(ended.exitMessage).toBe(PULL_REQUEST);
+      expect(running.quit).toBe(false);
+      expect(running.view().dialog!.body.join("\n")).not.toContain("Quitting");
+      running.finishTask(PUSHED);
+      expect(running.quit).toBe(true);
+      expect(running.exitMessage).toBe(PULL_REQUEST);
+      expect(longer.quit).toBe(false);
+      expect(longer.pullRequestQuitDelay).toBe(17);
+      expect(longer.view().dialog!.body.join("\n")).toContain("Quitting");
+    });
+
     it("quits for the pull request, keeping the address to print, when Quit is pressed while the dialog says it is quitting", () => {
       const session = editableSession();
       session.beginTask("Push", () => {});
       session.finishTask(PUSHED);
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
 
       session.handleKey({ name: "Q", char: "Q" });
 
@@ -2021,7 +2163,7 @@ describe("view-push", () => {
         }
         session.beginTask("Push", () => {});
         session.finishTask(PUSHED);
-        session.quitForPullRequest(PULL_REQUEST);
+        session.quitForPullRequest(PULL_REQUEST, 2000);
 
         expect(session.requestQuitFromSignal()).toBe(edited);
 
@@ -2038,7 +2180,7 @@ describe("view-push", () => {
       const session = editableSession();
       session.beginTask("Push", () => {});
       session.finishTask(PUSHED);
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
 
       session.handleKey({ name: "c", char: "c" });
       session.completePullRequestQuit();
@@ -2053,7 +2195,7 @@ describe("view-push", () => {
       session.finishTask(PUSHED);
       session.handleKey({ name: "c", char: "c" });
 
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
 
       expect(session.quit).toBe(false);
       session.beginTask("Push", () => {});
@@ -2069,12 +2211,30 @@ describe("view-push", () => {
       session.beginTask("Push", () => {});
       session.finishTask(PUSHED);
 
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
       session.completePullRequestQuit();
 
       expect(session.quit).toBe(false);
       expect(session.view().dialog?.title).toBe("Save Changes");
       session.handleKey({ name: "d", char: "d" });
+      expect(session.exitMessage).toBe(PULL_REQUEST);
+    });
+
+    it("asks at once to save unsaved edits when the pull request opens with a delay of 16 ms or less", () => {
+      const session = editableSession();
+      session.handleKey({ name: "e", char: "e" });
+      session.handleKey({ name: "X", char: "X" });
+      session.handleKey({ name: "escape" });
+      session.beginTask("Push", () => {});
+      session.finishTask(PUSHED);
+
+      session.quitForPullRequest(PULL_REQUEST, 16);
+
+      expect(session.quit).toBe(false);
+      expect(session.pullRequestQuitDelay).toBeNull();
+      expect(session.view().dialog?.title).toBe("Save Changes");
+      session.handleKey({ name: "d", char: "d" });
+      expect(session.quit).toBe(true);
       expect(session.exitMessage).toBe(PULL_REQUEST);
     });
 
@@ -2085,7 +2245,7 @@ describe("view-push", () => {
       session.handleKey({ name: "escape" });
       session.beginTask("Push", () => {});
       session.finishTask(PUSHED);
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
       session.completePullRequestQuit();
 
       session.handleKey({ name: "c", char: "c" });
@@ -2199,7 +2359,7 @@ describe("view-push", () => {
         session.beginWatchStep(say`Waiting for the pull request to open`);
         session.finishTask(PUSHED);
 
-        session.quitForPullRequest(PULL_REQUEST);
+        session.quitForPullRequest(PULL_REQUEST, 2000);
 
         expect(shown(session)).toEqual([
           "Pushed feature to origin.",
@@ -2220,7 +2380,7 @@ describe("view-push", () => {
         session.handleKey({ name: "home" });
         expect(shown(session)).not.toContain("Quitting... ◐");
 
-        session.quitForPullRequest(PULL_REQUEST);
+        session.quitForPullRequest(PULL_REQUEST, 2000);
 
         expect(shown(session).at(-1)).toBe("Quitting... ◐");
       });
@@ -2231,7 +2391,7 @@ describe("view-push", () => {
         session.beginTask("Push", () => {});
         session.beginWatchStep(say`Waiting for the pull request to open`);
 
-        session.quitForPullRequest(PULL_REQUEST);
+        session.quitForPullRequest(PULL_REQUEST, 2000);
 
         expect(shown(session)).toEqual([
           "Waiting for the pull request to open... ✓",
@@ -2404,7 +2564,7 @@ describe("view-push", () => {
         session.beginTask("Push", () => {});
         session.appendTaskOutput(`See ${PULL_REQUEST}.\n${LONG}\n`);
         session.finishTask(say`Done.`);
-        session.quitForPullRequest(OCTO_PULL_REQUEST);
+        session.quitForPullRequest(OCTO_PULL_REQUEST, 2000);
         return session;
       }
 
@@ -2530,7 +2690,7 @@ describe("view-push", () => {
             )
           ),
       }));
-      const running = harness.frame((text) => text.includes(" Abort "));
+      const running = harness.frame((text) => text.includes(PUSHING));
       const closable = harness.frame((text) => text.includes(" Close "));
 
       await harness.run(["P", () => running, "a", () => closable, "c"]);
@@ -2551,7 +2711,7 @@ describe("view-push", () => {
           ),
       }));
       const at = abortCell();
-      const running = harness.frame((text) => text.includes(" Abort "));
+      const running = harness.frame((text) => text.includes(PUSHING));
       const pressed = harness.frame((text) =>
         text.includes(" Abort ") &&
         cellOf(frameRows(text), "Abort").x === at.x + 1
@@ -2592,13 +2752,19 @@ describe("view-push", () => {
             ),
       }), { holdTimers: true });
       const retryable = harness.frame((text) => text.includes("Retry push"));
+      let retried = Promise.resolve();
       let drawn: string[] = [];
       let armed = 0;
 
       await harness.run([
         "P",
         () => retryable,
+        () => {
+          retried = harness.frame((text) => text.includes(PUSHING));
+          return Promise.resolve();
+        },
         "P",
+        () => retried,
         () => {
           const before = harness.writes.length;
           const spinners = harness.spinners.length;
@@ -2627,8 +2793,9 @@ describe("view-push", () => {
             })
           ),
       }));
+      const running = harness.frame((text) => text.includes(PUSHING));
 
-      await harness.run(["P"]);
+      await harness.run(["P", () => running]);
       const writesAtClose = harness.writes.length;
       await ended.promise;
 
@@ -2648,7 +2815,7 @@ describe("view-push", () => {
             )
           ),
       }));
-      const running = harness.frame((text) => text.includes(" Abort "));
+      const running = harness.frame((text) => text.includes(PUSHING));
 
       await harness.run([
         "P",
@@ -2732,7 +2899,7 @@ describe("view-push", () => {
             );
           },
         }));
-        const running = harness.frame((text) => text.includes(" Abort "));
+        const running = harness.frame((text) => text.includes(PUSHING));
         const failed = harness.frame((text) => text.includes("P Retry push"));
         const pushed = harness.frame((text) =>
           text.includes("Pushed feature to origin.")
@@ -2952,6 +3119,45 @@ describe("view-push", () => {
         return { ...harness, ran, asked };
       }
 
+      it("looks for the pull request while origin's server is asked for its default branch, asking whether to push once it answers", async () => {
+        const answer = deferred();
+        const harness = pagerHarness(() => {
+          const { io } = fakeIo({ answers: FEATURE_PUSHED });
+          return {
+            ...io,
+            queryAsync: async (args) => {
+              await answer.promise;
+              return io.queryAsync(args);
+            },
+          };
+        }, { git: viewerGit({}, UPSTREAM), github: findingGitHub });
+        const asked = harness.frame((text) => text.includes(" Cancel "));
+        let unanswered = "";
+
+        await harness.run([
+          "P",
+          () => {
+            unanswered = harness.writes.join("");
+            answer.resolve();
+            return asked;
+          },
+          "c",
+        ]);
+
+        expect(unanswered).toContain(`${ASKED_ORIGIN}...`);
+        expect(unanswered).toContain(
+          "Looking for the pull request of feature in octo/repo...",
+        );
+        // The question that decides whether to push is shown first.
+        expect(unanswered.indexOf(ASKED_ORIGIN)).toBeLessThan(
+          unanswered.indexOf("Looking for the pull request"),
+        );
+        expect(unanswered).not.toContain(" Cancel ");
+        expect(harness.writes.join("")).toContain(
+          "Pull request 7 is open from it:",
+        );
+      });
+
       it("asks again whether to push when Retry push follows a failure to ask origin which branch is its default", async () => {
         let asks = 0;
         const ran: string[] = [];
@@ -3147,6 +3353,7 @@ describe("view-push", () => {
           },
         });
         const looking = harness.frame((text) =>
+          text.includes(`${ASKED_ORIGIN}... ✓`) &&
           text.includes("Looking for the pull request")
         );
         const asked = harness.frame((text) => text.includes(" Cancel "));
@@ -3175,6 +3382,39 @@ describe("view-push", () => {
             "Stopped looking for its pull request.",
           );
       });
+      it("stops the push on Abort while origin's server has not answered, asking nothing", async () => {
+        const harness = pagerHarness((signal) => {
+          const { io } = fakeIo({ answers: FEATURE_PUSHED });
+          return {
+            ...io,
+            queryAsync: () =>
+              new Promise((resolve) =>
+                signal.addEventListener("abort", () => resolve(null))
+              ),
+          };
+        }, {
+          git: viewerGit({}, UPSTREAM),
+          github: {
+            ...unusedGitHub,
+            find: (_, signal) =>
+              new Promise((_, reject) =>
+                signal.addEventListener("abort", () => reject(signal.reason))
+              ),
+          },
+        });
+        const looking = harness.frame((text) =>
+          text.includes(`${ASKED_ORIGIN}...`) &&
+          text.includes("Looking for the pull request")
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => looking, "a", () => closable, "c"]);
+
+        const shown = harness.writes.join("");
+        expect(shown).toContain("Push aborted.");
+        expect(shown).not.toContain(" Cancel ");
+        expect(shown).not.toContain("Stopped looking for its pull request.");
+      });
     });
 
     describe("watching for the pull request", () => {
@@ -3195,7 +3435,7 @@ describe("view-push", () => {
             },
           }),
           {
-            git: viewerGit(),
+            git: viewerGit({ ...QUITTING, "cf-view.quitDelay": "6300" }),
             relay: (address) => address === RELAY ? relay.connect : undefined,
           },
         );
@@ -3216,6 +3456,8 @@ describe("view-push", () => {
         expect(connectedBeforePage).toBe(true);
         const shown = harness.writes.find((text) => text.includes(" Close "))!;
         expect(shown).toContain("Waiting for the pull request to open");
+        expect(harness.timers).toContain(6300);
+        expect(harness.timers).not.toContain(2000);
         expect(harness.writes.at(-1)).toMatch(
           new RegExp(`\\x1b\\[\\?1049l${PULL_REQUEST}\\n$`),
         );
@@ -3422,7 +3664,7 @@ describe("view-push", () => {
           }),
           { git: viewerGit(), relay: () => relay.connect },
         );
-        const running = harness.frame((text) => text.includes(" Abort "));
+        const running = harness.frame((text) => text.includes(PUSHING));
         const closable = harness.frame((text) => text.includes(" Close "));
 
         await harness.run(["P", () => running, "a", () => closable, "c"]);
@@ -3794,12 +4036,16 @@ describe("view-push", () => {
         }
       });
 
-      it("gives the created pull request's address in the dialog, saying it is quitting, for two seconds before it quits", async () => {
+      it("gives the created pull request's address in the dialog, saying it is quitting, for the delay the settings set before it quits", async () => {
         const harness = pagerHarness(
           () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
           {
             git: viewerGit(
-              { "cf-view.pullRequestTool": "api", ...QUITTING },
+              {
+                "cf-view.pullRequestTool": "api",
+                "cf-view.quitDelay": "250",
+                ...QUITTING,
+              },
               UPSTREAM,
             ),
             github: {
@@ -3819,10 +4065,43 @@ describe("view-push", () => {
           `Pull request: ${OCTO_PULL_REQUEST}`,
         );
         expect(harness.writes[quitting]).toContain(" Close ");
-        expect(harness.timers).toContain(2000);
+        expect(harness.timers).toContain(250);
+        expect(harness.timers).not.toContain(2000);
         expect(harness.writes.at(-1)).toMatch(
           new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
         );
+      });
+
+      it("quits for the created pull request at once, without saying it is quitting, when the settings set a delay of 16 ms or less", async () => {
+        for (const delay of ["16", "5"]) {
+          const harness = pagerHarness(
+            () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+            {
+              git: viewerGit(
+                {
+                  "cf-view.pullRequestTool": "api",
+                  "cf-view.quitDelay": delay,
+                  ...QUITTING,
+                },
+                UPSTREAM,
+              ),
+              github: {
+                ...unusedGitHub,
+                create: () => Promise.resolve(OCTO_PULL_REQUEST),
+              },
+            },
+          );
+
+          await harness.run(["P", forever]);
+
+          expect(harness.writes.join("")).toContain(OCTO_PULL_REQUEST);
+          expect(harness.writes.join("")).not.toContain("Quitting...");
+          expect(harness.timers).not.toContain(16);
+          expect(harness.timers).not.toContain(2000);
+          expect(harness.writes.at(-1)).toMatch(
+            new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
+          );
+        }
       });
 
       it("creates it with touch-gate and the token the settings name, showing what the touch approves, and stays up while quitting is off", async () => {
@@ -3894,7 +4173,94 @@ describe("view-push", () => {
               : `Pushed feature to origin. Created ${OCTO_PULL_REQUEST}`,
           );
           expect(shown).toContain(OCTO_PULL_REQUEST);
+          if (listed) expect(shown).not.toContain("Asking upstream");
         }
+      });
+
+      it("shows the search for the open pull request done once GitHub answers, while upstream's server has not", async () => {
+        let looked = Promise.resolve();
+        const harness = pagerHarness(() => {
+          const { io } = fakeIo({ pushOutput: GITHUB_OFFER });
+          return {
+            ...io,
+            queryAsync: async (args) => {
+              if (args.includes("upstream")) await looked;
+              return io.queryAsync(args);
+            },
+          };
+        }, {
+          git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+          github: {
+            ...unusedGitHub,
+            create: () => Promise.resolve(OCTO_PULL_REQUEST),
+          },
+        });
+        looked = harness.frame((text) =>
+          text.includes(
+            "Looking for the pull request of feature in octo/repo... ✓",
+          ) && text.includes("Asking upstream which branch is its default...")
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        expect(harness.writes.join("")).toContain(
+          `Created ${OCTO_PULL_REQUEST}`,
+        );
+        expect(harness.writes.join("")).toContain(
+          "Asking upstream which branch is its default... ✓",
+        );
+      });
+
+      it("asks upstream's server for its default branch while it asks GitHub for the open pull request, once the user's list names none", async () => {
+        const events: string[] = [];
+        const harness = pagerHarness(() => {
+          const { io } = fakeIo({ pushOutput: GITHUB_OFFER });
+          return {
+            ...io,
+            queryAsync: (args) => {
+              if (!args.includes("upstream")) return io.queryAsync(args);
+              events.push("ask upstream");
+              return io.queryAsync(args).then((answer) => {
+                events.push("upstream answered");
+                return answer;
+              });
+            },
+          };
+        }, {
+          git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+          pullRequestList: () => {
+            events.push("read the list");
+            return Promise.resolve(null);
+          },
+          github: {
+            ...unusedGitHub,
+            find: () => {
+              events.push("ask GitHub");
+              return Promise.resolve(null).then((found) => {
+                events.push("GitHub answered");
+                return found;
+              });
+            },
+            create: () => Promise.resolve(OCTO_PULL_REQUEST),
+          },
+        });
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        expect(events[0]).toBe("read the list");
+        expect(events.slice(1, 3).sort()).toEqual([
+          "ask GitHub",
+          "ask upstream",
+        ]);
+        expect(events.slice(3).sort()).toEqual([
+          "GitHub answered",
+          "upstream answered",
+        ]);
+        expect(harness.writes.join("")).toContain(
+          `Created ${OCTO_PULL_REQUEST}`,
+        );
       });
 
       it("creates nothing when GitHub, asked because the list names none, says one is open", async () => {
@@ -3916,6 +4282,9 @@ describe("view-push", () => {
         const shown = harness.writes.find((text) => text.includes(" Close "))!;
         expect(shown).toContain("Pull request 7 is open:");
         expect(shown).toContain(OCTO_PULL_REQUEST);
+        expect(shown).toContain(
+          "Asking upstream which branch is its default... ✓",
+        );
       });
 
       it("tries again with the settings as they are when Create PR is pressed, and says when they no longer create pull requests", async () => {
@@ -4571,12 +4940,13 @@ describe("view-push", () => {
           .toContain(`Merged ${OCTO_PULL_REQUEST}`);
       });
 
-      it("gives the merged pull request's address in the dialog, saying it is quitting, for two seconds before it quits, when the settings say to", async () => {
+      it("gives the merged pull request's address in the dialog, saying it is quitting, for the delay the settings set before it quits, when the settings say to", async () => {
         const harness = pagerHarness(() => fakeIo().io, {
           git: viewerGit(
             {
               "cf-view.pullRequestTool": "touch-gate",
               "cf-view.touchGateToken": "mine",
+              "cf-view.quitDelay": "7900",
               ...QUITTING,
             },
             UPSTREAM,
@@ -4595,7 +4965,8 @@ describe("view-push", () => {
         )!;
         expect(quitting).toContain(" Land ");
         expect(quitting).toContain(`Pull request: ${OCTO_PULL_REQUEST}`);
-        expect(harness.timers).toContain(2000);
+        expect(harness.timers).toContain(7900);
+        expect(harness.timers).not.toContain(2000);
         expect(harness.writes.at(-1)).toMatch(
           new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
         );

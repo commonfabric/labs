@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { parseDiff } from "../lib/view/diff.ts";
+import { test } from "@commonfabric/test-support/test";
 
 //
 // Coverage-focused tests for lib/view/diff.ts, exercising body-loop branches
@@ -8,7 +9,7 @@ import { parseDiff } from "../lib/view/diff.ts";
 // fallback, and a quoted file path in the `---`/`+++` headers.
 //
 
-Deno.test("diff: a `\\ No newline` marker mid-body is metadata, the body continues", () => {
+test("diff: a `\\ No newline` marker mid-body is metadata, the body continues", () => {
   // git emits the no-newline marker for the OLD side between the removal and
   // the addition when the pre-image had no trailing newline. The marker arrives
   // while the new side still has a line to consume, so it is classified inside
@@ -37,7 +38,7 @@ Deno.test("diff: a `\\ No newline` marker mid-body is metadata, the body continu
   assertEquals(model.files[0].hunks[0].endLine, addIdx);
 });
 
-Deno.test("diff: a malformed body line stops the hunk leniently", () => {
+test("diff: a malformed body line stops the hunk leniently", () => {
   // After one context line is consumed, an out-of-grammar line (no `\`, `+`,
   // `-`, space, and non-empty) arrives while both counts still have lines to
   // go. The body loop breaks on it; the stray line and everything after it
@@ -67,7 +68,7 @@ GARBAGE not a diff line
   assertEquals(model.files[0].hunks[0].endLine, ctxIdx);
 });
 
-Deno.test("diff: a hunk header with no trailing context yields an empty context", () => {
+test("diff: a hunk header with no trailing context yields an empty context", () => {
   // The `@@ … @@` header has no enclosing-function suffix: the context field
   // trims to the empty string rather than carrying junk.
   const diff = `diff --git a/m.ts b/m.ts
@@ -92,7 +93,7 @@ Deno.test("diff: a hunk header with no trailing context yields an empty context"
   assertEquals(m2.files[0].hunks[0].context, "export function f", "trimmed");
 });
 
-Deno.test("diff: quoted paths in `---`/`+++` headers are unquoted", () => {
+test("diff: quoted paths in `---`/`+++` headers are unquoted", () => {
   // git quotes paths containing spaces (or other special bytes). The quotes are
   // stripped so the stored path is the bare name.
   const diff = `diff --git a/with space.ts b/with space.ts
@@ -120,7 +121,7 @@ Deno.test("diff: quoted paths in `---`/`+++` headers are unquoted", () => {
   assertEquals(m2.files[0].newPath, "x y.ts");
 });
 
-Deno.test("diff: a `\\` mid-body and a malformed line in the same parse", () => {
+test("diff: a `\\` mid-body and a malformed line in the same parse", () => {
   // A belt-and-braces case: a no-newline marker arrives mid-body and is meta,
   // and a later hunk's body has a malformed line that stops it. Confirms the
   // two lenient branches coexist across hunks in one file.

@@ -10,9 +10,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { ListingHandles } from "../lib/shuttle/listing.ts";
 import type { PiecePlace } from "../lib/shuttle/place.ts";

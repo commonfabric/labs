@@ -11,7 +11,6 @@
 
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { Database } from "@db/sqlite";
 
@@ -36,6 +35,7 @@ import {
   type SessionOpenResult,
   type SessionSync,
 } from "../v2.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HELLO_FLAGS = getMemoryProtocolFlags();
 const HELLO = {

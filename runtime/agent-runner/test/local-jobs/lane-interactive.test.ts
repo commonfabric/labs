@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { HarnessJobResult } from "../../src/harness-job.ts";
 import { createLocalJobApi } from "../../src/local-jobs/api.ts";
 import { LocalJobLane } from "../../src/local-jobs/lane.ts";
 import type { LocalJobProfile } from "../../src/local-jobs/profiles.ts";
 import { LocalJobStore } from "../../src/local-jobs/store.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Builds an API and lane whose runs stay open until settled or aborted. */
 const heldLane = (maxConcurrent: number) => {

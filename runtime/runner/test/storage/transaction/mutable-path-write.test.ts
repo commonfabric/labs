@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { deepFreeze, type FabricValue } from "@commonfabric/data-model";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { IMemoryAddress } from "../../../src/storage/interface.ts";
 import { planMutablePathWrite } from "../../../src/storage/transaction/mutable-path-write.ts";
 

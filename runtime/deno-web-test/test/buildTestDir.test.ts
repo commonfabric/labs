@@ -5,9 +5,14 @@
 
 import { join, toFileUrl } from "@std/path";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { removeDirectory } from "@commonfabric/test-support/remove-directory";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { applyDefaults, type Config } from "../config.ts";
 import { Manifest } from "../manifest.ts";

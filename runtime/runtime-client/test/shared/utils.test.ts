@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { CellRef } from "@/protocol/mod.ts";
 import { cellRefToInstanceId } from "@/shared/utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("runtime client shared utilities", () => {
   describe("cellRefToInstanceId", () => {

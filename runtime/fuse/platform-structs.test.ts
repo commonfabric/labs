@@ -12,9 +12,10 @@ import { assertEquals } from "@std/assert";
 import darwinPlatform from "./platform-darwin.ts";
 import linuxPlatform from "./platform-linux.ts";
 import type { FusePlatform } from "./platform.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function testPlatformStructs(name: string, p: FusePlatform): void {
-  Deno.test(`${name} writeStat marshals ino, size, and the mtime/atime/ctime timespecs`, () => {
+  test(`${name} writeStat marshals ino, size, and the mtime/atime/ctime timespecs`, () => {
     const buf = new ArrayBuffer(p.STAT_SIZE);
     p.writeStat(buf, {
       ino: 7n,
@@ -40,7 +41,7 @@ function testPlatformStructs(name: string, p: FusePlatform): void {
     }
   });
 
-  Deno.test(`${name} writeStat leaves the timestamps at the epoch when mtime is omitted`, () => {
+  test(`${name} writeStat leaves the timestamps at the epoch when mtime is omitted`, () => {
     const buf = new ArrayBuffer(p.STAT_SIZE);
     p.writeStat(buf, { ino: 1n, mode: 0o755, nlink: 2, size: 0 });
     const view = new DataView(buf);
@@ -50,7 +51,7 @@ function testPlatformStructs(name: string, p: FusePlatform): void {
     assertEquals(view.getBigUint64(8, true), 1n);
   });
 
-  Deno.test(`${name} writeEntryParam embeds the attr stat with its mtime`, () => {
+  test(`${name} writeEntryParam embeds the attr stat with its mtime`, () => {
     const buf = new ArrayBuffer(p.ENTRY_PARAM_SIZE);
     p.writeEntryParam(buf, {
       ino: 9n,

@@ -1,7 +1,8 @@
 import { assertEquals } from "@std/assert";
 import { CollectionRequestQueue } from "../src/collection-request-queue.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("CollectionRequestQueue keeps one pending collection request", async () => {
+test("CollectionRequestQueue keeps one pending collection request", async () => {
   const firstStarted = Promise.withResolvers<void>();
   const releaseFirst = Promise.withResolvers<void>();
   const secondStarted = Promise.withResolvers<void>();
@@ -29,7 +30,7 @@ Deno.test("CollectionRequestQueue keeps one pending collection request", async (
   assertEquals(queue.request("periodic"), "closed");
 });
 
-Deno.test("CollectionRequestQueue runs an empty pending reason", async () => {
+test("CollectionRequestQueue runs an empty pending reason", async () => {
   const firstStarted = Promise.withResolvers<void>();
   const releaseFirst = Promise.withResolvers<void>();
   const secondStarted = Promise.withResolvers<void>();
@@ -55,7 +56,7 @@ Deno.test("CollectionRequestQueue runs an empty pending reason", async () => {
   assertEquals(reasons, ["periodic", ""]);
 });
 
-Deno.test("CollectionRequestQueue drops a pending request when closed", async () => {
+test("CollectionRequestQueue drops a pending request when closed", async () => {
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const reasons: string[] = [];
@@ -75,7 +76,7 @@ Deno.test("CollectionRequestQueue drops a pending request when closed", async ()
   assertEquals(reasons, ["periodic"]);
 });
 
-Deno.test("CollectionRequestQueue starts its pending request after a failure", async () => {
+test("CollectionRequestQueue starts its pending request after a failure", async () => {
   const firstStarted = Promise.withResolvers<void>();
   const releaseFirst = Promise.withResolvers<void>();
   const secondStarted = Promise.withResolvers<void>();

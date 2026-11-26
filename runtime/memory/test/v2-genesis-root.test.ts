@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 import * as Engine from "../v2/engine.ts";
 import { encodeMemoryBoundary, type GenesisRoot } from "../v2.ts";
@@ -8,6 +7,7 @@ import {
   readGenesisRoot,
   readSpaceKind,
 } from "../v2/genesis-root.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const space = "did:key:root-test-space";
 const root = {

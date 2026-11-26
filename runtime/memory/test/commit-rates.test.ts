@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type CommitRatesReport,
@@ -7,6 +6,7 @@ import {
   type CommitStormThresholds,
   commitStormThresholds,
 } from "../v2/commit-rates.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A clock the test moves by hand, starting on a whole second. */
 const clock = (start = 1_000_000) => {

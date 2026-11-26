@@ -12,11 +12,11 @@
  * tests to a guess at that shape instead of to the shape itself.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { decode } from "@commonfabric/text/utf8";
 import { getLogger } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 import { captureStderr, checkStderr, relevantStderr } from "./utils.ts";
 
 // The line `deno task` echoes before it runs the CLI. Every command the tests

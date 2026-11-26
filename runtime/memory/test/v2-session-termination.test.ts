@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { decodeMemoryBoundary, encodeMemoryBoundary } from "../v2.ts";
@@ -15,6 +14,7 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Wraps a loopback transport to `server`, so that a test can hand the client

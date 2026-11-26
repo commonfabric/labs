@@ -5,10 +5,11 @@ import {
   BOOT_FAILURE_MESSAGE,
   type BrowserProcess,
 } from "@commonfabric/integration/browser-process";
+import { test } from "@commonfabric/test-support/test";
 
 import { isRetryableAstralLaunchError, launchWithRetry } from "../browser.ts";
 
-Deno.test("isRetryableAstralLaunchError matches transient browser-launch failures", () => {
+test("isRetryableAstralLaunchError matches transient browser-launch failures", () => {
   assertEquals(
     isRetryableAstralLaunchError(
       new Error("open '/tmp/chrome': Text file busy (os error 26)"),
@@ -31,7 +32,7 @@ Deno.test("isRetryableAstralLaunchError matches transient browser-launch failure
   );
 });
 
-Deno.test("launchWithRetry retries retryable ETXTBSY launch failures", async () => {
+test("launchWithRetry retries retryable ETXTBSY launch failures", async () => {
   const launchCalls: LaunchOptions[] = [];
   const sleepCalls: number[] = [];
   const browser = {} as BrowserProcess;
@@ -62,7 +63,7 @@ Deno.test("launchWithRetry retries retryable ETXTBSY launch failures", async () 
   assertEquals(sleepCalls, [250, 500]);
 });
 
-Deno.test("launchWithRetry does not retry non-retryable launch failures", async () => {
+test("launchWithRetry does not retry non-retryable launch failures", async () => {
   let attempts = 0;
 
   await assertRejects(
@@ -82,7 +83,7 @@ Deno.test("launchWithRetry does not retry non-retryable launch failures", async 
   assertEquals(attempts, 1);
 });
 
-Deno.test("launchWithRetry rethrows ETXTBSY after exhausting retries", async () => {
+test("launchWithRetry rethrows ETXTBSY after exhausting retries", async () => {
   let attempts = 0;
   const sleepCalls: number[] = [];
 

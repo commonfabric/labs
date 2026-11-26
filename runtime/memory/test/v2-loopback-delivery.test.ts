@@ -8,7 +8,6 @@
 // timer wake-up per frame. They also pin `delivered()`, which lets a caller
 // wait for the frames queued at its call to be handed over.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { ServerMessage } from "../v2.ts";
 import {
@@ -16,6 +15,7 @@ import {
   loopback,
   queuedFrameTransport,
 } from "../v2/client.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // A stand-in for the server. `loopback` calls `connect` once and then only
 // `receive` and `close` on what it hands back, so nothing else of Server is

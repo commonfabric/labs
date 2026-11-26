@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import type { SchemaGenerationDiagnostic } from "../src/interface.ts";
 import { asObjectSchema, getTypeFromCode } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The DEFAULT_MARKER brand payload carries V (the default VALUE's type) — see
 // Default<> in base/api/index.ts. These tests generate schemas from bare

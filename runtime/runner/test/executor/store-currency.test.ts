@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   type CurrencyBatch,
   type CurrencyRecord,
@@ -13,6 +12,12 @@ import {
   type Engine,
   open,
 } from "@commonfabric/memory/v2/engine";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { HostMemoryServer } from "../../src/executor/host-memory-server.ts";
 import {
   emptyServingLoopStats,
@@ -224,7 +229,9 @@ describe("StoreCurrency", () => {
             };
           },
         },
-        runner: { pieceCurrencyFacts: () => ({ owned: [] }) },
+        runner: {
+          pieceCurrencyFacts: () => ({ owned: [], absentAsDefault: [] }),
+        },
         getCellFromLink: () => ({}),
       } as unknown as Runtime;
 
@@ -300,7 +307,11 @@ describe("StoreCurrency", () => {
         const following = {
           ...runtime,
           runner: {
-            pieceCurrencyFacts: () => ({ owned: [], followsOrigin: true }),
+            pieceCurrencyFacts: () => ({
+              owned: [],
+              absentAsDefault: [],
+              followsOrigin: true,
+            }),
           },
         } as unknown as Runtime;
 
@@ -322,6 +333,7 @@ describe("StoreCurrency", () => {
         /** A runtime whose runner reports `facts` for every piece. */
         const scopedRuntime = (facts: {
           owned: string[];
+          absentAsDefault: string[];
           followsOrigin?: boolean;
         }) =>
           ({
@@ -341,22 +353,24 @@ describe("StoreCurrency", () => {
 
         it("asks the runner about the root at its own scope, and vouches for the piece", () => {
           const snapshot = currency.snapshot(
-            scopedRuntime({ owned: ["of:owned"] }),
+            scopedRuntime({
+              owned: ["of:owned"],
+              absentAsDefault: ["of:owned"],
+            }),
             0,
             [],
           );
 
           expect(asked).toBe("session");
           expect(
-            snapshot?.records.map(({ piece, vouched, owned }) => ({
-              piece,
-              vouched,
-              owned,
-            })),
+            snapshot?.records.map((
+              { piece, vouched, owned, absentAsDefault },
+            ) => ({ piece, vouched, owned, absentAsDefault })),
           ).toEqual([{
             piece: "of:piece",
             vouched: true,
             owned: ["of:owned"],
+            absentAsDefault: ["of:owned"],
           }]);
         });
 
@@ -365,7 +379,11 @@ describe("StoreCurrency", () => {
           // piece holds one for each viewer.
 
           const snapshot = currency.snapshot(
-            scopedRuntime({ owned: [], followsOrigin: true }),
+            scopedRuntime({
+              owned: [],
+              absentAsDefault: [],
+              followsOrigin: true,
+            }),
             0,
             [],
           );
@@ -461,13 +479,13 @@ describe("StoreCurrency", () => {
         expect(judged.servable).toEqual(["shared", "derived", "own-derived"]);
       });
 
-      describe("for a root the memory server finds nothing derives", () => {
+      describe("for a root the memory server finds plain", () => {
         const idleRuntime = {
           scheduler: { hasNodesUnderDemandRoot: () => false },
         } as unknown as Runtime;
 
-        /** A loop in `mode` whose memory server finds `of:data` underived. */
-        const underivedIn = (
+        /** A loop in `mode` whose memory server finds `of:data` plain. */
+        const plainIn = (
           mode: CurrencyIndexMode,
           stats: ServingLoopStats,
         ) =>
@@ -479,7 +497,7 @@ describe("StoreCurrency", () => {
                   servable: roots.filter((root) => root !== "of:data").map((
                     root,
                   ) => ({ root, piece: "of:piece", origins: [] })),
-                  underived: roots.filter((root) => root === "of:data"),
+                  plain: roots.filter((root) => root === "of:data"),
                   held: [],
                   upstream: [],
                   refused: {},
@@ -509,27 +527,27 @@ describe("StoreCurrency", () => {
             true,
           );
 
-        it("returns its key apart from the servable ones, and counts it as underived and not as left unloaded, under `skip`", async () => {
+        it("returns its key apart from the servable ones, and counts it as plain and not as left unloaded, under `skip`", async () => {
           const stats = emptyServingLoopStats();
-          const currency = underivedIn("skip", stats);
+          const currency = plainIn("skip", stats);
 
           const judged = await judgeBoth(currency);
 
-          expect(judged.underived).toEqual(["data"]);
+          expect(judged.plain).toEqual(["data"]);
           expect(judged.servable).toEqual(["result"]);
-          expect(stats.currency.underived).toBe(1);
+          expect(stats.currency.plainRoots).toBe(1);
           expect(stats.currency.servable).toBe(1);
           expect(stats.currency.servedFromStore).toBe(1);
         });
 
-        it("returns its key and counts it as underived, under `record`", async () => {
+        it("returns its key and counts it as plain, under `record`", async () => {
           const stats = emptyServingLoopStats();
-          const currency = underivedIn("record", stats);
+          const currency = plainIn("record", stats);
 
           const judged = await judgeBoth(currency);
 
-          expect(judged.underived).toEqual(["data"]);
-          expect(stats.currency.underived).toBe(1);
+          expect(judged.plain).toEqual(["data"]);
+          expect(stats.currency.plainRoots).toBe(1);
           expect(stats.currency.servedFromStore).toBe(0);
         });
       });
@@ -701,7 +719,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: [],
           origins: new Map(),
-          underived: [],
+          plain: [],
           held: [],
           rearm: [],
         });
@@ -740,7 +758,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: [],
           origins: new Map(),
-          underived: [],
+          plain: [],
           held: [],
           rearm: [],
         });
@@ -755,7 +773,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: [],
           origins: new Map(),
-          underived: [],
+          plain: [],
           held: ["key"],
           rearm: [],
         });
@@ -789,7 +807,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: ["key"],
           origins: new Map(),
-          underived: [],
+          plain: [],
           held: [],
           rearm: [],
         });
@@ -830,7 +848,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: [],
           origins: new Map(),
-          underived: [],
+          plain: [],
           held: ["key"],
           rearm: [],
         });

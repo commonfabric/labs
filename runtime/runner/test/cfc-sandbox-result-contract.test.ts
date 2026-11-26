@@ -1,7 +1,8 @@
 import { assertEquals } from "@std/assert";
 import type { CfcSandboxResult } from "../src/cfc/mod.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("CfcSandboxResult represents observed, opaque, and denied outputs", () => {
+test("CfcSandboxResult represents observed, opaque, and denied outputs", () => {
   const result = {
     version: 1,
     stdout: {

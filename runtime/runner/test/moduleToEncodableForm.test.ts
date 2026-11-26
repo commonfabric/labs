@@ -5,13 +5,18 @@
  * JavaScript.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { moduleToEncodableForm } from "../src/builder/to-encodable-form.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";

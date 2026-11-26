@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { paintDashboardMessageInput } from "./dashboard-message-client.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const VISIBLE_MS = 2 * 60 * 60 * 1_000;
 const FADE_MS = 4 * 60 * 60 * 1_000;
@@ -12,7 +13,7 @@ function editor(value: string): HTMLInputElement {
   return input;
 }
 
-Deno.test("a focused saved message fades and expires", () => {
+test("a focused saved message fades and expires", () => {
   const input = editor("Saved message");
   const state = {
     savedText: input.value,
@@ -50,7 +51,7 @@ Deno.test("a focused saved message fades and expires", () => {
 });
 
 for (const protectedState of ["dirty", "pending"] as const) {
-  Deno.test(`a ${protectedState} message stays visible past expiry`, () => {
+  test(`a ${protectedState} message stays visible past expiry`, () => {
     const input = editor("Local draft");
     const state = {
       savedText: "Saved message",
@@ -75,7 +76,7 @@ for (const protectedState of ["dirty", "pending"] as const) {
   });
 }
 
-Deno.test("an empty message remains ready for editing", () => {
+test("an empty message remains ready for editing", () => {
   const input = editor("");
   const state = {
     savedText: "",

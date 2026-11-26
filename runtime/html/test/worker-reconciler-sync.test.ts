@@ -3,6 +3,8 @@ import { Identity } from "@commonfabric/identity";
 import { type Cell, Runtime, type VNode } from "@commonfabric/runner";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
 
@@ -73,10 +75,10 @@ async function renderAndCollect(
   }
 }
 
-Deno.test(
+test(
   "worker reconciler preserves sync state across VDOM asCell cuts",
-  async (t) => {
-    const { syncCalls } = await renderAndCollect(t.settle, {
+  async () => {
+    const { syncCalls } = await renderAndCollect(clock.settle, {
       type: "vnode",
       name: "main",
       props: {},
@@ -104,11 +106,11 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "worker reconciler reuses VDOM schema coverage for style objects",
-  async (t) => {
+  async () => {
     const { syncCalls, updateOps } = await renderAndCollect(
-      t.settle,
+      clock.settle,
       {
         type: "vnode",
         name: "div",

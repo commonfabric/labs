@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CellScope, JSONSchema } from "@commonfabric/api";
 import type { DID } from "@commonfabric/identity";
 import { favoriteKey } from "@commonfabric/home-schemas";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   type FavoritePieceAddress,

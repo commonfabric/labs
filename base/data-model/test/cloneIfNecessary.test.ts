@@ -18,7 +18,6 @@
  * the others.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -37,6 +36,7 @@ import {
   FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
   FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY,
 } from "@/for-testing-only.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("cloneIfNecessary()", () => {
   describe(`error cases`, () => {

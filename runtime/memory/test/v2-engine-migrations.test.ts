@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
@@ -8,6 +7,12 @@ import {
   insertExecutionOutboxRows,
   selectPendingExecutionOutboxRows,
 } from "../v2/execution-outbox.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("engine migrations", () => {
   let path: string;

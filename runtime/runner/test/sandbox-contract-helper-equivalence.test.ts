@@ -6,6 +6,7 @@ import {
   createFunctionHardeningHelperSource,
   FUNCTION_HARDENING_HELPER_NAME,
 } from "@commonfabric/pattern-contract/sandbox-contract";
+import { test } from "@commonfabric/test-support/test";
 import { stripJsTrivia } from "../src/sandbox/compiled-js-parser.ts";
 import { COMMONFABRIC_TYPES } from "../../../base/ts-transformers/test/commonfabric-test-types.ts";
 import { transformSource } from "../../../base/ts-transformers/test/utils.ts";
@@ -27,7 +28,7 @@ function emittedFunction(
   return stripJsTrivia(source, match.getStart(sourceFile), match.getEnd());
 }
 
-Deno.test("transformer hardening helpers match the sandbox verifier contract", async () => {
+test("transformer hardening helpers match the sandbox verifier contract", async () => {
   const output = await transformSource(
     `/// <cts-enable />
       import { pattern, WriteAuthorizedBy } from "commonfabric";

@@ -2,7 +2,6 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import { CFPatternInstall } from "./index.ts";
@@ -11,6 +10,7 @@ import {
   installWording,
   plainName,
 } from "./cf-pattern-install.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A component mounted with `properties`. */
 function installWith(

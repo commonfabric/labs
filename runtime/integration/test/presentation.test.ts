@@ -14,12 +14,13 @@ import {
 } from "../presentation/mod.ts";
 import type { ScreencastFrame } from "../astral-adapter.ts";
 import { Page } from "../page.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("parsePresentationConfig stays disabled without an output directory", () => {
+test("parsePresentationConfig stays disabled without an output directory", () => {
   assertEquals(parsePresentationConfig({}), { enabled: false });
 });
 
-Deno.test("Page runs the navigation hook after goto and reload", async () => {
+test("Page runs the navigation hook after goto and reload", async () => {
   const navigations: string[] = [];
   const celestial = new EventTarget() as EventTarget & {
     Page: {
@@ -58,7 +59,7 @@ Deno.test("Page runs the navigation hook after goto and reload", async () => {
   assertEquals(hookCalls, 2);
 });
 
-Deno.test("Page runs every navigation hook, and stops one that is removed", async () => {
+test("Page runs every navigation hook, and stops one that is removed", async () => {
   const celestial = new EventTarget() as EventTarget & {
     Page: {
       setLifecycleEventsEnabled(): Promise<Record<string, never>>;
@@ -93,7 +94,7 @@ Deno.test("Page runs every navigation hook, and stops one that is removed", asyn
   assertEquals(order, ["first", "second", "first"]);
 });
 
-Deno.test("Page skips a navigation hook removed while an earlier one waits", async () => {
+test("Page skips a navigation hook removed while an earlier one waits", async () => {
   const celestial = new EventTarget() as EventTarget & {
     Page: {
       setLifecycleEventsEnabled(): Promise<Record<string, never>>;
@@ -131,7 +132,7 @@ Deno.test("Page skips a navigation hook removed while an earlier one waits", asy
   assertEquals(order, ["first"]);
 });
 
-Deno.test("Page navigation does not depend on Astral's retry wrapper", async () => {
+test("Page navigation does not depend on Astral's retry wrapper", async () => {
   const navigationCalls: unknown[] = [];
   const lifecycleCalls: unknown[] = [];
   const celestial = new EventTarget() as EventTarget & {
@@ -192,7 +193,7 @@ Deno.test("Page navigation does not depend on Astral's retry wrapper", async () 
   assertEquals(hookCalls, 1);
 });
 
-Deno.test("Page navigation ignores unrelated lifecycle events", async () => {
+test("Page navigation ignores unrelated lifecycle events", async () => {
   let navigationStarted!: () => void;
   const started = new Promise<void>((resolve) => {
     navigationStarted = resolve;
@@ -246,7 +247,7 @@ Deno.test("Page navigation ignores unrelated lifecycle events", async () => {
   assertEquals(completed, true);
 });
 
-Deno.test("Page navigation maps the explicit load option", async () => {
+test("Page navigation maps the explicit load option", async () => {
   const lifecycleNames: string[] = [];
   const celestial = new EventTarget() as EventTarget & {
     Page: {
@@ -279,7 +280,7 @@ Deno.test("Page navigation maps the explicit load option", async () => {
   assertEquals(lifecycleNames, ["load"]);
 });
 
-Deno.test("Page navigation accepts DOMContentLoaded by default", async () => {
+test("Page navigation accepts DOMContentLoaded by default", async () => {
   const celestial = new EventTarget() as EventTarget & {
     Page: {
       setLifecycleEventsEnabled(): Promise<Record<string, never>>;
@@ -308,7 +309,7 @@ Deno.test("Page navigation accepts DOMContentLoaded by default", async () => {
   await page.goto("https://example.test/");
 });
 
-Deno.test("Page navigation rejects when its browser session detaches", async () => {
+test("Page navigation rejects when its browser session detaches", async () => {
   let navigationStarted!: () => void;
   const started = new Promise<void>((resolve) => {
     navigationStarted = resolve;
@@ -348,7 +349,7 @@ Deno.test("Page navigation rejects when its browser session detaches", async () 
   );
 });
 
-Deno.test("Page navigation cleans up after its frame detaches", async () => {
+test("Page navigation cleans up after its frame detaches", async () => {
   let navigationStarted!: () => void;
   const started = new Promise<void>((resolve) => {
     navigationStarted = resolve;
@@ -408,7 +409,7 @@ Deno.test("Page navigation cleans up after its frame detaches", async () => {
   ]);
 });
 
-Deno.test("Page detects an early frame detachment without a loader", async () => {
+test("Page detects an early frame detachment without a loader", async () => {
   const celestial = new EventTarget() as EventTarget & {
     Page: {
       setLifecycleEventsEnabled(): Promise<Record<string, never>>;
@@ -441,7 +442,7 @@ Deno.test("Page detects an early frame detachment without a loader", async () =>
   );
 });
 
-Deno.test("Page rejects when its frame stops before becoming ready", async () => {
+test("Page rejects when its frame stops before becoming ready", async () => {
   const celestial = new EventTarget() as EventTarget & {
     Page: {
       setLifecycleEventsEnabled(): Promise<Record<string, never>>;
@@ -484,7 +485,7 @@ Deno.test("Page rejects when its frame stops before becoming ready", async () =>
   );
 });
 
-Deno.test("Page rejects when another loader supersedes navigation", async () => {
+test("Page rejects when another loader supersedes navigation", async () => {
   const celestial = new EventTarget() as EventTarget & {
     Page: {
       setLifecycleEventsEnabled(): Promise<Record<string, never>>;
@@ -533,7 +534,7 @@ Deno.test("Page rejects when another loader supersedes navigation", async () => 
   );
 });
 
-Deno.test("Page accepts readiness before its frame stops", async () => {
+test("Page accepts readiness before its frame stops", async () => {
   const celestial = new EventTarget() as EventTarget & {
     Page: {
       setLifecycleEventsEnabled(): Promise<Record<string, never>>;
@@ -567,7 +568,7 @@ Deno.test("Page accepts readiness before its frame stops", async () => {
   await page.goto("https://example.test/");
 });
 
-Deno.test("Page ignores terminal signals from the previous document", async () => {
+test("Page ignores terminal signals from the previous document", async () => {
   const celestial = new EventTarget() as EventTarget & {
     Page: {
       setLifecycleEventsEnabled(): Promise<Record<string, never>>;
@@ -614,7 +615,7 @@ Deno.test("Page ignores terminal signals from the previous document", async () =
   await page.goto("https://example.test/");
 });
 
-Deno.test("Page preserves a navigation command failure after detachment", async () => {
+test("Page preserves a navigation command failure after detachment", async () => {
   let navigationStarted!: () => void;
   const started = new Promise<void>((resolve) => {
     navigationStarted = resolve;
@@ -659,7 +660,7 @@ Deno.test("Page preserves a navigation command failure after detachment", async 
   );
 });
 
-Deno.test("Page preserves navigation failures when cleanup fails", async () => {
+test("Page preserves navigation failures when cleanup fails", async () => {
   let lifecycleCall = 0;
   const celestial = new EventTarget() as EventTarget & {
     Page: {
@@ -691,7 +692,7 @@ Deno.test("Page preserves navigation failures when cleanup fails", async () => {
   );
 });
 
-Deno.test("Page serializes overlapping navigation calls", async () => {
+test("Page serializes overlapping navigation calls", async () => {
   const loaderIds = ["first", "second"];
   const navigationCalls: string[] = [];
   let firstNavigationStarted!: () => void;
@@ -746,7 +747,7 @@ Deno.test("Page serializes overlapping navigation calls", async () => {
   assertEquals(navigationCalls, ["first", "second"]);
 });
 
-Deno.test("Page serializes reload behind navigation", async () => {
+test("Page serializes reload behind navigation", async () => {
   const operations: string[] = [];
   let navigationStarted!: () => void;
   const started = new Promise<void>((resolve) => {
@@ -798,7 +799,7 @@ Deno.test("Page serializes reload behind navigation", async () => {
   assertEquals(operations, ["goto", "reload"]);
 });
 
-Deno.test("parsePresentationConfig supplies deterministic defaults", () => {
+test("parsePresentationConfig supplies deterministic defaults", () => {
   const config = parsePresentationConfig({
     CF_DEMO_OUTPUT_DIR: "/tmp/demo",
   });
@@ -813,7 +814,7 @@ Deno.test("parsePresentationConfig supplies deterministic defaults", () => {
   assertEquals(config.jpegQuality, 85);
 });
 
-Deno.test("parsePresentationConfig names and validates the output video", () => {
+test("parsePresentationConfig names and validates the output video", () => {
   const config = parsePresentationConfig({
     CF_DEMO_OUTPUT_DIR: "/tmp/demo",
     CF_DEMO_NAME: "lunch-poll-vote",
@@ -831,7 +832,7 @@ Deno.test("parsePresentationConfig names and validates the output video", () => 
   );
 });
 
-Deno.test("parsePresentationConfig validates numeric overrides", () => {
+test("parsePresentationConfig validates numeric overrides", () => {
   assertThrows(
     () =>
       parsePresentationConfig({
@@ -843,7 +844,7 @@ Deno.test("parsePresentationConfig validates numeric overrides", () => {
   );
 });
 
-Deno.test("buildFfconcat preserves variable durations and repeats final frame", () => {
+test("buildFfconcat preserves variable durations and repeats final frame", () => {
   const frames: RecordedFrame[] = [
     frame("frames/000001.jpg", 0, 0.4),
     frame("frames/000002.jpg", 400, 1.1),
@@ -865,7 +866,7 @@ Deno.test("buildFfconcat preserves variable durations and repeats final frame", 
   );
 });
 
-Deno.test("buildFfconcat rejects an empty recording", () => {
+test("buildFfconcat rejects an empty recording", () => {
   assertThrows(
     () => buildFfconcat([]),
     Error,
@@ -873,7 +874,7 @@ Deno.test("buildFfconcat rejects an empty recording", () => {
   );
 });
 
-Deno.test("buildCompositionPlan creates deterministic one through four participant layouts", () => {
+test("buildCompositionPlan creates deterministic one through four participant layouts", () => {
   assertEquals(buildCompositionPlan(["alice"]), {
     width: 1280,
     height: 720,
@@ -902,7 +903,7 @@ Deno.test("buildCompositionPlan creates deterministic one through four participa
   assertStringIncludes(four.filter, "layout=0_0|1280_0|0_720|1280_720");
 });
 
-Deno.test("buildCompositionPlan rejects more than four participants", () => {
+test("buildCompositionPlan rejects more than four participants", () => {
   assertThrows(
     () => buildCompositionPlan(["a", "b", "c", "d", "e"]),
     Error,
@@ -910,7 +911,7 @@ Deno.test("buildCompositionPlan rejects more than four participants", () => {
   );
 });
 
-Deno.test("FrameRecorder acknowledges immediately and preserves variable timing", async () => {
+test("FrameRecorder acknowledges immediately and preserves variable timing", async () => {
   const dir = await Deno.makeTempDir();
   try {
     let now = 100;
@@ -949,7 +950,7 @@ Deno.test("FrameRecorder acknowledges immediately and preserves variable timing"
   }
 });
 
-Deno.test("FrameRecorder waits for late acknowledgment failures", async () => {
+test("FrameRecorder waits for late acknowledgment failures", async () => {
   const dir = await Deno.makeTempDir();
   try {
     let rejectAcknowledgement!: (reason: Error) => void;
@@ -983,7 +984,7 @@ Deno.test("FrameRecorder waits for late acknowledgment failures", async () => {
   }
 });
 
-Deno.test("PresentationSession serializes manifests and records failed steps", async () => {
+test("PresentationSession serializes manifests and records failed steps", async () => {
   const dir = await Deno.makeTempDir();
   try {
     const session = new PresentationSession({

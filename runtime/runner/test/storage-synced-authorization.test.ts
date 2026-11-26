@@ -11,6 +11,7 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { test } from "@commonfabric/test-support/test";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { SessionFactory } from "../src/storage/v2.ts";
@@ -87,7 +88,7 @@ class DenyingWatchSessionFactory implements SessionFactory {
   }
 }
 
-Deno.test(
+test(
   "authorizationError() surfaces a permanent watch denial for the space",
   async () => {
     const signer = await Identity.fromPassphrase("storage-synced-authz-perm");
@@ -113,7 +114,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "authorizationError() stays undefined on a retriable authorization race",
   async () => {
     const signer = await Identity.fromPassphrase("storage-synced-authz-retry");
@@ -262,7 +263,7 @@ class ReconnectDenyingSessionFactory implements SessionFactory {
   }
 }
 
-Deno.test(
+test(
   "authorizationError() surfaces a permanent denial that terminated the session on reconnect",
   async () => {
     const signer = await Identity.fromPassphrase(

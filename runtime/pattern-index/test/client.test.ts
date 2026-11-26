@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -12,6 +11,7 @@ import {
 } from "@commonfabric/pattern-index/client";
 import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const signer = await Identity.fromPassphrase("cf-harness pattern-index client");
 

@@ -10,8 +10,13 @@ import {
   type Page,
   withWaitForConditionTimeout,
 } from "@commonfabric/integration";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import {
   clickCardOpenLink,

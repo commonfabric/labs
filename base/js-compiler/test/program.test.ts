@@ -1,12 +1,12 @@
 import { expect } from "@std/expect";
 import * as path from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import {
   FileSystemProgramResolver,
   HttpProgramResolver,
   InMemoryProgram,
   readDataFileSource,
 } from "../program.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("InMemoryProgram", () => {
   it("resolves empty main and dependency sources", async () => {

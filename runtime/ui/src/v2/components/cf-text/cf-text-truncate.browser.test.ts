@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import "./index.ts";
 import "../cf-hstack/index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 type UpdatingElement = HTMLElement & {
   updateComplete: Promise<unknown>;
@@ -20,7 +21,7 @@ const LONG_TEXT =
   "A very long single line of text that should be clipped to an ellipsis " +
   "instead of overflowing or wrapping onto additional lines in the row.";
 
-Deno.test("cf-text truncate applies single-line ellipsis styles", async () => {
+test("cf-text truncate applies single-line ellipsis styles", async () => {
   const text = document.createElement("cf-text");
   text.setAttribute("truncate", "");
   text.textContent = LONG_TEXT;
@@ -39,7 +40,7 @@ Deno.test("cf-text truncate applies single-line ellipsis styles", async () => {
   }
 });
 
-Deno.test("cf-text truncate shrinks and clips inside a cf-hstack", async () => {
+test("cf-text truncate shrinks and clips inside a cf-hstack", async () => {
   const fixture = document.createElement("div");
   fixture.style.cssText = "width: 240px;";
   fixture.innerHTML = `

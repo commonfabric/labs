@@ -5,7 +5,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type DiffLine,
@@ -29,6 +28,7 @@ import {
   type HighlightEvidence,
   VIEW_LANGUAGE_FIXTURES,
 } from "./fixtures/view-language/corpus.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Every fixture is parsed through its language's synchronous entry points,
 // which show plain text until the language's parser has loaded.
@@ -176,8 +176,14 @@ describe("view language fixture corpus", () => {
     expect(reconstructDiffSide(doc.lines, model!.lines, "add")).toBe(after);
   });
 
+  const titled = new Set<string>();
   for (const fixture of VIEW_LANGUAGE_FIXTURES) {
-    describe(`${fixture.languageId} from ${fixture.surveyRepository}`, () => {
+    // A later fixture of a language from a repository already titled is told
+    // apart by its path, so that its tests are identities of their own.
+    const pair = `${fixture.languageId} from ${fixture.surveyRepository}`;
+    const title = titled.has(pair) ? `${pair} at ${fixture.surveyPath}` : pair;
+    titled.add(pair);
+    describe(title, () => {
       const before = Deno.readTextFileSync(fixture.before);
       const after = Deno.readTextFileSync(fixture.after);
       const incomplete = Deno.readTextFileSync(fixture.incomplete);

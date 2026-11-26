@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   resolveScopeKey,
@@ -6,6 +5,7 @@ import {
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
 import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-keys";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { CellScope } from "../../src/builder/types.ts";
 import type { SchedulerLivenessState } from "../../src/scheduler/dependency-graph.ts";
 import {

@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { GreenBranch } from "../green-branch.ts";
 import { FakeRelay, pushPayload } from "./webhook-relay.ts";
+import { afterEach, beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 const REPO = "example/repo";
 const NOW = Date.UTC(2026, 9, 6, 12, 0);

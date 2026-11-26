@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { ConfidenceAssessment, TapeAnnotation } from "./contract.ts";
 import {
@@ -16,6 +15,7 @@ import {
   type WritableAnnotationFields,
   writeAnnotationEdits,
 } from "./model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const annotation: TapeAnnotation = {
   id: "annotation-stable-id",

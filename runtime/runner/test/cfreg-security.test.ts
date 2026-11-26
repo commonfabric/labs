@@ -12,7 +12,6 @@
  * transactional) in cfreg-builder-identity.test.ts.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -26,6 +25,7 @@ import {
   isTrustedBuilderArtifact,
   noteDerivedCopy,
 } from "../src/builder/pattern-metadata.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const IMPORT = `const cf = require("commonfabric");`;
 

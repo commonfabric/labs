@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { comparePeerBuilds } from "../src/peer-build.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("peer build diagnostics", () => {
   it("captures the loaded build once instead of following a later global override", async () => {

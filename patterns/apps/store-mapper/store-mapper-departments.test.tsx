@@ -20,7 +20,7 @@ import {
   textContent,
   typeInto,
 } from "../../tools/test-support/vnode-helpers.ts";
-import { CorrectionsTab, DepartmentsTab } from "./store-mapper.tsx";
+import { CorrectionsTab, DepartmentsTab } from "./main.tsx";
 
 type WallPosition =
   | "front-left"

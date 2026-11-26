@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   defineIndexedCollections,
@@ -6,6 +5,7 @@ import {
   indexedFieldPath,
   indexedKindOf,
 } from "../../../src/builtins/indexed-collection/definition.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("definition", () => {
   describe("defineIndexedCollections()", () => {

@@ -2,10 +2,10 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import "../cf-radio-group/index.ts";
 import { CFRadio } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A radio mounted with `properties`, inside `parent` when one is given, with

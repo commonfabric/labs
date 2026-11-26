@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { join } from "@std/path";
 import { realWorkspace } from "../lib/view/diffdoc.ts";
+import { test } from "@commonfabric/test-support/test";
 
 //
 // realWorkspace.resolve: the file-vs-directory check
@@ -13,7 +14,7 @@ import { realWorkspace } from "../lib/view/diffdoc.ts";
 // a real `cf view` invocation drives.
 //
 
-Deno.test("realWorkspace.resolve: a bounded regular file resolves to its absolute path", () => {
+test("realWorkspace.resolve: a bounded regular file resolves to its absolute path", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.mkdirSync(join(root, ".git"));
@@ -28,7 +29,7 @@ Deno.test("realWorkspace.resolve: a bounded regular file resolves to its absolut
   }
 });
 
-Deno.test("realWorkspace.resolve: a symlink to a bounded file resolves through realpath", () => {
+test("realWorkspace.resolve: a symlink to a bounded file resolves through realpath", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.mkdirSync(join(root, ".git"));
@@ -46,7 +47,7 @@ Deno.test("realWorkspace.resolve: a symlink to a bounded file resolves through r
   }
 });
 
-Deno.test("realWorkspace.resolve: a directory is bounded but not a file, so resolve falls through", () => {
+test("realWorkspace.resolve: a directory is bounded but not a file, so resolve falls through", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.mkdirSync(join(root, ".git"));
@@ -62,7 +63,7 @@ Deno.test("realWorkspace.resolve: a directory is bounded but not a file, so reso
   }
 });
 
-Deno.test("realWorkspace.resolve: an absent bounded path is filtered before statSync", () => {
+test("realWorkspace.resolve: an absent bounded path is filtered before statSync", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.mkdirSync(join(root, ".git"));
@@ -81,7 +82,7 @@ Deno.test("realWorkspace.resolve: an absent bounded path is filtered before stat
   }
 });
 
-Deno.test("realWorkspace.resolve: an absolute diff path resolves to null before the loop", () => {
+test("realWorkspace.resolve: an absolute diff path resolves to null before the loop", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.mkdirSync(join(root, ".git"));
@@ -98,7 +99,7 @@ Deno.test("realWorkspace.resolve: an absolute diff path resolves to null before 
   }
 });
 
-Deno.test("realWorkspace.resolve: a `..` escape above the workspace is blocked", () => {
+test("realWorkspace.resolve: a `..` escape above the workspace is blocked", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.mkdirSync(join(root, ".git"));
@@ -116,7 +117,7 @@ Deno.test("realWorkspace.resolve: a `..` escape above the workspace is blocked",
   }
 });
 
-Deno.test("realWorkspace.resolve: with a repo root above cwd, the second base resolves a file", () => {
+test("realWorkspace.resolve: with a repo root above cwd, the second base resolves a file", () => {
   const repo = Deno.makeTempDirSync();
   try {
     Deno.mkdirSync(join(repo, ".git"));

@@ -2,7 +2,6 @@
 // worker entry is the thing under test, and it must happen after the test has
 // replaced the globals it posts through.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   fabricFromRealmValue,
@@ -11,6 +10,7 @@ import {
 import { getLogger } from "@commonfabric/logger";
 import { CompilerStackLoadError } from "@commonfabric/runner";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   ClientNotificationType,

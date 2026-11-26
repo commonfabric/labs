@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { GraphNodeInfo } from "../src/lib/scheduler-graph-layout.ts";
@@ -11,6 +10,7 @@ import {
   tableGroups,
   type TableSort,
 } from "../src/lib/scheduler-graph-stats.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A computation for `id` that ran `runCount` times for `totalTime`

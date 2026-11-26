@@ -10,9 +10,14 @@
  * `fabrichat-room-list-*` files share.
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Cell } from "@commonfabric/runner";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   adoptedRooms,
   arrivedIn,

@@ -2,6 +2,7 @@ import { assertEquals, assertGreater, assertStringIncludes } from "@std/assert";
 import { validateSource } from "./utils.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function getErrors(diagnostics: readonly TransformationDiagnostic[]) {
   return diagnostics.filter((d) => d.severity === "error");
@@ -14,7 +15,7 @@ function errorsOfType(
   return getErrors(diagnostics).filter((d) => d.type === type);
 }
 
-Deno.test(
+test(
   "computation over reactive property in statement position names the access",
   async () => {
     // validateComputationExpression -> findProblematicAccess: a reactive
@@ -39,7 +40,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "if-condition over locally created computed result is rejected",
   async () => {
     // validateLocalReactiveAliasUsage: an if-statement condition that reads a
@@ -72,7 +73,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "while/for/switch heads over locally created computed results are rejected",
   async () => {
     // validateLocalReactiveAliasUsage while/for/switch statement heads: reading
@@ -138,7 +139,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "member access on a locally created reactive result is rejected",
   async () => {
     // findProblematicUse member-access branch: a topmost property access rooted
@@ -169,7 +170,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "opaque-source call on a locally created reactive result is rejected",
   async () => {
     // findProblematicUse call branch: a `.get()`/`.key()`/`.for()` chain on a
@@ -201,7 +202,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "for-statement without a condition still reports the local reactive use",
   async () => {
     // checkExpression skips a missing expression: a for-statement with no
@@ -234,7 +235,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "condition with a nested callback still reports the local reactive use",
   async () => {
     // findProblematicUse nested-function skip: when the checked expression
@@ -266,7 +267,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "toJSON member on a pattern object literal is rejected",
   async () => {
     // validateObjectMemberCreation: `toJSON` is an ordinary member name, so a
@@ -292,7 +293,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "standalone function calling computed() is rejected",
   async () => {
     // validateStandaloneFunction: a standalone (module-scope) function that
@@ -317,7 +318,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "standalone function calling a reactive array method is rejected",
   async () => {
     // validateStandaloneFunction reactive-array-method branch: a standalone
@@ -342,7 +343,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "callback parameter default initializer capturing a helper is flagged",
   async () => {
     // validateCallbackSelfContainment with a parameter default initializer that
@@ -368,7 +369,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "capturing a non-callable uninitialized local is not flagged",
   async () => {
     // isCallableReference non-callable-capture path: a captured uninitialized
@@ -400,7 +401,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "callback capturing a function-typed parameter is flagged",
   async () => {
     // isSyntacticCallable parameter-type branch -> isCallableTypeNode: a
@@ -430,7 +431,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "callback capturing a parenthesized-function-typed parameter is flagged",
   async () => {
     // isCallableTypeNode parenthesized-type branch: a parameter typed with a
@@ -455,7 +456,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "callback capturing a union-function-typed parameter is flagged",
   async () => {
     // isCallableTypeNode union-type branch: a parameter typed as a union that
@@ -481,7 +482,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "callback capturing an intersection-function-typed parameter is flagged",
   async () => {
     // isCallableTypeNode intersection-type branch: a parameter typed as an
@@ -507,7 +508,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "callback capturing a Function-typed parameter is flagged",
   async () => {
     // isCallableTypeNode Function-reference branch: a parameter typed as the
@@ -532,7 +533,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a helper captured multiple times is reported once",
   async () => {
     // report() dedup: when a single captured helper is referenced multiple

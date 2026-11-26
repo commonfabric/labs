@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import * as packageRoot from "../mod.ts";
 import * as index from "../src/index.ts";
 import { runCfHarnessCli } from "../src/cli.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("mod", () => {
   it("exports every name the source index exports, and nothing else", () => {

@@ -1,10 +1,15 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { llmToolExecutionHelpers } from "../src/builtins/llm-dialog.ts";
 import { cfcObservationFitsCeiling } from "../src/cfc/observation.ts";

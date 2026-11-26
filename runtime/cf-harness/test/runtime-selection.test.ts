@@ -1,6 +1,7 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { join } from "@std/path";
 import { resolveSandboxRuntimeSelection } from "../src/sandbox/runtime-selection.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const never = (): Promise<boolean> => Promise.resolve(false);
 const always = (): Promise<boolean> => Promise.resolve(true);
@@ -10,7 +11,7 @@ const always = (): Promise<boolean> => Promise.resolve(true);
 const FREEBSD = { platform: "freebsd", flags: true } as const;
 const NAMED_RUNSC = { runtime: "runsc", source: "environment" } as const;
 
-Deno.test("a run that names `docker`, or no runtime where there is no default, is refused before any file is looked at", async () => {
+test("a run that names `docker`, or no runtime where there is no default, is refused before any file is looked at", async () => {
   // Loom's dispatch lanes export the network mode and the runsc companions on
   // every run; none of them makes a runtime of a name that is not one.
   const env = {
@@ -58,7 +59,7 @@ Deno.test("a run that names `docker`, or no runtime where there is no default, i
   assertEquals(stats, 0);
 });
 
-Deno.test("explicit rootfs and policy win over the environment and the default", async () => {
+test("explicit rootfs and policy win over the environment and the default", async () => {
   const selected = await resolveSandboxRuntimeSelection(
     {
       HOME: "/home/u",
@@ -95,7 +96,7 @@ Deno.test("explicit rootfs and policy win over the environment and the default",
   );
 });
 
-Deno.test("an explicit empty policy means none: not the environment's, not the default", async () => {
+test("an explicit empty policy means none: not the environment's, not the default", async () => {
   const selected = await resolveSandboxRuntimeSelection(
     {
       HOME: "/home/u",
@@ -111,7 +112,7 @@ Deno.test("an explicit empty policy means none: not the environment's, not the d
   });
 });
 
-Deno.test("the default policy is looked up under the host home an entrypoint names", async () => {
+test("the default policy is looked up under the host home an entrypoint names", async () => {
   // The Loom local host clears HOME from the environment it hands on. The
   // default policy is a machine-level install, so it is found under the home
   // the host kept aside, and only when it is a regular file.
@@ -151,7 +152,7 @@ Deno.test("the default policy is looked up under the host home an entrypoint nam
   }
 });
 
-Deno.test("relative rootfs and policy paths resolve against the working directory", async () => {
+test("relative rootfs and policy paths resolve against the working directory", async () => {
   assertEquals(
     await resolveSandboxRuntimeSelection(
       { CF_HARNESS_SANDBOX_RUNTIME: "runsc", CF_HARNESS_SANDBOX_ROOTFS: "img" },
@@ -167,7 +168,7 @@ Deno.test("relative rootfs and policy paths resolve against the working director
   );
 });
 
-Deno.test("an invalid network mode is refused for the runsc runtime", async () => {
+test("an invalid network mode is refused for the runsc runtime", async () => {
   await assertRejects(
     () =>
       resolveSandboxRuntimeSelection(

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type AppView,
@@ -12,6 +11,7 @@ import {
   spaceViewRef,
   urlToAppView,
 } from "@commonfabric/navigation";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE_DID = "did:key:z6MkjosLwWEobyT9T6RqLTdaEhFrXAZUNkRZJuUae2ukgfEa";
 

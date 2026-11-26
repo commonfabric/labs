@@ -37,6 +37,7 @@ import {
   setServerExecutionConfig,
   type WatchSetResult,
 } from "../v2.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const TEST_AUDIENCE = "did:key:z6Mk-scoped-push-audience";
 const SPACE = "did:key:z6Mk-scoped-push-space";
@@ -114,7 +115,7 @@ const effectUpsertIds = (
   return ids;
 };
 
-Deno.test("scoped push is per-instance: a user-scoped commit refreshes the SAME instance's watcher in another session, and no other instance (M4)", async () => {
+test("scoped push is per-instance: a user-scoped commit refreshes the SAME instance's watcher in another session, and no other instance (M4)", async () => {
   const server = new Server({
     store: new URL("memory://scoped-push"),
     subscriptionRefreshDelayMs: 0,
@@ -226,7 +227,7 @@ Deno.test("scoped push is per-instance: a user-scoped commit refreshes the SAME 
   }
 });
 
-Deno.test("same-principal two-session isolation (Phase-4 review MINOR-5): a derived write into session:p:s1's effects instance delivers the frame to s1 and ZERO rows to s2", async () => {
+test("same-principal two-session isolation (Phase-4 review MINOR-5): a derived write into session:p:s1's effects instance delivers the frame to s1 and ZERO rows to s2", async () => {
   // The sharpest instance pair — `session:p:s1` vs `session:p:s2`
   // differ ONLY in the session segment (one principal). The write is
   // the effect channel's own shape: a DERIVED wave commit addressed by

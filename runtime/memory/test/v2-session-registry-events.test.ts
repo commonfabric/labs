@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type SessionLifecycleEvent,
   SessionRegistry,
 } from "../v2/session-registry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const space = "did:key:z6MkSessionRegistryEventsSpace";
 

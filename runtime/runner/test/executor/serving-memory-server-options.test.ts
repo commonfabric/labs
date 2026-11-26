@@ -6,12 +6,12 @@
  * itself is in `serving-memory-server.test.ts`.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import { createClientInfo } from "@commonfabric/memory/v2/client-info";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   policyFromEnvironment,
   type ServingMemoryServer,

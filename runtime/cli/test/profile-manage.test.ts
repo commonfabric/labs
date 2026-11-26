@@ -6,7 +6,6 @@
  * profiles are made by `createProfile()`, as profile-create.test.ts drives it.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { fromFileUrl } from "@std/path";
@@ -32,6 +31,12 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 import { blobDocumentId } from "@commonfabric/runner/blob-record";
 import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { PiecesController } from "@commonfabric/piece/ops";
 

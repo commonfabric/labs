@@ -5,8 +5,7 @@
     // --preload runs test/clock-preload.ts before the test modules; it replaces
     // the clock so the runtime's own timers auto-advance and test sleeps freeze.
     // See that file and docs/development/waiting-in-tests.md. --no-check: the
-    // global `clock` type lives in test/clock.d.ts, which `deno task check` sees
-    // by type-checking the package directory as one program.
+    // type check is a suite of its own.
     // --allow-run: commit-callback-release.test.ts, document-release.test.ts
     // and read-release.test.ts re-invoke `deno` by name for a helper that
     // needs --expose-gc and the real clock, and silent-backstop-guard.test.ts
@@ -69,6 +68,7 @@
     "./scope": "./src/scope.ts",
     "./component-read-contract": "./src/component-read-contract.ts",
     "./telemetry-otel-bridge": "./src/telemetry-otel-bridge.ts",
+    "./storage/array-edit-script": "./src/storage/array-edit-script.ts",
     "./storage/write-stack-trace": "./src/storage/write-stack-trace.ts",
     "./traverse": "./src/traverse.ts",
     "./graph-query": "./src/graph-query.ts",

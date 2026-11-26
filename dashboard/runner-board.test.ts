@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   abbreviateHashes,
@@ -26,6 +25,7 @@ import {
   type Token,
 } from "./runner-board.ts";
 import type { ActiveJob } from "./runner-jobs.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const MAC = ["self-hosted", "macOS", "ARM64", "ci-mac-01", "cf-mac"];

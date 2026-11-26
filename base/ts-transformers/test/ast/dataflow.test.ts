@@ -2,6 +2,7 @@ import { assert, assertEquals, assertStrictEquals } from "@std/assert";
 import ts from "typescript";
 
 import { createDataFlowAnalyzer } from "../../src/ast/dataflow.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // A minimal branded-cell setup so that `state.*` reads resolve to a reactive
 // (opaque) type under `noLib`, mirroring the reactive harness prelude.
@@ -78,7 +79,7 @@ function findInitializer(
   return found;
 }
 
-Deno.test("createDataFlowAnalyzer caches repeated analysis for the same node", () => {
+test("createDataFlowAnalyzer caches repeated analysis for the same node", () => {
   const { sourceFile, checker } = createProgram(`
     declare const foo: number;
     declare const bar: number;
@@ -95,7 +96,7 @@ Deno.test("createDataFlowAnalyzer caches repeated analysis for the same node", (
   assertStrictEquals(second, first);
 });
 
-Deno.test("property read of a const object spread still resolves through the literal", () => {
+test("property read of a const object spread still resolves through the literal", () => {
   // The aggregate's only property comes from a spread, so the static-property
   // lookup short-circuits on the spread assignment and falls back to the
   // resolved (reactive) property type.
@@ -111,7 +112,7 @@ Deno.test("property read of a const object spread still resolves through the lit
   assert(analysis.containsReactive, "spread-sourced reactive prop is reactive");
 });
 
-Deno.test("property read of a const object shorthand follows the shorthand initializer", () => {
+test("property read of a const object shorthand follows the shorthand initializer", () => {
   // The aggregate uses a shorthand property whose name matches the access, so
   // the lookup returns the shorthand identifier and analyzes it.
   // `other` is a trailing shorthand that the reverse-order scan visits and
@@ -129,7 +130,7 @@ Deno.test("property read of a const object shorthand follows the shorthand initi
   assert(analysis.containsReactive, "shorthand reactive prop is reactive");
 });
 
-Deno.test("property read of a const object missing the key is not reactive", () => {
+test("property read of a const object missing the key is not reactive", () => {
   const { sourceFile, checker } = createProgram(`
     ${REACTIVE_PRELUDE}
     const agg = { a: 1 };
@@ -142,7 +143,7 @@ Deno.test("property read of a const object missing the key is not reactive", () 
   assertEquals(analysis.dataFlows.length, 0);
 });
 
-Deno.test("tagged template without substitutions is inert", () => {
+test("tagged template without substitutions is inert", () => {
   const { sourceFile, checker } = createProgram(`
     ${REACTIVE_PRELUDE}
     const value = tag\`plain text\`;
@@ -154,7 +155,7 @@ Deno.test("tagged template without substitutions is inert", () => {
   assertEquals(analysis.dataFlows.length, 0);
 });
 
-Deno.test("tagged template with a reactive substitution is reactive", () => {
+test("tagged template with a reactive substitution is reactive", () => {
   const { sourceFile, checker } = createProgram(`
     ${REACTIVE_PRELUDE}
     const value = tag\`count: \${state.count}\`;
@@ -198,7 +199,7 @@ function createTsxProgram(source: string): {
   return { sourceFile, checker: program.getTypeChecker() };
 }
 
-Deno.test("JSX fragment children carry through reactive dataflow", () => {
+test("JSX fragment children carry through reactive dataflow", () => {
   const { sourceFile, checker } = createTsxProgram(`
     ${REACTIVE_PRELUDE}
     const value = <>{state.count}</>;

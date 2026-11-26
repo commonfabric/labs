@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import ports from "@commonfabric/ports" with { type: "json" };
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { defaultApiUrl } from "../../src/builder/env.ts";
 

@@ -1,8 +1,8 @@
 /** Exercises React-shaped subscriptions and mutations without bundling React. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { FabricClient, ResourceSnapshot } from "../src/guest.ts";
 import { createFabricReact, type ReactHooks } from "../src/react.ts";

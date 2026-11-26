@@ -2,6 +2,7 @@ import { assert, assertEquals } from "@std/assert";
 import { transformSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callSchemas, callsNamed, parseModule } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // A few branches in schema-injection.ts run only while a pattern compiles
 // through the transformer from cold. When CI's compile cache is warm the
@@ -21,7 +22,7 @@ function t(source: string): Promise<string> {
 // deno-lint-ignore no-explicit-any
 type Obj = Record<string, any>;
 
-Deno.test(
+test(
   "a lift result recovered as any leaves the downstream capture schema permissive",
   async () => {
     // `liftSummary` is applied to build `summary`, which a `computed` closure then
@@ -63,7 +64,7 @@ export default pattern<{ primary: Cell<number>; secondary: Cell<number> }>(
   },
 );
 
-Deno.test(
+test(
   "a lift result recovered as a concrete object keeps its projected schema",
   async () => {
     // Companion to the case above: with a concrete lift callback return type the
@@ -114,7 +115,7 @@ export default pattern<{ primary: Cell<number>; secondary: Cell<number> }>(
   },
 );
 
-Deno.test(
+test(
   "a parenthesized scope-wrapper type on an inferred lift object return declares no scope",
   async () => {
     // The lift callback returns `{ v }` where `v` is declared with the

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -6,6 +5,7 @@ import { LiftLoweringTransformer } from "../../src/lift/transformer.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { callsNamed, parseModule } from "../transformed-ast.ts";
 import { createInMemoryProgram } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Runs only `LiftLoweringTransformer` over `source`, compiled against the

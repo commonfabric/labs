@@ -250,7 +250,10 @@ export {
 export {
   currentPatternKey,
   formerPatternKey,
+  formerPatternKeys,
   mainNamesPattern,
+  type PatternKeyMoves,
+  patternKeyMovesIn,
 } from "./pattern-key-moves.ts";
 export { DocumentLoadError, loadDocument } from "./document-readiness.ts";
 export {
@@ -314,6 +317,7 @@ export {
   setPatternRepository,
   setPatternSource,
   setPieceReconciliation,
+  stampCreatedFromOrigin,
   STORED_ARGUMENT_SCHEMA_REFUSAL,
 } from "./runner.ts";
 export {

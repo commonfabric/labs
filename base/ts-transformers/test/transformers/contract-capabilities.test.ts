@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { CapabilityParamSummary } from "../../src/core/mod.ts";
 import { narrowEventCapabilities } from "../../src/transformers/contract-capabilities.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("contract-capabilities", () => {
   describe("narrowEventCapabilities()", () => {

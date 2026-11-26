@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   BACKGROUND_LOG_ENV,
   READY_MARKER,

@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { exists } from "@std/fs";
-import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
@@ -8,6 +7,7 @@ import {
   decomposeSchema,
   STORED_ARGUMENT_SCHEMA_REFUSAL,
 } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   schemaRelaxedForComparison,

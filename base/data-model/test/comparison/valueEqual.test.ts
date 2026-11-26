@@ -18,7 +18,6 @@
  * for those, and so must this, so they pin the absence of an over-correction.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { deepFreeze, type FabricValue, hashStringOf, valueEqual } from "@";
@@ -31,6 +30,7 @@ import {
   FabricEpochDay,
   FabricUnavailable,
 } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("valueEqual()", () => {
   describe("shared and cyclic graphs", () => {

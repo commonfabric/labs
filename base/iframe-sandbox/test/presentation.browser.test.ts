@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 
 import { CommonIframeSandboxElement } from "../src/common-iframe-sandbox.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** Returns the next report from this fixture's guest. */
 function report(id: string) {
@@ -43,7 +44,7 @@ function guest(id: string) {
 }
 
 for (const outerFrameUrl of [undefined, "/outer-frame.html"]) {
-  Deno.test(`iframe presentation updates in ${outerFrameUrl ?? "srcdoc"} without replacing the guest`, async () => {
+  test(`iframe presentation updates in ${outerFrameUrl ?? "srcdoc"} without replacing the guest`, async () => {
     const id = crypto.randomUUID();
     const element = new CommonIframeSandboxElement();
     element.outerFrameUrl = outerFrameUrl;
@@ -118,7 +119,7 @@ for (const outerFrameUrl of [undefined, "/outer-frame.html"]) {
 }
 
 for (const outerFrameUrl of [undefined, "/outer-frame.html"]) {
-  Deno.test(`iframe presentation honors guest meta CSP in ${outerFrameUrl ?? "srcdoc"}`, async () => {
+  test(`iframe presentation honors guest meta CSP in ${outerFrameUrl ?? "srcdoc"}`, async () => {
     const id = crypto.randomUUID();
     const element = new CommonIframeSandboxElement();
     element.outerFrameUrl = outerFrameUrl;

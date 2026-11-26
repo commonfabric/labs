@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { normalizeRenderConfidentialityCeiling } from "../src/worker/types.ts";
 

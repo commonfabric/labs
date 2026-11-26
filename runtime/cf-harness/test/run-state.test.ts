@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   createHarnessHandleTable,
@@ -9,6 +8,7 @@ import {
   createHarnessRunState,
   setHarnessRunStatus,
 } from "../src/run-state.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("run-state", () => {
   describe("setHarnessRunStatus()", () => {

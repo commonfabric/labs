@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   fabricAuthorityMatchesSpaceHost,
@@ -10,6 +9,7 @@ import {
   spaceHostFromFabricAuthority,
   SpaceHostValidationError,
 } from "../src/space-host.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Returns the `Error` thrown by `run`. */
 function captureError(run: () => unknown): Error {

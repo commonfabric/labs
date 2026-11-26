@@ -1,11 +1,12 @@
-// Flat `Deno.test` cases: this package's tests also run in a browser through
-// `deno-web-test`, which does not support `@std/testing/bdd`.
+// Flat `test()` cases: this package's tests also run in a browser through
+// `deno-web-test`, where `describe()` is not available.
 
 import { expect } from "@std/expect";
 
 import { StaticCache } from "../cache.ts";
 import { generateETag } from "../etag.ts";
 import { TEST_ASSET } from "../utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const BASE = "https://assets.example/static";
 
@@ -31,7 +32,7 @@ async function withFetch(
   return requested;
 }
 
-Deno.test("StaticCache fetches an asset from a base that is not a file, once", async () => {
+test("StaticCache fetches an asset from a base that is not a file, once", async () => {
   const cache = new StaticCache(new URL(BASE));
 
   const requested = await withFetch(
@@ -51,7 +52,7 @@ Deno.test("StaticCache fetches an asset from a base that is not a file, once", a
   expect(requested).toEqual([`${BASE}/${TEST_ASSET}`]);
 });
 
-Deno.test("StaticCache rejects naming the asset and its location when the fetch fails", async () => {
+test("StaticCache rejects naming the asset and its location when the fetch fails", async () => {
   const cache = new StaticCache(new URL(BASE));
 
   await withFetch(
@@ -64,7 +65,7 @@ Deno.test("StaticCache rejects naming the asset and its location when the fetch 
   );
 });
 
-Deno.test("StaticCache throws for an asset the package does not ship, fetching nothing", async () => {
+test("StaticCache throws for an asset the package does not ship, fetching nothing", async () => {
   const cache = new StaticCache(new URL(BASE));
 
   const requested = await withFetch(

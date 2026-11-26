@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { PatternIndexGardenerPromptResponse } from "../src/client.ts";
 import {
@@ -10,6 +9,7 @@ import {
   renderGardenerInput,
   runPrivacyCheck,
 } from "../src/privacy.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const GARDENER: PatternIndexGardenerPromptResponse = {
   name: "privacy",

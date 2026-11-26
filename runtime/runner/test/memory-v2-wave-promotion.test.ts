@@ -1,7 +1,6 @@
 /** Pins local visibility when several sealed writes share one wave commit. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
@@ -16,6 +15,7 @@ import {
   ExecutionLeaseCycle,
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { SealedCommitVerdict } from "../src/storage/interface.ts";
 import type { SpaceReplica } from "../src/storage/v2.ts";

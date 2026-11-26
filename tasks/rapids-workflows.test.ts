@@ -4,12 +4,12 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { parse } from "@std/yaml";
 
 import { z } from "zod";
 
 import { commandWords } from "./ci-workflow.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const stepSchema = z.object({
   id: z.string().optional(),

@@ -1,6 +1,5 @@
 import { assert, assertEquals, assertMatch } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 
@@ -15,6 +14,7 @@ import {
   PatternCoverageTransformer,
 } from "../src/transformers/pattern-coverage.ts";
 import { collect, literalToValue, parseModule } from "./transformed-ast.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 interface TransformResult {
   output: string;
@@ -151,7 +151,7 @@ function expectNoSpanContaining(
   );
 }
 
-Deno.test("instrumented code runs without a collector installed", () => {
+test("instrumented code runs without a collector installed", () => {
   // The probe has to be part of the optional chain. Emitted as a plain call
   // around a chained callee it prints `(globalThis.__cfPatternCoverage?.hit)(…)`,
   // whose parens end the chain: the short-circuit yields `undefined` and calling
@@ -184,7 +184,7 @@ Deno.test("instrumented code runs without a collector installed", () => {
   }
 });
 
-Deno.test("PatternCoverageTransformer skips files when coverage is disabled", () => {
+test("PatternCoverageTransformer skips files when coverage is disabled", () => {
   const source = "const value = 1;";
   const { program, sourceFile } = createProgramForSource(
     "/pattern.tsx",
@@ -197,7 +197,7 @@ Deno.test("PatternCoverageTransformer skips files when coverage is disabled", ()
   assertEquals(transformWithDirectCall(source), "const value = 1;\n");
 });
 
-Deno.test("PatternCoverageTransformer skips declaration files", () => {
+test("PatternCoverageTransformer skips declaration files", () => {
   const source = "declare const value: string;";
   const { program, sourceFile } = createProgramForSource(
     "/types.d.ts",
@@ -216,7 +216,7 @@ Deno.test("PatternCoverageTransformer skips declaration files", () => {
   assertEquals(spans, []);
 });
 
-Deno.test("PatternCoverageTransformer instruments runtime statements", () => {
+test("PatternCoverageTransformer instruments runtime statements", () => {
   const source = `import "./dep.ts";
 export type ExportedType = string;
 interface Shape {
@@ -379,7 +379,7 @@ export {};
   );
 });
 
-Deno.test("PatternCoverageTransformer maps every registered span", () => {
+test("PatternCoverageTransformer maps every registered span", () => {
   const source = `const first = 1;
 function run() {
   const second = 2;
@@ -427,7 +427,7 @@ function run() {
   ]);
 });
 
-Deno.test("PatternCoverageTransformer leaves directive prologues first", () => {
+test("PatternCoverageTransformer leaves directive prologues first", () => {
   const source = `"use strict";
 const top = 1;
 function run() {
@@ -450,7 +450,7 @@ function run() {
   );
 });
 
-Deno.test("CommonFabricTransformerPipeline clears diagnostics", () => {
+test("CommonFabricTransformerPipeline clears diagnostics", () => {
   const pipeline = new CommonFabricTransformerPipeline();
   const diagnostics = pipeline.getDiagnostics() as TransformationDiagnostic[];
   diagnostics.push({
@@ -468,7 +468,7 @@ Deno.test("CommonFabricTransformerPipeline clears diagnostics", () => {
   assertEquals(pipeline.getDiagnostics(), []);
 });
 
-Deno.test("statements rebuilt as synthetic nodes still get coverage", () => {
+test("statements rebuilt as synthetic nodes still get coverage", () => {
   const fileName = "/pattern.tsx";
   const source = "const keep = 1;\nconst drop = 2;\n";
   const { program, sourceFile } = createProgramForSource(fileName, source);
@@ -523,7 +523,7 @@ Deno.test("statements rebuilt as synthetic nodes still get coverage", () => {
   ]);
 });
 
-Deno.test("a synthetic statement with no original keeps its source map range", () => {
+test("a synthetic statement with no original keeps its source map range", () => {
   const fileName = "/pattern.tsx";
   const source = "const keep = 1;\nconst drop = 2;\n";
   const { program, sourceFile } = createProgramForSource(fileName, source);
@@ -579,7 +579,7 @@ Deno.test("a synthetic statement with no original keeps its source map range", (
   ]);
 });
 
-Deno.test("leading non-directive string statement is instrumented", () => {
+test("leading non-directive string statement is instrumented", () => {
   const source = `function f() {
   "leading note";
   doStuff();
@@ -593,7 +593,7 @@ Deno.test("leading non-directive string statement is instrumented", () => {
   assertEquals(spans.some((span) => span.startLine === 2), true);
 });
 
-Deno.test("empty fall-through switch case is recorded", () => {
+test("empty fall-through switch case is recorded", () => {
   const source = `const x = 2;
 switch (x) {
   case 1:
@@ -612,7 +612,7 @@ switch (x) {
   assertEquals(spans.some((span) => span.startLine === caseOneLine), true);
 });
 
-Deno.test("switch default clause statements are recorded", () => {
+test("switch default clause statements are recorded", () => {
   const source = `const x = 3;
 switch (x) {
   case 1:
@@ -635,7 +635,7 @@ switch (x) {
   );
 });
 
-Deno.test("an empty switch default clause is recorded at its label", () => {
+test("an empty switch default clause is recorded at its label", () => {
   const source = `const x = 3;
 switch (x) {
   case 1:
@@ -657,7 +657,7 @@ switch (x) {
   );
 });
 
-Deno.test("single-statement control-flow bodies are wrapped and recorded", () => {
+test("single-statement control-flow bodies are wrapped and recorded", () => {
   const source = `const flag = 1;
 if (flag > 0) doThen(); else doElse();
 if (flag > 0) doIfOnly();

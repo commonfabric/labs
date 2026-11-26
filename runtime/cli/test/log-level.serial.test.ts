@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { getGlobalLogFloor, setGlobalLogFloor } from "@commonfabric/logger";
+import { test } from "@commonfabric/test-support/test";
 import { applyLogLevel, extractLogLevel } from "../lib/log-level.ts";
 
 // applyLogLevel mutates the global log floor and the CF_LOG_LEVEL env var;
@@ -19,7 +20,7 @@ function withCleanLogEnv(fn: () => void): void {
   }
 }
 
-Deno.test("applyLogLevel defaults the floor to warn", () => {
+test("applyLogLevel defaults the floor to warn", () => {
   withCleanLogEnv(() => {
     const cleanArgs = applyLogLevel(["check", "./p.tsx"]);
     assertEquals(getGlobalLogFloor(), "warn");
@@ -28,7 +29,7 @@ Deno.test("applyLogLevel defaults the floor to warn", () => {
   });
 });
 
-Deno.test("applyLogLevel honors an explicit --log-level and strips it", () => {
+test("applyLogLevel honors an explicit --log-level and strips it", () => {
   withCleanLogEnv(() => {
     const cleanArgs = applyLogLevel([
       "--log-level",
@@ -42,7 +43,7 @@ Deno.test("applyLogLevel honors an explicit --log-level and strips it", () => {
   });
 });
 
-Deno.test("applyLogLevel leaves a preset CF_LOG_LEVEL untouched", () => {
+test("applyLogLevel leaves a preset CF_LOG_LEVEL untouched", () => {
   withCleanLogEnv(() => {
     Deno.env.set("CF_LOG_LEVEL", "debug");
     setGlobalLogFloor("debug");
@@ -53,7 +54,7 @@ Deno.test("applyLogLevel leaves a preset CF_LOG_LEVEL untouched", () => {
   });
 });
 
-Deno.test("extractLogLevel ignores an invalid --log-level value", () => {
+test("extractLogLevel ignores an invalid --log-level value", () => {
   // A non-level value is not consumed; it stays in the args and no level is
   // returned, so applyLogLevel falls through to the warn default.
   const { level, args } = extractLogLevel(["--log-level", "bogus", "check"]);
@@ -61,7 +62,7 @@ Deno.test("extractLogLevel ignores an invalid --log-level value", () => {
   assertEquals(args, ["--log-level", "bogus", "check"]);
 });
 
-Deno.test("extractLogLevel leaves payload args after -- untouched", () => {
+test("extractLogLevel leaves payload args after -- untouched", () => {
   // `--log-level error` after `--` is a schema-derived flag for the target
   // handler, not a CLI directive; eating it would silently drop handler input.
   const { level, args } = extractLogLevel([
@@ -75,7 +76,7 @@ Deno.test("extractLogLevel leaves payload args after -- untouched", () => {
   assertEquals(args, ["call", "h", "--", "--log-level", "error"]);
 });
 
-Deno.test("extractLogLevel consumes the leading flag and keeps the payload one", () => {
+test("extractLogLevel consumes the leading flag and keeps the payload one", () => {
   const { level, args } = extractLogLevel([
     "--log-level",
     "debug",
@@ -89,7 +90,7 @@ Deno.test("extractLogLevel consumes the leading flag and keeps the payload one",
   assertEquals(args, ["call", "h", "--", "--log-level", "error"]);
 });
 
-Deno.test("extractLogLevel does not pair a flag with a value across --", () => {
+test("extractLogLevel does not pair a flag with a value across --", () => {
   // `--log-level` as the last token before `--` has no in-bounds value; it
   // stays put rather than consuming the payload boundary.
   const { level, args } = extractLogLevel(["--log-level", "--", "error"]);

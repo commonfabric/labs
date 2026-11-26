@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -17,6 +16,7 @@ import {
   HEALTH_MIN_LANES,
   LANE_BUDGET_SECONDS,
 } from "./policy.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A manifest holding one identity of each suite named, with their fits. */
 function manifestOf(

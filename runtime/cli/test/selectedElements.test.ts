@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   parseSelectionFilter,
   parseSelectProjection,
   selectedElements,
 } from "../lib/cell-selection.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("selectedElements()", () => {
   const filter = parseSelectionFilter('.title == "Kept"');

@@ -21,7 +21,7 @@ import {
   sortedIds,
   statsText,
 } from "./classifier-test-fixture.ts";
-import SelfImprovingClassifier from "./self-improving-classifier.tsx";
+import SelfImprovingClassifier from "./main.tsx";
 
 const QUESTION_PLACEHOLDER =
   "Enter your classification question (e.g., 'Is this email a bill?')";

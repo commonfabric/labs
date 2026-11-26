@@ -8,8 +8,8 @@
 // package preload and expects it to FAIL. The ride is shared with the base
 // fixture through `conflict-read-repair-backstop-scenario.ts`.
 
-import { describe, it } from "@std/testing/bdd";
 import { resetAllLoggerCounts } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 import { rideReadRepairBackstop } from "./conflict-read-repair-backstop-scenario.ts";
 
 describe("a backstop firing survives a later logger reset", () => {

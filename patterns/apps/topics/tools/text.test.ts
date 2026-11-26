@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { center, clip, linkable, span, take, wrap } from "./text.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** `rows` as text. */
 function text(rows: readonly { text: string }[][]): string[] {

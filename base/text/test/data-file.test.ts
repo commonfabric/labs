@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   dataFileAssets,
@@ -8,6 +7,7 @@ import {
   encodeDataFile,
   isStoredAsDataUrl,
 } from "@commonfabric/text/data-file";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The first bytes of a PNG file, which are not valid UTF-8. */
 const PNG_BYTES = new Uint8Array([

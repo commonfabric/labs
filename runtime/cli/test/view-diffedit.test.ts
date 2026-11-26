@@ -8,9 +8,9 @@
 import { assert, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { describe, it } from "@commonfabric/test-support/test";
 import { stripAnsi } from "../lib/view/ansi.ts";
 import { type GitRunner, realGit } from "../lib/view/commitmsg.ts";
 import { parseDiff } from "../lib/view/diff.ts";

@@ -3,6 +3,8 @@ import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { SessionFactory } from "../src/storage/v2.ts";
@@ -53,7 +55,7 @@ function makeServer(): MemoryV2Server.Server {
   return newSharedServer();
 }
 
-Deno.test("runtime.dispose() resolves while a commit is withheld in flight", async () => {
+test("runtime.dispose() resolves while a commit is withheld in flight", async () => {
   // runtime.dispose() tears down storage as part of shutdown, and teardown
   // rejects in-flight commits the way it already rejects in-flight reads,
   // rather than awaiting a confirmation that may never arrive. A commit whose

@@ -248,6 +248,12 @@ export const ui = {
    * them. */
   inputArrow: { fg: C.green, bg: C.editorBg, bold: true } as Style,
 
+  /** The track of a slider, a well like an input line's. */
+  sliderTrack: { fg: C.fgDim, bg: C.editorBg } as Style,
+
+  /** The thumb on a slider's track, at the stop its value is at. */
+  sliderThumb: { fg: C.cyan, bg: C.editorBg, bold: true } as Style,
+
   scrollbarTrack: { fg: C.fgDim } as Style,
   scrollbarThumb: { fg: C.cyan } as Style,
 };

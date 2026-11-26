@@ -27,6 +27,7 @@ import { RUNNERS_PATH } from "./runners-paths.ts";
 import { followUpdates, liveUpdateStream } from "./stream-client.ts";
 import { paintDashboardMessageInput } from "./dashboard-message-client.ts";
 import { reconcileTiles } from "./tiles-client.ts";
+import { receivedText } from "./sent-text.ts";
 import { DASHBOARD_HEADER_RULES, dashboardHeader } from "./dashboard-header.ts";
 import {
   DASHBOARD_MESSAGE_FADE_MS,
@@ -55,6 +56,7 @@ const FOLLOW_UPDATES = followUpdates.toString();
 const DASHBOARD_MESSAGE_OPACITY = dashboardMessageOpacity.toString();
 const PAINT_DASHBOARD_MESSAGE_INPUT = paintDashboardMessageInput.toString();
 const RECONCILE_TILES = reconcileTiles.toString();
+const RECEIVED_TEXT = receivedText.toString();
 
 // How long past the refresh interval the freshness indicator stays orange before
 // it turns red. The page treats the same span of silence from the server as a
@@ -284,6 +286,7 @@ ${DASHBOARD_THEME_CLIENT}
   const dashboardMessageOpacity = ${DASHBOARD_MESSAGE_OPACITY};
   const paintDashboardMessageInput = ${PAINT_DASHBOARD_MESSAGE_INPUT};
   const reconcileTiles = ${RECONCILE_TILES};
+  const receivedText = ${RECEIVED_TEXT};
   const liveUpdateStream = ${LIVE_UPDATE_STREAM};
   const followUpdates = ${FOLLOW_UPDATES};
   const badge = document.getElementById('livebadge');
@@ -400,6 +403,9 @@ ${DASHBOARD_THEME_CLIENT}
     );
     paintDashboardMessage(now);
   }
+  // The markup of each of the two lists of tiles as the stream last sent it,
+  // which each update's edits apply to.
+  let markup = { grid: '', wide: '' };
   function updateTiles(container, html) {
     const template = document.createElement('template');
     template.innerHTML = html;
@@ -410,8 +416,13 @@ ${DASHBOARD_THEME_CLIENT}
     update: (data) => {
       const update = JSON.parse(data);
       if (update.shellVersion !== SHELL_VERSION) { location.reload(); return; }
-      updateTiles(grid, update.gridHtml);
-      updateTiles(wide, update.wideHtml);
+      // Edits that cannot be applied to either list leave both as they were.
+      markup = {
+        grid: receivedText(markup.grid, update.gridHtml),
+        wide: receivedText(markup.wide, update.wideHtml),
+      };
+      updateTiles(grid, markup.grid);
+      updateTiles(wide, markup.wide);
       base = update.ageSeconds;
       t0 = Date.now();
       faviconServerRedSince = update.faviconRedSince;

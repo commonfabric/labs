@@ -17,6 +17,7 @@ import {
   FabricLink,
 } from "@commonfabric/data-model/fabric-instances";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   annotate,
@@ -35,7 +36,7 @@ const UNBOUNDED = {
   maxNodes: Number.POSITIVE_INFINITY,
 };
 
-Deno.test("decode: modern FabricLink is recognized as a link", () => {
+test("decode: modern FabricLink is recognized as a link", () => {
   const link = new FabricLink({ id: "of:target", path: [] });
   const decoded = decodedLinkOf(link);
   assert(decoded, "FabricLink should be recognized");
@@ -47,7 +48,7 @@ Deno.test("decode: modern FabricLink is recognized as a link", () => {
   assertEquals(links[0].link.id, "of:target");
 });
 
-Deno.test("decode: a modern encoded link round-trips to a recognized link", () => {
+test("decode: a modern encoded link round-trips to a recognized link", () => {
   // Encode WITH modern cell rep on (as a modern server would), decode with the
   // inspector's default config — the value-at-rest must still read as a link.
   setModernCellRepConfig(true);
@@ -66,7 +67,7 @@ Deno.test("decode: a modern encoded link round-trips to a recognized link", () =
   JSON.stringify(annotate(decoded));
 });
 
-Deno.test("decode: summarizeLink keeps the computed: scheme visible", () => {
+test("decode: summarizeLink keeps the computed: scheme visible", () => {
   const summary = (id: string) => summarizeLink({ id });
   // The hash preimage is kind-free, so of:fid1:H and computed:fid1:H can be
   // two distinct docs for one cause — the display must NOT conflate them.
@@ -85,7 +86,7 @@ Deno.test("decode: summarizeLink keeps the computed: scheme visible", () => {
   );
 });
 
-Deno.test("decode: BigInt is JSON-safe after annotate", () => {
+test("decode: BigInt is JSON-safe after annotate", () => {
   const annotated = annotate({ big: 10n, nested: [1n, "ok"] }) as {
     big: { $bigint: string };
     nested: Array<unknown>;
@@ -96,7 +97,7 @@ Deno.test("decode: BigInt is JSON-safe after annotate", () => {
   assert(json.includes('"$bigint"'), "bigint lowered to a tagged record");
 });
 
-Deno.test("decode: inspector JSON matches ordinary pretty output", () => {
+test("decode: inspector JSON matches ordinary pretty output", () => {
   const annotated = annotate({
     text: "value",
     list: [1, true, null],
@@ -108,7 +109,7 @@ Deno.test("decode: inspector JSON matches ordinary pretty output", () => {
   );
 });
 
-Deno.test("decode: full-depth output survives deeply nested values", () => {
+test("decode: full-depth output survives deeply nested values", () => {
   const depth = 20_000;
   let value: FabricValue = { leaf: "complete" };
   for (let index = 0; index < depth; index++) value = { child: value };
@@ -123,14 +124,14 @@ Deno.test("decode: full-depth output survives deeply nested values", () => {
   assertEquals(nested, { leaf: "complete" });
 });
 
-Deno.test("decode: full-depth annotation marks cycles", () => {
+test("decode: full-depth annotation marks cycles", () => {
   const value: Record<string, unknown> = {};
   value.self = value;
   // @ts-expect-error A cycle is not a `FabricValue`.
   assertEquals(annotate(value, Number.POSITIVE_INFINITY), { self: "…" });
 });
 
-Deno.test("decode: annotate lowers a `FabricPrimitive` to its debug string", () => {
+test("decode: annotate lowers a `FabricPrimitive` to its debug string", () => {
   // A `FabricPrimitive` keeps its state in private fields, so a walk that
   // rebuilds a record from enumerable properties renders it `{}` -- the outcome
   // `annotate` exists to prevent.
@@ -146,7 +147,7 @@ Deno.test("decode: annotate lowers a `FabricPrimitive` to its debug string", () 
   );
 });
 
-Deno.test("decode: annotate lowers a `FabricInstance` to its debug string", () => {
+test("decode: annotate lowers a `FabricInstance` to its debug string", () => {
   // The other arm of `FabricSpecialObject`. A `FabricInstance` is a container
   // reached by its codec contents rather than by property name, so descending
   // it by name is wrong for a second reason beyond the empty result.
@@ -162,7 +163,7 @@ Deno.test("decode: annotate lowers a `FabricInstance` to its debug string", () =
   );
 });
 
-Deno.test("decode: summarize names a `FabricSpecialObject` of either arm", () => {
+test("decode: summarize names a `FabricSpecialObject` of either arm", () => {
   // `summarize` feeds table cells. The empty-brace rendering is the tell that
   // it descended something it should have named instead.
   for (
@@ -177,7 +178,7 @@ Deno.test("decode: summarize names a `FabricSpecialObject` of either arm", () =>
   }
 });
 
-Deno.test("decode: a present `undefined` is not silently dropped on export", () => {
+test("decode: a present `undefined` is not silently dropped on export", () => {
   // JSON.stringify omits an `undefined` field; the sentinel preserves the
   // present-undefined vs absent-key distinction the data model keeps.
   const annotated = annotate({ a: undefined, b: 1 }) as Record<string, unknown>;
@@ -188,7 +189,7 @@ Deno.test("decode: a present `undefined` is not silently dropped on export", () 
   );
 });
 
-Deno.test("decode: sparse arrays keep holes without scanning their length", () => {
+test("decode: sparse arrays keep holes without scanning their length", () => {
   const sparse: unknown[] = [];
   sparse.length = 1_000_000_000;
   sparse[5] = undefined;
@@ -220,7 +221,7 @@ Deno.test("decode: sparse arrays keep holes without scanning their length", () =
   assert(Object.hasOwn(ordinary, "__proto__"));
 });
 
-Deno.test("decode: summaries escape terminal control characters", () => {
+test("decode: summaries escape terminal control characters", () => {
   assertEquals(
     summarize("\u001b[2Jforged\nline"),
     '"\\u001b[2Jforged\\nline"',

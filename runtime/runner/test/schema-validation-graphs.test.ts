@@ -4,13 +4,13 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import {
   validateAgainstSchemaForSanitization,
   validateSchemaValue,
 } from "../src/cfc/schema-sanitization.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("schema validation over shared graphs", () => {
   it("validates a shared recursive graph with work proportional to its nodes", () => {

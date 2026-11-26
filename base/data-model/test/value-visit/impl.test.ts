@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { deepFreeze } from "@/deep-freeze.ts";
@@ -14,6 +13,7 @@ import {
 } from "@/value-visit";
 
 import { mainResult, mapTo, Recorder } from "./Recorder.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("value-visit/impl", () => {
   describe("mapValue()", () => {

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CiJobs, Job } from "../ci-jobs-page.ts";
 import { RECENT_DISPLAY } from "../config.ts";
@@ -13,6 +12,7 @@ import {
   type Tile,
   type TileView,
 } from "../types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;

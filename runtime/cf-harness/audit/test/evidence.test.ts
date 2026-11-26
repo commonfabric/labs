@@ -6,7 +6,6 @@
  * not read as one it read and found clean.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -16,6 +15,7 @@ import {
   loadRunEvidence,
   loadRunFamily,
 } from "../evidence.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Builds a tree of files under a temporary directory, hands the directory to

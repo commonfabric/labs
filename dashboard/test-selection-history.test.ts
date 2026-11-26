@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import {
@@ -11,6 +10,7 @@ import {
   sampleManifest,
   serializeManifest,
 } from "@commonfabric/test-support/records";
+import { afterEach, beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   makeTestSelectionSource,

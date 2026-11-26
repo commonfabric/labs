@@ -1,10 +1,10 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { readHarnessRunReport } from "../src/artifacts.ts";
 import { createHarnessRunReport } from "../src/contracts/run-report.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("legacy run reports remain readable without provider metadata", async () => {
+test("legacy run reports remain readable without provider metadata", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const path = `${directory}/run-report.json`;
@@ -36,7 +36,7 @@ Deno.test("legacy run reports remain readable without provider metadata", async 
   }
 });
 
-Deno.test("run reports carry the fabric session's resolved CFC posture", () => {
+test("run reports carry the fabric session's resolved CFC posture", () => {
   const fabricSessionCfc = {
     enforcementMode: "enforce-strict",
     enforcementModeSource: "configured",
@@ -63,7 +63,7 @@ Deno.test("run reports carry the fabric session's resolved CFC posture", () => {
   assertEquals(report.fabricSessionCfc, fabricSessionCfc);
 });
 
-Deno.test("run reports omit the fabric-session posture when the run had no session", () => {
+test("run reports omit the fabric-session posture when the run had no session", () => {
   const report = createHarnessRunReport({
     runState: {
       runId: "sessionless-state",
@@ -82,7 +82,7 @@ Deno.test("run reports omit the fabric-session posture when the run had no sessi
   assertEquals("fabricSessionCfc" in report, false);
 });
 
-Deno.test("run reports do not invent API-key auth for legacy run state", () => {
+test("run reports do not invent API-key auth for legacy run state", () => {
   const report = createHarnessRunReport({
     runState: {
       runId: "legacy-state",
@@ -102,7 +102,7 @@ Deno.test("run reports do not invent API-key auth for legacy run state", () => {
   assertEquals(report.modelAuthSource, undefined);
 });
 
-Deno.test("run reports preserve the non-secret local Loom host binding", () => {
+test("run reports preserve the non-secret local Loom host binding", () => {
   const report = createHarnessRunReport({
     runState: {
       runId: "loom-local",
@@ -132,7 +132,7 @@ Deno.test("run reports preserve the non-secret local Loom host binding", () => {
   assertEquals(report.harnessHomeIdentity, "sha256:opaque-home");
 });
 
-Deno.test("run reports preserve aggregate and per-turn model usage", () => {
+test("run reports preserve aggregate and per-turn model usage", () => {
   const usage = {
     inputTokens: 300,
     cachedInputTokens: 100,
@@ -192,7 +192,7 @@ Deno.test("run reports preserve aggregate and per-turn model usage", () => {
   assertEquals(report.cacheAffinity, "custom");
 });
 
-Deno.test("run reports end the timeline with the run's terminal reason and drop undated entries", () => {
+test("run reports end the timeline with the run's terminal reason and drop undated entries", () => {
   const report = createHarnessRunReport({
     runState: {
       runId: "ended-state",

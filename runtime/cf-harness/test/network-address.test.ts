@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
@@ -9,6 +8,7 @@ import {
   normalizeHostname,
   parseIpAddress,
 } from "../src/network-address.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const parsed = (text: string): Uint8Array => {
   const address = parseIpAddress(text);

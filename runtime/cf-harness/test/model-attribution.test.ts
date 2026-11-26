@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { createHarnessRunReport } from "../src/contracts/run-report.ts";
 import { OpenAICompatibleGatewayClient } from "../src/gateway/openai-client.ts";
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";
 import { OpenAICompatibleGatewayModelClient } from "../src/model/openai-compatible-gateway.ts";
 import { OpenAICodexResponsesClient } from "../src/model/openai-codex-responses.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const turn = (model: string): HarnessModelTurnRequest => ({
   model,

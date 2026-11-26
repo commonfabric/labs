@@ -12,9 +12,9 @@
  * rather than returning something a pattern would go on to parse.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createBuilder } from "../src/builder/factory.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("commonfabric dataFile builtin", () => {
   const { dataFile } = createBuilder().commonfabric;

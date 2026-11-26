@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { h } from "../src/builder/h.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("bidirectional binding validation", () => {
   it("throws when `$value` is a primitive string", () => {

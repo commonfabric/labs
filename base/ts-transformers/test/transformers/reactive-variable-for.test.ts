@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { callsNamed, collect, parseModule } from "../transformed-ast.ts";
 import { transformSource } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HEAD = `/// <cts-enable />
 import { pattern, Writable } from "commonfabric";

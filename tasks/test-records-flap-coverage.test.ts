@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { composeLocalContext } from "./test-records.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("composeLocalContext() flap coverage", () => {
   // The arm of composeLocalContext() that records a branch runs when git named

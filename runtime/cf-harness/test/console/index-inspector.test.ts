@@ -2,7 +2,7 @@ import type {
   PatternIndexListedPattern,
   PatternIndexSearchResult,
 } from "@commonfabric/pattern-index/client";
-import { describe, it } from "@std/testing/bdd";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
 import {
   eventBadges,

@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 import { runShutdown } from "@/lib/shutdown.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("shutdown", () => {
   /**

@@ -2,6 +2,7 @@ import { assertEquals } from "@std/assert";
 import ts from "typescript";
 
 import { createBindingPlan } from "../src/transformers/expression-rewrite/bindings.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function parseExpressions(source: string): ts.Expression[] {
   const sourceFile = ts.createSourceFile(
@@ -23,7 +24,7 @@ function parseExpressions(source: string): ts.Expression[] {
   return expressions;
 }
 
-Deno.test("createBindingPlan assigns stable unique binding names", () => {
+test("createBindingPlan assigns stable unique binding names", () => {
   const [first, second, third] = parseExpressions(`
     user.profile.name;
     user.profile.name;
@@ -51,7 +52,7 @@ Deno.test("createBindingPlan assigns stable unique binding names", () => {
   ]);
 });
 
-Deno.test("createBindingPlan keeps single captures as direct bindings", () => {
+test("createBindingPlan keeps single captures as direct bindings", () => {
   const [expression] = parseExpressions("selected.id;");
   const plan = createBindingPlan([{ expression: expression! }] as never);
 

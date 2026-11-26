@@ -6,7 +6,6 @@ import {
 } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   type CachedCiHistoryRefresh,
   type CachedCiRun,
@@ -15,6 +14,7 @@ import {
   CiJobHistoryStore,
   ganttRunSummary,
 } from "./ci-job-cache.ts";
+import { afterEach, beforeEach, describe, it, test } from "@commonfabric/test-support/test";
 
 const DAY_MS = 86_400_000;
 const NOW = Date.UTC(2026, 6, 20);
@@ -58,7 +58,7 @@ function cachedRun(
   };
 }
 
-Deno.test("CI job cache removes the layout that held step detail inline", async () => {
+test("CI job cache removes the layout that held step detail inline", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const superseded = `${directory}/fabric-wall-ci-job-history.json`;
   const file = `${directory}/fabric-wall-ci-run-index.json`;
@@ -92,7 +92,7 @@ Deno.test("CI job cache removes the layout that held step detail inline", async 
   }
 });
 
-Deno.test("CI job cache reports a superseded file it cannot reach", async () => {
+test("CI job cache reports a superseded file it cannot reach", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/fabric-wall-ci-run-index.json`;
   const logged: string[] = [];
@@ -130,7 +130,7 @@ Deno.test("CI job cache reports a superseded file it cannot reach", async () => 
   assertStringIncludes(logged[1], "cannot remove");
 });
 
-Deno.test("CI job cache never removes the file it was given", async () => {
+test("CI job cache never removes the file it was given", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/fabric-wall-ci-job-history.json`;
   try {
@@ -149,7 +149,7 @@ Deno.test("CI job cache never removes the file it was given", async () => {
   }
 });
 
-Deno.test("CI job cache orders retained attempts by when their run started", async () => {
+test("CI job cache orders retained attempts by when their run started", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   try {
     const store = new CiJobHistoryStore(`${directory}/history.json`);
@@ -174,7 +174,7 @@ Deno.test("CI job cache orders retained attempts by when their run started", asy
   }
 });
 
-Deno.test("CI job cache refreshes legacy and outdated samples without dropping their runs", async () => {
+test("CI job cache refreshes legacy and outdated samples without dropping their runs", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   const run = cachedRun(90);
@@ -245,7 +245,7 @@ Deno.test("CI job cache refreshes legacy and outdated samples without dropping t
   }
 });
 
-Deno.test("CI job cache rejects a sampling version that is not a version", async () => {
+test("CI job cache rejects a sampling version that is not a version", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   try {
@@ -283,7 +283,7 @@ Deno.test("CI job cache rejects a sampling version that is not a version", async
   }
 });
 
-Deno.test("CI job cache rejects malformed persisted structures before merging", async () => {
+test("CI job cache rejects malformed persisted structures before merging", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const valid = cachedRun(1);
   const invalidDrawable = structuredClone(valid);
@@ -405,7 +405,7 @@ Deno.test("CI job cache rejects malformed persisted structures before merging", 
   }
 });
 
-Deno.test("CI job cache records a validated commit on an exact run attempt", async () => {
+test("CI job cache records a validated commit on an exact run attempt", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   try {
     const store = new CiJobHistoryStore(`${directory}/history.json`);
@@ -441,7 +441,7 @@ Deno.test("CI job cache records a validated commit on an exact run attempt", asy
   }
 });
 
-Deno.test("CI job cache quarantines future persisted refresh state", async () => {
+test("CI job cache quarantines future persisted refresh state", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   const run = cachedRun(301);
@@ -489,7 +489,7 @@ Deno.test("CI job cache quarantines future persisted refresh state", async () =>
   }
 });
 
-Deno.test("CI job cache validates refresh changes and isolates source revisions", async () => {
+test("CI job cache validates refresh changes and isolates source revisions", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   const now = Date.now;
@@ -613,7 +613,7 @@ Deno.test("CI job cache validates refresh changes and isolates source revisions"
   }
 });
 
-Deno.test("CI job cache drops a refresh whose retained run is pruned", async () => {
+test("CI job cache drops a refresh whose retained run is pruned", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   try {
@@ -644,7 +644,7 @@ Deno.test("CI job cache drops a refresh whose retained run is pruned", async () 
   }
 });
 
-Deno.test("CI job cache removes a temporary file after rename fails", async () => {
+test("CI job cache removes a temporary file after rename fails", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   const rename = Deno.rename;
@@ -667,7 +667,7 @@ Deno.test("CI job cache removes a temporary file after rename fails", async () =
   }
 });
 
-Deno.test("CI job cache preserves a write error when temporary cleanup fails", async () => {
+test("CI job cache preserves a write error when temporary cleanup fails", async () => {
   const directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
   const file = `${directory}/history.json`;
   const rename = Deno.rename;

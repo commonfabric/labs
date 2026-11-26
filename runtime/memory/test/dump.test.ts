@@ -17,6 +17,7 @@ import {
   spaceStorePath,
 } from "../v2/dump.ts";
 import { resolveSpaceStoreUrl } from "../v2/storage-path.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SPACE_A = "did:key:z6MkDumpHelperSpaceAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const SPACE_B = "did:key:z6MkDumpHelperSpaceBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
@@ -52,7 +53,7 @@ async function rm(store: URL): Promise<void> {
   );
 }
 
-Deno.test("listSpaceStores returns decoded DIDs, newest first", async () => {
+test("listSpaceStores returns decoded DIDs, newest first", async () => {
   const store = await makeStore();
   try {
     seedStore(store, SPACE_A, 1);
@@ -70,7 +71,7 @@ Deno.test("listSpaceStores returns decoded DIDs, newest first", async () => {
   }
 });
 
-Deno.test("spaceStorePath matches the server's canonical path + blocks traversal", async () => {
+test("spaceStorePath matches the server's canonical path + blocks traversal", async () => {
   const store = await makeStore();
   try {
     seedStore(store, SPACE_A, 1);
@@ -85,7 +86,7 @@ Deno.test("spaceStorePath matches the server's canonical path + blocks traversal
   }
 });
 
-Deno.test("snapshotSpaceStore produces a consistent, openable copy", async () => {
+test("snapshotSpaceStore produces a consistent, openable copy", async () => {
   const store = await makeStore();
   try {
     seedStore(store, SPACE_A, 100);
@@ -113,7 +114,7 @@ Deno.test("snapshotSpaceStore produces a consistent, openable copy", async () =>
   }
 });
 
-Deno.test("single-file (DB_PATH) mode: literal-%3A filenames round-trip", async () => {
+test("single-file (DB_PATH) mode: literal-%3A filenames round-trip", async () => {
   // Single-file/clustering mode keeps the percent-encoded filename literally on
   // disk (`did%3Akey%3A….sqlite`) — distinct from directory mode. Lock it so a
   // refactor can't silently fork existing clustered data into new files.
@@ -133,7 +134,7 @@ Deno.test("single-file (DB_PATH) mode: literal-%3A filenames round-trip", async 
   }
 });
 
-Deno.test("directory mode: an id with a literal percent-sequence round-trips", async () => {
+test("directory mode: an id with a literal percent-sequence round-trips", async () => {
   // e.g. a did:web with an encoded port. Directory-mode stems are the LITERAL
   // id, so listing must NOT decodeURIComponent them (that corrupted `%3A`→`:`
   // and made the listed id unresolvable).
@@ -148,7 +149,7 @@ Deno.test("directory mode: an id with a literal percent-sequence round-trips", a
   }
 });
 
-Deno.test("listSpaceStores skips entries that aren't space stores", async () => {
+test("listSpaceStores skips entries that aren't space stores", async () => {
   const store = await makeStore();
   try {
     seedStore(store, SPACE_A, 1);
@@ -162,7 +163,7 @@ Deno.test("listSpaceStores skips entries that aren't space stores", async () => 
   }
 });
 
-Deno.test("single-file mode: an undecodable stem is skipped", async () => {
+test("single-file mode: an undecodable stem is skipped", async () => {
   // In single-file mode stems are percent-ENCODED, so a stem that fails to
   // decode cannot be a store we wrote. (In directory mode stems are literal,
   // so the same name would be a valid literal id — no decode happens there.)
@@ -178,7 +179,7 @@ Deno.test("single-file mode: an undecodable stem is skipped", async () => {
   }
 });
 
-Deno.test("listSpaceStores: stat races and null mtimes degrade gracefully", async () => {
+test("listSpaceStores: stat races and null mtimes degrade gracefully", async () => {
   const store = await makeStore();
   const realStat = Deno.statSync;
   try {
@@ -222,7 +223,7 @@ Deno.test("listSpaceStores: stat races and null mtimes degrade gracefully", asyn
   }
 });
 
-Deno.test("spaceStorePath surfaces non-NotFound stat errors", async () => {
+test("spaceStorePath surfaces non-NotFound stat errors", async () => {
   // A store whose engine-v3 "dir" is a FILE → stat of engine-v3/<did>.sqlite
   // fails with NotADirectory, which must rethrow rather than read as "absent".
   const tmp = await Deno.makeTempDir({ prefix: "cf-dump-nadir-" });
@@ -241,7 +242,7 @@ Deno.test("spaceStorePath surfaces non-NotFound stat errors", async () => {
   }
 });
 
-Deno.test("resolveSpaceStoreUrl rejects an unencodable space id", async () => {
+test("resolveSpaceStoreUrl rejects an unencodable space id", async () => {
   // A lone surrogate passes the character guard but encodeURIComponent throws.
   const store = await makeStore();
   try {
@@ -258,7 +259,7 @@ Deno.test("resolveSpaceStoreUrl rejects an unencodable space id", async () => {
   }
 });
 
-Deno.test("listSpaceStores: missing store dir is empty, IO error rethrows", async () => {
+test("listSpaceStores: missing store dir is empty, IO error rethrows", async () => {
   const store = await makeStore(); // exists, but no engine-v3 dir seeded yet
   try {
     assertEquals(listSpaceStores(store), []); // NotFound → []

@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/api";
 import { MERGEABLE_OP_METHODS } from "@commonfabric/api";
 import { patchOpDescriptors } from "@commonfabric/memory/v2/patch";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   buildMergeableIntent,
   MERGEABLE_WIRE_OPS,

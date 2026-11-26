@@ -1,6 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import {
@@ -27,6 +26,7 @@ import {
   transformFiles,
   validateSource,
 } from "./utils.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 //
 // Structural inspection of printed type nodes.
@@ -872,7 +872,7 @@ export default pattern<{ v: any }>(({ v }) => ({ m: l(v) }));`,
   });
 });
 
-Deno.test("applyShrinkAndWrap preserves tuple roots for length-only synthetic shrinking", () => {
+test("applyShrinkAndWrap preserves tuple roots for length-only synthetic shrinking", () => {
   const { sourceFile, checker } = createProgram(`
     type Pair = [number, string];
   `);
@@ -897,7 +897,7 @@ Deno.test("applyShrinkAndWrap preserves tuple roots for length-only synthetic sh
   assertEquals(printTypeNode(result, sourceFile), "Pair");
 });
 
-Deno.test("applyShrinkAndWrap does not treat numeric index signatures as arrays", () => {
+test("applyShrinkAndWrap does not treat numeric index signatures as arrays", () => {
   const { sourceFile, checker } = createProgram(`
     type Indexed = { [index: number]: string };
   `);
@@ -922,7 +922,7 @@ Deno.test("applyShrinkAndWrap does not treat numeric index signatures as arrays"
   assertEquals(printTypeNode(result, sourceFile), "unknown");
 });
 
-Deno.test("applyShrinkAndWrap treats numeric index plus length as array-like", () => {
+test("applyShrinkAndWrap treats numeric index plus length as array-like", () => {
   const { sourceFile, checker } = createProgram(`
     type Option = {
       id: string;
@@ -960,7 +960,7 @@ Deno.test("applyShrinkAndWrap treats numeric index plus length as array-like", (
   );
 });
 
-Deno.test("applyShrinkAndWrap preserves full array item shapes for direct array reads", () => {
+test("applyShrinkAndWrap preserves full array item shapes for direct array reads", () => {
   const { sourceFile, checker } = createProgram(`
     type Input = {
       people: {
@@ -995,7 +995,7 @@ Deno.test("applyShrinkAndWrap preserves full array item shapes for direct array 
   assertEquals(members.has("other"), false);
 });
 
-Deno.test("applyShrinkAndWrap keeps numeric array access array-shaped", () => {
+test("applyShrinkAndWrap keeps numeric array access array-shaped", () => {
   const { sourceFile, checker } = createProgram(`
     type Option = {
       id: string;
@@ -1027,7 +1027,7 @@ Deno.test("applyShrinkAndWrap keeps numeric array access array-shaped", () => {
   );
 });
 
-Deno.test("applyShrinkAndWrap prefers array-shaped semantic shrink over synthetic numeric object", () => {
+test("applyShrinkAndWrap prefers array-shaped semantic shrink over synthetic numeric object", () => {
   const { sourceFile, checker } = createProgram(`
     type Option = {
       id: string;
@@ -1080,7 +1080,7 @@ Deno.test("applyShrinkAndWrap prefers array-shaped semantic shrink over syntheti
   );
 });
 
-Deno.test("applyShrinkAndWrap materializes item paths for synthetic unknown arrays", () => {
+test("applyShrinkAndWrap materializes item paths for synthetic unknown arrays", () => {
   const { sourceFile, checker } = createProgram(`
     type Input = unknown[];
   `);
@@ -1121,7 +1121,7 @@ Deno.test("applyShrinkAndWrap materializes item paths for synthetic unknown arra
   );
 });
 
-Deno.test("applyShrinkAndWrap defaults-only fallback expands repeated child leaves independently", () => {
+test("applyShrinkAndWrap defaults-only fallback expands repeated child leaves independently", () => {
   const { sourceFile, checker } = createProgram(`
     type Shared = { a: string; b: string };
     type Input = { group: { left: Shared; right: Shared } };
@@ -1159,7 +1159,7 @@ Deno.test("applyShrinkAndWrap defaults-only fallback expands repeated child leav
   assert(right && right.type && ts.isTypeLiteralNode(right.type));
 });
 
-Deno.test("applyShrinkAndWrap preserves nested primitive leaves for property-only access", () => {
+test("applyShrinkAndWrap preserves nested primitive leaves for property-only access", () => {
   const { sourceFile, checker } = createProgram(`
     type Input = { text: string };
   `);
@@ -1184,7 +1184,7 @@ Deno.test("applyShrinkAndWrap preserves nested primitive leaves for property-onl
   assertEquals(members.has("length"), false);
 });
 
-Deno.test("applyShrinkAndWrap turns identity-only wrapped inputs into OpaqueCell<unknown>", () => {
+test("applyShrinkAndWrap turns identity-only wrapped inputs into OpaqueCell<unknown>", () => {
   const { sourceFile, checker } = createProgram(`
     type Item = { name: string; nested: { value: number } };
   `);
@@ -1210,7 +1210,7 @@ Deno.test("applyShrinkAndWrap turns identity-only wrapped inputs into OpaqueCell
   );
 });
 
-Deno.test("applyShrinkAndWrap turns comparable wrapped inputs into ComparableCell<unknown>", () => {
+test("applyShrinkAndWrap turns comparable wrapped inputs into ComparableCell<unknown>", () => {
   const { sourceFile, checker } = createProgram(`
     type Item = { name: string; nested: { value: number } };
   `);
@@ -1237,7 +1237,7 @@ Deno.test("applyShrinkAndWrap turns comparable wrapped inputs into ComparableCel
   );
 });
 
-Deno.test("applyShrinkAndWrap turns identity-only unwrapped inputs into unknown", () => {
+test("applyShrinkAndWrap turns identity-only unwrapped inputs into unknown", () => {
   const { sourceFile, checker } = createProgram(`
     type Item = { name: string; nested: { value: number } };
   `);
@@ -1260,7 +1260,7 @@ Deno.test("applyShrinkAndWrap turns identity-only unwrapped inputs into unknown"
   assertEquals(printTypeNode(result, sourceFile), "unknown");
 });
 
-Deno.test("applyShrinkAndWrap turns identity-only cell leaves into OpaqueCell<unknown>", () => {
+test("applyShrinkAndWrap turns identity-only cell leaves into OpaqueCell<unknown>", () => {
   const { sourceFile, checker } = createProgram(`
     declare namespace __cfHelpers {
       export type Writable<T> = { readonly value?: T };
@@ -1294,7 +1294,7 @@ Deno.test("applyShrinkAndWrap turns identity-only cell leaves into OpaqueCell<un
   assertEquals(members.has("nested"), false);
 });
 
-Deno.test("applyShrinkAndWrap turns read-only cell leaves into ReadonlyCell", () => {
+test("applyShrinkAndWrap turns read-only cell leaves into ReadonlyCell", () => {
   const { sourceFile, checker } = createProgram(`
     declare namespace __cfHelpers {
       export type Writable<T> = { readonly value?: T };
@@ -1326,7 +1326,7 @@ Deno.test("applyShrinkAndWrap turns read-only cell leaves into ReadonlyCell", ()
   assertEquals(members.has("untouched"), false);
 });
 
-Deno.test("applyShrinkAndWrap turns opaque derivation cell leaves into OpaqueCell", () => {
+test("applyShrinkAndWrap turns opaque derivation cell leaves into OpaqueCell", () => {
   const { sourceFile, checker } = createProgram(`
     declare namespace __cfHelpers {
       export type Writable<T> = { readonly value?: T };
@@ -1360,7 +1360,7 @@ Deno.test("applyShrinkAndWrap turns opaque derivation cell leaves into OpaqueCel
   assertEquals(members.has("untouched"), false);
 });
 
-Deno.test("applyShrinkAndWrap turns comparable cell leaves into ComparableCell<unknown>", () => {
+test("applyShrinkAndWrap turns comparable cell leaves into ComparableCell<unknown>", () => {
   const { sourceFile, checker } = createProgram(`
     declare namespace __cfHelpers {
       export type Writable<T> = { readonly value?: T };
@@ -1401,7 +1401,7 @@ Deno.test("applyShrinkAndWrap turns comparable cell leaves into ComparableCell<u
   assertEquals(members.has("nested"), false);
 });
 
-Deno.test("applyShrinkAndWrap lets identity containers cover retained child paths", () => {
+test("applyShrinkAndWrap lets identity containers cover retained child paths", () => {
   const { sourceFile, checker } = createProgram(`
     type Input = {
       item: { active: boolean; name: string };
@@ -1430,7 +1430,7 @@ Deno.test("applyShrinkAndWrap lets identity containers cover retained child path
   assertEquals(members.has("name"), false);
 });
 
-Deno.test("applyShrinkAndWrap shrinks direct array parameters to used item fields", () => {
+test("applyShrinkAndWrap shrinks direct array parameters to used item fields", () => {
   const { sourceFile, checker } = createProgram(`
     type AssetRecord = {
       id: string;
@@ -1463,7 +1463,7 @@ Deno.test("applyShrinkAndWrap shrinks direct array parameters to used item field
   assertEquals(members.has("nested"), false);
 });
 
-Deno.test("applyShrinkAndWrap preserves inherited interface fields in array unions", () => {
+test("applyShrinkAndWrap preserves inherited interface fields in array unions", () => {
   const { sourceFile, checker } = createProgram(`
     interface LeadState {
       id: string;
@@ -1499,7 +1499,7 @@ Deno.test("applyShrinkAndWrap preserves inherited interface fields in array unio
   assertEquals(members.has("unused"), false);
 });
 
-Deno.test("applyShrinkAndWrap preserves aliased fixed-symbol keys in node-driven shrinking", () => {
+test("applyShrinkAndWrap preserves aliased fixed-symbol keys in node-driven shrinking", () => {
   const { sourceFile, checker } = createProgramWithFiles({
     "/test.ts": `
       import { SELF as CF_SELF } from "commonfabric";
@@ -1534,7 +1534,7 @@ Deno.test("applyShrinkAndWrap preserves aliased fixed-symbol keys in node-driven
   assertEquals(members.has("value"), false);
 });
 
-Deno.test("applyCapabilityDefaultsToTypeNode applies defaults through tuples and unions", () => {
+test("applyCapabilityDefaultsToTypeNode applies defaults through tuples and unions", () => {
   const { sourceFile, checker } = createProgram(`
     type Input =
       | [{ name?: string; unused?: string }]
@@ -1574,7 +1574,7 @@ Deno.test("applyCapabilityDefaultsToTypeNode applies defaults through tuples and
   );
 });
 
-Deno.test("type shrinking helper predicates detect wrapper type nodes", () => {
+test("type shrinking helper predicates detect wrapper type nodes", () => {
   const { sourceFile, checker } = createProgram(`
     type CellValue = Cell<string>;
     type StreamValue = Stream<string>;
@@ -1601,7 +1601,7 @@ Deno.test("type shrinking helper predicates detect wrapper type nodes", () => {
   assertEquals(preservedWrapperFor(plainNode, undefined, checker), undefined);
 });
 
-Deno.test("applyShrinkAndWrap descends identity paths through named interface references", () => {
+test("applyShrinkAndWrap descends identity paths through named interface references", () => {
   const { sourceFile, checker } = createProgram(`
     declare namespace __cfHelpers {
       export type OpaqueCell<T> = { readonly opaque?: T };
@@ -1636,7 +1636,7 @@ Deno.test("applyShrinkAndWrap descends identity paths through named interface re
   assertEquals(members.get("other")?.type, "string");
 });
 
-Deno.test("applyShrinkAndWrap rebuilds inline literals when a nested identity leaf changes", () => {
+test("applyShrinkAndWrap rebuilds inline literals when a nested identity leaf changes", () => {
   const { sourceFile, checker } = createProgram(`
     declare namespace __cfHelpers {
       export type OpaqueCell<T> = { readonly opaque?: T };
@@ -1669,7 +1669,7 @@ Deno.test("applyShrinkAndWrap rebuilds inline literals when a nested identity le
   assertEquals(members.get("other")?.type, "string");
 });
 
-Deno.test("applyShrinkAndWrap returns an inline literal unchanged when a nested identity path does not resolve", () => {
+test("applyShrinkAndWrap returns an inline literal unchanged when a nested identity path does not resolve", () => {
   const { sourceFile, checker } = createProgram(`
     type Input = {
       a: { x: string };
@@ -1699,7 +1699,7 @@ Deno.test("applyShrinkAndWrap returns an inline literal unchanged when a nested 
   assertEquals(hasQualifiedRef(node, "__cfHelpers", "OpaqueCell"), false);
 });
 
-Deno.test("applyShrinkAndWrap prunes members no path reaches when every path is an identity path", () => {
+test("applyShrinkAndWrap prunes members no path reaches when every path is an identity path", () => {
   const { sourceFile, checker } = createProgram(`
     declare namespace __cfHelpers {
       export type OpaqueCell<T> = { readonly opaque?: T };
@@ -1733,7 +1733,7 @@ Deno.test("applyShrinkAndWrap prunes members no path reaches when every path is 
   assertEquals(members.has("other"), false);
 });
 
-Deno.test("applyShrinkAndWrap leaves array elements untouched when an identity item path does not resolve", () => {
+test("applyShrinkAndWrap leaves array elements untouched when an identity item path does not resolve", () => {
   const { sourceFile, checker } = createProgram(`
     interface Item { keep: string; drop: number; }
     type Input = Item[];
@@ -1760,7 +1760,7 @@ Deno.test("applyShrinkAndWrap leaves array elements untouched when an identity i
   assertEquals(printed, "Item[]");
 });
 
-Deno.test("applyShrinkAndWrap descends identity item paths through readonly arrays", () => {
+test("applyShrinkAndWrap descends identity item paths through readonly arrays", () => {
   const { sourceFile, checker } = createProgram(`
     declare namespace __cfHelpers {
       export type OpaqueCell<T> = { readonly opaque?: T };
@@ -1794,7 +1794,7 @@ Deno.test("applyShrinkAndWrap descends identity item paths through readonly arra
   assertEquals(members.get("drop")?.type, "number");
 });
 
-Deno.test("wrapTypeNodeWithCapability emits the expected cell wrappers", () => {
+test("wrapTypeNodeWithCapability emits the expected cell wrappers", () => {
   const { sourceFile } = createProgram(`type Value = string;`);
   const valueNode = findTypeAlias(sourceFile, "Value").type;
 
@@ -1821,7 +1821,7 @@ Deno.test("wrapTypeNodeWithCapability emits the expected cell wrappers", () => {
   }
 });
 
-Deno.test("applyShrinkAndWrap preserves a parenthesized capture while narrowing cell capability", () => {
+test("applyShrinkAndWrap preserves a parenthesized capture while narrowing cell capability", () => {
   const { sourceFile, checker } = createProgramWithFiles({
     "/commonfabric.d.ts": "export interface Cell<T> { get(): T; }",
     "/test.ts": `

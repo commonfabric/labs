@@ -3,13 +3,13 @@
  * manifest, and what it says when there is not one.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type Manifest,
   sampleEntry,
   sampleManifest,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   FLAKY_SECTION_ID,

@@ -9,7 +9,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { parseDocument, SAMPLE } from "./view-helpers.ts";
 import {
   createDiffSemantics,
@@ -20,6 +19,7 @@ import { diffSemanticsFor } from "../lib/view/languages/language.ts";
 import type { DiffMaps, DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { parseDiff } from "../lib/view/diff.ts";
 import type { Document } from "../lib/view/model.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 const CWD = Deno.cwd();
 
@@ -35,7 +35,7 @@ function nameOffsetOf(doc: Document, name: string): number {
 // createSemantics: lazy build and degrade-to-null paths
 //
 
-Deno.test("semantics: createSemantics returns a service for a single-section blob", () => {
+test("semantics: createSemantics returns a service for a single-section blob", () => {
   // No section headers: the fallback single section runs, the service builds,
   // and a plain binding types — exercising the non-error setup path.
 
@@ -46,7 +46,7 @@ Deno.test("semantics: createSemantics returns a service for a single-section blo
   assertEquals(sem!.typeAt(nameOffsetOf(doc, "s")), "number");
 });
 
-Deno.test("semantics: a failed build latches, so later queries stay silent", () => {
+test("semantics: a failed build latches, so later queries stay silent", () => {
   const blob = `// transformed: /m.ts
 const mystery = undeclaredGlobalThing.field;`;
   const doc = parseDocument(blob);
@@ -60,7 +60,7 @@ const mystery = undeclaredGlobalThing.field;`;
   assert(first === second, "definition lookups are cached by offset");
 });
 
-Deno.test("semantics: typeAt returns null for an out-of-range offset", () => {
+test("semantics: typeAt returns null for an out-of-range offset", () => {
   const blob = `// transformed: /m.ts
 const x = 1;`;
   const sem = createSemantics(blob, { cwd: CWD })!;
@@ -70,14 +70,14 @@ const x = 1;`;
   assertEquals(sem.definitionOf(10_000_000), []);
 });
 
-Deno.test("semantics: empty input yields a silent-but-present service", () => {
+test("semantics: empty input yields a silent-but-present service", () => {
   const sem = createSemantics("", { cwd: CWD });
   assert(sem, "empty input still yields a (silent) service");
   assertEquals(sem!.typeAt(0), null);
   assertEquals(sem!.definitionOf(0), []);
 });
 
-Deno.test("semantics: fileLines reads an in-workspace file and rejects outside", () => {
+test("semantics: fileLines reads an in-workspace file and rejects outside", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), JSON.stringify({}));
@@ -101,7 +101,7 @@ const x = 1;`;
   }
 });
 
-Deno.test("semantics: discoverConfig fallback when no deno.json exists", () => {
+test("semantics: discoverConfig fallback when no deno.json exists", () => {
   const root = Deno.makeTempDirSync();
   try {
     const blob = `// transformed: /m.ts
@@ -116,7 +116,7 @@ const y = x;`;
   }
 });
 
-Deno.test("semantics: definitionOf caches, so the repeat returns the same array", () => {
+test("semantics: definitionOf caches, so the repeat returns the same array", () => {
   const blob = `// transformed: /helpers.ts
 export function triple(n: number): number {
     return n * 3;
@@ -136,7 +136,7 @@ const out = triple(7);`;
 // JSONC parsing edge cases (stripJsonc)
 //
 
-Deno.test("semantics: JSONC import map survives block comments and escapes", () => {
+test("semantics: JSONC import map survives block comments and escapes", () => {
   // A block comment AND a string value containing an escaped quote and a `//`
   // sequence force every branch of stripJsonc: the escape step, the block-
   // comment skip, and the in-string passthrough.
@@ -168,7 +168,7 @@ const flag = ext();`;
   }
 });
 
-Deno.test("semantics: a deno.json with no usable imports yields an empty map", () => {
+test("semantics: a deno.json with no usable imports yields an empty map", () => {
   // imports present but every value is a non-local specifier (jsr:/npm:) — the
   // isLocalSpecifier filter drops them all, leaving an empty import map; and a
   // non-string value is ignored by parseImports.
@@ -192,7 +192,7 @@ const y = x;`;
   }
 });
 
-Deno.test("semantics: an unparseable deno.json degrades to an empty import map", () => {
+test("semantics: an unparseable deno.json degrades to an empty import map", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), "{ not json at all ");
@@ -211,7 +211,7 @@ const y = x;`;
 // typeStringAt branches + lineAndPreview clamp
 //
 
-Deno.test("semantics: typeStringAt returns null when no node holds the offset", () => {
+test("semantics: typeStringAt returns null when no node holds the offset", () => {
   // A run of trailing blank space after the only statement, all inside the
   // single section: those offsets land in no AST node, so nodeAt returns
   // undefined and typeStringAt returns null.
@@ -227,7 +227,7 @@ const x = 1;
   assertEquals(sem.typeAt(blob.length - 2), null);
 });
 
-Deno.test("semantics: definitionOf preview on a last line with no trailing newline", () => {
+test("semantics: definitionOf preview on a last line with no trailing newline", () => {
   // The external definition sits on the file's final line, which has no
   // trailing newline — lineAndPreview's `end < 0` branch clamps to the end.
 
@@ -264,7 +264,7 @@ const flag = ext();`;
 // makeHost: extension classification of resolved modules
 //
 
-Deno.test("semantics: classifies a resolved .tsx import (extensionOf Tsx)", () => {
+test("semantics: classifies a resolved .tsx import (extensionOf Tsx)", () => {
   // The import-map value points directly at a `.tsx` file; resolveRelative
   // returns it verbatim, and extensionOf tags it as Tsx during resolution. The
   // service stays usable whether or not the binding's type flows through.
@@ -291,7 +291,7 @@ const v = comp;`;
   }
 });
 
-Deno.test("semantics: classifies a resolved .d.ts import (extensionOf Dts)", () => {
+test("semantics: classifies a resolved .d.ts import (extensionOf Dts)", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -313,7 +313,7 @@ const v = decl;`;
   }
 });
 
-Deno.test("semantics: classifies a resolved .json import (extensionOf Json)", () => {
+test("semantics: classifies a resolved .json import (extensionOf Json)", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -337,7 +337,7 @@ const v = data;`;
   }
 });
 
-Deno.test("semantics: classifies resolved .jsx and .js imports (extensionOf Jsx/Js)", () => {
+test("semantics: classifies resolved .jsx and .js imports (extensionOf Jsx/Js)", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -368,7 +368,7 @@ const b = fromJs;`;
   }
 });
 
-Deno.test("semantics: a directory named as a dependency reads as undefined", () => {
+test("semantics: a directory named as a dependency reads as undefined", () => {
   // The blob imports an absolute path that resolves to a directory. The host's
   // readReal hits the read-failure catch (a directory is not a text file) and
   // returns undefined; the service must not throw.
@@ -388,7 +388,7 @@ const v = thing;`;
   }
 });
 
-Deno.test("semantics: an unreadable in-root dependency degrades to no type", () => {
+test("semantics: an unreadable in-root dependency degrades to no type", () => {
   // The dependency statSyncs as a file (so it resolves) but cannot be read
   // (mode 000): the host's readReal hits its read-failure catch and returns
   // undefined, so the binding referencing it has no knowable type and the
@@ -417,7 +417,7 @@ const v = ext;`;
   }
 });
 
-Deno.test("semantics: the same external file is read once and cached by the host", () => {
+test("semantics: the same external file is read once and cached by the host", () => {
   // Two uses of the same external symbol resolve to one file; the host's file
   // cache (fileExists + getScriptSnapshot + readFile all funnel through it)
   // serves the repeat reads from the cache, and the service's realFiles cache
@@ -531,7 +531,7 @@ function tempDiffRoot(): { root: string; ws: DiffWorkspace; done: () => void } {
   };
 }
 
-Deno.test("diff semantics: typeAt and definitionOf answer against the workspace", () => {
+test("diff semantics: typeAt and definitionOf answer against the workspace", () => {
   const { root, ws, done } = tempDiffRoot();
   try {
     const model = parseDiff(DIFF)!;
@@ -556,7 +556,7 @@ Deno.test("diff semantics: typeAt and definitionOf answer against the workspace"
   }
 });
 
-Deno.test("diff semantics: a diff file read in another language types to null", () => {
+test("diff semantics: a diff file read in another language types to null", () => {
   // Both files hold the same code. The diff maps offsets into each, but only
   // the TypeScript file is in the program, so the Markdown file's offsets reach
   // no source file.
@@ -594,7 +594,7 @@ Deno.test("diff semantics: a diff file read in another language types to null", 
   }
 });
 
-Deno.test("diff semantics: a definition on a line the diff shows maps back into the diff", () => {
+test("diff semantics: a definition on a line the diff shows maps back into the diff", () => {
   const { root, ws, done } = tempDiffRoot();
   try {
     const model = parseDiff(DIFF)!;
@@ -608,7 +608,7 @@ Deno.test("diff semantics: a definition on a line the diff shows maps back into 
   }
 });
 
-Deno.test("diff semantics: an offset with no file mapping types to null", () => {
+test("diff semantics: an offset with no file mapping types to null", () => {
   const { root, ws, done } = tempDiffRoot();
   try {
     const model = parseDiff(DIFF)!;
@@ -624,7 +624,7 @@ Deno.test("diff semantics: an offset with no file mapping types to null", () => 
 // Named apart from the test of the same case in view-diff.test.ts: two
 // tests of one package with one name are one identity, and a lane running
 // both files cannot say which of them a record belongs to.
-Deno.test("diff semantics: fileLines colors a definition outside the diff, and nothing outside the root", () => {
+test("diff semantics: fileLines colors a definition outside the diff, and nothing outside the root", () => {
   const { root, ws, done } = tempDiffRoot();
   try {
     Deno.writeTextFileSync(
@@ -711,7 +711,7 @@ describe("binary diff external sources", () => {
   });
 });
 
-Deno.test("diff semantics: returns null when no root file is in the workspace", () => {
+test("diff semantics: returns null when no root file is in the workspace", () => {
   const noWs: DiffWorkspace = { resolve: () => null, read: () => null };
   const model = parseDiff(DIFF)!;
   const { maps } = buildDiffDocument(DIFF, model, noWs);
@@ -724,7 +724,7 @@ Deno.test("diff semantics: returns null when no root file is in the workspace", 
   );
 });
 
-Deno.test("diff semantics: stays silent on a drifted (unverified) hunk", () => {
+test("diff semantics: stays silent on a drifted (unverified) hunk", () => {
   const { root, ws, done } = tempDiffRoot();
   try {
     Deno.writeTextFileSync(
@@ -743,7 +743,7 @@ Deno.test("diff semantics: stays silent on a drifted (unverified) hunk", () => {
   }
 });
 
-Deno.test("diff semantics: types the workspace binding from a real subdir cwd", () => {
+test("diff semantics: types the workspace binding from a real subdir cwd", () => {
   const { root, ws, done } = tempDiffRoot();
   try {
     const model = parseDiff(DIFF)!;
@@ -782,7 +782,7 @@ function throwingMaps(
   };
 }
 
-Deno.test("diff semantics: typeAt swallows a throw from the offset map", () => {
+test("diff semantics: typeAt swallows a throw from the offset map", () => {
   // maps.toFile throws inside typeAt's try; the catch returns null rather
   // than propagating.
 
@@ -801,7 +801,7 @@ Deno.test("diff semantics: typeAt swallows a throw from the offset map", () => {
   }
 });
 
-Deno.test("diff semantics: definitionOf swallows a throw and caches empty", () => {
+test("diff semantics: definitionOf swallows a throw and caches empty", () => {
   // After build, maps.fromFile throws while classifying a resolved definition;
   // definitionOf's catch resets to an empty list and caches it.
 
@@ -824,7 +824,7 @@ Deno.test("diff semantics: definitionOf swallows a throw and caches empty", () =
   }
 });
 
-Deno.test("diff semantics: a definition resolving to a lib file is skipped", () => {
+test("diff semantics: a definition resolving to a lib file is skipped", () => {
   // `Set` resolves into lib.d.ts (outside the workspace); fromFile returns null
   // (not in the diff) and readReal returns undefined, so the def is skipped via
   // the `content === undefined` continue.
@@ -861,7 +861,7 @@ Deno.test("diff semantics: a definition resolving to a lib file is skipped", () 
   }
 });
 
-Deno.test("diff semantics: fileLines rejects a path outside the workspace", () => {
+test("diff semantics: fileLines rejects a path outside the workspace", () => {
   const { root, ws, done } = tempDiffRoot();
   try {
     const model = parseDiff(DIFF)!;
@@ -881,7 +881,7 @@ Deno.test("diff semantics: fileLines rejects a path outside the workspace", () =
 // end-to-end against the real repo (resolves commonfabric)
 //
 
-Deno.test("semantics: SAMPLE blob types a pattern binding from a real subdir", () => {
+test("semantics: SAMPLE blob types a pattern binding from a real subdir", () => {
   const doc = parseDocument(SAMPLE);
   const sem = createSemantics(SAMPLE, { cwd: join(CWD, "lib", "view") })!;
   const t = sem.typeAt(nameOffsetOf(doc, "myPattern"));

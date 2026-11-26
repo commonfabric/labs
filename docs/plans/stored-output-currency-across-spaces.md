@@ -130,8 +130,14 @@ nothing of it yet.
 The source decides "stale upstream" with the predicate it already applies
 to a local reader's input: a recorded piece computes the instance, and a
 slice that decides it is marked or no piece vouches for it, or the instance
-is a derived document no recorded piece writes. An instance nothing
-computes is plain data, and only a commit moves it.
+is a derived document no recorded piece writes that no computation may
+have produced yet, as the first plan's list says. An instance no recorded
+piece writes is otherwise plain data, and only a commit moves it. For a
+read in its own space, the recording runtime's mark on the read says
+whether the document is derived. For an instance another space
+registered, which carries no such mark, the source takes it for a derived
+document where its id has the form of one, or a serving loop's commit
+wrote it.
 
 Those rows change in two places the index already has. An advance that
 finds a registered instance changed records its new head. And wherever a
@@ -255,10 +261,9 @@ so finding the readers to tell is one read of the rows that moved. A row
 takes a position when it changes, and none when its instance is first
 registered, since the space registering it is handed the row. An index
 that starts over with its records dropped keeps these rows, and the first
-call that changes it brings every one of them up to date. A reader that
-kept its records then hears that an instance a piece here computes is no
-longer vouched for. An instance nothing computes is plain data, and its
-row stays as it was.
+call that changes it brings every one of them up to date. An instance a
+piece here computed is then a cell of a piece the index holds no record
+of, reported stale until a record of that piece is stored.
 
 ### A circle of triggers
 
@@ -846,7 +851,10 @@ For the serving loop, in `runtime/runner/test/executor/`:
    viewer returns and their home space has not changed. This exists in
    `space-server-currency-wish.test.ts`, with the root refused, and under
    `skip` the piece started, once the home space changed while nothing
-   served the piece.
+   served the piece. The same file holds the case of a home space whose
+   own serving loop made its root, whose documents no recorded piece
+   writes: the viewer's slice is stored clean, and a change to the list of
+   favorites the root's setup wrote starts the piece.
 10. A change to that viewer's home space while the piece is unstarted and
     their session is live starts the piece, and the viewer reads the new
     value. A change to the home space of a viewer who is no longer watching

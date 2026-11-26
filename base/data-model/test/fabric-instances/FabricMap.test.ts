@@ -10,7 +10,6 @@
  * is a recorded gap; one that is merely never called is a gap nobody can see.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -24,6 +23,7 @@ import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases";
 import { FabricMap, FabricNativeWrapper } from "@/fabric-instances";
 import { FrozenMap } from "@/frozen-builtins.ts";
 import { subFreeze, subIsDeepFrozen } from "./fixtures.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("FabricMap", () => {
   // Pure type-identity / supertype checks: cross-cutting carve-out per the

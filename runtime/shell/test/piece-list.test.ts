@@ -7,11 +7,11 @@
  * the active one marked; and that choosing a piece announces that piece.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { PieceItem } from "../src/components/PieceList.ts";
 import { templateMarkup } from "./lit-template-markup.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 interface PieceListLike extends EventTarget {
   pieces: PieceItem[];

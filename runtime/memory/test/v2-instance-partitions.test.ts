@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type GraphQuery,
@@ -9,6 +8,7 @@ import {
 } from "../v2.ts";
 import { partitionGraphQuery } from "../v2/query.ts";
 import { watchGraphGroups } from "../v2/server-sync.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const service = { principal: "did:key:service", sessionId: "session:service" };
 const alice = { principal: "did:key:alice", sessionId: "session:alice" };

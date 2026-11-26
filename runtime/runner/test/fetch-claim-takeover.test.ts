@@ -1,4 +1,3 @@
-/// <reference path="./clock.d.ts" />
 // The fetch builtins coordinate across replicas through durable state: a claim
 // in `internal` for fetch.ts, a `fetching` cache entry for fetch-program.ts. A
 // staleness bound decides when a claim left by another replica is treated as
@@ -20,10 +19,16 @@
 //
 // docs/features/fetch-request-deadlines.md carries the reasoning.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { Runtime } from "../src/runtime.ts";
 import { createBuilder } from "../src/builder/factory.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";

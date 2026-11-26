@@ -16,7 +16,7 @@ import {
   innermostNode,
   typeInto,
 } from "../../tools/test-support/vnode-helpers.ts";
-import StoryWeaver, { type Level, type Spindle } from "./story-weaver.tsx";
+import StoryWeaver, { type Level, type Spindle } from "./main.tsx";
 import {
   answers,
   boardPaths,

@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { resolveGithubToken } from "../src/auth.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("auth", () => {
   describe("resolveGithubToken()", () => {

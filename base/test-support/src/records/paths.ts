@@ -93,6 +93,17 @@ export function recordsDir(
 }
 
 /**
+ * Whether this process may write into the spool. Querying a permission
+ * needs no permission, so this answers before anything is attempted and
+ * without a warning for a process that was never going to record.
+ */
+export function writableSpool(spool: string | undefined): boolean {
+  if (spool === undefined) return false;
+  return Deno.permissions.querySync({ name: "write", path: spool }).state ===
+    "granted";
+}
+
+/**
  * The fixed per-user spool root. Overridable with
  * CF_TEST_RECORDS_SPOOL_ROOT; otherwise under the user's cache directory,
  * which survives reboots — the temporary directory does not, and a rebooted

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -31,6 +30,7 @@ import {
   FabricHash,
   FabricUnavailable,
 } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("narrowing", () => {
   describe("isFabricSpecialObject()", () => {

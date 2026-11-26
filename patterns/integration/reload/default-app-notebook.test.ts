@@ -7,9 +7,9 @@ import {
   waitForCondition,
 } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { NAVIGATE_EVENT } from "@commonfabric/navigation";
+import { describe, it } from "@commonfabric/test-support/test";
 import { assert, assertEquals } from "@std/assert";
 import {
   collectSchedulerLoadSummary,

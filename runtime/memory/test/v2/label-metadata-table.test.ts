@@ -1,6 +1,5 @@
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type FabricPlainObject,
@@ -9,6 +8,7 @@ import {
   isValidFabricValue,
 } from "@commonfabric/data-model";
 import { isPlainObject } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { decodeTrustedMemoryBoundary, encodeMemoryBoundary } from "../../v2.ts";
 import {

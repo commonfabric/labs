@@ -9,7 +9,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
@@ -21,6 +20,7 @@ import {
 } from "@commonfabric/llm";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { Cell } from "../src/cell.ts";
 import { addCfcDenialListener } from "../src/cfc/denial-report.ts";

@@ -9,7 +9,6 @@
 
 import { expect } from "@std/expect";
 import { join, resolve } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { toCompactDebugString } from "@commonfabric/data-model";
 import type { DID, Identity } from "@commonfabric/identity";
@@ -24,6 +23,7 @@ import { writeTempIdentity } from "@commonfabric/integration/temp-identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import "../src/globals.ts";
 

@@ -39,7 +39,7 @@ import StoreMapper, {
   mergeExtractedAisle,
   removeAisle,
   setDepartmentLocation,
-} from "./store-mapper.tsx";
+} from "./main.tsx";
 
 interface Aisle {
   name: string;

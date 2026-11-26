@@ -13,6 +13,7 @@ import {
   runQuery,
 } from "../v2/sqlite/exec.ts";
 import { table } from "../v2/sqlite/schema.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const DB_ID = "of:atomic-db";
 const TABLES = { messages: table({ id: "integer primary key", body: "text" }) };
@@ -22,7 +23,7 @@ async function freshEngine() {
   return await open({ url: toFileUrl(path) });
 }
 
-Deno.test("commit with a cell op + a sqlite op lands both atomically", async () => {
+test("commit with a cell op + a sqlite op lands both atomically", async () => {
   const engine = await freshEngine();
   const alias = aliasForDbId(DB_ID);
   attachDatabase(
@@ -61,7 +62,7 @@ Deno.test("commit with a cell op + a sqlite op lands both atomically", async () 
   }
 });
 
-Deno.test("a failing commit rolls back BOTH the cell and the row", async () => {
+test("a failing commit rolls back BOTH the cell and the row", async () => {
   const engine = await freshEngine();
   const alias = aliasForDbId(DB_ID);
   attachDatabase(

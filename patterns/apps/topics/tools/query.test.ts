@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { Topic } from "./mirror.ts";
@@ -12,6 +11,7 @@ import {
   references,
   settled,
 } from "./query.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A Topic with every field defaulted except those given. */
 function topic(fields: Partial<Topic> & { number: string }): Topic {

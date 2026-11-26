@@ -7,19 +7,20 @@ import {
   formatCfLauncherUsage,
   parseCfLauncherArgs,
 } from "../launcher.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const launcherPath = fileUrlToPath(
   new URL("../launcher.ts", import.meta.url).href,
 );
 
-Deno.test("defaultLabsRootFromModulePath resolves from runtime/cli", () => {
+test("defaultLabsRootFromModulePath resolves from runtime/cli", () => {
   assertEquals(
     defaultLabsRootFromModulePath("/workspace/labs/runtime/cli/launcher.ts"),
     "/workspace/labs",
   );
 });
 
-Deno.test("defaultLabsRootFromModulePath preserves UNC roots", () => {
+test("defaultLabsRootFromModulePath preserves UNC roots", () => {
   assertEquals(
     defaultLabsRootFromModulePath(
       "//server/share/labs/runtime/cli/launcher.ts",
@@ -34,7 +35,7 @@ Deno.test("defaultLabsRootFromModulePath preserves UNC roots", () => {
   );
 });
 
-Deno.test("fileUrlToPath converts drive and UNC file URLs", () => {
+test("fileUrlToPath converts drive and UNC file URLs", () => {
   assertEquals(
     fileUrlToPath("file:///C:/workspace/labs/runtime/cli/launcher.ts"),
     "C:/workspace/labs/runtime/cli/launcher.ts",
@@ -45,7 +46,7 @@ Deno.test("fileUrlToPath converts drive and UNC file URLs", () => {
   );
 });
 
-Deno.test("parseCfLauncherArgs defaults to the launcher labs checkout", () => {
+test("parseCfLauncherArgs defaults to the launcher labs checkout", () => {
   const parsed = parseCfLauncherArgs({
     argv: ["--", "--help"],
     cwd: "/workspace/labs",
@@ -64,7 +65,7 @@ Deno.test("parseCfLauncherArgs defaults to the launcher labs checkout", () => {
   });
 });
 
-Deno.test("parseCfLauncherArgs lets explicit --cwd override INIT_CWD", () => {
+test("parseCfLauncherArgs lets explicit --cwd override INIT_CWD", () => {
   const parsed = parseCfLauncherArgs({
     argv: ["--cwd", "/workspace/explicit", "--", "check", "pattern.tsx"],
     cwd: "/workspace/labs",
@@ -81,7 +82,7 @@ Deno.test("parseCfLauncherArgs lets explicit --cwd override INIT_CWD", () => {
   assertEquals(parsed.cfArgs, ["check", "pattern.tsx"]);
 });
 
-Deno.test("parseCfLauncherArgs supports explicit consumer config", () => {
+test("parseCfLauncherArgs supports explicit consumer config", () => {
   const parsed = parseCfLauncherArgs({
     argv: [
       "--labs-root",
@@ -111,7 +112,7 @@ Deno.test("parseCfLauncherArgs supports explicit consumer config", () => {
   });
 });
 
-Deno.test("parseCfLauncherArgs preserves explicit UNC share roots", () => {
+test("parseCfLauncherArgs preserves explicit UNC share roots", () => {
   const parsed = parseCfLauncherArgs({
     argv: [
       "--labs-root",
@@ -139,7 +140,7 @@ Deno.test("parseCfLauncherArgs preserves explicit UNC share roots", () => {
   });
 });
 
-Deno.test("parseCfLauncherArgs forwards cf args after separator", () => {
+test("parseCfLauncherArgs forwards cf args after separator", () => {
   const parsed = parseCfLauncherArgs({
     argv: [
       "--labs-root",
@@ -165,7 +166,7 @@ Deno.test("parseCfLauncherArgs forwards cf args after separator", () => {
   assertEquals(parsed.cfArgs, ["--config", "piece-config.json"]);
 });
 
-Deno.test("parseCfLauncherArgs treats the first non-launcher arg as cf args", () => {
+test("parseCfLauncherArgs treats the first non-launcher arg as cf args", () => {
   const parsed = parseCfLauncherArgs({
     argv: ["check", "pattern.tsx", "--no-run"],
     cwd: "/workspace/labs",
@@ -180,7 +181,7 @@ Deno.test("parseCfLauncherArgs treats the first non-launcher arg as cf args", ()
   assertEquals(parsed.cfArgs, ["check", "pattern.tsx", "--no-run"]);
 });
 
-Deno.test("parseCfLauncherArgs reports launcher help for launcher-specific flag", () => {
+test("parseCfLauncherArgs reports launcher help for launcher-specific flag", () => {
   assertEquals(
     parseCfLauncherArgs({
       argv: ["--launcher-help"],
@@ -193,7 +194,7 @@ Deno.test("parseCfLauncherArgs reports launcher help for launcher-specific flag"
   assertEquals(formatCfLauncherUsage().includes("--labs-root"), true);
 });
 
-Deno.test("parseCfLauncherArgs passes cf help through to the child CLI", () => {
+test("parseCfLauncherArgs passes cf help through to the child CLI", () => {
   const parsed = parseCfLauncherArgs({
     argv: ["--help"],
     cwd: "/workspace/labs",
@@ -208,7 +209,7 @@ Deno.test("parseCfLauncherArgs passes cf help through to the child CLI", () => {
   assertEquals(parsed.cfArgs, ["--help"]);
 });
 
-Deno.test("parseCfLauncherArgs rejects missing option values", () => {
+test("parseCfLauncherArgs rejects missing option values", () => {
   assertThrows(
     () =>
       parseCfLauncherArgs({
@@ -222,14 +223,14 @@ Deno.test("parseCfLauncherArgs rejects missing option values", () => {
   );
 });
 
-Deno.test("formatCfLauncherError adds cf passthrough hint for launcher options", () => {
+test("formatCfLauncherError adds cf passthrough hint for launcher options", () => {
   assertEquals(
     formatCfLauncherError(new Error("--config requires a value")),
     "cf launcher: --config requires a value; use -- to pass --config to cf",
   );
 });
 
-Deno.test("launcher main renders launcher-scoped diagnostics without a stack", async () => {
+test("launcher main renders launcher-scoped diagnostics without a stack", async () => {
   const command = new Deno.Command(Deno.execPath(), {
     args: [
       "run",
@@ -253,7 +254,7 @@ Deno.test("launcher main renders launcher-scoped diagnostics without a stack", a
   );
 });
 
-Deno.test("launcher runs an outside-Labs consumer config and inherits env", async () => {
+test("launcher runs an outside-Labs consumer config and inherits env", async () => {
   const tempDir = await Deno.makeTempDir();
   try {
     const expectedCwd = (await Deno.realPath(tempDir)).replaceAll("\\", "/");
@@ -331,7 +332,7 @@ console.log(JSON.stringify({
   }
 });
 
-Deno.test("buildCfLauncherCommand builds the child deno invocation", () => {
+test("buildCfLauncherCommand builds the child deno invocation", () => {
   assertEquals(
     buildCfLauncherCommand({
       denoPath: "/usr/local/bin/deno",

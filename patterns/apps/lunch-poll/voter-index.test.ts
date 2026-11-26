@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { indexBy } from "./voter-index.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A stand-in for a profile cell: an entity id, the space it lives in, and the

@@ -2,7 +2,6 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { DID } from "@commonfabric/identity/did";
 import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
@@ -11,6 +10,12 @@ import { endDrag, getCurrentDrag, isDragging } from "../../core/drag-state.ts";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { createRenderableCellHandle } from "../../test-utils/mock-vdom-connection.ts";
 import { setNewTabReservation } from "@commonfabric/navigation";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { CFCellLink } from "./index.ts";
 

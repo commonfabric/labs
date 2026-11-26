@@ -2,6 +2,7 @@ import { assert, assertEquals } from "@std/assert";
 
 import { registry } from "./registration-dom.ts";
 import "../src/embedded-components.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // Embedded hosts have no Toolshed routes on their origin. These components
 // depend on those routes, or carry an intentionally excluded heavy dependency.
@@ -16,7 +17,7 @@ const excluded = new Map([
   ["cf-link-preview", "/api/link-preview"],
 ]);
 
-Deno.test("the embedded palette makes an explicit decision for every component", async () => {
+test("the embedded palette makes an explicit decision for every component", async () => {
   const source = await Deno.readTextFile(
     new URL("../src/embedded-components.ts", import.meta.url),
   );
@@ -72,7 +73,7 @@ Deno.test("the embedded palette makes an explicit decision for every component",
   }
 });
 
-Deno.test("embedded palette registers rendering components without starting a shell", () => {
+test("embedded palette registers rendering components without starting a shell", () => {
   assert(registry.has("cf-map"));
   assert(registry.has("cf-code-editor"));
   assert(registry.has("cf-render"));

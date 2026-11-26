@@ -9,7 +9,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
@@ -25,6 +24,7 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,

@@ -9,6 +9,7 @@ import {
 } from "../src/transformers/expression-rewrite/emitters/compute-wrap-invariants.ts";
 import { rewriteHelperOwnedExpression } from "../src/transformers/expression-rewrite/emitters/helper-owned-expression.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // These tests exercise the compute-wrap invariant guard that emitters call
 // before adding a compute wrapper, and the pending-candidate search that
@@ -142,7 +143,7 @@ function findFirst<T extends ts.Node>(
   return found;
 }
 
-Deno.test(
+test(
   "findPendingComputeWrapCandidate selects the reactive object-property value as the pending wrap",
   () => {
     const { sourceFile, checker, context } = createContext(
@@ -163,7 +164,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "findPendingComputeWrapCandidate treats a top-level function subtree as its own boundary and yields no candidate",
   () => {
     const { sourceFile, checker, context } = createContext(
@@ -185,7 +186,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "findPendingComputeWrapCandidate stops at the first candidate and skips sibling function subtrees",
   () => {
     const { sourceFile, checker, context } = createContext(
@@ -213,7 +214,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "resolveComputeWrapCandidate returns a wrap verdict when the wrap agrees with the classification",
   () => {
     const { sourceFile, checker: _checker, context } = createContext(
@@ -238,7 +239,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "resolveComputeWrapCandidate throws when the culprit is already classified as compute",
   () => {
     const { sourceFile, checker: _checker, context } = createContext(
@@ -272,7 +273,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "resolveComputeWrapCandidate reports the call-argument diagnostic for an authored culprit inside an owned pattern boundary",
   () => {
     const { sourceFile, checker: _checker, context } = createContext(
@@ -320,7 +321,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "resolveComputeWrapCandidate still throws for a synthetic culprit inside an owned pattern boundary",
   () => {
     const { sourceFile, checker: _checker, context } = createContext(
@@ -364,7 +365,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "rewriteHelperOwnedExpression skips the wrap and reports when its assert container spans an owned boundary",
   () => {
     const { sourceFile, checker, context } = createContext(
@@ -407,7 +408,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "the compiler-bug message truncates a long culprit snippet with an ellipsis",
   () => {
     const longExpression = "count.get()" + " + count.get()".repeat(20);
@@ -438,7 +439,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "the compiler-bug message falls back to the SyntaxKind name when a culprit has no source text",
   () => {
     const { sourceFile, checker: _checker, context } = createContext(

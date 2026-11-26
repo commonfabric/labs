@@ -7,11 +7,11 @@
  * a shape.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { annotate, decodedLinkOf, summarizeLink } from "../decode.ts";
 

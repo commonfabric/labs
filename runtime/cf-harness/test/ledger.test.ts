@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   deployedPieceRef,
@@ -6,6 +5,7 @@ import {
   type PatternIndexPublishRequest,
 } from "@commonfabric/pattern-index/client";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { HarnessFetch } from "../src/contracts/http-fetch.ts";
 
 import {

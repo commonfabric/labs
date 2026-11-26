@@ -47,7 +47,6 @@
 //   registers (mutation: the check removed → the late echo registers and
 //   its divergent write renders).
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
@@ -75,6 +74,20 @@ import {
 import { readWatermarkSeq as readWatermark } from "../src/executor/watermark-engine.ts";
 
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
+
+// This file runs on the real clock because it drives a live memory server and
+// waits on transport edges with bounded timeouts; its retry path's catch-up
+// rides those edges, not logical time, and auto-advance would fire the retry
+// backoff as fast as it arms. Its "would-be loop" window is a real-time
+// observation.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("arrival gate space");
 const space = spaceSigner.did() as MemorySpace;

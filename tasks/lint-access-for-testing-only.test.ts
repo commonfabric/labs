@@ -6,10 +6,10 @@
  * what puts a case in or out of the rule's scope.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, resolve } from "@std/path";
 import plugin from "./lint-access-for-testing-only.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 

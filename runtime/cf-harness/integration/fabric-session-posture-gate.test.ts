@@ -19,12 +19,12 @@
  *     integration/fabric-session-posture-gate.test.ts
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createTestSpace } from "@commonfabric/integration/test-space";
 import { writeTempIdentity } from "@commonfabric/integration/temp-identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import { describe, it } from "@commonfabric/test-support/test";
 import { createHarnessFabricSessionFactory } from "../src/fabric-session.ts";
 
 const API_URL = Deno.env.get("API_URL");

@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { VirtualModuleRecord } from "../src/sandbox/esm-module-loader.ts";
 import { verifyModuleGraph } from "../src/sandbox/module-record-verifier.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function rec(over: Partial<VirtualModuleRecord> = {}): VirtualModuleRecord {
   return {

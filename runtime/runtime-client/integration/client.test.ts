@@ -1,7 +1,6 @@
 #!/usr/bin/env -S deno run -A
 
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { debugStr } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { render } from "@commonfabric/html/client";
@@ -37,6 +36,7 @@ import {
 import { MessagePortRuntimeTransport } from "@commonfabric/runtime-client/transports/message-port";
 import { WebWorkerRuntimeTransport } from "@commonfabric/runtime-client/transports/web-worker";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { serverExecutionOnStepSkip } from "../../../tasks/server-execution-on-skips.ts";
 

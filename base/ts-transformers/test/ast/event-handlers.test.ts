@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assertEquals } from "@std/assert";
 import ts from "typescript";
@@ -7,6 +6,7 @@ import {
   isEventHandlerType,
   isSafeEventHandlerCall,
 } from "../../src/ast/event-handlers.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 /**
  * Creates a TypeScript program from JSX source and returns utilities for testing.
@@ -121,7 +121,7 @@ function findJsxAttribute(
 // Tests for isEventHandlerType
 //
 
-Deno.test("isEventHandlerType - function with 0-1 params is a handler", () => {
+test("isEventHandlerType - function with 0-1 params is a handler", () => {
   const { checker, sourceFile } = createJsxTestProgram(
     `<CustomButton callback={() => {}} asyncCallback={async () => {}} toggle={() => true} eventHandler={(e) => {}} label="test" count={1} mapper={(n) => String(n)} renderItem={(n) => n} twoParamHandler={(e, ctx) => {}} reducer={(acc, item, idx) => acc + item} />`,
   );
@@ -183,7 +183,7 @@ Deno.test("isEventHandlerType - function with 0-1 params is a handler", () => {
   }
 });
 
-Deno.test("isEventHandlerType - non-function type is NOT a handler", () => {
+test("isEventHandlerType - non-function type is NOT a handler", () => {
   const { checker, sourceFile } = createJsxTestProgram(
     `<CustomButton callback={() => {}} asyncCallback={async () => {}} toggle={() => true} eventHandler={(e) => {}} label="test" count={1} mapper={(n) => String(n)} renderItem={(n) => n} twoParamHandler={(e, ctx) => {}} reducer={(acc, item, idx) => acc + item} />`,
   );
@@ -221,7 +221,7 @@ Deno.test("isEventHandlerType - non-function type is NOT a handler", () => {
 // Tests for isEventHandlerJsxAttribute - name-based detection
 //
 
-Deno.test("isEventHandlerJsxAttribute - onClick detected by name (without checker)", () => {
+test("isEventHandlerJsxAttribute - onClick detected by name (without checker)", () => {
   const { sourceFile } = createJsxTestProgram(
     `<button onClick={() => console.log("clicked")}>Click</button>`,
   );
@@ -238,7 +238,7 @@ Deno.test("isEventHandlerJsxAttribute - onClick detected by name (without checke
   );
 });
 
-Deno.test("isEventHandlerJsxAttribute - onSubmit detected by name (without checker)", () => {
+test("isEventHandlerJsxAttribute - onSubmit detected by name (without checker)", () => {
   const { sourceFile } = createJsxTestProgram(
     `<button onSubmit={() => console.log("submitted")}>Submit</button>`,
   );
@@ -255,7 +255,7 @@ Deno.test("isEventHandlerJsxAttribute - onSubmit detected by name (without check
   );
 });
 
-Deno.test("isEventHandlerJsxAttribute - non-on attribute not detected (without checker)", () => {
+test("isEventHandlerJsxAttribute - non-on attribute not detected (without checker)", () => {
   const { sourceFile } = createJsxTestProgram(
     `<button type="button">Click</button>`,
   );
@@ -276,7 +276,7 @@ Deno.test("isEventHandlerJsxAttribute - non-on attribute not detected (without c
 // Tests for isEventHandlerJsxAttribute - type-based detection
 //
 
-Deno.test("isEventHandlerJsxAttribute - function prop detected by type (with checker)", () => {
+test("isEventHandlerJsxAttribute - function prop detected by type (with checker)", () => {
   const { sourceFile, checker } = createJsxTestProgram(
     `<CustomButton callback={() => {}} asyncCallback={async () => {}} toggle={() => true} eventHandler={(e) => {}} label="test" count={1} mapper={(n) => String(n)} renderItem={(n) => n} twoParamHandler={(e, ctx) => {}} reducer={(acc, item, idx) => acc + item} />`,
   );
@@ -324,7 +324,7 @@ Deno.test("isEventHandlerJsxAttribute - function prop detected by type (with che
   }
 });
 
-Deno.test("isEventHandlerJsxAttribute - label (string prop) NOT detected as handler", () => {
+test("isEventHandlerJsxAttribute - label (string prop) NOT detected as handler", () => {
   const { sourceFile, checker } = createJsxTestProgram(
     `<CustomButton callback={() => {}} asyncCallback={async () => {}} toggle={() => true} eventHandler={(e) => {}} label="test" count={1} mapper={(n) => String(n)} renderItem={(n) => n} twoParamHandler={(e, ctx) => {}} reducer={(acc, item, idx) => acc + item} />`,
   );

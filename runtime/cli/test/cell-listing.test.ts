@@ -4,10 +4,10 @@
  * it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { PiecesController } from "@commonfabric/piece/ops";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { keysOf, listCellKeys } from "../lib/cell-listing.ts";
 import type { PieceConfig } from "../lib/piece.ts";

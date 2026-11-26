@@ -1,11 +1,11 @@
 /** Checks default extraction from aliased records through both formatters. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { SchemaGenerator } from "../../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("default-empty-record", () => {
   for (const form of ["union member", "two arguments"]) {

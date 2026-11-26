@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import * as path from "@std/path";
 import { COVERAGE_SUGGESTION_MARKER } from "./ci-check-lib.ts";
 import { gateComment } from "./coverage-gate.ts";
 import { postCoverageComment } from "./post-coverage-comment.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The head commit the run that wrote a payload tested. */
 const TESTED = "a".repeat(40);

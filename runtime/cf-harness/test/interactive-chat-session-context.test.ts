@@ -8,7 +8,6 @@
  * handed a cell at all, which is what these tests are about.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import {
@@ -40,6 +39,7 @@ import type {
   RunHarnessTranscriptOptions,
 } from "../src/prompt-loop.ts";
 import { INERT_RUNSC } from "./support/inert-runsc.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * An engine that reports what a fabric-configured run establishes, without

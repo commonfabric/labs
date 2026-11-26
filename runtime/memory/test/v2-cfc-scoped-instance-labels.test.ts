@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   broaderCellScopes,
   broaderEntriesForReader,
 } from "../v2/cfc-scoped-instance-labels.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A label-map entry, as far as the selection reads one. */
 interface Entry {

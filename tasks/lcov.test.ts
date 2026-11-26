@@ -7,7 +7,6 @@
  * coverage, or invent debt, rather than fail.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   PATTERN_COVERAGE_INTEGRATION_TEST_NAME,
@@ -16,6 +15,7 @@ import {
   PatternCoverageCollector,
   patternCoverageReportToLcov,
 } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   addLcovReport,
   type LcovFileCoverage,

@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import type { ClientCommit } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   EventAppendQueue,

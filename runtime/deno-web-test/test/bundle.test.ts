@@ -1,6 +1,7 @@
 import { runDenoWebTest } from "./utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("a `bundle` entry is bundled onto the server root", async function () {
+test("a `bundle` entry is bundled onto the server root", async function () {
   const run = await runDenoWebTest("bundle-project");
 
   run.assert(run.success, "the run succeeds");

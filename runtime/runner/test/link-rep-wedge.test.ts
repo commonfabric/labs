@@ -7,7 +7,6 @@
  * legacy `{ "/": { "link@1": … } }` sub-tree to descend into.
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -17,6 +16,7 @@ import {
   linkRefPayload,
   resetModernCellRepConfig,
 } from "@commonfabric/data-model/cell-rep";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 
 const signer = await Identity.fromPassphrase("link-rep wedge");

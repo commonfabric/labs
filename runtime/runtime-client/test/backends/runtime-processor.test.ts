@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
 import type { CellScope } from "@commonfabric/api";
@@ -69,6 +68,7 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import * as V2Storage from "@commonfabric/runner/storage/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   type CellGetResponse,

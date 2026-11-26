@@ -1,6 +1,5 @@
 import { join } from "@std/path";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   abortable,
@@ -13,6 +12,7 @@ import {
   readPullRequestList,
 } from "../lib/view/github.ts";
 import { realPushIo } from "../lib/view/push.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A git that answers as a checkout would whose remotes have the fetch

@@ -1,8 +1,8 @@
 import { Identity } from "@commonfabric/identity";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
 import {

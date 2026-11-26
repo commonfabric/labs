@@ -2561,10 +2561,13 @@ the per-epic implementation notes).
   for (`currency.expiryWakes`), or a session's demand reaches an instance
   the piece does not vouch for
   ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §1).
-  A root whose stored document carries no back-link and no pattern pointer,
-  which a load starts no piece from, is judged as the one piece recorded as
-  writing it, and one that nothing derives is parked as that load would
-  park it, until a commit to it (`currency.underived`).
+  A space-scoped root that is no `computed:` document and whose stored
+  document is absent or carries no `result` field and no pattern pointer,
+  which a load starts no piece from, is parked as that load would park it,
+  whatever writes it, until a commit to it (`currency.plainRoots`). One that
+  a commit wrote while the judgment ran, or whose document the loop could not
+  sync for the park, is loaded at once instead. Such a document is read as
+  the store holds it until its writer runs for another reason.
   That is all `skip` does, and it carries no demand, into another space or
   its own, as a loop with no index carries none: both counts stay zero. A
   piece in another space that a run here read, and a piece here that a run

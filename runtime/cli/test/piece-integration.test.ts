@@ -8,7 +8,6 @@
  *     test/piece-integration.test.ts
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import type { Identity } from "@commonfabric/identity";
@@ -20,6 +19,12 @@ import {
 } from "@commonfabric/integration/temp-identity";
 import { createTestSpace } from "@commonfabric/integration/test-space";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   callPieceHandler,
   type EntryConfig,

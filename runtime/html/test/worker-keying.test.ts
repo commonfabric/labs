@@ -4,8 +4,9 @@
 
 import { assertEquals, assertNotEquals } from "@std/assert";
 import { generateChildKeys, generateKey } from "../src/worker/keying.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("keying - generateKey", async (t) => {
+test("keying - generateKey", async (t) => {
   await t.step("generates stable keys for strings", () => {
     assertEquals(generateKey("hello"), generateKey("hello"));
     assertNotEquals(generateKey("hello"), generateKey("goodbye"));
@@ -152,7 +153,7 @@ Deno.test("keying - generateKey", async (t) => {
   });
 });
 
-Deno.test("keying - generateChildKeys", async (t) => {
+test("keying - generateChildKeys", async (t) => {
   await t.step("generates unique keys for identical children", () => {
     const children = ["a", "a", "a"];
     const keys = generateChildKeys(children);

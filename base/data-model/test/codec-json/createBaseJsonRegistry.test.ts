@@ -9,12 +9,12 @@
  * deriving a new one rather than adding to something shared.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { SELF_REP } from "@/codec-common/CodecRegistry.ts";
 import { createBaseJsonRegistry } from "@/codec-json";
 import { FabricError } from "@/fabric-instances";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("createBaseJsonRegistry", () => {
   it("returns a frozen registry", () => {

@@ -27,7 +27,11 @@
 //   client that runs the piece (`SourceReconciler.reconcile`, called from
 //   `PiecesController`), or the serving runtime's first start of it in a
 //   tenure (`ensurePieceRunning` with `originFollowed`). Ensuring the root
-//   starts nothing, so it owes the space existence and nothing more;
+//   starts nothing, so it owes the space existence and nothing more. A root
+//   it creates is recorded as following its origin
+//   (`stampCreatedFromOrigin()`), since creation ran what the origin
+//   offered; checking whether the origin has offered anything since still
+//   waits for the root's START;
 // - the custom `defaultAppUrl` read — the opening user's home-config read
 //   is client identity through and through, and the server-side
 //   owner-scoped fetch is an UNRULED fork (design §3, open question 3):
@@ -49,7 +53,7 @@ import {
   resolveSystemPatternSource,
   systemPatternSource,
 } from "./pattern-source-scheme.ts";
-import { getPatternIdentityRef, setPatternSource } from "./runner.ts";
+import { getPatternIdentityRef, stampCreatedFromOrigin } from "./runner.ts";
 import type { Runtime, RuntimeFetch, SpaceCellContents } from "./runtime.ts";
 import { type NameSchema, nameSchema } from "./schemas.ts";
 import type {
@@ -249,8 +253,13 @@ export async function createSpaceRootIfAbsent(
         // Run pattern setup within the same transaction.
         runtime.run(tx, pattern, config.argument ?? {}, pieceCell);
         // Stamp the provenance the piece tracks for updates (the source it
-        // was born from) — same transaction, one extra meta write.
-        setPatternSource(pieceCell, tx, config.source);
+        // was born from), and that it follows it, in the same transaction.
+        stampCreatedFromOrigin(
+          pieceCell,
+          tx,
+          config.source,
+          getPatternIdentityRef(pieceCell.withTx(tx)),
+        );
         // Link as the default pattern within the same transaction.
         defaultPatternCell.set(pieceCell.withTx(tx));
         return true;
@@ -351,10 +360,10 @@ export type EnsureSpaceRootResult = {
  * supplied genesis reservation; a different address is a conflict. The memory
  * session separately authenticates the complete immutable creation intent.
  * A reservation naming no source leaves creating the root to the space's
- * creator, so with no root linked this creates nothing. Following its origin
- * is the
- * ordinary piece reconciliation, which belongs to the user who opens the
- * piece, not to a tenure that opens nothing.
+ * creator, so with no root linked this creates nothing. A root this creates
+ * is recorded as following its origin, which it was created from. Following
+ * the origin later is the ordinary piece reconciliation, which belongs to the
+ * user who opens the piece, not to a tenure that opens nothing.
  *
  * `isHomeSpace` is the ACL-derived predicate (self-owned = home),
  * resolved by the caller through the memory server's

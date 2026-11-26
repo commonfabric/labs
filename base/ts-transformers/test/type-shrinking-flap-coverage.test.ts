@@ -12,6 +12,7 @@ import {
   validateShrinkCoverage,
 } from "../src/transformers/type-shrinking.ts";
 import { collect, parseModule } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // These branches in type-shrinking run only when a pattern compiles cold through
 // the transformer. When the pattern compile-cache is warm they are skipped, so
@@ -170,7 +171,7 @@ function createContext(sourceFile: ts.SourceFile): {
 // branch is covered whether or not a pattern happens to compile cold.
 //
 
-Deno.test("applyShrinkAndWrap drops a deep read into an unknown-typed property under type-driven shrinking", () => {
+test("applyShrinkAndWrap drops a deep read into an unknown-typed property under type-driven shrinking", () => {
   // Type-driven shrink descending into an `unknown`/`any` property drops that
   // property rather than widening it (buildShrunkTypeNodeFromType
   // `!hasDirectAccess && isAnyOrUnknownType(propType)` continue, lines
@@ -205,7 +206,7 @@ Deno.test("applyShrinkAndWrap drops a deep read into an unknown-typed property u
   assertEquals(members.get("kept")?.type, "string");
 });
 
-Deno.test("validateShrinkCoverage resolves array element node from an array type-alias reference", () => {
+test("validateShrinkCoverage resolves array element node from an array type-alias reference", () => {
   // getArrayElementTypeNode fallback: a base node that is a plain type-alias
   // reference (not `T[]`, `Array<T>`, readonly array, union, or type literal)
   // resolves to an array only through the checker, so the element node is built
@@ -248,7 +249,7 @@ Deno.test("validateShrinkCoverage resolves array element node from an array type
   assertEquals(diagnostics[0]!.message.includes("'.id'"), false);
 });
 
-Deno.test("validateShrinkCoverage validates array-root paths against the array base when the shrunk node is not array-shaped", () => {
+test("validateShrinkCoverage validates array-root paths against the array base when the shrunk node is not array-shaped", () => {
   // validateShrinkCoverage over an array base where the shrunk node is NOT
   // array-shaped: array-root paths (`length`) survive and re-drive validation
   // against the array base (line 1832-1833 `paths = arrayRootPaths`), and the

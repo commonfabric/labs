@@ -6,7 +6,6 @@ import {
 } from "@std/assert";
 import { dirname, join } from "@std/path";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
@@ -23,6 +22,7 @@ import {
   type CaptureTreeNode,
   createCaptureTreeNode,
 } from "../../src/utils/capture-tree.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 //
 // Emitting a type node into another file
@@ -35,7 +35,7 @@ import {
 // literals print from their own `.text`.
 //
 
-Deno.test("cloneTypeNodeDeepForEmission prints cross-file literal types from their own text", () => {
+test("cloneTypeNodeDeepForEmission prints cross-file literal types from their own text", () => {
   const declarationFile = ts.createSourceFile(
     "declaration.ts",
     `interface I { label: Default<string, "default-text">; }`,
@@ -62,7 +62,7 @@ Deno.test("cloneTypeNodeDeepForEmission prints cross-file literal types from the
   assertEquals(printed, `Default<string, "default-text">`);
 });
 
-Deno.test("cloneTypeNodeDeepForEmission carries typeRegistry entries onto clones", () => {
+test("cloneTypeNodeDeepForEmission carries typeRegistry entries onto clones", () => {
   const declarationFile = ts.createSourceFile(
     "declaration.ts",
     `interface I { label: Default<string, "x">; }`,
@@ -86,7 +86,7 @@ Deno.test("cloneTypeNodeDeepForEmission carries typeRegistry entries onto clones
   assertStrictEquals(typeRegistry.get(cloned), fakeType);
 });
 
-Deno.test("cloneTypeNodeDeepForEmission records the clone of a print as printed from its type", () => {
+test("cloneTypeNodeDeepForEmission records the clone of a print as printed from its type", () => {
   const state = new CrossStageState();
   const printedType = { flags: ts.TypeFlags.String } as ts.Type;
   const printed = ts.factory.createKeywordTypeNode(
@@ -109,7 +109,7 @@ Deno.test("cloneTypeNodeDeepForEmission records the clone of a print as printed 
 // Building capture type elements
 //
 
-Deno.test("buildCaptureTypeElements handles destructured keys and renames identifier captures", () => {
+test("buildCaptureTypeElements handles destructured keys and renames identifier captures", () => {
   const sourceText = `
     interface Input {
       0?: string;
@@ -380,7 +380,7 @@ function printProbeType(
   return { type, node, checker, print, sourceFile };
 }
 
-Deno.test("qualifyCommonFabricTypeRefs rewrites an import type a relative path names when its type is the commonfabric export", () => {
+test("qualifyCommonFabricTypeRefs rewrites an import type a relative path names when its type is the commonfabric export", () => {
   const { type, node, checker, print, sourceFile } = printProbeType(
     'import { cell } from "commonfabric";\nexport const probe = cell({ a: 1 });',
   );
@@ -398,7 +398,7 @@ Deno.test("qualifyCommonFabricTypeRefs rewrites an import type a relative path n
   assertEquals(print(qualified), "__cfHelpers.Cell<{ a: number; }>");
 });
 
-Deno.test("qualifyCommonFabricTypeRefs rewrites an import-type member of a union by the constituent it names", () => {
+test("qualifyCommonFabricTypeRefs rewrites an import-type member of a union by the constituent it names", () => {
   const { type, node, checker, print, sourceFile } = printProbeType(
     [
       'import { cell } from "commonfabric";',
@@ -423,7 +423,7 @@ Deno.test("qualifyCommonFabricTypeRefs rewrites an import-type member of a union
   );
 });
 
-Deno.test("qualifyCommonFabricTypeRefs leaves an import type naming a module of the program's own called commonfabric", () => {
+test("qualifyCommonFabricTypeRefs leaves an import type naming a module of the program's own called commonfabric", () => {
   const { type, node, checker, print, sourceFile } = printProbeType(
     'import { cell } from "../commonfabric";\nexport const probe = cell({ a: 1 });',
     { "/app/commonfabric.ts": COMMONFABRIC_DECLARATIONS },
@@ -439,7 +439,7 @@ Deno.test("qualifyCommonFabricTypeRefs leaves an import type naming a module of 
   assertStrictEquals(qualified, node);
 });
 
-Deno.test("qualifyCommonFabricTypeRefs leaves an import type of the commonfabric module itself, which names no export", () => {
+test("qualifyCommonFabricTypeRefs leaves an import type of the commonfabric module itself, which names no export", () => {
   const { type, checker, print, sourceFile } = printProbeType(
     'import { cell } from "commonfabric";\nexport const probe = cell({ a: 1 });',
   );
@@ -459,7 +459,7 @@ Deno.test("qualifyCommonFabricTypeRefs leaves an import type of the commonfabric
   assertStrictEquals(qualified, node);
 });
 
-Deno.test("qualifyCommonFabricTypeRefs leaves a union member a module of the program's own exports under a commonfabric export's name", () => {
+test("qualifyCommonFabricTypeRefs leaves a union member a module of the program's own exports under a commonfabric export's name", () => {
   const { type, node, checker, print, sourceFile } = printProbeType(
     [
       'import { cell } from "commonfabric";',
@@ -491,7 +491,7 @@ Deno.test("qualifyCommonFabricTypeRefs leaves a union member a module of the pro
   );
 });
 
-Deno.test("qualifyCommonFabricTypeRefs leaves a union member the program's own type in scope names under a commonfabric export's name", () => {
+test("qualifyCommonFabricTypeRefs leaves a union member the program's own type in scope names under a commonfabric export's name", () => {
   const { type, node, checker, print, sourceFile } = printProbeType(
     [
       'import { cell } from "commonfabric";',
@@ -523,7 +523,7 @@ Deno.test("qualifyCommonFabricTypeRefs leaves a union member the program's own t
   );
 });
 
-Deno.test("qualifyCommonFabricTypeRefs leaves a union member a module of the program's own re-exports under a commonfabric export's name", () => {
+test("qualifyCommonFabricTypeRefs leaves a union member a module of the program's own re-exports under a commonfabric export's name", () => {
   const { type, node, checker, print, sourceFile } = printProbeType(
     [
       'import { cell } from "commonfabric";',
@@ -556,7 +556,7 @@ Deno.test("qualifyCommonFabricTypeRefs leaves a union member a module of the pro
   );
 });
 
-Deno.test("qualifyCommonFabricTypeRefs leaves a union member the program's own re-export in scope names under a commonfabric export's name", () => {
+test("qualifyCommonFabricTypeRefs leaves a union member the program's own re-export in scope names under a commonfabric export's name", () => {
   const { type, node, checker, print, sourceFile } = printProbeType(
     [
       'import { cell } from "commonfabric";',
@@ -589,7 +589,7 @@ Deno.test("qualifyCommonFabricTypeRefs leaves a union member the program's own r
   );
 });
 
-Deno.test("qualifyCommonFabricTypeRefs leaves both members of a union whose import types name the commonfabric declarations' path and a module of the program's own at it", () => {
+test("qualifyCommonFabricTypeRefs leaves both members of a union whose import types name the commonfabric declarations' path and a module of the program's own at it", () => {
   const { type, node, checker, print, sourceFile } = printProbeType(
     [
       'import { cell } from "commonfabric";',
@@ -622,7 +622,7 @@ Deno.test("qualifyCommonFabricTypeRefs leaves both members of a union whose impo
   );
 });
 
-Deno.test('qualifyCommonFabricTypeRefs qualifies a union member an import type of "commonfabric" names by its spelling', () => {
+test('qualifyCommonFabricTypeRefs qualifies a union member an import type of "commonfabric" names by its spelling', () => {
   const { type, node, checker, print, sourceFile } = printProbeType(
     [
       'import { cell } from "commonfabric";',
@@ -663,7 +663,7 @@ Deno.test('qualifyCommonFabricTypeRefs qualifies a union member an import type o
   );
 });
 
-Deno.test("qualifyCommonFabricTypeRefs qualifies a union member an import type names with the declarations' extension", () => {
+test("qualifyCommonFabricTypeRefs qualifies a union member an import type names with the declarations' extension", () => {
   const { type, node, checker, print, sourceFile } = printProbeType(
     [
       'import { cell } from "commonfabric";',

@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { validateSource } from "../utils.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { transformCfDirective } from "../../src/mod.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The type and severity of each `module-scope:` diagnostic reported for a

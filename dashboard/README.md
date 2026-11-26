@@ -57,6 +57,7 @@ dashboard/
   detail-page.ts  the frame, navigation and type a drill-down page starts from
   live-page.ts  the frame of a live drill-down page, and the event streams that keep it current
   live-page-client.ts  the browser half: puts the changed parts of a fresh rendering on the page
+  sent-text.ts  markup sent down an event stream as the edits from what it sent before
   history-page-client.ts  the browser half of the two performance history pages: the window slider, chart loading, progress, and update checks
   ci-jobs-page.ts the page behind the ci tile, and its table sorting
   repo-page.ts  the page for each repository, and the index of them all
@@ -179,23 +180,40 @@ the heading of the commit CI Gantt page. The star's tooltip names the branch and
 says whether it is or was at the commit.
 
 Each event connection receives the current tile snapshot before it waits for new
-collections. The browser matches each tile in that snapshot with the tile of the
-same label on the page, leaving unchanged elements, focus, and scroll positions
-in place. Inside a tile that changed, an element carrying a `data-focus-key`
-attribute is matched with the element carrying the same key in the new markup,
-which takes over its keyboard focus and scroll position; a tile puts that
-attribute on each element whose focus or scroll position should carry over from
-one update to the next. Routine data updates never navigate the page. The page
-shell — the styles and the client script — arrives only with a full page load,
-so the server hands the browser a compatibility version and the page reloads
-itself as soon as the server reports a different one. A deployed image uses the
-commit its publishing workflow checked out, which is fixed for the life of the
-image, so every display on that image agrees. A server started from a checkout
-reports the moment it started instead, because the code under it changes between
-one start and the next: a watched restart therefore pulls every open page onto
-the code that restart is serving, and the version in the page source says which
-start served it. An unattended display reloads when it reconnects to a server
-reporting a different version.
+collections. On that update and every later one, the browser matches each tile
+in the markup with the tile of the same label on the page, leaving unchanged
+elements, focus, and scroll positions in place. Inside a tile that changed, an
+element carrying a `data-focus-key` attribute is matched with the element
+carrying the same key in the new markup, which takes over its keyboard focus and
+scroll position; a tile puts that attribute on each element whose focus or
+scroll position should carry over from one update to the next.
+
+Only the first update on a connection carries the whole markup. Each later
+update carries the edits that turn the markup that connection was last sent into
+the new markup, and the browser applies them to the markup it holds before
+matching tiles (`sent-text.ts`). The edits split the markup into pieces, each
+piece after the first starting at a `<`, and drop and insert as few pieces as
+they can. An update that would drop and insert more than a thousand pieces
+carries the whole markup instead. A collection that changes one tile therefore
+sends that tile's changed tags, and one that changes no markup sends none, only
+the update's other fields: the freshness age, the version, the favicon's state,
+and the shared message. Each update's edits name the length of the markup they
+were made from. Edits made from markup of another length than the browser holds
+throw an error rather than being applied. The page then closes its stream, and
+opens another once the silence interval described below has passed, which starts
+with the whole markup.
+
+Routine data updates never navigate the page. The page shell — the styles and
+the client script — arrives only with a full page load, so the server hands the
+browser a compatibility version and the page reloads itself as soon as the
+server reports a different one. A deployed image uses the commit its publishing
+workflow checked out, which is fixed for the life of the image, so every display
+on that image agrees. A server started from a checkout reports the moment it
+started instead, because the code under it changes between one start and the
+next: a watched restart therefore pulls every open page onto the code that
+restart is serving, and the version in the page source says which start served
+it. An unattended display reloads when it reconnects to a server reporting a
+different version.
 
 Every response to a drill-down route also names the version that served it, in
 a `dashboard-version` header. A live page compares the version in each event it
@@ -222,7 +240,9 @@ A stream that was delivering and then closed is reopened immediately. One that
 has never delivered is reopened once per silence interval, so a server that
 refuses or fails connections costs one request an interval however long it is
 away, while one that accepts a connection and then drops it is followed as fast
-as it flaps. The silence interval is the fastest tile's collection interval
+as it flaps. A stream the page closes itself, because it cannot apply an update
+that arrived on it, is reopened once per silence interval too, so a failure
+that recurs on every stream costs one request an interval. The silence interval is the fastest tile's collection interval
 plus a serving tick plus ten seconds. That keeps it clear of the heartbeat
 period, which is one serving tick, by the whole of the fastest tile's interval.
 A heartbeat slower than the silence interval would replace a healthy stream on
@@ -255,8 +275,9 @@ the client script and keeps everything that changes inside its `<main>` element,
 apart from the tab's favicon.
 The page opens `/events?page=<its path and query>`. On every serving tick the
 server sends a heartbeat down that stream and renders the page again by calling
-the route's handler, and it sends the new markup when that differs from what it
-last sent. A page that connects is sent the current markup whether or not it
+the route's handler, and when the new markup differs from what it last sent, it
+sends the edits from the one to the other.
+A page that connects is sent the whole of the current markup whether or not it
 changed. The browser keeps every element whose tags, attributes, and text
 between its children match the new markup's, and whose children match in number,
 and compares those children the same way; any other element that differs is
@@ -2226,7 +2247,10 @@ gray-out contract. These ordinary unit tests are hermetic and need only
 `--allow-env` for module-load configuration reads. The full `test` task also
 verifies that Resvg reproduces the embedded PNGs and runs the favicon
 behavior in the local browser test runner. The package tasks grant the additional
-permissions those two checks need. `tiles/prod-uptime.test.ts` exercises the
+permissions those two checks need. `test/runners-feed-socket.test.ts` opens the
+runners feed's WebSockets over TCP on this machine, the only way Deno upgrades
+a request, so the `deno-test` task runs it with every permission too.
+`tiles/prod-uptime.test.ts` exercises the
 production tile's public-site, health, DNS, and proxy checks with canned HTTP
 responses, an injected DNS resolver, an injected proxy client factory, and a
 fake SOCKS5 proxy, so its unit tests never reach the network. This is
@@ -2280,13 +2304,13 @@ its embedded tsnet).
 
 `.github/workflows/dashboard-image.yml` publishes the image, and it publishes
 only from `main`. A push to `main` starts it when the dashboard image, the
-dashboard package, the Gantt drill-down, the Deno dependency metadata, or the
-workflow itself changes. You can also start it by hand from the repository's
-Actions tab, which is how to publish a `main` commit whose files fall outside
-that path list. A manual run can name any branch or tag, so the workflow's
-first step fails a run that is not on `main`: publishing moves the `latest` tag
-the stage deployment follows. That step runs before anything from the named ref
-is checked out.
+dashboard package, a package the dashboard imports, the Gantt drill-down, the
+Deno dependency metadata, or the workflow itself changes. You can also start it
+by hand from the repository's Actions tab, which is how to publish a `main`
+commit whose files fall outside that path list. A manual run can name any branch
+or tag, so the workflow's first step fails a run that is not on `main`:
+publishing moves the `latest` tag the stage deployment follows. That step runs
+before anything from the named ref is checked out.
 
 The workflow runs the dashboard tests, then builds the amd64 image and pushes
 it under both the immutable `dev-dashboard:<full-sha>` tag and `latest`. The

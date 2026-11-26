@@ -1,9 +1,9 @@
 /** Verifies row catch-up after a real storage transport outage in the reader. */
 
 import { env } from "@commonfabric/integration";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { MultiRuntimeHarness } from "./multi-runtime-harness.ts";
 import { StorageNetworkGate } from "./storage-network-gate.ts";

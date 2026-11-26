@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -7,6 +6,7 @@ import {
   type TransformationContext,
 } from "../../src/core/mod.ts";
 import { shouldTransformArrayMethod } from "../../src/closures/strategies/array-method-policy.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function createProgram(source: string): {
   sourceFile: ts.SourceFile;

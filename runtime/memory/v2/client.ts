@@ -5317,13 +5317,21 @@ export class SpaceSession {
         facets: publication.facets,
       });
     };
-    void send().catch((error) => {
+    void send().catch(this.#presenceFailure(state));
+  }
+
+  /**
+   * What tells `state`'s observers that a presence request failed, unless
+   * the connection went away or the client closed, which say so themselves.
+   */
+  #presenceFailure(state: PresenceRoomState): (error: unknown) => void {
+    return (error) => {
       if (isConnectionError(error) || this.#closed) return;
       this.#deliverPresence(state, {
         kind: "failure",
         error: error instanceof Error ? error : new Error(String(error)),
       });
-    });
+    };
   }
 
   /**
@@ -5346,13 +5354,7 @@ export class SpaceSession {
           state.revision += 1;
           this.#publishPresence(state, state.revision, state.publication);
         }
-      }).catch((error) => {
-        if (isConnectionError(error) || this.#closed) return;
-        this.#deliverPresence(state, {
-          kind: "failure",
-          error: error instanceof Error ? error : new Error(String(error)),
-        });
-      });
+      }).catch(this.#presenceFailure(state));
     }
   }
 

@@ -1,9 +1,9 @@
 import { assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 
 import { COMMONFABRIC_RUNTIME_EXPORTS_BY_NAME } from "../../src/core/commonfabric-runtime-registry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FACTORY_URL = new URL(
   "../../../../runtime/runner/src/builder/factory.ts",

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { BuiltInLLMMessage } from "@commonfabric/api";
 import { cfcAtom } from "@commonfabric/api/cfc";
@@ -9,6 +8,7 @@ import {
   enableMockMode,
   loadConversationFixture,
 } from "@commonfabric/llm/client";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import type { JSONSchema } from "../src/builder/types.ts";

@@ -29,7 +29,7 @@ import {
   withRound,
   withWord,
 } from "./board.ts";
-import CodenamesHelper, { type Mode, type Team } from "./codenames-helper.tsx";
+import CodenamesHelper, { type Mode, type Team } from "./main.tsx";
 
 const WORDS = Array.from({ length: 25 }, (_, i) => `WORD${i + 1}`);
 

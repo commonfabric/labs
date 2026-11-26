@@ -14,6 +14,7 @@ import { openSpace } from "../db.ts";
 import { entityHistory } from "../queries.ts";
 import { getValueAt } from "../reconstruct.ts";
 import { scopeOverlay } from "../scopes.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -59,7 +60,7 @@ function seed(path: string) {
   db.close();
 }
 
-Deno.test("candidate histories recover a snapshot after every scope changes", async () => {
+test("candidate histories recover a snapshot after every scope changes", async () => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-candidate-" });
   const dbPath = `${dir}/space.sqlite`;
   try {

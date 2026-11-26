@@ -5,7 +5,6 @@
  * publish in their OpenAPI schemas, so it is pinned here at both levels.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { LanguageModel } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
@@ -14,6 +13,7 @@ import { CACHE_DIR, requestsCaching } from "./cache.ts";
 import { diskResponseCache } from "./llm.handlers.ts";
 import { createLLMRouter } from "./llm.router.ts";
 import { registryWith } from "@/test/fixtures/llm-models.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const MOCK_MODEL_NAME = "mock:cache-model";
 

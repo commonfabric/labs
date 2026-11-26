@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Lexer, type Tokens } from "marked";
 
 import { HeadingIds } from "./heading-id.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("heading-id", () => {
   // marked generated these ids itself until version 5, under a `headerIds`

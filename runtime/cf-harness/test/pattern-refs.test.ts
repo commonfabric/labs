@@ -5,11 +5,11 @@
  * and never its source.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { HarnessFetch } from "../src/contracts/http-fetch.ts";
 import {

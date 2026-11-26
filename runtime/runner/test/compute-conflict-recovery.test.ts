@@ -45,8 +45,9 @@ import {
   arraysOverlap,
   nonRecursiveReadMayOverlapWrite,
 } from "../src/reactive-dependencies.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test(
+test(
   "reader-dirty re-triggers container readers but not disjoint-sibling readers",
   () => {
     // A sibling-leaf reader is exactly the reader leaf-only propagation does NOT

@@ -8,7 +8,7 @@
  * the prompt the chat would build.
  */
 import { action, assert, NAME, pattern, TESTS, UI } from "commonfabric";
-import ImageAnalysis from "./image-analysis.tsx";
+import ImageAnalysis from "./main.tsx";
 import {
   findElement,
   fireEvent,

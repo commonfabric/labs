@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 
 import { analyzeFunctionCapabilities } from "../../src/policy/capability-analysis.ts";
 import { collect, parseModule } from "../transformed-ast.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("capability-analysis", () => {
   describe("array shape checks without a type checker", () => {

@@ -10,11 +10,11 @@
 import { expect } from "@std/expect";
 import { walk } from "@std/fs";
 import { fromFileUrl, relative } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { TYPE_NODE_FLAGS } from "../src/ast/mod.ts";
 import { DEFAULT_TYPE_NODE_FLAGS } from "../src/ast/type-building.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SRC_ROOT = fromFileUrl(new URL("../src/", import.meta.url));
 

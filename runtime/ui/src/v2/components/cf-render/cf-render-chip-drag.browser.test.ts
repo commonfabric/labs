@@ -5,6 +5,7 @@
 
 import { expect } from "@std/expect";
 import type { CellRef } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 
 import { getCurrentDrag, isDragging } from "../../core/drag-state.ts";
 import { createRenderableCellHandle } from "../../test-utils/mock-vdom-connection.ts";
@@ -21,7 +22,7 @@ function previews(): Element[] {
   );
 }
 
-Deno.test("a default chip inside a drag source starts one cell-link drag, and leaves no preview behind", async () => {
+test("a default chip inside a drag source starts one cell-link drag, and leaves no preview behind", async () => {
   const { cell } = createRenderableCellHandle<unknown>(undefined, {
     id: "of:fid1:dragged-abcdef" as CellRef["id"],
   });
@@ -108,7 +109,7 @@ function pressAndRelease(
   return navigations;
 }
 
-Deno.test("a drag of a default chip, or of a cell link, does not navigate, and a click after it does", async () => {
+test("a drag of a default chip, or of a cell link, does not navigate, and a click after it does", async () => {
   // A drag released over something else gets no click on the chip, and the
   // click after it still navigates.
 

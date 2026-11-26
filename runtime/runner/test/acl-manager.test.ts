@@ -14,6 +14,7 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { ACLManager } from "../src/acl-manager.ts";
 import type { Runtime } from "../src/runtime.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-acl-manager-space";
 const ALICE = "did:key:z6Mk-acl-manager-alice";
@@ -38,18 +39,18 @@ const createHarness = (initial: unknown) => {
   };
 };
 
-Deno.test("ACLManager addresses the server's canonical ACL document", async () => {
+test("ACLManager addresses the server's canonical ACL document", async () => {
   const { manager, requestedId } = createHarness({ [ALICE]: "OWNER" });
   await manager.get();
   assertEquals(requestedId(), `of:${SPACE}`);
 });
 
-Deno.test("ACLManager returns null for a missing ACL", async () => {
+test("ACLManager returns null for a missing ACL", async () => {
   const { manager } = createHarness(undefined);
   assertEquals(await manager.get(), null);
 });
 
-Deno.test("ACLManager rejects malformed and ownerless stored ACLs", async () => {
+test("ACLManager rejects malformed and ownerless stored ACLs", async () => {
   for (
     const value of [
       null,

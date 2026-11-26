@@ -5,7 +5,6 @@
  * failures the model cannot correct end the run.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -26,6 +25,7 @@ import type {
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
 import { responsesBodyFromChatFixture } from "./support/responses-fixture.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const directPromptSlotBinding: PromptSlotBinding = {
   type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,

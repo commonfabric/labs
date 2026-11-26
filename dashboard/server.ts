@@ -48,6 +48,7 @@ import {
 import { faviconPng, faviconStatus } from "./favicon.ts";
 import type { FaviconStatus } from "./favicon.ts";
 import { renderTile, shell } from "./render.ts";
+import { type SentText, textToSend } from "./sent-text.ts";
 import {
   type Ctx,
   type Run,
@@ -182,27 +183,61 @@ async function refreshDashboardMessage(): Promise<boolean> {
   }
 }
 
-export const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+/**
+ * A `DashboardUpdate` as the event stream carries it: its markup as the edits
+ * from the markup the same stream carried before.
+ */
+export interface DashboardEvent extends Omit<DashboardUpdate, "gridHtml" | "wideHtml"> {
+  gridHtml: SentText;
+  wideHtml: SentText;
+}
+
+type Client = ReadableStreamDefaultController<Uint8Array>;
+export const clients = new Set<Client>();
+// The update each client was last sent, which its next one is sent as edits
+// to. A client that has been sent none is sent the whole markup.
+const sentTo = new WeakMap<Client, DashboardUpdate>();
 const enc = new TextEncoder();
-const encodeUpdate = (update: DashboardUpdate) =>
-  enc.encode(`event: update\ndata: ${JSON.stringify(update)}\n\n`);
-const send = (event: Uint8Array) => {
+const encodeUpdate = (before: DashboardUpdate | undefined, update: DashboardUpdate) => {
+  const event: DashboardEvent = {
+    ...update,
+    gridHtml: textToSend(before?.gridHtml, update.gridHtml),
+    wideHtml: textToSend(before?.wideHtml, update.wideHtml),
+  };
+  return enc.encode(`event: update\ndata: ${JSON.stringify(event)}\n\n`);
+};
+// Sends `event(c)` to each client `c`, dropping a dead controller so the set
+// cannot grow forever.
+const send = (event: (c: Client) => Uint8Array) => {
   for (const c of clients) {
     try {
-      c.enqueue(event);
+      c.enqueue(event(c));
     } catch {
-      clients.delete(c); // drop a dead controller so the set can't grow forever
+      clients.delete(c);
     }
   }
 };
-export const broadcast = (update: DashboardUpdate) => send(encodeUpdate(update));
+export const broadcast = (update: DashboardUpdate) => {
+  // Clients sent the same update before share one encoding of this one.
+  const events = new Map<DashboardUpdate | undefined, Uint8Array>();
+  send((c) => {
+    const before = sentTo.get(c);
+    const event = events.get(before) ?? encodeUpdate(before, update);
+    events.set(before, event);
+    sentTo.set(c, update);
+    return event;
+  });
+};
 // A tick that collects nothing publishes nothing, so a browser cannot read
 // silence as a fault unless the server speaks on its own schedule. The
 // heartbeat is that schedule: a browser that stops hearing it replaces its
 // stream. The SSE data field carries the tick count because an event with no
 // data is not delivered to the page.
 let beats = 0;
-export const heartbeat = () => send(enc.encode(`event: ping\ndata: ${++beats}\n\n`));
+export const heartbeat = () => {
+  const ping = enc.encode(`event: ping\ndata: ${++beats}\n\n`);
+  send(() => ping);
+};
 
 const runSourceTileKey = (source: RunSource, tile: Tile): string => `${runSourceKey(source)} ${tile.label}`;
 
@@ -814,9 +849,11 @@ export async function handle(req: Request): Promise<Response> {
     const stream = new ReadableStream<Uint8Array>({
       start(c) {
         controller = c;
+        const update = dashboardUpdate();
         clients.add(c);
+        sentTo.set(c, update);
         c.enqueue(enc.encode(": connected\n\n"));
-        c.enqueue(encodeUpdate(dashboardUpdate()));
+        c.enqueue(encodeUpdate(undefined, update));
       },
       cancel() {
         if (controller) clients.delete(controller);

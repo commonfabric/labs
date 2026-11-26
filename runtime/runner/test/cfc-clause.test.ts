@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { hashStringOf } from "@commonfabric/data-model";
 import {
@@ -7,6 +6,7 @@ import {
   clauseAlternatives,
   isOrClause,
 } from "@commonfabric/memory/v2/cfc-release-authority";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   canonicalizeCfcMetadata,

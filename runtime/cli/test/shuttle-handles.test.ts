@@ -14,9 +14,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { resolveHandle } from "../lib/shuttle/handles.ts";
 import type { ListingHandles, ListingRow } from "../lib/shuttle/listing.ts";

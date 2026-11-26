@@ -6,12 +6,13 @@ import { createRouter } from "@/lib/create-app.ts";
 import configureOpenAPI from "@/lib/configure-open-api.ts";
 import { DESCRIPTORS } from "@/routes/integrations/provider-registry.ts";
 import { createOAuth2Routes } from "@/routes/integrations/oauth2-common/oauth2-common.routes.ts";
+import { test } from "@commonfabric/test-support/test";
 
 if (env.ENV !== "test") {
   throw new Error("ENV must be 'test'");
 }
 
-Deno.test("openapi reference", async (t) => {
+test("openapi reference", async (t) => {
   // `@/app.ts` is the app the server serves: `configureOpenAPI` plus every
   // router. The document is generated per request from the schemas of the
   // routes mounted on it.

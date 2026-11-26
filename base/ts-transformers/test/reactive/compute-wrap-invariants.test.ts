@@ -4,6 +4,7 @@ import ts from "typescript";
 import { createDataFlowAnalyzer } from "../../src/ast/mod.ts";
 import { CrossStageState, TransformationContext } from "../../src/core/mod.ts";
 import { findPendingComputeWrapCandidate } from "../../src/transformers/expression-rewrite/emitters/compute-wrap-invariants.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function createProgramAndContext(source: string): {
   sourceFile: ts.SourceFile;
@@ -108,7 +109,7 @@ const findPendingComputeWrapCandidateWithExclude =
     excludeSubtree?: ts.Node,
   ) => ts.Expression | undefined;
 
-Deno.test(
+test(
   "findPendingComputeWrapCandidate excludes the queried subtree from circular analysis",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -142,7 +143,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "findPendingComputeWrapCandidate still finds independent candidates after exclusion",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -176,7 +177,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "findPendingComputeWrapCandidate does not treat custom map methods as supported rewrite boundaries",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`

@@ -1,8 +1,8 @@
 /** Sharing workflow state transitions under Lit's headless element shim. */
 
 import type { CellHandle, RuntimeClient } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { CFShareSnapshot } from "./index.ts";

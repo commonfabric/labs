@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { Source } from "@commonfabric/js-compiler";
@@ -9,6 +8,12 @@ import {
   injectCfHelpers,
   isLegacyInjectedEnvelope,
 } from "@commonfabric/ts-transformers";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   loadCompiledClosure,

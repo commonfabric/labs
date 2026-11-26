@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { listChildSetupBatch } from "../../src/builtins/list-child-setup-batch.ts";
 import { RetryImmediately } from "../../src/scheduler/retry-immediately.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("list-child-setup-batch", () => {
   it("needs no fresh transaction when no children require loading", () => {

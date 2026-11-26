@@ -8,8 +8,9 @@ import {
   SHOW,
   withGitShim,
 } from "./view-commitmsg-test-helpers.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("commitSubjects: the first indented body line of a standard commit", () => {
+test("commitSubjects: the first indented body line of a standard commit", () => {
   const subjects = commitSubjects(SHOW);
   assertEquals(
     subjects.get("0123456789abcdef0123456789abcdef01234567"),
@@ -17,7 +18,7 @@ Deno.test("commitSubjects: the first indented body line of a standard commit", (
   );
 });
 
-Deno.test("realGit: reads HEAD and amends the message, keeping the tree", async () => {
+test("realGit: reads HEAD and amends the message, keeping the tree", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -53,7 +54,7 @@ Deno.test("realGit: reads HEAD and amends the message, keeping the tree", async 
   }
 });
 
-Deno.test("realGit: preserves non-UTF-8 commit message bytes", async () => {
+test("realGit: preserves non-UTF-8 commit message bytes", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -106,7 +107,7 @@ Deno.test("realGit: preserves non-UTF-8 commit message bytes", async () => {
   }
 });
 
-Deno.test({
+test({
   name: "realGit: rolls back nested commits after hooks expire reflogs",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -155,7 +156,7 @@ fi`,
   },
 });
 
-Deno.test({
+test({
   name: "realGit: amends a POSIX path containing a literal backslash",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -183,7 +184,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "realGit: branch-aware hooks see the branch being amended",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -213,13 +214,13 @@ Deno.test({
   },
 });
 
-Deno.test("realGit: headSha is null when git cannot run (bad cwd)", () => {
+test("realGit: headSha is null when git cannot run (bad cwd)", () => {
   // A cwd that does not exist makes the git subprocess fail to launch; the
   // runner catches it and reports no HEAD rather than throwing.
   assertEquals(realGit("/no/such/directory/really").headSha(), null);
 });
 
-Deno.test("realGit: preserves a staged version that already matches the pager", async () => {
+test("realGit: preserves a staged version that already matches the pager", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -248,7 +249,7 @@ Deno.test("realGit: preserves a staged version that already matches the pager", 
   }
 });
 
-Deno.test({
+test({
   name: "realGit: surfaces malformed repository and tree responses from Git",
   ignore: Deno.build.os === "windows",
   async fn() {

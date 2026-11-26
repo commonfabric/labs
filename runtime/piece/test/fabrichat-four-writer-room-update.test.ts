@@ -25,7 +25,6 @@
 import { expect } from "@std/expect";
 import { walk } from "@std/fs";
 import { fromFileUrl, relative } from "@std/path";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
@@ -50,6 +49,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { cfcSchemaEntries } from "../../runner/src/cfc/schema-label-view.ts";
 import {

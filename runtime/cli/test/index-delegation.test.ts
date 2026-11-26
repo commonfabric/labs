@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { decodeDelegation, Identity } from "@commonfabric/identity";
 import {
@@ -8,6 +7,12 @@ import {
 } from "@commonfabric/pattern-index/membership";
 import { issueIndexDelegation } from "../lib/index-delegation.ts";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const BASE = "https://index.test";
 const cfKey = await Identity.fromPassphrase("index delegation cf");

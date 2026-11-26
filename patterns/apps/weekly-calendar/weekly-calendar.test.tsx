@@ -12,7 +12,7 @@ import {
   createEventHandler,
   type EventPiece,
   handleCreateEvent,
-} from "./weekly-calendar.tsx";
+} from "./main.tsx";
 
 export default pattern(() => {
   const events = new Writable<EventPiece[]>([]);

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -10,6 +9,12 @@ import {
   parseAliasLine,
   readAliasDirectory,
 } from "./aliases.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const FULL: AliasLine = {
   date: "2026-08-17",
