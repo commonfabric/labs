@@ -118,18 +118,17 @@ async function takeSupersedingCommit(
   }
   if (taken(runtime, output)) return;
   await new Promise<void>((resolve) => {
+    if (signal?.aborted === true) return;
     const subscriber = {
       next: () => {
         if (!taken(runtime, output)) return { done: false };
+        signal?.removeEventListener("abort", stop);
         resolve();
         return { done: true };
       },
     };
+    const stop = () => manager.unsubscribe?.(subscriber);
     manager.subscribe(subscriber);
-    signal?.addEventListener(
-      "abort",
-      () => manager.unsubscribe?.(subscriber),
-      { once: true },
-    );
+    signal?.addEventListener("abort", stop, { once: true });
   });
 }
