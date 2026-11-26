@@ -426,9 +426,9 @@ export function parseAggregate(value: unknown): AggregateState | undefined {
     readNewRealTestFailuresForward(identity);
     readDisagreementsForward(identity);
     // An aggregate written before failures on `main` were counted apart
-    // holds none, and an empty count is the truthful reading of it: the
-    // last failure is then read from the disagreements alone until `main`
-    // fails the test again.
+    // does not say which of its failures were there. That count is read
+    // as empty, so the last failure comes from the disagreements alone
+    // until `main` fails the test again.
     if (!isObjectNotArray(identity.mainFailuresByDay)) {
       identity.mainFailuresByDay = {};
     }
