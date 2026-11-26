@@ -21,18 +21,49 @@ export interface OrganizationRepo {
 
 /**
  * Lists every repository in the organization the token can see, minus the
- * archived ones, making each request with `options`. A token that cannot see a private repository is not shown it
- * here, so a caller covers what the token reaches and says nothing about the
- * rest. Throws when GitHub's answer does not have the shape of a listing.
+ * archived ones, making each request with `options`. A token that cannot see
+ * a private repository is not shown it here, so a caller covers what the token
+ * reaches and says nothing about the rest. Throws when GitHub's answer does not
+ * have the shape of a listing.
  */
 export async function organizationRepos(
   credential: GitHubCredential,
   options: GitHubRequestOptions = {},
 ): Promise<OrganizationRepo[]> {
-  const repos: OrganizationRepo[] = [];
+  return (await listRepos(GITHUB_ORGANIZATION.name, credential, options))
+    .filter((repo) => !repo.archived)
+    .map(({ name, branch, pushedAt }) => ({ name, branch, pushedAt }));
+}
+
+/**
+ * Lists the names, without the owner, of every repository in `organization`
+ * that the token can see, archived ones included, making each request with
+ * `options`. Throws when GitHub's answer does not have the shape of a
+ * listing.
+ */
+export async function repositoryNames(
+  organization: string,
+  credential: GitHubCredential,
+  options: GitHubRequestOptions = {},
+): Promise<string[]> {
+  return (await listRepos(organization, credential, options)).map(({ name }) =>
+    name.slice(name.indexOf("/") + 1)
+  );
+}
+
+/**
+ * Helper for `organizationRepos()` and `repositoryNames()`, which reads every
+ * page of `organization`'s repositories, making each request with `options`.
+ */
+async function listRepos(
+  organization: string,
+  credential: GitHubCredential,
+  options: GitHubRequestOptions,
+): Promise<(OrganizationRepo & { archived: boolean })[]> {
+  const repos: (OrganizationRepo & { archived: boolean })[] = [];
   for (let page = 1;; page++) {
     const batch = await github<unknown>(
-      `orgs/${GITHUB_ORGANIZATION.name}/repos?per_page=100&page=${page}`,
+      `orgs/${organization}/repos?per_page=100&page=${page}`,
       credential,
       options,
     );
@@ -50,13 +81,12 @@ export async function organizationRepos(
           "GitHub organization repositories returned invalid data",
         );
       }
-      if (!repo.archived) {
-        repos.push({
-          name: repo.full_name,
-          branch: repo.default_branch,
-          pushedAt: repo.pushed_at,
-        });
-      }
+      repos.push({
+        name: repo.full_name,
+        branch: repo.default_branch,
+        pushedAt: repo.pushed_at,
+        archived: repo.archived,
+      });
     }
     if (batch.length < 100) return repos;
   }

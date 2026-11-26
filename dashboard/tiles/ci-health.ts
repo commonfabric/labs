@@ -55,6 +55,11 @@
  * for each failing run. It is read again after the relay delivers a push to
  * the run's repository's default branch, or when the relay cannot vouch that
  * none has been delivered.
+ *
+ * Each repository the sweep lists also has a job of the dashboard's own, the
+ * scan for references into the offcuts organization (offcuts-scan.ts). It
+ * fails while the repository's default branch has any, and a failure of it
+ * does not fade to orange however long it lasts.
  */
 
 import {
@@ -101,6 +106,7 @@ import {
   workflowRunOf,
 } from "../github-webhooks.ts";
 import { dashboardCacheFile } from "../history-files.ts";
+import { OffcutsScan } from "../offcuts-scan.ts";
 import {
   type OrganizationRepo,
   organizationRepos,
@@ -516,11 +522,14 @@ export interface CiHealthTile extends Tile {
 
 /**
  * Builds the ci tile, which reads every workflow's runs through `lists`, and
- * learns of their activity, and of pushes, from `webhooks`.
+ * learns of their activity, and of pushes, from `webhooks`. With `offcuts`,
+ * it scans every repository it lists for references into the offcuts
+ * organization, and shows those scans as jobs.
  */
 export function createCiHealth(
   lists: RunLists = new RunLists(),
   webhooks: GitHubWebhooks = githubWebhooks,
+  offcuts?: OffcutsScan,
 ): CiHealthTile {
   // The inventory is read on first use and shared until it goes stale. A read
   // that fails is not kept, so the next sweep tries again.
@@ -740,8 +749,13 @@ export function createCiHealth(
         return { status: "unknown", value: "—", sub: "reading every repository" };
       }
 
+      offcuts?.scan(swept.repos, credential, () => ctx.collectAgain?.());
       const jobs: CiJobs = {
-        jobs: [...await judgePinned(ctx, swept, credential), ...swept.jobs],
+        jobs: [
+          ...await judgePinned(ctx, swept, credential),
+          ...swept.jobs,
+          ...offcuts?.jobs(swept.repos) ?? [],
+        ],
         repos: swept.repos.map((repo) => shortName(repo.repo)),
         unreadableRepos: swept.repos
           .filter((repo) => repo.error !== undefined)
@@ -773,4 +787,6 @@ function logUnreadable(names: string[]): void {
 
 export const ciHealth = createCiHealth(
   new RunLists(dashboardCacheFile("fabric-wall-run-lists-ci.json")),
+  githubWebhooks,
+  new OffcutsScan({ webhooks: githubWebhooks }),
 );
