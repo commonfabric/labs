@@ -658,7 +658,6 @@ export function resolveLinkTracingDereferences(
   memoKey: string | undefined;
 } {
   // The walk needs this to detect cycles; the memo needs it to name the entry.
-  const zzReaderSchema = link.schema;
   let addressKey = linkAddressKey(link);
   const memo = tx.getSnapshotMemo?.();
   const memoKey = memo === undefined ? "" : resolutionMemoVariant(
@@ -1029,10 +1028,8 @@ export function resolveLinkTracingDereferences(
         ensureExternalSchemaClosure(tx, nextHop.source.space, link.schema);
       }
       const mgr = runtime.storageManager;
-      (globalThis as any).zzSchema = zzReaderSchema === undefined ? "none" : ContextualFlowControl.isFalseSchema(zzReaderSchema) ? "false" : zzReaderSchema === true ? "true" : "schema";
       const reserved = !crossSpace &&
         mgr.shouldPullDoc?.(link.space, link.id, link.scope) === true;
-      (globalThis as any).zzSchema = "other";
       if (crossSpace || reserved) {
         // Only the cross-space kick is replayed. A same-space one is taken
         // against a reservation, so a second resolution of this link would not
