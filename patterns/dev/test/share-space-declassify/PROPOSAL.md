@@ -215,3 +215,26 @@ leave room:
 - **The reader's display is unverified** until the browser test exists.
 - **Whether `RequiresIntegrity` on a lift's input stops the run** is not yet
   shown in a test.
+- **Anyone with WRITE on the piece's space can change who releases.** The
+  runtime honors a reclassification only when every writer at the declared path
+  is the module the piece's `patternIdentity` names. `setsrc` is a space grant,
+  not the creator's act (`docs/plans/piece-creator-owns-update-added-fields.md`,
+  "What this plan does not change"). So a member of B with WRITE can point A's
+  piece at a pattern whose lift reclassifies A's data under any policy, and its
+  new outputs are new documents, which the stored-envelope refusal does not
+  reach. Requiring the creator's act for a source change of a piece that records
+  one would close this.
+- **A document created before the dial keeps its existence A's.** SC-4 freezes a
+  path's existence (shape) entry at creation. A value first written with the
+  dial off, or before its piece recorded a creator, keeps `User(A)` on that
+  entry when it is rewritten with the dial on, while its value entry becomes
+  `anyOf(User(A), P)`. A read of the value joins the shape, so B's readers still
+  cannot read it. The window must be created with the dial on, or its shape
+  re-minted.
+- **Only the module the pattern is defined in releases.** A lift defined in a
+  module the pattern imports is not the module `patternIdentity` names, so its
+  declaration is ignored and a diagnostic says so. That fails closed. Admitting
+  it needs the module set of the piece's program to be readable at commit.
+- **A reclassification must cover every path the transaction writes.** The flow
+  join is stamped on the whole document, so a declaration on one field is
+  honored only when the transaction writes nothing else there.
