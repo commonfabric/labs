@@ -721,8 +721,9 @@ async function makeSession(config: SpaceConfig): Promise<Session> {
 export interface ConnectionOutput {
   /**
    * Takes each line the connection writes for itself: the navigate callback's
-   * three, the two warnings a failed connect's own cleanup writes, and the
-   * warning that the profile delegations Home records could not be loaded.
+   * three, the two warnings a failed connect's own cleanup writes, the
+   * warning that the profile delegations Home records could not be loaded,
+   * and the report that the directory of compiled modules failed.
    */
   readonly report?: (message: string) => void;
 
@@ -821,7 +822,7 @@ export async function loadPieces(
   // both stand for.
   await validateEmbeddedSpaces(config.embeddedSpaces, session);
   const runtimeErrors: CliRuntimeErrorRecord[] = [];
-  const compileCache = connectionCompileCache();
+  const compileCache = connectionCompileCache().reportingTo(navigateFailure);
   const runtime = await timeCliPhase(
     "loadPieces.runtime",
     () =>

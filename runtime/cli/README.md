@@ -2101,8 +2101,9 @@ processes that compile the same modules at once compile them once.
 `lib/compile-byte-cache.ts` opens the directory once per process, when the first
 compile asks it for anything, so a command that compiles nothing does not touch
 it. From the first failure of the directory, whether opening it, reading it or
-locking in it, the command says why on stderr and keeps what it compiles in
-memory for the rest of the process.
+locking in it, the command keeps what it compiles in memory for the rest of the
+process, and the connection whose compile met the failure says why, through its
+caller's report where it has one and on stderr otherwise.
 
 ## Piece discovery
 

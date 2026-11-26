@@ -8,7 +8,11 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import { Identity } from "@commonfabric/identity";
-import { Runtime, type RuntimeProgram } from "@commonfabric/runner";
+import {
+  type ModuleByteCache,
+  Runtime,
+  type RuntimeProgram,
+} from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   afterEach,
@@ -22,6 +26,11 @@ import {
   connectionCompileCache,
   connectionCompileCacheDir,
 } from "../lib/compile-byte-cache.ts";
+
+/** A report a test expects no failure to reach. */
+function unreported(message: string): never {
+  throw new Error(`unexpected report: ${message}`);
+}
 
 /** An environment that holds `values` and nothing else. */
 function environment(
@@ -90,14 +99,14 @@ describe("compile-byte-cache", () => {
     }
 
     /** Puts one module through `cache` and reads it back. */
-    function roundTrip(cache: ConnectionCompileCache): string | undefined {
+    function roundTrip(cache: ModuleByteCache): string | undefined {
       cache.putAll("version", [{ identity: "module", js: "compiled" }]);
       return cache.getCompleteSet("version", ["module"])?.get("module")?.js;
     }
 
     it("creates its directory only when a compile first asks it for something", async () => {
       const dir = join(await scratch(), "compiled-modules");
-      const cache = new ConnectionCompileCache(dir);
+      const cache = new ConnectionCompileCache(dir).reportingTo(unreported);
       expect(await exists(dir)).toBe(false);
 
       expect(cache.getCompleteSet("version", ["module"])).toBeUndefined();
@@ -107,10 +116,13 @@ describe("compile-byte-cache", () => {
 
     it("serves what another cache over its directory put", async () => {
       const dir = join(await scratch(), "compiled-modules");
-      roundTrip(new ConnectionCompileCache(dir));
+      roundTrip(new ConnectionCompileCache(dir).reportingTo(unreported));
 
       expect(
-        new ConnectionCompileCache(dir).getCompleteSet("version", ["module"])
+        new ConnectionCompileCache(dir).reportingTo(unreported).getCompleteSet(
+          "version",
+          ["module"],
+        )
           ?.get("module")?.js,
       ).toBe("compiled");
     });
@@ -120,8 +132,7 @@ describe("compile-byte-cache", () => {
       await Deno.writeTextFile(blocker, "");
       const dir = join(blocker, "compiled-modules");
       const reports: string[] = [];
-      const cache = new ConnectionCompileCache(
-        dir,
+      const cache = new ConnectionCompileCache(dir).reportingTo(
         (message) => reports.push(message),
       );
 
@@ -135,8 +146,7 @@ describe("compile-byte-cache", () => {
     it("keeps modules in memory from then on, and reports why once, when locking in its directory fails", async () => {
       const dir = join(await scratch(), "compiled-modules");
       const reports: string[] = [];
-      const cache = new ConnectionCompileCache(
-        dir,
+      const cache = new ConnectionCompileCache(dir).reportingTo(
         (message) => reports.push(message),
       );
       expect(cache.getCompleteSet("version", ["module"])).toBeUndefined();
@@ -154,7 +164,7 @@ describe("compile-byte-cache", () => {
 
     it("keeps modules in memory from then on, and reports why, when reading its directory fails", async () => {
       const dir = join(await scratch(), "compiled-modules");
-      roundTrip(new ConnectionCompileCache(dir));
+      roundTrip(new ConnectionCompileCache(dir).reportingTo(unreported));
       for await (const version of Deno.readDir(join(dir, "modules"))) {
         for await (
           const file of Deno.readDir(join(dir, "modules", version.name))
@@ -165,8 +175,7 @@ describe("compile-byte-cache", () => {
         }
       }
       const reports: string[] = [];
-      const cache = new ConnectionCompileCache(
-        dir,
+      const cache = new ConnectionCompileCache(dir).reportingTo(
         (message) => reports.push(message),
       );
 
@@ -180,8 +189,7 @@ describe("compile-byte-cache", () => {
     it("reports once when two turns fail together", async () => {
       const dir = join(await scratch(), "compiled-modules");
       const reports: string[] = [];
-      const cache = new ConnectionCompileCache(
-        dir,
+      const cache = new ConnectionCompileCache(dir).reportingTo(
         (message) => reports.push(message),
       );
       expect(cache.getCompleteSet("version", ["module"])).toBeUndefined();
@@ -200,8 +208,7 @@ describe("compile-byte-cache", () => {
     it("makes a turn wait for one its process holds for the same modules when the directory fails between them", async () => {
       const dir = join(await scratch(), "compiled-modules");
       const reports: string[] = [];
-      const cache = new ConnectionCompileCache(
-        dir,
+      const cache = new ConnectionCompileCache(dir).reportingTo(
         (message) => reports.push(message),
       );
       const endFirst = await cache.take("modules");
@@ -229,6 +236,7 @@ describe("compile-byte-cache", () => {
       await Deno.writeTextFile(blocker, "");
       const cache = new ConnectionCompileCache(
         join(blocker, "compiled-modules"),
+      ).reportingTo(
         () => {
           throw new Error("the report could not be written");
         },
@@ -243,8 +251,8 @@ describe("compile-byte-cache", () => {
 
     it("makes a turn for modules wait for another process's turn for them, and no other", async () => {
       const dir = join(await scratch(), "compiled-modules");
-      const first = new ConnectionCompileCache(dir);
-      const later = new ConnectionCompileCache(dir);
+      const first = new ConnectionCompileCache(dir).reportingTo(unreported);
+      const later = new ConnectionCompileCache(dir).reportingTo(unreported);
       const endFirst = await first.take("modules");
       let laterStarted = false;
       const laterTurn = later.take("modules").then((end) => {
@@ -261,8 +269,12 @@ describe("compile-byte-cache", () => {
     });
 
     it("takes turns within itself, and with no other cache, when it has no directory", async () => {
-      const cache = new ConnectionCompileCache(undefined);
-      const other = new ConnectionCompileCache(undefined);
+      const cache = new ConnectionCompileCache(undefined).reportingTo(
+        unreported,
+      );
+      const other = new ConnectionCompileCache(undefined).reportingTo(
+        unreported,
+      );
       const endFirst = await cache.take("modules");
       let secondStarted = false;
       const second = cache.take("modules").then((end) => {
@@ -278,10 +290,28 @@ describe("compile-byte-cache", () => {
       expect(secondStarted).toBe(true);
     });
 
+    it("reports a failure to the connection whose compile met it, and to no other", async () => {
+      const blocker = join(await scratch(), "a-file");
+      await Deno.writeTextFile(blocker, "");
+      const cache = new ConnectionCompileCache(
+        join(blocker, "compiled-modules"),
+      );
+      const met: string[] = [];
+      const other: string[] = [];
+      const meeting = cache.reportingTo((message) => met.push(message));
+      cache.reportingTo((message) => other.push(message));
+
+      expect(meeting.getCompleteSet("version", ["module"])).toBeUndefined();
+
+      expect(met).toHaveLength(1);
+      expect(other).toEqual([]);
+    });
+
     it("reports nothing when its directory opens", async () => {
       const reports: string[] = [];
       const cache = new ConnectionCompileCache(
         join(await scratch(), "compiled-modules"),
+      ).reportingTo(
         (message) => reports.push(message),
       );
 
@@ -328,7 +358,7 @@ describe("compile-byte-cache", () => {
     function connection(): Runtime {
       const storageManager = StorageManager.emulate({ as: signer });
       storageManagers.push(storageManager);
-      const cache = new ConnectionCompileCache(dir);
+      const cache = new ConnectionCompileCache(dir).reportingTo(unreported);
       const runtime = new Runtime({
         apiUrl: new URL(import.meta.url),
         storageManager,

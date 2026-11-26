@@ -28,7 +28,6 @@ import {
 
 import { slugIdForSpace } from "../../runner/src/slugs.ts";
 import { runtimeErrorLog } from "../lib/callable.ts";
-import { connectionCompileCache } from "../lib/compile-byte-cache.ts";
 import {
   loadPieces,
   newPiece,
@@ -194,7 +193,6 @@ describe("piece-library", () => {
         await withEnv("XDG_CACHE_HOME", cacheHome, async () => {
           const pieces = await open([]);
           expect(await cachedFiles()).toBeUndefined();
-          expect(pieces.runtime.compileTurns).toBe(connectionCompileCache());
 
           await pieces.runtime.patternManager.compileAndRegisterModules({
             main: "/main.tsx",
@@ -211,6 +209,47 @@ describe("piece-library", () => {
         });
       } finally {
         await Deno.remove(cacheHome, { recursive: true });
+      }
+    });
+
+    it("reports a failure of the compiled-module cache to the connection's report", async () => {
+      stubs.push(
+        stub(
+          Runtime.prototype,
+          "loadProfileDelegations",
+          () => Promise.resolve(0),
+        ),
+      );
+      const scratch = await Deno.makeTempDir({ prefix: "cf-cache-home-" });
+      const blocker = join(scratch, "a-file");
+      await Deno.writeTextFile(blocker, "");
+      try {
+        await withEnv("XDG_CACHE_HOME", blocker, async () => {
+          const reports: string[] = [];
+          const pieces = await open(reports);
+          expect(reports).toEqual([]);
+
+          await pieces.runtime.patternManager.compileAndRegisterModules({
+            main: "/main.tsx",
+            files: [{
+              name: "/main.tsx",
+              contents: [
+                "import { NAME, pattern } from 'commonfabric';",
+                "export default pattern(() => ({ [NAME]: 'reported' }));",
+              ].join("\n"),
+            }],
+          });
+
+          expect(reports).toEqual([
+            expect.stringContaining(
+              `[compile-byte-cache] ${
+                join(blocker, "common-fabric", "compiled-modules")
+              } failed`,
+            ),
+          ]);
+        });
+      } finally {
+        await Deno.remove(scratch, { recursive: true });
       }
     });
   });
