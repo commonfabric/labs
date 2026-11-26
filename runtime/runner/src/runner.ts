@@ -3170,6 +3170,17 @@ export class Runner {
    */
   #handlerResultPatterns = new WeakSet<Pattern>();
 
+  /**
+   * The piece whose handler produced each receipt a handler's result is set
+   * up into, by the receipt's document key. A receipt is a keyless piece,
+   * which records no creator, so a child the result instantiates takes the
+   * producing piece's record instead (`#pieceCreatorFor`). The child is set
+   * up after the receipt's own setup returns, so an entry lives as long as
+   * the runner, as `#demandRootChains` does; a handler that returns no
+   * pattern adds none.
+   */
+  #receiptProducers = new Map<string, { id: URI; space: MemorySpace }>();
+
   /** See {@link #releaseServedHandlerResult}: set for the length of its release. */
   #releasingServedResult = false;
 
@@ -5425,12 +5436,24 @@ export class Runner {
     if (options.parentPieceRootId !== undefined) {
       const space = options.parentPieceSpace ??
         resultCell.getAsNormalizedFullLink().space;
-      const recorded = this.#runtime.getCellFromLink(
+      const parent = this.#runtime.getCellFromLink(
         { id: options.parentPieceRootId as URI, space, path: [] },
         undefined,
         tx,
+      );
+      const recorded = parent.getMetaRaw("creator", {
+        meta: ignoreReadForScheduling,
+      });
+      if (typeof recorded === "string") return recorded;
+      // A receipt records no creator; its producing piece does.
+      const producer = this.#receiptProducers.get(this.#getDocKey(parent));
+      if (producer === undefined) return undefined;
+      const produced = this.#runtime.getCellFromLink(
+        { ...producer, path: [] },
+        undefined,
+        tx,
       ).getMetaRaw("creator", { meta: ignoreReadForScheduling });
-      return typeof recorded === "string" ? recorded : undefined;
+      return typeof produced === "string" ? produced : undefined;
     }
     if (options.attributeInitialization === false) return undefined;
     const snapshot = tx.getCfcState().trustSnapshot;
@@ -14910,6 +14933,11 @@ export class Runner {
         return setup.resultCell;
       })()
       : (() => {
+        const producer = patternResultCell.getAsNormalizedFullLink();
+        this.#receiptProducers.set(receiptKey, {
+          id: producer.id,
+          space: producer.space,
+        });
         const run = this.#runWithStartOwnership(
           tx,
           resultPattern,
@@ -14918,8 +14946,7 @@ export class Runner {
           {
             // A result-as-pattern child's demand roots include the producing
             // piece's chain (see RunnerRunOptions).
-            parentPieceRootId: patternResultCell.getAsNormalizedFullLink()
-              .id,
+            parentPieceRootId: producer.id,
           },
         );
         installedCancel = run.installedCancel;
