@@ -340,12 +340,25 @@ hooks. The menu's DOM behavior is driven end to end by
 **Contract.** A cell handle exposes
 `getCfcLabel(): Promise<CfcLabelView | undefined>` — a pure,
 non-blocking read of the cell's runtime-attested CFC label. A host that
-persists cell data *outside the runtime* (a host-side cache, an LLM
-prompt) has left the CFC enforcement boundary and must **fail closed**:
+persists cell data *outside the runtime* (a host-side cache that serves
+anyone else, an LLM prompt) has left the CFC enforcement boundary and must **fail closed**:
 egress only what is public. A label is public iff no entry carries a
 non-empty `confidentiality` clause; an absent label and empty entries
 are public; `integrity` atoms are orthogonal and do not make a value
 confidential.
+
+This rule is for what a host hands on: to a prompt, a server, another
+principal or device, or a cache that serves anyone else. A user agent's own
+copy of what it drew for the acting principal is not egress. It is a
+re-display of a release already made to that principal's display, and CFC
+§8.10.6.1 governs it instead
+([commonfabric/specs#104](https://github.com/commonfabric/specs/pull/104)):
+kept for that principal on that device, protected at rest and out of backups,
+never a source, bounded and aged out, shown as not current until the runtime
+answers and replaced whole by that answer, cleared at once on a refusal or a
+lost membership or space, and holding no authorship badge or permission
+verdict. Such a copy needs no label, so a host that receives values without
+their labels may keep one.
 
 ```ts
 // runtime/runner/src/cfc/label-view-core.ts
