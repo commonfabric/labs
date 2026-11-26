@@ -41,7 +41,7 @@ import {
   styleOf,
   typeInto,
 } from "../../tools/test-support/vnode-helpers.ts";
-import HabitTracker from "./habit-tracker.tsx";
+import HabitTracker from "./main.tsx";
 import type { Habit, HabitLog } from "./schemas.tsx";
 
 // Helper to get array length with proper reactivity tracking

@@ -16,7 +16,7 @@ import SelfImprovingClassifier, {
   type ClassificationRule,
   type LabeledExample,
   type PendingClassification,
-} from "./self-improving-classifier.tsx";
+} from "./main.tsx";
 
 // With server execution on, the serving loop asks the model to classify the
 // non-matching item; the test states that the request fails. With it off,

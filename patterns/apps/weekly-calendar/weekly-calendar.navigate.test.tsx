@@ -30,10 +30,7 @@ import {
   slots,
   todayBadges,
 } from "./view-walk.ts";
-import WeeklyCalendar, {
-  addDays,
-  formatDateHeader,
-} from "./weekly-calendar.tsx";
+import WeeklyCalendar, { addDays, formatDateHeader } from "./main.tsx";
 
 export default pattern(() => {
   const cal = WeeklyCalendar({ events: [] });

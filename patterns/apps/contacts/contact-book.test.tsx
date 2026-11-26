@@ -27,7 +27,7 @@ import {
   textContent,
   typeInto,
 } from "../../tools/test-support/vnode-helpers.ts";
-import { default as ContactBook, matchesSearch } from "./contact-book.tsx";
+import { default as ContactBook, matchesSearch } from "./main.tsx";
 import { type Contact } from "./contact-detail.tsx";
 
 // Helper to get array length with proper reactivity tracking

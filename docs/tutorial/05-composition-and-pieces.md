@@ -154,7 +154,7 @@ const response = generateText({
 The request flows through the server's LLM proxy (Toolshed — Chapter 11),
 results are cached per distinct input, and `pending`/`error`/`result` are
 just cells your UI binds to. A real use from
-`patterns/apps/shopping-list/shopping-list.tsx` — note it's *inside a `.map()`*,
+`patterns/apps/shopping-list/main.tsx` — note it's *inside a `.map()`*,
 one cached classification per item:
 
 ```tsx

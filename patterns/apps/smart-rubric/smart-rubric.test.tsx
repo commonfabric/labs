@@ -34,7 +34,7 @@ import SmartRubric, {
   withOptionMoved,
   withRange,
   withWeightChanged,
-} from "./smart-rubric.tsx";
+} from "./main.tsx";
 
 const LOFT_ANSWER: QuickAddResponse = {
   optionName: "Sunny Loft",

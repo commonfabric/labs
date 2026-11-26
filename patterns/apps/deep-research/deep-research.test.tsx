@@ -19,7 +19,7 @@ import {
   UI,
   Writable,
 } from "commonfabric";
-import DeepResearch from "./deep-research.tsx";
+import DeepResearch from "./main.tsx";
 import {
   findElement,
   fireEvent,
