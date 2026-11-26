@@ -75,7 +75,7 @@ describe("drag-drop-demo", () => {
       rootPath,
       "examples",
       "drag-drop-demo",
-      "drag-drop-demo.tsx",
+      "main.tsx",
     );
     const program = await resolveLocalProgram(
       (resolver) => cc.runtime.harness.resolve(resolver),

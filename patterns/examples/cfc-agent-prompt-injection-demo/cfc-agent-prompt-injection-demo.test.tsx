@@ -8,7 +8,7 @@
  * error reply and no tool is ever called. `model-turns.test.tsx` beside this
  * one drives the agents' tool calls.
  *
- * Run: deno task cf test patterns/examples/cfc-agent-prompt-injection-demo/main.test.tsx
+ * Run: deno task cf test patterns/examples/cfc-agent-prompt-injection-demo/cfc-agent-prompt-injection-demo.test.tsx
  */
 import { action, assert, NAME, pattern, TESTS, UI } from "commonfabric";
 import {
@@ -19,7 +19,7 @@ import {
   hasText,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Demo from "./main.tsx";
+import Demo from "./cfc-agent-prompt-injection-demo.tsx";
 
 const DEMO_PROMPT_START = "Read the briefing, see whether the project";
 const UNSAFE_TITLE = "Unsafe raw reader";

@@ -27,23 +27,23 @@ import {
   hasText,
   textContent,
 } from "../tools/test-support/vnode-helpers.ts";
-import ArbitraryWishExample from "./arbitrary-wish-example/arbitrary-wish-example.tsx";
-import ArrayInCell from "./array-in-cell-with-remove-editable/array-in-cell-with-remove-editable.tsx";
-import CfChartDemo from "./cf-chart-demo/cf-chart-demo.tsx";
-import CheckboxCell from "./cf-checkbox-cell/cf-checkbox-cell.tsx";
+import ArbitraryWishExample from "./arbitrary-wish-example/main.tsx";
+import ArrayInCell from "./array-in-cell-with-remove-editable/main.tsx";
+import CfChartDemo from "./cf-chart-demo/main.tsx";
+import CheckboxCell from "./cf-checkbox-cell/main.tsx";
 import CodeEditorCell from "./cf-code-editor-cell/cf-code-editor-cell.tsx";
 import CfRenderSubpath from "./cf-render-subpath/cf-render-subpath.tsx";
-import CfRender from "./cf-render/cf-render.tsx";
+import CfRender from "./cf-render/main.tsx";
 import CfTags from "./cf-tags/cf-tags.tsx";
-import DragDropDemo from "./drag-drop-demo/drag-drop-demo.tsx";
-import MultiOptionSelection from "./multi-option-selection/multi-option-selection.tsx";
-import NestedCounter from "./nested-counter/nested-counter.tsx";
+import DragDropDemo from "./drag-drop-demo/main.tsx";
+import MultiOptionSelection from "./multi-option-selection/main.tsx";
+import NestedCounter from "./nested-counter/main.tsx";
 import NestedMentionables from "./nested-mentionables/nested-mentionables.tsx";
-import OutputSchema from "./output_schema/output_schema.tsx";
-import ProfileAwareWriter from "./profile-aware-writer/profile-aware-writer.tsx";
+import OutputSchema from "./output_schema/main.tsx";
+import ProfileAwareWriter from "./profile-aware-writer/main.tsx";
 import UiVariantsDemo from "./ui-variants/ui-variants-demo.tsx";
 import UiVariantsHost from "./ui-variants/ui-variants-host.tsx";
-import WishNoteExample from "./wish-note-example/wish-note-example.tsx";
+import WishNoteExample from "./wish-note-example/main.tsx";
 
 export default pattern(() => {
   const arrayItems = new Writable<{ text: string }[]>([

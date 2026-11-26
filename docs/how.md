@@ -65,7 +65,7 @@ gate errors rather than silently applying
 
 ## The label is data, and the row derives its own
 
-From `patterns/examples/cfc-row-label-records/main.tsx`, the whole rule:
+From `patterns/examples/cfc-row-label-records/cfc-row-label-records.tsx`, the whole rule:
 
 ```tsx
 (f) => ({
@@ -80,7 +80,7 @@ That is an ordinary arrow function in a TypeScript file. It does not
 survive compilation as code:
 
 ```
-deno task cf check patterns/examples/cfc-row-label-records/main.tsx \
+deno task cf check patterns/examples/cfc-row-label-records/cfc-row-label-records.tsx \
   --pattern-json --root patterns
 ```
 
@@ -105,13 +105,13 @@ query node carries its own declared ceiling.
 
 ## The code is constrained by what it does, not who wrote it
 
-`patterns/examples/counter/counter.tsx` is ordinary TypeScript. Nothing
+`patterns/examples/counter/main.tsx` is ordinary TypeScript. Nothing
 in it mentions policies, capabilities, or labels. One input is annotated
 `Writable<number | Default<0>>`, and two closures use it — an `action`
 that only writes, a `computed` that only reads:
 
 ```
-deno task cf check patterns/examples/counter/counter.tsx --show-transformed --no-run
+deno task cf check patterns/examples/counter/main.tsx --show-transformed --no-run
 ```
 
 The writer's capture:
@@ -232,7 +232,7 @@ lab and one that ships.
 Which raises the obvious question: if no code is trusted, how does
 anything you authorize ever happen? A field can require that its write
 came from a named function, invoked through a named surface. From
-`patterns/examples/cfc-authorized-save/main.tsx`, two buttons — the
+`patterns/examples/cfc-authorized-save/cfc-authorized-save.tsx`, two buttons — the
 second wired to the same stream as the reviewed one:
 
 ```tsx

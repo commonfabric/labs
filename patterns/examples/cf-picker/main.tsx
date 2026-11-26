@@ -13,7 +13,7 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
-import Counter from "../counter/counter.tsx";
+import Counter from "../counter/main.tsx";
 import Note from "../../system/notes/note.tsx";
 
 type Input = Record<string, never>;

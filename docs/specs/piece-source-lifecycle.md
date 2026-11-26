@@ -1800,7 +1800,7 @@ The implementation evidence for this table is concentrated in:
   and
   [`patterns/system/suggestion/suggestion.tsx`](../../patterns/system/suggestion/suggestion.tsx)
   for the current indexed-URL UI flow;
-- [`patterns/examples/write-and-run/write-and-run.tsx`](../../patterns/examples/write-and-run/write-and-run.tsx)
+- [`patterns/examples/write-and-run/main.tsx`](../../patterns/examples/write-and-run/main.tsx)
   and
   [`runtime/runner/src/builtins/compile-and-run.ts`](../../runtime/runner/src/builtins/compile-and-run.ts)
   for the example LLM-backed creation machinery; and

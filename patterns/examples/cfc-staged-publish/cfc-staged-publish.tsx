@@ -57,7 +57,7 @@ export interface StagedPublishOutput {
 }
 
 // Named (not an anonymous `export default pattern(...)`) so importing files'
-// CTS transformer recognizes the factory; see cfc-authorized-save/main.tsx.
+// CTS transformer recognizes the factory; see cfc-authorized-save/cfc-authorized-save.tsx.
 const StagedPublish = pattern<StagedPublishInput, StagedPublishOutput>(
   ({
     draftTitle,

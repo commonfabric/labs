@@ -12,7 +12,7 @@ import {
   findNodeByText,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Image from "./image.tsx";
+import Image from "./main.tsx";
 
 const URL = "https://example.com/harbor.jpg";
 

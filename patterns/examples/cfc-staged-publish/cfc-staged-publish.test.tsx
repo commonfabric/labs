@@ -19,7 +19,7 @@ import {
   TRUSTED_REVIEW_SURFACE,
   TRUSTED_SAVE_DRAFT_SURFACE,
 } from "../../system/cfc/trusted-surfaces/mod.ts";
-import StagedPublish from "./main.tsx";
+import StagedPublish from "./cfc-staged-publish.tsx";
 
 const setDraft = handler<
   void,

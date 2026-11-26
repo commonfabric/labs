@@ -88,7 +88,7 @@ export default pattern<Input>(({ item }) => ({
 ## Canonical Example
 
 See `patterns/examples/reading-list/` for a complete implementation:
-- `reading-list.tsx` - List with navigation to detail
+- `main.tsx` - List with navigation to detail
 - `reading-item-detail.tsx` - Detail view using `.key()` for field editing
 
 ## See Also

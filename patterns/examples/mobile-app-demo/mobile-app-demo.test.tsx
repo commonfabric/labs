@@ -16,7 +16,7 @@ import {
   propValue,
   setBound,
 } from "../../tools/test-support/vnode-helpers.ts";
-import MobileAppDemo from "./mobile-app-demo.tsx";
+import MobileAppDemo from "./main.tsx";
 
 const sheetOpen = (root: unknown): unknown =>
   propValue(findElement(root, "cf-modal"), "$open");

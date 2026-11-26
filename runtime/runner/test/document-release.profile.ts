@@ -84,7 +84,7 @@ try {
   const program = await resolveLocalProgram(
     (resolver) => creator.harness.resolve(resolver),
     {
-      main: join(patternsRoot, "examples", "todo-list", "todo-list.tsx"),
+      main: join(patternsRoot, "examples", "todo-list", "main.tsx"),
       root: patternsRoot,
     },
   );

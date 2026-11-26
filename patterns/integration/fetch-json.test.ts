@@ -50,7 +50,7 @@ describe("fetch json integration test", () => {
             "..",
             "examples",
             "fetch-json",
-            "fetch-json.tsx",
+            "main.tsx",
           ),
         ),
         { start: true },

@@ -1,5 +1,5 @@
 import { assert, NAME, pattern, TESTS } from "commonfabric";
-import Clock from "./clock.tsx";
+import Clock from "./main.tsx";
 
 // The clock's labels derive from the reactive #now clock. They read the
 // load-window placeholders until #now resolves, and the harness re-runs the
