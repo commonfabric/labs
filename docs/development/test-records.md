@@ -362,7 +362,12 @@ validating reader; the readers built on it:
   credentials. It writes from `.github/workflows/test-records-compact.yml`
   on a daily schedule, which is the only place its identity can be
   assumed; there is no key for it and no way to run the writing half by
-  hand.
+  hand. A day closes seven days after its date, to leave room for late
+  arrivals, so each run rolls up the days from a week back or earlier that
+  have no rollup yet, and the newest seven days exist only as raw objects
+  under `submissions/`. A day with no records never gets a rollup. A
+  reader that uses rollups, such as the test-selection publisher, reads a
+  day without one from its objects under `submissions/`.
 - `dashboard/test-records-history.ts` — the dashboard's collector:
   cached per-identity daily series shaped for `trend.ts`.
 
