@@ -29450,3 +29450,200 @@ decisions from P530.
       does. _Not verified:_ the cause of either path's crossing; whether today's
       crossing in the Topics board is the same defect as round thirty's; the
       instrument against a browser; more than three full runs.
+
+## Round thirty-three: three defects of the compiled path that the comparison reports
+
+The round of 2026-11-25 that takes three kinds of finding of the two-principal
+comparison (`commit` with `policy`, a value a spread loses, `error-state`),
+reproduces each by a failing test and fixes what is a defect of the compiled
+path. It touches nothing that decides the labels of each principal. Its logs and
+results are in the folder of the round, `r33-fixes/`. Notes from 1173,
+provisional decisions from P535.
+
+1173. **The `commit` findings have two causes, and one of them is a label.** Of
+      the 23 `commit` findings of round thirty-two (17 scenarios), 6 are in the
+      three scenarios of `dev/test/cfc-trusted-write/main.tsx`. There the
+      compiled path stores the write policy of the state cell `pinned` at its
+      start, refuses the same handlers as today's path with the same messages
+      (the scheduler's log of both runs), and tells the sender nothing: the
+      stream entry of every event of the piece is marked `withheld`, because the
+      cell stores the clause `User(service)` (CFC question 2 of round
+      thirty-one), which the space admits no reader of. The sender's commit
+      callback reports a withheld outcome as done (`withheldStatusTxView` of
+      `runtime/runner/src/cell.ts`), which the comparison read as committed. The
+      cause is the principal the start of a serving runtime acts for
+      (`CompiledPiece`, the comment at `storedArgument`), which is a stored
+      label and not a write policy. It is reproduced by the ignored case of
+      `runtime/runner/test/compiled/served-write-policy.test.ts` over
+      `fixtures/own-write-policy.tsx` and not fixed. One more `commit` finding,
+      `named/instance a handler makes` step 2, is an event the compiled path
+      drops for a made instance (`no handler registered`), the open item of a
+      second principal's scoped place, and no write policy. The other 16
+      findings are the stored argument, note 1174.
+1174. **A stored argument held no default and no policy (fixed; P535).** A piece
+      a client sets up (`setUpCompiledPiece`) has an argument document the
+      client wrote under no schema. `Instance` asks the adapter for the stored
+      argument (`RuntimeTransactions.heldArgument`), fills the defaults of the
+      argument type in its own copy (`argumentWithDefaults`) and creates the
+      document, and `RuntimeTransactions.change` left that creation out as no
+      write, since the storage holds the document: the storage kept `{}`, no
+      schema was recorded, and no envelope named a policy until a handler of the
+      piece first wrote a field. A handler's write of the default of a protected
+      field then installed a default where today's path refuses a write
+      (`cfc-authorized-save/main` step 0), and a value the client supplied for a
+      protected field stayed stored where today's setup is refused.
+      `RuntimeTransactions.#completeStoredArgument` now does, at the first start
+      from a stored argument and not at a resume, what the creation of an
+      argument document does, by the same functions: it writes each default the
+      stored argument leaves out, records the protected ones as seeds
+      (`#seedFilledDefaults`, which the creation branch calls too, over
+      `recordNewDocumentProtectedDefaults`), and records the policies of the
+      argument type with the bindings of the cells the client handed
+      (`#recordDeclaredPolicy`). A plain value the stored argument holds at a
+      position the type protects is marked as an attempted write
+      (`markReadAsAttemptedWrite`, as a handler's write of an equal value is),
+      at the path of the field and at the path of each member of an array or a
+      record whose members the type protects (`suppliedUnderPolicy`), so the
+      commit preparation holds the start to the policy.
+1175. **A start the policies refuse (P536).** The start's commit is then refused
+      with the message today's path gives the client's setup commit.
+      `serving.ts` stores that message as the reason the piece was not started
+      (`compiledFailureOf`), which `cf piece new` reports
+      (`CompiledPieceRefusedError`), and no longer lists a piece whose start did
+      not commit as running: the commit of a start the preparation refuses
+      settles before the loader lists the piece, so the loader listed it after
+      `failed` had removed it. What the client's setup commit wrote (the source,
+      the pointer to it, the argument) stays stored on the compiled path, and
+      each later demand of the piece starts it again and is refused again; on
+      today's path nothing is stored.
+1176. **The instrument (P537).** `both-paths-serving.ts` records whether the
+      sender was told that the outcome is withheld (`Checkpoint.withheld`), and
+      `both-paths-gate.ts` reports `withheld` where one path alone withholds.
+      `commit` and `message` keep their meaning, so a `commit` finding with
+      `committed` on one side can be a withheld outcome on that side; the
+      `withheld` finding at the same step says so. A start of the compiled path
+      counts as committed where the client's setup commit and the serving
+      runtime's start both committed, and a start the commit preparation refused
+      is compared by its message with today's refusal of the setup commit. A
+      piece whose start was refused so is no `not-compiled` finding and no
+      skipped module. Seen failing first: the case of `withheld` against the
+      comparison of `c0480ed24e^` and the case of a refused start against the
+      harness before the change (`gate-withheld-before.log`,
+      `gate-start-refused-before.log`).
+1177. **The 17 scenarios after the fix** (`d1-seventeen.out`, and the full run
+      of the final head). Equal:
+      `writer-policy/main with a protected field
+      supplied` in both role
+      orders, and the corpus modules `dev/test/writer-policy/main.tsx`,
+      `examples/cfc-authorized-save/main.tsx`,
+      `system/cfc/trusted-surfaces/save.tsx` and `system/fabrifile/store.tsx`.
+      No `commit` finding, other kinds left: `cfc-authorized-save/main` in both
+      role orders. Refused at the start on both paths with a message that names
+      another field of the same policy (`message`): `custody-answer-room.tsx`
+      (`/terms` and `/policy`), `cfc-staged-publish/main.tsx`,
+      `trusted-surfaces/publish.tsx`, `review.tsx` and `save-draft.tsx`; the
+      crate emits the properties of a schema in the order of their names and
+      today's transformer in the order they are declared, and the preparation
+      reports the first entry it refuses. Not agreeing: the three
+      `cfc-trusted-write` scenarios and `named/instance a handler makes` (note
+      1173).
+1178. **A new `commit` finding the fix produces, and what it shows.** In
+      `writer-policy/main forged first` the forger's two events were committed
+      on the compiled path before the fix: the stored argument held no policy,
+      so a handler of another piece wrote a field the room's type lets one
+      handler write. They are refused now. Today's path refuses them too and
+      withholds the outcome from the sender, because the fields are `Sealed` and
+      the forger's run reads them; the compiled path tells the sender the
+      refusal, because the argument document stores no confidentiality clause
+      for the fields (`label-missing` at `room/entries` and `room/frozen`). The
+      schema recorded for an argument document holds the write policies of the
+      type and no other label (`withPoliciesAlone` of `declared-policy.ts`), so
+      the remaining difference is a stored label and is not changed here.
+1179. **A spread in a function body (fixed; P538).** `footprint.rs`
+      (`Analyzer::object`, `SpreadProperty`) recorded the argument of a spread
+      as a member passed on and no read of it, after `footprint-analysis.md`
+      §3.3 ("Neither form reads a child"). The executor hands a body an input it
+      reads for its identity alone as a handle (`Host.#invoke`,
+      `Instance.handleOf`), and the spread the body runs in JavaScript copies
+      the own members of the handle, which are none. So a `lift` or an authored
+      function that spreads an element lost every member: over an array of
+      references, over the result of a `filter` over one, of one element by
+      index, and of a record of the argument that is no element
+      (`{ ...extra, title: item.title }`), with a member before the spread, one
+      behind it, or neither. Over an array of plain values in place and over the
+      result of a `map` that builds its rows the body was handed the values and
+      the spread was right. The footprint now records `value` at the argument of
+      a spread that is an input and a record or of no type; a handle, a
+      reference and a factory are spread as before. The same literals in the
+      reactive tier were right before (the plan expands them by the declared
+      members, `plan.rs`), and today's transformer refuses them there ("Spread
+      traversal of opaque pattern values is not lowerable"), so
+      `fixtures/spread-element-reactive.tsx` is run by the executor's tests
+      alone and `fixtures/spread-element.tsx` on both paths. Left: a body that
+      spreads an element of the result of a `filter` over an array of references
+      copies every member the element's document holds (the stream `name` of the
+      item), where today's path copies the members the body's type declares;
+      `Object.assign` records its sources as a spread did and was not changed.
+1180. **Error states (two fixed, two not defects of a computation; P539).**
+      `examples/suggestable/event-list.tsx` and `people-list.tsx`: the result
+      document of the made instance `EventListView` (and `PeopleListView`), in
+      the instance of the scope `user` of the serving runtime's own identity,
+      held `{ $error }` at `$NAME`, "Cannot read properties of undefined
+      (reading 'length')". The name is a `computed` whose body is an expression,
+      which the crate promotes; its value code read `$h.v($h.slot(0)).length`
+      (`emit.rs`, `place_code`, `Place::Read`), and the slot, the candidates of
+      a `wish`, holds nothing for a principal with no home. Today's runtime does
+      not run a `lift` whose argument does not meet its schema ("action argument
+      is undefined", `runner.ts`). The value code now reads `?.length`.
+      `apps/weekly-calendar/event.tsx` (result document, `summary` and one child
+      of the view; "reading 'toString'"; `formatTime12h` over the driver's
+      `startTime-text`) and `dev/test/silent-computed-crash.tsx` (result
+      document, two children of the view; "I am a poisoned computed"; the
+      `computed` named `poisoned`, which throws on purpose): the body throws on
+      today's path as well (the scheduler's `Action failed` with the same
+      message and line), today's path stores nothing there and the compiled path
+      stores the error state, which is the design of `README.md`, "The serving
+      loop, error states and effects". Neither is changed.
+
+### Provisional decisions, round thirty-three
+
+These are the coordinator's and none is an owner ruling.
+
+- P535: the first start of a piece from a stored argument completes the argument
+  document as its creation does (defaults, seeds, the policies of the argument
+  type), in the transaction of the start, which acts for no principal.
+  Classified under `docs/development/cfc-spec-correspondence.md` as a host
+  arrangement: it calls `recordRelevantSchemaWritePolicyInput`,
+  `recordNewDocumentProtectedDefaults` and the attempted-write mark, which the
+  creation of an argument document and a handler's write already call, and adds
+  no rule to the commit preparation. It makes the compiled path refuse what it
+  committed.
+- P536: a value a stored argument supplies under a policy is held to the policy
+  at the start, as today's setup holds the client's write, and a refused start
+  stores the refusal as the reason. A semantic question it leaves: the client's
+  setup commit stays stored.
+- P537: for the comparison, a start of the compiled path is the client's setup
+  commit and the serving runtime's start together, and a withheld outcome is a
+  kind of its own.
+- P538: a spread of an input record in a function body is a `value` read of the
+  record. It reads more than `footprint-analysis.md` §3.3 states and never less;
+  the specification's own form, an expansion by the declared properties with
+  each member passed on, needs the executor to hand the body a record of member
+  handles. The label of what such a body returns now holds the labels of the
+  members it copies.
+- P539: the length of a place that holds nothing is nothing in the value code of
+  a promoted `computed`, as a path read of `length` is in the reactive tier. A
+  promoted `computed` over an absent required input then gives a value
+  (`"Events"`) where today's runtime does not run the `lift` and stores nothing.
+
+### CFC questions deferred, round thirty-three
+
+1. Which principal the start of a compiled piece by a serving runtime acts for.
+   It decides the `User` clause of a cell whose type names the current principal
+   (`cfc-trusted-write`), and with it whether the sender of an event is told a
+   refusal or that the outcome is withheld.
+2. Whether the argument document of a compiled piece stores the confidentiality
+   its type declares (note 1178): today's setup records the whole argument
+   schema, the compiled path the write policies alone.
+3. Whether an error state a body's throw leaves in a document of the space
+   carries what the body read (the two modules of note 1180).
