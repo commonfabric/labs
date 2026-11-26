@@ -433,8 +433,9 @@ type WaveSettlement = Result<
     /** This run read a contribution whose optimistic state was withdrawn. */
     readDependencyWithdrawn?: true;
 
-    /** The documents this derivation's writes were dropped from as
-     * superseded. */
+    /** The documents the wave dropped this run's writes to: a derivation's
+     * superseded writes, or every write of a bookkeeping contribution dropped
+     * whole over a concurrent write it cannot rebase over. */
     supersededOutputs?: readonly SupersededOutput[];
 
     /** Why the wave withdrew this transaction's contribution. */
@@ -443,12 +444,16 @@ type WaveSettlement = Result<
 >;
 
 /**
- * A document instance a derivation's write to it was dropped from as
- * superseded (serving-loop.md §3d). Nothing wakes the derivation for the
+ * A document instance the wave dropped a write to (serving-loop.md §3d),
+ * with the store's head for it at the drop: a derivation's write superseded
+ * by a concurrent commit, or any write of a bookkeeping contribution dropped
+ * whole over a concurrent write it cannot rebase over. Nothing wakes the derivation for the
  * superseding commit unless it read the document, and a computed never reads
  * its own output. That commit can leave the document with no value, as a
  * client's piece start does, and then the run can be owed again:
- * `scheduler/superseded-output.ts`.
+ * `scheduler/superseded-output.ts`. A retry of a dropped bookkeeping write
+ * waits for the replica to take each such commit
+ * (`Runtime.awaitCommitRetryReadiness`).
  */
 export interface SupersededOutput {
   space: MemorySpace;
@@ -895,8 +900,9 @@ interface WaveContribution {
    * to name the cause when the run's withdrawal is reported. */
   withdrawnRead?: WithdrawnRead;
 
-  /** Per doc-instance key, what this derivation's dropped writes lost to.
-   * Set only where the commit step drops such a write. */
+  /** Per doc-instance key, what this run's dropped writes lost to. Set only
+   * where the commit step drops a derivation's write as superseded, or a
+   * bookkeeping contribution whole. */
   supersededOutputs?: Map<string, SupersededOutput>;
   index: number;
   context: WaveRunContext;
@@ -2672,6 +2678,24 @@ export class WaveAccumulator
       return patches.size === 0 ? undefined : patches;
     };
 
+    /** Records the store's head for `doc` as what `contribution`'s dropped
+     * write to it lost to ({@link SupersededOutput}). */
+    const noteSuperseded = (
+      contribution: WaveContribution,
+      key: string,
+      doc: { id: string; scope?: CellScope },
+    ): void => {
+      const identity = contribution.context.scopeKeyIdentity ??
+        this.#scopeKeyIdentity;
+      (contribution.supersededOutputs ??= new Map()).set(key, {
+        space: this.#space,
+        id: doc.id,
+        ...(doc.scope === undefined ? {} : { scope: doc.scope }),
+        ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
+        seq: heads.get(key) ?? 0,
+      });
+    };
+
     const resolveConflicts = async (): Promise<void> => {
       for (const contribution of this.#contributions) {
         if (
@@ -2724,15 +2748,7 @@ export class WaveAccumulator
               contribution,
               doc,
             );
-            const identity = contribution.context.scopeKeyIdentity ??
-              this.#scopeKeyIdentity;
-            (contribution.supersededOutputs ??= new Map()).set(key, {
-              space: this.#space,
-              id: doc.id,
-              ...(doc.scope === undefined ? {} : { scope: doc.scope }),
-              ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
-              seq: heads.get(key) ?? 0,
-            });
+            noteSuperseded(contribution, key, doc);
           } else {
             // Non-re-derivable consequence (event-handler and the loop's
             // bookkeeping alike): rebase against the new head —
@@ -2771,6 +2787,12 @@ export class WaveAccumulator
               outcome.dependencyDroppedWrites += this.#homeOpCount(
                 contribution,
               );
+              // The runner retries a dropped piece start in place, and the
+              // retry writes every one of these docs again over what its
+              // replica holds of them.
+              for (const [written, writtenDoc] of docs) {
+                noteSuperseded(contribution, written, writtenDoc);
+              }
               break;
             }
           }

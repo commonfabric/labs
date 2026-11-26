@@ -196,6 +196,7 @@ import {
   delegatedCarriageOf,
   markScopedDefaultSeed,
   requireWaveAcceptance,
+  type SupersededOutput,
   waveRunContextOf,
   waveSettlementOf,
 } from "./executor/wave.ts";
@@ -7032,8 +7033,10 @@ export class Runner {
           // write, its whole contribution to the serving wave, a policy
           // manifest install to another participant, an absence claim over
           // the documents `absent` names that the store holds, or none of
-          // these, which is terminal. A dropped contribution takes one retry
-          // against the view the drop rolled back to. One retry is enough
+          // these, which is terminal. A dropped contribution takes one retry,
+          // once the replica has taken each commit `superseded` names that
+          // the wave dropped it over, so that the retry writes over what
+          // those commits left rather than past it. One retry is enough
           // for a lost install: a manifest never changes once present, so
           // once the catch-up has loaded it the install reads it as present
           // and writes nothing, and the same refusal cannot recur. A lost
@@ -7060,7 +7063,10 @@ export class Runner {
               | "manifest"
               | "repair"
               | "terminal",
-            absent: readonly string[] = [],
+            { absent = [], superseded }: {
+              absent?: readonly string[];
+              superseded?: readonly SupersededOutput[];
+            } = {},
           ): PieceInstantiationSettlement => {
             if (!exactNodesAreCurrent()) {
               // A stop, a runtime cycle, or a newer instantiation retired
@@ -7111,7 +7117,7 @@ export class Runner {
                   "them, and instantiating once more if they load"
                 : refusal === "dropped"
                 ? "had its contribution dropped from the serving wave; " +
-                  "re-instantiating once from the rolled-back view"
+                  "re-instantiating once the replica takes what it lost to"
                 : refusal === "repair"
                 ? "carried a setup repair this principal may not commit; " +
                   "instantiating once more with no repair staged"
@@ -7132,6 +7138,7 @@ export class Runner {
             const unloaded = await this.#runtime.awaitCommitRetryReadiness(
               error,
               retryReadinessTeardown.signal,
+              superseded,
             );
 
             // A pointer that moved during the wait has a follow in flight,
@@ -7247,11 +7254,9 @@ export class Runner {
                 // So does a claim of absence over documents the store holds,
                 // for the reason `refusalClaimsOnlyAbsence` gives.
                 if (refusalClaimsOnlyAbsence(error)) {
-                  return await recoverInstantiation(
-                    error,
-                    "absence",
-                    conflictKeys(error),
-                  );
+                  return await recoverInstantiation(error, "absence", {
+                    absent: conflictKeys(error),
+                  });
                 }
                 // So does any other stale read, refused by the server or by
                 // this replica's own consistency check: the retry reads the
@@ -7314,6 +7319,7 @@ export class Runner {
                 waveWithdrawalCause === "contribution-dropped"
                   ? "dropped"
                   : "terminal",
+                { superseded: settled.error.supersededOutputs },
               );
             },
           ).catch((error) => {
