@@ -37,6 +37,7 @@ export type { CoverageFigures } from "./lane-measurement.ts";
 export {
   AGENT_VARIABLE,
   agentLabel,
+  commonFabricCacheDir,
   defaultSpoolRoot,
   readEnv,
   RECORDS_DIR_VARIABLE,

@@ -170,6 +170,7 @@ import {
   deriveSelectedValue,
 } from "./cell-selection.ts";
 import { cliCommand } from "./cli-name.ts";
+import { connectionCompileCache } from "./compile-byte-cache.ts";
 import { holdDelegationChainFiles } from "./delegation.ts";
 import {
   type ExecCommandSpec,
@@ -820,12 +821,13 @@ export async function loadPieces(
   // both stand for.
   await validateEmbeddedSpaces(config.embeddedSpaces, session);
   const runtimeErrors: CliRuntimeErrorRecord[] = [];
+  const compileCache = connectionCompileCache();
   const runtime = await timeCliPhase(
     "loadPieces.runtime",
     () =>
       // Shared first-party posture for client runtimes against a deployed
-      // API (CT-1814); collectors and the navigate hook are this CLI's
-      // declared deltas.
+      // API (CT-1814); collectors, the navigate hook, and the compile cache
+      // are this CLI's declared deltas.
       new Runtime({
         ...runtimePresets.remoteClient({
           apiUrl: new URL(config.apiUrl),
@@ -849,7 +851,9 @@ export async function loadPieces(
             },
           ],
           navigateCallback: navigateReporter(navigateLine, navigateFailure),
+          moduleByteCache: compileCache,
         }),
+        compileTurns: compileCache,
         ...(consoleHandler === undefined ? {} : { consoleHandler }),
       }),
   );

@@ -28,12 +28,14 @@ import {
 
 import { slugIdForSpace } from "../../runner/src/slugs.ts";
 import { runtimeErrorLog } from "../lib/callable.ts";
+import { connectionCompileCache } from "../lib/compile-byte-cache.ts";
 import {
   loadPieces,
   newPiece,
   pullServed,
   savePiecePattern,
 } from "../lib/piece.ts";
+import { withEnv } from "./utils.ts";
 
 const API_URL = "https://toolshed.test";
 const ENTRY = "Avcny13Rj8q-2ClANy_-k0ikWWQcXx7QTdsiqGfrC1c";
@@ -153,6 +155,63 @@ describe("piece-library", () => {
         space: undefined,
         stackTrace: expect.stringContaining("the pattern threw"),
       });
+    });
+
+    it("leaves what the connection compiles, and nothing before, in the compiled-module cache under the user's cache directory", async () => {
+      stubs.push(
+        stub(
+          Runtime.prototype,
+          "loadProfileDelegations",
+          () => Promise.resolve(0),
+        ),
+      );
+      const cacheHome = await Deno.makeTempDir({ prefix: "cf-cache-home-" });
+      const modules = join(
+        cacheHome,
+        "common-fabric",
+        "compiled-modules",
+        "modules",
+      );
+      // Every module file under `modules`, or `undefined` where there is no
+      // such directory.
+      const cachedFiles = async (): Promise<string[] | undefined> => {
+        const files: string[] = [];
+        try {
+          for await (const version of Deno.readDir(modules)) {
+            for await (
+              const file of Deno.readDir(join(modules, version.name))
+            ) {
+              files.push(file.name);
+            }
+          }
+        } catch (error) {
+          if (error instanceof Deno.errors.NotFound) return undefined;
+          throw error;
+        }
+        return files;
+      };
+      try {
+        await withEnv("XDG_CACHE_HOME", cacheHome, async () => {
+          const pieces = await open([]);
+          expect(await cachedFiles()).toBeUndefined();
+          expect(pieces.runtime.compileTurns).toBe(connectionCompileCache());
+
+          await pieces.runtime.patternManager.compileAndRegisterModules({
+            main: "/main.tsx",
+            files: [{
+              name: "/main.tsx",
+              contents: [
+                "import { NAME, pattern } from 'commonfabric';",
+                "export default pattern(() => ({ [NAME]: 'cached' }));",
+              ].join("\n"),
+            }],
+          });
+
+          expect((await cachedFiles())?.length).toBeGreaterThan(0);
+        });
+      } finally {
+        await Deno.remove(cacheHome, { recursive: true });
+      }
     });
   });
 
