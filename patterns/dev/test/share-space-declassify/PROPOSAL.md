@@ -80,6 +80,18 @@ compiler-lowered `PolicyOf` atom with its subject resolved to the target's space
 by `resolvePolicyOfValue` (`prepare.ts:9409`), which also installs the manifest
 there.
 
+**The output is a copy.** A lift that keeps items of its input returns the
+input's own values, which a write stores as references into the input, each
+carrying the input's label. A read of such an item would follow the reference
+and still be the creator's alone, so the reclassification would release the
+container and not its contents. The runner therefore stores the result of a lift
+whose result schema declares a reclassification as a snapshot of its value
+(`snapshotQueryResult`), whatever the dial, and the transformed join labels
+every path of it. A reference cannot be reclassified: the document it names
+keeps its own label, which this rule never changes. A handler that `set`s input
+values into a reclassified store gets no copy, so its references keep their
+source labels and release nothing.
+
 **What is kept.** Every other clause, as stored: another principal's, another
 space's, a policy's, an `Expires`, a `Caveat` (§5.3.3). All integrity, including
 the `TransformedBy` mint (`prepare.ts:6210-6228`). The source documents and
@@ -235,6 +247,12 @@ leave room:
   module the pattern imports is not the module `patternIdentity` names, so its
   declaration is ignored and a diagnostic says so. That fails closed. Admitting
   it needs the module set of the piece's program to be readable at commit.
+- **A served run that reads the released value in another space is refused.**
+  Reading a value labeled with `P` resolves `P`'s manifest in the space the
+  label names. The read records a precondition on that manifest document, and a
+  served wave refuses a commit that carries a precondition on another space's
+  document (`foreign-write-refused`, `runtime/runner/src/executor/wave.ts`). The
+  fixture's home-space assertion that reads the landed window hits this.
 - **A reclassification must cover every path the transaction writes.** The flow
   join is stamped on the whole document, so a declaration on one field is
   honored only when the transaction writes nothing else there.

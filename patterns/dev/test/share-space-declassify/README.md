@@ -120,22 +120,30 @@ the server-execution serving loop, which is the `cf test` default.
    that names a policy is silently inert, with no error. The test asserts
    today's behavior.
 
-7. **Reclassification lands its label but not yet its share.** With
+7. **Reclassification lands the share, with one runtime gap left.** With
    `EXPERIMENTAL_PIECE_CREATOR_RECORD=true` and
    `EXPERIMENTAL_CFC_PATTERN_RECLASSIFICATION=true`, commit preparation stores a
    `Reclassified` value's creator-releasable `User` clauses as
    `anyOf(User(creator), PolicyOf<rules>)`
-   (`runtime/runner/test/cfc-reclassify.test.ts`). `main.test.tsx` shows the
-   flags-off half: `share-live.tsx` over the connector's label is refused at its
-   store. The flags-on half, the same publish landing, is blocked by one runtime
-   gap, found by tracing a run rather than by a passing test: a store's
-   `maxConfidentiality` ceiling is compared with its `CurrentPrincipal` and
-   `PolicyOf` placeholders unresolved, so a ceiling that names either fits no
-   stored clause, and the publish is refused ("maxConfidentiality failed at /").
-   That is the likely cause of finding 4's refused ceiling as well. A share
-   placed with `inSpace()` from an action does record its owner as creator: its
-   parent is the action's receipt, which records none, so the child takes the
-   record of the piece whose action made it.
+   (`runtime/runner/test/cfc-reclassify.test.ts`), and `share-live.tsx` over the
+   connector's label lands whole in its share-space store. Without the flags it
+   is refused there. A `cf test` run has one set of flags and a pattern cannot
+   read them, so `main.test.tsx`'s live-share step admits exactly those two
+   outcomes; run it both ways to see each.
+
+   Two things had to hold for the share to land. The share's creator: placed
+   with `inSpace()` from an action, its parent is the action's receipt, which
+   records no creator, so it takes the record of the piece whose action made it.
+   And the window's items: `fixesWithin` keeps the connector's own items, which
+   were stored as references carrying the connector's `User(owner)` label, so a
+   read of `/0` still misfit the store's ceiling. A reclassified lift's result
+   is now stored as a copy (PROPOSAL.md, "The output is a copy").
+
+   The gap: with the flags on, the test's home-space assertion that reads the
+   landed window makes a served commit carrying a precondition on the share
+   space's policy manifest, which the serving wave refuses
+   (`foreign-write-refused`), and `cf test` fails the run on that logged error
+   although every step passes. PROPOSAL.md, Risks.
 
 ## Runtime behavior found along the way
 
