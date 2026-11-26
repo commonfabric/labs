@@ -424,7 +424,9 @@ there.
   the operator to allow a script: an acquired skill's script runs only where the
   operator already allows skill scripts, by the same decision a registry
   skill's script answers to. The child holding the skill runs as `quote`, so
-  under an enforce mode its `run_skill_script` calls are refused.
+  under an enforce mode its `run_skill_script` calls are refused, unless an
+  accepted review covers the skill
+  ([reviewed skills](reviewed-skills.md)).
 - It does not retire the trusted operator `--skills-root` path.
 - It does not build CT-2068's declassification predicate, and nothing here
   should be taken as a precedent for an integrity fact granting permission.

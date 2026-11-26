@@ -195,7 +195,8 @@ program over fabric data", already builds one from these pieces:
 
 Today's harness `skill-context` handle capability is a slot role under another
 name. Handle-delivered skill text is recorded as `quote`, and the child that
-holds it runs as `quote`.
+holds it runs as `quote` unless an accepted review covers the skill
+([reviewed skills](reviewed-skills.md)).
 
 ### A skill with scripts
 
