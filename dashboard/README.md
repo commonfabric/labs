@@ -1334,7 +1334,8 @@ Under `tests`, each test held back as flaky has, worst share first:
 - `flakes` and `runs`, the disagreements and the runs inside the window,
   counted flat, so `flakeShare` is not their ratio;
 - `lastRun`, the last day anything ran it, which is long ago for a test the
-  tree no longer holds;
+  tree no longer holds, or `null` where nothing the publisher still counts
+  has run it;
 - `disagreements`, the newest ten times it both passed and failed at one
   commit in one order, newest first. Each gives the `day` of the failing run,
   the `commit`, the `seed` the runs shuffled their tests by (`null` for
@@ -1348,8 +1349,9 @@ Under `tests`, each test held back as flaky has, worst share first:
 
 `unit`, `flakeShare`, `flakes`, `runs` and `lastRun` are `null` for a test the
 manifest holds back without holding it in its corpus. A manifest that cannot be
-read is answered with status 503 and an `error` saying why, in place of
-`manifest` and `tests`.
+read is answered with status 503 and an `error`, the same short account of
+the failure the test selection page gives, in place of `manifest` and
+`tests`.
 
 ### What the GitHub figure covers
 

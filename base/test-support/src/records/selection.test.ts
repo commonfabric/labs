@@ -442,6 +442,13 @@ describe("selection", () => {
           { ...kept, passed: { place: "ci" } },
           {
             ...kept,
+            passed: {
+              place: "local",
+              ci: { runId: "1", runAttempt: 1, job: "Test" },
+            },
+          },
+          {
+            ...kept,
             failed: {
               place: "pr",
               ci: { runId: "1", runAttempt: 0, job: "Test" },

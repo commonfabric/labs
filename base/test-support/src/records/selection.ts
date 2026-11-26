@@ -675,6 +675,8 @@ export function parseSeenRun(value: unknown): SeenRun | undefined {
   const { place, ci } = value;
   if (place !== "main" && place !== "pr" && place !== "local") return undefined;
   if (ci === undefined) return { place };
+  // A workstation's run names no job, so a job beside one is not a run.
+  if (place === "local") return undefined;
   const job = parseCiJob(ci);
   return job === undefined ? undefined : { place, ci: job };
 }
