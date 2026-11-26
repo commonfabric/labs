@@ -537,20 +537,31 @@ that arrived for a document a run of the instance is recorded to have read
 (`dirtyFanOutForCause` in `scheduler/fan-out.ts`), whether they arrived before
 the pass the run is in began or during it. A pass starts a run of an instance
 only where the instance never ran, one of those changes or an invalidation
-that names no cause reached it, a retry of its own run is due, or demand for
-it arrived (`fanOutInstancesToRun`), so a change to a document only another
-viewer's run read starts no run of this instance, and is not joined. Two
-things such a change can still do to this instance are not trigger reads
-under this reading. Where it also reaches an instance that read the
-document, it re-arms the node's debounce, which is the node's and not an
-instance's, and a run this instance was already owed starts later. And the
-match is by document, not by path: an instance that read one path of a
-document takes a change at another path of it, at the read path the cause
-names. With
-`cfcTriggerReadGating` on, the shipped default, `triggerReadSources` adds them
-to the egress and sink consumed set and to the `requiredIntegrity` input gate
+that names no cause reached it, a retry of its own run is due, a viewer asked
+for it, or a viewer arrived at a root the node is under
+(`fanOutInstancesToRun`), so a change to a document only another viewer's run
+read starts no run of this instance, and is not joined. With
+`cfcTriggerReadGating` on, the shipped default, `triggerReadSources` adds a
+run's trigger reads to the egress and sink consumed set and to the `requiredIntegrity` input gate
 as well. `cfc-enforcement-matrix.md` §2, item 4, records that multi-hop closure
 is complete at `persist`, the shipped default.
+
+**Residual: such a change can move the time of another instance's run.** The
+node's debounce is the node's and not an instance's. A change that reaches an
+instance that read the document re-arms it, so a run another instance was
+already owed, for a cause of its own, starts later, and the change's label is
+not joined to that run. The change did not cause that run to be scheduled,
+which is what §8.9.2 defines the trigger set by; it did move the time of the
+run's writes, and the section's reason for the trigger set speaks of the
+"timing/existence of that write". Whether an address that moves only the
+timing of an already scheduled rerun belongs to its trigger set is an open
+question for the specification, not one this document settles. The same
+holds for a pass one instance's change starts running an arriving viewer's
+first run sooner than the arrival alone would have.
+
+**The match is by document, not by path**, which over-taints: an instance
+that read one path of a document takes a change at another path of it, at the
+read path the cause names.
 
 **A run deferred into a transaction of its own carries what decided it.** The
 runner sets up or starts some runs in a fresh transaction rather than the one

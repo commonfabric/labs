@@ -1095,10 +1095,24 @@ function parkUnavailableRun(state: SchedulerActionRunState, args: {
       return true;
     }
     state.pending.delete(args.action);
-    // A change to what the parked run of a fanned-out instance read, the
-    // unavailable document included, is what runs that instance again.
+    // A run of a fanned-out instance does not get here. Only a serving
+    // runtime fans a node out (`Runtime.installSealDestination()` refuses a
+    // demander resolver anywhere else), and a serving runtime restricts no
+    // run to local reads: `Scheduler.prepareViewAction()` does so for a
+    // client that replicates by view, which a serving runtime is not, and
+    // for the view nodes such a client starts. The wake below is the node's
+    // and the next pass cancels it, so an instance parked here would wait
+    // with nothing to run it; it is reported rather than left to.
     if (args.fanOutRun !== undefined) {
       fanOutRunAborted(args.fanOutRun.state, args.fanOutRun.instance, log);
+      state.handleError(
+        new Error(
+          "A run of one viewer's instance parked on a local read, which a " +
+            "serving runtime does not restrict runs to; nothing runs the " +
+            "instance again until what it read changes",
+        ),
+        args.action,
+      );
     }
     state.parkLocalRead?.(args.action, log);
     state.nodes.setStatus(args.action, "unavailable");
@@ -1276,9 +1290,11 @@ function rescheduleActionForImmediateRetry(
     // against rolled-back data (accepted zombie — spec §15 decision 9).
     // A fanned-out instance's exhausted key stays non-clean, unqueued and
     // owed no run: it runs again, with a fresh budget, on a change to a
-    // document it read, on an invalidation that names no cause, or on
-    // demand — the same "until its input data changes" shape as OFF's. A
-    // change to a document only a sibling instance read does not start it.
+    // document its latest finished run or this given-up run read (the node
+    // stays subscribed to both), on an invalidation that names no cause or
+    // names it, or when a viewer asks for it or arrives — the same "until
+    // its input data changes" shape as OFF's. A change to a document only a
+    // sibling instance read does not start it.
     state.retries.delete(args.action);
     abandonAction({
       action: args.action,

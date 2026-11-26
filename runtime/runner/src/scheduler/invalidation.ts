@@ -14,6 +14,7 @@ import { summarizeTriggerTraceValue } from "./diagnostics.ts";
 import {
   dirtyFanOutAll,
   dirtyFanOutForCause,
+  fanOutCauseConcerns,
   type FanOutNodeState,
   fanOutRunApplied,
   fanOutSlotChanged,
@@ -261,9 +262,16 @@ export function processStorageNotification(
         // (addInvalidCause dedups by address): an interleaved unshaped wake may
         // run the action and consume its recorded causes before the deferred
         // release, and the deferred rerun must still carry the "this change
-        // triggered me" flow label.
+        // triggered me" flow label. A cause that concerns no instance of a
+        // fanned-out node is not recorded, here or at release.
         const record = state.nodes.get(action);
-        if (record) addInvalidCause(record, cause);
+        if (
+          record &&
+          (record.fanOut === undefined ||
+            fanOutCauseConcerns(record.fanOut, cause))
+        ) {
+          addInvalidCause(record, cause);
+        }
         state.holdShapedNotification(
           shapeGroupKey,
           `${actionId}|${spaceAndURI}`,

@@ -15,9 +15,11 @@ import {
   dirtyFanOutAll,
   dirtyFanOutForCause,
   dirtyFanOutKey,
+  fanOutCauseConcerns,
   fanOutHoldsSlot,
   fanOutInstances,
   fanOutInstancesToRun,
+  fanOutOwesRun,
   fanOutRunAborted,
   fanOutRunApplied,
   fanOutRunEnded,
@@ -551,6 +553,34 @@ describe("fan-out stage B: run outcomes and B7 precise dirtiness", () => {
       expect(dirtyFanOutForCause(narrowed(), readOf("of:any"))).toBe(true);
     });
 
+    it("answers whether a cause concerns the node without dirtying an instance", () => {
+      const state = narrowed();
+      finish(state, alice, ["of:alice-only"]);
+
+      expect(fanOutCauseConcerns(state, readOf("of:other"))).toBe(false);
+      expect(fanOutCauseConcerns(state, readOf("of:alice-only"))).toBe(true);
+      expect(
+        fanOutCauseConcerns(state, readOf("of:x", "user", alice.key)),
+      ).toBe(true);
+      expect(
+        fanOutCauseConcerns(state, readOf("of:x", "user", bob.key)),
+      ).toBe(false);
+      expect(fanOutCauseConcerns(narrowed(), readOf("of:any"))).toBe(true);
+      expect(state.clean.has(alice.key)).toBe(true);
+      expect(takeFanOutTriggers(state, alice.key)).toBeUndefined();
+    });
+
+    it("keeps nothing for the key of an instance the node holds no record of", () => {
+      const state = narrowed();
+      finish(state, alice, ["of:alice-only"]);
+
+      dirtyFanOutKey(state, bob.key);
+
+      expect(state.owed.has(bob.key)).toBe(false);
+      expect(state.dirtyGen.has(bob.key)).toBe(false);
+      expect(fanOutOwesRun(state, bob.key)).toBe(true);
+    });
+
     it("returns `true` for a cause kept for a run under way", () => {
       const state = narrowed();
       fanOutRunStarted(state, alice);
@@ -616,6 +646,24 @@ describe("fan-out stage B: run outcomes and B7 precise dirtiness", () => {
         expect(takeFanOutTriggers(state, bob.key)).toEqual(
           new Set([invalidCauseKey(tried)]),
         );
+      });
+
+      it("keeps the node subscribed to what its given-up run read, beside what its latest finished run read", () => {
+        const state = givenUp(["of:tried"]);
+
+        expect(fanOutUnionLog(state).reads.map((read) => read.id)).toEqual([
+          "of:alice-only",
+          "of:bob-only",
+          "of:tried",
+        ]);
+      });
+
+      it("reports it as an instance no pass runs, and as one a pass runs once it is owed a run", () => {
+        const state = givenUp([]);
+        expect(fanOutOwesRun(state, bob.key)).toBe(false);
+
+        oweFanOutRuns(state, [bob.key]);
+        expect(fanOutOwesRun(state, bob.key)).toBe(true);
       });
 
       it("stops going by the given-up run's reads once a later run finished", () => {

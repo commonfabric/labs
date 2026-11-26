@@ -3361,6 +3361,16 @@ export class Runtime {
           "serial per space (serving-loop.md §3)",
       );
     }
+    // Running a node once for each viewer belongs to a serving runtime. The
+    // scheduler relies on it: such a node's runs are never restricted to
+    // local reads, which only a client that replicates by view does
+    // (`viewScopedReplicationRequested`).
+    if (options.runDemanderResolver !== undefined && !this.servingPosture) {
+      throw new Error(
+        "A run demander resolver requires a serving runtime " +
+          "(`servingPosture`); a client runs each node once",
+      );
+    }
     this.#transactionSealDestination = destination;
     this.#serverRunStamper = options.runStamper;
     this.#serverRunDemanderResolver = options.runDemanderResolver;

@@ -152,9 +152,12 @@ export interface FanOutNodeState {
    * Instance keys that are owed a run: something that concerns the instance
    * asked for one since its latest run started (`dirtyFanOutKey()`,
    * `oweFanOutRuns()`). An instance that is not current and not owed a run
-   * is one whose run was given up, its retries spent; it waits for a change
-   * to what it read, an invalidation that names no cause, or demand, and a
-   * change to a document only another instance read does not start it.
+   * is one whose run was given up, its retries spent. It waits for a change
+   * to a document its latest finished run or its given-up run read, both of
+   * which the node stays subscribed to (`fanOutUnionLog()`), for an
+   * invalidation that names no cause or names it, for a viewer asking for
+   * it, or for a viewer arriving at a root the node is under. A change to a
+   * document only another instance read does not start it.
    */
   readonly owed: Set<ScopeKey>;
 
@@ -465,8 +468,47 @@ export function dirtyFanOutAll(state: FanOutNodeState): void {
 
 export function dirtyFanOutKey(state: FanOutNodeState, key: ScopeKey): void {
   state.clean.delete(key);
+  // An instance the node holds no record of has left, or never ran and runs
+  // as a first run whatever is recorded, so nothing is kept for its key.
+  if (!state.instances.has(key)) return;
   state.owed.add(key);
   state.dirtyGen.set(key, (state.dirtyGen.get(key) ?? 0) + 1);
+}
+
+/**
+ * Whether `cause` concerns the node, as `dirtyFanOutForCause()` would return
+ * for it, without dirtying an instance or recording anything.
+ */
+export function fanOutCauseConcerns(
+  state: FanOutNodeState,
+  cause: Pick<IMemorySpaceAddress, "space" | "id" | "scope" | "scopeKey">,
+): boolean {
+  if (state.instances.size === 0) return true;
+  if (namesNoInstance(cause)) {
+    const document = entityNameKey(cause);
+    for (const record of state.instances.values()) {
+      if (record.running === true || readsDocument(record, document)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  for (const [key, record] of state.instances) {
+    if (key !== "space" && keysOnChain(record.identity).has(cause.scopeKey!)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether a pass runs the instance at `key`: it is not current, and it
+ * either never ran at this ratchet or is owed a run
+ * (`FanOutNodeState.owed`).
+ */
+export function fanOutOwesRun(state: FanOutNodeState, key: ScopeKey): boolean {
+  return !state.clean.has(key) &&
+    (state.owed.has(key) || !state.instances.has(key));
 }
 
 /**
@@ -489,10 +531,7 @@ export function fanOutInstancesToRun(
   state: FanOutNodeState,
   instances: readonly FanOutInstance[],
 ): FanOutInstance[] {
-  return instances.filter((instance) =>
-    !state.clean.has(instance.key) &&
-    (state.owed.has(instance.key) || !state.instances.has(instance.key))
-  );
+  return instances.filter((instance) => fanOutOwesRun(state, instance.key));
 }
 
 /**
@@ -744,7 +783,10 @@ export function fanOutRunFinished(
 
 /** The union of every current instance's last log — the node's ONE
  * subscription (stage A's union resubscribe, persisted per instance so a
- * pass that skips clean instances keeps their reads registered). */
+ * pass that skips clean instances keeps their reads registered). The reads
+ * of a run that handed nothing over are in it too (`InstanceRecord.attempt`):
+ * a change to one of them is what runs a given-up instance again, and it
+ * has to arrive for that. */
 export function fanOutUnionLog(state: FanOutNodeState): ReactivityLog {
   const reads: IMemorySpaceAddress[] = [];
   const shallowReads: IMemorySpaceAddress[] = [];
@@ -754,6 +796,11 @@ export function fanOutUnionLog(state: FanOutNodeState): ReactivityLog {
     for (const read of record.log.reads) reads.push(read);
     for (const read of record.log.shallowReads) shallowReads.push(read);
     for (const write of record.log.writes) writes.push(write);
+  }
+  for (const { attempt } of state.instances.values()) {
+    if (attempt === undefined) continue;
+    for (const read of attempt.reads) reads.push(read);
+    for (const read of attempt.shallowReads) shallowReads.push(read);
   }
   return { reads, shallowReads, writes };
 }

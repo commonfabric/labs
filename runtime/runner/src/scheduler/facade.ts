@@ -136,6 +136,7 @@ import {
 import {
   dirtyFanOutKey,
   fanOutInstances,
+  fanOutOwesRun,
   keyAtRatchet,
   oweFanOutRuns,
 } from "./fan-out.ts";
@@ -1429,9 +1430,19 @@ export class Scheduler {
     for (const record of this.#nodes.nodesUnderDemandRoots(rootIds)) {
       if (record.fanOut === undefined) {
         if (record.status === "never-ran") continue;
-      } else if (!record.fanOut.narrowed) continue;
-      // Demand arrived: an instance that was given up runs for it as well.
-      if (record.fanOut !== undefined) oweFanOutRuns(record.fanOut);
+      } else {
+        // A viewer arrived at a root the node is under. Which of its
+        // instances the viewer asks for is not known here, so every
+        // instance that is not current is owed a run, one whose run was
+        // given up among them.
+        oweFanOutRuns(record.fanOut);
+        // A node that has not narrowed is one instance for all its viewers,
+        // and the arrival asks for a run of it only where that instance was
+        // given up.
+        if (!record.fanOut.narrowed && !fanOutOwesRun(record.fanOut, "space")) {
+          continue;
+        }
+      }
       this.#markActionInvalid(record.action, undefined, {
         fanOutInstances: "keep",
       });
@@ -2392,8 +2403,9 @@ export class Scheduler {
    * live, a materializer, or pending, which is what has the scheduler queue
    * it. On a node that is not fanned out it must also be invalid or never
    * have run. On a fanned-out node, whose dirtiness is per instance, the
-   * instance must instead not be current (`fanOut.clean`), and be one its
-   * current demanders produce (`fanOutInstances()`, as `runSchedulerAction()`
+   * instance must instead be one a pass runs (`fanOutOwesRun()`: not current,
+   * and never run or owed a run, which an instance whose run was given up is
+   * not), and be one its current demanders produce (`fanOutInstances()`, as `runSchedulerAction()`
    * asks): the run supply runs no other, so a principal nothing demands this
    * node for gets no run of it.
    */
@@ -2405,7 +2417,7 @@ export class Scheduler {
       this.#pending.has(action);
     if (!queued) return false;
     if (node.fanOut === undefined) return this.#isInvalidAction(action);
-    if (node.fanOut.clean.has(instance)) return false;
+    if (!fanOutOwesRun(node.fanOut, instance)) return false;
     const observation = (action as Partial<TelemetryAnnotations>)
       .schedulerObservationIdentity;
     const roots = observation?.demandRootIds ??
