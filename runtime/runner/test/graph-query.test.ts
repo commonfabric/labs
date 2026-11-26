@@ -17,6 +17,7 @@ import {
   schemaTrackerKey,
   trackedRecordKey,
 } from "../src/graph-query.ts";
+import { rendererVDOMSchema, vnodeSchema } from "../src/schemas.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 
 const SPACE = "did:key:graph-query-test" as MemorySpace;
@@ -1667,6 +1668,122 @@ describe("graph-query", () => {
           expect(handoffsOver(shallow)).toBe(0);
           expect(handoffsOver(deep)).toBeGreaterThan(0);
         });
+      });
+
+      describe("over a view's bound cell", () => {
+        // A view's `$cell` prop binds a cell. A renderer is handed the link
+        // and reads the cell under a schema of its own, so a walk of the
+        // view reads nothing through the prop, where it reads an ordinary
+        // prop's link for the value a renderer shows.
+
+        const OTHER = "did:key:graph-query-other" as MemorySpace;
+
+        /** A link to `id` in `OTHER`. */
+        const linkAway = (id: string) => ({
+          "/": { [LINK_V1_TAG]: { id, path: [], space: OTHER } },
+        });
+
+        /**
+         * Walks `of:root`, a view node binding `room` and labeled by `label`,
+         * under `schema`, and returns the ids of the other documents the walk
+         * asked for, the ids its tracker holds, and the ids of the documents
+         * in `OTHER` it reported a link into, each sorted.
+         */
+        const walkView = (
+          schema: JSONSchema,
+          room: FabricValue,
+          label: FabricValue,
+        ): { reached: string[]; tracked: string[]; crossed: string[] } => {
+          const manager = new StubObjectManager(
+            new Map<string, FabricValue>([
+              [keyFor("of:root"), {
+                type: "vnode",
+                name: "cf-cell-link",
+                props: { $cell: room, label },
+              }],
+              [keyFor("of:label"), "Room one"],
+              [keyFor("of:room"), { name: "one" }],
+              // An entry whose fields are links into `OTHER`, as a list of
+              // rooms holds each room. The manager serves one space, so a
+              // document of `OTHER` is one it does not hold.
+              [keyFor("of:entry"), {
+                room: linkAway("of:far-room"),
+                label: linkAway("of:far-label"),
+              }],
+            ]),
+          );
+          const schemaTracker = new MapSetStringToPathSelectors(true);
+          const crossed = new Set<string>();
+          const idOf = (key: string) => key.slice(key.lastIndexOf("/") + 1);
+          const walk = new GraphQueryWalk({
+            manager,
+            space: SPACE,
+            schemaTracker,
+            identity: TEST_SCOPE_IDENTITY,
+            // A crossing's key is its target's space, scope and id as JSON.
+            onCrossing: (key) => crossed.add(JSON.parse(key)[2]),
+            // The memory server's walks attribute by record, which is what
+            // has a link found below the root reported.
+            onTrackedDoc: () => {},
+          });
+          walk.visit(
+            documentFor(manager, "of:root"),
+            { path: ["value"], schema },
+            undefined,
+            "root",
+          );
+          return {
+            reached: [...new Set(manager.requested)]
+              .filter((key) => key !== keyFor("of:root"))
+              .map(idOf)
+              .toSorted(),
+            tracked: trackedKeys(schemaTracker).map(idOf),
+            crossed: [...crossed].toSorted(),
+          };
+        };
+
+        for (
+          const [name, schema] of [
+            ["rendered view", rendererVDOMSchema],
+            ["view node", vnodeSchema],
+          ] as const
+        ) {
+          it(`loads the target of an ordinary prop's link and none of \`$cell\`'s, under the ${name} schema`, () => {
+            const { reached } = walkView(
+              schema,
+              linkTo("of:room"),
+              linkTo("of:label"),
+            );
+
+            expect(reached).toEqual(["of:label"]);
+          });
+
+          it(`tracks the target of an ordinary prop's link and none of \`$cell\`'s, under the ${name} schema`, () => {
+            // A tracked target is walked again when its document changes, so
+            // one tracked for `$cell` would be read then.
+
+            const { tracked } = walkView(
+              schema,
+              linkTo("of:room"),
+              linkTo("of:label"),
+            );
+
+            expect(tracked).toEqual(["of:label", "of:root"]);
+          });
+
+          it(`reports an ordinary prop's link into another space and none of \`$cell\`'s, under the ${name} schema`, () => {
+            // Each prop links to a field of `of:entry`, which links on into
+            // `OTHER`.
+
+            const { crossed } = walkView(
+              schema,
+              linkTo("of:entry", ["room"]),
+              linkTo("of:entry", ["label"]),
+            );
+
+            expect(crossed).toEqual(["of:far-label"]);
+          });
+        }
       });
     });
   });
