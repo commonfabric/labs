@@ -191,15 +191,18 @@ export type RenderConfidentialityResolverConfig = {
  * that space and can fire for no other reader without one.
  *
  * A subject held in commitment form (label-metadata protection, §4.6.4.1)
- * names no space, and the runtime never opens one (§4.3.6). Where the label
- * was read from a space whose digest that commitment is, `readFrom`'s
- * space is listed too: the candidate is digested and compared, which is the
- * equality-shaped consumption §4.6.4.1 keeps, and the guard's later match
- * against the minted fact is the commitment-aware unification §4.3.6
- * prescribes. Testing a space the label was read from tells the display
- * nothing it could not compute itself, and the point query still decides
- * membership: residency only nominates the candidate. A committed subject
- * naming any other space is not listed, and its guard stays sealed. A space a
+ * names no space, and the runtime never opens one (§4.3.6). Where `readFrom`
+ * — the spaces the render read from: each labeled read's document and each
+ * link hop it followed, across the whole render — holds a space whose digest
+ * that commitment is, that space is listed too: the candidate is digested and
+ * compared, which is the equality-shaped consumption §4.6.4.1 keeps, and the
+ * guard's later match against the minted fact is the commitment-aware
+ * unification §4.3.6 prescribes. Testing a space the render read from tells
+ * the display nothing it could not compute itself, and the point query still
+ * decides membership: residency only nominates the candidate. The fact it
+ * mints is true, and like every minted fact every rule the label selects may
+ * consult it. A committed subject naming a space outside `readFrom` is not
+ * listed, and its guard stays sealed. A space a
  * module rule adds from any other binding is not listed either, and its
  * `Space` alternative stays sealed. The render resolver consults exactly
  * these, and the reconciler watches these ACLs (a committed subject's
