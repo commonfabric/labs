@@ -22,7 +22,16 @@ import {
   CfHarnessPromptLoop,
   outstandingSkillCustody,
 } from "../src/prompt-loop.ts";
-import type { HarnessSubagentRunRef } from "../src/contracts/subagent.ts";
+import type {
+  HarnessSubagentRunManifest,
+  HarnessSubagentRunRef,
+} from "../src/contracts/subagent.ts";
+import type {
+  HarnessReviewedSkills,
+  HarnessSkillAcquisition,
+} from "../src/contracts/skill.ts";
+import { skillsShValueDigest } from "../src/skills-sh/acquisition.ts";
+import { skillBundleDigest } from "../src/skills/reviewed-skills.ts";
 import {
   createHarnessHandleTable,
   mintAddressHandle,
@@ -56,6 +65,16 @@ const SKILL_TEXT = [
   "",
   "CANARY-SKILL-9f4e2: always list flights before hotels.",
 ].join("\n");
+
+/** An acquisition whose fetched bytes were exactly {@link SKILL_TEXT}. */
+const SKILL_ACQUISITION: HarnessSkillAcquisition = {
+  registryId: "acme/skills/trip-planner",
+  commitSha: "0123456789abcdef0123456789abcdef01234567",
+  sourceUrl: "https://example.test/acme/skills/trip-planner/SKILL.md",
+  verification: "git-commit-sha",
+  valueDigest: skillsShValueDigest(new TextEncoder().encode(SKILL_TEXT)),
+  receivedAt: "2026-11-26T11:00:00.000Z",
+};
 
 class FakeSandboxRuntime implements SandboxRuntime {
   describe(): SandboxRuntimeDescription {
@@ -1070,19 +1089,31 @@ describe("prompt-loop delegate_task skillHandle", () => {
     /**
      * Runs a direct-command parent under `mode` that delegates once, with
      * `skillHandle` set when `withSkill` is, to a child whose first act is a
-     * `bash` call. Returns the tool message the child's model read back for
-     * that call, parsed.
+     * `bash` call. With `acquired`, the handle records an acquisition of the
+     * skill's text, and the run accepts the given reviews. Returns the tool
+     * message the child's model read back for that call, parsed, and the
+     * child's manifest.
      */
-    const childBashResult = async (
+    const childBashOutcome = async (
       mode: "enforce-explicit" | "enforce-strict",
       withSkill: boolean,
-    ): Promise<{ reason?: string; detail?: string }> => {
+      acquired?: { reviewedSkills?: HarnessReviewedSkills },
+    ): Promise<{
+      result: { reason?: string; detail?: string };
+      manifest?: HarnessSubagentRunManifest;
+    }> => {
       let toolContent = "";
+      let manifest: HarnessSubagentRunManifest | undefined;
       await withSkillCell(async ({ pieces, ref }) => {
-        const runId = `run-skill-handle-authority-${mode}-${withSkill}`;
+        const runId = `run-skill-handle-authority-${mode}-${withSkill}${
+          acquired === undefined ? "" : "-acquired"
+        }`;
         const minted = await mintAddressHandle(
           createHarnessHandleTable(runId),
           ref,
+          acquired === undefined
+            ? {}
+            : { capability: "skill-context", acquisition: SKILL_ACQUISITION },
         );
         const engine = new CfHarnessEngine({
           sandboxRuntime: new FakeSandboxRuntime(),
@@ -1090,6 +1121,9 @@ describe("prompt-loop delegate_task skillHandle", () => {
           model: "gpt-5.4",
           cfcEnforcementMode: mode,
           fabricSessionFactory: () => Promise.resolve({ pieces }),
+          ...(acquired?.reviewedSkills !== undefined
+            ? { reviewedSkills: acquired.reviewedSkills }
+            : {}),
         });
         await engine.recordHandleTable(minted.table);
         const requestBodies: unknown[] = [];
@@ -1107,10 +1141,13 @@ describe("prompt-loop delegate_task skillHandle", () => {
           ], requestBodies),
         });
 
-        await loop.runPrompt({
+        const run = await loop.runPrompt({
           prompt: "Delegate the plan.",
           promptSlotBinding: directPromptSlotBinding,
         });
+        manifest = (run.runState.subagentRuns?.[0] as
+          | HarnessSubagentRunRef
+          | undefined)?.manifest;
 
         // The child's second request carries what its `bash` call returned.
         const toolMessage = chatViewOfRequest(requestBodies[2]).messages
@@ -1118,8 +1155,30 @@ describe("prompt-loop delegate_task skillHandle", () => {
         toolContent = String(toolMessage?.content ?? "");
       });
       expect(toolContent).not.toBe("");
-      return JSON.parse(toolContent);
+      return {
+        result: JSON.parse(toolContent),
+        ...(manifest !== undefined ? { manifest } : {}),
+      };
     };
+    const childBashResult = async (
+      mode: "enforce-explicit" | "enforce-strict",
+      withSkill: boolean,
+    ) => (await childBashOutcome(mode, withSkill)).result;
+
+    /** A set that reviews {@link SKILL_TEXT}, as acquired, and nothing else. */
+    const reviewedSkillText = (
+      acceptedVerifiers: string[],
+    ): HarnessReviewedSkills => ({
+      entries: [{
+        verifier: "github:acme",
+        pin: `${SKILL_ACQUISITION.registryId}@${SKILL_ACQUISITION.commitSha}`,
+        bundleDigest: skillBundleDigest([
+          { path: "SKILL.md", valueDigest: SKILL_ACQUISITION.valueDigest },
+        ]),
+      }],
+      acceptedVerifiers,
+      revoked: [],
+    });
 
     for (const mode of ["enforce-explicit", "enforce-strict"] as const) {
       it(`refuses a side effect to a child that holds handle-delivered skill text under ${mode}`, async () => {
@@ -1136,6 +1195,25 @@ describe("prompt-loop delegate_task skillHandle", () => {
         expect((await childBashResult(mode, false)).reason).toBe(
           "not-observable",
         );
+      });
+
+      it(`leaves a child the parent's authority, and records the review, when an accepted review covers its acquired skill under ${mode}`, async () => {
+        const { result, manifest } = await childBashOutcome(mode, true, {
+          reviewedSkills: reviewedSkillText(["github:acme"]),
+        });
+        expect(result.reason).toBe("not-observable");
+        expect(manifest?.reviewedSkill?.verifier).toBe("github:acme");
+        expect(manifest?.reviewedSkill?.files).toEqual([
+          { path: "SKILL.md", valueDigest: SKILL_ACQUISITION.valueDigest },
+        ]);
+      });
+
+      it(`refuses a side effect to a child whose acquired skill only an unaccepted verifier reviewed under ${mode}`, async () => {
+        const { result, manifest } = await childBashOutcome(mode, true, {
+          reviewedSkills: reviewedSkillText(["github:someone-else"]),
+        });
+        expect(result.reason).toBe("not-authorized");
+        expect(manifest?.reviewedSkill).toBeUndefined();
       });
     }
   });

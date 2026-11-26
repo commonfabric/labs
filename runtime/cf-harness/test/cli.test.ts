@@ -409,6 +409,52 @@ test("parseCfHarnessCliArgs supports prompt files and mode overrides", async () 
   assertEquals(parsed.maxModelTurns, 5);
 });
 
+test("parseCfHarnessCliArgs reads the reviewed skills a run accepts from a file", async () => {
+  const reviewedSkills = {
+    entries: [{
+      verifier: "github:acme",
+      pin: "acme/skills/trip@0123456789abcdef0123456789abcdef01234567",
+      bundleDigest: "sha256:abc",
+    }],
+    acceptedVerifiers: ["github:acme"],
+    revoked: [],
+  };
+  const parsed = await parseCfHarnessCliArgs(
+    ["--prompt", "hi", "--reviewed-skills", "reviewed.json"],
+    {
+      cwd: "/tmp/project",
+      env: {},
+      readTextFile: (path) => {
+        assertEquals(path, "/tmp/project/reviewed.json");
+        return Promise.resolve(JSON.stringify(reviewedSkills));
+      },
+    },
+  );
+
+  if ("help" in parsed) {
+    throw new Error("expected config result");
+  }
+  expect(parsed.reviewedSkills).toEqual(reviewedSkills);
+});
+
+test("parseCfHarnessCliArgs refuses a reviewed-skills file with an unknown key", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--reviewed-skills", "/tmp/reviewed.json"],
+        {
+          env: {},
+          readTextFile: () =>
+            Promise.resolve(
+              JSON.stringify({ entries: [], acceptedVerifiers: [], extra: 1 }),
+            ),
+        },
+      ),
+    Error,
+    'unknown key "extra" in the file',
+  );
+});
+
 test("parseCfHarnessCliArgs accepts CFC mode from environment", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
