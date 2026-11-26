@@ -23,21 +23,23 @@ import {
   settleBoth,
 } from "../lib/view/push.ts";
 import { realFileGateway } from "../lib/view/filegateway.ts";
-import { dialogBox } from "../lib/view/render.ts";
+import { dialogBox, KEY_PLUG_MS, KEY_REACH } from "../lib/view/render.ts";
 import { Session } from "../lib/view/session.ts";
-import { ui } from "../lib/view/theme.ts";
+import { palette, ui } from "../lib/view/theme.ts";
 import {
   type BeginStep,
   link,
   plainText,
   quote,
   say,
+  type StepKind,
   words,
 } from "../lib/view/tasklog.ts";
 import {
   cellOf,
   drawnRows,
   fakeRelay,
+  fgCode,
   frameRows,
   mergedPayload,
   mouseKey,
@@ -354,7 +356,8 @@ function deferred<T = void>() {
  * something. `git` answers the viewer's questions about the repository,
  * `relay` connects it to the webhook relay, `open` opens pages, `github` and
  * `touchGate` create and merge pull requests, `pullRequestList` lists the
- * open ones, and `source` makes the document editable. `handlers` holds the
+ * open ones, `source` makes the document editable, and `columns` sets how
+ * wide the terminal is. `handlers` holds the
  * process signal handlers the pager adds, `exits` the codes it exits
  * with, `timers` how long each timer it set was for, `cancelled` how long
  * each it cancelled before it ran was for, and `spinners` each frame of the
@@ -374,6 +377,7 @@ function pagerHarness(
     pullRequestList = () => Promise.resolve(null),
     source,
     holdTimers = false,
+    columns = 80,
   }:
     & Partial<
       Pick<
@@ -384,6 +388,7 @@ function pagerHarness(
     & {
       readonly source?: EditableSource;
       readonly holdTimers?: boolean;
+      readonly columns?: number;
     } = {},
 ) {
   const writes: string[] = [];
@@ -429,7 +434,7 @@ function pagerHarness(
           else watchers.push(watcher);
         }
       },
-      consoleSize: () => ({ columns: 80, rows: 12 }),
+      consoleSize: () => ({ columns, rows: 12 }),
       env: () => undefined,
       addSignalListener: (signal, handler) => handlers.set(signal, handler),
       removeSignalListener: () => {},
@@ -2412,6 +2417,206 @@ describe("view-push", () => {
       });
     });
 
+    describe("the security key", () => {
+      /** A session `width` columns by `height` rows showing the land dialog
+       * drawn with color `color`, its last step of `kind`, which the
+       * function returned shows is done. */
+      function landing(
+        { color = false, kind = "touch", width = 116, height = 32 }: {
+          readonly color?: boolean;
+          readonly kind?: StepKind;
+          readonly width?: number;
+          readonly height?: number;
+        } = {},
+      ): { session: Session; done: () => void } {
+        const session = new Session(
+          parseDocument("const a = 1;\n", "/work/main.ts"),
+          { color, showLineNumbers: false },
+          { width, height },
+          undefined,
+        );
+        session.beginTask("Land", () => {});
+        session.beginTaskStep(say`Merging`)();
+        const done = session.beginTaskStep(say`Touch the key`, kind);
+        return { session, done };
+      }
+
+      /** The five rows of `session`'s screen beside the task dialog's right
+       * edge that show the security key, from that edge to the screen's. */
+      function key(session: Session): string[] {
+        const rows = drawnRows(session).map(stripAnsi);
+        const { x, y } = cellOf(rows, "╗");
+        return rows.slice(y + 1, y + 6).map((row) => row.slice(x).trimEnd());
+      }
+
+      /** Moves the key in `session` on, a frame at a time, until `time`
+       * milliseconds after its step began or until it holds still, returning
+       * the key's rows as {@link key} gives them at each frame, the first
+       * before it moves. */
+      function advance(session: Session, time: number): string[][] {
+        const frames = [key(session)];
+        for (let at = 0, delay = session.keyFrameDelay; at < time;) {
+          if (delay === null || delay <= 0) break;
+          at += delay;
+          session.advanceKey();
+          frames.push(key(session));
+          delay = session.keyFrameDelay;
+        }
+        return frames;
+      }
+
+      /** The rows that show a plugged-in key whose light is `light`, as
+       * drawn without color. */
+      const plugged = (light: "──" | "━━") => [
+        `╟─${light}─╮`,
+        "║    │",
+        "║   ┃│",
+        "║    │",
+        `╟─${light}─╯`,
+      ];
+
+      it("draws none of the key when the step begins, the key being past the screen's edge, and none while a step waits for a person", () => {
+        const { session } = landing();
+        const { session: person } = landing({ kind: "person" });
+        advance(person, 350);
+
+        expect(key(session)).toEqual(Array(5).fill("║"));
+        expect(key(person)).toEqual(Array(5).fill("║"));
+        expect(session.keyFrameDelay).toBe(16);
+        expect(person.keyFrameDelay).toBe(null);
+      });
+
+      it("brings the key in from past the screen's edge, plug first, hides the part of the plug inside the dialog, and joins the key to the dialog's edge once it is plugged in, after 350 milliseconds", () => {
+        const { session } = landing();
+        const frames = advance(session, 350);
+
+        // Halfway through the time, the key has come a quarter of the way.
+        expect(frames[11]).toEqual([
+          "║",
+          "║          ╭────",
+          "║          │ ▪▪",
+          "║          ╰────",
+          "║",
+        ]);
+        expect(frames).toContainEqual([
+          "║   ╭────╮",
+          "║───┤    │",
+          "║▪▪ │   ┃│",
+          "║───┤    │",
+          "║   ╰────╯",
+        ]);
+        expect(frames.at(-2)).not.toEqual(plugged("━━"));
+        expect(frames.at(-1)).toEqual(plugged("━━"));
+        const rows = drawnRows(session).map(stripAnsi);
+        expect(rows.filter((row) => row.at(-1) !== " ")).toEqual([]);
+      });
+
+      it("draws the plug's end at the screen's last column in the key's first frame that shows any of it", () => {
+        const { session } = landing();
+        const top = cellOf(drawnRows(session).map(stripAnsi), "╗").y;
+        // The last column of each row the key's face takes.
+        const ends = () =>
+          drawnRows(session).map(stripAnsi).slice(top + 1, top + 6).map((
+            row,
+          ) => row.at(-1));
+        const frames = [ends()];
+        // Each frame is at least a millisecond after the one before.
+        while (
+          frames.length <= KEY_PLUG_MS &&
+          frames.at(-1)!.every((end) => end === " ")
+        ) {
+          session.advanceKey();
+          frames.push(ends());
+        }
+
+        expect(frames.length).toBeGreaterThan(2);
+        expect(frames.at(-1)).toEqual([" ", "╭", "│", "╰", " "]);
+      });
+
+      it("moves the dialog left, narrowing it, to leave room for the whole plugged-in key and its shadow on a narrow screen", () => {
+        const { session } = landing({ width: 60, height: 24 });
+        const { session: person } = landing({
+          kind: "person",
+          width: 60,
+          height: 24,
+        });
+        const edge = (session: Session) =>
+          cellOf(drawnRows(session).map(stripAnsi), "╗").x;
+        advance(session, 350);
+
+        expect(key(session)).toEqual(plugged("━━"));
+        expect(edge(session) + KEY_REACH).toBe(59);
+        expect(edge(person) + KEY_REACH).toBeGreaterThan(59);
+      });
+
+      it("draws no key beside a dialog too short to hold it", () => {
+        const { session } = landing({ height: 7 });
+        const { session: taller } = landing({ height: 8 });
+        advance(session, 350);
+        advance(taller, 350);
+
+        expect(drawnRows(session).join("")).not.toContain("┃");
+        expect(drawnRows(taller).join("")).toContain("┃");
+      });
+
+      it("blinks the light along the plugged-in key's top and bottom edges while the step waits, and leaves it lit in another color once the key is touched, with a yellow touch pad", () => {
+        const { session, done } = landing({ color: true });
+        const light = () => {
+          const rows = drawnRows(session);
+          const top = cellOf(rows.map(stripAnsi), "╟─").y;
+          return [rows[top], rows[top + 4]].join("");
+        };
+        advance(session, 350);
+        const on = light();
+        advance(session, 300);
+        const off = light();
+        done();
+        const touched = light();
+
+        expect(on.split(fgCode(palette.lightOn)).length).toBe(3);
+        expect(off).not.toContain(fgCode(palette.lightOn));
+        expect(touched.split(fgCode(palette.blue)).length).toBe(3);
+        expect(touched).not.toContain(fgCode(palette.lightOn));
+        const pad = drawnRows(session)[
+          cellOf(drawnRows(session).map(stripAnsi), "┃").y
+        ];
+        expect(pad.slice(pad.lastIndexOf("║"))).toContain(
+          fgCode(palette.yellow),
+        );
+        expect(session.keyFrameDelay).toBe(null);
+      });
+
+      it("draws the light as a heavier line while it is lit, without color", () => {
+        const { session, done } = landing();
+        advance(session, 650);
+        const off = key(session);
+        done();
+
+        expect(off).toEqual(plugged("──"));
+        expect(key(session)).toEqual(plugged("━━"));
+      });
+
+      it("plugs the key in at once, its light off, when the step ends before the key is in", () => {
+        const { session } = landing();
+        advance(session, 100);
+
+        session.finishTask(say`Aborted.`);
+
+        expect(key(session)).toEqual(plugged("──"));
+        expect(session.keyFrameDelay).toBe(null);
+      });
+
+      it("starts the key over past the screen's edge when another step waits for a touch", () => {
+        const { session, done } = landing();
+        advance(session, 350);
+        done();
+
+        session.beginTaskStep(say`Touch the key again`, "touch");
+
+        expect(key(session)).toEqual(Array(5).fill("║"));
+      });
+    });
+
     describe("tones", () => {
       /** A push dialog drawn with color `color` that shows text another
        * program wrote, the viewer's words with a name in them, and a step
@@ -3081,6 +3286,153 @@ describe("view-push", () => {
         expect(harness.spinners.map((spinner) => spinner.cancelled)).toEqual([
           true,
         ]);
+      });
+    });
+
+    describe("the security key", () => {
+      /** Drives the viewer to create a pull request with touch-gate, whose
+       * request waits for the touch of a security key until each of
+       * `touches` resolves in turn, holding every timer. */
+      function touchHarness(...touches: Promise<void>[]) {
+        return pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit(
+              {
+                "cf-view.pullRequestTool": "touch-gate",
+                "cf-view.touchGateToken": "mine",
+              },
+              UPSTREAM,
+            ),
+            touchGate: () => ({
+              ...unusedGitHub,
+              create: async (_request, step) => {
+                for (const touch of touches) {
+                  const touched = step(say`Touch the security key`, "touch");
+                  await touch;
+                  touched();
+                }
+                return OCTO_PULL_REQUEST;
+              },
+            }),
+            holdTimers: true,
+            columns: 100,
+          },
+        );
+      }
+
+      /** Runs the frames of the key that `harness` holds, one at a time,
+       * until it has written one showing the key plugged in with its light
+       * on, and returns what each frame wrote. */
+      function plugIn(harness: ReturnType<typeof touchHarness>): string[] {
+        const written = harness.writes.length;
+        const frames = () => harness.writes.slice(written);
+        // Each frame is at least a millisecond after the one before.
+        for (let frame = 0; frame <= KEY_PLUG_MS; frame++) {
+          if (frames().some((text) => text.includes("╟─━━─╮"))) break;
+          harness.releaseTimers();
+        }
+        return frames();
+      }
+
+      it("brings the key in from past the screen's edge, each frame when it is due, then blinks its light until it is touched, writing only the rows each frame changes", async () => {
+        const touch = deferred<void>();
+        const harness = touchHarness(touch.promise);
+        const waiting = harness.frame((text) =>
+          text.includes("Touch the security key")
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+        let timersWhenWaiting = 0;
+        let frames: string[] = [];
+        let blinks: string[] = [];
+        let timersWhenTouched = 0;
+        let writesWhenTouched = 0;
+        let timersWhenDue = 0;
+        let writesWhenDue = 0;
+
+        await harness.run([
+          "P",
+          async () => {
+            await waiting;
+            timersWhenWaiting = harness.timers.length;
+            frames = plugIn(harness);
+            const written = harness.writes.length;
+            harness.releaseTimers();
+            harness.releaseTimers();
+            blinks = harness.writes.slice(written);
+            touch.resolve();
+            await closable;
+            timersWhenTouched = harness.timers.length;
+            writesWhenTouched = harness.writes.length;
+            // The frame still pending when the key was touched comes due.
+            harness.releaseTimers();
+            timersWhenDue = harness.timers.length;
+            writesWhenDue = harness.writes.length;
+          },
+          "c",
+        ]);
+
+        // The draw that first shows the step sets the key's first timer
+        // after it writes, so that timer is the last one set by then.
+        const timers = harness.timers.slice(
+          timersWhenWaiting - 1,
+          timersWhenTouched,
+        );
+        const plugging = timers.slice(0, frames.length);
+        expect(plugging.reduce((sum, delay) => sum + delay, 0)).toBe(350);
+        expect(timers.slice(frames.length)).toEqual([300, 300, 300]);
+        expect(frames.filter((frame) => frame.includes("═"))).toEqual([]);
+        // The key's first frames move it less than a column, writing no rows.
+        const shown = frames.find((frame) => frame.includes("║"))!;
+        expect(shown).toContain("╭");
+        expect(shown).not.toContain("▪");
+        expect(blinks.map((frame) => frame.includes("╟─━━─╮"))).toEqual([
+          false,
+          true,
+        ]);
+        expect(blinks[0]).toContain("╟────╮");
+        const closed = harness.writes.find((text) => text.includes(" Close "))!;
+        expect(closed).toContain("╟─━━─╮");
+        expect(writesWhenDue).toBe(writesWhenTouched);
+        expect(timersWhenDue).toBe(timersWhenTouched);
+      });
+
+      it("starts the key over at once, cancelling the blink it had set, when another step waits for a touch", async () => {
+        const first = deferred<void>();
+        const harness = touchHarness(first.promise, new Promise(() => {}));
+        const waiting = harness.frame((text) =>
+          text.includes("Touch the security key")
+        );
+        let timersWhenPlugged = 0;
+
+        await harness.run([
+          "P",
+          async () => {
+            await waiting;
+            plugIn(harness);
+            timersWhenPlugged = harness.timers.length;
+            const restarted = harness.frame((text) =>
+              text.includes("Touch the security key ✓")
+            );
+            first.resolve();
+            await restarted;
+          },
+        ]);
+
+        const set = harness.timers.slice(timersWhenPlugged - 1);
+        expect(set).toEqual([300, 16]);
+        expect(harness.cancelled).toEqual(set);
+      });
+
+      it("cancels the key's next frame when the viewer closes", async () => {
+        const harness = touchHarness(new Promise<never>(() => {}));
+        const waiting = harness.frame((text) =>
+          text.includes("Touch the security key")
+        );
+
+        await harness.run(["P", () => waiting]);
+
+        expect(harness.cancelled).toEqual([16]);
       });
     });
 

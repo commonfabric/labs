@@ -48,6 +48,7 @@ import {
   diffTotalsWidth,
   inputLineColumns,
   inputLineIndexAt,
+  KEY_REACH,
   type KeyHint,
   labeledDiffMetadataLine,
   type Match,
@@ -686,6 +687,11 @@ export class Session {
   /** How far the spinners of the task dialog's running steps, and of the
    * status bar's highlighting progress, have turned. */
   #spinnerFrame = 0;
+
+  /** The milliseconds since the last step that waits for the touch of a
+   * security key began, as far as the key beside the task dialog has been
+   * drawn. */
+  #keyTime = 0;
 
   /** How much of the source left to color in the background has been
    * parsed, from 0 to 1, or null when nothing is left, which opening another
@@ -1612,7 +1618,13 @@ export class Session {
    * ran wrote, how it ended, and what it says about watching for the pull
    * request; how many of them it shows at once; and how wide they are. */
   #taskLayout(): { output: TaskRow[]; rows: number; columns: number } {
-    const columns = Math.max(1, Math.min(PUSH_COLUMNS, this.width - 8));
+    // A security key beside the dialog reaches past the two columns of the
+    // dialog's shadow.
+    const key = this.#taskLog.securityKey(this.#keyTime) !== null;
+    const columns = Math.max(
+      1,
+      Math.min(PUSH_COLUMNS, this.width - 6 - (key ? KEY_REACH : 2)),
+    );
     return {
       output: TaskLog.rows(
         [this.#taskLog, this.#watchLog],
@@ -1664,6 +1676,7 @@ export class Session {
       spans: body.map((row) => row.spans),
       output: true,
       width: columns,
+      securityKey: this.#taskLog.securityKey(this.#keyTime),
       buttons: this.#abortTask
         ? [{ label: "Abort", hotkey: "a", kind: "cancel" }]
         : this.#confirmation
@@ -3999,6 +4012,7 @@ export class Session {
    * returned shows is done. A step still running when the task ends shows
    * that it ended without being done. */
   beginTaskStep(text: TaskText, kind?: StepKind): () => void {
+    if (kind === "touch") this.#keyTime = 0;
     return this.#taskLog.step(text, kind);
   }
 
@@ -4037,6 +4051,13 @@ export class Session {
       TaskLog.spinning([this.#taskLog, this.#watchLog]);
   }
 
+  /** How long after the task dialog's security key last moved it next
+   * moves, which {@link advanceKey} makes it do, in milliseconds, or null
+   * while it holds still. */
+  get keyFrameDelay(): number | null {
+    return this.#taskLog.keyFrameDelay(this.#keyTime);
+  }
+
   /** Whether the status bar shows highlighting progress, whose spinner
    * {@link advanceSpinner} turns. Opening another file ends it. */
   get highlighting(): boolean {
@@ -4047,6 +4068,12 @@ export class Session {
    * highlighting progress, a frame. */
   advanceSpinner(): void {
     this.#spinnerFrame++;
+  }
+
+  /** Move the task dialog's security key a frame on, plugging it in or
+   * blinking its light. */
+  advanceKey(): void {
+    this.#keyTime += this.keyFrameDelay ?? 0;
   }
 
   /** Show on the status bar that `fraction` of the source left to color in

@@ -349,6 +349,8 @@ export async function runPager(
     if (session.taskSpinning || session.highlighting) {
       cancelSpin ??= deps.setSpinnerTimer(spin);
     }
+    const keyDelay = session.keyFrameDelay;
+    if (keyDelay !== null) cancelKey ??= deps.setTimer(moveKey, keyDelay);
     for (const load of session.takeBlameLoads()) {
       deps.blame(load.request, blameController.signal).then(
         (lines) => session.finishBlameLoad(load, lines),
@@ -372,6 +374,18 @@ export async function runPager(
     cancelSpin = undefined;
     if (!(session.taskSpinning || session.highlighting) || cancelPush) return;
     session.advanceSpinner();
+    draw(true);
+  };
+
+  // While the task dialog's security key plugs in, or blinks waiting for a
+  // touch, it moves a frame at a time, each when it is due, writing only the
+  // rows it changes, except while a pressed button is drawn, whose own draw
+  // starts its timer again.
+  let cancelKey: (() => void) | undefined;
+  const moveKey = () => {
+    cancelKey = undefined;
+    if (session.keyFrameDelay === null || cancelPush) return;
+    session.advanceKey();
     draw(true);
   };
 
@@ -567,6 +581,7 @@ export async function runPager(
     stopWatching();
     cancelQuit?.();
     cancelSpin?.();
+    cancelKey?.();
     blameController.abort();
     try {
       tty.setRaw(false);
@@ -750,6 +765,12 @@ export async function runPager(
    * function that shows the step is done. */
   const step: BeginStep = (text, kind) => {
     const done = session.beginTaskStep(text, kind);
+    // A step that waits for a touch starts its security key over, so the
+    // frame set for the key before is not the one now due.
+    if (kind === "touch") {
+      cancelKey?.();
+      cancelKey = undefined;
+    }
     draw();
     return () => {
       done();
