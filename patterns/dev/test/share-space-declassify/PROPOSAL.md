@@ -66,7 +66,8 @@ run that acts for no one (`updateAddedOwnerCreator`, `prepare.ts:2320`). The
 same principal is the authority in a handler, so a member who fires a handler of
 the owner's piece releases nothing of their own.
 
-**Which clauses.** Exactly those `clauseReleasableBy(clause, creator)` admits
+**Which clauses.** The `User(creator)` clauses among those
+`clauseReleasableBy(clause, creator)` admits
 (`runtime/memory/v2/cfc-release-authority.ts:204`): every alternative stands for
 the creator alone, with a cross-space `{digestOf}` commitment read as the DID.
 This is §8.12.7's `canReleaseStoredClause`, unchanged.
@@ -183,18 +184,20 @@ Code lands behind a dial and one marker.
   row rule is inert.
 - Host-reviewed surfaces for this flow.
 
-## Open points for Berni
+## Decisions
 
-One unit, the authority rule:
+Taken from Berni's comments 4 and 10, choosing the narrower reading where they
+leave room:
 
-1. Is the piece's recorded creator (specs pull request 87) the principal whose
-   clauses a reclassifier releases, for lifts and handlers alike?
-2. The clause set: all of `standsForActor` (`User`, `Context`, `Resource`, the
-   home `Space`, `PersonalSpace`), or `User` alone?
-3. Does that authority follow the piece across a source update, as the creator
-   record's delegation does?
-4. Is commit-preparation enforcement of the record acceptable while the dial is
-   off by default, with store-side admission required before it turns on?
+1. **Authority is the piece's recorded creator**, for lifts and handlers alike:
+   "the user installed a trusted pattern".
+2. **Only `User(creator)` clauses are released**, not the rest of
+   `standsForActor` (`Context`, `Resource`, the home `Space`, `PersonalSpace`).
+   Connector data needs only `User`, and widening later breaks nothing.
+3. **Across a source update, the authority follows the creator record** as that
+   record already defines it; this proposal adds no rule of its own.
+4. **The record is enforced at commit preparation while the dial is off.**
+   Store-side admission (repair 5b) is a precondition for turning it on.
 
 ## Risks
 
