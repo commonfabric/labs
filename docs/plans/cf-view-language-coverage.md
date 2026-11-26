@@ -14,8 +14,8 @@ that no `.json` suffix announces: web manifests, TLDraw documents, Deno lock
 files, Swift package resolutions, and the `.cfg` files whose source opens a JSON
 object. JSONC, which is JSON with comments, covers `.jsonc` files, editor
 workspace files, and the `deno.json`, `tsconfig.json`, and `jsconfig.json`
-project configurations; there, unlike in JSON, a line holding only a comment
-leaves the code as it was. Python has syntax highlighting and a structure
+project configurations, along with the `.example` templates of those files;
+there, unlike in JSON, a line holding only a comment leaves the code as it was. Python has syntax highlighting and a structure
 tree of its classes and functions. Go has syntax highlighting and a structure
 tree of its package clause, types, functions, methods, package-level names, and
 the fields and methods each type declares; `go.mod` and `go.work`, and `go.sum`
