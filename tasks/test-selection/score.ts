@@ -11,11 +11,20 @@
  */
 
 import type {
+  CiJob,
+  Disagreement,
   FlakeEvidence,
   ScoreInputs,
+  SeenRun,
   TestIdentity,
 } from "@commonfabric/test-support/records";
-import { testIdentityKey } from "@commonfabric/test-support/records";
+import {
+  isDay,
+  parseCiJob,
+  parseDisagreement,
+  parseSeenRun,
+  testIdentityKey,
+} from "@commonfabric/test-support/records";
 import { minOf } from "@commonfabric/collections/math";
 import {
   isObjectNotArray,
@@ -47,7 +56,7 @@ import {
 } from "./policy.ts";
 
 /** Where a failure happened, which changes what it means. */
-export type NewRealTestFailurePlace = "local" | "pr" | "main";
+export type NewRealTestFailurePlace = SeenRun["place"];
 
 /** One execution of one test, as the publisher reads it from a report. */
 export interface Observation {
@@ -92,6 +101,12 @@ export interface Observation {
 
   /** Where it ran, which is what a new real test failure there is worth. */
   place: NewRealTestFailurePlace;
+
+  /**
+   * The job that recorded it, for a continuous-integration run. One object
+   * is shared by every observation its job recorded.
+   */
+  ci?: CiJob;
 
   /**
    * What a passing execution on a lane's runner took, in milliseconds,
@@ -177,6 +192,98 @@ export interface IdentityState {
    * continuing, and waits.
    */
   pendingMain: Array<PendingMainFailure>;
+
+  /**
+   * The newest `DISAGREEMENTS_KEPT` of the disagreements `flakesByDay`
+   * counts, oldest first, aged over the same window. Absent where there
+   * are none.
+   */
+  disagreements?: Disagreement[];
+}
+
+/**
+ * How many of an identity's disagreements a state keeps, which is enough
+ * for someone fixing the test to open several of the runs it disagreed
+ * across without the state growing with every flake.
+ */
+const DISAGREEMENTS_KEPT = 10;
+
+/**
+ * Sets a state's disagreements to the newest `DISAGREEMENTS_KEPT` distinct
+ * ones of `list`, by the day of the failing run. A job that runs a test
+ * several times and sees it fail more than once beside one pass names the
+ * same runs each time, and those are kept once.
+ */
+function keepDisagreements(
+  state: IdentityState,
+  list: readonly Disagreement[],
+): void {
+  const runKey = (
+    run: SeenRun | undefined,
+  ) => [run?.place, run?.ci?.runId, run?.ci?.runAttempt, run?.ci?.job];
+  const distinct = new Map(list.map((held) => [
+    JSON.stringify([
+      held.day,
+      held.commit,
+      held.seed,
+      ...runKey(held.failed),
+      ...runKey(held.passed),
+    ]),
+    held,
+  ]));
+  const kept = [...distinct.values()]
+    .sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0)
+    .slice(-DISAGREEMENTS_KEPT);
+  if (kept.length > 0) state.disagreements = kept;
+  else delete state.disagreements;
+}
+
+/**
+ * Counts a disagreement: a run at `point` that failed beside one that
+ * passed there, dated by the failing run's day.
+ */
+function disagreedAt(
+  state: IdentityState,
+  day: string,
+  point: Pick<Observation, "commit" | "seed">,
+  failed: SeenRun,
+  passed: SeenRun | undefined,
+): void {
+  bump(state.flakesByDay, day);
+  keepDisagreements(state, [...(state.disagreements ?? []), {
+    day,
+    commit: point.commit,
+    ...(point.seed === undefined ? {} : { seed: point.seed }),
+    failed,
+    ...(passed === undefined ? {} : { passed }),
+  }]);
+}
+
+/** The run an observation was made in. */
+function runOfObservation(observation: Observation): SeenRun {
+  return observation.ci === undefined
+    ? { place: observation.place }
+    : { place: observation.place, ci: observation.ci };
+}
+
+/**
+ * Reads a state's disagreements forward, keeping those that read as one,
+ * and the jobs its pending failures on `main` name, dropping any that do
+ * not, since each becomes the failing run of a disagreement.
+ */
+export function readDisagreementsForward(state: IdentityState): void {
+  for (const pending of state.pendingMain) {
+    if (pending.ci !== undefined && parseCiJob(pending.ci) === undefined) {
+      delete pending.ci;
+    }
+  }
+  const held: unknown = state.disagreements;
+  keepDisagreements(
+    state,
+    Array.isArray(held)
+      ? held.map(parseDisagreement).filter((read) => read !== undefined)
+      : [],
+  );
 }
 
 /** What `main` last said about one identity, in each order it ran it in. */
@@ -250,6 +357,9 @@ export interface PendingMainFailure {
   commit: string;
   seed?: number;
   source: string;
+
+  /** The job that recorded the failure. */
+  ci?: CiJob;
 
   /**
    * Whether the breakage arrived in a crowd: a run that newly broke at
@@ -422,6 +532,7 @@ export function daysHeld(state: IdentityState): Set<string> {
   ]);
   for (const pending of state.pendingMain) days.add(pending.day);
   for (const day of state.ordersOnMain ?? []) days.add(day);
+  for (const held of state.disagreements ?? []) days.add(held.day);
   return days;
 }
 
@@ -478,6 +589,12 @@ export function moveHistory(
     if (moves(pending.day)) into.pendingMain.push(pending);
   }
   from.pendingMain = from.pendingMain.filter((pending) => !moves(pending.day));
+  const disagreements = from.disagreements ?? [];
+  keepDisagreements(into, [
+    ...(into.disagreements ?? []),
+    ...disagreements.filter((held) => moves(held.day)),
+  ]);
+  keepDisagreements(from, disagreements.filter((held) => !moves(held.day)));
   const recorded = from.ordersOnMain ?? [];
   const moved = recorded.filter((day) => moves(day));
   if (moved.length > 0) {
@@ -518,8 +635,10 @@ export function renameInContext(
       const to = rename(key, seen.day);
       if (to === key) continue;
       seen.identities.delete(key);
-      const held = seen.identities.get(to) ?? new Set<string>();
-      for (const outcome of outcomes) held.add(outcome);
+      const held: OutcomeRuns = seen.identities.get(to) ?? new Map();
+      for (const [outcome, run] of outcomes) {
+        if (!held.has(outcome)) held.set(outcome, run);
+      }
       seen.identities.set(to, held);
     }
   }
@@ -628,7 +747,15 @@ function resolvePendingMain(
     // same-commit check that catches this within one batch does not see
     // it, and dropping the pending failure silently would lose the flake
     // as well as the new real test failure.
-    bump(state.flakesByDay, here.day);
+    disagreedAt(
+      state,
+      here.day,
+      here,
+      here.ci === undefined
+        ? { place: "main" }
+        : { place: "main", ci: here.ci },
+      runOfObservation(observation),
+    );
     return;
   }
   // A pass at a point where the test also failed, with no failure there
@@ -690,11 +817,13 @@ export interface FoldContext {
    * commit's day. Keyed by that point (see `pointOf`) rather than by the
    * pair of point and identity so that the window below can drop a whole
    * point at once, and so that a point's name is stored once instead of
-   * against every identity that ran at it.
+   * against every identity that ran at it. Each outcome maps to the first
+   * run that gave it, which is unknown for one a context stored before
+   * runs were kept.
    */
   outcomesAtCommit: Map<
     string,
-    { day: string; identities: Map<string, Set<string>> }
+    { day: string; identities: Map<string, OutcomeRuns> }
   >;
 
   /**
@@ -734,6 +863,9 @@ export interface FoldContext {
   crowds: Map<string, { day: string; identities: Set<string> }>;
 }
 
+/** The first run each outcome was seen in, by outcome. */
+export type OutcomeRuns = Map<string, SeenRun | undefined>;
+
 /** One failure of an identity, as the environmental rule counts it. */
 export interface SeenFailure {
   day: string;
@@ -763,10 +895,18 @@ export function emptyContext(): FoldContext {
   };
 }
 
-/** A fold context as it travels between runs. */
+/**
+ * A fold context as it travels between runs. A point's runs are listed once
+ * under `runs`, and the third element of an identity's entry gives, for each
+ * of its outcomes, the index of the run it was first seen in, or -1.
+ */
 export interface StoredFoldContext {
   outcomesAtCommit: Array<
-    [string, { day: string; identities: Array<[string, string[]]> }]
+    [string, {
+      day: string;
+      identities: Array<[string, string[], number[]?]>;
+      runs?: SeenRun[];
+    }]
   >;
   recentCommits: string[];
   mainAtCommit: Array<[string, { day: string; outcome: "pass" | "fail" }]>;
@@ -778,33 +918,30 @@ export interface StoredFoldContext {
 /** The outcomes a record may carry, for validating a stored context. */
 const OUTCOMES = new Set(["pass", "fail", "skip"]);
 
-/**
- * Whether a value is a "yyyy-mm-dd" day this reader can measure from.
- * The parse alone is not enough: a date the calendar does not have rolls
- * into the next month, so "2026-02-31" parses as March 3rd and would be
- * aged from three days later than it claims. What round-trips is a day.
- */
-export function isDay(value: unknown): value is string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return false;
-  }
-  const at = new Date(`${value}T00:00:00Z`);
-  return Number.isFinite(at.getTime()) &&
-    at.toISOString().slice(0, 10) === value;
-}
-
 /** The context, flattened for the aggregate that carries it. */
 export function serializeContext(context: FoldContext): StoredFoldContext {
   return {
-    outcomesAtCommit: [...context.outcomesAtCommit].map(([commit, seen]) => [
-      commit,
-      {
-        day: seen.day,
-        identities: [...seen.identities].map((
-          [key, outcomes],
-        ) => [key, [...outcomes]] as [string, string[]]),
-      },
-    ]),
+    outcomesAtCommit: [...context.outcomesAtCommit].map(([commit, seen]) => {
+      const runs: SeenRun[] = [];
+      const indices = new Map<SeenRun, number>();
+      const indexOf = (run: SeenRun | undefined): number => {
+        if (run === undefined) return -1;
+        let index = indices.get(run);
+        if (index === undefined) {
+          index = runs.push(run) - 1;
+          indices.set(run, index);
+        }
+        return index;
+      };
+      const identities = [...seen.identities].map((
+        [key, outcomes],
+      ): [string, string[], number[]] => [
+        key,
+        [...outcomes.keys()],
+        [...outcomes.values()].map(indexOf),
+      ]);
+      return [commit, { day: seen.day, identities, runs }];
+    }),
     recentCommits: [...context.recentCommits],
     mainAtCommit: [...context.mainAtCommit],
     credited: [...context.credited],
@@ -825,28 +962,41 @@ export function parseContext(value: unknown): FoldContext {
   const context = emptyContext();
   if (!isObjectOrArray(value)) return context;
   const stored = value as Partial<StoredFoldContext>;
-  const pairs = (raw: unknown): Array<[string, unknown]> =>
+  const pairs = (raw: unknown): Array<[string, unknown, ...unknown[]]> =>
     Array.isArray(raw)
-      ? raw.filter((entry): entry is [string, unknown] =>
+      ? raw.filter((entry): entry is [string, unknown, ...unknown[]] =>
         Array.isArray(entry) && typeof entry[0] === "string"
       )
       : [];
 
   for (const [commit, seen] of pairs(stored.outcomesAtCommit)) {
     if (!isObjectOrArray(seen)) continue;
-    const held = seen as { day?: unknown; identities?: unknown };
+    const held = seen as {
+      day?: unknown;
+      identities?: unknown;
+      runs?: unknown;
+    };
     if (!isDay(held.day)) continue;
-    const identities = new Map<string, Set<string>>();
-    for (const [key, raw] of pairs(held.identities)) {
+    const runs = Array.isArray(held.runs) ? held.runs.map(parseSeenRun) : [];
+    const identities = new Map<string, OutcomeRuns>();
+    for (const entry of pairs(held.identities)) {
+      const [key, raw] = entry;
       if (!Array.isArray(raw)) continue;
-      // An outcome this reader does not know would read as one more
-      // thing the identity did at that commit, and two of them is the
-      // test disagreeing with itself — which suppresses a new real test
-      // failure.
-      const outcomes = raw.filter((outcome): outcome is string =>
-        typeof outcome === "string" && OUTCOMES.has(outcome)
-      );
-      if (outcomes.length > 0) identities.set(key, new Set(outcomes));
+      const indices: unknown = entry[2];
+      const outcomes: OutcomeRuns = new Map();
+      raw.forEach((outcome: unknown, at: number) => {
+        // An outcome this reader does not know would read as one more
+        // thing the identity did at that commit, and two of them is the
+        // test disagreeing with itself — which suppresses a new real
+        // test failure.
+        if (typeof outcome !== "string" || !OUTCOMES.has(outcome)) return;
+        const index: unknown = Array.isArray(indices) ? indices[at] : -1;
+        outcomes.set(
+          outcome,
+          typeof index === "number" ? runs[index] : undefined,
+        );
+      });
+      if (outcomes.size > 0) identities.set(key, outcomes);
     }
     if (identities.size === 0) continue;
     context.outcomesAtCommit.set(commit, { day: held.day, identities });
@@ -1080,6 +1230,18 @@ export function foldObservations(
   // crowd.
   const crowds = context.crowds;
   const lastMainOf = new Map<string, MainOutcomes>();
+  // One run object for each job, rather than one for each observation the
+  // context remembers.
+  const runs = new Map<CiJob | NewRealTestFailurePlace, SeenRun>();
+  const sharedRun = (observation: Observation): SeenRun => {
+    const job = observation.ci ?? observation.place;
+    let run = runs.get(job);
+    if (run === undefined) {
+      run = runOfObservation(observation);
+      runs.set(job, run);
+    }
+    return run;
+  };
   const hasFailed = (key: string) => failures.has(key) || failedHere.has(key);
   const evidencing = counting();
   for (const observation of observations) {
@@ -1139,8 +1301,10 @@ export function foldObservations(
       }
     }
     if (!recent.includes(point) && !hasFailed(key)) continue;
-    const outcomes = seen.identities.get(key) ?? new Set<string>();
-    outcomes.add(observation.outcome);
+    const outcomes: OutcomeRuns = seen.identities.get(key) ?? new Map();
+    if (!outcomes.has(observation.outcome)) {
+      outcomes.set(observation.outcome, sharedRun(observation));
+    }
     seen.identities.set(key, outcomes);
   }
 
@@ -1244,7 +1408,14 @@ export function foldObservations(
     bump(state.failuresByDay, day);
 
     if (disagreed(key, observation)) {
-      bump(state.flakesByDay, day);
+      disagreedAt(
+        state,
+        day,
+        observation,
+        sharedRun(observation),
+        outcomesAtCommit.get(pointOf(observation))?.identities.get(key)
+          ?.get("pass"),
+      );
       continue;
     }
     if (environmental(key, day, observation.source)) continue;
@@ -1269,6 +1440,7 @@ export function foldObservations(
         commit: observation.commit,
         ...(observation.seed === undefined ? {} : { seed: observation.seed }),
         source: observation.source,
+        ...(observation.ci === undefined ? {} : { ci: observation.ci }),
         ...(inCrowd ? { crowded: true as const } : {}),
       });
       continue;
@@ -1536,6 +1708,12 @@ export function trimWindows(state: IdentityState, today: string): void {
   drop(state.failuresByDay, CHURN_WINDOW_DAYS);
   drop(state.flakesByDay, FLAKE_WINDOW_DAYS);
   drop(state.costByDay, COST_WINDOW_DAYS);
+  keepDisagreements(
+    state,
+    (state.disagreements ?? []).filter((held) =>
+      daysBetween(held.day, today) <= FLAKE_WINDOW_DAYS
+    ),
+  );
   // A failure on the default branch waits here for a later run to judge
   // it, and a test the branch does not go red for is one no run has to
   // arrive for. So this is aged like everything else, over the longest

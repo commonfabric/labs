@@ -111,7 +111,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       extra: history(),
       duration: 18 * DAY,
       aside: `<span class="running"><span class="rdot"></span>running</span>`,
-      hint: "flakes ↗",
+      hint: "flakes ↗ · as JSON at /test-selection/flaky.json",
       href: "/test-selection#flaky",
     },
   },

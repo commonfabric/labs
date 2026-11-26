@@ -417,6 +417,58 @@ describe("selection", () => {
       }
     });
 
+    it("carries the disagreements an entry names, and drops one that does not read", () => {
+      // Nothing selects by these, so a malformed one must not cost every
+      // lane the manifest it obeys.
+      const kept = {
+        day: "2026-08-19",
+        commit: "c2",
+        seed: 20260819,
+        failed: {
+          place: "pr" as const,
+          ci: { runId: "1001", runAttempt: 1, job: "Test (3/8)" },
+        },
+        passed: { place: "local" as const },
+      };
+      const manifest = sampleManifest();
+      Object.assign(manifest.entries[0]!, {
+        disagreements: [
+          kept,
+          { ...kept, day: "2026-02-31" },
+          { ...kept, commit: "" },
+          { ...kept, seed: 1.5 },
+          { ...kept, failed: { place: "pr", ci: { runId: "1" } } },
+          { ...kept, failed: { place: "pr", ci: "1001" } },
+          { ...kept, passed: { place: "ci" } },
+          {
+            ...kept,
+            passed: {
+              place: "local",
+              ci: { runId: "1", runAttempt: 1, job: "Test" },
+            },
+          },
+          {
+            ...kept,
+            failed: {
+              place: "pr",
+              ci: { runId: "1", runAttempt: 0, job: "Test" },
+            },
+          },
+          "not one",
+        ],
+      });
+      const parsed = parseManifest(JSON.stringify(manifest));
+      expect(parsed?.entries[0]?.disagreements).toEqual([kept]);
+    });
+
+    it("reads an entry whose disagreements all fail to read as holding none", () => {
+      const manifest = sampleManifest();
+      Object.assign(manifest.entries[0]!, { disagreements: ["not one"] });
+      const parsed = parseManifest(JSON.stringify(manifest));
+      expect(parsed?.entries.length).toBe(manifest.entries.length);
+      expect(parsed?.entries[0]?.disagreements).toBeUndefined();
+    });
+
     it("rejects a generation time that is not one", () => {
       // A reader measures a manifest's age from this, and a value that
       // does not parse compares false against every threshold, so a

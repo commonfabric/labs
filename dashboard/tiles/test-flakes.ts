@@ -7,7 +7,9 @@
  *
  * The line under the count says how much history the publisher measured over
  * and how long ago it measured. The chart shows the count in every available
- * manifest, with gaps for missing measurements. The tests are a page away.
+ * manifest, with gaps for missing measurements. The tests are a page away,
+ * and served as JSON, with the runs each disagreed across, at
+ * `/test-selection/flaky.json`.
  *
  * Following the dashboard's values (README.md): it reports on the system.
  * Neither the count nor the page behind it is aggregated per person, and
@@ -16,6 +18,10 @@
 
 import type { Manifest } from "@commonfabric/test-support/records";
 
+import {
+  FLAKY_TESTS_JSON_PATH,
+  flakyTestsResponse,
+} from "../flaky-tests-json.ts";
 import { compactSpan, groupDigits } from "../lib.ts";
 import {
   collectSelectionTile,
@@ -51,6 +57,11 @@ export function makeTestFlakes(
     label: "flaky tests",
     repo: REPO,
     intervalMs: MANIFEST_SHARE_MS,
+    routes: [{
+      path: FLAKY_TESTS_JSON_PATH,
+      handler: () =>
+        flakyTestsResponse(source.latest, options.now ?? Date.now),
+    }],
     collectActivity: publisherRunning,
     collect: (_ctx, publish) =>
       collectSelectionTile(
@@ -102,7 +113,7 @@ function flakesView(
     // measured over, and how long ago the publisher measured it.
     sub: `${days} days of runs · ${age} old`,
     href: `${TEST_SELECTION_PATH}#${FLAKY_SECTION_ID}`,
-    hint: "flakes ↗",
+    hint: `flakes ↗ · as JSON at ${FLAKY_TESTS_JSON_PATH}`,
   };
 }
 
