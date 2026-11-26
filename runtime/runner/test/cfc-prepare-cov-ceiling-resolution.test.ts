@@ -4,7 +4,10 @@ import { Identity } from "@commonfabric/identity";
 import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
-import { buildCfcPolicyArtifactManifest } from "../src/cfc/policy.ts";
+import {
+  buildCfcPolicyArtifactManifest,
+  cfcPolicyManifestDocId,
+} from "../src/cfc/policy.ts";
 import { isVerdictReason } from "../src/cfc/verdict-reason.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -186,6 +189,70 @@ describe("prepare", () => {
       expect(diagnostics).toEqual([
         `policy-evaluation(enforce): module policy missing-manifest digest ${artifact.policyDigest} at input requirement /out`,
       ]);
+    });
+  });
+
+  describe("a cold copy from the space that holds the manifest", () => {
+    // The gate resolves a read's module references where the read's label
+    // came from. The destination receives the manifest only from the commit
+    // the gate decides, so looking there alone would refuse every attempt.
+
+    it("passes the ceiling with the manifest only in the source space", async () => {
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+        cfcPolicyEvaluation: "enforce",
+      });
+      const destination = (await Identity.fromPassphrase(
+        "runner-cfc-prepare-cov-ceiling-resolution destination",
+      )).did();
+      const raw = storageManager.edit();
+      raw.write({
+        space,
+        id: cfcPolicyManifestDocId(artifact.policyDigest),
+        type: "application/json",
+        path: ["value"],
+      }, artifact as never);
+      expect((await raw.commit().settled).ok).toBeDefined();
+      const source = runtime.getCell(space, "cold-source");
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      seedStoredEnvelope(
+        seed,
+        { ...source.getAsNormalizedFullLink(), path: [] },
+        {
+          value: "secret",
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                label: {
+                  confidentiality: [POLICY],
+                  integrity: [{ type: "Evidence" }],
+                },
+                origin: "derived",
+                observes: "value",
+              }],
+            },
+          },
+        },
+      );
+      expect((await seed.commit().settled).error).toBeUndefined();
+
+      const tx = runtime.edit();
+      const value = source.withTx(tx).get();
+      runtime.getCell(destination, "cold-target", targetSchema([POLICY]), tx)
+        .set({ out: value } as never);
+      tx.prepareCfc();
+      const prepared = tx.getCfcState().prepare;
+      const reasons = prepared.status === "invalidated" ? prepared.reasons : [];
+      tx.abort();
+      expect(reasons.filter((reason) => reason.includes("maxConfidentiality")))
+        .toEqual([]);
     });
   });
 });

@@ -5518,13 +5518,14 @@ const deriveFlowJoinImpl = (
    * writer the evidence at the container does not speak for.
    *
    * The clauses come back as read where the policy-evaluation dial is not
-   * `enforce` and where no location carries evidence. A policy that cannot
-   * be resolved fires none of its rules, so the clause naming it stays as
-   * read on the derived value and the gate that later reads it decides on
-   * it again (§5.3.2: "leaves the original label unchanged").
+   * `enforce` and where no location carries evidence.
    *
-   * Where an evaluation runs out of fuel, each clause that location consumed
-   * comes back split into its alternatives, one clause each. Keeping the
+   * Where an evaluation runs out of fuel, or a module policy it names does
+   * not resolve, each clause that location consumed comes back split into
+   * its alternatives, one clause each. A module policy's value-intrinsic
+   * rules can fire only here, since the join drops the evidence they guard
+   * on, and a manifest consultation adds no precondition that would catch a
+   * replica that has not received it (§4.4.1). Keeping the
    * clauses as read is not the strict side there, since a `dropClause` rule
    * on a clause of several alternatives removes one, which tightens it, and
    * §5.3.2 makes exhaustion "a hard boundary failure (fail closed), not
@@ -5583,7 +5584,7 @@ const deriveFlowJoinImpl = (
           admitsRulesOfKind("value-intrinsic"),
           manifestFor,
         );
-        return outcome.exhausted
+        return outcome.exhausted || outcome.resolutionFailures.length > 0
           ? consumed.flatMap((clause) => clauseAlternatives(clause))
           : outcome.confidentiality;
       },
@@ -9218,7 +9219,11 @@ const verifyInputRequirements = (
           read.locations,
           [],
           mode === "enforce" ? "consuming" : "observing",
-          target.space,
+          // The space the label was read from holds its manifests (atomic
+          // persistence, spec §4.4.1). The target may receive its copy only
+          // from the commit this gate decides, so a lookup there alone
+          // would refuse a cold cross-space copy on every attempt.
+          read.space,
         );
         if (mode === "enforce") {
           // Exhaustion fails closed; otherwise subsumption-fit the REWRITTEN
@@ -9227,8 +9232,8 @@ const verifyInputRequirements = (
           // manifest that did not resolve fails the gate even where the
           // unrewritten label fits (spec §5.3.2): a rule may drop an
           // alternative, so the manifest's rules could have made the label
-          // stricter, and the consultation binds nothing at commit that
-          // would catch a replica that has not received it (§4.4.1).
+          // stricter, and the consultation adds no precondition that would
+          // catch a replica that has not received it (§4.4.1).
           const fits = outcome.exhausted === false &&
             outcome.resolutionFailures.length === 0 &&
             atomsOutsideCeiling(outcome.confidentiality, maxConfidentiality)
@@ -12472,8 +12477,8 @@ type ManifestLookup = (
 /**
  * A manifest lookup for one pass of exchange evaluations, which resolves each
  * module policy once per space rather than once per evaluation. A resolution
- * reads the manifest document, adds its reads to the journal and binds it into
- * the commit, so a pass that evaluates at every location of a long list
+ * reads the manifest document and adds its reads to the journal, so a pass
+ * that evaluates at every location of a long list
  * otherwise pays that per location. Absences are kept too. Sound only while the
  * pass installs no manifest: a pass that does must take a new lookup after it.
  * A lookup with no space named resolves over the spaces the journal has
@@ -12772,7 +12777,7 @@ const verifySinkRequestCeilings = (
         if (spaces.length === 0) return undefined;
         // Every consumed label origin must carry its own exact local copy.
         // A copy is bound by its digest, and a missing one fails the
-        // release below, so no origin is bound into the commit (§4.4.1).
+        // release below, so no origin takes a precondition (§4.4.1).
         for (const space of spaces) {
           if (tx.resolveCfcPolicyManifest(reference, space) === undefined) {
             return undefined;

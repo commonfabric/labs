@@ -29,6 +29,7 @@ import { writeChokepointMark } from "../src/storage/write-chokepoint.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
+import { isVerdictReason } from "../src/cfc/verdict-reason.ts";
 
 const signer = await Identity.fromPassphrase("cfc PolicyOf label test");
 const space = signer.did();
@@ -182,7 +183,7 @@ describe("PolicyOf label-time binding", () => {
     deletion.abort();
   });
 
-  // A consultation binds nothing at commit (spec §4.4.1): a present manifest
+  // A consultation adds no precondition (spec §4.4.1): a present manifest
   // is verified against its digest when read, and a missing one fails the
   // resolution closed. A change after prepare leaves the decision no less
   // safe, and a fresh consultation sees it.
@@ -893,6 +894,14 @@ describe("PolicyOf label-time binding", () => {
         },
       );
       tx.prepareCfc();
+      const prepared = tx.getCfcState().prepare;
+      const reasons = prepared.status === "invalidated" ? prepared.reasons : [];
+      const missing = reasons.filter((reason) =>
+        reason.includes("module policy did not resolve")
+      );
+      expect(missing).toHaveLength(1);
+      expect(isVerdictReason(missing[0]), "the manifest may yet arrive")
+        .toBe(false);
       const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
       expect(flushed).toBe(false);
@@ -902,9 +911,10 @@ describe("PolicyOf label-time binding", () => {
   });
 
   it("releases a prepared sink after a consumed manifest origin changes", async () => {
-    // A consultation binds nothing at commit (spec §4.4.1): the release was
-    // decided over manifests verified against their digests, so a later
-    // change in an origin does not reject it.
+    // A consultation adds no precondition (spec §4.4.1). This release writes
+    // nothing, and its ceiling admits both origins' clauses as read, so what
+    // it pins is that a change in an origin's manifest after prepare does not
+    // reject it at commit.
     runtime.registerCfcPolicyManifests(undefined, [artifact]);
     for (
       const [origin, id] of [
@@ -930,8 +940,6 @@ describe("PolicyOf label-time binding", () => {
       apiUrl: new URL(import.meta.url),
       storageManager,
       cfcPolicyEvaluation: "enforce",
-      // The ceiling admits both origins' clauses, so the release is decided
-      // by the manifests the decision consulted.
       cfcSinkMaxConfidentiality: {
         fetchJson: [
           originReference(space),
