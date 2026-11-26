@@ -301,6 +301,26 @@ describe("cf-custody-answer", () => {
     expect(state.watches[0].ended).toBe(true);
   });
 
+  it("says nothing of a watch that fails to start after the element is detached", async () => {
+    let fail: ((failed: Error) => void) | undefined;
+    const state = setup({
+      start: () =>
+        new Promise<void>((_, reject) => {
+          fail = reject;
+        }),
+    });
+    state.element.connected = true;
+    state.element.connectedCallback();
+    await settle();
+
+    state.element.connected = false;
+    state.element.disconnectedCallback();
+    fail!(new Error("worker connection lost"));
+    await settle();
+
+    expect(state.element.accessForTestingOnly.error).toBe("");
+  });
+
   it("says so when the watch cannot start", async () => {
     const state = setup({
       start: () => Promise.reject(new Error("worker connection lost")),
