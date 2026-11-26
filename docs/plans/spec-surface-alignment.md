@@ -332,11 +332,12 @@ several answers on 2026-11-26. Every answer is provisional: the plans build on i
 now, without waiting, and Berni confirms or corrects the whole package when he
 reviews it.
 
-The check found that the spec already decides these. All eight answers are
-readings of rules the spec already has, so the ask is only whether we read the
-spec correctly. Question 7 also names a gap: §18.2 says nothing about network
-traffic out of a sandbox. Question 4 makes one policy choice, the default for
-unreviewed outputs.
+The check found that the spec already decides these. All eight answers rest on
+rules the spec already has, so the main ask is whether we read the spec
+correctly. Two ask a little more. Question 4 makes one policy choice, the
+default for unreviewed outputs, for Berni to confirm. Question 7 names a gap:
+§18.2 says nothing about network traffic out of a sandbox, and the ask is
+whether a clause for it is wanted.
 
 1. **Authority across the reactive hop.** A click mints gesture evidence in a
    handler, but an effect issued by a reactive node commits in a later

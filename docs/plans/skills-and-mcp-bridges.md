@@ -110,8 +110,9 @@ and unrevoked. The default set comes pre-accepted. Adding another set is a
 potentially dangerous action, and the UI treats it as one; the delegation's
 scope bounds what the added organization can vouch for. A call is trusted when
 the person whose authority it runs under has accepted the set. An entry that
-loosens a confidentiality rule acts only on that person's own data, because
-only a rule's owner can release it (question 3).
+loosens a confidentiality rule acts only on that person's own data, or under
+an explicit multi-party policy, because only a rule's owner can release it
+(question 3).
 A person's own unreviewed draft stays in their own space, and it is never a set.
 
 ### Unreviewed tools are usable, under worst-case assumptions
@@ -245,7 +246,8 @@ Each step is the long-term mechanism in a smaller form.
    reviewed adapters into a snapshot that the fabric accepts. Reviewed reads
    become free for agents.
 4. **`cf import skill`** builds the same wrapper for a skill. Its scripts run in
-   the sandbox sealed, with every channel out of it switched off (question 7).
+   the sandbox sealed: every channel out of it is switched off, and only its
+   stdout and stderr return, still tainted (question 7).
    Skill scripts and stdio MCP servers then reach
    patterns.
 

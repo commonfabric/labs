@@ -209,8 +209,10 @@ both caveats for the reviewed bytes, each by a route this plan proposes.
    - `result`: `supported`.
 
    Minting at each decision also checks expiry and revocation against the trust
-   snapshot the decision is made under. §13.13.3's proposed rules are the
-   precedent for an assessment with no intent, trusted through §4.8.
+   snapshot the decision is made under. §13.13.3's proposed rules sketch an
+   assessment with no intent, trusted through §4.8, but being proposed they do
+   not establish that a review-minted assessment is admissible (Berni question
+   4).
 
    The clearing covers content fields only, never a public audience, and only
    source `s`. Keeping it off routing is a policy choice. A route copied
@@ -456,7 +458,9 @@ These are provisional until Berni reviews the package, like the bridge plan's.
    `CaveatScreened`, and its steering of content fields, by an assessment
    minted at each decision. It never clears routing, never for a public
    audience, and only for the skill's own source. One concept covers both.
-   Decided 2026-11-26.
+   Decided 2026-11-26. Both routes hold only once a rule admits them (Berni
+   questions 3 and 4); until then the interim rests on the trust statement
+   alone.
 4. **Sealed scripts.** Built as a separate track, after steps 1 to 3 or
    alongside them, for reviewed and unreviewed skills alike. The effect class is
    computed from the sandbox profile, never declared. Decided 2026-11-26.
