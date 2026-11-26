@@ -144,6 +144,25 @@ the server-execution serving loop, which is the `cf test` default.
    carrying it was refused as a foreign write until labs#10271 (top/3723); the
    run now finishes with every step passing either way.
 
+   A reader of the share space sees the window at their display, and the source
+   stays hidden from them
+   (`patterns/integration/share-space-reclassify-two-browsers.test.ts`). The
+   window's flow join reads the owner's fixes from the owner's space, so
+   label-metadata protection stores every subject on its label as a commitment
+   (spec §4.6.4.1), the policy's own included. The display used to list only a
+   plaintext module-policy subject for the membership point query the policy's
+   `HasRole(reader, THIS_POLICY.subject)` rule needs, so every reader but the
+   owner saw "Content hidden by policy". It now also lists a space the label was
+   read from when a committed subject is that space's digest
+   (`membershipSpacesInConfidentiality` in
+   `runtime/runner/src/cfc/render-ceiling.ts`). The commitment is never opened:
+   the candidate is digested and compared, the ACL point query still decides
+   membership, and the rule's match is the commitment-aware unification §4.3.6
+   prescribes. A principal who does not read the share space, or a label read
+   from another space, stays sealed
+   (`runtime/runner/test/cfc-reclassify.test.ts`, "releases a value placed
+   elsewhere to a reader of that space at their display").
+
 ## Runtime behavior found along the way
 
 - `Pattern.inSpace()` called in a pattern body places the piece in the body's

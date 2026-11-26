@@ -54,7 +54,6 @@ const transformValue = (
   value: CfcJsonValue,
   contextAtom: unknown,
   pathInAtom: readonly string[],
-  destination: string | undefined,
 ): CfcJsonValue => {
   if (isCfcFieldCommitment(value)) {
     return value;
@@ -62,12 +61,7 @@ const transformValue = (
   if (Array.isArray(value)) {
     let changed = false;
     const out = value.map((element) => {
-      const next = transformValue(
-        element,
-        contextAtom,
-        pathInAtom,
-        destination,
-      );
+      const next = transformValue(element, contextAtom, pathInAtom);
       if (next !== element) changed = true;
       return next;
     });
@@ -95,21 +89,16 @@ const transformValue = (
       ? undefined
       : classifyAtomField(atom, fieldPath);
     let next: CfcJsonValue;
-    if (
-      cls === "commitment" && !isCfcFieldCommitment(field) &&
-      (destination === undefined || field !== destination)
-    ) {
+    if (cls === "commitment" && !isCfcFieldCommitment(field)) {
       next = commitCfcFieldValue(field);
     } else if (cls === "commitment" || cls === "public") {
-      // Already committed, the destination's own identity (see
-      // `transformCfcLabelForCrossSpacePersist`), or public — verbatim.
-      // Public fields are scalar
+      // Already committed, or public — verbatim. Public fields are scalar
       // disclosure-intended values (DIDs, module identities); nothing nests
       // under them today, and classifying a field public means exactly
       // "persist as-is".
       next = field;
     } else {
-      next = transformValue(field, atom, fieldPath, destination);
+      next = transformValue(field, atom, fieldPath);
     }
     if (next !== field) changed = true;
     out[key] = next;
@@ -129,7 +118,7 @@ const transformValue = (
  * counts as ONE shared witness.
  */
 export const cfcCommitmentNormalForm = (atom: CfcAtom): CfcAtom =>
-  transformValue(atom, undefined, [], undefined);
+  transformValue(atom, undefined, []);
 
 /**
  * The Stage 1 persist transform: every commitment-classified source-bearing
@@ -140,43 +129,16 @@ export const cfcCommitmentNormalForm = (atom: CfcAtom): CfcAtom =>
  * copy-on-write: a label with nothing to commit comes back as the SAME
  * object, so callers detect divergence (the observe-mode rollout metric)
  * with a reference check.
- *
- * `destination`, when given, is the DID of the space the label is persisted
- * into, and a commitment-classified field whose value is exactly that DID
- * persists verbatim. A commitment hides an identity from the destination's
- * observers (spec §4.6.4.1), and the destination's own DID is not hidden from
- * them: it addresses every document of every replica they hold, and any of
- * them can digest it to test a commitment. Committing it therefore protects
- * nothing, and it breaks the one consumer that must dereference the field:
- * a module policy whose subject is the space it was written to
- * (`PolicyOf<Rules>` reclassified for that space), whose
- * `HasRole(reader, THIS_POLICY.subject)` guard is a membership point query
- * the display can make only on a plaintext subject
- * (`membershipSpacesInConfidentiality` in `render-ceiling.ts`). Only that
- * exact value is kept: a field naming any other space, or a principal, is
- * committed as before, so a later hop into a third space commits this one
- * too. Callers pass it only behind the `patternReclassification` dial, until
- * the ruling the experiment's PROPOSAL.md names decides it.
  */
-// SPEC-PENDING specs PR not yet filed; see patterns/dev/test/share-space-declassify/PROPOSAL.md
 export const transformCfcLabelForCrossSpacePersist = (
   label: IFCLabel,
-  destination?: string,
 ): IFCLabel => {
   const confidentiality = label.confidentiality === undefined
     ? undefined
-    : (transformValue(
-      label.confidentiality,
-      undefined,
-      [],
-      destination,
-    ) as CfcConfClause[]);
-  const integrity = label.integrity === undefined ? undefined : (transformValue(
-    label.integrity,
-    undefined,
-    [],
-    destination,
-  ) as CfcAtom[]);
+    : (transformValue(label.confidentiality, undefined, []) as CfcConfClause[]);
+  const integrity = label.integrity === undefined
+    ? undefined
+    : (transformValue(label.integrity, undefined, []) as CfcAtom[]);
   if (
     confidentiality === label.confidentiality && integrity === label.integrity
   ) {

@@ -8,7 +8,10 @@ import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   type CfcConfClause,
+  type CfcFieldCommitment,
   clauseAlternatives,
+  commitmentAwareEquals,
+  isCfcFieldCommitment,
 } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import {
@@ -168,6 +171,15 @@ export type RenderConfidentialityResolverConfig = {
    * `cfcPolicyEvaluation` dial says, as the standard render rule does.
    */
   readonly modulePolicyResolver?: RenderModulePolicyResolver;
+
+  /**
+   * Whether a committed module-policy subject nominates the space the label
+   * was read from whose digest it is as a membership candidate
+   * (`membershipSpacesInConfidentiality`). Off, such a subject nominates
+   * nothing and its guard stays sealed. The runtime turns it on with the
+   * `cfcPatternReclassification` dial, whose ruling decides it.
+   */
+  readonly committedSubjectCandidates?: boolean;
 };
 
 /**
@@ -176,23 +188,37 @@ export type RenderConfidentialityResolverConfig = {
  * subject space of each module policy the label selects, which
  * `docs/specs/cfc-spec-changes.md` SC-44 adds. A module rule's
  * `HasRole(reader, THIS_POLICY.subject)` guard is a membership point query on
- * that space and can fire for no other reader without one. A subject held in
- * commitment form names no space and is not listed: the runtime never opens a
- * commitment (§4.3.6), so such a guard can match only a fact the resolver
- * mints anyway. A space a module rule adds from any other binding is not
- * listed, and its `Space` alternative stays sealed. The render resolver
- * consults exactly these, and the reconciler watches exactly these ACLs.
- * Order-preserving and deduped.
+ * that space and can fire for no other reader without one.
+ *
+ * A subject held in commitment form (label-metadata protection, §4.6.4.1)
+ * names no space, and the runtime never opens one (§4.3.6). Where the label
+ * was read from a space whose digest that commitment is, `readFrom`'s
+ * space is listed too: the candidate is digested and compared, which is the
+ * equality-shaped consumption §4.6.4.1 keeps, and the guard's later match
+ * against the minted fact is the commitment-aware unification §4.3.6
+ * prescribes. Testing a space the label was read from tells the display
+ * nothing it could not compute itself, and the point query still decides
+ * membership: residency only nominates the candidate. A committed subject
+ * naming any other space is not listed, and its guard stays sealed. A space a
+ * module rule adds from any other binding is not listed either, and its
+ * `Space` alternative stays sealed. The render resolver consults exactly
+ * these, and the reconciler watches these ACLs (a committed subject's
+ * candidate whether or not the resolver was told to consult it, which costs a
+ * subscription and decides nothing). Order-preserving and deduped.
  */
+// SPEC-PENDING specs PR not yet filed; see patterns/dev/test/share-space-declassify/PROPOSAL.md
 export const membershipSpacesInConfidentiality = (
   confidentiality: readonly CfcConfClause[],
+  readFrom?: () => readonly string[],
 ): readonly string[] => {
   const spaces: string[] = [];
+  const committed: CfcFieldCommitment[] = [];
   for (const clause of confidentiality) {
     for (const alternative of clauseAlternatives(clause as CfcConfClause)) {
       let space: unknown;
       if (isExactModulePolicyRef(alternative)) {
         space = alternative.subject;
+        if (isCfcFieldCommitment(space)) committed.push(space);
       } else if (
         isObjectOrArray(alternative) &&
         (alternative as { type?: unknown }).type === CFC_ATOM_TYPE.Space
@@ -200,6 +226,16 @@ export const membershipSpacesInConfidentiality = (
         space = (alternative as { id?: unknown }).id;
       }
       if (typeof space === "string" && !spaces.includes(space)) {
+        spaces.push(space);
+      }
+    }
+  }
+  if (committed.length > 0 && readFrom !== undefined) {
+    for (const space of readFrom()) {
+      if (
+        !spaces.includes(space) &&
+        committed.some((subject) => commitmentAwareEquals(space, subject))
+      ) {
         spaces.push(space);
       }
     }
@@ -295,15 +331,19 @@ export const createRenderConfidentialityResolver = (
     // A space the user cannot prove reader access to mints nothing and fails
     // closed.
     const memberSpaces = new Set(staticMemberSpaces);
+    let spaces: readonly string[] | undefined;
+    const readFrom = () => spaces ??= label.spaces?.() ?? [];
     if (provider !== undefined && actingPrincipal !== undefined) {
       for (
-        const id of membershipSpacesInConfidentiality(label.confidentiality)
+        const id of membershipSpacesInConfidentiality(
+          label.confidentiality,
+          config.committedSubjectCandidates === true ? readFrom : undefined,
+        )
       ) {
         if (memberSpaces.has(id)) continue; // already a caller-verified member
         if (provider.readerRole(id) !== null) memberSpaces.add(id);
       }
     }
-    let spaces: readonly string[] | undefined;
     const result = evaluateExchangeRules(
       {
         confidentiality: [...label.confidentiality],
@@ -321,8 +361,7 @@ export const createRenderConfidentialityResolver = (
         // Consulted only for a label that selects a module policy.
         modulePolicyResolver: modulePolicyResolver === undefined
           ? undefined
-          : (reference) =>
-            modulePolicyResolver(reference, spaces ??= label.spaces?.() ?? []),
+          : (reference) => modulePolicyResolver(reference, readFrom()),
         ...(label.rules === undefined
           ? {}
           : { admitsRule: admitsRulesOfKind(label.rules) }),

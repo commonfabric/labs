@@ -686,6 +686,11 @@ export function renderConfidentialityResolverFor(
     // the reconciler's, so the manifests it watches and the ones this
     // resolves are one cache.
     modulePolicyResolver: modulePolicySource?.resolve,
+    // The candidate a committed policy subject nominates is the
+    // reclassification experiment's, pending the same ruling.
+    committedSubjectCandidates:
+      runtime.experimental.cfcPatternReclassification === true &&
+      runtime.experimental.pieceCreatorRecord === true,
   });
 }
 

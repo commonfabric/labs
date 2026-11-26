@@ -1129,24 +1129,31 @@ holds the measurements and the conditions for revisiting.
   writer adds to a stored envelope that had none at its path, refuses the
   write. Also whatever the flag, a lift whose result schema declares a
   reclassification stores its result as a copy rather than as references into
-  its inputs, whose labels a reference keeps.
+  its inputs, whose labels a reference keeps. With the flag and
+  `pieceCreatorRecord` on, a worker's display also nominates, as a membership
+  candidate, a space the label was read from whose digest a committed
+  module-policy subject is (`committedSubjectCandidates` in
+  `runtime/runner/src/cfc/render-ceiling.ts`), so a reader of the share space
+  sees a reclassified value whose flow join was cross-space.
 - **Current default and planned end state.** Off by default. The rule is a
   semantic gap under the CFC correspondence procedure, and its deciding site
-  in `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker whose
-  specs pull request is not yet filed. The flag must stay off in every
+  in `runtime/runner/src/cfc/prepare.ts`, and the display's candidate in
+  `runtime/runner/src/cfc/render-ceiling.ts`, carry `SPEC-PENDING` markers
+  whose specs pull request is not yet filed. The flag must stay off in every
   deployment until the store itself admits a `creator` record only when it
   names the commit's authenticated actor: commit preparation alone checks the
   record today, so a modified client could write a piece naming another
   principal as its creator and release that principal's data.
-- **Status on 2026-11-25.** Implemented and off. The substitution is covered
+- **Status on 2026-11-26.** Implemented and off. The substitution is covered
   by `runtime/runner/test/cfc-reclassify.test.ts`, the plumbing by
   `runtime/runner/test/experimental-options.test.ts`. The end-to-end share in
-  `patterns/dev/test/share-space-declassify/` does not land yet: its README,
-  finding 7, names the two gaps.
+  `patterns/dev/test/share-space-declassify/` lands, and a reader of the share
+  space sees it: its README, finding 7, says how.
 - **Path to removal.** Once the ruling merges and the store admits the
   record, remove the env mapping, the runtime option and its authority and
-  shell-source entries, the default, and the transaction dial; the
-  substitution in `prepare.ts` stays.
+  shell-source entries, the default, the transaction dial, and the
+  resolver's `committedSubjectCandidates` switch; the substitution in
+  `prepare.ts` and the candidate in `render-ceiling.ts` stay.
 
 ### `instanceNames`
 

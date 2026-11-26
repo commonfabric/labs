@@ -29,6 +29,7 @@ import type { ImplementationIdentity } from "../src/cfc/types.ts";
 import {
   atomsOutsideCeiling,
   createRenderConfidentialityResolver,
+  membershipSpacesInConfidentiality,
 } from "../src/cfc/mod.ts";
 import { createRuntimeCfcModulePolicySource } from "../src/cfc/policy-resolver.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
@@ -450,10 +451,8 @@ describe("cfc-reclassify", () => {
       const { shared } = await sharePiece(client, source, elsewhere);
 
       expect(shared.getAsNormalizedFullLink().space).toBe(elsewhere);
-      // Stored outside the owner's space, the owner's subject is a commitment
-      // (label-metadata protection), which the release keeps as it is. The
-      // policy's subject is the space it is stored in, which that protection
-      // keeps in plaintext.
+      // Stored outside the owner's space, both subjects are commitments
+      // (label-metadata protection), which the release keeps as they are.
       const stored = storedConfidentiality(client, shared) as {
         anyOf?: { type: string; subject: unknown; policyDigest?: string }[];
       }[];
@@ -471,7 +470,7 @@ describe("cfc-reclassify", () => {
       const policy = clause!.anyOf!.find((alternative) =>
         alternative.type === CFC_ATOM_TYPE.Policy
       ) as { policyDigest: string; subject: unknown };
-      expect(policy.subject).toBe(elsewhere);
+      expect(policy.subject).toEqual({ digestOf: expect.any(String) });
       const installed = client.getCellFromEntityId(
         elsewhere,
         cfcPolicyManifestDocId(policy.policyDigest),
@@ -485,12 +484,13 @@ describe("cfc-reclassify", () => {
     // Reduced from the two-browser share test
     // (patterns/integration/share-space-reclassify-two-browsers.test.ts).
     // The owner's secret is in the owner's space and the share elsewhere, so
-    // the flow join is cross-space, and label-metadata protection commits the
-    // subjects on the stamped label. It keeps the policy's subject in
-    // plaintext, since that subject is the space being written, and the
-    // display resolver lists only a plaintext subject for its membership point
-    // query (`membershipSpacesInConfidentiality` in `render-ceiling.ts`).
-    // A reader of that space sees the value; anyone else does not.
+    // the flow join is cross-space, and label-metadata protection commits
+    // every subject on the stamped label, the policy's own included. The
+    // display resolver lists the space the label was read from as a
+    // membership candidate because the committed subject is its digest
+    // (`membershipSpacesInConfidentiality` in `render-ceiling.ts`), and the
+    // point query decides: a reader of that space sees the value, anyone else
+    // does not, and nor does a reader when the label was read from elsewhere.
     it("releases a value placed elsewhere to a reader of that space at their display", async () => {
       const client = connect(alice);
       const elsewhere = bob.did();
@@ -511,7 +511,10 @@ describe("cfc-reclassify", () => {
       );
       await installed.sync();
       const reader = service.did();
-      const resolverFor = (readerRole: (id: string) => "reader" | null) =>
+      const resolverFor = (
+        readerRole: (id: string) => "reader" | null,
+        committedSubjectCandidates = true,
+      ) =>
         createRenderConfidentialityResolver({
           actingPrincipal: reader,
           membershipProvider: {
@@ -521,6 +524,7 @@ describe("cfc-reclassify", () => {
           },
           modulePolicyResolver: createRuntimeCfcModulePolicySource(client)
             .resolve,
+          committedSubjectCandidates,
         });
 
       expect(atomsOutsideCeiling(
@@ -530,7 +534,7 @@ describe("cfc-reclassify", () => {
         }),
         [cfcAtom.user(reader)],
       )).toEqual([]);
-      // A principal who reads no space the label names stays sealed out.
+      // A principal who does not read that space stays sealed out.
       expect(atomsOutsideCeiling(
         resolverFor(() => null)({
           confidentiality: stored,
@@ -538,6 +542,22 @@ describe("cfc-reclassify", () => {
         }),
         [cfcAtom.user(reader)],
       )).not.toEqual([]);
+      // Without the dial the committed subject nominates nothing.
+      expect(atomsOutsideCeiling(
+        resolverFor((id) => id === elsewhere ? "reader" : null, false)({
+          confidentiality: stored,
+          spaces: () => [elsewhere],
+        }),
+        [cfcAtom.user(reader)],
+      )).not.toEqual([]);
+      // The committed subject nominates only a space the label was read from
+      // whose digest it is; it is never opened.
+      expect(membershipSpacesInConfidentiality(stored)).toEqual([]);
+      expect(membershipSpacesInConfidentiality(stored, () => [space]))
+        .toEqual([]);
+      expect(
+        membershipSpacesInConfidentiality(stored, () => [space, elsewhere]),
+      ).toEqual([elsewhere]);
     });
   });
 

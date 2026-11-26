@@ -224,7 +224,18 @@ leave room:
   in the installed pattern.
 - **Unsharing does not reach values already derived** from the window. Access to
   B does.
-- **The reader's display is unverified** until the browser test exists.
+- **The reader's display tests a committed policy subject against the spaces the
+  label was read from.** The window's flow join is cross-space, so
+  label-metadata protection commits the policy's subject (spec §4.6.4.1). Spec
+  §4.9.3 nominates membership candidates only from a label's `Space(...)` atoms,
+  and SC-44 adds a plaintext module-policy subject. The display now also
+  nominates a space the label was read from whose digest a committed subject is,
+  and point-queries its ACL. That is a case the spec lacks, so it needs a ruling
+  and carries a `SPEC-PENDING` marker. It admits more than the current text, so
+  the display does it only with the dial on. It opens no commitment and tells
+  the display nothing it could not compute. A value stored in one space whose
+  committed subject names another stays sealed: no candidate exists without a
+  reverse index, and releasing it needs the `reference` representation class.
 - **Whether `RequiresIntegrity` on a lift's input stops the run** is not yet
   shown in a test.
 - **Anyone with WRITE on the piece's space can change who releases.** The
