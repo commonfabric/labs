@@ -745,6 +745,120 @@ partly a second mechanism: the handler that files a topic reads the
 creator's labeled profile and writes shared documents under that label,
 which is the class Z100 is about.
 
+## Rounds thirty-three to thirty-eight, the fixes on `main`, and the derivation design
+
+State on 2026-11-26. Rounds now run on Fable agents; each is reviewed by an
+agent that did not write it, and the coordinator reruns the gates. Every
+review so far found defects the round's own tests did not, so a round's
+report is not evidence until its review is in. Briefs, logs and the
+reviewers' probes are under the session's `work/` directory
+(`r33-fixes`, `r34-derivation-measure`, `r35-setup`, `r36-body-reads`,
+`r38-argument-read`, `review-r35`, `main-fanout-fix`). Provisional decisions
+in use: P535 to P539 (P535 and P536 withdrawn), P550 to P557, P560, P561,
+P580 to P583, P620 to P622; later rounds were given notes from 1240, 1280,
+1300 and decisions from P600, P640, P660.
+
+### Branches added
+
+| Branch | Worktree | State |
+| --- | --- | --- |
+| `claude/compiled-pattern-scoped-rows` (build) | `compiled-pattern-scoped-rows` | `7eb87d6743` pushed (round 33); round 35 at `ac296044df` and its continuation local |
+| `claude/compiled-pattern-derivation-split` | `compiled-pattern-derivation-split` | off `a04632cb2c`; round 34's instruments at `6743be8f25`, then the design's round 2; local |
+| `claude/compiled-pattern-body-reads` | `compiled-pattern-body-reads` | off `7eb87d6743`; round 36 at `0ba7879878`, round 38 on top; local |
+| `claude/served-two-principal-clause-crossing` | same name | pull request #10262 against `main`, head `e3f8b4c1b9` |
+| `claude/own-write-link-stale` | `own-write-link-stale` | off `main`; local until reviewed |
+
+The three compiled branches have to be merged into the build branch; they
+touch `transactions.ts`, `executor.ts` and `both-paths-serving.ts` in
+different regions. One more local branch off `main` holds work the owner
+decides how to publish; the coordinator's session notes name it.
+
+### Defects of `main` found by this work
+
+- **A space-scoped cause reached every per-user instance** and joined one
+  principal's `User` clause into another's. Fixed in #10262 after three
+  review passes; the reviewer's verdict is ready to merge. Open by decision:
+  a debounce timing residual (the question for the specification is written
+  in `work/main-fanout-fix/specs-question-debounce.md`, not filed), matching
+  by document and not by path, and a viewer's arrival restarting every
+  given-up instance.
+- A cause arriving mid-pass was never carried as a trigger read; fixed in
+  #10262.
+- **A client that stored a document by a raw transaction write and reads it
+  through a link from a schemaless cell stays stale.** Fix in progress.
+- The review of round 35 produced further findings about `main` that are
+  held with the owner and not recorded here.
+
+### The compiled path
+
+- **Setup (rounds 33, 35).** A client no longer writes the argument; it
+  writes a request and the server creates the argument with value, schema,
+  seeds and attempted-write marks in one transaction (P560). The review
+  found defects in it (the first-start decision, the resume check after a
+  source change, the request's values stored under no label, a corrected
+  request never started, a wait on every sync of the runtime, two
+  implementations of making the argument, and the serving identity stored
+  as the acting user where §8.15.4 names the authenticated acting
+  principal). The continuation is repairing these.
+- **What a body reads (rounds 33, 36, 38).** Three passes fixed forms and
+  left adjacent ones wrong. At `0ba7879878` a checked-in matrix
+  (`compare/test/body-reads-matrix.test.ts`, 95 fixtures against today's
+  path) lists 22 differing; the absent-input guard differs from today's rule
+  in 13 of 28 arguments; over plain values held in place any write in a row
+  re-runs every body over the array (38.8 ms at 8,000 rows). Round 38 builds
+  one read of a body's argument under the declared type in place of the
+  per-form rules.
+- **"Invalid cell link" on the Topics board** was the comparison's own
+  reader on a cyclic value, not a stored link.
+- **Error states.** Two corpus modules throw on both paths; today's path
+  stores nothing and the compiled path stores `{ $error }` by design. For
+  the owner.
+
+### The derivation design and its measurement
+
+`docs/plans/compiled-pattern-derivation-by-demand.md` is the design, revised
+after round 34 measured it; nothing in it is a ruling, and its recommended
+answers are the working assumption. Round 34's numbers, on the corpus and
+the real Topics board with two principals:
+
+- A create evaluates the shared part once (31 evaluations) and writes 72 to
+  88 shared documents at every session count and from 0 to 40 topics.
+  Transactions per create are 4, 18, 31, 114 at 1, 3, 5, 9 sessions held,
+  with 0, 4, 10, 35 failed commits.
+- 182 of 187 `foreign-clause` findings sit where a keyed derivation wrote
+  into a document of the space; 544 of the 604 uncovered keyed writes are
+  bookkeeping. The other five are a handler writing event input into a
+  per-user cell (Z100's case).
+- 156 of 228 `crossed-clause` findings are in documents no compiled
+  transaction wrote; the traced ones are the `wish` action
+  (`compiled/wish.ts`), a fanned-out action of today's path, so they wait on
+  #10262 reaching the build branch.
+- The plan gives no scope to 106 of 257 cone instances found scoped; two
+  static rules would cover 100.
+- A renderer-like session watches 6 scope instances at every size; a
+  watcher of the board's result 6 plus 22 per topic.
+- Not explained: with one session a create takes 4.3 s at 10 topics and 29 s
+  at 40 and writes 130 kB at 0 topics against 871 kB at 40, with the
+  document count flat. Times include the harness's clients.
+- With one session held, the third headless `addTopic` and every later one
+  is refused (writer-fit misfit on the receipt under the actor's `User`
+  clause); being diagnosed on the derivation branch.
+
+The design's next round (its round 2) is the refusal of scoped reads under
+the load alone; it must take 199 writes of the serving runtime's own scope
+instances to 0 with no value the comparison reads changed.
+
+### Waiting on the owner
+
+- Merge of #10262, and filing the debounce question with the specification.
+- How the held findings about `main` are published.
+- The design's nine questions (its section 5), first the reach of Z100 for a
+  handler and whether an instance whose existence depends on a scoped value
+  is refused.
+- Whether an error state is stored where today's path stores nothing.
+- Today's path's own inconsistency between a spread and `JSON.stringify` of
+  the same record (the compiled path implements the declared type).
+
 ## Open lines of work
 
 Each line names the notes that hold its plan. The notes are in
