@@ -28,7 +28,10 @@ import {
   pruneFanOutInstances,
   ratchetDepthFor,
   ratchetDiscovered,
+  restoreFanOutTriggers,
+  takeFanOutTriggers,
 } from "../src/scheduler/fan-out.ts";
+import { invalidCauseKey } from "../src/scheduler/keys.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 
 const space = "did:key:fanout-unit" as MemorySpace;
@@ -171,7 +174,7 @@ describe("fan-out stage B: run outcomes and B7 precise dirtiness", () => {
     expect(state.clean.has(userKey(aliceS1))).toBe(true);
   });
 
-  it("B7: a keyed cause dirties exactly the instances whose identity covers it — Bob's user doc dirties Bob's user AND session instances, never Alice's; an unkeyed (space) cause dirties everyone", () => {
+  it("B7: a keyed cause dirties exactly the instances whose identity covers it — Bob's user doc dirties Bob's user AND session instances, never Alice's; an unkeyed (space) cause dirties the instances that read its document", () => {
     const state = newFanOutNodeState();
     state.narrowed = true;
     state.sessionPrincipals.add(bobS1.principal);
@@ -183,7 +186,7 @@ describe("fan-out stage B: run outcomes and B7 precise dirtiness", () => {
       fanOutRunFinished(state, instance, {
         discovered: instance === alice ? "user" : "session",
         startGen: gen,
-        log: emptyLog(),
+        log: { ...emptyLog(), reads: [readOf("of:y")] },
       });
     }
     expect(state.clean.size).toBe(3);
@@ -206,7 +209,7 @@ describe("fan-out stage B: run outcomes and B7 precise dirtiness", () => {
     // Alice's user doc: Alice only.
     dirtyFanOutForCause(state, readOf("of:x", "user", userKey(aliceS1)));
     expect([...state.clean]).toEqual([sessionKey(bobS2)]);
-    // A space doc (no key): everyone.
+    // A space doc (no key) that every instance read: everyone.
     dirtyFanOutForCause(state, readOf("of:y"));
     expect(state.clean.size).toBe(0);
     // dirtyFanOutAll likewise.
@@ -219,6 +222,219 @@ describe("fan-out stage B: run outcomes and B7 precise dirtiness", () => {
     expect(state.clean.size).toBe(1);
     dirtyFanOutAll(state);
     expect(state.clean.size).toBe(0);
+  });
+
+  describe("a cause that names no instance", () => {
+    const alice = { identity: aliceS1, key: userKey(aliceS1) };
+    const bob = { identity: bobS1, key: userKey(bobS1) };
+
+    /** Runs `instance` to a finished run that read the documents `ids`. */
+    const finish = (
+      state: ReturnType<typeof newFanOutNodeState>,
+      instance: typeof alice,
+      ids: readonly string[],
+    ) => {
+      const startGen = fanOutRunStarted(state, instance);
+      fanOutRunFinished(state, instance, {
+        discovered: "user",
+        startGen,
+        log: { ...emptyLog(), reads: ids.map((id) => readOf(id)) },
+      });
+    };
+    const narrowed = () => {
+      const state = newFanOutNodeState();
+      state.narrowed = true;
+      return state;
+    };
+
+    it("leaves current an instance whose latest run did not read the cause's document", () => {
+      const state = narrowed();
+      finish(state, alice, ["of:alice-only", "of:shared"]);
+      finish(state, bob, ["of:bob-only", "of:shared"]);
+
+      dirtyFanOutForCause(state, readOf("of:alice-only"));
+
+      expect([...state.clean]).toEqual([bob.key]);
+    });
+
+    it("leaves current an instance that read the document of the same id in another space or at another scope", () => {
+      const state = narrowed();
+      finish(state, alice, ["of:doc"]);
+      const startGen = fanOutRunStarted(state, bob);
+      fanOutRunFinished(state, bob, {
+        discovered: "user",
+        startGen,
+        log: {
+          ...emptyLog(),
+          reads: [
+            { ...readOf("of:doc"), space: "did:key:elsewhere" as MemorySpace },
+            readOf("of:doc", "user", bob.key),
+          ],
+        },
+      });
+
+      dirtyFanOutForCause(state, readOf("of:doc"));
+
+      expect([...state.clean]).toEqual([bob.key]);
+    });
+
+    it("dirties an instance that read the cause's document only shallowly", () => {
+      const state = narrowed();
+      const startGen = fanOutRunStarted(state, alice);
+      fanOutRunFinished(state, alice, {
+        discovered: "user",
+        startGen,
+        log: { ...emptyLog(), shallowReads: [readOf("of:listed")] },
+      });
+
+      dirtyFanOutForCause(state, readOf("of:listed"));
+
+      expect(state.clean.size).toBe(0);
+    });
+
+    it("dirties an instance that read the cause's document at another path", () => {
+      const state = narrowed();
+      const startGen = fanOutRunStarted(state, alice);
+      fanOutRunFinished(state, alice, {
+        discovered: "user",
+        startGen,
+        log: {
+          ...emptyLog(),
+          reads: [{ ...readOf("of:doc"), path: ["value", "a"] }],
+        },
+      });
+
+      dirtyFanOutForCause(state, {
+        ...readOf("of:doc"),
+        path: ["value", "b"],
+      });
+
+      expect(state.clean.size).toBe(0);
+    });
+
+    it("keeps an instance that is running not current, whatever its earlier run read", () => {
+      // The running run's reads are not recorded until it finishes, so a
+      // cause that arrives meanwhile cannot be told to miss it.
+
+      const state = narrowed();
+      finish(state, alice, ["of:alice-only"]);
+      finish(state, bob, ["of:bob-only"]);
+      dirtyFanOutForCause(state, readOf("of:bob-only"));
+      const startGen = fanOutRunStarted(state, bob);
+      dirtyFanOutForCause(state, readOf("of:alice-only"));
+      fanOutRunFinished(state, bob, {
+        discovered: "user",
+        startGen,
+        log: { ...emptyLog(), reads: [readOf("of:bob-only")] },
+      });
+
+      expect(state.clean.has(bob.key)).toBe(false);
+    });
+
+    it("leaves an instance that never ran to run, and records no cause for it", () => {
+      const state = narrowed();
+      finish(state, alice, ["of:alice-only"]);
+
+      dirtyFanOutForCause(state, readOf("of:alice-only"));
+
+      const toRun = fanOutInstancesToRun(
+        state,
+        fanOutInstances(state, [aliceS1, bobS1]),
+      );
+      expect(toRun.map((instance) => instance.key)).toEqual([
+        alice.key,
+        bob.key,
+      ]);
+      fanOutRunStarted(state, bob);
+      expect(takeFanOutTriggers(state, bob.key)).toBeUndefined();
+    });
+
+    it("dirties no instance once the only one that read the document has left", () => {
+      const state = narrowed();
+      finish(state, alice, ["of:alice-only"]);
+      finish(state, bob, ["of:bob-only"]);
+      pruneFanOutInstances(state, fanOutInstances(state, [bobS1]));
+
+      dirtyFanOutForCause(state, readOf("of:alice-only"));
+
+      expect([...state.clean]).toEqual([bob.key]);
+    });
+
+    it("goes by the reads of an instance's latest run, not of the one before", () => {
+      const state = narrowed();
+      finish(state, alice, ["of:alice-only"]);
+      finish(state, bob, ["of:alice-only"]);
+      finish(state, bob, ["of:bob-only"]);
+
+      dirtyFanOutForCause(state, readOf("of:alice-only"));
+
+      expect([...state.clean]).toEqual([bob.key]);
+    });
+
+    it("goes by the reads a run recorded under the key the ratchet moved its instance to", () => {
+      const state = narrowed();
+      const startGen = fanOutRunStarted(state, bob);
+      fanOutRunFinished(state, bob, {
+        discovered: "session",
+        startGen,
+        log: { ...emptyLog(), reads: [readOf("of:bob-only")] },
+      });
+      finish(state, alice, ["of:alice-only"]);
+
+      dirtyFanOutForCause(state, readOf("of:bob-only"));
+
+      expect([...state.clean]).toEqual([alice.key]);
+    });
+
+    it("hands the cause to the next run of each instance that read its document, once", () => {
+      const state = narrowed();
+      finish(state, alice, ["of:alice-only", "of:shared"]);
+      finish(state, bob, ["of:shared"]);
+      const aliceOnly = readOf("of:alice-only");
+      const shared = readOf("of:shared");
+
+      dirtyFanOutForCause(state, aliceOnly);
+      dirtyFanOutForCause(state, shared);
+
+      expect(takeFanOutTriggers(state, alice.key)).toEqual(
+        new Set([invalidCauseKey(aliceOnly), invalidCauseKey(shared)]),
+      );
+      expect(takeFanOutTriggers(state, bob.key)).toEqual(
+        new Set([invalidCauseKey(shared)]),
+      );
+      expect(takeFanOutTriggers(state, alice.key)).toBeUndefined();
+    });
+
+    it("hands a running instance the cause only where its earlier run read the document", () => {
+      const state = narrowed();
+      finish(state, alice, ["of:alice-only"]);
+      finish(state, bob, ["of:bob-only"]);
+      fanOutRunStarted(state, bob);
+
+      dirtyFanOutForCause(state, readOf("of:alice-only"));
+      dirtyFanOutForCause(state, readOf("of:bob-only"));
+
+      expect(takeFanOutTriggers(state, bob.key)).toEqual(
+        new Set([invalidCauseKey(readOf("of:bob-only"))]),
+      );
+    });
+
+    it("gives a retried run back the causes its failed attempt took, and its siblings none of them", () => {
+      const state = narrowed();
+      finish(state, alice, ["of:alice-only"]);
+      finish(state, bob, ["of:bob-only"]);
+      const aliceOnly = readOf("of:alice-only");
+      const keyed = readOf("of:x", "user", alice.key);
+      dirtyFanOutForCause(state, aliceOnly);
+      takeFanOutTriggers(state, alice.key);
+
+      restoreFanOutTriggers(state, alice.key, [aliceOnly, keyed]);
+
+      expect(takeFanOutTriggers(state, alice.key)).toEqual(
+        new Set([invalidCauseKey(aliceOnly)]),
+      );
+      expect(takeFanOutTriggers(state, bob.key)).toBeUndefined();
+    });
   });
 
   it("the union subscription keeps a SKIPPED instance's last log and drops a DEPARTED one's (prune)", () => {
