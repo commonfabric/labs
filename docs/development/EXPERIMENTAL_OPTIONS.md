@@ -1127,7 +1127,9 @@ holds the measurements and the conditions for revisiting.
   creator, or with no such clause, the join is stored as derived, and a
   diagnostic says why. Whatever the flag, a malformed declaration, or one a
   writer adds to a stored envelope that had none at its path, refuses the
-  write.
+  write. Also whatever the flag, a lift whose result schema declares a
+  reclassification stores its result as a copy rather than as references into
+  its inputs, whose labels a reference keeps.
 - **Current default and planned end state.** Off by default. The rule is a
   semantic gap under the CFC correspondence procedure, and its deciding site
   in `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker whose
