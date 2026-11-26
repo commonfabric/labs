@@ -72,6 +72,8 @@ import {
   keyAtRatchet,
   newFanOutNodeState,
   pruneFanOutInstances,
+  restoreFanOutTriggers,
+  takeFanOutTriggers,
 } from "./fan-out.ts";
 import {
   addInvalidCause,
@@ -79,6 +81,7 @@ import {
   restoreInvalidCauses,
   takeInvalidCauses,
 } from "./invalidation.ts";
+import { invalidCauseKey } from "./keys.ts";
 import type { NodeRegistry } from "./node-record.ts";
 import { diagnosticPrefix } from "../storage/diagnostics.ts";
 import { txToReactivityLog } from "./reactivity.ts";
@@ -783,7 +786,8 @@ export async function runSchedulerAction(
     // this run to the transaction so flow-label derivation can taint its
     // writes even when this run's branch never re-reads them. Consumed
     // once per scheduling; a fanned-out instance run carries the causes
-    // that dirtied ITS instance (B7) plus the untargeted ones. If a run
+    // that dirtied ITS instance (B7): those naming an instance on its
+    // chain, and those naming none whose document it read. If a run
     // aborts and is retried (RetryImmediately, commit conflict) the
     // consumed addresses are restored below so the retry inherits them.
     if (causes !== undefined && causes.length > 0) {
@@ -972,9 +976,10 @@ export async function runSchedulerAction(
       if (toRun.length === 0) break;
       const instance = toRun[0];
       const startGen = fanOutRunStarted(fanOut, instance);
+      const triggers = takeFanOutTriggers(fanOut, instance.key);
       const causes = invalidCauses === undefined
         ? undefined
-        : causesForInstance(invalidCauses, instance);
+        : causesForInstance(invalidCauses, instance, triggers);
       const outcome = await runOnce(instance, causes, startGen);
       lastResult = outcome.result;
       ran = true;
@@ -1006,14 +1011,23 @@ export async function runSchedulerAction(
   });
 }
 
-/** B7: the causes a fanned-out instance run carries as its CFC trigger
- * reads — those that dirtied ITS instance (a keyed cause resolving on the
- * instance identity's own chain) plus every untargeted one. */
+/**
+ * B7: the causes a fanned-out instance run carries as its CFC trigger reads
+ * (§8.9.2). A cause that names an instance is carried by the runs on that
+ * instance's chain: the instance identity's own user and session keys. A
+ * cause that names no instance is carried only where `triggers` holds its
+ * key (`invalidCauseKey()`): those are the causes that arrived for a
+ * document the instance's recorded run read (`takeFanOutTriggers()`). The
+ * node is subscribed to the union of its instances' reads, so another cause
+ * naming no instance is for a document some other viewer's run read, and
+ * did not schedule this instance's run.
+ */
 export function causesForInstance(
   causes: readonly IMemorySpaceAddress[],
   instance: FanOutInstance,
+  triggers: ReadonlySet<string> | undefined,
 ): IMemorySpaceAddress[] {
-  const chain = new Set<string>(["space"]);
+  const chain = new Set<string>();
   try {
     chain.add(resolveScopeKey("user", instance.identity));
     chain.add(resolveScopeKey("session", instance.identity));
@@ -1021,7 +1035,9 @@ export function causesForInstance(
     // whatever resolved is the chain
   }
   return causes.filter((cause) =>
-    cause.scopeKey === undefined || chain.has(cause.scopeKey)
+    cause.scopeKey === undefined || cause.scopeKey === "space"
+      ? triggers?.has(invalidCauseKey(cause)) === true
+      : chain.has(cause.scopeKey)
   );
 }
 
@@ -1218,8 +1234,14 @@ function rescheduleActionForImmediateRetry(
     }
     // A fanned-out instance's aborted run re-runs THAT instance (B7):
     // its key is dirtied, its siblings stay current — on the QUEUED
-    // pass, never this one (deferred above).
+    // pass, never this one (deferred above). The causes naming no instance
+    // go back to it alone.
     if (args.fanOutRun !== undefined) {
+      restoreFanOutTriggers(
+        args.fanOutRun.state,
+        args.fanOutRun.instance.key,
+        args.invalidCauses ?? [],
+      );
       dirtyFanOutKey(args.fanOutRun.state, args.fanOutRun.instance.key);
       state.markInvalid(args.action, { fanOutInstances: "keep" });
     } else {
@@ -1430,6 +1452,17 @@ function finalizeReactiveActionCommit(
     args.error,
   );
   const fanOutRun = args.fanOutRun;
+  // A retry of a fanned-out instance's run takes again the causes naming no
+  // instance that this run took, and its siblings take none of them.
+  const restoreInstanceTriggers = () => {
+    if (fanOutRun === undefined) return;
+    restoreFanOutTriggers(
+      fanOutRun.state,
+      keyAtRatchet(fanOutRun.state, fanOutRun.instance.identity) ??
+        fanOutRun.instance.key,
+      args.invalidCauses ?? [],
+    );
+  };
   const commitState: Parameters<typeof watchReactiveActionCommit>[0] = {
     isLiveAction: () => state.isLiveAction(args.action),
     hasCommittedResult: () => owner?.hasCommittedResult === true,
@@ -1499,6 +1532,7 @@ function finalizeReactiveActionCommit(
         args.invalidCauses.length > 0
       ) {
         restoreInvalidCauses(state.nodes, args.action, args.invalidCauses);
+        restoreInstanceTriggers();
       }
     },
     handleUnavailable: () => parkUnavailableRun(state, args),
@@ -1635,6 +1669,7 @@ function finalizeReactiveActionCommit(
     for (const cause of args.invalidCauses ?? []) {
       addInvalidCause(record, cause);
     }
+    restoreInstanceTriggers();
     commitState.markInvalid(args.action, { retry: true });
     state.pending.add(args.action);
     state.queueExecution();

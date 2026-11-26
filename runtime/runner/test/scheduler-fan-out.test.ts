@@ -199,7 +199,7 @@ describe("fan-out stage B: run outcomes and B7 precise dirtiness", () => {
       fanOutRunFinished(state, instance, {
         discovered: "session",
         startGen: gen,
-        log: emptyLog(),
+        log: { ...emptyLog(), reads: [readOf("of:y")] },
       });
     }
     dirtyFanOutForCause(state, readOf("of:x", "session", sessionKey(bobS1)));
@@ -416,6 +416,24 @@ describe("fan-out stage B: run outcomes and B7 precise dirtiness", () => {
 
       expect(takeFanOutTriggers(state, bob.key)).toEqual(
         new Set([invalidCauseKey(readOf("of:bob-only"))]),
+      );
+    });
+
+    it("keeps a cause that arrived during the run that moved its instance to another key for the instance's next run", () => {
+      const state = narrowed();
+      finish(state, bob, ["of:bob-only"]);
+      const bobOnly = readOf("of:bob-only");
+      const startGen = fanOutRunStarted(state, bob);
+      dirtyFanOutForCause(state, bobOnly);
+      fanOutRunFinished(state, bob, {
+        discovered: "session",
+        startGen,
+        log: { ...emptyLog(), reads: [bobOnly] },
+      });
+
+      expect(state.instances.has(bob.key)).toBe(false);
+      expect(takeFanOutTriggers(state, sessionKey(bobS1))).toEqual(
+        new Set([invalidCauseKey(bobOnly)]),
       );
     });
 

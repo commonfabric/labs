@@ -34,7 +34,8 @@ import {
 import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-keys";
 import { scopeRank } from "../scope.ts";
 import type { IMemorySpaceAddress } from "../storage/interface.ts";
-import type { ReactivityLog } from "./types.ts";
+import { entityNameKey, invalidCauseKey } from "./keys.ts";
+import type { ReactivityLog, SpaceScopeAndURI } from "./types.ts";
 
 /** One demanded instance run of a fanned-out node. */
 export interface FanOutInstance {
@@ -62,6 +63,22 @@ interface InstanceRecord {
 
   identity: ScopeKeyIdentity;
   log?: ReactivityLog;
+
+  /**
+   * The documents `log` reads, each by its space, the name of its scope and
+   * its id (`entityNameKey()`), and the log they were collected from. Built
+   * when a cause that names no instance first asks, and again once a later
+   * run has replaced the log.
+   */
+  documents?: { of: ReactivityLog; read: Set<SpaceScopeAndURI> };
+
+  /**
+   * The causes naming no instance that arrived for a document this
+   * instance's recorded run read, and that no run of it has taken yet, each
+   * by `invalidCauseKey()`. A run of the instance takes only these among the
+   * node's causes that name no instance as its trigger reads.
+   */
+  triggers?: Set<string>;
 
   /**
    * The node's count of changes (`FanOutNodeState.changes`) as the
@@ -272,28 +289,104 @@ function keysOnChain(identity: ScopeKeyIdentity): Set<string> {
 }
 
 /**
+ * Whether a cause names no instance: a change to a document of the scope
+ * `space`, or to an address the ambient identity would resolve.
+ */
+const namesNoInstance = (
+  cause: Pick<IMemorySpaceAddress, "scopeKey">,
+): boolean => cause.scopeKey === undefined || cause.scopeKey === "space";
+
+/**
+ * Whether the run `record` holds the log of read the document `document`
+ * names, at any path. An instance with no log has no recorded reads.
+ */
+function readsDocument(
+  record: InstanceRecord,
+  document: SpaceScopeAndURI,
+): boolean {
+  const log = record.log;
+  if (log === undefined) return false;
+  if (record.documents?.of !== log) {
+    const read = new Set<SpaceScopeAndURI>();
+    for (const address of log.reads) read.add(entityNameKey(address));
+    for (const address of log.shallowReads) read.add(entityNameKey(address));
+    record.documents = { of: log, read };
+  }
+  return record.documents.read.has(document);
+}
+
+/**
  * B7 — precise per-instance dirtiness. A cause address that NAMES its
  * instance (`scopeKey`, stage A's keyed notification addresses) dirties
  * exactly the instances whose identity resolves that address's scope to
  * that key — Bob's write to `user:bob/X` dirties Bob's user instance and
- * Bob's session instances (they read `user:bob` too), never Alice's. A
- * cause with no key — a space doc, or an address the ambient identity
- * would resolve — dirties every instance. Returns the keys dirtied.
+ * Bob's session instances (they read `user:bob` too), never Alice's.
+ *
+ * A cause that names no instance dirties the instances whose recorded run
+ * read its document, and is recorded on each of them for its next run to
+ * take as a trigger read (`takeFanOutTriggers()`). The node's subscription
+ * is the union of its instances' reads, so such a cause can be for a
+ * document only one viewer's run read, and an instance that did not read it
+ * cannot depend on it. An instance that is not current is dirtied whatever
+ * its record says, without the cause being recorded for it: it may be
+ * running, and the reads of a run are not recorded until it finishes.
  */
 export function dirtyFanOutForCause(
   state: FanOutNodeState,
-  cause: Pick<IMemorySpaceAddress, "scope" | "scopeKey">,
+  cause: Pick<
+    IMemorySpaceAddress,
+    "space" | "id" | "scope" | "scopeKey" | "path"
+  >,
 ): void {
-  const causeKey = cause.scopeKey;
-  if (causeKey === undefined || causeKey === "space") {
-    dirtyFanOutAll(state);
+  if (namesNoInstance(cause)) {
+    const document = entityNameKey(cause);
+    for (const [key, record] of state.instances) {
+      const read = readsDocument(record, document);
+      if (read) (record.triggers ??= new Set()).add(invalidCauseKey(cause));
+      if (read || record.log === undefined || !state.clean.has(key)) {
+        dirtyFanOutKey(state, key);
+      }
+    }
     return;
   }
+  const causeKey = cause.scopeKey;
   for (const [key, record] of state.instances) {
     if (key === "space") continue;
-    if (keysOnChain(record.identity).has(causeKey)) {
+    if (keysOnChain(record.identity).has(causeKey!)) {
       dirtyFanOutKey(state, key);
     }
+  }
+}
+
+/**
+ * Hands over the causes naming no instance recorded for the instance at
+ * `key` (`dirtyFanOutForCause()`), leaving none recorded. `undefined` where
+ * there are none.
+ */
+export function takeFanOutTriggers(
+  state: FanOutNodeState,
+  key: ScopeKey,
+): ReadonlySet<string> | undefined {
+  const record = state.instances.get(key);
+  const triggers = record?.triggers;
+  if (record !== undefined) record.triggers = undefined;
+  return triggers;
+}
+
+/**
+ * Gives the instance at `key` back those of `causes` that name no instance,
+ * which a run of it took and that run's retry takes again.
+ */
+export function restoreFanOutTriggers(
+  state: FanOutNodeState,
+  key: ScopeKey,
+  causes: readonly IMemorySpaceAddress[],
+): void {
+  const record = state.instances.get(key);
+  if (record === undefined) return;
+  for (const cause of causes) {
+    if (!namesNoInstance(cause)) continue;
+    (record.triggers ??= new Set()).add(invalidCauseKey(cause));
   }
 }
 
@@ -458,6 +551,11 @@ export function fanOutRunFinished(
   const key = keyAtRatchet(state, instance.identity) ?? instance.key;
   const dirtiedMeanwhile =
     (state.dirtyGen.get(instance.key) ?? 0) !== outcome.startGen;
+  // The causes that arrived for the stamped instance while it ran are its
+  // next run's, under whichever key that run has.
+  const arrived = key === instance.key
+    ? undefined
+    : state.instances.get(instance.key)?.triggers;
   if (key !== instance.key) {
     // Re-keyed by the ratchet: the stamped instance has left the set.
     state.instances.delete(instance.key);
@@ -465,6 +563,9 @@ export function fanOutRunFinished(
     state.dirtyGen.delete(instance.key);
   }
   const record = state.instances.get(key) ?? { identity: instance.identity };
+  if (arrived !== undefined) {
+    record.triggers = new Set([...(record.triggers ?? []), ...arrived]);
+  }
   record.identity = instance.identity;
   if (outcome.log !== undefined) record.log = outcome.log;
   record.settledAt = state.changes;
