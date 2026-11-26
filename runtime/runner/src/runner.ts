@@ -130,6 +130,7 @@ import {
   flowJoinObservationsOf,
   servedRunActsForNoOne,
 } from "./cfc/prepare.ts";
+import { cfcSchemaEntries } from "./cfc/schema-label-view.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { spaceReaderRole } from "./cfc/space-membership.ts";
 import { isTrustedGesture } from "./cfc/ui-contract.ts";
@@ -219,7 +220,10 @@ import {
   type PieceSourceRecord,
   type PreparedSourceUpdate,
 } from "./pattern-manager.ts";
-import { isCellResultForDereferencing } from "./query-result-proxy.ts";
+import {
+  isCellResultForDereferencing,
+  snapshotQueryResult,
+} from "./query-result-proxy.ts";
 import type { CommitRetryPullFailure, Runtime } from "./runtime.ts";
 import {
   type Action,
@@ -1456,6 +1460,17 @@ function recordedInstanceNames(
 /** The number in the positional partial cause `partialCause`. */
 function positionalNumber(partialCause: unknown): number {
   return (partialCause as { $generated: number }).$generated;
+}
+
+/**
+ * Whether `schema` declares a reclassification anywhere (`ifc.reclassify`,
+ * the lowered form of `Reclassified`).
+ */
+function declaresReclassification(schema: JSONSchema | undefined): boolean {
+  return schema !== undefined &&
+    cfcSchemaEntries(schema).some((entry) =>
+      (entry.schema.ifc as Record<string, unknown>).reclassify !== undefined
+    );
 }
 
 /**
@@ -15382,6 +15397,13 @@ export class Runner {
     narrowestReadScope?: CellScope,
   ): any {
     if (!resultHasReactives && frame.reactives.size === 0) {
+      // A reclassified result is the computation's own value: what it keeps
+      // of its inputs is stored as a copy, under the label the
+      // reclassification gives it. Stored as references into the inputs, its
+      // items would still be read under the inputs' labels.
+      if (declaresReclassification(resultSchema)) {
+        result = snapshotQueryResult(result);
+      }
       recordOutputSchemaPolicyInputs(
         tx,
         this.#runtime,

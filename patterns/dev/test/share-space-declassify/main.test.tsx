@@ -131,10 +131,17 @@ export default pattern(() => {
       },
       { action: action(() => shares.get().live?.publish.send()) },
       {
-        // Reclassification is off, so the window stays the owner's alone and
-        // its store, which admits the owner or the share space's readers,
-        // refuses it.
-        assertion: assert(() => lats(shares.get().live?.shared).length === 0),
+        // The live share's store admits the owner or the share space's
+        // readers. With `EXPERIMENTAL_PIECE_CREATOR_RECORD` and
+        // `EXPERIMENTAL_CFC_PATTERN_RECLASSIFICATION` set, the window is
+        // reclassified for the share space's readers and lands whole;
+        // without them it stays the owner's alone and the store refuses it.
+        // A run has one set of flags, and a pattern cannot read them, so the
+        // step admits exactly those two outcomes (README, finding 7).
+        assertion: assert(() => {
+          const shared = shares.get().live?.shared;
+          return lats(shared).length === 0 || isRecent(shared);
+        }),
       },
     ],
     // Each refused publish logs the CFC refusal; the refusals are findings.
