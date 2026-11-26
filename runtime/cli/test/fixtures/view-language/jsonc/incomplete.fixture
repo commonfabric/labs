@@ -1,0 +1,4 @@
+{
+  // Workspaces used by the root configuration.
+  "workspace": [
+    "./packages/runtime",

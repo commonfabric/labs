@@ -11,8 +11,11 @@ shebangs, launcher shebangs that a subcommand settles, and extensions that
 several syntaxes share. JSON Lines and NDJSON use the JSON tokenizer with
 independent lexical state for each record. JSON also covers the surveyed names
 that no `.json` suffix announces: web manifests, TLDraw documents, Deno lock
-files, editor workspace files, Swift package resolutions, and the `.cfg` files
-whose source opens a JSON object. Python has syntax highlighting and a structure
+files, Swift package resolutions, and the `.cfg` files whose source opens a JSON
+object. JSONC, which is JSON with comments, covers `.jsonc` files, editor
+workspace files, and the `deno.json`, `tsconfig.json`, and `jsconfig.json`
+project configurations; there, unlike in JSON, a line holding only a comment
+leaves the code as it was. Python has syntax highlighting and a structure
 tree of its classes and functions. Go has syntax highlighting and a structure
 tree of its package clause, types, functions, methods, package-level names, and
 the fields and methods each type declares; `go.mod` and `go.work`, and `go.sum`
