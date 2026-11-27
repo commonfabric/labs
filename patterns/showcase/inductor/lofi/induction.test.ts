@@ -831,5 +831,34 @@ describe("prompts and text", () => {
     expect(text).toContain("# Is it a bill?");
     expect(text).toContain("- `subject: /invoice/i → YES`");
     expect(text).toContain("held-out F1 67%");
+    expect(text).toContain("## Proposals\n\nNone yet.");
+  });
+
+  it("lists each judged round with its outcome and reason", () => {
+    const round = (
+      n: number,
+      accepted: boolean,
+      reason: string,
+    ): HistoryEntry => ({
+      round: n,
+      accepted,
+      reason,
+      proposed: [],
+      refusals: [],
+      currentF1: 0,
+      proposedF1: 0,
+      heldOut: 0,
+      answered: [],
+      decidedAt: 0,
+    });
+    const text = markdownOf("Is it a bill?", summarize(HELD_OUT_ROWS), [], 0, [
+      round(1, false, "no gain"),
+      round(2, true, "F1 up"),
+    ]);
+    expect(text).toContain("No rules yet.");
+    expect(text).not.toContain("None yet.");
+    expect(text).toContain(
+      "## Proposals\n\n- Round 1: rejected — no gain\n- Round 2: accepted — F1 up",
+    );
   });
 });
