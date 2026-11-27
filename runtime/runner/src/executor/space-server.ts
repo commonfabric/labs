@@ -1201,7 +1201,7 @@ export class SpaceServer implements TransactionSealDestination {
    * The demand roots that only reads make roots: `computed:` documents a
    * session was sent that hold no value and that no node here writes
    * (`#rowRootReason()`). Their structure load starts each piece as a read's
-   * start, and releases it once the runtime is idle.
+   * start, and releases it once it has settled.
    */
   #readRootKeys = new Set<string>();
 
@@ -6449,7 +6449,7 @@ export class SpaceServer implements TransactionSealDestination {
       }
     }
     // The pieces the loads below start for read roots, by key, released
-    // together once the runtime is idle (`#releaseReadStarts()`).
+    // together once they have settled (`#releaseReadStarts()`).
     const readStarts = new Map<string, OwningRootAddress[]>();
     try {
       await this.#loadStructureRootDocs(runtime, rootKeys, parked);
@@ -6513,7 +6513,7 @@ export class SpaceServer implements TransactionSealDestination {
               runtime.scheduler.invalidateActionsForDemandRoots([rootId]);
             };
             // A read root starts what it starts as a read's start, released
-            // once the runtime is idle, enclosing pieces the walk starts
+            // once it has settled, enclosing pieces the walk starts
             // included (`#releaseReadStarts()`).
             const forRead = this.#readRootKeys.has(key);
             const readSources: OwningRootAddress[] = [];
@@ -7202,29 +7202,39 @@ export class SpaceServer implements TransactionSealDestination {
   /**
    * Helper for `#loadDemandedStructure()`, which releases the pieces the
    * structure loads of a pass started for read roots, `batch`, by key, once
-   * the runtime is idle: each piece has then derived what the read reached,
-   * and the store holds it. Each is released only where every start of it
-   * answered a read (`Runner.releaseReadStart()`), so a piece another root, an
-   * event or an enclosing pattern has asked for since keeps running. Nothing
-   * is released for a key that a demand other than a read has made a root
-   * since. The pieces of one batch are released together, so the document
-   * release each asks for is one pass, not one for each piece.
+   * each has settled (`Runtime.settledFor()`): its derivations have run, and
+   * so has the async work its builtins began, a fetch's answer and what it
+   * derives included, which the runtime's idle does not wait for. The store
+   * then holds what the read reached. Each is released only where every start
+   * of it answered a read (`Runner.releaseReadStart()`), so a piece another
+   * root, an event or an enclosing pattern has asked for since keeps running.
+   * Nothing is released for a key that a demand other than a read has made a
+   * root since. The pieces of one batch are released together, once all of
+   * them have settled, so the document release each asks for is one pass, not
+   * one for each piece. A park ends the wait, with the tenure's runtime.
    */
   #releaseReadStarts(
     runtime: Runtime,
     batch: ReadonlyMap<string, readonly OwningRootAddress[]>,
   ): void {
-    runtime.idle().then(() => {
-      if (!this.#active || this.#runtime !== runtime) return;
-      for (const [key, roots] of batch) {
+    const signal = this.#structureLoadAbort.signal;
+    const cells = new Map(
+      [...batch].map(([key, roots]) => [
+        key,
+        roots.map((root) => runtime.getCellFromLink({ ...root, path: [] })),
+      ]),
+    );
+    Promise.all(
+      [...cells.values()].flat().map((cell) =>
+        runtime.settledFor(cell, signal)
+      ),
+    ).then(() => {
+      if (signal.aborted || !this.#active || this.#runtime !== runtime) return;
+      for (const [key, pieces] of cells) {
         if (
           this.#demandRootAddresses.has(key) && !this.#readRootKeys.has(key)
         ) continue;
-        for (const root of roots) {
-          runtime.runner.releaseReadStart(
-            runtime.getCellFromLink({ ...root, path: [] }),
-          );
-        }
+        for (const piece of pieces) runtime.runner.releaseReadStart(piece);
       }
     }).catch((error) => {
       logger.warn("read-release-failed", () => [

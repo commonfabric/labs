@@ -64,12 +64,15 @@ key stops being a root.
 The start is a read's start (`RunnerStartOptions.forRead`), kept as the runner
 keeps an event's start: a record of the running pieces whose every start was
 asked for that one reason, which any other start, a run, or an enclosing pattern
-taking the piece as a child clears. Once the runtime is idle after the demand
-pass, each piece has derived what the read reached, and the loop releases every
-piece the pass's loads started whose record still stands
-(`Runner.releaseReadStart()`), all at once. The store then holds what the pieces
-derived, and serves it as it serves any value of a stopped piece. A key that a
-demand other than a read has made a root since keeps its piece running.
+taking the piece as a child clears. Once every piece the demand pass's loads
+started has settled (`Runtime.settledFor()`), its derivations and the async work
+its builtins began included, each has derived what the read reached, and the
+loop releases every one whose record still stands (`Runner.releaseReadStart()`),
+all at once. The runtime's idle is not the barrier, because it does not wait for
+a builtin's async work: a piece released while a fetch it began is pending drops
+the fetch, and the read is left with nothing. The store then holds what the
+pieces derived, and serves it as it serves any value of a stopped piece. A key
+that a demand other than a read has made a root since keeps its piece running.
 
 ## Why the piece is released again
 
@@ -127,9 +130,12 @@ same gap for a piece stopped some other way before its first derivation.
 
 ## Costs and limits
 
-- A piece the rule starts runs only until the runtime is idle after its start,
-  and the start writes what the read reached, so a later read is served from the
-  store and starts nothing.
+- A piece the rule starts runs only until it has settled after its start, and
+  the start writes what the read reached, so a later read is served from the
+  store and starts nothing. A piece whose builtin's async work does not finish
+  stays running until the tenure parks, and since the barrier also waits for the
+  async work no single run owns (the scheduler's handoffs to an effect), a
+  runtime that keeps such work in flight delays the release.
 - A derivation that produced `undefined` stores no value, so its document reads
   as unwritten. A read that reaches one of a stopped piece starts the piece
   again, briefly, each time the document's key is newly demanded, unless a

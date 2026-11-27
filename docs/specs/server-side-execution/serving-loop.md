@@ -569,11 +569,12 @@ read. The memory server marks the session's row for such a document
 row's key as it does a root a demand names, so where the loop keeps a currency
 index the root is judged first ("A root the store can serve" above). The load
 starts each piece it starts as a read's start (`RunnerStartOptions.forRead`),
-and once the runtime is idle after the demand pass that started it, the piece
-has derived what the read reached and is released again
-(`Runner.releaseReadStart()`), with the store holding what it derived. The
-pieces one pass started for reads are released together, so the document
-release they ask for is one pass. A piece something else has asked for since,
+and releases it again (`Runner.releaseReadStart()`) once it has settled
+(`Runtime.settledFor()`): its derivations have run, and so has the async work
+its builtins began, a fetch's answer and what it derives included, which the
+runtime's idle does not wait for. The store then holds what the read reached.
+The pieces one pass started for reads are released together, once all of them
+have settled, so the document release they ask for is one pass. A piece something else has asked for since,
 another root's load, an event, a run, or an enclosing pattern, keeps running,
 and so does the piece of a key that a demand other than a read has made a root
 since. The row loses the mark

@@ -34,13 +34,23 @@ const serviceSigner = await Identity.fromPassphrase("served child service");
 const aliceSigner = await Identity.fromPassphrase("served child alice");
 const space = aliceSigner.did() as MemorySpace;
 
-/** A list a verb adds a child to, each child with a verb and a derived value. */
-const PROGRAM: RuntimeProgram = {
+/**
+ * A list a verb adds a child to, each child with a verb and the values it
+ * derives, which `child` declares: the pattern `Child` given its `title`.
+ */
+const programWith = (child: string): RuntimeProgram => ({
   main: "/main.tsx",
   files: [{
     name: "/main.tsx",
     contents: `/// <cts-enable />
-import { computed, handler, NAME, pattern, Writable } from "commonfabric";
+import {
+  computed,
+  fetchJson,
+  handler,
+  NAME,
+  pattern,
+  Writable,
+} from "commonfabric";
 
 const rename = handler<{ name: string }, { title: Writable<string> }>(
   (event, state) => {
@@ -48,10 +58,7 @@ const rename = handler<{ name: string }, { title: Writable<string> }>(
   },
 );
 
-const Child = pattern<{ title: Writable<string> }>(({ title }) => {
-  const upper = computed(() => title.get().toUpperCase());
-  return { [NAME]: "Child", title, upper, rename: rename({ title }) };
-});
+${child}
 
 const addChild = handler<
   { title: string },
@@ -70,7 +77,30 @@ export default pattern<{ seed?: string }>(() => {
 });
 `,
   }],
-};
+});
+
+/** Each child derives `upper` from its title. */
+const PROGRAM = programWith(`
+const Child = pattern<{ title: Writable<string> }>(({ title }) => {
+  const upper = computed(() => title.get().toUpperCase());
+  return { [NAME]: "Child", title, upper, rename: rename({ title }) };
+});
+`);
+
+/** Each child derives `greeting` from what a fetch answers. */
+const FETCHING_PROGRAM = programWith(`
+const Child = pattern<{ title: Writable<string> }>(({ title }) => {
+  const upper = computed(() => title.get().toUpperCase());
+  const fetched = fetchJson<{ greeting: string }>({
+    url: "https://example.test/greeting",
+  });
+  const greeting = computed(() => fetched.result?.greeting);
+  return { [NAME]: "Child", title, upper, greeting, rename: rename({ title }) };
+});
+`);
+
+/** What the stub fetch the serving runtime makes answers. */
+const GREETING = { greeting: "hello" };
 
 /** What a client reads of a child. */
 const CHILD_SCHEMA = {
@@ -91,12 +121,27 @@ describe("served-handler-child", () => {
   /** The verb of the parent the test's {@link addChildOnServer} last made. */
   let addChildVerb: Cell<unknown> | undefined;
 
+  /** What the stub fetch waits for before it answers. */
+  let fetchAnswers: Promise<void>;
+
+  /** Resolved once the serving runtime has asked the stub fetch. */
+  let fetchAsked: PromiseWithResolvers<void>;
+
   beforeEach(async () => {
+    fetchAnswers = Promise.resolve();
+    fetchAsked = Promise.withResolvers<void>();
     serving = await startServingMemoryServer({
       apiUrl: new URL(import.meta.url),
       serviceIdentity: serviceSigner,
       policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
       worker: false,
+      fetch: async () => {
+        fetchAsked.resolve();
+        await fetchAnswers;
+        return new Response(JSON.stringify(GREETING), {
+          headers: { "content-type": "application/json" },
+        });
+      },
     });
     host = serving.host.host!;
     session = createSession({
@@ -144,19 +189,20 @@ describe("served-handler-child", () => {
   };
 
   /**
-   * Makes a parent and has it add a child, and returns a client's cell for the
-   * parent's list of children, which the client has not read.
+   * Makes a parent of `program` and has it add a child, and returns a client's
+   * cell for the parent's list of children, which the client has not read.
    */
   const addChildUnread = async (
     pieces: PiecesController,
     title: string,
+    program: RuntimeProgram = PROGRAM,
   ): Promise<Cell<unknown>> => {
     const { pieceId } = await host.runLifecycleVerb(space, {
       name: "instantiate",
       run: (runtime) =>
         servedInstantiatePiece(
           new PiecesController(session, runtime, { deferSpaceCellSync: true }),
-          { source: { program: PROGRAM }, actingUser: aliceSigner.did() },
+          { source: { program }, actingUser: aliceSigner.did() },
         ),
       confirm: (runtime, receipt) =>
         confirmServedInstantiate(runtime, space, receipt, aliceSigner.did()),
@@ -376,6 +422,69 @@ describe("served-handler-child", () => {
         ),
       ).toBe(false);
       cancel();
+    });
+
+    it("keeps the child running for a read until its fetch answers, and stops it then", async () => {
+      // The value the read reaches derives from a fetch, which the runtime's
+      // idle does not wait for. Stopped before it answers, the child would
+      // drop the fetch and leave the read with nothing.
+
+      const answer = Promise.withResolvers<void>();
+      fetchAnswers = answer.promise;
+      const released = Promise.withResolvers<void>();
+      const releases = await host.runLifecycleVerb(space, {
+        name: "observe releases",
+        run: (runtime) => {
+          const release = runtime.runner.releaseReadStart.bind(
+            runtime.runner,
+          );
+          return Promise.resolve(
+            stub(runtime.runner, "releaseReadStart", (cell: Cell<unknown>) => {
+              const stopped = release(cell);
+              if (stopped) released.resolve();
+              return stopped;
+            }),
+          );
+        },
+      });
+      try {
+        const pieces = await clientPieces();
+        const children = await addChildUnread(
+          pieces,
+          "first",
+          FETCHING_PROGRAM,
+        );
+        const list = children.asSchema({
+          type: "array",
+          items: {
+            type: "object",
+            properties: { greeting: { type: "string" } },
+          },
+        } as never) as Cell<any>;
+        const answered = Promise.withResolvers<void>();
+        const cancel = list.sink((value: any) => {
+          if (value?.[0]?.greeting === GREETING.greeting) answered.resolve();
+        });
+        await list.sync();
+        await withStuckNet(fetchAsked.promise, "the child's fetch");
+        await host.runLifecycleVerb(space, {
+          name: "idle",
+          run: (runtime) => runtime.idle(),
+        });
+        const child = (children as Cell<any>).key(0).resolveAsCell()
+          .getAsNormalizedFullLink();
+        expect(await runningOnServer(child)).toBe(true);
+
+        answer.resolve();
+        await withStuckNet(answered.promise, "the greeting the fetch answers");
+        await withStuckNet(released.promise, "the child's release");
+
+        expect(list.get()?.[0]).toEqual(GREETING);
+        expect(await runningOnServer(child)).toBe(false);
+        cancel();
+      } finally {
+        releases.restore();
+      }
     });
 
     it("leaves the child stopped for a read of the value it derived before it stopped", async () => {

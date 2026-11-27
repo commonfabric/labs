@@ -39,6 +39,17 @@ import {
 import { sendVerbEvent } from "@commonfabric/piece/verb-call";
 
 const k = Number(Deno.args[0] ?? "5");
+const watched = Deno.env.get("WATCH_BOARD");
+if (
+  !Number.isInteger(k) || k <= 0 ||
+  (watched !== undefined && watched !== "index" && watched !== "ui")
+) {
+  console.error(
+    "usage: [WATCH_BOARD=index|ui] topics-read-starts-probe.ts <k>, " +
+      "where <k> is a positive integer",
+  );
+  Deno.exit(2);
+}
 const root = fromFileUrl(new URL("../../../", import.meta.url)).replace(
   /\/$/,
   "",
@@ -100,12 +111,12 @@ const boardOf = async (pieces: PiecesController) =>
   );
 const addTopic = (await boardOf(writer)).key("addTopic" as never)
   .asSchemaFromLinks() as Cell<unknown>;
-// With WATCH_BOARD=1 a client watches the board's survey while the topics
-// are filed, as a browser showing the board does.
-const watched = Deno.env.get("WATCH_BOARD");
+// With WATCH_BOARD set, a client watches the board's `index` or its `[UI]`
+// while the topics are filed: the board's headless survey, or what a browser
+// showing the board watches.
 if (watched !== undefined) {
   const viewer = await clientPieces();
-  const key = watched === "ui" ? UI : watched;
+  const key = watched === "ui" ? UI : "index";
   const view = (await boardOf(viewer)).key(key as never)
     .asSchemaFromLinks() as Cell<any>;
   view.sink(() => {});
