@@ -527,8 +527,7 @@ export class RunnersView {
       for (let i = 0; i < heap.world.count; i++) {
         const x = heap.world.xAt(i);
         if (x < 0) continue;
-        const ball = this.#balls.get(heap.world.idAt(i));
-        if (ball === undefined) continue;
+        const ball = this.#balls.get(heap.world.idAt(i))!;
         renderer.add(x0 + x, y0 + heap.world.yAt(i), r, this.#palette.color(ball.token.runId), clip);
       }
     }
