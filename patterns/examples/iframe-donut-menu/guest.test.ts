@@ -42,19 +42,19 @@ class Drawing {
 /**
  * Holds back each image's `decode()` until the test lets go of every image
  * showing a given URL, so a test chooses which picture finishes decoding
- * first.
+ * first, and whether it decodes or fails.
  */
 class HeldDecodes {
-  readonly #held = new Map<string, (() => void)[]>();
+  readonly #held = new Map<string, PromiseWithResolvers<void>[]>();
 
   /** Stands for `HTMLImageElement.prototype.decode()`. */
   decode(image: HTMLImageElement): Promise<void> {
-    const { promise, resolve } = Promise.withResolvers<void>();
+    const decoding = Promise.withResolvers<void>();
     const held = this.#held.get(image.src) ?? [];
-    held.push(resolve);
+    held.push(decoding);
     this.#held.set(image.src, held);
     announceChange();
-    return promise;
+    return decoding.promise;
   }
 
   /** Whether an image showing `url` is waiting to decode. */
@@ -64,7 +64,13 @@ class HeldDecodes {
 
   /** Finishes decoding every image showing `url`. */
   release(url: string): void {
-    for (const resolve of this.#held.get(url) ?? []) resolve();
+    for (const { resolve } of this.#held.get(url) ?? []) resolve();
+    this.#held.delete(url);
+  }
+
+  /** Fails decoding every image showing `url`, with `failure`. */
+  fail(url: string, failure: Error): void {
+    for (const { reject } of this.#held.get(url) ?? []) reject(failure);
     this.#held.delete(url);
   }
 }
@@ -245,6 +251,39 @@ describe("iframe-donut-menu/guest", () => {
 
       expect([...drawing.shown]).toEqual([ASSETS.chocolate]);
       expect(canvas().dataset.drawn).toBe("chocolate");
+    });
+
+    it("shows why a favorite's picture could not be drawn", async () => {
+      const decodes = new HeldDecodes();
+      const { page, drawing } = await open({ decodes });
+
+      button("glazed").click();
+      await page.until(() => decodes.holds(ASSETS.glazed));
+      decodes.fail(ASSETS.glazed, new Error("The picture is corrupt."));
+      const alert = one('[role="alert"]');
+      await page.until(() => alert.textContent !== "");
+
+      expect(alert.textContent).toContain("The picture is corrupt.");
+      expect(one("#status").textContent).toBe("The favorite is Glazed.");
+      expect([...drawing.shown]).toEqual([]);
+      expect(canvas().dataset.drawn).toBe("");
+    });
+
+    it("does not show why a replaced favorite's picture could not be drawn", async () => {
+      const decodes = new HeldDecodes();
+      const { page, drawing } = await open({ decodes });
+
+      button("glazed").click();
+      await page.until(() => decodes.holds(ASSETS.glazed));
+      button("chocolate").click();
+      await page.until(() => decodes.holds(ASSETS.chocolate));
+      decodes.release(ASSETS.chocolate);
+      await page.until(() => canvas().dataset.drawn === "chocolate");
+      decodes.fail(ASSETS.glazed, new Error("The picture is corrupt."));
+      await page.settled();
+
+      expect(one('[role="alert"]').textContent).toBe("");
+      expect([...drawing.shown]).toEqual([ASSETS.chocolate]);
     });
 
     it("shows why a favorite could not be stored", async () => {
