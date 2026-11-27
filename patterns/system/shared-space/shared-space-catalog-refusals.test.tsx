@@ -10,6 +10,7 @@ import {
 import {
   changeSharedSpaceMembershipIn,
   markSharedSpaceDeletedIn,
+  markSharedSpaceNoticeIn,
   registerSharedSpaceIn,
   removeSharedSpaceIn,
   retitleSharedSpaceIn,
@@ -20,11 +21,23 @@ import {
 const ROOM = "did:key:refusals-room";
 const DELETED = "did:key:refusals-deleted";
 const MIXED = "did:key:refusals-mixed";
+const EXHAUSTED = "did:key:refusals-exhausted";
 const PROFILE = "did:key:refusals-profile";
+const SENDER = "did:key:refusals-sender";
 const HOST = "https://room.example";
+// A 272-digit generation plus the 48-character event suffix fills the bound,
+// so no next revision fits.
+const EXHAUSTED_REVISION =
+  "99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999:evk:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 /** Which catalog operation an attempt runs. */
-type Operation = "register" | "choose" | "mark" | "retitle" | "remove";
+type Operation =
+  | "register"
+  | "choose"
+  | "mark"
+  | "retitle"
+  | "remove"
+  | "notice";
 
 /** What one attempt returned, or the message of what it threw. */
 interface Outcome {
@@ -65,6 +78,11 @@ const attempt = handler<
 }) => {
   const target = broken ? malformed : catalog;
   try {
+    if (op === "notice") {
+      markSharedSpaceNoticeIn(target, input);
+      outcomes.key(label).set({ status: "marked" });
+      return;
+    }
     const result = op === "register"
       ? registerSharedSpaceIn(
         target,
@@ -127,6 +145,14 @@ export default pattern(() => {
           expectedRevision: "1:mixed",
           state: "archived",
         },
+      },
+      // A revision whose next one would not fit.
+      [EXHAUSTED]: {
+        space: EXHAUSTED,
+        host: HOST,
+        kind: "loom",
+        state: "saved",
+        revision: EXHAUSTED_REVISION,
       },
     },
     offers: {},
@@ -255,6 +281,19 @@ export default pattern(() => {
       op: "mark",
       input: { space: DELETED, expectedRevision: "2:deleted" },
     });
+    // A mark the catalog could not record is refused before the server is
+    // asked whether the space is deleted, while one it could record is
+    // refused because the server does not say so.
+    run.send({
+      label: "mark-exhausted",
+      op: "mark",
+      input: { space: EXHAUSTED, expectedRevision: EXHAUSTED_REVISION },
+    });
+    run.send({
+      label: "mark-live",
+      op: "mark",
+      input: { space: ROOM, expectedRevision: "1:room" },
+    });
     run.send({
       label: "retitle-invalid",
       op: "retitle",
@@ -269,23 +308,54 @@ export default pattern(() => {
   const assert_other_refusals = assert(() => {
     const invalidMark = outcomeOf(outcomes, "mark-invalid");
     const deletedMark = outcomeOf(outcomes, "mark-deleted");
+    const exhaustedMark = outcomeOf(outcomes, "mark-exhausted");
+    const liveMark = outcomeOf(outcomes, "mark-live");
     const invalidRetitle = outcomeOf(outcomes, "retitle-invalid");
     const invalidRemoval = outcomeOf(outcomes, "removal-invalid");
     return invalidMark?.error === "Invalid shared-space deletion mark." &&
       deletedMark?.status === "conflict" &&
       deletedMark.reason === "unsupported-state" &&
+      exhaustedMark?.status === "conflict" &&
+      exhaustedMark.reason === "unsupported-revision" &&
+      liveMark?.status === "conflict" &&
+      liveMark.reason === "not-deleted" &&
       invalidRetitle?.error === "Invalid shared-space retitle." &&
       invalidRemoval?.error === "Invalid shared-space removal.";
+  });
+
+  // A notice mark with a negative `sharedAt` is refused, while a well-formed
+  // one is recorded.
+  const action_notice_marks = action(() => {
+    run.send({
+      label: "notice-invalid",
+      op: "notice",
+      input: { from: SENDER, id: "refused", sharedAt: -1 },
+    });
+    run.send({
+      label: "notice-valid",
+      op: "notice",
+      input: { from: SENDER, id: "accepted", sharedAt: 5 },
+    });
+  });
+  const assert_notice_marks = assert(() => {
+    const notices = catalog.get().notices ?? {};
+    return outcomeOf(outcomes, "notice-invalid")?.error ===
+        "Invalid shared-space notice mark." &&
+      outcomeOf(outcomes, "notice-valid")?.status === "marked" &&
+      notices[JSON.stringify([SENDER, "accepted"])] === 5 &&
+      Object.keys(notices).length === 1;
   });
 
   // None of the refusals wrote anything.
   const assert_catalog_unchanged = assert(() => {
     const entries = catalog.get().entries;
-    return Object.keys(entries).length === 3 &&
+    return Object.keys(entries).length === 4 &&
       entries[ROOM]?.state === "saved" &&
       entries[ROOM]?.revision === "1:room" &&
       entries[DELETED]?.state === "deleted" &&
       entries[MIXED]?.revision === "2:mixed" &&
+      entries[EXHAUSTED]?.state === "saved" &&
+      entries[EXHAUSTED]?.revision === EXHAUSTED_REVISION &&
       Object.keys(catalog.get().offers).length === 0;
   });
 
@@ -298,6 +368,8 @@ export default pattern(() => {
       { action: action_other_refusals },
       { assertion: assert_other_refusals },
       { assertion: assert_catalog_unchanged },
+      { action: action_notice_marks },
+      { assertion: assert_notice_marks },
     ],
   };
 });

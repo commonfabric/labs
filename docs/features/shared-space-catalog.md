@@ -316,6 +316,7 @@ order, and otherwise returns `conflict` with the reason given:
 | the catalog has an entry for the space | `missing` |
 | the entry is still at the observed revision | `revision` |
 | the entry is `saved` or `archived` | `unsupported-state` |
+| the entry's stored revision can be advanced | `unsupported-revision` |
 | `spaceDeleted(space)` returns `true` in the handler | `not-deleted` |
 
 The last check is the handler's own: it asks the runtime it runs on, as
