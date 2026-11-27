@@ -4,8 +4,10 @@ Written 2026-11-25 against the build branch
 `claude/compiled-pattern-scoped-rows` at `a04632cb2c` and the measuring round
 (round thirty-four, branch `claude/compiled-pattern-derivation-split` at
 `6743be8f25`, notes 1190 to 1207 of `base/pattern-compiler/SPEC-NOTES.md`
-there). Nothing in it is built beyond that round's instruments, and nothing in
-it is a ruling. Paths are relative to the repository root. Whenever a statement
+there; on `claude/compiled-pattern-rounds-38-39-merge` notes 1190 to 1199 keep
+their numbers and a note cited here as 1200 to 1207 is numbered 140 higher,
+1340 to 1347). Nothing in it is built beyond that round's instruments, and
+nothing in it is a ruling. Paths are relative to the repository root. Whenever a statement
 is about a per-element construct (`map`, `filter`, another), it names the case:
 an array of references, an array of plain values held in place, or the result
 of another construct.
