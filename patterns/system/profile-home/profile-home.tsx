@@ -615,6 +615,38 @@ export const VerifiedIdentitiesSection = pattern<
   };
 });
 
+// An external link as the profile shows it: a link to its URL when that URL is
+// http(s), and otherwise its label as plain text.
+export const ExternalLinkAnchor = pattern<
+  { link: ExternalProfileLink },
+  { [UI]: VNode }
+>(({ link }) => {
+  const safe = computed(() => isSafeExternalProfileUrl(link.url));
+  return {
+    [UI]: (
+      <cf-fragment>
+        {ifElse(
+          safe,
+          <a href={link.url} target="_blank" rel="noopener noreferrer">
+            {link.label}
+          </a>,
+          <span>{link.label}</span>,
+        )}
+      </cf-fragment>
+    ),
+  };
+});
+
+// A pinned element as the profile labels it: its title, or its tag when it
+// has none, and its tags, each marked with `#`.
+export const elementCaption = lift<
+  { title?: string; tag: string; userTags: readonly string[] },
+  { label: string; tags: string }
+>(({ title, tag, userTags }) => ({
+  label: title ?? tag,
+  tags: userTags.map((userTag) => `#${userTag}`).join(" "),
+}));
+
 const ProfileCatalogCard = pattern<{ title: string }, ProfileElementCell>(
   ({ title }) => ({
     [NAME]: title,
@@ -692,13 +724,16 @@ export const mutateElements = handler<
     patternUrl?: Writable<string>;
     title?: Writable<string>;
     tag?: Writable<string>;
-    userTags?: string[];
+    // The tags the form lists, separated by commas, for an event naming none.
+    userTagsText?: Writable<string>;
     // Pin-a-piece form binding ("addPiece" mode, CT-1755).
     pieceSpace?: Writable<string>;
     pieceId?: Writable<string>;
   }
 >((event, state) => {
-  const userTags = event.userTags ?? state.userTags ?? [];
+  const userTags = event.userTags ??
+    (state.userTagsText?.get() ?? "").split(",").map((tag) => tag.trim())
+      .filter((tag) => tag.length > 0);
   switch (state.mode) {
     case "remove": {
       const removeCell = event.cell ?? state.cell;
@@ -1095,10 +1130,9 @@ const publishVerifiedIdentities = handler<
     return;
   }
 
-  incoming.forEach((identity) => {
-    if (!isCanonicalVerifiedIdentity(identity.get())) return;
-    state.verifiedIdentities.addUnique(identity);
-  });
+  incoming
+    .filter((identity) => isCanonicalVerifiedIdentity(identity.get()))
+    .forEach((identity) => state.verifiedIdentities.addUnique(identity));
 });
 
 // View/edit toggle for the rendered profile view (CT-1748). Plain (un-protected)
@@ -1114,7 +1148,7 @@ const toggleProfileEditing = handler<void, { editing: Writable<boolean> }>(
 // The face the edit form shows: the picture, or else the avatar text, only as
 // the owner set them, by the rule `profileFace()` in
 // `../profile-face/profile-face.ts` states for every pattern.
-const faceOf = lift<
+export const faceOf = lift<
   { profile: Cell<ProfileHomeOutput> },
   {
     pictureBlob?: { space: string; id: string };
@@ -1252,11 +1286,6 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
     const hasExternalLinks = computed(() => externalLinks.get().length > 0);
     // Five-minute ticks are fine enough for a 48-hour freshness window.
     const now = wish<number>({ query: "#now/300" });
-    const parsedUserTags = computed(() =>
-      userTagsText.get().split(",").map((tag) => tag.trim()).filter((tag) =>
-        tag.length > 0
-      )
-    );
     const initialNameApplied = applyInitialName({ initialName, name });
     // A profile's display name is the person's name (falls back to "Profile"
     // before one is set). This drives cf-cell-link labels in the picker and
@@ -1378,19 +1407,9 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                 {ifElse(
                   hasExternalLinks,
                   <cf-hstack gap="2" wrap>
-                    {externalLinks.map((link) =>
-                      isSafeExternalProfileUrl(link.url)
-                        ? (
-                          <a
-                            href={link.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            {link.label}
-                          </a>
-                        )
-                        : <span>{link.label}</span>
-                    )}
+                    {externalLinks.map((link) => (
+                      <ExternalLinkAnchor link={link} />
+                    ))}
                   </cf-hstack>,
                   null,
                 )}
@@ -1406,31 +1425,34 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                     footer. The old bespoke card + cf-cell-link "Open" is gone. */
                 }
                 <cf-grid columns="2" gap="3">
-                  {elements.map((element) => (
-                    <div
-                      style={{
-                        border:
-                          "0.5px solid var(--cf-theme-color-border, #e5e5e7)",
-                        borderRadius: "12px",
-                        overflow: "hidden",
-                      }}
-                    >
-                      <div style={{ width: "100%", height: "160px" }}>
-                        <cf-render variant="tile" $cell={element.cell} />
-                      </div>
-                      <div style={{ padding: "10px 14px" }}>
-                        <strong>{element.title ?? element.tag}</strong>
-                        <div
-                          style={{
-                            color: "var(--cf-theme-color-text-secondary)",
-                            fontSize: "13px",
-                          }}
-                        >
-                          {element.userTags.map((tag) => `#${tag}`).join(" ")}
+                  {elements.map((element) => {
+                    const caption = elementCaption(element);
+                    return (
+                      <div
+                        style={{
+                          border:
+                            "0.5px solid var(--cf-theme-color-border, #e5e5e7)",
+                          borderRadius: "12px",
+                          overflow: "hidden",
+                        }}
+                      >
+                        <div style={{ width: "100%", height: "160px" }}>
+                          <cf-render variant="tile" $cell={element.cell} />
+                        </div>
+                        <div style={{ padding: "10px 14px" }}>
+                          <strong>{caption.label}</strong>
+                          <div
+                            style={{
+                              color: "var(--cf-theme-color-text-secondary)",
+                              fontSize: "13px",
+                            }}
+                          >
+                            {caption.tags}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </cf-grid>
 
                 {
@@ -1535,17 +1557,7 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                       <cf-vstack gap="1">
                         {externalLinks.map((link) => (
                           <cf-hstack gap="2" align="center">
-                            {isSafeExternalProfileUrl(link.url)
-                              ? (
-                                <a
-                                  href={link.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                >
-                                  {link.label}
-                                </a>
-                              )
-                              : <span>{link.label}</span>}
+                            <ExternalLinkAnchor link={link} />
                             <span
                               style={{
                                 color: "var(--cf-theme-color-text-secondary)",
@@ -1582,7 +1594,7 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                     onClick={mutateElements({
                       elements,
                       mode: "addCard",
-                      userTags: parsedUserTags,
+                      userTagsText,
                     })}
                   >
                     Add profile card
@@ -1604,7 +1616,7 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                       patternUrl,
                       title: elementTitle,
                       tag: elementTag,
-                      userTags: parsedUserTags,
+                      userTagsText,
                     })}
                   >
                     Add link
@@ -1636,7 +1648,7 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                       pieceSpace: pieceSpaceForm,
                       pieceId: pieceIdForm,
                       title: pieceTitleForm,
-                      userTags: parsedUserTags,
+                      userTagsText,
                     })}
                   >
                     Pin piece
@@ -1648,31 +1660,34 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                 </cf-vstack>
 
                 <cf-vstack gap="2">
-                  {elements.map((element) => (
-                    <cf-hstack gap="2" align="center">
-                      <cf-cell-link $cell={element.cell}>
-                        {element.title ?? element.tag}
-                      </cf-cell-link>
-                      <span
-                        style={{
-                          color: "var(--cf-theme-color-text-secondary)",
-                        }}
-                      >
-                        {element.userTags.map((tag) => `#${tag}`).join(" ")}
-                      </span>
-                      <cf-button
-                        size="sm"
-                        variant="ghost"
-                        onClick={mutateElements({
-                          elements,
-                          mode: "remove",
-                          cell: element.cell,
-                        })}
-                      >
-                        Remove
-                      </cf-button>
-                    </cf-hstack>
-                  ))}
+                  {elements.map((element) => {
+                    const caption = elementCaption(element);
+                    return (
+                      <cf-hstack gap="2" align="center">
+                        <cf-cell-link $cell={element.cell}>
+                          {caption.label}
+                        </cf-cell-link>
+                        <span
+                          style={{
+                            color: "var(--cf-theme-color-text-secondary)",
+                          }}
+                        >
+                          {caption.tags}
+                        </span>
+                        <cf-button
+                          size="sm"
+                          variant="ghost"
+                          onClick={mutateElements({
+                            elements,
+                            mode: "remove",
+                            cell: element.cell,
+                          })}
+                        >
+                          Remove
+                        </cf-button>
+                      </cf-hstack>
+                    );
+                  })}
                 </cf-vstack>
 
                 <cf-hstack>
