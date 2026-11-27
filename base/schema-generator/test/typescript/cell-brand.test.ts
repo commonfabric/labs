@@ -190,6 +190,24 @@ describe("cell-brand", () => {
         "readonly",
       );
     });
+
+    it("returns `undefined` for a brand that is not made of string literals", async () => {
+      const { checker, types } = await probes(`
+        interface Patterned<T>
+          extends BrandedCell<T, "readonly" | \`x\${string}\`> {}
+        interface Wide<T> extends BrandedCell<T, string> {}
+        interface Literal<T> extends BrandedCell<T, "readonly" | "cell"> {}
+        interface Probes {
+          patterned: Patterned<number>;
+          wide: Wide<number>;
+          literal: Literal<number>;
+        }
+      `);
+
+      expect(getCellBrand(types.get("patterned")!, checker)).toBeUndefined();
+      expect(getCellBrand(types.get("wide")!, checker)).toBeUndefined();
+      expect(getCellBrand(types.get("literal")!, checker)).toBe("readonly");
+    });
   });
 
   describe("getCellWrapperInfo()", () => {
@@ -207,6 +225,60 @@ describe("cell-brand", () => {
       expect(getCellWrapperInfo(types.get("cell")!, checker)?.kind).toBe(
         "Cell",
       );
+    });
+
+    it("takes a database subtype's `SqliteDb` base unless its argument is built from the subtype's parameter", async () => {
+      // Each `With` base is written with the subtype's parameter `T` inside
+      // its argument, as a union member, an alias argument, a reference's
+      // argument, or a property; its `Without` twin has the same shape
+      // without `T`. The `Fixed` bases are a declared interface and a type
+      // that refers to itself.
+      const { checker, types } = await probes(`
+        type Box<X> = { value: X };
+        type Tree = { child?: Tree; label: string };
+        interface Row { name: string }
+        interface UnionWith<T> extends SqliteDb<T | string> {}
+        interface UnionWithout<T> extends SqliteDb<number | string> {}
+        interface AliasWith<T> extends SqliteDb<Box<T>> {}
+        interface AliasWithout<T> extends SqliteDb<Box<string>> {}
+        interface ArrayWith<T> extends SqliteDb<Array<T>> {}
+        interface ArrayWithout<T> extends SqliteDb<Array<string>> {}
+        interface ObjectWith<T> extends SqliteDb<{ row: T }> {}
+        interface ObjectWithout<T> extends SqliteDb<{ row: string }> {}
+        interface FixedInterface<T> extends SqliteDb<Row> {}
+        interface FixedRecursive<T> extends SqliteDb<Tree> {}
+        interface Probes {
+          unionWith: UnionWith<boolean>;
+          unionWithout: UnionWithout<boolean>;
+          aliasWith: AliasWith<boolean>;
+          aliasWithout: AliasWithout<boolean>;
+          arrayWith: ArrayWith<boolean>;
+          arrayWithout: ArrayWithout<boolean>;
+          objectWith: ObjectWith<boolean>;
+          objectWithout: ObjectWithout<boolean>;
+          fixedInterface: FixedInterface<boolean>;
+          fixedRecursive: FixedRecursive<boolean>;
+        }
+      `);
+      const reference = (name: string) => {
+        const info = getCellWrapperInfo(types.get(name)!, checker);
+        return info && `${info.kind} ${checker.typeToString(info.typeRef)}`;
+      };
+
+      expect(reference("unionWith")).toBe("SqliteDb UnionWith<boolean>");
+      expect(reference("unionWithout")).toBe(
+        "SqliteDb SqliteDb<string | number>",
+      );
+      expect(reference("aliasWith")).toBe("SqliteDb AliasWith<boolean>");
+      expect(reference("aliasWithout")).toBe("SqliteDb SqliteDb<Box<string>>");
+      expect(reference("arrayWith")).toBe("SqliteDb ArrayWith<boolean>");
+      expect(reference("arrayWithout")).toBe("SqliteDb SqliteDb<string[]>");
+      expect(reference("objectWith")).toBe("SqliteDb ObjectWith<boolean>");
+      expect(reference("objectWithout")).toBe(
+        "SqliteDb SqliteDb<{ row: string; }>",
+      );
+      expect(reference("fixedInterface")).toBe("SqliteDb SqliteDb<Row>");
+      expect(reference("fixedRecursive")).toBe("SqliteDb SqliteDb<Tree>");
     });
   });
 });

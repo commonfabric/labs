@@ -354,7 +354,7 @@ export const scopeOfWrittenScopedUnion = (
  * recursive one is, adds nothing. `undefined` where `schema` reaches no
  * `anyOf` before a cell.
  */
-const unionBranches = (
+export const unionBranches = (
   schema: MutableJSONSchemaObj,
   definitions: Readonly<Record<string, MutableJSONSchema>>,
   reached = new Set<MutableJSONSchemaObj>(),
