@@ -1,4 +1,4 @@
-import type { Diagnostic, Program, SourceFile } from "typescript";
+import type { Program, SourceFile } from "typescript";
 import {
   type AuthoredSourceLookup,
   CompilerError,
@@ -157,24 +157,6 @@ export class Checker {
         this.#authoredSource,
       );
     }
-  }
-
-  check(diagnostics: readonly Diagnostic[] | undefined) {
-    // The emit path re-reports some semantic codes (TS surfaces 2578 through
-    // per-file emit diagnostics), so the stored-source filter applies here
-    // too.
-    const fatal = (diagnostics ?? []).filter(
-      (diagnostic) =>
-        !this.#storedSource || !isNonFatalDiagnosticCode(diagnostic.code),
-    );
-    if (fatal.length === 0) {
-      return;
-    }
-    throw new CompilerError(
-      fatal.map((diagnostic) => ({ diagnostic })),
-      this.#messageTransformer,
-      this.#authoredSource,
-    );
   }
 
   #sources() {
