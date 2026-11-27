@@ -461,15 +461,22 @@ input marks it or the policy names another epoch. Impl: `StoreCurrency` in `runt
 **A piece a handler starts.** A handler's result pattern runs on the serving
 runtime so that its setup stages into the wave, and each pattern it starts
 registers its nodes there. Nothing demands those nodes, so once the handler's
-transaction commits the result is released (`#releaseServedHandlerResult` in
-`runner.ts`), and what remains is what the store holds, with the basis rows of
-any of its actions that ran. A demand for one of its values, or an event to one
+transaction commits and the scheduler is idle after it, the result is released
+(`#releaseServedHandlerResult` in `runner.ts`), and what remains is what the
+store holds, with the basis rows of any of its actions that ran. The wait for
+idle is what puts the piece's derived values in the store for the derivations
+that read them: the commit sets off every derivation that reads what a new
+piece derives, as a board's index reads what each of its topics derives, and
+each of those runs before the scheduler is idle, so it reads the value from a
+piece that still runs. A piece released at the commit itself would have written
+none of those values, and a derivation reading one through a link starts
+nothing. A demand for one of its values, or an event to one
 of its streams, starts the piece as either starts a piece on a fresh runtime.
 A session demands one of its values when it is sent a document the piece's
 setup wrote, other than its argument, which holds inputs current without it. A
 read that stops at a link to the piece is sent only its result document, and
 starts nothing (`carriesPieceMeta` in `runtime/memory/v2/server-sync.ts`). A
-piece whose document a client session tracks at that commit keeps running,
+piece whose document a client session tracks at the release keeps running,
 because that session's demand has already made its attempt to load it. The result
 pattern's index entry goes with the release, and so do the watches of the
 documents only the stopped pieces read: the release asks for the pass a stop
@@ -2475,6 +2482,17 @@ triggered them has ended. Each crosses on that run's carriage, which
 its caller passes explicitly. They are the compile-cache and program
 writeback into a piece's own space, and the `agent` effect's index
 entry in the requester's home space (builtins.md).
+
+A commit precondition is part of the write it gates. A foreign seal
+that carries only preconditions still lands a commit in the foreign
+store, which takes a seq and a commit row and wakes that space's
+subscribers, so the gate holds it to the same carriage and grant as
+any other foreign write. A run that only observes a foreign document
+does not seal one. The CFC boundary's consultation of a module-policy
+manifest is such an observation: it adds no precondition to the commit
+(CFC spec §4.4.1 as commonfabric/specs#109 proposes; the ruling is
+pending), so a run that reads a policy-labeled value in another
+space commits to its own space alone.
 
 **No run writes an access list.** The wave commits engine-direct, past
 the memory server's INV-12 check (`09-invariants.md`), and nothing on

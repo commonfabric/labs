@@ -331,7 +331,7 @@ export interface CardRow {
 }
 
 /** How many cards the board shows at first, and adds per "Show more". */
-const CARD_PAGE = 100;
+const CARD_PAGE = 50;
 
 /**
  * The cards' topics, most recently active first, as many as the session has
@@ -1032,7 +1032,11 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
 
             {hasMoreCards
               ? (
-                <cf-button variant="secondary" onClick={showMore}>
+                <cf-button
+                  id="show-more-cards"
+                  variant="secondary"
+                  onClick={showMore}
+                >
                   Show more…
                 </cf-button>
               )

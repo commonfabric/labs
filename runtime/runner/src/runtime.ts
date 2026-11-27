@@ -19,7 +19,6 @@ import { aclDocId } from "@commonfabric/memory/acl";
 import {
   acquireServerExecutionEnabler,
   type CellScope,
-  commitPreconditionValueHash,
   type GenesisRoot,
   getCommitPreconditionsConfig,
   getServerExecutionConfig,
@@ -484,6 +483,18 @@ export interface ExperimentalOptions {
    * to off; off, no record is written and a stored one is left as it is.
    */
   pieceCreatorRecord?: boolean | undefined;
+
+  /**
+   * Let the render resolver nominate, as a spec §4.9.3 membership candidate,
+   * a space the rendered label was derived from whose digest a committed
+   * module-policy subject is, and point-query its ACL
+   * (`committedSubjectCandidates` in `cfc/render-ceiling.ts`). A subject the
+   * cross-space representation rule (§4.6.4.1) committed otherwise names no
+   * candidate, so its policy's `HasRole(reader, THIS_POLICY.subject)` rule
+   * fires for no reader. Pending commonfabric/specs#110; defaults to on, and off restores
+   * §4.9.3 as specs#49 states it.
+   */
+  cfcCommittedSubjectCandidates?: boolean | undefined;
 
   /**
    * Compile a pattern factory call bound to a `const` as a named sub-pattern
@@ -1969,33 +1980,21 @@ export class Runtime {
     reference: unknown,
     tx?: IExtendedStorageTransaction,
     destinationSpace?: MemorySpace,
-    bindCommit = true,
   ): PolicyArtifactManifestV1 | undefined {
     if (tx === undefined) return this.#registeredCfcPolicyManifest(reference);
     if (destinationSpace !== undefined) {
-      return this.#readCfcPolicyManifest(
-        destinationSpace,
-        reference,
-        tx,
-        bindCommit,
-      );
+      return this.#readCfcPolicyManifest(destinationSpace, reference, tx);
     }
-    let artifact: PolicyArtifactManifestV1 | undefined;
     const spaces = new Set<MemorySpace>();
     const log = tx.getReactivityLog();
     for (const address of [...log.writes, ...log.reads]) {
       spaces.add(address.space);
     }
     for (const space of spaces) {
-      artifact = this.#readCfcPolicyManifest(space, reference, tx);
-      if (artifact !== undefined) {
-        if (bindCommit) {
-          artifact = this.#readCfcPolicyManifest(space, reference, tx, true);
-        }
-        break;
-      }
+      const artifact = this.#readCfcPolicyManifest(space, reference, tx);
+      if (artifact !== undefined) return artifact;
     }
-    return artifact;
+    return undefined;
   }
 
   #registeredCfcPolicyManifest(
@@ -2084,11 +2083,18 @@ export class Runtime {
     return true;
   }
 
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/109
+  // A consultation is an ordinary read, which adds no precondition of its own
+  // (spec §4.4.1 as commonfabric/specs#109 proposes; the ruling is pending). A
+  // present manifest is verified against its digest here, so a later read finds
+  // this body or none. An absent one fails the label's resolution, which fails
+  // the write and sink gates (prepare.ts), and a reactive run reads it again
+  // when the manifest arrives. Neither releases more than the manifest at its
+  // digest allows.
   #readCfcPolicyManifest(
     space: MemorySpace,
     reference: unknown,
     tx: IExtendedStorageTransaction,
-    bindCommit = false,
   ): PolicyArtifactManifestV1 | undefined {
     if (
       !reference || typeof reference !== "object" || Array.isArray(reference)
@@ -2103,35 +2109,6 @@ export class Runtime {
       tx,
     );
     const stored = snapshotQueryResult(cell.get());
-    if (bindCommit) {
-      const link = cell.getAsNormalizedFullLink();
-      const rawStored = tx.readOrThrow({
-        space: link.space,
-        id: link.id,
-        scope: link.scope,
-        type: "application/json",
-        path: ["value"],
-      });
-      const alreadyWritten = tx.getReactivityLog().writes.some((address) =>
-        address.space === link.space && address.id === link.id &&
-        address.scope === link.scope
-      );
-      if (!alreadyWritten) {
-        if (!tx.addCommitPrecondition) {
-          throw new Error(
-            "cfcPolicyManifest: storage cannot bind manifest consultation",
-          );
-        }
-        tx.addCommitPrecondition(space, {
-          kind: "entity-value-hash",
-          id: link.id,
-          scope: link.scope,
-          valueHash: rawStored === undefined
-            ? null
-            : commitPreconditionValueHash(rawStored),
-        });
-      }
-    }
     if (stored === undefined) return undefined;
     let artifact: PolicyArtifactManifestV1;
     try {
@@ -3099,18 +3076,8 @@ export class Runtime {
           );
         assertCfcReadCeiling(readingTx, address, ceiling, options);
       },
-      resolvePolicyManifest: (
-        reference,
-        tx,
-        destinationSpace,
-        bindCommit,
-      ) =>
-        this.resolveCfcPolicyManifest(
-          reference,
-          tx,
-          destinationSpace,
-          bindCommit,
-        ),
+      resolvePolicyManifest: (reference, tx, destinationSpace) =>
+        this.resolveCfcPolicyManifest(reference, tx, destinationSpace),
       hasPolicyManifest: (space, reference, tx) =>
         this.hasCfcPolicyManifest(space, reference, tx),
       installPolicyManifest: (space, reference, tx) =>
@@ -3634,8 +3601,10 @@ export class Runtime {
    * such targets itself. Same-space targets (fresh-replica read asymmetry):
    * a rejecting-selector sync delivers only the root doc, so a link can
    * point at a doc no selector ever walked — those are fetched only when
-   * the local replica has never seen the doc (`shouldPullDoc`), so reads of
-   * genuinely absent optional values do not become repeated server queries.
+   * `shouldPullDoc()` reserves the fetch, which for an absent doc it does
+   * once until the doc is dropped or the kicked sync rejects (one that
+   * resolves carrying an error keeps the reservation), so reads of genuinely
+   * absent optional values do not become repeated server queries.
    * Fire-and-forget, but registered as a cross-space promise so
    * `storageManager.synced()` and `Cell.pull()`'s convergence loop can await
    * it; the absent doc is a tracked read, so the reader re-runs on arrival.

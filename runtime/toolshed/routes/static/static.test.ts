@@ -25,6 +25,15 @@ describe("Static Routes", () => {
     const text = await response.text();
     expect(text.includes(TEST_ASSET_CONTENT)).toBe(true);
   });
+
+  it("returns the JSON 404 for a name that is not an asset", async () => {
+    const response = await app.request("/static/types/missing.d.ts");
+    expect(response.status).toBe(404);
+    expect(response.headers.get("ETag")).toBeNull();
+    expect(await response.json()).toEqual({
+      message: "Not Found - /static/types/missing.d.ts",
+    });
+  });
 });
 
 describe("ETag HTTP Responses", () => {

@@ -23,7 +23,7 @@ import {
   propValue,
   sendMessage,
 } from "../../tools/test-support/vnode-helpers.ts";
-import SimpleListModule from "./simple-list.tsx";
+import SimpleListModule from "./main.tsx";
 
 // The rendered row whose text field holds `text`.
 const rowOf = (root: unknown, text: string): unknown =>

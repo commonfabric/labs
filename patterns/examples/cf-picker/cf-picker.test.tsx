@@ -6,7 +6,7 @@ import {
   propsOf,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import CfPickerDemo from "./cf-picker.tsx";
+import CfPickerDemo from "./main.tsx";
 
 const pressButton = (ui: unknown, label: string) => {
   const onClick = propsOf(findElementByExactText(ui, "cf-button", label))

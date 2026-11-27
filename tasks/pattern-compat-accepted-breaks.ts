@@ -917,7 +917,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // The same break in the scoped chat, same record.
-    pattern: "examples/scoped-group-chat/main-plain-inputs.tsx",
+    pattern: "examples/scoped-group-chat/plain-inputs/main.tsx",
     baselines: [
       "20260729T022742Z-Z-pkp9K1p6P_byR_",
       "20260909T184756Z-M530BSuyTtIuZ_9J",
@@ -929,7 +929,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // The same break in the scoped chat's writable-input variant, same record.
-    pattern: "examples/scoped-group-chat/main-with-writable-inputs.tsx",
+    pattern: "examples/scoped-group-chat/writable-inputs/main.tsx",
     baselines: [
       "20260729T022742Z-_XyScfA2QEj14JnS",
       "20260909T184756Z-NMt89YDsQnt_urES",

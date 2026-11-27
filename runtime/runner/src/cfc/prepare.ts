@@ -5518,25 +5518,25 @@ const deriveFlowJoinImpl = (
    * writer the evidence at the container does not speak for.
    *
    * The clauses come back as read where the policy-evaluation dial is not
-   * `enforce` and where no location carries evidence. A policy that cannot
-   * be resolved fires none of its rules, so the clause naming it stays as
-   * read on the derived value and the gate that later reads it decides on
-   * it again (§5.3.2: "leaves the original label unchanged").
+   * `enforce` and where no location carries evidence.
    *
-   * Where an evaluation runs out of fuel, each clause that location consumed
-   * comes back split into its alternatives, one clause each. Keeping the
-   * clauses as read is not the strict side there, since a `dropClause` rule
-   * on a clause of several alternatives removes one, which tightens it, and
-   * §5.3.2 makes exhaustion "a hard boundary failure (fail closed), not
-   * permission to continue with a partially rewritten label". The split is
-   * never looser than the clauses as read, and is stricter than any outcome
-   * that keeps one of a clause's original alternatives. It is not a bound on
-   * every outcome: a rule that adds an alternative can enable another that
-   * then drops an original one, leaving a clause the split does not imply.
-   * Exhaustion needs more than 64 firings at one location. The flow join
-   * has callers outside prepare (a query builtin's request label, the
-   * serving loop's processed claim), so it refuses through the label it
-   * returns rather than by throwing.
+   * Where an evaluation runs out of fuel, or a module policy it names does not
+   * resolve, each clause that location consumed comes back split into its
+   * alternatives, one clause each. A module policy's value-intrinsic rules can
+   * fire only here, since the join drops the evidence they guard on, and a
+   * manifest consultation adds no precondition that would catch a replica that
+   * has not received it (§4.4.1, commonfabric/specs#109, pending). Keeping the
+   * clauses as read is not the strict side there, since a `dropClause` rule on
+   * a clause of several alternatives removes one, which tightens it, and §5.3.2
+   * makes exhaustion "a hard boundary failure (fail closed), not permission to
+   * continue with a partially rewritten label". The split is never looser than
+   * the clauses as read, and is stricter than any outcome that keeps one of a
+   * clause's original alternatives. It is not a bound on every outcome: a rule
+   * that adds an alternative can enable another that then drops an original
+   * one, leaving a clause the split does not imply. Exhaustion needs more than
+   * 64 firings at one location. The flow join has callers outside prepare (a
+   * query builtin's request label, the serving loop's processed claim), so it
+   * refuses through the label it returns rather than by throwing.
    */
   const exchangedAtObservation = (
     document: string,
@@ -5583,7 +5583,7 @@ const deriveFlowJoinImpl = (
           admitsRulesOfKind("value-intrinsic"),
           manifestFor,
         );
-        return outcome.exhausted
+        return outcome.exhausted || outcome.resolutionFailures.length > 0
           ? consumed.flatMap((clause) => clauseAlternatives(clause))
           : outcome.confidentiality;
       },
@@ -9218,13 +9218,23 @@ const verifyInputRequirements = (
           read.locations,
           [],
           mode === "enforce" ? "consuming" : "observing",
-          target.space,
+          // The space the label was read from holds its manifests (atomic
+          // persistence, spec §4.4.1). The target may receive its copy only
+          // from the commit this gate decides, so a lookup there alone
+          // would refuse a cold cross-space copy on every attempt.
+          read.space,
         );
         if (mode === "enforce") {
           // Exhaustion fails closed; otherwise subsumption-fit the REWRITTEN
           // label (spec §8.10.3 clause fit — flat ceilings keep their
-          // conjunctive meaning through atomsOutsideCeiling).
+          // conjunctive meaning through atomsOutsideCeiling). A module manifest
+          // that did not resolve fails the gate even where the unrewritten
+          // label fits (spec §5.3.2): a rule may drop an alternative, so the
+          // manifest's rules could have made the label stricter, and the
+          // consultation adds no precondition that would catch a replica that
+          // has not received it (§4.4.1, commonfabric/specs#109, pending).
           const fits = outcome.exhausted === false &&
+            outcome.resolutionFailures.length === 0 &&
             atomsOutsideCeiling(outcome.confidentiality, maxConfidentiality)
                 .length === 0;
           if (
@@ -9900,7 +9910,7 @@ const installCarriedPolicyManifests = (
     // space it just read. Resolve first so the runtime verifies and indexes
     // that exact artifact, then atomically install it beside the destination
     // label in this transaction.
-    tx.resolveCfcPolicyManifest(reference, undefined, false);
+    tx.resolveCfcPolicyManifest(reference);
     if (
       !tx.hasCfcPolicyManifest(destination, reference) &&
       !tx.installCfcPolicyManifest(destination, reference)
@@ -12466,8 +12476,8 @@ type ManifestLookup = (
 /**
  * A manifest lookup for one pass of exchange evaluations, which resolves each
  * module policy once per space rather than once per evaluation. A resolution
- * reads the manifest document, adds its reads to the journal and binds it into
- * the commit, so a pass that evaluates at every location of a long list
+ * reads the manifest document and adds its reads to the journal, so a pass
+ * that evaluates at every location of a long list
  * otherwise pays that per location. Absences are kept too. Sound only while the
  * pass installs no manifest: a pass that does must take a new lookup after it.
  * A lookup with no space named resolves over the spaces the journal has
@@ -12477,11 +12487,12 @@ const passManifestLookup = (
   tx: IExtendedStorageTransaction,
 ): ManifestLookup => {
   const resolved = new Map<string, unknown>();
-  // A lookup is not an observation of the manifest: the commit is bound to
-  // the manifest it found by a precondition, and like every other policy
-  // lookup it reads under `internalVerifierRead`. Read plainly, a flow join
-  // that made it would walk the manifest document as an unlabeled input,
-  // whose empty integrity ends the hereditary meet.
+  // A lookup is not an observation of the manifest: the manifest is bound by
+  // its digest rather than by the commit (§4.4.1, commonfabric/specs#109,
+  // pending), and like every other policy lookup it reads under
+  // `internalVerifierRead`. Read plainly, a flow join that made it would walk
+  // the manifest document as an unlabeled input, whose empty integrity ends the
+  // hereditary meet.
   const resolve = (
     reference: CfcModulePolicyRefAtom,
     space: MemorySpace | undefined,
@@ -12764,12 +12775,11 @@ const verifySinkRequestCeilings = (
         const spaces = [...(consumed.modulePolicySpaces.get(key) ?? [])]
           .sort();
         if (spaces.length === 0) return undefined;
-        // Every consumed label origin must carry its own exact local copy.
-        // Bind every origin into the commit, so a concurrent change in any
-        // one of them rejects the release before its post-commit effect can
-        // flush. Precondition-only origin commits are harmless to split; the
-        // effect runs only after the complete transaction succeeds.
-        tx.enableMultiSpaceWrites?.(spaces);
+        // SPEC-PENDING https://github.com/commonfabric/specs/pull/109
+        // Every consumed label origin must carry its own exact local copy. A
+        // copy is bound by its digest, and a missing one fails the release
+        // below, so no origin takes a precondition (§4.4.1,
+        // commonfabric/specs#109, pending).
         for (const space of spaces) {
           if (tx.resolveCfcPolicyManifest(reference, space) === undefined) {
             return undefined;
@@ -12796,9 +12806,24 @@ const verifySinkRequestCeilings = (
           );
           continue;
         }
+        if (outcome.resolutionFailures.length > 0) {
+          // A manifest that did not resolve fails the release even where the
+          // unrewritten label fits (spec §5.3.2; §4.4.1,
+          // commonfabric/specs#109, pending), as the write gate does.
+          // Retryable: the manifest may arrive.
+          noteModulePolicyResolutionFailures(
+            tx,
+            `sink-request ${sink}`,
+            outcome.resolutionFailures,
+          );
+          reasons.push(
+            `cfcPolicyManifest: module policy did not resolve for ` +
+              `sink-request ${sink}`,
+          );
+          continue;
+        }
         effective = outcome.confidentiality;
-        verdict = outcome.resolutionFailures.length === 0 &&
-          !outcome.grantResolutionUnavailable;
+        verdict = !outcome.grantResolutionUnavailable;
       } else {
         // observe: decide exactly as `off` would; diagnose what enforce
         // would have done differently.

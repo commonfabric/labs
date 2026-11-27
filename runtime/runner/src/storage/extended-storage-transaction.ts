@@ -359,7 +359,6 @@ export type CfcInstrumentationHooks = {
     reference: unknown,
     tx: IExtendedStorageTransaction,
     destinationSpace?: MemorySpace,
-    bindCommit?: boolean,
   ): unknown;
   hasPolicyManifest?(
     space: MemorySpace,
@@ -1232,13 +1231,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   resolveCfcPolicyManifest(
     reference: unknown,
     destinationSpace?: MemorySpace,
-    bindCommit?: boolean,
   ): unknown {
     return this.#cfcInstrumentation.resolvePolicyManifest?.(
       reference,
       this,
       destinationSpace,
-      bindCommit,
     );
   }
 
@@ -5556,12 +5553,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
   resolveCfcPolicyManifest(
     reference: unknown,
     destinationSpace?: MemorySpace,
-    bindCommit?: boolean,
   ): unknown {
     return this.#wrapped.resolveCfcPolicyManifest(
       reference,
       destinationSpace,
-      bindCommit,
     );
   }
 

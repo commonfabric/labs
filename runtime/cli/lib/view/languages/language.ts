@@ -32,7 +32,11 @@ import type { DecodedLanguageSource, LanguageDecoder } from "./decoder.ts";
 import { utf8Decoder } from "./decoder.ts";
 import { typeScriptLanguage } from "./typescript/language.ts";
 import { markdownLanguage } from "./markdown/language.ts";
-import { jsonLanguage, jsonLinesLanguage } from "./json/language.ts";
+import {
+  jsoncLanguage,
+  jsonLanguage,
+  jsonLinesLanguage,
+} from "./json/language.ts";
 import { yamlLanguage } from "./yaml/language.ts";
 import {
   bazelignoreLanguage,
@@ -542,6 +546,7 @@ function allLanguages(): readonly Language[] {
   return languages ??= [
     typeScriptLanguage,
     markdownLanguage,
+    jsoncLanguage,
     jsonLanguage,
     jsonLinesLanguage,
     yamlLanguage,

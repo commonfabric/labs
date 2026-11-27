@@ -1,5 +1,5 @@
 import { assert, NAME, pattern, TESTS } from "commonfabric";
-import TrustedComponentExamples from "./main.tsx";
+import TrustedComponentExamples from "./cfc-trusted-component-examples.tsx";
 
 export default pattern(() => {
   const gallery = TrustedComponentExamples({});

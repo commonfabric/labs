@@ -146,8 +146,8 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   mirrors what a listing shows of a topic into a SQLite table named `topics`:
   its title, body, number, creation and activity instants, comment count, and
   who filed it. Every listing is a query over that table, so none of them reads
-  a topic: the cards, most recently active first, a hundred at first and a
-  hundred more each time a session presses "Show more…"; the topic count; the
+  a topic: the cards, most recently active first, fifty at first and fifty
+  more each time a session presses "Show more…"; the topic count; the
   mention universe; and the `topics` and `index` outputs, which carry each topic
   as a reference.
 

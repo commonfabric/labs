@@ -55,7 +55,7 @@ describe("cfc spec gallery integration test", () => {
       "..",
       "examples",
       "cfc-spec-gallery",
-      "main.tsx",
+      "cfc-spec-gallery.tsx",
     );
     const rootPath = join(import.meta.dirname!, "..");
     const program = await resolveLocalProgram(

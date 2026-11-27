@@ -413,10 +413,12 @@ One board of one size catches a regression but says nothing about shape: a
 change that is flat at thirty topics and quadratic at three hundred looks the
 same on the navigation benchmark's `board` series.
 `patterns/integration/topic-board-scale.bench.ts` measures that same
-thing — a signed-in cold load, timed until every card has rendered — across
-board sizes of 100, 1000, and 10000, in a `topic board scale` group whose
-series are named for the sizes. The boards carry no crossrefs, so the numbers
-describe the cost of the list rather than of the join over it.
+thing — a signed-in cold load, timed until the board's first page of cards has
+rendered — across board sizes of 100, 1000, and 10000, in a `topic board scale`
+group whose series are named for the sizes. A session shows the board's 50 most
+recently active topics until it asks for more, so every size renders 50 cards
+and what grows is the board behind them. The boards carry no crossrefs, so the
+numbers describe the cost of the list rather than of the join over it.
 `CF_TOPIC_BOARD_DEMAND=full` selects full-result seeding. The navigation
 fixture's citations and the scale fixture's lack of citations are distinct
 workloads, so their timings do not form a size-only comparison.

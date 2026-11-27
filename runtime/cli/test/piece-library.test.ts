@@ -1,11 +1,13 @@
 /**
- * Functions of `lib/piece.ts`, each handed the connection, runtime, or
- * deadline a deployment would otherwise supply.
+ * Functions of `lib/piece.ts`, each handed the connection or runtime a
+ * deployment would otherwise supply.
  */
 
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
+import { FakeTime } from "@std/testing/time";
 
+import { defer } from "@commonfabric/async/defer";
 import { createSession, Identity } from "@commonfabric/identity";
 import { pieceId, SlugResolutionError } from "@commonfabric/piece";
 import { PieceController, PiecesController } from "@commonfabric/piece/ops";
@@ -15,7 +17,6 @@ import {
   Runtime,
   type RuntimeProgram,
 } from "@commonfabric/runner";
-import type { NameSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { FabricPlainObject } from "@commonfabric/data-model";
 import {
@@ -30,10 +31,6 @@ import {
 } from "@commonfabric/test-support/test";
 
 import { externalRefTo } from "../../runner/test/schema-ref-helpers.ts";
-import {
-  CF_RUNTIME_ERROR_LOG,
-  type CliRuntimeErrorRecord,
-} from "../lib/callable.ts";
 import type { LifecycleClientConfig } from "../lib/pattern-lifecycle.ts";
 import {
   createSpace,
@@ -466,90 +463,143 @@ export default pattern<{ title: string; settings: string | Record<string, string
       );
     }
 
-    describe("the start's deadline", () => {
+    describe("the start", () => {
+      /** A program whose pattern's body is `body`. */
+      function patternProgram(body: string): RuntimeProgram {
+        return {
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents: [
+              "import { pattern } from 'commonfabric';",
+              `export default pattern<{ seed?: string }>(() => ${body});`,
+              "",
+            ].join("\n"),
+          }],
+        };
+      }
+
+      const CLEAN = patternProgram("({ ok: true })");
+
+      // The space's root, which registers each piece created in it.
+      beforeEach(async () => {
+        const root = await pieces().create({
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents: [
+              "import { handler, pattern, Writable } from 'commonfabric';",
+              "const addPiece = handler<",
+              "  { piece: Writable<unknown> },",
+              "  { pieces: Writable<Writable<unknown>[]> }",
+              ">(({ piece }, { pieces }) => { pieces.addUnique(piece); });",
+              "export default pattern(() => {",
+              "  const pieces = new Writable<Writable<unknown>[]>([]);",
+              "  return { pieceRegistry: pieces, addPiece: addPiece({ pieces }) };",
+              "});",
+              "",
+            ].join("\n"),
+          }],
+        });
+        await pieces().linkDefaultPattern(root.getCell());
+      });
+
       /**
-       * Creates a piece on this client whose runtime has recorded `errors`,
-       * starting it with `start`, which may record more, under `deadline`.
+       * Creates a piece from `program` on this client, which runs the piece
+       * itself, under `requestKey` when one is given. With `hold`, the
+       * step that starts the piece finishes and then waits for the promise
+       * `hold` returns before the command sees its outcome: the creation,
+       * which starts the piece as it creates it, without a request key, and
+       * the start that follows the creation with one.
        */
       function createLocal(
-        errors: CliRuntimeErrorRecord[],
-        start: () => Promise<unknown>,
-        deadline: (settled: AbortSignal) => Promise<void>,
+        program: RuntimeProgram,
+        requestKey: string | undefined,
+        hold?: () => Promise<void>,
       ): Promise<string> {
-        // Held apart from the call so the error log, which the runtime keeps
-        // under a symbol its type does not declare, can ride along.
-        const runtimeOverrides = {
-          experimental: { serverExecution: false },
-          [CF_RUNTIME_ERROR_LOG]: errors,
-        };
+        const after = <T>(work: () => Promise<T>): Promise<T> =>
+          hold === undefined
+            ? work()
+            : work().then((outcome) => hold().then(() => outcome));
         return newPiece(
           CONFIG,
           { mainPath: "/main.tsx" },
-          {},
+          requestKey === undefined ? {} : { requestKey },
           {
             loadPieces: () =>
               Promise.resolve(overriding(pieces(), {
-                runtime: overriding(pieces().runtime, runtimeOverrides),
-                ensureDefaultPattern: () =>
-                  Promise.resolve(
-                    new PieceController(
-                      pieces(),
-                      pieces().runtime.getCell<NameSchema>(space, "root"),
-                    ),
-                  ),
-                create: start as PiecesController["create"],
-                add: () => Promise.resolve(),
+                runtime: overriding(pieces().runtime, {
+                  experimental: { serverExecution: false },
+                }),
+                create: <U>(
+                  program: Parameters<PiecesController["create"]>[0],
+                  options?: Parameters<PiecesController["create"]>[1],
+                ) => after(() => pieces().create<U>(program, options)),
+                startPiece: (piece) => after(() => pieces().startPiece(piece)),
               })),
-            getPinnedProgramFromFile: () => Promise.resolve(PROGRAM),
-            startDeadline: deadline,
+            getPinnedProgramFromFile: () => Promise.resolve(program),
+            loadIdentity: () => Promise.resolve(signer),
           },
         );
       }
 
-      const never = () => new Promise<never>(() => {});
+      for (
+        const [path, requestKey] of [
+          ["without a request key", undefined],
+          ["with a request key", "the-start"],
+        ] as const
+      ) {
+        describe(path, () => {
+          it("returns the piece once a start held for an hour finishes", async () => {
+            const reached = defer<void>();
+            const released = defer<void>();
+            let returned: string | undefined;
+            let creating: Promise<unknown>;
+            {
+              // The clock is faked from before the creation begins until the
+              // start has been held for an hour, so every timer the creation
+              // and the start arm is armed on it, and runs during that hour.
+              using time = new FakeTime();
+              creating = createLocal(CLEAN, requestKey, () => {
+                reached.resolve();
+                return released.promise;
+              }).then((id) => returned = id);
 
-      it("reports the runtime error recorded while the piece started once the deadline passes", async () => {
-        const errors: CliRuntimeErrorRecord[] = [{ message: "before" }];
+              await reached.promise;
+              await time.tickAsync(60 * 60 * 1000);
+              expect(returned).toBeUndefined();
+            }
+            released.resolve();
+            await creating;
 
-        await expect(
-          createLocal(
-            errors,
-            () => {
-              errors.push({ message: "the pattern threw while starting" });
-              return never();
-            },
-            () => Promise.resolve(),
-          ),
-        ).rejects.toThrow(
-          "Piece created but failed to start within 60s. A runtime error " +
-            "was reported while it started: the pattern threw while starting",
-        );
-      });
+            expect(returned).toMatch(/^fid1:/);
+          });
 
-      it("points at the server logs once the deadline passes with no error recorded since the start", async () => {
-        await expect(
-          createLocal([{ message: "before" }], never, () => Promise.resolve()),
-        ).rejects.toThrow(
-          "Piece created but failed to start within 60s. Check toolshed " +
-            "logs for runtime errors.",
-        );
-      });
+          it("throws the error of a pattern that throws while it is set up", async () => {
+            await expect(
+              createLocal(
+                patternProgram(
+                  "{ throw new Error('the pattern threw while it was set up'); }",
+                ),
+                requestKey,
+              ),
+            ).rejects.toThrow("the pattern threw while it was set up");
+          });
 
-      it("returns the piece and stops the deadline when the piece starts first", async () => {
-        const deadlines: AbortSignal[] = [];
+          it("throws the error of a pattern that fails to compile", async () => {
+            await expect(
+              createLocal(patternProgram("({ ok: undeclared })"), requestKey),
+            ).rejects.toThrow("Cannot find name 'undeclared'");
+          });
 
-        const id = await createLocal(
-          [],
-          () => Promise.resolve({ id: "fid1:started", getCell: () => ({}) }),
-          (settled) => {
-            deadlines.push(settled);
-            return never();
-          },
-        );
+          it("returns the id of a piece whose pattern sets up cleanly", async () => {
+            const id = await createLocal(CLEAN, requestKey);
 
-        expect(id).toBe("fid1:started");
-        expect(deadlines.map((settled) => settled.aborted)).toEqual([true]);
-      });
+            expect(await (await pieces().get(id, false)).result.get())
+              .toEqual({ ok: true });
+          });
+        });
+      }
     });
 
     describe("the served-verb client", () => {

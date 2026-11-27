@@ -1917,7 +1917,8 @@ export class StorageManager implements IStorageManager {
 
   /**
    * Docs already offered a link-target pull via `shouldPullDoc()`. One entry
-   * per (space, scope, id) for the manager's lifetime: the first pull registers
+   * per (space, scope, id), kept until the replica drops the doc, the kicked
+   * sync rejects, or the manager releases the space: the first pull registers
    * a server-side watch that keeps the doc flowing afterwards, so a second kick
    * is never needed — and never re-kicking is what keeps reads of genuinely
    * absent targets (dangling links, deleted docs) from churning the cross-space
@@ -3709,16 +3710,26 @@ export class StorageManager implements IStorageManager {
       return false;
     }
     this.#docPullKicks.add(key);
-    // State the local replica can already serve needs no pull. getState is
-    // undefined both for never-pulled docs and for docs known to hold no
-    // value (deleted / genuinely absent) — the second kind gets one harmless
-    // kick and is then held off by the kick set above.
-    return this.open(space).replica.get({
-      id,
-      type: DOCUMENT_MIME as MIME,
-      scope,
-      ...(instance !== undefined ? { scopeKey: instance } : {}),
-    }) === undefined;
+    // A doc the replica holds no value for is pulled. `get()` is undefined
+    // both for never-pulled docs and for docs known to hold no value (deleted
+    // / genuinely absent) — the second kind gets one harmless kick and is
+    // then held off by the kick set above.
+    const { replica } = this.open(space);
+    if (
+      replica.get({
+        id,
+        type: DOCUMENT_MIME as MIME,
+        scope,
+        ...(instance !== undefined ? { scopeKey: instance } : {}),
+      }) === undefined
+    ) {
+      return true;
+    }
+    // A value the replica can serve needs no pull where a frame delivered it
+    // or a watch is rooted at it. One it holds from its own commit alone is
+    // served too, but nothing shows that a watch brings in what other
+    // sessions store there after it. The pull registers that watch.
+    return replica.lacksWatchEvidence?.(id, scope, instance) === true;
   }
 
   /** @inheritDoc */
@@ -8276,6 +8287,42 @@ export class SpaceReplica
       return undefined;
     }
     return this.#completeThroughSeq;
+  }
+
+  /**
+   * @inheritDoc
+   *
+   * No frame has delivered such a document, no watch of this replica's is
+   * rooted at it, and no release pass or retraction has settled what the
+   * session keeps of it. The server sends a session the documents its
+   * watches reach, so such a document stays at the replica's own version
+   * while other sessions change it, until something loads it, unless a
+   * watch rooted at another document reaches it. A document a release pass
+   * owes a watch, or one a retraction left unwatched for its holder, is
+   * that pass's to settle. Content under a
+   * content-addressed id cannot change and needs no watch, a document held
+   * only in this replica has no stored copy another session could change,
+   * and a replica that reads its store directly learns of every write to a
+   * document it holds.
+   */
+  lacksWatchEvidence(
+    id: URI,
+    scope?: CellScope,
+    instance?: ScopeKey,
+  ): boolean {
+    if (this.#storeReadThrough() !== undefined) return false;
+    const address = {
+      id,
+      scope,
+      ...(instance !== undefined ? { scopeKey: instance } : {}),
+    };
+    if (this.#isLocalSessionDocument(address)) return false;
+    const key = this.#docKeyOf(address);
+    const record = this.#docs.get(key);
+    return record !== undefined && !this.#delivered.has(key) &&
+      (this.#rootWatches.get(key)?.watches.size ?? 0) === 0 &&
+      !this.#owedWatches.has(key) && !this.#retractedHeld.has(key) &&
+      !holdsImmutableContent(id, scope, record);
   }
 
   /** ISpaceReplica.isConfirmedDocument. */

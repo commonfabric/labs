@@ -6,6 +6,7 @@ import type {
 import {
   DEFAULT_SUBAGENT_PROFILE,
   HARNESS_SUBAGENT_PROFILES,
+  IMAGE_REVIEW_SUBAGENT_PROFILE,
   MAX_DELEGATE_PATTERN_REF_NOTE_LENGTH,
   MAX_DELEGATE_PATTERN_REFS,
   PATTERN_AUTHOR_SUBAGENT_PROFILE,
@@ -27,19 +28,24 @@ const PATTERN_AUTHOR_DESCRIPTION =
 const delegateTaskDescriptor = (
   profiles: readonly HarnessSubagentProfile[],
 ): HarnessToolDescriptor => {
+  const imagesOnly = profiles.length === 1 &&
+    profiles[0] === IMAGE_REVIEW_SUBAGENT_PROFILE;
   const authors = profiles.includes(PATTERN_AUTHOR_SUBAGENT_PROFILE);
   return {
     toolId: "delegate_task",
     title: "Delegate Task",
-    description:
-      "Run one focused subagent with a fresh context and return only its structured summary and retained run references.",
+    description: imagesOnly
+      ? "Review the author’s selected images with a tool-free child. Read its visual feedback in subagent.summary."
+      : "Run one focused subagent with a fresh context and return only its structured summary and retained run references.",
     effectClass: "side-effect",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       // An omitted profile is the default one, so a run that may not use it
       // must name the profile it delegates to.
-      required: profiles.includes(DEFAULT_SUBAGENT_PROFILE)
+      required: imagesOnly
+        ? ["goal", "profile", "imageOutputIds"]
+        : profiles.includes(DEFAULT_SUBAGENT_PROFILE)
         ? ["goal"]
         : ["goal", "profile"],
       properties: {
@@ -62,30 +68,32 @@ const delegateTaskDescriptor = (
           description:
             "Supporting context, paths, constraints, or expected output.",
         },
-        patternRefs: {
-          type: "array",
-          maxItems: MAX_DELEGATE_PATTERN_REFS,
-          items: {
-            type: "object",
-            properties: {
-              patternId: {
-                type: "string",
-                minLength: 1,
-                description:
-                  "As search_patterns or host-confirmed research gave it.",
+        ...(imagesOnly ? {} : {
+          patternRefs: {
+            type: "array",
+            maxItems: MAX_DELEGATE_PATTERN_REFS,
+            items: {
+              type: "object",
+              properties: {
+                patternId: {
+                  type: "string",
+                  minLength: 1,
+                  description:
+                    "As search_patterns or host-confirmed research gave it.",
+                },
+                note: {
+                  type: "string",
+                  maxLength: MAX_DELEGATE_PATTERN_REF_NOTE_LENGTH,
+                  description: "Your note on this pattern, passed verbatim.",
+                },
               },
-              note: {
-                type: "string",
-                maxLength: MAX_DELEGATE_PATTERN_REF_NOTE_LENGTH,
-                description: "Your note on this pattern, passed verbatim.",
-              },
+              required: ["patternId"],
+              additionalProperties: false,
             },
-            required: ["patternId"],
-            additionalProperties: false,
+            description:
+              "Published patterns to attach, with their trusted metadata.",
           },
-          description:
-            "Published patterns to attach, with their trusted metadata.",
-        },
+        }),
         maxModelTurns: {
           type: "integer",
           minimum: 1,
@@ -93,19 +101,35 @@ const delegateTaskDescriptor = (
           description:
             "Child model-turn cap; the harness subagent cap when omitted.",
         },
-        returnSchema: {
-          anyOf: [
-            { type: "boolean" },
-            { type: "object", additionalProperties: true },
-          ],
-          description:
-            "JSON Schema the child's whole return must match; open-ended strings are linkified before you see them.",
-        },
-        skillHandle: {
-          type: "string",
-          description:
-            "A cfh:a: handle to a cell of skill text, injected into the child's context unseen by this run.",
-        },
+        ...(imagesOnly ? {} : {
+          returnSchema: {
+            anyOf: [
+              { type: "boolean" },
+              { type: "object", additionalProperties: true },
+            ],
+            description:
+              "JSON Schema the child's whole return must match; open-ended strings are linkified before you see them.",
+          },
+        }),
+        ...(profiles.includes(IMAGE_REVIEW_SUBAGENT_PROFILE)
+          ? {
+            imageOutputIds: {
+              type: "array",
+              minItems: 1,
+              uniqueItems: true,
+              items: { type: "string" },
+              description:
+                "Required for image-review. Supply distinct view_image output IDs from this run, in the order described in your goal. A new root run must open its frames again with view_image. Omit patternRefs, returnSchema and skillHandle. The child sees the frames and your text, has no tools, and returns prose in subagent.summary.",
+            },
+          }
+          : {}),
+        ...(imagesOnly ? {} : {
+          skillHandle: {
+            type: "string",
+            description:
+              "A cfh:a: handle to a cell of skill text, injected into the child's context unseen by this run.",
+          },
+        }),
         withoutSkillHandle: {
           type: "boolean",
           description: "Declares this delegation runs with no skill.",

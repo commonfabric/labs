@@ -26,7 +26,7 @@ import KnowledgeGraph, {
 
 import QuickCapture from "../../system/quick-capture/quick-capture.tsx";
 import OmniboxFAB from "../../system/omnibox-fab/omnibox-fab.tsx";
-import DoList from "../../examples/do-list/do-list.tsx";
+import DoList from "../../examples/do-list/main.tsx";
 import Notebook from "../../system/notes/notebook.tsx";
 import DailyJournal from "../../system/notes/daily-journal.tsx";
 import PieceGrid from "../../system/piece-grid/piece-grid.tsx";

@@ -8,7 +8,7 @@ import {
   propValue,
   styleOf,
 } from "../../tools/test-support/vnode-helpers.ts";
-import RenderPolicyDemo from "./main.tsx";
+import RenderPolicyDemo from "./cfc-render-policy-demo.tsx";
 
 // The surface and actions the demo's trusted controls declare.
 const TRUSTED_HEALTH_DISCLOSURE_SURFACE = "TrustedHealthDisclosureSurface";

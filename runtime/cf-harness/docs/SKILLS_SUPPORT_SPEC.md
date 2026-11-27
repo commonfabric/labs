@@ -535,6 +535,29 @@ read, and under `enforce-strict` it may call only its return channels. Nothing
 yet tells a delegation the person started apart from one the model chose, so the
 lowering applies to both.
 
+The exception is an acquired skill that an accepted review fully covers. A
+reviewed-skills file, passed with `--reviewed-skills`, lists reviewed bundles
+and the verifiers the run accepts. Each entry names a verifier, the skill's
+discovery id `owner/repo/slug`, and a bundle digest; it may name the commit the
+reviewer read as `reviewedCommit`, which is recorded and not matched. The bundle
+digest is taken over one line of `<path>\t<file digest>\n` per file, sorted by
+path, with `SKILL.md` and every acquired script listed, and digested the way
+acquisition digests a file. An entry may also name the review checklist it was
+read against and a `validUntil`, an ISO 8601 time with an offset. The file can
+revoke a bundle by listing its digest in `revoked`. A child keeps the delegating
+run's binding when all of these hold:
+
+- the text its handle resolved to is the text acquisition digested;
+- its bundle's digest matches a live entry for the same skill id, compared
+  without regard to case;
+- the entry's verifier is accepted, through the same trust closure that trusts a
+  connector.
+
+The child's run manifest records the review as `reviewedSkill`. Its skill text
+is still `quote`, and what it reads while it works is still treated as
+injectable. [Reviewed skills](../../../docs/plans/reviewed-skills.md) has the
+design.
+
 Policy rules:
 
 - A skill cannot grant a tool that the run did not already allow.
@@ -559,9 +582,10 @@ Policy rules:
   runs in the sandbox; a run whose skill-script execution target is the host
   refuses it.
 - `run_skill_script` is a side-effect tool, and the child that holds an acquired
-  skill runs as `quote`, so under an enforce mode the call is refused before
-  either gate is reached. Nothing yet lets a reviewed skill's script run under
-  enforcement.
+  skill runs as `quote` unless an accepted review covers it, so under an enforce
+  mode an unreviewed skill's call is refused before either gate is reached. A
+  child whose skill a review covers keeps its parent's binding, so its calls
+  reach both gates as its parent's would.
 - What backs `run_skill_script` for an acquired script is the mount that puts it
   at a path, so a run given no `--skills-root` still offers the tool to a child
   whose sandbox carries that mount, and `--allow-skill-script` takes an acquired

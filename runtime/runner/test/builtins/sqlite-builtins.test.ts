@@ -33,6 +33,7 @@ import { runtimeSecretId } from "../../src/runtime-secret.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import { createTransactionCommitReceipt } from "../../src/storage/commit-receipt.ts";
 import type { CommitError, Result, Unit } from "../../src/storage/interface.ts";
+import { isStaleReadConflict } from "../../src/storage/rejection.ts";
 import { getTransactionWriteAttempts } from "../../src/storage/transaction-inspection.ts";
 import { createTrustedBuilder } from "../support/trusted-builder.ts";
 
@@ -516,6 +517,75 @@ describe({
       expect(refused).toBe(1);
       expect(state.error).toBe(refusal.message);
       expect(state.result).toBeUndefined();
+    });
+
+    it("links its result into its output when the commit of its first run is refused as stale", async () => {
+      // A query's first run links the cell holding its result into the
+      // node's output. The commit of that run is refused here as the engine
+      // refuses a stale read, which the scheduler answers by running the
+      // query again, so only the second run can make that link.
+      start();
+      const db = newDb();
+      await seed(db, "INSERT INTO notes (body) VALUES (?)", ["hello"]);
+      const { commonfabric: cf } = createTrustedBuilder(runtime);
+      const p = cf.pattern(() =>
+        // deno-lint-ignore no-explicit-any
+        cf.sqliteQuery({ db, sql: "SELECT body FROM notes" } as any)
+      );
+      const setup = runtime.edit();
+      const result = runtime.run(
+        setup,
+        p,
+        {},
+        runtime.getCell(
+          space,
+          `query-${crypto.randomUUID()}`,
+          p.resultSchema,
+          setup,
+        ),
+      );
+      expect((await setup.commit().settled).error).toBeUndefined();
+      // The engine's stale-read refusal carries more fields than these two,
+      // and the scheduler decides from its name to run the action again.
+      const stale = {
+        name: "ConflictError",
+        message: "stale confirmed read: of:doc at seq 1 conflicted with seq 2",
+      } as CommitError;
+      expect(isStaleReadConflict(stale)).toBe(true);
+      // The query is the pattern's one node, so the first transaction a
+      // scheduled action commits is the query's first run.
+      const edit = runtime.edit.bind(runtime);
+      let refused = 0;
+      runtime.edit = (...args) => {
+        const opened = edit(...args);
+        const commit = opened.commit.bind(opened);
+        opened.commit = (options) => {
+          if (refused === 0 && opened.tx.sourceAction !== undefined) {
+            refused++;
+            opened.abort(stale);
+            return createTransactionCommitReceipt(
+              Promise.resolve<Result<Unit, CommitError>>({ error: stale }),
+            );
+          }
+          return commit(options);
+        };
+        return opened;
+      };
+      const cancel = result.sink(() => {});
+      try {
+        await runtime.settled();
+      } finally {
+        cancel();
+        runtime.edit = edit;
+      }
+
+      expect(refused).toBe(1);
+      const state = result.get() as QueryState | undefined;
+      expect(state?.pending).toBe(false);
+      expect(state?.error).toBeUndefined();
+      expect(state?.result?.map((row) => ({ ...row }))).toEqual([
+        { body: "hello" },
+      ]);
     });
 
     it("leaves a running query's claim alone when the next query is refused", async () => {

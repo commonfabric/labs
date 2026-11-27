@@ -10,7 +10,7 @@
  * requires integrity a literal does not carry.
  */
 import { assert, pattern, TESTS, UI } from "commonfabric";
-import Demo from "./main.tsx";
+import Demo from "./cfc-agent-prompt-injection-demo.tsx";
 
 const UNSAFE = "intentionally vulnerable control agent";
 const SAFE = "You are the safe control agent";

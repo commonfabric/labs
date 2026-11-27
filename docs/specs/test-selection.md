@@ -1083,7 +1083,11 @@ under the dataset area
 schema version, the generation time, the exploration seed, the commit
 whose tree was enumerated, how many runs the aggregate saw, every dial it
 was built with, the fitted calibration numbers, every identity with its
-score and its flake share and the inputs and counts behind both, the
+score and its flake share and the inputs and counts behind both and the
+last day anything ran it, for an identity it withholds the last day it
+failed on the default branch or disagreed with itself and the newest of
+the disagreements behind that share with the runs on either side of each,
+the
 withheld set with its reason, the
 tests a configuration deliberately does not run, a reference packing into
 lanes, the unschedulable list, a count and digest of known identities, and
@@ -1095,9 +1099,10 @@ over what they were charged; how many lanes ran past their bound; and
 what the publisher found broken in those figures.
 
 A manifest is **untrusted input**. It is validated whole, and one bad field
-rejects the object rather than leaving a consumer obeying half of it. The health
-is the one exception, because nothing obeys it: a health a reader cannot read is
-dropped and the rest of the manifest is read. A manifest declaring a shape from
+rejects the object rather than leaving a consumer obeying half of it. The
+health, the last failures, and the disagreements are the exceptions, because
+nothing obeys them: one a reader cannot read is dropped, and the rest of the
+manifest is read. A manifest declaring a shape from
 further ahead than the reader is treated as absent, because a reader that does
 not know a field cannot know what obeying the rest would mean. A reader whose
 answer decides what runs takes the newest one behind it instead, since a figure

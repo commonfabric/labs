@@ -52,7 +52,7 @@ describe("instantiate-pattern integration test", () => {
           "..",
           "examples",
           "instantiate-pattern",
-          "instantiate-pattern.tsx",
+          "main.tsx",
         ),
       ),
       { start: true },

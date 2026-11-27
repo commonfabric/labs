@@ -96,28 +96,26 @@ benefited (see the contract doc's "Lessons" section).
 
 `dev/catalog/` (type-checked component catalog + `dev/catalog/stories/`),
 `examples/counter/`, `examples/do-list/`, `examples/fair-share/`,
-`examples/form-demo/form-demo.tsx`, `system/notes/`, `examples/reading-list/`
+`examples/form-demo/main.tsx`, `system/notes/`, `examples/reading-list/`
 (canonical list-detail example), `examples/simple-list/`, `examples/todo-list/`.
 
 ## demo
 
 Capability and app demos, each a single file: `apps/annotation/annotation.tsx`,
-`apps/annotation-manager/main.tsx`, `examples/aside/aside.tsx`,
+`apps/annotation-manager/main.tsx`, `examples/aside/main.tsx`,
 `apps/bookmarks/main.tsx`, `system/chatbot/chatbot.tsx`,
-`apps/cheeseboard/main.tsx`, `examples/compiler/compiler.tsx`,
+`apps/cheeseboard/main.tsx`, `examples/compiler/main.tsx`,
 `apps/deep-research/main.tsx`, `showcase/dice/dice.tsx` (+
-`showcase/dice/dice-handlers.ts`),
-`examples/group-chat-lobby/group-chat-lobby.tsx`,
-`examples/group-chat-room/group-chat-room.tsx`, `examples/image/image.tsx`,
-`apps/image-analysis/main.tsx`, `examples/link-preview/link-preview.tsx`,
-`examples/map-demo/map-demo.tsx`,
-`examples/mobile-app-demo/mobile-app-demo.tsx`,
-`examples/pattern-index/pattern-index.tsx`,
+`showcase/dice/dice-handlers.ts`), `examples/group-chat-lobby/main.tsx`,
+`examples/group-chat-room/group-chat-room.tsx`, `examples/image/main.tsx`,
+`apps/image-analysis/main.tsx`, `examples/link-preview/main.tsx`,
+`examples/map-demo/main.tsx`, `examples/mobile-app-demo/main.tsx`,
+`examples/pattern-index/main.tsx`,
 `examples/profile-roster-live-demo/profile-roster-live-demo.tsx` (demo: live
 multi-user profile roster — every participant's cross-space profile badge),
 `system/self/self.tsx`, `apps/self-improving-classifier/main.tsx`,
 `apps/shopping-list/main.tsx`, `apps/store-mapper/main.tsx`,
-`examples/text-swapper/text-swapper.tsx`.
+`examples/text-swapper/main.tsx`.
 
 App and integration directories: `apps/activity-log/`, `apps/agent/`,
 `apps/base/`, `showcase/battleship/`, `apps/book-recommendations/`,
@@ -465,7 +463,7 @@ self.markIdle.send({
 
 ---
 
-## `examples/counter/counter.tsx`
+## `examples/counter/main.tsx`
 
 A simple counter demo.
 
@@ -487,7 +485,7 @@ interface CounterOutput {
 }
 ```
 
-## `examples/do-list/do-list.tsx`
+## `examples/do-list/main.tsx`
 
 A task list pattern with AI suggestions per item, indent-based subtasks, and
 LLM-friendly title-based handlers.
@@ -531,7 +529,7 @@ interface DoListOutput {
 }
 ```
 
-## `examples/todo-list/todo-list.tsx`
+## `examples/todo-list/main.tsx`
 
 A todo list with AI suggestions.
 
@@ -559,7 +557,7 @@ interface TodoListOutput {
 }
 ```
 
-## `examples/simple-list/simple-list.tsx`
+## `examples/simple-list/main.tsx`
 
 A checklist with indent support. Runs standalone, and embeds in another pattern
 as a JSX tag.
@@ -1652,7 +1650,7 @@ interface MealOrchestratorOutput {
 }
 ```
 
-## `examples/reading-list/reading-list.tsx`
+## `examples/reading-list/main.tsx`
 
 **Canonical list-detail example.** Track books, articles, papers, and videos.
 Demonstrates: footer forms, `navigateTo()` for details, `lift()` for filtering.
@@ -1849,7 +1847,7 @@ interface SharedNoteOutput {
 }
 ```
 
-## `examples/cfc-agent-prompt-injection-demo/main.tsx`
+## `examples/cfc-agent-prompt-injection-demo/cfc-agent-prompt-injection-demo.tsx`
 
 Interactive side-by-side chatbot demo for the new observation ceiling and
 subagent behavior. One chat reads a hostile prompt-influencing briefing directly
@@ -1921,7 +1919,7 @@ type ChatOutput = {
 };
 ```
 
-## `examples/group-chat-lobby/group-chat-lobby.tsx`
+## `examples/group-chat-lobby/main.tsx`
 
 Multiplayer group chat lobby where users join with their shared profile
 (`wish({ query: "#profile" })` — the wish UI covers profile create/pick) and
@@ -2064,7 +2062,7 @@ interface Output {
 }
 ```
 
-## `examples/image/image.tsx`
+## `examples/image/main.tsx`
 
 Display an image from a URL or data URI with optional caption. Useful for
 rendering images when an LLM has a URL to display.
@@ -2156,7 +2154,7 @@ type ImageChatOutput = {
 };
 ```
 
-## `examples/clock/clock.tsx`
+## `examples/clock/main.tsx`
 
 Example pattern: a live wall clock driven by the reactive `#now` wish
 (`wish({ query: "#now/1" })`, ticking once per second). Shows the sanctioned way
@@ -2167,7 +2165,7 @@ formatting.
 
 **Keywords:** now, wish, clock, time, reactive, capability-gate, timing
 
-## `examples/reactive-now/reactive-now.tsx`
+## `examples/reactive-now/main.tsx`
 
 Example pattern demonstrating both pattern-facing surfaces of the timing
 side-channel mitigations. Reading time: a one-shot `#now` snapshot (the piece's
@@ -2181,7 +2179,7 @@ mashing/typing is throttled, and nothing is dropped.
 **Keywords:** now, wish, time, elapsed, relative-time, reactive,
 capability-gate, timing, delivery-shaping, token-bucket, input
 
-## `examples/profile-aware-writer/profile-aware-writer.tsx`
+## `examples/profile-aware-writer/main.tsx`
 
 Example pattern demonstrating how to use the `#profile` wish to personalize LLM
 output. Fetches the user's profile summary and injects it into the system prompt
@@ -2755,7 +2753,7 @@ interface BookmarksOutput {
 }
 ```
 
-## `examples/link-preview/link-preview.tsx`
+## `examples/link-preview/main.tsx`
 
 A simple pattern that renders a rich link preview for a single URL. Uses
 cf-input for URL entry and cf-link-preview to display the preview card with
@@ -2783,7 +2781,7 @@ interface LinkPreviewOutput {
 
 ---
 
-## `examples/cfc-row-label-mailbox/main.tsx`
+## `examples/cfc-row-label-mailbox/cfc-row-label-mailbox.tsx`
 
 Demo of CFC Phase 3 per-row, data-derived SQLite labels: each email row's
 confidentiality is computed from the row's own columns (sender ∧ regex-split
@@ -2818,7 +2816,7 @@ interface MailboxOutput {
 
 ---
 
-## `examples/cfc-row-label-records/main.tsx`
+## `examples/cfc-row-label-records/cfc-row-label-records.tsx`
 
 Demo of per-row (Phase 3) and per-column (Phase 2) CFC labels COMPOSING on one
 row entity: a patient-records table whose row rule derives the patient from the

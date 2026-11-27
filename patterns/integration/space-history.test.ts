@@ -94,7 +94,7 @@ describe("space history", () => {
           "..",
           "examples",
           "counter",
-          "counter.tsx",
+          "main.tsx",
         ),
       },
     );
@@ -127,7 +127,7 @@ describe("space history", () => {
           "..",
           "examples",
           "counter",
-          "counter.tsx",
+          "main.tsx",
         ),
       },
     );

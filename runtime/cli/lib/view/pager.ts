@@ -58,7 +58,6 @@ import {
   watchForPullRequest,
 } from "./pullrequest.ts";
 import {
-  askDefaultBranch,
   describePush,
   type GitQuery,
   openPage,
@@ -804,11 +803,11 @@ export async function runPager(
    * the pull request, or null when there is none, and with what `alongside`
    * resolves with, which runs while GitHub is asked, or undefined when the
    * list names the pull request. */
-  const lookForPullRequest = async <T = undefined>(
+  const lookForPullRequest = async <T>(
     target: PullRequestTarget,
     signal: AbortSignal,
-    alongside?: () => Promise<T>,
-  ): Promise<[PullRequest | null, Awaited<T> | undefined]> => {
+    alongside: () => Promise<T>,
+  ): Promise<[PullRequest, Awaited<T> | undefined] | [null, Awaited<T>]> => {
     const looking = step(
       say`Looking for the pull request of ${target.branch} in ${target.repository}`,
     );
@@ -819,13 +818,13 @@ export async function runPager(
       return [listed, undefined];
     }
     const [also, found] = await settleBoth(
-      alongside?.(),
+      alongside(),
       deps.github.find(target, signal).then((found) => {
         looking();
         return found;
       }),
     );
-    return [found, also];
+    return found === null ? [null, also] : [found, also];
   };
 
   // A push, or creating or merging a pull request, that fails leaves a button
@@ -882,27 +881,40 @@ export async function runPager(
   // say to. A creation that fails, unless GitHub refused it as one that
   // cannot succeed, offers to try it again, which looks for an open pull
   // request first, in case the failed attempt created one. The base branch
-  // is asked for while GitHub is asked for the open pull request.
+  // is the default branch of the remote the pull request goes to: `known`
+  // when that is the remote it names, as origin's default branch is once the
+  // push has learned it; otherwise GitHub is asked for it while it is asked
+  // for the open pull request, and trying again keeps to its answer once it
+  // has given one.
   const createPullRequest = async (
     settings: ViewSettings,
     branch: string,
+    known: { readonly remote: string; readonly branch: string },
     signal: AbortSignal,
   ): Promise<TaskText> => {
+    let learned = known;
     try {
       const target = pullRequestTarget(deps.git, branch);
       const { repository, head, remote } = target;
       const [open, base] = await lookForPullRequest(
         target,
         signal,
-        () => askDefaultBranch(deps.pushIo(taskOutput, signal), remote, signal),
+        remote === known.remote
+          ? () => Promise.resolve(known.branch)
+          : async () => {
+            const asking = step(
+              say`Asking GitHub which branch is the default of ${repository}`,
+            );
+            const named = await deps.github.defaultBranch(repository, signal);
+            asking();
+            learned = { remote, branch: named };
+            return named;
+          },
       );
       if (open !== null) {
         return say`Pull request ${
           pullRequest(open.number, open.url)
         } is open: ${link(open.url)}`;
-      }
-      if (!base) {
-        throw new Error(`${remote}'s default branch is unknown`);
       }
       const { title, body } = pullRequestText(deps.git, target, base);
       const creating = step(
@@ -926,7 +938,8 @@ export async function runPager(
           label: RETRY_CREATE,
           run: () =>
             retryTask(
-              (settings, signal) => createPullRequest(settings, branch, signal),
+              (settings, signal) =>
+                createPullRequest(settings, branch, learned, signal),
               say`The settings no longer create pull requests.`,
             ),
         };
@@ -940,11 +953,13 @@ export async function runPager(
   // Once the push succeeds, the settings say whether to create the pushed
   // branch's pull request, unless one is open, or, when the server offers a
   // page for creating one, to give its address or open it. Settings that
-  // cannot be read leave the page to open.
+  // cannot be read leave the page to open. `main` is origin's default
+  // branch, as the push learned it.
   const pushed = async (
     io: PushIo,
     branch: string,
     url: string | null,
+    main: string,
     signal: AbortSignal,
   ): Promise<TaskText> => {
     let settings: ViewSettings;
@@ -957,7 +972,12 @@ export async function runPager(
     }
     const tool = settings.pullRequestTool;
     if (tool === "api" || tool === "touch-gate") {
-      return await createPullRequest(settings, branch, signal);
+      return await createPullRequest(
+        settings,
+        branch,
+        { remote: "origin", branch: main },
+        signal,
+      );
     }
     if (url === null) return [];
     await startWatching(
@@ -1006,6 +1026,7 @@ export async function runPager(
       const [found] = await lookForPullRequest(
         pullRequestTarget(deps.git, branch),
         signal,
+        () => Promise.resolve(),
       );
       open = found === null
         ? say`It has no open pull request.`
@@ -1047,7 +1068,8 @@ export async function runPager(
       summary = await pushBranch(
         io,
         controller.signal,
-        (branch, url) => pushed(io, branch, url, controller.signal),
+        (branch, url, originMain) =>
+          pushed(io, branch, url, originMain, controller.signal),
         (output, learned) => pushFailed(output, confirmed, learned),
         confirmed
           ? undefined
@@ -1121,7 +1143,11 @@ export async function runPager(
       throw new Error("this checkout is not on a branch");
     }
     const target = pullRequestTarget(deps.git, branch);
-    const [found] = await lookForPullRequest(target, signal);
+    const [found] = await lookForPullRequest(
+      target,
+      signal,
+      () => Promise.resolve(),
+    );
     signal.throwIfAborted();
     if (found === null) {
       return say`${branch} has no open pull request in ${target.repository}.`;

@@ -39,6 +39,7 @@ import type { HarnessPatternRefSpec } from "./contracts/pattern-refs.ts";
 import type { HarnessConnectorGrantSpec } from "./contracts/well-known-grants.ts";
 import type {
   HarnessAllowedSkillScript,
+  HarnessReviewedSkills,
   HarnessSkillScriptExecutionTarget,
   HarnessSkillsRootRecord,
 } from "./contracts/skill.ts";
@@ -157,6 +158,9 @@ export interface HarnessSessionConfig {
   allowSkillScripts?: boolean;
 
   allowedSkillScripts: readonly HarnessAllowedSkillScript[];
+
+  /** The skill bundles this run accepts as reviewed. */
+  reviewedSkills?: HarnessReviewedSkills;
   skillScriptExecutionTarget: HarnessSkillScriptExecutionTarget;
 
   fabricSession?: HarnessFabricSessionConfig;
@@ -381,6 +385,9 @@ export const harnessSessionEngineOptions = (
     ...(config.allowSkillScripts === true ? { allowSkillScripts: true } : {}),
     ...(config.allowedSkillScripts.length > 0
       ? { allowedSkillScripts: config.allowedSkillScripts }
+      : {}),
+    ...(config.reviewedSkills !== undefined
+      ? { reviewedSkills: config.reviewedSkills }
       : {}),
     ...(config.browserAccess !== undefined
       ? { browserAccess: config.browserAccess }

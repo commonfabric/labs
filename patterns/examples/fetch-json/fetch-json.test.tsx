@@ -5,7 +5,7 @@ import {
   hasText,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import FetchJson from "./fetch-json.tsx";
+import FetchJson from "./main.tsx";
 
 // A repository response with every field the pattern's response type
 // requires, as GitHub sends it.
