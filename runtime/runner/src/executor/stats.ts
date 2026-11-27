@@ -318,8 +318,10 @@ export type ServingLoopStats = {
     /** The (piece root, demanding pair) seedings of owed defaults the
      * passes completed — the arrival seed: a pattern-owned cell declaring a
      * default at a scope narrower than its result is seeded in a demanding
-     * pair's instance when the pair's demand for the piece arrives, as the
-     * piece's start seeds it for the identity the start runs under. */
+     * pair's instance when the pair's demand for the piece arrives and
+     * reaches that instance, as the piece's start seeds it for the identity
+     * the start runs under. A pair whose demand later reaches a cell an
+     * earlier seeding passed over is seeded again, and counted again. */
     ownedDefaultSeeds: number;
 
     /** Root documents the pass pulled TOGETHER before its sequential

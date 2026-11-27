@@ -187,8 +187,9 @@ faced them:
   after a node narrowed finds no instance of their own; the registry's
   new pair re-arms the narrowed nodes beneath the root for THAT
   demander only (the arrival re-arm — later demand, protocol.md §4),
-  and seeds that demander's instances of the piece's owned cells
-  declaring a default narrower than their owner (the arrival seed,
+  and seeds the instances that demander's demand reaches of the
+  piece's owned cells declaring a default narrower than their owner
+  (the arrival seed,
   serving-loop.md §7 `ownedDefaultSeeds`): the start that would have
   seeded them runs on no viewer's runtime under served views. A
   viewer's first write can create its instance before the seed reaches

@@ -793,6 +793,67 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     setup.cancel();
   });
 
+  it("(n3) a session whose demand reaches a piece but not its per-session default has nothing seeded, and finds the default seeded once its view reaches the cell, so its first blind write still lands beside the other defaults", async () => {
+    // A view can write only a cell it renders, and rendering it watches the
+    // session's instance of it, absent or not. A view showing a piece's
+    // values without the cell, as a list card does, owes the session no
+    // instance of it: seeding one per viewed piece for every page load is
+    // writing what nobody reads.
+    const setup = await standUp({
+      names: { arg: "fo-n3-arg", result: "fo-n3-result" },
+      pattern: OWNED_DRAFT_PATTERN,
+      clients: [aliceSigner],
+    });
+    const { engine, compiled } = setup;
+    await awaitAdmitted(
+      server,
+      () => host!.stats().demand.ownedDefaultSeeds > 0,
+    );
+    const seedsBefore = host!.stats().demand.ownedDefaultSeeds;
+    const bob = openClient(bobSigner);
+    const bobSession = resolveScopeKey("session", bob.scopeKeyIdentity);
+    const values = bob.getCell<{ echo: string }>(space, "fo-n3-result", {
+      type: "object",
+      properties: { echo: { type: "string" } },
+      additionalProperties: false,
+    });
+    await values.sync();
+    const cancelValues = values.sink(() => {});
+    await awaitAdmitted(
+      server,
+      () => host!.stats().demand.ownedDefaultSeeds > seedsBefore,
+    );
+    // Bob's instance of `echo` may run meanwhile, reading the default.
+    expect(instanceHolds(engine, bobSession, '"members"')).toBe(false);
+
+    const draft = bob.getCell<{ draft: { title: string; members: string } }>(
+      space,
+      "fo-n3-result",
+      compiled.resultSchema,
+    ).key("draft");
+    await draft.sync();
+    const cancelDraft = draft.sink(() => {});
+    await awaitAdmitted(
+      server,
+      () => instanceHolds(engine, bobSession, '"members":""'),
+    );
+    const written = await bob.commitUiCellWrite(draft.key("title"), "B", {
+      blind: true,
+    });
+    expect(written.error).toBeUndefined();
+    await awaitAdmitted(
+      server,
+      () => instanceHolds(engine, bobSession, '"title":"B"'),
+    );
+    const drafts = [...rowsUnder(engine, bobSession).values()].filter((
+      value,
+    ) => JSON.stringify(value ?? null).includes('"title":"B"'));
+    expect(drafts).toEqual([{ title: "B", members: "" }]);
+    cancelDraft();
+    cancelValues();
+    setup.cancel();
+  });
+
   it("(n4) a session that opens a piece and types at once keeps its keystroke, and finds the other defaults filled in beside it, whichever of its write and the arrival seed lands first", async () => {
     // Bob's first keystroke is a blind write of `title`, issued as soon as
     // his view watches the draft. The arrival seed races it: it can probe

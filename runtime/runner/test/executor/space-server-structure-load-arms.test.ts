@@ -18,6 +18,7 @@ import {
 import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { cellTx } from "../../src/cell.ts";
+import type { NormalizedFullLink } from "../../src/link-types.ts";
 import {
   DEFAULT_FLUSH_DEADLINE_MS,
   SpaceServer,
@@ -53,7 +54,14 @@ function logged(key: string, level: "debug" | "info" | "warn"): number {
 }
 
 /** A demand row: a watch root of the session `sessionId` of `principal`. */
-type DemandRow = { id: string; principal: string; sessionId: string };
+/** A row of a session's demand: a space-scoped root, or with `scope`, the
+ * session's own instance of a document, which is no root. */
+type DemandRow = {
+  id: string;
+  principal: string;
+  sessionId: string;
+  scope?: "session";
+};
 
 describe("SpaceServer", () => {
   let previous: boolean;
@@ -138,14 +146,17 @@ describe("SpaceServer", () => {
     const scopeKey = resolveScopeKey("space", { principal: service.did() });
     const rowsOf = (roots: readonly (string | DemandRow)[]) =>
       roots.map((root) => {
-        const { id, principal, sessionId } = typeof root === "string"
+        const { id, principal, sessionId, scope } = typeof root === "string"
           ? { id: root, principal: owner.did(), sessionId: "viewer" }
           : root;
         return {
           id,
-          scope: "space" as const,
-          scopeKey,
-          root: true,
+          scope: scope ?? "space" as const,
+          scopeKey: scope === undefined ? scopeKey : resolveScopeKey(scope, {
+            principal,
+            sessionId: sessionId as never,
+          }),
+          root: scope === undefined,
           identity: { principal, sessionId },
         };
       });
@@ -157,7 +168,10 @@ describe("SpaceServer", () => {
       onStart?: (id: string) => Promise<void> | void;
       onSeed?: (
         id: string,
-        options?: { onLost?: () => void },
+        options?: {
+          reached?: (link: NormalizedFullLink) => boolean;
+          onLost?: () => void;
+        },
       ) => Promise<boolean>;
       onReconcile?: (id: string) => Promise<void>;
     } = {};
@@ -745,6 +759,204 @@ describe("SpaceServer", () => {
         expect(logged("demand-seed-failed", "warn")).toBe(seedFailures);
         expect(fixture.stats.demand.ownedDefaultSeeds).toBe(1);
         expect(fixture.stats.demandArrivals).toBe(0);
+      });
+
+      it("seeds a viewer's piece again once the viewer's demand reaches a cell its first seeding passed over, once however many keys name the piece", async () => {
+        // A view writes only a cell it renders, and rendering it watches the
+        // viewer's instance of it: the seed waits for that instance to enter
+        // the viewer's demand. The piece here is named by its own key and by
+        // its argument's, which resolves to it.
+        const piece = "of:arms-reach-piece";
+        const argument = "of:arms-reach-argument";
+        const draft = "of:arms-reach-draft";
+        const fixture = await openFixture([piece, argument]);
+        fixture.loadable = true;
+        fixture.commit({
+          [piece]: { value: {}, patternIdentity: pointer },
+          [argument]: { value: {}, result: fixture.link(piece) },
+        });
+        const draftReached: boolean[] = [];
+        fixture.hooks.onSeed = (_id, options) => {
+          draftReached.push(
+            options?.reached?.({
+              space,
+              id: draft,
+              path: [],
+              scope: "session",
+              type: "application/json",
+            } as NormalizedFullLink) ?? false,
+          );
+          return Promise.resolve(true);
+        };
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        expect(fixture.seeds).toEqual([`${piece} for viewer`]);
+        expect(draftReached).toEqual([false]);
+
+        fixture.setDemand([piece, argument, {
+          id: draft,
+          principal: owner.did(),
+          sessionId: "viewer",
+          scope: "session",
+        }]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(fixture.seeds).toEqual([
+          `${piece} for viewer`,
+          `${piece} for viewer`,
+        ]);
+        expect(draftReached).toEqual([false, true]);
+        expect(fixture.stats.demand.ownedDefaultSeeds).toBe(2);
+      });
+
+      it("still seeds a viewer whose demand reaches a passed-over cell after one of the two keys naming the piece is dropped", async () => {
+        // The piece is named by its own key and by its argument's. The
+        // viewer drops the argument watch and keeps the piece's, so a key
+        // still names the piece, and what its first seeding passed over is
+        // still owed when the viewer's view reaches the draft.
+        const piece = "of:arms-drop-piece";
+        const argument = "of:arms-drop-argument";
+        const draft = "of:arms-drop-draft";
+        const fixture = await openFixture([piece, argument]);
+        fixture.loadable = true;
+        fixture.commit({
+          [piece]: { value: {}, patternIdentity: pointer },
+          [argument]: { value: {}, result: fixture.link(piece) },
+        });
+        const draftReached: boolean[] = [];
+        fixture.hooks.onSeed = (_id, options) => {
+          draftReached.push(
+            options?.reached?.({
+              space,
+              id: draft,
+              path: [],
+              scope: "session",
+              type: "application/json",
+            } as NormalizedFullLink) ?? false,
+          );
+          return Promise.resolve(true);
+        };
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        expect(draftReached).toEqual([false]);
+
+        fixture.setDemand([piece]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(fixture.seeds).toEqual([`${piece} for viewer`]);
+
+        fixture.setDemand([piece, {
+          id: draft,
+          principal: owner.did(),
+          sessionId: "viewer",
+          scope: "session",
+        }]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(fixture.seeds).toEqual([
+          `${piece} for viewer`,
+          `${piece} for viewer`,
+        ]);
+        expect(draftReached).toEqual([false, true]);
+      });
+
+      it("seeds a viewer's piece again once the viewer's demand reaches a cell that a seeding which then threw had passed over", async () => {
+        // The seeding passes the draft over and then fails. What it passed
+        // over is still owed: when the viewer's view reaches the draft, the
+        // piece's key has not changed, so only the passed-over record brings
+        // the seed back.
+        const piece = "of:arms-thrown-piece";
+        const draft = "of:arms-thrown-draft";
+        const fixture = await openFixture([piece]);
+        fixture.loadable = true;
+        fixture.commit({ [piece]: { value: {}, patternIdentity: pointer } });
+        const draftReached: boolean[] = [];
+        let failing = true;
+        fixture.hooks.onSeed = (_id, options) => {
+          draftReached.push(
+            options?.reached?.({
+              space,
+              id: draft,
+              path: [],
+              scope: "session",
+              type: "application/json",
+            } as NormalizedFullLink) ?? false,
+          );
+          return failing
+            ? Promise.reject(new Error("injected seed failure"))
+            : Promise.resolve(true);
+        };
+        const seedFailures = logged("demand-seed-failed", "warn");
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        expect(fixture.seeds).toEqual([`${piece} for viewer`]);
+        expect(draftReached).toEqual([false]);
+        expect(logged("demand-seed-failed", "warn")).toBe(seedFailures + 1);
+
+        failing = false;
+        fixture.setDemand([piece, {
+          id: draft,
+          principal: owner.did(),
+          sessionId: "viewer",
+          scope: "session",
+        }]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(fixture.seeds).toEqual([
+          `${piece} for viewer`,
+          `${piece} for viewer`,
+        ]);
+        expect(draftReached).toEqual([false, true]);
+        expect(fixture.stats.demand.ownedDefaultSeeds).toBe(1);
+      });
+
+      it("asks again for a viewer whose seeding after its demand reached a passed-over cell was incomplete, beside a viewer who arrives", async () => {
+        const piece = "of:arms-retry-piece";
+        const draft = "of:arms-retry-draft";
+        const fixture = await openFixture([piece]);
+        fixture.loadable = true;
+        fixture.commit({ [piece]: { value: {}, patternIdentity: pointer } });
+        const draftReached: boolean[] = [];
+        const outcomes = [true, false];
+        fixture.hooks.onSeed = (_id, options) => {
+          draftReached.push(
+            options?.reached?.({
+              space,
+              id: draft,
+              path: [],
+              scope: "session",
+              type: "application/json",
+            } as NormalizedFullLink) ?? false,
+          );
+          return Promise.resolve(outcomes.shift() ?? true);
+        };
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        expect(fixture.stats.demand.ownedDefaultSeeds).toBe(1);
+
+        const draftRow = {
+          id: draft,
+          principal: owner.did(),
+          sessionId: "viewer",
+          scope: "session" as const,
+        };
+        fixture.setDemand([piece, draftRow]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(draftReached).toEqual([false, true]);
+        expect(fixture.stats.demand.ownedDefaultSeeds).toBe(1);
+
+        fixture.setDemand([piece, draftRow, {
+          id: piece,
+          principal: owner.did(),
+          sessionId: "second-viewer",
+        }]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(fixture.seeds).toEqual([
+          `${piece} for viewer`,
+          `${piece} for viewer`,
+          `${piece} for viewer`,
+          `${piece} for second-viewer`,
+        ]);
+        expect(draftReached).toEqual([false, true, true, false]);
+        expect(fixture.stats.demand.ownedDefaultSeeds).toBe(3);
       });
 
       it("seeds the defaults a piece in its own space owes, and leaves a piece in another space to that space", async () => {

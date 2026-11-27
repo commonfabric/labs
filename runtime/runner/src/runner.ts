@@ -11534,8 +11534,9 @@ export class Runner {
    * its own (`#prepareCellsForRunningPattern` says why), under `identity`
    * and while `isCurrent` holds: an absent instance takes the whole default,
    * and one a first write created, carrying no owner link and holding only
-   * some fields of an object default, takes the rest.
-   * Returns whether every one was verified or seeded.
+   * some fields of an object default, takes the rest. With `options.only`,
+   * fills only the cells whose doc ids it holds. Returns whether every one
+   * was verified or seeded.
    *
    * A serving runtime fills no instance of its own. Its starts name no actor,
    * and a seed under its own session would be one no viewer ever reads: the
@@ -11562,11 +11563,12 @@ export class Runner {
     isCurrent: () => boolean,
     options: {
       allowReadOnly?: boolean;
+      only?: ReadonlySet<string>;
       retryDropped?: boolean;
       onLost?: () => void;
     } = {},
   ): Promise<boolean> {
-    const { allowReadOnly, retryDropped = true, onLost } = options;
+    const { allowReadOnly, only, retryDropped = true, onLost } = options;
     if (this.#runtime.servingPosture && this.#isServingOwnIdentity(identity)) {
       return true;
     }
@@ -11593,6 +11595,7 @@ export class Runner {
           ? descriptor.schema.default
           : undefined;
         if (schemaDefault === undefined) continue;
+        if (only !== undefined && !only.has(derivedLink.id)) continue;
         if (!isCurrent()) return false;
         if (allowReadOnly && !this.#runtime.servingPosture) {
           let readOnly = readOnlySpaces.get(derivedLink.space);
@@ -11785,7 +11788,7 @@ export class Runner {
           owed.map(({ derivedLink }) => derivedLink),
           identity,
           isCurrent,
-          { retry: retryDropped, onLost },
+          { retry: retryDropped, onLost, only },
         );
       }
     }
@@ -11800,7 +11803,9 @@ export class Runner {
    * reports a second drop rather than trying again. A seed lost for good, by
    * a second drop, a retry that fails or comes back incomplete, or a failed
    * settlement that is no conflict drop, calls `onLost`, so a caller that
-   * took the first seal as done can ask again.
+   * took the first seal as done can ask again. The retry seeds only the cells
+   * in `only` when the first seed was limited to them: a dropped seed of one
+   * draft a viewer reached does not seed the drafts it has not.
    */
   async #seedAgainIfDropped(
     settlement: NonNullable<ReturnType<typeof waveSettlementOf>>,
@@ -11808,7 +11813,11 @@ export class Runner {
     owed: readonly NormalizedFullLink[],
     identity: ScopeKeyIdentity | undefined,
     isCurrent: () => boolean,
-    { retry, onLost }: { retry: boolean; onLost?: () => void },
+    { retry, onLost, only }: {
+      retry: boolean;
+      onLost?: () => void;
+      only?: ReadonlySet<string>;
+    },
   ): Promise<void> {
     const settled = await settlement;
     if (settled.error === undefined) return;
@@ -11842,7 +11851,11 @@ export class Runner {
         [instance],
         identity,
         isCurrent,
-        { retryDropped: false, onLost },
+        {
+          retryDropped: false,
+          onLost,
+          ...(only === undefined ? {} : { only }),
+        },
       );
       if (!complete) onLost?.();
     } catch (error) {
@@ -13054,17 +13067,23 @@ export class Runner {
    * neither the replica nor the store read-through can say whether it holds
    * a value; the cells found absent, or created by a first write that left
    * some fields of an object default unwritten, are seeded, one transaction
-   * per piece instance (`#seedOwedDefaults`). Returns whether every owed default was
-   * verified or seeded. A piece not running here, or whose pattern pointer
-   * this runtime cannot read, seeds nothing and returns `false`. A seed
-   * returned as done that the serving loop's wave later loses for good calls
-   * `options.onLost`.
+   * per piece instance (`#seedOwedDefaults`). With `options.reached`, only
+   * the owed cells it accepts are probed and seeded: the arrival seed passes
+   * the cells the viewer's demand reaches. Returns whether every owed default
+   * it was asked for was verified or seeded. A piece not running here, or
+   * whose pattern pointer this runtime cannot read, seeds nothing and returns
+   * `false`. A seed returned as done that the serving loop's wave later loses
+   * for good calls `options.onLost`.
    */
   async seedOwedDefaultsFor(
     resultCell: Cell<any>,
     identity: ScopeKeyIdentity,
-    options: { onLost?: () => void } = {},
+    options: {
+      reached?: (derivedLink: NormalizedFullLink) => boolean;
+      onLost?: () => void;
+    } = {},
   ): Promise<boolean> {
+    const { reached } = options;
     const isCurrent = this.#currentWithinLifecycle();
     const link = resultCell.getAsNormalizedFullLink();
     const rootCell = link.path.length > 0
@@ -13108,6 +13127,8 @@ export class Runner {
       instances,
     );
     const seeds: ResumePatternInstance[] = [];
+    // The owed cells `reached` accepted, which alone are seeded.
+    const accepted = new Set<string>();
     for (const instance of instances) {
       const ownerScope = instance.resultCell.getAsNormalizedFullLink().scope;
       let owesSeed = false;
@@ -13119,6 +13140,10 @@ export class Runner {
           !ownedCellOwesSeed(derivedLink, ownerScope) ||
           !canResolveScopeKey(derivedLink.scope, identity)
         ) continue;
+        if (reached !== undefined) {
+          if (!reached(derivedLink)) continue;
+          accepted.add(derivedLink.id);
+        }
         if (this.#instanceHoldsDefault(readTx, derivedLink)) continue;
         if (
           !this.#documentPresent(readTx, derivedLink) &&
@@ -13137,6 +13162,7 @@ export class Runner {
     }
     if (seeds.length === 0) return true;
     return await this.#seedOwedDefaults(seeds, identity, isCurrent, {
+      ...(reached === undefined ? {} : { only: accepted }),
       onLost: options.onLost,
     });
   }

@@ -3132,12 +3132,18 @@ completed — the ARRIVAL SEED: a pattern-owned cell declaring a default at a
 scope narrower than its result (scoped-cell-instances.md, "A pattern-owned
 cell narrower than its result starts from its declared default for each
 actor instance") is seeded in a demanding pair's instance when the pair's
-demand for a loaded root arrives, as the piece's start seeds it for the
-identity the start runs under. A viewer whose runtime runs none of the
-pattern never starts the piece; without the seed its first write into such
-a cell would create the instance holding that one field alone. The pass
-awaits the seeds ahead of the arrival re-arm, so a node re-run for the
-arriving demander reads the seeded instance.
+demand for a loaded root arrives and reaches that instance, as the piece's
+start seeds it for the identity the start runs under. A viewer whose runtime
+runs none of the pattern never starts the piece; without the seed its first
+write into such a cell would create the instance holding that one field
+alone. A view writes only a cell it renders, and rendering one watches the
+viewer's instance of it, absent or not, so the instance is in the pair's
+demand before the first write. A piece the pair reaches only for its values,
+as a list card's link reaches the piece it shows, is seeded nothing for it.
+A pair whose demand later reaches a cell an earlier seeding passed over has
+the root seeded again, which counts as another seeding. The pass awaits the
+seeds ahead of the arrival re-arm, so a node re-run for the arriving demander
+reads the seeded instance.
 The pass reads the demand set per session (`demandForSpace`): the memory
 server keeps each session's share and hands back the same object until a
 write to that session's watches, views, delivered entities, graph misses, or
