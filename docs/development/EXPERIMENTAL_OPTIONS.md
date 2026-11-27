@@ -1185,7 +1185,14 @@ holds the measurements and the conditions for revisiting.
   deployment until the store itself admits a `creator` record only when it
   names the commit's authenticated actor: commit preparation alone checks the
   record today, so a modified client could write a piece naming another
-  principal as its creator and release that principal's data.
+  principal as its creator and release that principal's data. It must also
+  stay off until only the creator may change the source of a piece that
+  records one (otherwise a member with WRITE can repoint the piece and
+  release the creator's data), the creator-record ruling
+  ([specs pull request 87](https://github.com/commonfabric/specs/pull/87))
+  lands, and documents created before the flag can be rebuilt, since their
+  stored shape stays the creator's alone. The fixture's `PROPOSAL.md`, Risks,
+  lists these and the rest.
 - **Status on 2026-11-27.** Implemented and off. The substitution is covered
   by `runtime/runner/test/cfc-reclassify.test.ts`, the plumbing by
   `runtime/runner/test/experimental-options.test.ts`. With this flag and

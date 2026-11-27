@@ -3190,11 +3190,16 @@ export class Runner {
    * up into, by the receipt's document key. A receipt is a keyless piece,
    * which records no creator, so a child the result instantiates takes the
    * producing piece's record instead (`#pieceCreatorFor`). The child is set
-   * up after the receipt's own setup returns, so an entry lives as long as
-   * the runner, as `#demandRootChains` does; a handler that returns no
-   * pattern adds none.
+   * up after the receipt's own setup returns, so an entry outlives that
+   * setup; a handler that returns no pattern adds none. Bounded like the
+   * pointer maps, since every handled event that returns a pattern adds one:
+   * a child whose entry was evicted records no creator, so nothing it writes
+   * is reclassified, which fails closed.
    */
-  #receiptProducers = new Map<string, { id: URI; space: MemorySpace }>();
+  #receiptProducers = new BoundedKeyMap<
+    string,
+    { id: URI; space: MemorySpace }
+  >(RESULT_SHORTCUT_LIMIT);
 
   /** See {@link #releaseServedHandlerResult}: set for the length of its release. */
   #releasingServedResult = false;

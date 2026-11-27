@@ -2352,8 +2352,9 @@ const updateAddedOwnerCreator = (
  * document belong to two ways: the setup naming them for the piece in this
  * transaction (`runtime.piece-setup-store`, `runtime.owned-store`, whose
  * first source is the result document), and the `result` meta link a setup
- * writes on them. A result document's own `result` link names its parent
- * piece, so it is never followed.
+ * writes on them. A document that records a `creator` or a `patternIdentity`
+ * is a result document, whose own `result` link names its parent piece, so
+ * that link is not followed for it.
  */
 const pieceResultOfDocument = (
   tx: IExtendedStorageTransaction,
