@@ -107,6 +107,9 @@ const { engine, scene } = initializeGraphics(
     try {
       return { engine, scene: new Scene(engine) };
     } catch (cause) {
+      // A scene that failed partway through construction cannot be disposed,
+      // so the engine drops it before disposing the rest.
+      engine.scenes.length = 0;
       engine.dispose();
       throw cause;
     }
@@ -198,7 +201,6 @@ let selectedModuleId: string | null = null;
 let selectionAwaitingModuleId: string | undefined;
 let drag: DragState | undefined;
 const cancelledPointers = new Set<number>();
-let disposed = false;
 let actionTail = Promise.resolve();
 const abort = new AbortController();
 const { signal } = abort;
@@ -226,6 +228,16 @@ function clearError(): void {
 function selectedModule(): StationModule | undefined {
   if (!selectedModuleId) return undefined;
   return effectiveModules().find((module) => module.id === selectedModuleId);
+}
+
+/** Returns the module `moduleId` of `modules`, or throws when it is gone. */
+function availableModule(
+  modules: readonly StationModule[],
+  moduleId: string,
+): StationModule {
+  const module = modules.find(({ id }) => id === moduleId);
+  if (!module) throw new Error("That salvage module is no longer available.");
+  return module;
 }
 
 function effectiveModules(
@@ -637,10 +649,7 @@ async function moveSelected(delta: Vector3Tuple): Promise<void> {
   if (!moduleId) return;
   await state.pull();
   const latestState = state.get() ?? DEFAULT_STATE;
-  const module = effectiveModules(latestState).find(({ id }) =>
-    id === moduleId
-  );
-  if (!module) throw new Error("That salvage module is no longer available.");
+  const module = availableModule(effectiveModules(latestState), moduleId);
   const [x, y, z] = module.transform.position;
   const position: Vector3Tuple = [
     roundHalf(x + delta[0]),
@@ -655,10 +664,7 @@ async function rotateSelected(delta: number): Promise<void> {
   if (!moduleId) return;
   await state.pull();
   const latestState = state.get() ?? DEFAULT_STATE;
-  const module = effectiveModules(latestState).find(({ id }) =>
-    id === moduleId
-  );
-  if (!module) throw new Error("That salvage module is no longer available.");
+  const module = availableModule(effectiveModules(latestState), moduleId);
   const rotationQuarterTurns = normalizeQuarterTurns(
     module.transform.rotationQuarterTurns + delta,
   );
@@ -676,8 +682,7 @@ async function snapSelected(): Promise<void> {
   await state.pull();
   const latestState = state.get() ?? DEFAULT_STATE;
   const modules = effectiveModules(latestState);
-  const moving = modules.find((module) => module.id === moduleId);
-  if (!moving) throw new Error("That salvage module is no longer available.");
+  const moving = availableModule(modules, moduleId);
   const result = findBestSnap(
     moving,
     modules.filter((module) => module.id !== moduleId),
@@ -729,10 +734,7 @@ function beginDrag(moduleId: string, pointerId: number): void {
   ) {
     return;
   }
-  const module = effectiveModules().find((candidate) =>
-    candidate.id === moduleId
-  );
-  if (!module) return;
+  const module = availableModule(effectiveModules(), moduleId);
   selectModule(moduleId);
   camera.detachControl();
   canvas.setPointerCapture(pointerId);
@@ -784,12 +786,10 @@ function endDrag(pointerId: number, cancelled: boolean): void {
   void runAction("drag position", async () => {
     await state.pull();
     const latestState = state.get() ?? DEFAULT_STATE;
-    const module = effectiveModules(latestState).find(({ id }) =>
-      id === completed.moduleId
+    const module = availableModule(
+      effectiveModules(latestState),
+      completed.moduleId,
     );
-    if (!module) {
-      throw new Error("That salvage module is no longer available.");
-    }
     await writeTransformField(
       latestState,
       module,
@@ -915,8 +915,6 @@ cameraReadout.textContent = cameraDescription();
 canvas.style.cursor = "grab";
 
 function dispose(): void {
-  if (disposed) return;
-  disposed = true;
   abort.abort();
   if (drag && canvas.hasPointerCapture(drag.pointerId)) {
     canvas.releasePointerCapture(drag.pointerId);
