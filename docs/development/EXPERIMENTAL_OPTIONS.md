@@ -1178,8 +1178,9 @@ holds the measurements and the conditions for revisiting.
   its inputs, whose labels a reference keeps.
 - **Current default and planned end state.** Off by default. The rule is a
   semantic gap under the CFC correspondence procedure, and its deciding site
-  in `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker whose
-  specs pull request is not yet filed. The flag must stay off in every
+  in `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker naming
+  [specs pull request 111](https://github.com/commonfabric/specs/pull/111)
+  (SC-57). The flag must stay off in every
   deployment until the store itself admits a `creator` record only when it
   names the commit's authenticated actor: commit preparation alone checks the
   record today, so a modified client could write a piece naming another

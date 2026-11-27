@@ -361,6 +361,18 @@ rule ahead of the ruling and revising it after; that direction does not
 supply a ruling. The conformance statement records the gap until #110 merges
 and a reconciled pin addresses it.
 
+Pattern reclassification is a semantic gap pending
+[specs#111](https://github.com/commonfabric/specs/pull/111) (SC-57), which
+cites the creator record of
+[specs#87](https://github.com/commonfabric/specs/pull/87). A value whose
+schema declares `ifc.reclassify` stores each `User` clause its piece's
+recorded creator may release as that clause or the declared policy, which
+§3.1.8 and §8.12.7 do not permit today. It sits behind the
+`cfcPatternReclassification` dial, which defaults to off and has effect only
+with `pieceCreatorRecord`, so the strict default is unchanged. Its deciding
+site in `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker
+naming #111.
+
 An owner release (§8.12.7 route 2c) whose path holds a `*` segment is a
 nonconforming semantic gap pending
 [specs#86](https://github.com/commonfabric/specs/pull/86). The pinned route

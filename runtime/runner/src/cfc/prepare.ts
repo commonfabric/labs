@@ -2575,7 +2575,7 @@ type ReclassificationContext = {
  * clause that is theirs alone is choosing the audience of their own content
  * (§8.12.7's `canReleaseStoredClause`, applied to a new value).
  */
-// SPEC-PENDING specs PR not yet filed; see patterns/dev/test/share-space-declassify/PROPOSAL.md
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/111
 const reclassifiedFlowConfidentiality = (
   tx: IExtendedStorageTransaction,
   target: {
