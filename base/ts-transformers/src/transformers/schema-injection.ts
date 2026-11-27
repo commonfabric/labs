@@ -4595,9 +4595,9 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           const liftCallback = resolveFunctionLikeExpression(node.arguments[2]);
           if (argumentType && liftCallback) {
             // Authored `lift(toSchema<T>(), fn)`: T is a real-source TypeNode
-            // the checker resolves. No stage writes a schema-first lift, and
-            // the one this branch builds is visited no further than its
-            // children.
+            // the checker resolves. No other stage writes a schema-first lift,
+            // and the one this branch builds is marked before only its
+            // children are visited.
             const argumentTypeValue = getTypeFromTypeNodeWithFallback(
               argumentType,
               checker,

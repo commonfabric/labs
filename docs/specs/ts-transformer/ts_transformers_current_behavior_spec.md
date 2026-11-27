@@ -1547,6 +1547,11 @@ The rewriter uses normalized data-flow dependencies and ordered emitters:
 7. prefix unary
 8. container expression
 
+The prefix unary emitter lifts `!`, `-`, `+`, and `~` applied to a reactive
+operand. It leaves `++` and `--` in place: they assign to their operand, and a
+lift reruns its callback whenever an input changes, which would repeat the
+assignment.
+
 The container emitter owns a literal that holds other expressions, and a
 transparent wrapper around one: it rewrites the children and leaves the
 container unwrapped. It reads the transparent wrapper set (parentheses, `as`,
@@ -3574,11 +3579,10 @@ export default pattern((state) => ({
 Inside object-literal properties (only there), a *reference* to an existing
 reactive value is re-caused at its result location: after visiting, a bare
 identifier whose type is a cell in every arm a value can take (`isCellByType`,
-as for the variable-position fallback in §13.2) — or, absent type information,
-is a reactive value expression (`isReactiveValueExpression`) — gets
-`.for(<path>, true)` appended (`shouldRetargetReactiveReference`). An
-identifier whose type has a plain-value arm beside a cell arm is re-rooted
-only when it is a reactive node by provenance (`isReactiveNodeByProvenance`):
+as for the variable-position fallback in §13.2) gets `.for(<path>, true)`
+appended (`shouldRetargetReactiveReference`). An identifier whose type has a
+plain-value arm beside a cell arm is re-rooted only when it is a reactive
+node by provenance (`isReactiveNodeByProvenance`):
 a parameter of a reactive scope — the callback of a pattern builder call or
 of a reactive array method, through any parentheses or other transparent
 wrapper around the callback (`isReactiveScopeParameter`; a handler's, lift's,

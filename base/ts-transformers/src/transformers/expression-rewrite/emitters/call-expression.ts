@@ -30,6 +30,11 @@ function isZeroArgInlineIifeCall(expression: ts.CallExpression): boolean {
   return ts.isArrowFunction(callee) || ts.isFunctionExpression(callee);
 }
 
+/**
+ * Whether `expression` names a binding declared inside `container`. Bindings
+ * are declared in the authored tree, so a rewritten `container` is compared
+ * through the authored node it was rebuilt from.
+ */
 function isDeclaredInside(
   expression: ts.Expression,
   container: ts.Node,
@@ -39,12 +44,13 @@ function isDeclaredInside(
     return false;
   }
 
+  const authored = ts.getOriginalNode(container);
   const symbol = context.checker.getSymbolAtLocation(expression);
   const declarations = symbol?.getDeclarations() ?? [];
   return declarations.some((declaration) => {
     let current: ts.Node | undefined = declaration;
     while (current) {
-      if (current === container) {
+      if (current === authored) {
         return true;
       }
       current = current.parent;

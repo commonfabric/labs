@@ -28,6 +28,7 @@ interface Input {
 }
 interface Output { [UI]: VNode; }
 const plus = (a: number, b: number) => a + b;
+const outer = { get: () => 1 };
 export default pattern<Input, Output>(
   ({ flag, count, label, items, index, base, list }) => ({
     [UI]: <div>{${jsx}}</div>,
@@ -100,6 +101,17 @@ describe("emitters", () => {
       expect(lifts(root)).toEqual([{ inputs: ["count"], body: "-count" }]);
       expect(rendered(root)).toBe(
         "({ fixed: -1, signed: __cfLift_1({ count: count }) })",
+      );
+    });
+
+    it("leaves an increment or decrement of a reactive value in place, beside a lifted negation", async () => {
+      const root = await render(
+        "({ up: ++count, down: --count, signed: -count })",
+      );
+
+      expect(lifts(root)).toEqual([{ inputs: ["count"], body: "-count" }]);
+      expect(rendered(root)).toBe(
+        "({ up: ++count, down: --count, signed: __cfLift_1({ count: count }) })",
       );
     });
 
@@ -336,6 +348,29 @@ export default pattern<{ count: number }, Output>(({ count }) => {
 
         expect(lifts(root)).toEqual([
           { inputs: ["count", "read"], body: "count + read()" },
+        ]);
+      });
+
+      it("keeps an IIFE whose cell read was lifted when its remaining `.get()` reads its own local", async () => {
+        const root = await render(
+          "({ a: (() => { const m = { get: () => 1 }; return [m.get(), base.get()]; })() })",
+        );
+
+        expect(rendered(root)).toBe(
+          "({ a: (() => { const m = { get: () => 1 }; return [m.get(), __cfLift_1({ base: base })]; })() })",
+        );
+        expect(lifts(root)).toEqual([{ inputs: ["base"], body: "base.get()" }]);
+      });
+
+      it("lifts an IIFE whose cell read was lifted when its remaining `.get()` reads a value declared outside it", async () => {
+        const root = await render(
+          "({ a: (() => [outer.get(), base.get()])() })",
+        );
+
+        expect(rendered(root)).toBe("({ a: __cfLift_2({ base: base }) })");
+        expect(lifts(root).map(({ inputs }) => inputs)).toEqual([
+          ["base"],
+          ["base"],
         ]);
       });
     });

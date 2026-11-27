@@ -8,7 +8,13 @@ export const emitPrefixUnaryExpression: Emitter = ({
   context,
   preferInputBoundWrappers,
 }) => {
-  if (!ts.isPrefixUnaryExpression(expression)) return undefined;
+  if (
+    !ts.isPrefixUnaryExpression(expression) ||
+    expression.operator === ts.SyntaxKind.PlusPlusToken ||
+    expression.operator === ts.SyntaxKind.MinusMinusToken
+  ) {
+    return undefined;
+  }
   return createReactiveWrapperForExpression(
     expression,
     dataFlows,
