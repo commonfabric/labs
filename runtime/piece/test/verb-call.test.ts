@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { createSession, Identity } from "@commonfabric/identity";
 import {
   type Cell,
@@ -170,6 +171,43 @@ describe("verb-call", () => {
       expect(messageOf(call)).toContain(
         "transport closed",
       );
+      expect(await total()).toBe(0);
+    });
+
+    it("refuses the call, sending nothing, when a stop supersedes the piece's start", async () => {
+      // The piece is stopped while its real start resolves.
+      const start = runtime.start.bind(runtime);
+      using _start = stub(runtime, "start", (started, options) => {
+        const starting = start(started, options);
+        runtime.runner.stop(started);
+        return starting;
+      });
+
+      const call = await callVerb(runtime, piece, "add", { amount: 3 });
+
+      expect(call).toEqual({
+        status: "refused",
+        message: "the piece could not be started here: its start was " +
+          "superseded or it was stopped",
+      });
+      expect(await total()).toBe(0);
+    });
+
+    it("refuses a verb whose field on the piece holds data rather than a stream, leaving the data as it was", async () => {
+      // The pattern declares `add`, and the piece's result holds data there
+      // in place of the link to the verb's stream.
+      const tx = runtime.edit();
+      runtime.getCellFromLink<{ add: unknown }>(piece, undefined, tx).key("add")
+        .setRawUntyped("not a stream");
+      expect((await tx.commit().settled).ok).toBeDefined();
+
+      const call = await callVerb(runtime, piece, "add", { amount: 3 });
+
+      expect(call).toEqual({
+        status: "refused",
+        message: '"add" did not resolve to a stream on this piece',
+      });
+      expect(cell.getRaw()).toMatchObject({ add: "not a stream" });
       expect(await total()).toBe(0);
     });
 

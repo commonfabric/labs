@@ -211,6 +211,46 @@ describe("adopt-catalog-rooms", () => {
       ]);
     });
 
+    it("sends nothing for a catalog that lists no entries", async () => {
+      const home = await installCustomRoot(
+        runtime,
+        controller,
+        homeProgram({ [spaceOf("room")]: saved("1") }),
+      );
+      const { error } = await runtime.editWithRetry((tx) => {
+        home.key("chatManager").key("sharedSpaceCatalog").withTx(tx).set({});
+      });
+      expect(error).toBeUndefined();
+
+      expect(await adoptCatalogRoomsOf(runtime, home, identity.did())).toBe(0);
+
+      expect(await sent(home)).toEqual([]);
+    });
+
+    it("leaves running a piece its join started outside every joined room's space", async () => {
+      // No space the catalog lists declares a room, so the join joins none,
+      // and the Home it starts by delivering the join is in no joined room's
+      // space.
+      const home = await installCustomRoot(
+        runtime,
+        controller,
+        homeProgram({ [spaceOf("room")]: saved("1") }),
+      );
+      runtime.runner.stop(home);
+      expect(runtime.runner.isRunning(home)).toBe(false);
+      const mark = runtime.runner.eventStartMark;
+
+      const stopped = await adoptCatalogRoomsOf(runtime, home, identity.did());
+
+      expect(stopped).toBe(0);
+      expect(runtime.runner.eventStartsSince(mark).map((link) => link.id))
+        .toEqual([home.getAsNormalizedFullLink().id]);
+      expect(runtime.runner.isRunning(home)).toBe(true);
+      expect(await sent(home)).toEqual([
+        adoptionRequestId(spaceOf("room"), "1"),
+      ]);
+    });
+
     it("goes on past an entry whose handling fails, which stays unadopted", async () => {
       const home = await installCustomRoot(
         runtime,

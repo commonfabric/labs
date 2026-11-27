@@ -380,6 +380,30 @@ describe("profile-space-root", () => {
       expect(await rootIdOf(listed.space)).toBeUndefined();
     });
 
+    it("repairs nothing, and resolves, when its signal aborts while it inspects a profile", async () => {
+      const listed = await createProfileThroughHome(runtimeAs(owner), "U", {
+        shape: "not-root",
+        hostIsRoot: true,
+      });
+      const runtime = runtimeAs(owner);
+      const aborting = new AbortController();
+
+      await repairProfileRootsOf(
+        await homeListing(runtime, [listed]),
+        owner.did(),
+        (space) => {
+          // Runs after the check that precedes the inspection, and before the
+          // inspection settles.
+          queueMicrotask(() => aborting.abort());
+          return controllerOver(runtime, owner, space);
+        },
+        aborting.signal,
+      );
+
+      expect(aborting.signal.aborted).toBe(true);
+      expect(await rootIdOf(listed.space)).toBeUndefined();
+    });
+
     it("does nothing for a Home with no `profiles` list", async () => {
       const runtime = runtimeAs(owner);
       const home = runtime.getCell(owner.did() as MemorySpace, "no list");

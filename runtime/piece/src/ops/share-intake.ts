@@ -99,12 +99,10 @@ const retainedSchema = {
   items: inboxPieceLinkSchema,
 } as const;
 
-// Every field of every row, as stored, so that a malformed field reaches the
-// vetting rather than being projected away.
-const offersSchema = {
-  type: "array",
-  items: { type: "object", additionalProperties: true },
-} as const;
+// Every row, as stored, so that a malformed field reaches the vetting rather
+// than being projected away, and a row that is not a record is passed over
+// rather than failing the list, which would hide every other row.
+const offersSchema = { type: "array", items: true } as const;
 
 const catalogSchema = {
   type: "object",
@@ -215,6 +213,8 @@ export function startShareIntakeOf(
  *
  * Each row of an inbox is decided by its whole content, so a row naming
  * another offer's sender and `id` decides nothing about that offer. A row
+ * that is not a record is passed over, unlogged, and decides nothing about
+ * the rows around it. A row
  * refused for something in the row itself (its envelope, its `kind` or its
  * `host`) or for the kind its space declares, which never changes, is decided
  * for the life of the instance, and so is one Home handled once sent, or

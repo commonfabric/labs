@@ -224,12 +224,9 @@ function reservedRootRefusal(
 const DOCUMENT_ALONE = { type: "object", properties: {} } as const;
 
 /**
- * Why `root` fails as a `loom` space's root: the result schema its setup
- * stored is not a Loom's composition, as {@link isLoomComposition} reads one.
- * Reads the root's document and nothing it links.
- *
- * @throws When the schema is stored as a reference to documents that have not
- *   reached this host, so that whether the root is a Loom cannot be told yet.
+ * Why `root` fails as a `loom` space's root, as {@link loomSchemaRefusal}
+ * reads the result schema its setup stored. Reads the root's document and
+ * nothing it links.
  */
 async function loomRootRefusal(
   _runtime: Runtime,
@@ -237,7 +234,20 @@ async function loomRootRefusal(
   root: Cell<unknown>,
 ): Promise<SpaceRefusal | undefined> {
   await root.asSchema(DOCUMENT_ALONE).pull();
-  const schema = readResultSchemaMeta(root);
+  return loomSchemaRefusal(readResultSchemaMeta(root));
+}
+
+/**
+ * Why a root whose stored result schema reads as `schema`, as
+ * `readResultSchemaMeta()` reads it, fails as a `loom` space's root: the
+ * schema is not a Loom's composition, as {@link isLoomComposition} reads one.
+ *
+ * @throws When the schema is still a reference to documents that have not
+ *   reached this host, so that whether the root is a Loom cannot be told yet.
+ */
+export function loomSchemaRefusal(
+  schema: JSONSchema | undefined,
+): SpaceRefusal | undefined {
   if (classifySchemaMetaValue(schema).kind === "reference") {
     throw new Error(
       "The root's result schema refers to documents that have not arrived",

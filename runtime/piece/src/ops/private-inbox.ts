@@ -356,7 +356,8 @@ function untilAborted<T>(
 /**
  * Helper for {@link requestPrivateInboxOf}, which resolves with what `pick`
  * makes of the first of `cell`'s durable values that `pick` makes anything of,
- * or with `undefined` once `signal` aborts. A durable value is one read past
+ * or with `undefined` once `signal` aborts, at once and without reading `cell`
+ * when it has aborted already. A durable value is one read past
  * this runtime's speculation overlay (`readDurable()`), so under server
  * execution it is what the server wrote, never this runtime's own preview of
  * it, which can mix values from different moments. It reads again on each
@@ -364,7 +365,7 @@ function untilAborted<T>(
  * over what it read have settled, since a change beneath a layer delivers
  * nothing.
  */
-function firstPicked<T, R>(
+export function firstPicked<T, R>(
   runtime: Runtime,
   cell: Cell<T>,
   pick: (value: Readonly<T>) => R | undefined,
@@ -373,9 +374,10 @@ function firstPicked<T, R>(
   const { promise, resolve } = Promise.withResolvers<R | undefined>();
   // Where `sink()`'s cancel is kept: a callback can run before it returns.
   const subscription: { cancel?: Cancel } = {};
+  // `check` and `abandon` call `settle` at most once between them: `check`
+  // returns once settled, and `settle` removes `abandon` from `signal`.
   let settled = false;
   const settle = (picked: R | undefined) => {
-    if (settled) return;
     settled = true;
     signal?.removeEventListener("abort", abandon);
     subscription.cancel?.();
