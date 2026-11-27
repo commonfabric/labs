@@ -30,7 +30,9 @@ import { type NamesMap } from "../../product/collection-naming/naming.ts";
 import { bucketRowsByName } from "./crossref-index.ts";
 import Topics, {
   activityOrderOf,
-  cardsToShow,
+  byActivity,
+  CARD_PAGE,
+  cardsShown,
   distinctByIdentity,
   mentionedBy,
   mentionedByEach,
@@ -750,10 +752,9 @@ export default pattern(() => {
     activityOrderOf({ lastActivityAt: 2500, createdAt: 1700 }) === 2500
   );
 
-  // The board shows only the most recently active topics, so a board larger
-  // than the limit keeps the newest activity and drops the oldest, in activity
-  // order whatever order the topics were filed in.
-  const assert_cards_keep_the_most_recently_active = assert(() => {
+  // The cards run most recently active first whatever order the topics were
+  // filed in, and topics equally recently active keep their filing order.
+  const assert_cards_run_most_recently_active_first = assert(() => {
     const row = (name: string, createdAt: number, lastActivityAt: number) => ({
       name,
       value: {
@@ -764,14 +765,25 @@ export default pattern(() => {
         lastActivityAt,
       },
     });
-    const shown = cardsToShow([
+    const ordered = byActivity([
       row("filed first, active last", 100, 900),
       row("filed second, never active", 200, 0),
       row("filed third, active early", 300, 400),
-    ], 2);
-    return shown.map(({ name }) => name).join("|") ===
-      "filed first, active last|filed third, active early";
+      row("filed fourth, as active as the third", 350, 400),
+    ]);
+    return ordered.map(({ name }) => name).join("|") ===
+      "filed first, active last|filed third, active early|" +
+        "filed fourth, as active as the third|filed second, never active";
   });
+
+  // A session shows one page of cards until it asks for more, each press adds
+  // a page, and it never shows more cards than the board has.
+  const assert_cards_shown_page_by_page = assert(() =>
+    cardsShown(120, undefined) === CARD_PAGE &&
+    cardsShown(120, CARD_PAGE + CARD_PAGE) === 2 * CARD_PAGE &&
+    cardsShown(120, 3 * CARD_PAGE) === 120 &&
+    cardsShown(CARD_PAGE - 1, CARD_PAGE) === CARD_PAGE - 1
+  );
 
   // The ordering this exists for, stated as the comparison the sort makes: a
   // cold topic filed AFTER a warm one still sorts above it. Fixed inputs that
@@ -1508,7 +1520,8 @@ export default pattern(() => {
       { assertion: assert_row_universe_accepted },
       { assertion: assert_cold_row_orders_by_created_at },
       { assertion: assert_warm_row_orders_by_last_activity },
-      { assertion: assert_cards_keep_the_most_recently_active },
+      { assertion: assert_cards_run_most_recently_active_first },
+      { assertion: assert_cards_shown_page_by_page },
       { assertion: assert_cold_new_topic_outranks_an_older_warm_one },
       { assertion: assert_self_mention_inert_through_a_twin },
       { assertion: assert_mentioned_by_counts_each_matching_entry },

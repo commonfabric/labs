@@ -4,9 +4,11 @@
  * `topic-board-navigation.bench.ts` measures one board of one size, which
  * catches a regression but says nothing about shape: a change that is flat at
  * thirty topics and quadratic at three hundred looks the same there. This file
- * measures the same thing — a signed-in cold load, timed until every card has
- * rendered — across several board sizes, so the shape of the curve is a thing
- * the dashboard charts rather than a thing somebody has to go and measure.
+ * measures the same thing — a signed-in cold load, timed until the board's
+ * first page of cards has rendered — across several board sizes, so the shape
+ * of the curve is a thing the dashboard charts rather than a thing somebody has
+ * to go and measure. Every size here is larger than a page, so each load shows
+ * the same number of cards and what grows is the board behind them.
  *
  * The boards carry no crossrefs. Citations are what the board can least afford
  * (see `DEFAULT_CITING_TOPICS` in `topic-board-fixture.ts`), and a scaling
