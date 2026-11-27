@@ -1898,6 +1898,27 @@ timing moves. Run with:
 deno bench -A --json runtime/memory/test/v2-refresh-schema-closure.bench.ts
 ```
 
+## Letting go of one referrer of a shared record
+
+`runtime/memory/test/v2-refresh-shared-record.bench.ts` measures a tracked
+graph of 100, 1,000, or 10,000 topic roots that each link to one board document
+under the same selector, so every topic's record attributes the board's one
+record. One group times a refresh after a commit that moves one topic's link
+off the board; the other times releasing one topic's root. Either leaves the
+board's record with walkers and makes it a suspect of the cycle sweep, which
+searches back from it for a root. The search follows one referrer at a time and
+stops at the first root, so it reads one topic's record rather than every
+topic's, and neither timing should grow with the topic count. Each sample makes
+the change, times the refresh or the release, and undoes the change; the commit,
+the undo, fixture construction, and the check that the board stayed delivered
+are outside the timed interval. The records one untimed sweep visits go to
+stderr per fixture — two, the board's record and one topic's, at every size —
+which is the count to compare when a timing moves. Run with:
+
+```sh
+deno bench -A --json runtime/memory/test/v2-refresh-shared-record.bench.ts
+```
+
 ## String tuple keys
 
 `base/collections/test/string-tuple-key.bench.ts` measures encoding 256 distinct
