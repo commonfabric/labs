@@ -3,17 +3,27 @@
  *
  * The scoring, ranking and Quick Add checking rules are pure functions and are
  * tested directly. The pattern is then driven through its UI and streams with
- * a seeded rubric. The Quick Add LLM call is answered by `llmMocks`: one
- * description has a mocked answer, and a second, unanswered one reaches the
+ * a seeded rubric. The Quick Add LLM call is answered by `llmMocks`: two
+ * descriptions have mocked answers, and a third, unanswered one reaches the
  * error path.
  *
  * Run: deno task cf test patterns/apps/smart-rubric/smart-rubric.test.tsx --verbose
  */
-import { action, assert, FS, pattern, TESTS, UI, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  FS,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
 import {
   clickButton,
   clickInRow,
   findNodeByProp,
+  fireClick,
   fireEvent,
   hasText,
   typeInto,
@@ -46,6 +56,14 @@ const LOFT_ANSWER: QuickAddResponse = {
   reasoning: "Near the park reads as a great location.",
 };
 
+const COTTAGE_ANSWER: QuickAddResponse = {
+  optionName: "Cosy Cottage",
+  extractedValues: [
+    { dimensionName: "Location", value: "Fair", confidence: "high" },
+  ],
+  reasoning: "Out of town reads as a fair location.",
+};
+
 const QUICK_ADD_PLACEHOLDER =
   "Describe an option, e.g. 'Apartment A: 2br in the Mission, $2100/mo'";
 
@@ -53,6 +71,10 @@ export const llmMocks = [
   {
     when: { lastMessageContains: "sunny loft near the park" },
     object: LOFT_ANSWER,
+  },
+  {
+    when: { lastMessageContains: "cosy cottage out of town" },
+    object: COTTAGE_ANSWER,
   },
   // Every other request fails, as an unanswered one did before `cf test`
   // answered every request: these steps check what the pattern does without
@@ -67,6 +89,13 @@ const editRange = (root: unknown, label: string, value: string): void =>
     "oncf-change",
     { detail: { value } },
     `the "${label}" field`,
+  );
+
+/** Clicks the control labelled `label` through its `aria-label`. */
+const clickLabelled = (root: unknown, label: string): void =>
+  fireClick(
+    findNodeByProp(root, "aria-label", label),
+    `the "${label}" control`,
   );
 
 const location: Dimension = {
@@ -158,6 +187,20 @@ export default pattern(() => {
       option("A", "Excellent"),
       option("Z", "Poor", undefined, 5),
     ], [location])) === "A,Z"
+  );
+  // Two options claiming the last slot both stay in the list: the second
+  // takes the nearest free slot above it.
+  const assert_colliding_pins_keep_every_option = assert(() =>
+    names(rankOptions([
+        option("A", "Excellent"),
+        option("P", "Poor", undefined, 3),
+        option("Q", "Poor", undefined, 9),
+      ], [location])) === "A,Q,P" &&
+    names(rankOptions([
+        option("A", "Excellent"),
+        option("P", "Poor", undefined, 2),
+        option("Q", "Poor", undefined, 9),
+      ], [location])) === "A,P,Q"
   );
   const assert_move_past_end_is_noop = assert(() =>
     withOptionMoved([option("A"), option("B")], [location], "A", -1)
@@ -418,6 +461,112 @@ export default pattern(() => {
     rubric[FS].content.includes("Location [categorical], weight 2.0×")
   );
 
+  // --- Controls on each row ------------------------------------------------
+
+  const assert_name_follows_title = assert(() =>
+    rubric[NAME] === "⚖️ Decision Rubric"
+  );
+  const action_rename = action(() =>
+    typeInto(rubric[UI], "Rubric title", "Flat hunt")
+  );
+  const assert_renamed = assert(() => rubric[NAME] === "⚖️ Flat hunt");
+
+  // Sunny Loft (25.5) leads; ▼ pins it second, behind B (21).
+  const action_move_loft_down = action(() =>
+    clickLabelled(rubric[UI], "Move Sunny Loft down")
+  );
+  const assert_loft_moved_down = assert(() =>
+    names(rubric.ranked) === "Apartment B,Sunny Loft,Apartment A" &&
+    rubric.ranked[1]?.movedByHand === true &&
+    rubric.ranked[0]?.movedByHand === false
+  );
+
+  // − steps the selected option's rent down a tenth of the range (200).
+  const action_decrease_loft_rent = action(() =>
+    clickLabelled(rubric[UI], "Decrease Rent")
+  );
+  const assert_loft_rent_decreased = assert(() => {
+    const loft = rubric.options.find((o) => o.name === "Sunny Loft");
+    const b = rubric.options.find((o) => o.name === "Apartment B");
+    return loft?.values.find((v) => v.dimensionName === "Rent")?.value ===
+        1900 &&
+      b?.values.find((v) => v.dimensionName === "Rent")?.value === 1200 &&
+      hasText(rubric[UI], "1900");
+  });
+
+  const action_change_weights = action(() => {
+    clickLabelled(rubric[UI], "Raise the weight of Rent");
+    clickLabelled(rubric[UI], "Lower the weight of Location");
+  });
+  const assert_weights_changed = assert(() =>
+    rubric.dimensions[0]?.multiplier === 1.5 &&
+    rubric.dimensions[1]?.multiplier === 1.5 &&
+    hasText(rubric[UI], "Weight: 1.5×")
+  );
+
+  // A categorical dimension starts on the default scale.
+  const action_add_categorical = action(() => {
+    typeInto(rubric[UI], "New dimension name", "Parking");
+    clickButton(rubric[UI], "+ Categorical");
+  });
+  const assert_categorical_added = assert(() => {
+    const parking = rubric.dimensions[2];
+    return parking?.name === "Parking" && parking.type === "categorical" &&
+      parking.multiplier === 1 &&
+      parking.categories.map((c) => `${c.label}=${c.score}`).join(", ") ===
+        "Excellent=10, Good=7, Fair=4, Poor=1" &&
+      hasText(rubric[UI], "Categories: Excellent=10, Good=7, Fair=4, Poor=1");
+  });
+  const action_rate_loft_parking = action(() =>
+    clickInRow(rubric[UI], "Parking [categorical]", "Good (7 pts)")
+  );
+  const assert_loft_has_parking = assert(() =>
+    rubric.options.find((o) => o.name === "Sunny Loft")?.values.some((v) =>
+      v.dimensionName === "Parking" && v.value === "Good"
+    ) === true
+  );
+  // Removing a dimension drops its values from every option.
+  const action_remove_parking = action(() =>
+    clickLabelled(rubric[UI], "Remove Parking")
+  );
+  const assert_parking_removed = assert(() =>
+    rubric.dimensions.map((d) => d.name).join(",") === "Location,Rent" &&
+    rubric.options.every((o) =>
+      o.values.every((v) => v.dimensionName !== "Parking")
+    ) &&
+    rubric.options.find((o) => o.name === "Sunny Loft")?.values.length === 2
+  );
+
+  // Removing the selected option clears the selection.
+  const action_remove_loft = action(() =>
+    clickLabelled(rubric[UI], "Remove Sunny Loft")
+  );
+  const assert_loft_removed = assert(() =>
+    names(rubric.options) === "Apartment A,Apartment B" &&
+    rubric.selected === "" &&
+    hasText(rubric[UI], "How it works")
+  );
+
+  // Clear drops a proposal and its description, so Analyze then sends
+  // nothing; Dismiss, above, keeps the description.
+  const action_quick_add_cottage = action(() => {
+    typeInto(rubric[UI], QUICK_ADD_PLACEHOLDER, "A cosy cottage out of town");
+    clickButton(rubric[UI], "Analyze");
+  });
+  const assert_cottage_ready = assert(() =>
+    rubric.quickAddStatus === "ready" &&
+    rubric.quickAddPreview.name === "Cosy Cottage"
+  );
+  const action_clear_quick_add = action(() => clickButton(rubric[UI], "Clear"));
+  const action_analyze_after_clear = action(() =>
+    clickButton(rubric[UI], "Analyze")
+  );
+  const assert_quick_add_cleared = assert(() =>
+    rubric.quickAddStatus === "idle" &&
+    !rubric.quickAddPreview.ready &&
+    names(rubric.options) === "Apartment A,Apartment B"
+  );
+
   return {
     [TESTS]: [
       { assertion: assert_numeric_normalized_to_ten },
@@ -426,6 +575,7 @@ export default pattern(() => {
       { assertion: assert_rank_by_score_ties_by_order },
       { assertion: assert_move_pins_only_the_moved_option },
       { assertion: assert_pinned_slots_survive_shrinking },
+      { assertion: assert_colliding_pins_keep_every_option },
       { assertion: assert_move_past_end_is_noop },
       { assertion: assert_manual_ranks_come_first },
       { assertion: assert_unique_names },
@@ -479,6 +629,30 @@ export default pattern(() => {
       { action: action_clear },
       { assertion: assert_cleared },
       { assertion: assert_fs_projection },
+      { assertion: assert_name_follows_title },
+      { action: action_rename },
+      { assertion: assert_renamed },
+      { action: action_move_loft_down },
+      { assertion: assert_loft_moved_down },
+      { action: action_decrease_loft_rent },
+      { assertion: assert_loft_rent_decreased },
+      { action: action_change_weights },
+      { assertion: assert_weights_changed },
+      { action: action_add_categorical },
+      { assertion: assert_categorical_added },
+      { action: action_rate_loft_parking },
+      { assertion: assert_loft_has_parking },
+      { action: action_remove_parking },
+      { assertion: assert_parking_removed },
+      { action: action_remove_loft },
+      { assertion: assert_loft_removed },
+      { action: action_quick_add_cottage },
+      { settle: true },
+      { assertion: assert_cottage_ready },
+      { action: action_clear_quick_add },
+      { action: action_analyze_after_clear },
+      { settle: true },
+      { assertion: assert_quick_add_cleared },
     ],
     rubric,
     allowConsoleWarnings: true,
