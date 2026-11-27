@@ -280,6 +280,12 @@ leave room:
 - **The owner's data includes other people's.** Connector data labeled `User(A)`
   holds content others sent A, such as received mail or invites, and a
   reclassification releases it as A's.
+- **A link write can store a declaration on an existing document.** A write that
+  stores a link to a share's result in an existing record brings the share's
+  declaration at that path, which the record then stores. The write is not
+  refused, since refusing it would refuse keeping a share in any existing
+  record. A later write there is honored only with its own declaration, from the
+  piece's own pattern, under its recorded creator.
 - **A reclassification must cover every path the transaction writes.** The flow
   join is stamped on the whole document, so a declaration on one field is
   honored only when the transaction writes nothing else there.

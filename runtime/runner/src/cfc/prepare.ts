@@ -2557,9 +2557,15 @@ type ReclassificationContext = {
  * there. Every other clause is kept.
  *
  * Throws, which refuses the write, where a declaration is malformed
- * (`reclassifyDeclarationsOf`) or a writer adds one to a stored envelope that
- * declared none at its path: an audience is the creating program's to
- * choose, not a later writer's.
+ * (`reclassifyDeclarationsOf`), or where a write to a document the
+ * transaction did not create brings a declaration covering a value it writes
+ * that the document did not store, at that path and policy: an audience is
+ * the creating program's to choose, not a later writer's. A declaration
+ * covering no value the transaction writes, as when a link to a share's
+ * result is stored beneath it, is persisted without a refusal, since
+ * refusing it would refuse storing such a link in any existing record; a
+ * later write there is honored only under every condition below.
+ * (`PROPOSAL.md`, Risks.)
  *
  * Returns the join as it is, with a diagnostic saying why, unless all of
  * these hold: the transaction's `patternReclassification` dial is on; one
