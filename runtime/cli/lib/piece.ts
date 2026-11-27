@@ -169,7 +169,6 @@ import {
   deriveSelectedValue,
 } from "./cell-selection.ts";
 import { cliCommand } from "./cli-name.ts";
-import { connectionCompileCache } from "./compile-byte-cache.ts";
 import { holdDelegationChainFiles } from "./delegation.ts";
 import {
   type ExecCommandSpec,
@@ -814,6 +813,11 @@ export async function loadPieces(
   // both stand for.
   await validateEmbeddedSpaces(config.embeddedSpaces, session);
   const runtimeErrors: CliRuntimeErrorRecord[] = [];
+  // Only a connection reads compiled modules, and the cache reaches the
+  // runner's shared compile cache, so a command that never connects should not
+  // load it.
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  const { connectionCompileCache } = await import("./compile-byte-cache.ts");
   const compileCache = connectionCompileCache().reportingTo(navigateFailure);
   const runtime = await timeCliPhase(
     "loadPieces.runtime",
