@@ -8,7 +8,13 @@
  */
 
 import { debugStr } from "@commonfabric/data-model";
-import { Browser, env, type Page } from "@commonfabric/integration";
+import {
+  Browser,
+  env,
+  type Page,
+  type ProbeApi,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { login } from "@commonfabric/integration/shell-utils";
 import type { Identity } from "@commonfabric/identity";
 import {
@@ -26,6 +32,63 @@ import {
   type TopicBoardFixture,
   topicTitle,
 } from "./topic-board-fixture.ts";
+
+/**
+ * How many cards a session shows before it asks for more, and how many each
+ * press of "Show more…" adds: the board's `CARD_PAGE`.
+ */
+export const CARD_PAGE = 50;
+
+/**
+ * In-page predicate: once the view has settled, the board shows `count`
+ * cards, each carrying one of `titles`, and offers another page exactly when
+ * `more`. Answers with the title each card carries, in the order the cards are
+ * shown.
+ *
+ * Settling on each check is what drives the page to render the effect of its
+ * own work, such as a press of "Show more…"; a wait that only watched the DOM
+ * would not.
+ */
+const settledCards = async (
+  probe: ProbeApi,
+  count: number,
+  more: boolean,
+  titles: readonly string[],
+): Promise<false | string[]> => {
+  const settle = (globalThis as typeof globalThis & {
+    commonfabric?: { viewSettled?: () => Promise<void> };
+  }).commonfabric?.viewSettled;
+  if (!settle) return false;
+  await settle();
+  const cards = probe.collect("cf-card");
+  const offersMore = probe.collect("#show-more-cards").length > 0;
+  if (cards.length !== count || offersMore !== more) return false;
+  const shown = cards.map((card) => {
+    const text = probe.deepText(card);
+    return titles.find((title) => text.includes(title)) ?? "";
+  });
+  return shown.includes("") ? false : shown;
+};
+
+/**
+ * Waits for the board on `page` to show `count` cards, each carrying a title
+ * `fixture` seeded, and to offer another page exactly when `more`. Returns the
+ * title on each card, in the order the cards are shown.
+ */
+export async function waitForBoardCards(
+  page: Page,
+  fixture: TopicBoardFixture,
+  count: number,
+  more: boolean,
+): Promise<string[]> {
+  const shown = await waitForCondition(page, settledCards, {
+    args: [count, more, fixture.topics.map(({ title }) => title)],
+  });
+  if (shown === undefined) {
+    throw new Error("The wait for the board's cards returned no titles.");
+  }
+  return shown;
+}
 
 export interface BoardSessionTarget {
   fixture: TopicBoardFixture;
@@ -80,9 +143,19 @@ export class BoardSession {
     await waitForRuntimeIdle(this.#page);
   }
 
-  /** Waits for the first seeded topic's title and settles the board's view. */
+  /**
+   * Waits for the board's first page of cards, which on a board of one page or
+   * fewer is a card for every seeded topic, and settles the board's view.
+   */
   async showBoard(): Promise<void> {
-    await waitForSettledText(this.#page, "body", topicTitle(0));
+    const { fixture } = this.#target;
+    const topicCount = fixture.topics.length;
+    await waitForBoardCards(
+      this.#page,
+      fixture,
+      Math.min(topicCount, CARD_PAGE),
+      topicCount > CARD_PAGE,
+    );
     await settleView(this.#page);
   }
 
