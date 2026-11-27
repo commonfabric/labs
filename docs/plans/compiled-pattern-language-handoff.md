@@ -859,6 +859,111 @@ instances to 0 with no value the comparison reads changed.
 - Today's path's own inconsistency between a spread and `JSON.stringify` of
   the same record (the compiled path implements the declared type).
 
+## The reviews of rounds thirty-five to thirty-nine, and the merge
+
+State on 2026-11-27. Each line below was reviewed by an agent that did not
+write it, sent back to its author with the review, and gate-checked by the
+coordinator at the head named. Reports are under the session's `work/`
+directory: `r38-argument-read/report-3.md` with `review-r38-2/report.md`,
+`r35-no-scope-key/report-3.md` with `review-r35-2/report.md`,
+`r39-setup-findings/report.md` with `review-r39/report.md`, and
+`rounds-merge/report.md` for the merge.
+
+### Branches
+
+| Branch | Head | State |
+| --- | --- | --- |
+| `claude/compiled-pattern-scoped-rows` (build) | `c12d442929` | local past `7eb87d6743`; round 39 (setup) on top |
+| `claude/compiled-pattern-body-reads` | `d8a20351b9` | round 38 after three passes; local |
+| `claude/compiled-pattern-derivation-split` | `a9db79ae27` | the design's round 2 after three passes; local |
+| `claude/compiled-pattern-rounds-38-39-merge` | see `rounds-merge/report.md` | the build head with the two branches above merged; local |
+| `claude/own-write-link-stale` | `e7b3789ae4` | pull request #10283 against `main`; five review comments answered |
+
+Before any compiled branch is pushed, its diff is read for material the
+owner has not released; the coordinator's session notes say what that is.
+
+### The stale read on `main`
+
+#10283 makes a read through a link load a document the runtime's own commit
+stored and no watch reaches. Not fixed by it: a load that resolves carrying
+an error keeps its reservation, so that document is not loaded again.
+
+### Setup (round 39)
+
+The review of round 39 found the class its fixes address still open, and
+one regression: after the serving loop restarts, a piece with a per-user
+cell that its creator can read does not resume. The findings and the
+choices for closing the class are with the owner; nothing more is built on
+this line until the owner answers.
+
+### What a body reads (round 38)
+
+- The decisions of the read (union branch, defaults, required keys) are
+  today's functions, called through
+  `runtime/runner/src/compiled/argument-rules.ts`. The walk in
+  `exec/argument-view.ts` is still a second implementation of today's.
+- `argument-probes`: 63 outputs listed as differing, by cause: the element
+  code of a construct 27, the members a body reads 17, recursive types 9,
+  today's path against itself 4, note 1304 4, a primitive at an `unknown`
+  position 2. `body-reads-matrix`: 82 of 95 agree. `argument-guards`: all
+  60 agree.
+- **The element code of `map`, `filter` and `reduce` inside a `computed`
+  reads raw slots**, with none of the rules a function body's read applies.
+  Over an array of plain values held in place, one of the listed outputs
+  differs on a valid argument. Routing those reads through the view needs
+  the view to record a read through a reference by key as a keyed read
+  first; without that, a move of elements re-evaluates them
+  (`r38-argument-read/cont3/executor.element-view-attempt.ts` is the attempt
+  that was set aside). The same gap exists for a `lift` handed the result
+  of a `filter`, and no test holds it.
+- **Two label differences older than the round are open and block
+  shipping**, held by ignored tests in
+  `compare/test/open-label-gaps.test.ts`: plain argument rows whose members
+  the type declares `Confidential` give an output stored with no clause
+  where today's path stores the rows' clauses; and rows of another piece
+  carry a sibling's clause and none of their own.
+- A union-of-records member costs 6 to 8 microseconds a row to read (243 ms
+  a write at 32,000 rows), linear.
+- On today's path a body that runs before the store's frame arrives reads a
+  record in the writer's key order; `member-copies.test.ts` compares three
+  outputs without member order for that reason (P685).
+- Which members a body reads is derived by the crate (P664) and differs from
+  today's compiler, whose rule depends on the form of the code. For the
+  owner: keep the crate's rule with the differences listed, or reproduce
+  today's.
+
+### The derivation design's round 2
+
+- A run with no scope key writes no scope instance: `unkeyed-into-scope` is
+  0 (199 before), with the same 278 scenarios running.
+- **Keyed runs now write derived values of the space**: 263 writes at 247
+  positions in 17 scenarios (the Topics board 132). Which principal's run
+  writes is not the same between two runs of one commit. Where that run
+  read `User`-labeled data the clause is stored on the shared document, and
+  the other principal reads the position as hidden (`board.crossrefs`,
+  `crossrefIndex`, `namesTable`). `keyed-into-space` is 1,884 with every
+  part counted. This is what the design's round 4 removes, with the
+  addition that a scoped run names the shared entry it needs and does not
+  evaluate it.
+- A built-in is registered with a stated decision on whether its answer
+  depends on the acting principal (P615). `spaceMembers` was registered as
+  independent, which let one principal read another's answer; it and an
+  argument that names a document of a scope now make the evaluation scoped.
+- A result that reads a per-user value directly is an error state at the
+  place of the reading result (P611, P616); a pattern compiled into another
+  keeps its other members. `examples/suggestable/event-list.tsx` and
+  `people-list.tsx` return such a pattern as their whole result and are in
+  that state. For the owner: this, or a result built member by member.
+- The change to when the `wish` action is registered (P612) has no test
+  that fails without it and no measured effect.
+
+### Waiting on the owner, added
+
+- Whether the build branch takes round 2 before round 4 is built.
+- The members a body reads, and the result that reads a per-user value, as
+  above.
+- How the setup class is closed.
+
 ## Open lines of work
 
 Each line names the notes that hold its plan. The notes are in
