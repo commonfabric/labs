@@ -3634,3 +3634,65 @@ test("diffedit cov: joinAdjacent keeps hunks from different commits separate", (
   assertEquals(_de.joinAdjacent(twoHunks, twoHunks, hunks, 0), null);
   assertEquals(hunks.length, 2);
 });
+
+test("diffedit cov: reparsing an edit reads the file on disk only for a line-local language", () => {
+  const notesDiff = [
+    "diff --git a/notes.txt b/notes.txt",
+    "--- a/notes.txt",
+    "+++ b/notes.txt",
+    "@@ -2 +2 @@",
+    "-old",
+    "+two",
+    "",
+  ].join("\n");
+  const scriptDiff = [
+    "diff --git a/script.ts b/script.ts",
+    "--- a/script.ts",
+    "+++ b/script.ts",
+    "@@ -1 +1 @@",
+    "-const a = 0;",
+    "+const a = 1;",
+    "",
+  ].join("\n");
+  const { root, ws: disk, done } = tempWs({
+    "notes.txt": "one\ntwo\nthree\n",
+    "script.ts": "const a = 1;\nconst b = 2;\n",
+  });
+  const notes = join(root, "notes.txt");
+  const script = join(root, "script.ts");
+  try {
+    const reparseReads = (diff: string, edited: string): string[] => {
+      const reads: string[] = [];
+      const ws: DiffWorkspace = {
+        resolve: disk.resolve,
+        read: (path) => {
+          reads.push(path);
+          return disk.read(path);
+        },
+      };
+      const { edit } = buildDiffDocument(diff, parseDiff(diff)!, ws);
+      const source = diffSource(ws, edit);
+      reads.length = 0;
+      const doc = source.parse(edited);
+      assertEquals(doc.text, edited);
+      return reads;
+    };
+    const editNotes = (diff: string) => diff.replace("+two", "+2 `two");
+    const editScript = (diff: string) =>
+      diff.replace("+const a = 1;", "+const a = `1;");
+
+    // Plain text colors each line alone, so its edit is drawn against the
+    // file on disk, with no edited copy of the file built.
+    assertEquals(reparseReads(notesDiff, editNotes(notesDiff)), [notes]);
+    // TypeScript colors the whole file, so the edit is drawn against the
+    // file as edited, and the copy on disk is not read.
+    assertEquals(reparseReads(scriptDiff, editScript(scriptDiff)), []);
+    // In one diff each file is read according to its own language.
+    const both = notesDiff + scriptDiff;
+    assertEquals(reparseReads(both, editScript(editNotes(both))), [notes]);
+    // A whole-file language whose text the edit leaves alone is read from disk.
+    assertEquals(reparseReads(both, editNotes(both)), [notes, script]);
+  } finally {
+    done();
+  }
+});

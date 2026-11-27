@@ -927,6 +927,22 @@ describe("pattern", () => {
       ]);
     });
 
+    it("prints the beta link with --beta, and the stable link without it, while a version is stable", async () => {
+      lineages.keep(await entrysSlot());
+      lineages.links = {
+        "a-xyz": linkTo("a-xyz", "stable", 1),
+        "a-xyz@beta": linkTo("a-xyz@beta", "beta", 2),
+      };
+
+      await link(options({ beta: true }), entry, ownerDeps());
+      await link(options(), entry, ownerDeps());
+
+      expect(rendered.map((r) => r.value)).toEqual([
+        `a-xyz@beta: ${entry}, beta (shared version #2 now). It names the pattern, not you.`,
+        `a-xyz: ${entry}, stable (shared version #1 now). It names the pattern, not you.`,
+      ]);
+    });
+
     it("prints exactly one shared version with --number, never falling back", async () => {
       lineages.keep(await entrysSlot());
       lineages.links = {

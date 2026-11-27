@@ -72,10 +72,18 @@ export interface ProcessResult {
   patternJson?: string;
 }
 
+/**
+ * Compile `options.main` and, with `options.run`, evaluate it, in `runtime`
+ * when one is given and in a fresh runtime from {@link createRuntime}
+ * otherwise. A fabric import resolves against `options.space` as the
+ * runtime's storage holds it, and a fresh runtime's emulated storage starts
+ * empty.
+ */
 export async function process(
   options: ProcessOptions,
+  runtime?: Runtime,
 ): Promise<ProcessResult> {
-  const runtime = await createRuntime({
+  runtime ??= await createRuntime({
     consoleToStderr: options.patternJson,
   });
   // Compile/evaluate through the runtime's OWN harness, not a second Engine.

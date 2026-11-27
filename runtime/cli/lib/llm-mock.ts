@@ -31,6 +31,7 @@ import {
   type LLMResponder,
   type LLMResponse,
   requestMismatch,
+  setLLMResponder,
 } from "@commonfabric/llm";
 import { defer, type Deferred } from "@commonfabric/async/defer";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -285,6 +286,7 @@ export class LLMMockResponder implements LLMResponder {
   readonly #entries: readonly LLMMockEntry[];
   readonly #used: boolean[];
   readonly #unanswered: string[] = [];
+  #reported = 0;
 
   constructor(entries: readonly LLMMockEntry[]) {
     this.#entries = entries;
@@ -294,6 +296,16 @@ export class LLMMockResponder implements LLMResponder {
   /** One message for each request no entry answered. */
   get unanswered(): string[] {
     return [...this.#unanswered];
+  }
+
+  /**
+   * The messages of the requests no entry answered that no earlier call
+   * returned, so that each is reported once.
+   */
+  takeUnreported(): string[] {
+    const unreported = this.#unanswered.slice(this.#reported);
+    this.#reported = this.#unanswered.length;
+    return unreported;
   }
 
   sendRequest(
@@ -376,6 +388,32 @@ export class LLMMockResponder implements LLMResponder {
     if (chosen.entry.error !== undefined) throw new Error(chosen.entry.error);
     return reply(chosen.entry, chosen.index);
   }
+}
+
+/**
+ * Installs `responder` as the process's LLM responder until the returned
+ * disposable is disposed. Disposing it uninstalls the responder, then throws,
+ * naming `testPath`, for the requests no entry answered that
+ * `responder.takeUnreported()` has not returned: the ones made after the
+ * test's results were collected.
+ */
+export function installLLMResponder(
+  responder: LLMMockResponder,
+  testPath: string,
+): Disposable {
+  setLLMResponder(responder);
+  return {
+    [Symbol.dispose]() {
+      setLLMResponder(undefined);
+      const late = responder.takeUnreported();
+      if (late.length > 0) {
+        throw new Error(
+          `${testPath}: requests no llmMocks entry answered, made after the ` +
+            `test's results were collected:\n${late.join("\n")}`,
+        );
+      }
+    },
+  };
 }
 
 /**

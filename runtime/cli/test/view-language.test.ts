@@ -182,6 +182,21 @@ test("language metadata claims a shared extension only with its evidence", () =>
   assert(!metadataMatchesSharedExtension(metadata, undefined, "demo:"));
 });
 
+test("filenameSettlesLanguage: a name settles only when a language claims it", () => {
+  // LICENSE is plain text by name, so it settles as much as a JSON file does.
+  for (
+    const name of ["a.json", "LICENSE", "containers/Dockerfile.debug"]
+  ) {
+    assert(filenameSettlesLanguage(name), name);
+  }
+  for (const name of ["notes.xyz", "script", undefined]) {
+    assert(!filenameSettlesLanguage(name), String(name));
+  }
+  // A template settles exactly when its host's name does.
+  assert(filenameSettlesLanguage("deploy.sh.j2"));
+  assert(!filenameSettlesLanguage("notes.xyz.j2"));
+});
+
 test("languageForFile: named JavaScript uses the TypeScript-family parser", () => {
   const source = "export const answer = 42;\n";
   const doc = languageForFile("answer.js").parseDocument(source, "answer.js");

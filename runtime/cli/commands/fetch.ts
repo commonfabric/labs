@@ -40,23 +40,39 @@ export const fetchCommand = new Command()
     ),
     "Run one of the service's commands.",
   )
-  .action(async (options, url) => {
-    if (!options.identity) {
-      throw new ValidationError(
-        'Missing required option: "--identity", or "CF_IDENTITY".',
-      );
-    }
-    const method = options.method.toUpperCase();
-    const body = method === "GET" || method === "HEAD"
-      ? undefined
-      : await new Response(Deno.stdin.readable).text();
-    const text = await signedFetch({
-      url,
-      method,
-      body,
-      identity: options.identity,
-    });
-    await Deno.stdout.write(
-      new TextEncoder().encode(text.endsWith("\n") ? text : `${text}\n`),
+  .action((options, url) => fetchAction(options, url));
+
+/**
+ * The process streams `cf fetch` uses: where a body is read from, and where
+ * the answer goes. Each defaults to the process's own.
+ */
+export interface FetchDeps {
+  stdin?: ReadableStream<Uint8Array>;
+  stdout?: Pick<typeof Deno.stdout, "write">;
+}
+
+/** Sends the request and prints the answer, ending it with a newline. */
+export async function fetchAction(
+  options: { identity?: string; method: string },
+  url: string,
+  { stdin, stdout = Deno.stdout }: FetchDeps = {},
+): Promise<void> {
+  if (!options.identity) {
+    throw new ValidationError(
+      'Missing required option: "--identity", or "CF_IDENTITY".',
     );
+  }
+  const method = options.method.toUpperCase();
+  const body = method === "GET" || method === "HEAD"
+    ? undefined
+    : await new Response(stdin ?? Deno.stdin.readable).text();
+  const text = await signedFetch({
+    url,
+    method,
+    body,
+    identity: options.identity,
   });
+  await stdout.write(
+    new TextEncoder().encode(text.endsWith("\n") ? text : `${text}\n`),
+  );
+}

@@ -260,6 +260,48 @@ describe(
       }
     });
 
+    it("fails the run, leaving the store without its result, when instantiating the test pattern throws", async () => {
+      const identity = await Identity.fromPassphrase(
+        "cli storage host observer throws",
+      );
+      const storageManager = StorageManager.emulate({ as: identity });
+      const reader = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const result = await runTestPattern(
+          resolve(FIXTURES, "counter.test.tsx"),
+          {
+            root: FIXTURES,
+            storageHost: {
+              identity,
+              storageManager,
+              serverExecution: false,
+              resultCause: RESULT_CAUSE,
+              // Called while the run instantiates the test pattern, before
+              // its setup commits.
+              onPatternInstantiated: () => {
+                throw new Error("observer refused");
+              },
+            },
+          },
+        );
+
+        expect(result.error).toBe("observer refused");
+        expect(result.results).toEqual([]);
+        const root = reader.getCell<{ count: number }>(
+          identity.did(),
+          RESULT_CAUSE,
+          SCHEMA,
+        );
+        await root.sync();
+        expect(root.get()).toBeUndefined();
+      } finally {
+        await reader.dispose();
+      }
+    });
+
     it("RAISES a teardown that does not complete", async () => {
       // The other half of "the store is the caller's": the caller is about to
       // read what this run wrote, so a teardown that did not finish must not be

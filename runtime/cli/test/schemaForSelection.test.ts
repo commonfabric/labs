@@ -236,5 +236,24 @@ describe("schemaForSelection()", () => {
       };
       expect(schemaForSelection(schema)).toBe(schema);
     });
+
+    it("throws for a schema naming a document whose own positions cannot be hashed", () => {
+      const named = externalizeSchema(claimed);
+      const unhashable = {
+        type: "object",
+        properties: { name: named, computed: { const: () => "value" } },
+      } as unknown as JSONSchema;
+      expect(() => schemaForSelection(unhashable)).toThrow(
+        /Cannot hash value/,
+      );
+      // The same schema with a hashable value in that position is inlined.
+      const hashable: JSONSchema = {
+        type: "object",
+        properties: { name: named, computed: { const: "value" } },
+      };
+      expect(containsExternalSchemaRef(schemaForSelection(hashable))).toBe(
+        false,
+      );
+    });
   });
 });

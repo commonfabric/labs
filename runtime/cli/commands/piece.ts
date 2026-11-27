@@ -5330,29 +5330,53 @@ export async function restoreFromCommand(
   }
 }
 
-/** The module recording a version, loaded on first use. */
-const loadVersionModules = async () => ({
+const importVersionModule = async () =>
   // deno-lint-ignore cf-imports/no-inline-module-import
-  versions: await import("../lib/pattern-versions.ts"),
-});
+  await import("../lib/pattern-versions.ts");
+
+/** What a deploy uses of `lib/pattern-versions.ts`. */
+type VersionModule = Pick<
+  Awaited<ReturnType<typeof importVersionModule>>,
+  "recordVersionInIndex" | "versionLine" | "versionJson"
+>;
+
+/**
+ * `lib/pattern-versions.ts`, loaded on first use rather than with the
+ * command, since recording reaches the compiler's identity code, which
+ * starting `cf piece` must not load. A module that fails to load stands in
+ * as one that keeps no version and reports why, so a deploy that committed
+ * still succeeds.
+ */
+export const loadVersionModule = (
+  load: () => Promise<VersionModule> = importVersionModule,
+): Promise<VersionModule> =>
+  load().catch((error): VersionModule => {
+    const reason = describeFailure(error);
+    return {
+      recordVersionInIndex: () => Promise.resolve({ status: "failed", reason }),
+      versionLine: (outcome) =>
+        outcome.status === "failed"
+          ? `Version not kept: ${outcome.reason}. The deploy itself succeeded.`
+          : undefined,
+      versionJson: (outcome) => ({
+        status: outcome.status,
+        ...("reason" in outcome ? { reason: outcome.reason } : {}),
+      }),
+    };
+  });
 
 /**
  * Keeps a deploy as a private version: `recordVersionInIndex` in
- * `lib/pattern-versions.ts`, loaded here rather than with the command,
- * since recording reaches the compiler's identity code, which starting
- * `cf piece` must not load. Never throws.
+ * `lib/pattern-versions.ts`, as `loadVersionModule` loads it. Never throws.
  */
 export async function recordVersionInIndex(
   identity: string,
   deployed: DeployedSource,
 ): Promise<VersionOutcome> {
-  let modules;
-  try {
-    modules = await loadVersionModules();
-  } catch (error) {
-    return { status: "failed", reason: describeFailure(error) };
-  }
-  return await modules.versions.recordVersionInIndex(identity, deployed);
+  return await (await loadVersionModule()).recordVersionInIndex(
+    identity,
+    deployed,
+  );
 }
 
 /**
@@ -5476,15 +5500,7 @@ function versionRecorder(
     settle: async () => {
       if (pending === undefined) return undefined;
       const outcome = await pending;
-      // A module that failed to load already made the outcome a failure;
-      // reporting it must not fail the deploy either.
-      const line = await loadVersionModules().then(
-        ({ versions }) => versions.versionLine(outcome),
-        () =>
-          outcome.status === "failed"
-            ? `Version not kept: ${outcome.reason}. The deploy itself succeeded.`
-            : undefined,
-      );
+      const line = (await loadVersionModule()).versionLine(outcome);
       if (line !== undefined) print(line);
       return outcome;
     },
@@ -5581,14 +5597,20 @@ export async function patternIdForLink(
   return answer.patternId;
 }
 
-/** A client for the index at `patternIndexUrl`, signing as `identity`. */
-const openIndexClient = async (
+/**
+ * A client for the index at `patternIndexUrl`, signing as the key file
+ * `identity` and presenting the chain the store for that index, under the
+ * state directory `env` names, keeps for it.
+ */
+export const openIndexClient = async (
   patternIndexUrl: string,
   identity: string,
+  env: (key: string) => string | undefined = (key) => Deno.env.get(key),
 ): Promise<Pick<PatternIndexClient, "getPattern">> =>
   await openPatternIndexClient({
     baseUrl: patternIndexUrl,
     signer: await loadIdentity(identity),
+    store: new PatternIndexStore(patternIndexStoreDir(patternIndexUrl, env)),
   });
 
 /** A shared link `cf piece new --from-link` names, and the index to ask. */
@@ -5751,24 +5773,13 @@ export async function newPieceFromCommand(
   const print = deps.render ?? render;
   if (options.json) {
     const kept = await version?.settle();
-    const versionJson = kept === undefined
-      ? undefined
-      : await loadVersionModules().then(
-        ({ versions }) => versions.versionJson,
-        // The modules failing to load made the outcome a failure, which a
-        // script still reads as one.
-        () => (outcome: VersionOutcome) => ({
-          status: outcome.status,
-          ...("reason" in outcome ? { reason: outcome.reason } : {}),
-        }),
-      );
     print(
       {
         pieceId,
         ...(name === undefined ? {} : { name }),
-        ...(kept === undefined || versionJson === undefined
+        ...(kept === undefined
           ? {}
-          : { version: versionJson(kept) }),
+          : { version: (await loadVersionModule()).versionJson(kept) }),
       },
       { json: true },
     );
