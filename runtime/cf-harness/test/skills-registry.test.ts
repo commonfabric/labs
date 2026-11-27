@@ -388,7 +388,7 @@ test("loadHarnessSkillContextFromText wraps handle-delivered text with token pro
   assertEquals(result.activation.handleToken, "cfh:a:3kk78");
   assertEquals(result.activation.runId, "run-from-text");
   assertEquals(result.activation.activatedAt, "2026-04-15T19:00:00.000Z");
-  assertEquals(result.activation.cfcPromptRole, "context");
+  assertEquals(result.activation.cfcPromptRole, "quote");
   assertEquals(result.activation.digest.startsWith("sha256:"), true);
   // No registry directory stands behind a handle-delivered skill.
   assertEquals(result.activation.skillPath, undefined);

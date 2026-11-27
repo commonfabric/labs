@@ -517,7 +517,7 @@ describe("pattern-compat", () => {
 
     // The whole gate, over one pattern of this checkout and its baselines.
 
-    const counter = ["--only", "examples/counter/counter.tsx"];
+    const counter = ["--only", "examples/counter/main.tsx"];
 
     it("compiles a real pattern and proves it against its recorded baselines, writing no record unasked", async () => {
       const said: string[] = [];
@@ -532,7 +532,7 @@ describe("pattern-compat", () => {
       expect(shown?.code).toBe(0);
       expect(said).toEqual([
         "Checking update compatibility for 1 patterns.",
-        "[1/1] examples/counter/counter.tsx",
+        "[1/1] examples/counter/main.tsx",
       ]);
       expect(shown?.out).toContain(
         "\n1 pattern(s) can be updated from every recorded contract.",
@@ -546,7 +546,7 @@ describe("pattern-compat", () => {
       );
 
       expect(spooled.map((record) => [record.test.n, record.outcome]))
-        .toEqual([["pattern-compat examples/counter/counter.tsx", "pass"]]);
+        .toEqual([["pattern-compat examples/counter/main.tsx", "pass"]]);
     });
   });
 });

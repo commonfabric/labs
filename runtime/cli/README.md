@@ -1035,13 +1035,16 @@ request. The second and the fourth create the pull request after any push that
 succeeds, including one that had nothing new to push, unless the branch already
 has an open pull request, which they look for as `L` does, below. The pull
 request goes to the GitHub repository of the remote named `upstream`, `github`,
-or `origin`, whichever is the first to name one, and merges into that remote's
-default branch, as its server names it then, from the branch on `origin`. When
-the viewer has to ask GitHub for the open pull request, it asks that remote's
-server for its default branch at the same time. The created pull request's title
-and description are the subject and the rest of the message of the branch's
-oldest commit that the default branch, as last fetched, does not have, leaving
-out merges and commits whose changes that branch already has.
+or `origin`, whichever is the first to name one, and merges into that
+repository's default branch from the branch on `origin`. When that remote is
+`origin`, its default branch is the one the push already asked `origin`'s server
+for. Otherwise, when the viewer has to ask GitHub for the open pull request, it
+asks GitHub for the repository's default branch at the same time, which makes no
+git connection to the remote. Create PR, after a creation fails, keeps to that
+default branch once it has learned it. The created pull request's title and
+description are the subject and the rest of the message of the branch's oldest
+commit that the default branch, as last fetched, does not have, leaving out
+merges and commits whose changes that branch already has.
 
 - "Just push, and link to them": the summary gives the page's address, which the
   status line makes a link for terminals that open links.

@@ -1056,9 +1056,9 @@ See:
 
 ## Good Examples
 
-- `patterns/examples/scoped-group-chat/main-plain-inputs.tsx`: data-shaped
+- `patterns/examples/scoped-group-chat/plain-inputs/main.tsx`: data-shaped
   scoped inputs.
-- `patterns/examples/scoped-group-chat/main-with-writable-inputs.tsx`: scoped
+- `patterns/examples/scoped-group-chat/writable-inputs/main.tsx`: scoped
   writable aliases for mutation-heavy UI.
 - `patterns/examples/scoped-user-directory/`: per-user pointer into a shared
   directory.

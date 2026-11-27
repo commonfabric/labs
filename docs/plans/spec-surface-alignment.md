@@ -194,7 +194,11 @@ program over fabric data", already builds one from these pieces:
   instructions" stays `quote`.
 
 Today's harness `skill-context` handle capability is a slot role under another
-name, and today it is the wrong one for third-party text (top/3606).
+name. Handle-delivered skill text is recorded as `quote`, and the child that
+holds it runs as `quote`. The exception is an acquired skill whose whole bundle,
+`SKILL.md` and every script, matches a review the run's trust closure accepts:
+that child keeps the delegating run's binding, and the skill's text is still
+`quote` ([reviewed skills](reviewed-skills.md)).
 
 ### A skill with scripts
 
@@ -264,8 +268,8 @@ work under way, the item links to it.
    - `acquire_skill` becomes source entry plus a reference;
    - `read_skill_resource` becomes `read_value`;
    - `run_skill_script` becomes `invokeTool`;
-   - the `skill-context` capability becomes a prompt-slot role. That is `quote`
-     for third-party text (top/3606).
+   - the `skill-context` capability becomes a prompt-slot role. Handle-delivered
+     text already binds as `quote`.
 
    The tool names can stay as thin aliases, because models are trained on
    skill-shaped tools. (Ties to 1.4 and 1.6; Topics 1900 and 1771.)
@@ -314,9 +318,6 @@ work under way, the item links to it.
   - `agent()`'s `call_verb` and `run_pattern` are always refused, because the
     task is hard-wired to `context` under `enforce-explicit`, so they fail
     closed.
-- **top/3606:** cf-harness hands third-party skill text to a `delegate_task`
-  child as plain prompt text, with no slot role of its own. The child also
-  inherits the parent's `direct-command` binding.
 - **Comment on top/1892 (Ben, in progress):** webhook payloads enter with no
   source-entry label or provenance. top/1892 already covers D1-A source entry
   and retiring `LlmDerived` (cleanups 3–4 above).

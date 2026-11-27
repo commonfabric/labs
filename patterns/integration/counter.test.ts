@@ -85,7 +85,7 @@ describe("counter direct operations test", () => {
       "..",
       "examples",
       "counter",
-      "counter.tsx",
+      "main.tsx",
     );
     const program = await resolveLocalProgram(
       (resolver) => cc.runtime.harness.resolve(resolver),

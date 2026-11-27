@@ -17,7 +17,7 @@ import { compileFailure } from "../compiler/compile-failure.ts";
 export default pattern(() => {
   // URL to a simple pattern file
   const url = new Writable(
-    "https://raw.githubusercontent.com/commonfabric/labs/main/patterns/examples/counter/counter.tsx",
+    "https://raw.githubusercontent.com/commonfabric/labs/main/patterns/examples/counter/main.tsx",
   );
 
   // Step 1: Fetch the program from URL

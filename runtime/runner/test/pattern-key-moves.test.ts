@@ -138,7 +138,7 @@ describe("pattern-key-moves", () => {
       for (
         const key of [
           "system/profile-home.tsx",
-          "examples/clock.tsx",
+          "examples/cf-tags.tsx",
           "examples/data/phonetic-alphabet.json",
           "topics/topic.tsx",
           "test/vnode-helpers.ts",

@@ -1655,7 +1655,6 @@ const inspectRoom = async (
       policy,
       manifestTx,
       room,
-      false,
     );
     if (!artifact) {
       throw new Error(
@@ -2199,7 +2198,7 @@ const releasedToSeal = (
     undefined,
     {
       modulePolicyResolver: (reference) =>
-        runtime.resolveCfcPolicyManifest(reference, tx, room as never, false),
+        runtime.resolveCfcPolicyManifest(reference, tx, room as never),
     },
   );
   const left = result.label.confidentiality ?? [];

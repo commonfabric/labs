@@ -199,7 +199,8 @@ test the passes could choose would be charged needs no more room than that,
 so a large scale opens no lanes that nothing could fill.
 So a change that forces a great deal of work in takes more lanes, and still
 runs the tests chosen by score. A change with nothing mandatory takes the
-fewest lanes that hold `DISCRETIONARY_SECONDS`, which is three. The passes
+fewest lanes that hold `DISCRETIONARY_SECONDS`, which is eight wherever
+there are that many seconds of tests to choose from. The passes
 spend the target and no more however many lanes there are, and less where
 `LANES_MAX` leaves them less room.
 
@@ -763,7 +764,10 @@ its own to edit: each lane budget is its run's bound less the prologue and
 the safety margin, so a budget that does not fit inside its own bound
 cannot be written down. The distinction matters because the two look
 identical in a source file, and somebody who tries to tune a derived value
-is editing a line that is not there.
+is editing a line that is not there. A chosen value may be written as a
+multiple of a derived one, as `DISCRETIONARY_SECONDS` is of
+`LANE_BUDGET_SECONDS`; the multiple is then the decision, and the table
+shows what it comes to.
 
 More numbers come from measurement, and they are not in the table
 because they are not in `policy.ts`: `setupCost` for each capability, for
@@ -784,7 +788,7 @@ measurement to look at rather than a setting to fix.
 | `LANE_BUDGET_SECONDS` | 230 | seconds | derived | Nothing edits this. It is the bound less the prologue and the safety margin, so a budget that does not fit inside its own bound cannot be written down. |
 | `FULL_LANE_BOUND_SECONDS` | 1800 | seconds | chosen | Up when the run on `main` uses more jobs than it needs; down when `main` takes too long to say something broke. |
 | `FULL_LANE_BUDGET_SECONDS` | 1730 | seconds | derived | Nothing edits this. It is the full run's bound less the same prologue and safety margin a pull request's lane pays, since a lane of either run is the same job doing the same setup on the same runner. |
-| `DISCRETIONARY_SECONDS` | 575 | seconds | chosen | Up when regressions reach the default branch past pull requests that did not run the test chosen by score that would have caught them; down when pull requests take more lanes than runner minutes allow. A pull request whose mandatory work fits in five lanes with room to spare most often takes five at this figure. The label `ci: <n>x` multiplies it by n for one pull request. |
+| `DISCRETIONARY_SECONDS` | 1725 | seconds | chosen | Up when regressions reach the default branch past pull requests that did not run the test chosen by score that would have caught them; down when pull requests take more lanes than runner minutes allow. It is written as seven and a half lanes' budget, so a change with nothing mandatory takes eight lanes however the lane budget moves. The label `ci: <n>x` multiplies it by n for one pull request. |
 | `LANES_MAX` | 30 | lanes | chosen | The most lanes a run other than the full run takes. Up when the lane-count job says such a run needs more lanes than this, and the organization's runner limit has room; down when one run crowds out the runs behind it. A pull request needing more lanes than this takes this many, and then runs fewer tests chosen by score, and its mandatory work may put its lanes past their budget. |
 | `FULL_LANES_MAX` | 256 | lanes | chosen | The full run may use up to GitHub's job-matrix limit. Concurrency per run is limited by the workflow's `max-parallel`, independently of how many lanes the work needs. |
 | `FULL_RUN_LABEL` | ci: full | a label | chosen | Not a quantity. Change it only if the label collides with one the repository already uses for something else. |
@@ -1935,6 +1939,25 @@ leave gaps; measured zeros remain visible. The chart's span follows the availabl
 caches compact counts across restarts and removes them when their source
 objects leave the listing. A latest manifest with no tests makes both
 headlines unknown.
+
+The flake tile's page lists the tests held back, and
+`/test-selection/flaky.json` serves the same list as JSON for an agent or a
+script setting out to fix one. Beside each test's share, both give the last day
+it failed on the default branch, for whatever reason, or was seen disagreeing
+with itself anywhere, and the last day anything ran it. The share falls only as
+the test goes on running, so these are what say how lately it failed and whether
+the tree still holds it. A failure on a pull request or a workstation counts
+toward the first only as part of a disagreement, since on its own it may be the
+change being worked on breaking the test. The JSON also gives the runs the test
+disagreed across, and the page links the newest of them. The publisher keeps
+those runs as it folds the records:
+for each test, the newest ten disagreements inside `FLAKE_WINDOW_DAYS`, each
+with its commit and order, the job of the failing run, and the job of the first
+run that passed there. A run on a workstation is named only as one. A
+disagreement counted before the publisher kept runs has none listed, and the
+first run that passed is unknown where it was folded before then. The
+[dashboard's README](../../dashboard/README.md#flaky-tests-as-json) defines
+every field.
 
 Both tiles show a running indicator while the publisher workflow is queued or
 running on main. Activity and new manifests are checked every 30 seconds.

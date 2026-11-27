@@ -191,7 +191,7 @@ drives has a body that runs in neither path, so it sits at zero on every run
 rather than moving between them. That is permanent debt rather than flap, and it
 costs one more action apiece to clear.
 
-`patterns/examples/cfc-spec-gallery/main.test.tsx` is the worked example. It
+`patterns/examples/cfc-spec-gallery/cfc-spec-gallery.test.tsx` is the worked example. It
 reads its view, states its name and the four inputs it reports back out, and
 drives every stream the gallery exposes, which takes the file from 385 of its
 522 measured lines to all of them. Before that the integration path was the only
@@ -1054,10 +1054,13 @@ Three things read them:
   `tasks/test-selection/baselines.ts` is where that happens.
 - The dashboard's coverage debt tile
   (`dashboard/coverage-debt-history.ts`) takes the `workspace`
-  figure of one `main` run attempt a day, the newest of the day's attempts
-  that has one, was not measured on a cold compile cache, and passed, and
-  charts the run of them. The record store does not say whether an attempt
-  passed, so the tile asks GitHub.
+  figure of every `main` run attempt of a day that has one, was not
+  measured on a cold compile cache, passed, is its run's latest attempt,
+  and belongs to a run created no more than a day before that day, and
+  charts the mean of each day's figures. The record store
+  does not say whether an attempt passed, so the tile reads that from the
+  dashboard's shared lists of GitHub workflow runs, and asks GitHub for
+  the record of a run whose attempt is newer than those lists hold.
 - The report a `main` run posts on the pull request behind it
   (`tasks/post-main-report.ts`) reads the figures out of the newest coverage
   artifact of the run and of the run before it, and compares the two. A run

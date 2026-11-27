@@ -39,8 +39,10 @@ function classesOf(lines: readonly Line[], token: string): Set<TokenClass> {
 }
 
 test("json: language metadata selects JSON filenames", () => {
-  assertEquals(languageForFile("deno.json").id, "json");
-  assertEquals(languageForFile("/a/b/tsconfig.jsonc").id, "json");
+  assertEquals(languageForFile("package.json").id, "json");
+  assertEquals(languageForFile("deno.json").id, "jsonc");
+  assertEquals(languageForFile("/a/b/tsconfig.json").id, "jsonc");
+  assertEquals(languageForFile("/a/b/tsconfig.jsonc").id, "jsonc");
   assertEquals(languageForFile("records.jsonl").id, "json-lines");
   assertEquals(languageForFile("events.ndjson").id, "json-lines");
   assertEquals(languageForFile("EVENTS.NDJSON").id, "json-lines");
@@ -58,7 +60,7 @@ test("json: language metadata selects JSON-shaped names without a JSON suffix", 
   );
   assertEquals(languageForFile("runtime/memory/memory.tldr").id, "json");
   assertEquals(languageForFile("/repo/deno.lock").id, "json");
-  assertEquals(languageForFile("bay.code-workspace").id, "json");
+  assertEquals(languageForFile("bay.code-workspace").id, "jsonc");
   assertEquals(languageForFile("ios/Package.resolved").id, "json");
   assertEquals(languageForFile("Cargo.lock").id, "toml");
   assertEquals(languageForFile("package.resolved").id, "plain-text");

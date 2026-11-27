@@ -14,7 +14,7 @@ import {
   hasText,
   sendMessage,
 } from "../../tools/test-support/vnode-helpers.ts";
-import LLMTest from "./llm.tsx";
+import LLMTest from "./main.tsx";
 
 export const llmMocks = [
   {

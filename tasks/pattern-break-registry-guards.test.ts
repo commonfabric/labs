@@ -309,7 +309,7 @@ describe("pattern-break-registry-guards", () => {
     const findings = guardUnevaluableExemptions({
       unevaluable: new Set([
         "system/home/home.tsx",
-        "examples/cf-picker/cf-picker.tsx",
+        "examples/cf-picker/main.tsx",
       ]),
       requiredPatternKeys: new Set(["system/home/home.tsx"]),
     });
@@ -320,7 +320,7 @@ describe("pattern-break-registry-guards", () => {
 
   it("allows unevaluable patterns that no required key addresses", () => {
     expect(guardUnevaluableExemptions({
-      unevaluable: new Set(["examples/cf-picker/cf-picker.tsx", "whome.tsx"]),
+      unevaluable: new Set(["examples/cf-picker/main.tsx", "whome.tsx"]),
       requiredPatternKeys: new Set(["system/home/home.tsx"]),
     })).toEqual([]);
   });

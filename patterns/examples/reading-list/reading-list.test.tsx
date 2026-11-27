@@ -22,7 +22,7 @@ import {
   hasText,
   viewShows,
 } from "../../tools/test-support/vnode-helpers.ts";
-import ReadingList from "./reading-list.tsx";
+import ReadingList from "./main.tsx";
 
 export default pattern(() => {
   // Instantiate the reading list pattern with default empty list

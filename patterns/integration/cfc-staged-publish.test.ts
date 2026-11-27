@@ -49,7 +49,7 @@ describe("cfc staged publish integration test", () => {
       "..",
       "examples",
       "cfc-staged-publish",
-      "main.tsx",
+      "cfc-staged-publish.tsx",
     );
     const rootPath = join(import.meta.dirname!, "..");
     const program = await resolveLocalProgram(

@@ -123,7 +123,7 @@ describe("sx2 events (Phase 3 gates)", () => {
       "..",
       "examples",
       "counter",
-      "counter.tsx",
+      "main.tsx",
     );
     const program = await resolveLocalProgram(
       (resolver) => cc.runtime.harness.resolve(resolver),

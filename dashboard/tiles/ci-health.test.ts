@@ -7,6 +7,7 @@
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { expect } from "@std/expect";
+import { join, toFileUrl } from "@std/path";
 import { stub } from "@std/testing/mock";
 import {
   CI_FAILURE_FRESH_HOURS,
@@ -17,6 +18,12 @@ import {
 } from "../config.ts";
 import { RunLists } from "../github-runs.ts";
 import { compactSpan } from "../lib.ts";
+import {
+  OFFCUTS_JOB,
+  OFFCUTS_ORGANIZATION,
+  OffcutsScan,
+} from "../offcuts-scan.ts";
+import { commitFiles } from "../test/git-repos.ts";
 import {
   FakeRelay,
   pushPayload,
@@ -1922,6 +1929,88 @@ describe("ci-health", () => {
         expect(asked).toBe(2);
         await tile.sweeping();
         expect(asked).toBe(2);
+      });
+    });
+
+    describe("with an offcuts scan", () => {
+      // labs and cfs are Git repositories under a temporary directory, which
+      // the scan fetches from in place of GitHub.
+
+      /**
+       * Commits `labs` and `cfs` to their repositories, and runs `body` with
+       * a tile scanning them, and a context whose `collectAgain()` is counted
+       * in `asked`.
+       */
+      async function withScan(
+        labs: Record<string, string>,
+        cfs: Record<string, string>,
+        body: (
+          tile: CiHealthTile,
+          context: Ctx,
+          asked: () => number,
+        ) => Promise<void>,
+      ): Promise<void> {
+        const root = await Deno.makeTempDir({ prefix: "ci-offcuts-test-" });
+        try {
+          await commitFiles(join(root, "labs"), labs);
+          await commitFiles(join(root, "cfs"), cfs);
+          const scan = new OffcutsScan({
+            webhooks: new FakeRelay().webhooks,
+            directory: join(root, "scans"),
+            remote: (repo) => toFileUrl(join(root, repo.split("/")[1])).href,
+            repositoryNames: () => Promise.resolve([]),
+          });
+          await withGitHub(standingOrg(green, green), async () => {
+            const tile = createCiHealth(undefined, undefined, scan);
+            let asked = 0;
+            const context: Ctx = { ...ctx(), collectAgain: () => asked++ };
+            await collectSwept(tile, context);
+            await scan.scanning();
+            await body(tile, context, () => asked);
+          });
+        } finally {
+          await Deno.remove(root, { recursive: true });
+        }
+      }
+
+      it("turns red, naming the repository, while a default branch references the offcuts organization", async () => {
+        await withScan(
+          { "deno.json": `{ "lib": "${OFFCUTS_ORGANIZATION}/lib" }` },
+          { "README.md": "nothing" },
+          async (tile, context, asked) => {
+            const view = await tile.collect(context);
+
+            expect(asked()).toBe(2);
+            expect(view.status).toBe("bad");
+            expect(view.value).toBe("labs failing");
+            expect(view.extra).toContain(
+              `<span class="dot red"></span>labs · ${OFFCUTS_JOB}`,
+            );
+            expect(view.extra).toContain("1 reference");
+            expect(view.extra).not.toContain(`cfs · ${OFFCUTS_JOB}`);
+          },
+        );
+      });
+
+      it("returns a passing job for each repository with no reference", async () => {
+        await withScan(
+          { "README.md": "nothing" },
+          { "README.md": "nothing" },
+          async (tile, context) => {
+            const view = await tile.collect(context);
+
+            expect(view.status).toBe("good");
+            expect(view.value).toBe("passing");
+            expect(view.aside).toContain("4 jobs · 2 repos");
+            expect(
+              tile.jobs()?.jobs.filter((job) => job.workflow === OFFCUTS_JOB)
+                .map(({ repo, status }) => ({ repo, status })),
+            ).toEqual([
+              { repo: "labs", status: "good" },
+              { repo: "cfs", status: "good" },
+            ]);
+          },
+        );
       });
     });
   });

@@ -5,7 +5,7 @@ import {
   propValue,
   readValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import AuthorshipChat from "./main.tsx";
+import AuthorshipChat from "./cfc-authorship-chat.tsx";
 
 const surface = (root: unknown, name: string) =>
   findNodeByProp(root, "data-authorship-surface", name);

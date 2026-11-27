@@ -4,7 +4,7 @@ import {
   findNodeById,
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
-import NestedCounter, { Counter } from "./nested-counter.tsx";
+import NestedCounter, { Counter } from "./main.tsx";
 
 export default pattern(() => {
   const nested = NestedCounter({ value: 2 });

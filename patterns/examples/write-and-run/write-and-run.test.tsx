@@ -3,7 +3,7 @@ import {
   hasText,
   sendMessage,
 } from "../../tools/test-support/vnode-helpers.ts";
-import WriteAndRun from "./write-and-run.tsx";
+import WriteAndRun from "./main.tsx";
 
 // The model writes a pattern that compiles for the first prompt, and code
 // that does not for the second.

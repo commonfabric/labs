@@ -73,7 +73,12 @@ describe("cold start over an owned cell that holds no value", () => {
     const program = await resolveLocalProgram(
       (resolver) => creator.harness.resolve(resolver),
       {
-        main: join(patternsRoot, "examples", "cfc-staged-publish", "main.tsx"),
+        main: join(
+          patternsRoot,
+          "examples",
+          "cfc-staged-publish",
+          "cfc-staged-publish.tsx",
+        ),
         root: patternsRoot,
       },
     );

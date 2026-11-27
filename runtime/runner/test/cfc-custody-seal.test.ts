@@ -97,7 +97,7 @@ const syncManifest = async (runtime: Runtime) => {
     cfcPolicyManifestDocId(CUSTODY.policyDigest),
   ).sync();
   const tx = runtime.edit();
-  expect(runtime.resolveCfcPolicyManifest(P, tx, S, false)).toBeDefined();
+  expect(runtime.resolveCfcPolicyManifest(P, tx, S)).toBeDefined();
   tx.abort();
 };
 

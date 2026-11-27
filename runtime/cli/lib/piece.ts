@@ -161,7 +161,6 @@ import {
   detectCallableKind,
   executeResolvedCallable,
   type InvocationOutcome,
-  runtimeErrorLog,
   VerbInputValidationError,
 } from "./callable.ts";
 import {
@@ -622,13 +621,6 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
 
   /** Where creation's phases report; the process-wide trace by default. */
   phaseTrace?: PhaseTrace;
-
-  /**
-   * Resolves when a created piece has had as long as it gets to start, and
-   * stops counting once `settled` aborts; {@link pieceStartDeadline} by
-   * default.
-   */
-  startDeadline?: (settled: AbortSignal) => Promise<void>;
 
   reportSearchError?: (
     pieceId: string,
@@ -1941,7 +1933,6 @@ function servedScope(
  * deployment executes the transaction remotely; an ordinary client executes
  * the same operation locally. Registration retains its delivery identity, so
  * an uncertain response can be retried without reinitializing the document.
- * `boundStart` bounds only the local start, after creation and registration.
  *
  * With phase tracing on, each step reports as `newPiece.create.<step>`, and
  * a served creation reports the steps the serving side timed as
@@ -1960,7 +1951,6 @@ async function createWithReceipt(
     requestKey?: string;
   } | undefined,
   deps: PieceOperationDependencies,
-  boundStart: <T>(start: Promise<T>) => Promise<T>,
 ): Promise<string> {
   const requestKey = options?.requestKey ?? crypto.randomUUID();
   const trace = deps.phaseTrace ?? cliPhaseTrace;
@@ -2043,25 +2033,11 @@ async function createWithReceipt(
     );
     await timeCliPhase(
       "newPiece.create.start",
-      () => boundStart(pieces.startPiece(cell)),
+      () => pieces.startPiece(cell),
       trace,
     );
   }
   return receipt.pieceId;
-}
-
-/** How long `cf piece new` waits for a created piece to start. */
-const PIECE_START_TIMEOUT_MS = 60_000;
-
-/**
- * Resolves once {@link PIECE_START_TIMEOUT_MS} has passed, unless `settled`
- * aborts first, in which case it never resolves and holds no timer.
- */
-function pieceStartDeadline(settled: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, PIECE_START_TIMEOUT_MS);
-    settled.addEventListener("abort", () => clearTimeout(timer));
-  });
 }
 
 /**
@@ -2095,6 +2071,10 @@ export interface NewPieceReceipt {
  * leaves nothing behind. Otherwise the refusal arrives after the piece exists,
  * so it names the piece as well as the flag: an operator who meant to repoint
  * has an id to name, and one who did not has a piece to find.
+ *
+ * When this client starts the piece, this returns once the start has finished,
+ * however long that takes. A pattern that fails to compile, or that throws
+ * while it is set up, makes this reject with the pattern's own error.
  */
 export async function newPieceWithReceipt(
   config: SpaceConfig,
@@ -2225,31 +2205,6 @@ export async function newPieceWithReceipt(
   const named = indexed?.name === undefined ? {} : { name: indexed.name };
   // A published pattern carries no repository locator of its own.
   const repository = "patternId" in entry ? undefined : entry.repository;
-  // A piece whose pattern never settles leaves `pieces.create` awaiting a
-  // scheduler `idle()` that never resolves, and the runtime surfaces no
-  // event that a start has definitively failed (a thrown pattern reports its
-  // error and still resolves; a stuck async load reports nothing). The
-  // start's deadline is the only thing that turns that hang into a message.
-  // When it passes, report the actual runtime error the pattern recorded
-  // while starting rather than only pointing at the server logs.
-  const runtimeErrors = runtimeErrorLog(pieces.runtime);
-  const errorCountBefore = runtimeErrors.length;
-  const startDeadline = deps.startDeadline ?? pieceStartDeadline;
-  const boundStart = <T>(starting: Promise<T>): Promise<T> => {
-    const settled = new AbortController();
-    const expired = startDeadline(settled.signal).then((): never => {
-      const recorded = runtimeErrors.slice(errorCountBefore).at(-1)?.message;
-      const detail = recorded !== undefined
-        ? `A runtime error was reported while it started: ${recorded}`
-        : `Check toolshed logs for runtime errors.`;
-      throw new Error(
-        `Piece created but failed to start within ${
-          PIECE_START_TIMEOUT_MS / 1000
-        }s. ${detail}`,
-      );
-    });
-    return Promise.race([starting, expired]).finally(() => settled.abort());
-  };
   // Receipt-backed creation returns after both setup and registration commit.
   // Only a request key replays a receipt, so a creation with no program to
   // hand on (`indexed` absent) always takes this path.
@@ -2264,7 +2219,6 @@ export async function newPieceWithReceipt(
           repository,
           options,
           deps,
-          boundStart,
         ),
     ).catch(async (error) => {
       // The serving side refuses a space with no history as `forbidden`,
@@ -2295,11 +2249,11 @@ export async function newPieceWithReceipt(
   const piece = await timeCliPhase(
     "newPiece.create",
     () =>
-      boundStart(pieces.create(program, {
+      pieces.create(program, {
         repository,
         start: options?.start,
         ...(options?.input === undefined ? {} : { input: options.input }),
-      })),
+      }),
   );
   // Here rather than after the registry add below: the piece now exists in
   // the space, and a slug or registry step that throws afterwards leaves a

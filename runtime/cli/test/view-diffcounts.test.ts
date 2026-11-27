@@ -1242,6 +1242,33 @@ describe("diffcounts", () => {
       ).toEqual([false, false, true]);
     });
 
+    it("returns true for comment lines added to or removed from JSONC, and false for one added to strict JSON or for a changed JSONC value", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "deno.jsonc",
+            before: ["{", "  // a", '  "x": 1', "}"],
+            after: ["{", "  // b", "  /* c */", '  "x": 1', "}"],
+          },
+          {
+            path: "deno.json",
+            before: ["{", "  // a", '  "x": 1', "}"],
+            after: ["{", '  "x": 1', "}"],
+          },
+          {
+            path: "package.json",
+            before: ["{", '  "x": 1', "}"],
+            after: ["{", "  // a", '  "x": 1', "}"],
+          },
+          {
+            path: "settings.jsonc",
+            before: ["{", "  // a", '  "x": 1', "}"],
+            after: ["{", "  // a", '  "x": 2', "}"],
+          },
+        ),
+      ).toEqual([true, true, false, false]);
+    });
+
     it("returns false for a Rust change inside a raw string that holds comment markers", async () => {
       expect(
         await commentOnly({

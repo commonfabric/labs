@@ -16,7 +16,7 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
-import Counter from "../counter/counter.tsx";
+import Counter from "../counter/main.tsx";
 
 interface Item {
   title: string;

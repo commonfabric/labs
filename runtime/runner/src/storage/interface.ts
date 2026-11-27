@@ -3205,7 +3205,6 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   resolveCfcPolicyManifest(
     reference: unknown,
     destinationSpace?: MemorySpace,
-    bindCommit?: boolean,
   ): unknown;
 
   /** Whether the exact manifest is installed for a destination space. */
