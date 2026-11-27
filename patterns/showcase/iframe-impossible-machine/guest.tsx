@@ -77,11 +77,6 @@ type NodeViewData = {
   node: MachineNode;
   signal: model.SignalPresentation;
   disabled: boolean;
-};
-
-type MachineFlowNode = Node<NodeViewData, MachineNodeKind>;
-
-type NodeActions = {
   updateParameter<K extends keyof MachineParameters>(
     nodeId: string,
     key: K,
@@ -89,15 +84,7 @@ type NodeActions = {
   ): Promise<boolean>;
 };
 
-const NodeActionContext = React.createContext<NodeActions | undefined>(
-  undefined,
-);
-
-function useNodeActions(): NodeActions {
-  const actions = React.useContext(NodeActionContext);
-  if (!actions) throw new Error("Machine node rendered without its actions.");
-  return actions;
-}
+type MachineFlowNode = Node<NodeViewData, MachineNodeKind>;
 
 function defaultParameters(kind: MachineNodeKind): MachineParameters {
   return {
@@ -112,25 +99,21 @@ function defaultParameters(kind: MachineNodeKind): MachineParameters {
 }
 
 function NumberParameter({
-  nodeId,
+  data: { node, disabled, updateParameter },
   name,
   label,
-  value,
   min,
   max,
   step,
-  disabled,
 }: {
-  nodeId: string;
+  data: NodeViewData;
   name: "strength" | "delaySteps" | "gain" | "offset" | "threshold";
   label: string;
-  value: number;
   min: number;
   max: number;
   step: number;
-  disabled: boolean;
 }) {
-  const { updateParameter } = useNodeActions();
+  const value = node.parameters[name];
   const [draft, setDraft] = React.useState(String(value));
   const editing = React.useRef(false);
 
@@ -145,7 +128,7 @@ function NumberParameter({
       ? Math.min(max, Math.max(min, parsed))
       : value;
     setDraft(String(next));
-    if (next !== value) void updateParameter(nodeId, name, next);
+    if (next !== value) void updateParameter(node.id, name, next);
   };
 
   return (
@@ -226,8 +209,7 @@ function NodeFrame({
 }
 
 function SensorNode(props: NodeProps<MachineFlowNode>) {
-  const { updateParameter } = useNodeActions();
-  const { node, disabled } = props.data;
+  const { node, disabled, updateParameter } = props.data;
   return (
     <NodeFrame {...props} hasInput={false}>
       <button
@@ -246,22 +228,19 @@ function SensorNode(props: NodeProps<MachineFlowNode>) {
         {node.parameters.active ? "Emitting" : "Dormant"}
       </button>
       <NumberParameter
-        nodeId={node.id}
+        data={props.data}
         name="strength"
         label="Strength"
-        value={node.parameters.strength}
         min={0}
         max={1}
         step={0.05}
-        disabled={disabled}
       />
     </NodeFrame>
   );
 }
 
 function GateNode(props: NodeProps<MachineFlowNode>) {
-  const { updateParameter } = useNodeActions();
-  const { node, disabled } = props.data;
+  const { node, disabled, updateParameter } = props.data;
   return (
     <NodeFrame {...props}>
       <label className="parameter-row">
@@ -288,64 +267,54 @@ function GateNode(props: NodeProps<MachineFlowNode>) {
 }
 
 function DelayNode(props: NodeProps<MachineFlowNode>) {
-  const { node, disabled } = props.data;
   return (
     <NodeFrame {...props}>
       <NumberParameter
-        nodeId={node.id}
+        data={props.data}
         name="delaySteps"
         label="Ticks"
-        value={node.parameters.delaySteps}
         min={1}
         max={8}
         step={1}
-        disabled={disabled}
       />
     </NodeFrame>
   );
 }
 
 function TransformerNode(props: NodeProps<MachineFlowNode>) {
-  const { node, disabled } = props.data;
   return (
     <NodeFrame {...props}>
       <NumberParameter
-        nodeId={node.id}
+        data={props.data}
         name="gain"
         label="Gain"
-        value={node.parameters.gain}
         min={-2}
         max={3}
         step={0.1}
-        disabled={disabled}
       />
       <NumberParameter
-        nodeId={node.id}
+        data={props.data}
         name="offset"
         label="Offset"
-        value={node.parameters.offset}
         min={-1}
         max={1}
         step={0.05}
-        disabled={disabled}
       />
     </NodeFrame>
   );
 }
 
 function ActuatorNode(props: NodeProps<MachineFlowNode>) {
-  const { node, disabled } = props.data;
+  const { node } = props.data;
   return (
     <NodeFrame {...props} hasOutput={false}>
       <NumberParameter
-        nodeId={node.id}
+        data={props.data}
         name="threshold"
         label="Trigger"
-        value={node.parameters.threshold}
         min={0}
         max={1}
         step={0.05}
-        disabled={disabled}
       />
       <p className="actuator-state">
         {model.isActuatorFiring(node, props.data.signal.semantic)
@@ -622,6 +591,7 @@ function App() {
         outputValue.showSignals,
       ),
       disabled: (busyNodeCounts[node.id] ?? 0) > 0,
+      updateParameter,
     },
     draggable: true,
     connectable: true,
@@ -685,230 +655,228 @@ function App() {
     ).length;
 
   return (
-    <NodeActionContext.Provider value={{ updateParameter }}>
-      <main className="machine-app" data-testid="impossible-machine">
-        <header className="app-header">
+    <main className="machine-app" data-testid="impossible-machine">
+      <header className="app-header">
+        <div>
+          <p className="eyebrow">Shared workshop · Fabric is authoritative</p>
+          <h1>{inputValue.title}</h1>
+          <p>{inputValue.subtitle}</p>
+        </div>
+        <div className="telemetry" aria-live="polite">
+          <span>{stateValue.nodes.length} modules</span>
+          <span>{machineState.edges.length} wires</span>
+          <strong>{activeActuators} firing</strong>
+        </div>
+      </header>
+
+      <section className="toolbar" aria-label="Machine controls">
+        <div className="add-controls">
+          <span>Add</span>
+          {(Object.keys(KIND_LABELS) as MachineNodeKind[]).map((kind) => (
+            <button
+              type="button"
+              key={kind}
+              data-add-kind={kind}
+              disabled={pending}
+              onClick={() => void appendNode(kind)}
+            >
+              <span aria-hidden="true">{KIND_ICONS[kind]}</span>
+              {KIND_LABELS[kind]}
+            </button>
+          ))}
+        </div>
+        <div className="simulation-controls">
+          <button
+            type="button"
+            data-action="previous-tick"
+            aria-label="Previous simulation tick"
+            disabled={pending || outputValue.simulationTick === 0}
+            onClick={() =>
+              void updatePreference(
+                "simulationTick",
+                (current) => Math.max(0, current - 1),
+              )}
+          >
+            −
+          </button>
+          <output data-testid="simulation-tick">
+            Tick {outputValue.simulationTick}
+          </output>
+          <button
+            type="button"
+            data-action="next-tick"
+            aria-label="Next simulation tick"
+            disabled={pending}
+            onClick={() =>
+              void updatePreference(
+                "simulationTick",
+                (current) => current + 1,
+              )}
+          >
+            +
+          </button>
+          <button
+            className={outputValue.showSignals ? "is-on" : ""}
+            type="button"
+            data-action="toggle-signals"
+            aria-pressed={outputValue.showSignals}
+            disabled={pending}
+            onClick={() =>
+              void updatePreference("showSignals", (current) => !current)}
+          >
+            Signal glow
+          </button>
+        </div>
+      </section>
+
+      <section className="workspace">
+        <div className="flow-shell" aria-label="Collaborative machine canvas">
+          <MachineCanvas
+            authoritativeNodes={flowNodes}
+            authoritativeSelection={outputValue.selectedNodeId}
+            edges={flowEdges}
+            onNodeSelection={(nodeId) =>
+              tracker.request(
+                nodeId,
+                (selectedNodeId) =>
+                  updatePreference(
+                    "selectedNodeId",
+                    () => selectedNodeId,
+                  ),
+              )}
+            onPositionCommit={persistPosition}
+            onConnect={(connection) => void appendEdge(connection)}
+          />
+        </div>
+
+        <aside className="inspector">
           <div>
-            <p className="eyebrow">Shared workshop · Fabric is authoritative</p>
-            <h1>{inputValue.title}</h1>
-            <p>{inputValue.subtitle}</p>
+            <p className="eyebrow">Personal view</p>
+            <h2>{selected?.label ?? "Select a module"}</h2>
+            <p>
+              {selected
+                ? `${KIND_LABELS[selected.kind]} · ${
+                  model.presentSignal(
+                    signals.get(selected.id) ?? 0,
+                    outputValue.showSignals,
+                  ).label
+                } signal`
+                : "Selection, tick, and signal glow follow your user identity."}
+            </p>
           </div>
-          <div className="telemetry" aria-live="polite">
-            <span>{stateValue.nodes.length} modules</span>
-            <span>{machineState.edges.length} wires</span>
-            <strong>{activeActuators} firing</strong>
-          </div>
-        </header>
 
-        <section className="toolbar" aria-label="Machine controls">
-          <div className="add-controls">
-            <span>Add</span>
-            {(Object.keys(KIND_LABELS) as MachineNodeKind[]).map((kind) => (
-              <button
-                type="button"
-                key={kind}
-                data-add-kind={kind}
+          <div className="wire-builder">
+            <h3>Accessible wire builder</h3>
+            <label>
+              From
+              <select
+                className="nodrag"
+                data-wire="source"
+                value={connectSource}
                 disabled={pending}
-                onClick={() => void appendNode(kind)}
+                onChange={(event) =>
+                  setConnectSource(event.currentTarget.value)}
               >
-                <span aria-hidden="true">{KIND_ICONS[kind]}</span>
-                {KIND_LABELS[kind]}
-              </button>
-            ))}
-          </div>
-          <div className="simulation-controls">
-            <button
-              type="button"
-              data-action="previous-tick"
-              aria-label="Previous simulation tick"
-              disabled={pending || outputValue.simulationTick === 0}
-              onClick={() =>
-                void updatePreference(
-                  "simulationTick",
-                  (current) => Math.max(0, current - 1),
-                )}
-            >
-              −
-            </button>
-            <output data-testid="simulation-tick">
-              Tick {outputValue.simulationTick}
-            </output>
-            <button
-              type="button"
-              data-action="next-tick"
-              aria-label="Next simulation tick"
-              disabled={pending}
-              onClick={() =>
-                void updatePreference(
-                  "simulationTick",
-                  (current) => current + 1,
-                )}
-            >
-              +
-            </button>
-            <button
-              className={outputValue.showSignals ? "is-on" : ""}
-              type="button"
-              data-action="toggle-signals"
-              aria-pressed={outputValue.showSignals}
-              disabled={pending}
-              onClick={() =>
-                void updatePreference("showSignals", (current) => !current)}
-            >
-              Signal glow
-            </button>
-          </div>
-        </section>
-
-        <section className="workspace">
-          <div className="flow-shell" aria-label="Collaborative machine canvas">
-            <MachineCanvas
-              authoritativeNodes={flowNodes}
-              authoritativeSelection={outputValue.selectedNodeId}
-              edges={flowEdges}
-              onNodeSelection={(nodeId) =>
-                tracker.request(
-                  nodeId,
-                  (selectedNodeId) =>
-                    updatePreference(
-                      "selectedNodeId",
-                      () => selectedNodeId,
-                    ),
-                )}
-              onPositionCommit={persistPosition}
-              onConnect={(connection) => void appendEdge(connection)}
-            />
-          </div>
-
-          <aside className="inspector">
-            <div>
-              <p className="eyebrow">Personal view</p>
-              <h2>{selected?.label ?? "Select a module"}</h2>
-              <p>
-                {selected
-                  ? `${KIND_LABELS[selected.kind]} · ${
-                    model.presentSignal(
-                      signals.get(selected.id) ?? 0,
-                      outputValue.showSignals,
-                    ).label
-                  } signal`
-                  : "Selection, tick, and signal glow follow your user identity."}
-              </p>
-            </div>
-
-            <div className="wire-builder">
-              <h3>Accessible wire builder</h3>
-              <label>
-                From
-                <select
-                  className="nodrag"
-                  data-wire="source"
-                  value={connectSource}
-                  disabled={pending}
-                  onChange={(event) =>
-                    setConnectSource(event.currentTarget.value)}
-                >
-                  <option value="">Choose module</option>
-                  {stateValue.nodes.filter((node) => node.kind !== "actuator")
-                    .map((node) => (
-                      <option key={node.id} value={node.id}>
-                        {node.label}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <label>
-                To
-                <select
-                  className="nodrag"
-                  data-wire="target"
-                  value={connectTarget}
-                  disabled={pending}
-                  onChange={(event) =>
-                    setConnectTarget(event.currentTarget.value)}
-                >
-                  <option value="">Choose module</option>
-                  {stateValue.nodes.filter((node) => node.kind !== "sensor")
-                    .map((node) => (
-                      <option key={node.id} value={node.id}>
-                        {node.label}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <button
-                type="button"
-                data-action="connect-modules"
-                disabled={pending || !connectSource || !connectTarget}
-                onClick={() =>
-                  void appendEdge({
-                    source: connectSource,
-                    target: connectTarget,
-                  })}
+                <option value="">Choose module</option>
+                {stateValue.nodes.filter((node) => node.kind !== "actuator")
+                  .map((node) => (
+                    <option key={node.id} value={node.id}>
+                      {node.label}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              To
+              <select
+                className="nodrag"
+                data-wire="target"
+                value={connectTarget}
+                disabled={pending}
+                onChange={(event) =>
+                  setConnectTarget(event.currentTarget.value)}
               >
-                Connect modules
-              </button>
-            </div>
+                <option value="">Choose module</option>
+                {stateValue.nodes.filter((node) => node.kind !== "sensor")
+                  .map((node) => (
+                    <option key={node.id} value={node.id}>
+                      {node.label}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              data-action="connect-modules"
+              disabled={pending || !connectSource || !connectTarget}
+              onClick={() =>
+                void appendEdge({
+                  source: connectSource,
+                  target: connectTarget,
+                })}
+            >
+              Connect modules
+            </button>
+          </div>
 
-            {canonicalEdges.suppressed.length > 0 && (
-              <div className="wire-conflicts">
-                <h3>Feedback conflicts</h3>
-                <p>
-                  These dashed wires arrived concurrently with an established
-                  route. Remove one to clear the shared conflict.
-                </p>
-                {canonicalEdges.suppressed.map((edge) => (
-                  <button
-                    type="button"
-                    key={edge.id}
-                    data-remove-wire={edge.id}
-                    disabled={pending}
-                    onClick={() => void disableEdge(edge.id)}
-                  >
-                    Remove {edge.source} → {edge.target}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="legend">
-              <h3>Signal legend</h3>
-              <p>
-                <i className="pulse pulse--high" /> High ≥ 50%
-              </p>
-              <p>
-                <i className="pulse" /> Low &lt; 50%
-              </p>
-              <p>Delay modules read an earlier tick.</p>
-              <p>
-                Feedback loops are rejected. Established wires retain priority,
-                and concurrent conflicts remain visible until removed.
-              </p>
-            </div>
-          </aside>
-        </section>
-
-        <footer>
-          <span id="machine-status">
-            {pending ? "Committing to Fabric…" : "All controls are live"}
-          </span>
           {canonicalEdges.suppressed.length > 0 && (
-            <span className="action-error" role="status">
-              {canonicalEdges.suppressed.length} concurrent feedback{" "}
-              {canonicalEdges
-                  .suppressed.length === 1
-                ? "wire is"
-                : "wires are"} awaiting conflict resolution
-            </span>
+            <div className="wire-conflicts">
+              <h3>Feedback conflicts</h3>
+              <p>
+                These dashed wires arrived concurrently with an established
+                route. Remove one to clear the shared conflict.
+              </p>
+              {canonicalEdges.suppressed.map((edge) => (
+                <button
+                  type="button"
+                  key={edge.id}
+                  data-remove-wire={edge.id}
+                  disabled={pending}
+                  onClick={() => void disableEdge(edge.id)}
+                >
+                  Remove {edge.source} → {edge.target}
+                </button>
+              ))}
+            </div>
           )}
-          {actionError && (
-            <span className="action-error" role="alert">
-              {actionError.message}
-            </span>
-          )}
-        </footer>
-      </main>
-    </NodeActionContext.Provider>
+
+          <div className="legend">
+            <h3>Signal legend</h3>
+            <p>
+              <i className="pulse pulse--high" /> High ≥ 50%
+            </p>
+            <p>
+              <i className="pulse" /> Low &lt; 50%
+            </p>
+            <p>Delay modules read an earlier tick.</p>
+            <p>
+              Feedback loops are rejected. Established wires retain priority,
+              and concurrent conflicts remain visible until removed.
+            </p>
+          </div>
+        </aside>
+      </section>
+
+      <footer>
+        <span id="machine-status">
+          {pending ? "Committing to Fabric…" : "All controls are live"}
+        </span>
+        {canonicalEdges.suppressed.length > 0 && (
+          <span className="action-error" role="status">
+            {canonicalEdges.suppressed.length} concurrent feedback{" "}
+            {canonicalEdges
+                .suppressed.length === 1
+              ? "wire is"
+              : "wires are"} awaiting conflict resolution
+          </span>
+        )}
+        {actionError && (
+          <span className="action-error" role="alert">
+            {actionError.message}
+          </span>
+        )}
+      </footer>
+    </main>
   );
 }
 
