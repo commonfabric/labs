@@ -334,6 +334,91 @@ describe("indexed-collection", () => {
     });
   });
 
+  describe("a field aliasing a derived value", () => {
+    // A piece's result holds a write redirect to the cell each of its
+    // derivations writes, and that cell holds nothing until the derivation
+    // runs. Each case stores such a redirect on the member, for `rank` and
+    // for `mentions`, and writes the cell where the derivation would.
+
+    const mentions = "SELECT s.title AS source, t.title AS target " +
+      "FROM topics_mentions e " +
+      "JOIN topics s ON s.member_cf_link = e.source_cf_link " +
+      "JOIN topics t ON t.member_cf_link = e.target_cf_link";
+
+    beforeEach(async () => {
+      await declare({
+        columns: { title: "text", rank: "integer" },
+        relations: ["mentions"],
+      });
+      await addTopic("target");
+    });
+
+    /** The cell the derivation of the field `name` writes. */
+    function derived(
+      name: "rank" | "mentions",
+      tx?: IExtendedStorageTransaction,
+    ): Cell<unknown> {
+      return runtime.getCell<unknown>(space, `derived-${name}`, undefined, tx);
+    }
+
+    /** Adds the topic `name`, whose `rank` and `mentions` are aliases. */
+    async function addAliasing(name: string): Promise<void> {
+      await commit((tx) => {
+        const cell = topic(name, tx);
+        cell.setRawUntyped({
+          title: name,
+          rank: derived("rank", tx).getAsWriteRedirectLink(),
+          mentions: derived("mentions", tx).getAsWriteRedirectLink(),
+        });
+        collection(tx).add("topics", cell);
+      });
+    }
+
+    it("stores `NULL` in a column while the aliased cell holds nothing", async () => {
+      await addAliasing("a");
+
+      expect(await rows("SELECT rank FROM topics WHERE title = 'a'")).toEqual([
+        { rank: null },
+      ]);
+    });
+
+    it("fills a column once the aliased cell holds a value", async () => {
+      await addAliasing("a");
+      await commit((tx) => derived("rank", tx).set(5));
+
+      expect(await rows("SELECT rank FROM topics WHERE title = 'a'")).toEqual([
+        { rank: 5 },
+      ]);
+    });
+
+    it("stores no relation row while the aliased cell holds nothing", async () => {
+      await addAliasing("a");
+
+      expect(await rows("SELECT target_cf_link FROM topics_mentions"))
+        .toEqual([]);
+    });
+
+    it("stores a row per reference once the aliased cell holds a list", async () => {
+      await addAliasing("a");
+      await commit((tx) => derived("mentions", tx).set([topic("target")]));
+
+      expect(await rows(mentions)).toEqual([
+        { source: "a", target: "target" },
+      ]);
+    });
+
+    it("stores one row for the reference the aliased cell holds", async () => {
+      await commit((tx) =>
+        derived("mentions", tx).setRawUntyped(topic("target").getAsLink())
+      );
+      await addAliasing("a");
+
+      expect(await rows(mentions)).toEqual([
+        { source: "a", target: "target" },
+      ]);
+    });
+  });
+
   describe("a collection with several kinds of member", () => {
     const latest = "SELECT t.title AS title, max(c.rank) AS last " +
       "FROM topics t LEFT JOIN comments_topic e " +

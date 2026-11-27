@@ -228,9 +228,15 @@ its own.
 
 A column mirrors a scalar. A string or a finite number is stored as it is, a
 boolean as `0` or `1`, and anything else as `NULL`. A relation field that
-holds a list contributes a row per distinct element, and one that holds
-anything else contributes one row for that value's own cell. The declaration
-is trusted to name fields that hold references.
+holds a list contributes a row per distinct element, and one that holds a
+link contributes one row for the cell the link names, whatever that cell
+holds. A write redirect is the exception: a field holding one is an alias of
+the cell it leads to, and holds what that cell holds. A piece's result holds
+a write redirect to the cell each of its derivations writes, so a relation
+that a derivation computes contributes no row until the derivation has run.
+The member's `member_deps` rows name that cell's document, so a write by the
+derivation has the member read again, and the relation fills in. The
+declaration is trusted to name fields that hold references.
 
 A table schema can declare secondary indexes, which is what the relation
 tables and `indexes` use. The memory server creates them with the table,
