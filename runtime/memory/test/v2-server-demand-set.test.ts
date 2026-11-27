@@ -366,6 +366,69 @@ describe("Server", () => {
         expect(rows.get("space\0of:relative-result")?.piece).toBeUndefined();
       });
 
+      it("marks as valueless the rows of a piece's values that hold no value", async () => {
+        const rows = await rowsWatchedThrough([
+          { id: "of:unwritten", value: { result: link("of:piece") } },
+          {
+            id: "of:written",
+            value: { value: { v: 1 }, result: link("of:piece") },
+          },
+          { id: "of:empty", value: {} },
+        ]);
+
+        expect(rows.get("space\0of:unwritten")?.piece).toBe(true);
+        expect(rows.get("space\0of:unwritten")?.valueless).toBe(true);
+        expect(rows.get("space\0of:written")?.piece).toBe(true);
+        expect(rows.get("space\0of:written")?.valueless).toBeUndefined();
+        expect(rows.has("space\0of:empty")).toBe(true);
+        expect(rows.get("space\0of:empty")?.valueless).toBeUndefined();
+      });
+
+      it("rebuilds a share when a push writes the first value of a held piece's value", async () => {
+        localSeq += 1;
+        await writer.transact({
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [
+            {
+              op: "set",
+              id: "of:unwritten",
+              value: { result: link("of:piece") },
+            },
+            {
+              op: "set",
+              id: "of:root",
+              value: { value: { items: [link("of:unwritten")] } },
+            },
+          ],
+        });
+        const watcher = await mount(alice);
+        const view = await watcher.watchSet([follow("of:root")]);
+        const before = shareOf(watcher);
+        expect(before.rows.get("space\0of:unwritten")?.valueless).toBe(true);
+
+        const updates = view.subscribe();
+        const pushed = updates.next();
+        localSeq += 1;
+        await writer.transact({
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: "of:unwritten",
+            value: { value: { v: 1 }, result: link("of:piece") },
+          }],
+        });
+        await pushed;
+
+        const after = shareOf(watcher);
+        expect(after).not.toBe(before);
+        expect(after.rows.get("space\0of:unwritten")?.piece).toBe(true);
+        expect(after.rows.get("space\0of:unwritten")?.valueless)
+          .toBeUndefined();
+        expectKeptSharesCurrent();
+      });
+
       it("rebuilds a share when a push makes a held document a piece's value", async () => {
         const watcher = await mount(alice);
         const view = await watcher.watchSet([follow("of:root")]);

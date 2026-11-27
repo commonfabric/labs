@@ -652,10 +652,11 @@ type StartAttempt = {
   // runs again from the top after the read, and must not read again for a
   // grant the durable metadata does not carry.
   authorityReadFor?: Set<string>;
-  // Whether every caller of this attempt asked for it to deliver an event
-  // (`RunnerStartOptions.forEvent`). A caller that joins the attempt for any
-  // other reason clears it.
-  forEventOnly?: boolean;
+  // What every caller of this attempt asked for it for, when each asked for
+  // the same passing reason: to deliver an event (`RunnerStartOptions.forEvent`)
+  // or to answer a read (`RunnerStartOptions.forRead`). A caller that joins the
+  // attempt for any other reason clears it.
+  onlyFor?: TransientStartPurpose;
   // The work the attempt's instantiation waits for and has not yet waited for
   // (`RunnerStartOptions.instantiateAfter`), its callers' and its joiners'.
   readonly instantiateAfter: Promise<unknown>[];
@@ -672,6 +673,14 @@ export type RunnerStartOptions = {
   forEvent?: boolean;
 
   /**
+   * The start answers a read: a client read reached a value the piece derives
+   * and has not written, and the piece starts to derive it. A piece whose
+   * every start was such a start is one `Runner.releaseReadStart()` may stop.
+   * A start with `forEvent` as well is an event's.
+   */
+  forRead?: boolean;
+
+  /**
    * Work the start waits for before it instantiates the piece's graph. The
    * start's own loads, of the piece's root, its pattern, and the documents
    * the pattern reads, run while this is under way. A piece that is running
@@ -684,15 +693,24 @@ export type RunnerStartOptions = {
   instantiateAfter?: Promise<unknown>;
 };
 
-/** A piece an event's delivery started, and that no other start has asked for. */
-type EventStart = {
-  /** The registration the event's start installed. */
+/** What a start was asked for, when it was asked for one passing reason. */
+type TransientStartPurpose = "event" | "read";
+
+/**
+ * A running piece whose every start was asked for one passing reason, which
+ * `Runner.releaseEventStart()` or `Runner.releaseReadStart()` may stop.
+ */
+type TransientStart = {
+  /** What every start of the piece was asked for. */
+  readonly purpose: TransientStartPurpose;
+
+  /** The registration the start installed. */
   readonly registration: PieceRegistration;
 
   /** The piece's result document. */
   readonly link: NormalizedFullLink;
 
-  /** Where the start falls in the runner's count of event starts. */
+  /** Where an event's start falls in the runner's count of event starts. */
   readonly sequence: number;
 };
 
@@ -3145,15 +3163,20 @@ export class Runner {
   >();
 
   /**
-   * The running pieces whose registration an event's delivery installed
-   * (`RunnerStartOptions.forEvent`), by result document, while no other
+   * The running pieces whose registration a start asked for one passing
+   * reason installed, an event's delivery (`RunnerStartOptions.forEvent`) or a
+   * read (`RunnerStartOptions.forRead`), by result document, while no other
    * start, and no enclosing pattern, has asked for them since. An entry's
    * registration is the one `#cancels` holds for its document: every removal
    * from `#cancels` drops the entry with it.
    */
-  #eventStarts = new Map<`${MemorySpace}/${ScopeKey}/${URI}`, EventStart>();
+  #transientStarts = new Map<
+    `${MemorySpace}/${ScopeKey}/${URI}`,
+    TransientStart
+  >();
 
-  /** How many entries `#eventStarts` has been given, for `eventStartMark`. */
+  /** How many event starts `#transientStarts` has been given, for
+   * `eventStartMark`. */
   #eventStartCount = 0;
 
   /**
@@ -5847,7 +5870,8 @@ export class Runner {
    *
    * `options.forEvent` says the start delivers an event; any other start of
    * the piece, this one's join included, takes it off what
-   * `releaseEventStart()` may stop.
+   * `releaseEventStart()` may stop. `options.forRead` says the same of a
+   * start that answers a read, for `releaseReadStart()`.
    */
   start<T = any>(
     resultCell: Cell<T>,
@@ -5907,11 +5931,18 @@ export class Runner {
     resultCell: Cell<T>,
     options?: RunnerStartOptions,
   ): { attempt: StartAttempt; settled: Promise<boolean> } {
-    const forEvent = options?.forEvent === true;
+    const purpose: TransientStartPurpose | undefined =
+      options?.forEvent === true
+        ? "event"
+        : options?.forRead === true
+        ? "read"
+        : undefined;
     const startKey = this.#getDocKey(resultCell);
-    // A start for anything but an event asks for the piece from this moment,
-    // before it has resolved the piece the document leads to.
-    if (!forEvent) this.#eventStarts.delete(startKey);
+    // A start for any other reason asks for the piece from this moment, before
+    // it has resolved the piece the document leads to.
+    if (this.#transientStarts.get(startKey)?.purpose !== purpose) {
+      this.#transientStarts.delete(startKey);
+    }
     const inFlight = this.#inFlightStartsByDoc.get(startKey);
     const instantiateAfter = options?.instantiateAfter;
     // The work is awaited only once the start's loads are done, or never, for
@@ -5921,7 +5952,7 @@ export class Runner {
     if (
       inFlight?.settled !== undefined && this.#isStartAttemptCurrent(inFlight)
     ) {
-      if (!forEvent) inFlight.forEventOnly = false;
+      if (inFlight.onlyFor !== purpose) inFlight.onlyFor = undefined;
       if (instantiateAfter !== undefined) {
         inFlight.instantiateAfter.push(instantiateAfter);
       }
@@ -5931,7 +5962,7 @@ export class Runner {
       lifecycleEpoch: this.#lifecycleEpoch,
       generationsByDoc: new Map(),
       preResolutionStopKeys: new Set(),
-      forEventOnly: forEvent,
+      onlyFor: purpose,
       instantiateAfter: instantiateAfter === undefined
         ? []
         : [instantiateAfter],
@@ -5964,7 +5995,7 @@ export class Runner {
           this.#cancels.has(target);
         if (stillRunning) {
           this.#independentlyStartedResults.add(target);
-          this.#noteEventStart(attempt, target);
+          this.#noteTransientStart(attempt, target);
         }
         return stillRunning;
       })
@@ -5979,25 +6010,27 @@ export class Runner {
   /**
    * Helper for `#joinOrBeginStart()`, which records what a start attempt that
    * left `target` running says about the piece: one made only to deliver
-   * events, that installed the piece's registration, makes the piece an
-   * event start; any other takes it off them.
+   * events, or only to answer reads, that installed the piece's registration,
+   * makes the piece a start of that kind; any other takes it off them.
    */
-  #noteEventStart(
+  #noteTransientStart(
     attempt: StartAttempt,
     target: `${MemorySpace}/${ScopeKey}/${URI}`,
   ): void {
     const registration = this.#cancels.get(target);
-    if (attempt.forEventOnly !== true) {
-      this.#eventStarts.delete(target);
+    const purpose = attempt.onlyFor;
+    if (purpose === undefined) {
+      this.#transientStarts.delete(target);
     } else if (
       registration !== undefined &&
       registration === attempt.installedRegistration &&
       attempt.targetLink !== undefined
     ) {
-      this.#eventStarts.set(target, {
+      this.#transientStarts.set(target, {
+        purpose,
         registration,
         link: attempt.targetLink,
-        sequence: ++this.#eventStartCount,
+        sequence: purpose === "event" ? ++this.#eventStartCount : 0,
       });
     }
   }
@@ -6010,8 +6043,10 @@ export class Runner {
    */
   eventStartsSince(mark: number): NormalizedFullLink[] {
     const links: NormalizedFullLink[] = [];
-    for (const start of this.#eventStarts.values()) {
-      if (start.sequence > mark) links.push(start.link);
+    for (const start of this.#transientStarts.values()) {
+      if (start.purpose === "event" && start.sequence > mark) {
+        links.push(start.link);
+      }
     }
     return links;
   }
@@ -6029,9 +6064,34 @@ export class Runner {
    * Returns whether it stopped the piece.
    */
   releaseEventStart<T>(resultCell: Cell<T>): boolean {
+    return this.#releaseTransientStart(resultCell, "event");
+  }
+
+  /**
+   * Stops the piece whose result document is `resultCell`'s when every start
+   * of it answered a read (`RunnerStartOptions.forRead`), no start of its
+   * document is in flight, and the scheduler holds no event for it, releasing
+   * the documents nothing reads then, as `releaseEventStart()` does for a
+   * piece an event started. What the piece wrote stays in the store, and a
+   * read or an event starts it again.
+   *
+   * Returns whether it stopped the piece.
+   */
+  releaseReadStart<T>(resultCell: Cell<T>): boolean {
+    return this.#releaseTransientStart(resultCell, "read");
+  }
+
+  /**
+   * Helper for `releaseEventStart()` and `releaseReadStart()`, which stops the
+   * piece if every start of it was asked for `purpose`.
+   */
+  #releaseTransientStart<T>(
+    resultCell: Cell<T>,
+    purpose: TransientStartPurpose,
+  ): boolean {
     const key = this.#getDocKey(resultCell);
-    const start = this.#eventStarts.get(key);
-    if (start === undefined) return false;
+    const start = this.#transientStarts.get(key);
+    if (start === undefined || start.purpose !== purpose) return false;
     const { space, id } = start.link;
     if (
       (this.#activeStartAttemptsByDoc.get(key)?.size ?? 0) > 0 ||
@@ -6047,14 +6107,14 @@ export class Runner {
   /**
    * Helper for the teardowns of `registration`, the registration of the piece
    * whose result document is `key`, outside `#stopResult()`, which takes it
-   * off `#eventStarts`.
+   * off `#transientStarts`.
    */
   #forgetStartsOf(
     key: `${MemorySpace}/${ScopeKey}/${URI}`,
     registration: PieceRegistration,
   ): void {
-    if (this.#eventStarts.get(key)?.registration === registration) {
-      this.#eventStarts.delete(key);
+    if (this.#transientStarts.get(key)?.registration === registration) {
+      this.#transientStarts.delete(key);
     }
   }
 
@@ -6112,7 +6172,7 @@ export class Runner {
   /** Holds a child for a parent node group's lifetime. */
   retainChild<T>(resultCell: Cell<T>): Cancel {
     // An enclosing pattern now asks for the piece.
-    this.#eventStarts.delete(this.#getDocKey(resultCell));
+    this.#transientStarts.delete(this.#getDocKey(resultCell));
     if (!this.#usesScopedPrograms(resultCell)) {
       return () => this.releaseChild(resultCell, undefined);
     }
@@ -8670,7 +8730,7 @@ export class Runner {
     }
     if (this.#cancels.has(key)) {
       // A run of a piece that is running asks for it.
-      this.#eventStarts.delete(key);
+      this.#transientStarts.delete(key);
       return undefined;
     }
 
@@ -10806,7 +10866,7 @@ export class Runner {
       throw new Error("a synced run requires a pattern");
     }
     // A run asks for the piece, whether or not it finds it running.
-    this.#eventStarts.delete(this.#getDocKey(resultCell));
+    this.#transientStarts.delete(this.#getDocKey(resultCell));
     // A module runs as the one-node pattern `run()` wraps it in, and the
     // pre-sync names what that node reads: `inputs` under the module's
     // argument schema.
@@ -13267,7 +13327,7 @@ export class Runner {
     const setupKey = this.#getSetupKey(resultCell);
     this.#scopedChildOwners.delete(key);
     this.#independentlyStartedResults.delete(key);
-    this.#eventStarts.delete(key);
+    this.#transientStarts.delete(key);
     this.#registrationsInstalledByRefusedRuns.delete(key);
     // TODO(hixie): This reaches every pending commit-gated start for the result,
     // which is wider than a release's authority: one that another launch
@@ -13526,7 +13586,7 @@ export class Runner {
     // later start can join one; dropping the index releases the attempts too.
     this.#inFlightStartsByDoc.clear();
     this.#independentlyStartedResults.clear();
-    this.#eventStarts.clear();
+    this.#transientStarts.clear();
     this.#registrationsInstalledByRefusedRuns.clear();
     for (const key of [...this.#pendingDeferredStarts.keys()]) {
       this.#cancelPendingDeferredStarts(key);

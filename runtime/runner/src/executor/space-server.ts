@@ -64,7 +64,10 @@ import {
   readSpaceKind,
 } from "@commonfabric/memory/v2/genesis-root";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
-import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
+import type {
+  AdmittedCommitNotice,
+  DemandedInstanceRow,
+} from "@commonfabric/memory/v2/server";
 import {
   CarriedDemand,
   type CarriedPair,
@@ -885,8 +888,9 @@ const neverAPieceRootId = (id: string): boolean =>
  * piece that derives it (`docs/specs/space-model/4-cells.md`), which a
  * structure load follows as it follows an argument's. A session is sent
  * many of them for each piece it watches, so one is a structure-load root
- * only when a demand names it as a root (serving-loop.md §1, "A computed
- * document a demand names").
+ * only when a demand names it as a root, or when it holds no value and no
+ * node here writes it (serving-loop.md §1, "A computed document a demand
+ * names").
  */
 const isComputedId = (id: string): boolean =>
   entityKindOfIdString(id) === "computed";
@@ -1192,6 +1196,14 @@ export class SpaceServer implements TransactionSealDestination {
   readonly #parked = Promise.withResolvers<void>();
   #idleSince: number | undefined;
   #demandedRoots = new Set<string>();
+
+  /**
+   * The demand roots that only reads make roots: `computed:` documents a
+   * session was sent that hold no value and that no node here writes
+   * (`#rowRootReason()`). Their structure load starts each piece as a read's
+   * start, and releases it once it has settled.
+   */
+  #readRootKeys = new Set<string>();
 
   /** Demanded roots whose `ensurePieceRunning` has not yet SUCCEEDED —
    * it returned false (typically the creation race: the demand cycle
@@ -1913,16 +1925,22 @@ export class SpaceServer implements TransactionSealDestination {
 
   /**
    * The own derived commits the quiescence advance may step over, and the
-   * step that records one, which a test drives past the set's bound.
+   * step that records one, which a test drives past the set's bound; and the
+   * ids of the documents whose keys the demand pass has structure-loaded as
+   * roots this tenure, while a session still demands them.
    */
   get accessForTestingOnly(): {
     readonly ownDerivedSeqs: Set<number>;
     recordOwnDerivedCommit(seq: number, hasContent: boolean): void;
+    readonly demandedRootIds: ReadonlySet<string>;
   } {
     return {
       ownDerivedSeqs: this.#ownDerivedSeqs,
       recordOwnDerivedCommit: (seq, hasContent) =>
         this.#recordOwnDerivedCommit(seq, hasContent),
+      demandedRootIds: new Set(
+        [...this.#demandedRoots].map((key) => key.slice(key.indexOf("\0") + 1)),
+      ),
     };
   }
 
@@ -6249,21 +6267,17 @@ export class SpaceServer implements TransactionSealDestination {
       const warm = this.#warmDemandKeys.get(key);
       if (rows === undefined && warm === undefined) continue;
       // The first row is the structure address, and the key is a ROOT (the
-      // structure load's input) when any session's row says so, or it is
-      // warm, or a session's row was sent one of a piece's values: a piece
-      // reached only through a data link starts for the session that demands
-      // its values, as one it watches does (design §2.8 flag 4). A
-      // `computed:` document a session was sent is no root on that ground:
-      // a session watching a piece is sent every one the piece derives, and
-      // the piece starts from the root that reached them.
+      // structure load's input) when it is warm or any session's row makes
+      // it one (`#rowRootReason()`). A root only reads make is a read root.
       let first: { id: string; scope: CellScope } | undefined;
       let root = warm !== undefined;
+      let demanded = warm !== undefined;
       const pairs = new Map<string, ScopeKeyIdentity>();
       for (const row of rows?.values() ?? []) {
         first ??= row;
-        if (row.root || (row.piece === true && !isComputedId(row.id))) {
-          root = true;
-        }
+        const reason = this.#rowRootReason(runtime, row);
+        if (reason !== undefined) root = true;
+        if (reason === "demand") demanded = true;
         // Anonymous sessions (no principal) contribute the key but own no
         // instance — not a demander (`fanOutInstances` drops principal-less
         // pairs; parity with `watchedRootsForSpace`'s identity-less rows).
@@ -6291,6 +6305,11 @@ export class SpaceServer implements TransactionSealDestination {
       } else {
         this.#demandRootAddresses.delete(key);
         this.#rootsAwaitingFirstLoad.delete(key);
+      }
+      if (root && !demanded) {
+        this.#readRootKeys.add(key);
+      } else {
+        this.#readRootKeys.delete(key);
       }
       const address = {
         space: this.#options.space,
@@ -6429,6 +6448,9 @@ export class SpaceServer implements TransactionSealDestination {
         this.#pendingDemandWake = true;
       }
     }
+    // The pieces the loads below start for read roots, by key, released
+    // together once they have settled (`#releaseReadStarts()`).
+    const readStarts = new Map<string, OwningRootAddress[]>();
     try {
       await this.#loadStructureRootDocs(runtime, rootKeys, parked);
       // The STRUCTURE LOAD, per watch ROOT and per row marked as a piece's
@@ -6490,12 +6512,20 @@ export class SpaceServer implements TransactionSealDestination {
               this.#indexResolvedRoot(key, rootId);
               runtime.scheduler.invalidateActionsForDemandRoots([rootId]);
             };
+            // A read root starts what it starts as a read's start, released
+            // once it has settled, enclosing pieces the walk starts
+            // included (`#releaseReadStarts()`).
+            const forRead = this.#readRootKeys.has(key);
+            const readSources: OwningRootAddress[] = [];
             // The pieces the walk finds enclosing the owning piece are this
             // key's, and every other key's on that piece (`onSourceRoot`).
             const onSourceRoot = (
               source: OwningRootAddress,
               owner: OwningRootAddress,
-            ) => this.#noteEnclosingRoot(runtime, owner.id, source.id);
+            ) => {
+              if (forRead) readSources.push(source);
+              this.#noteEnclosingRoot(runtime, owner.id, source.id);
+            };
             const rearmedAt = minOf([
               this.#rearmSeqsUnderRetry.get(key) ?? Infinity,
               this.#rearmSeqsAwaitingFollow.get(key) ?? Infinity,
@@ -6512,12 +6542,21 @@ export class SpaceServer implements TransactionSealDestination {
               loadRoot,
               onOwningRoot,
               onSourceRoot,
+              forRead,
             );
             const verdict = attempt.verdict;
             if (!this.#active || this.#runtime !== runtime) return;
+            const releaseIfRead = (started: { root?: OwningRootAddress }) => {
+              if (!forRead) return;
+              readStarts.set(key, [
+                ...(started.root === undefined ? [] : [started.root]),
+                ...readSources,
+              ]);
+            };
             if (verdict.started) {
               this.#pendingStructureLoads.delete(key);
               this.#structureLoadDeferralStreaks.delete(key);
+              releaseIfRead(verdict);
             } else if (verdict.reason === "no-pattern-meta") {
               // Each traversal syncs the complete addresses it reads. Put the
               // question again before terminalizing, so metadata arriving
@@ -6529,11 +6568,13 @@ export class SpaceServer implements TransactionSealDestination {
                 attempt,
                 onOwningRoot,
                 onSourceRoot,
+                forRead,
               )).verdict;
               if (!this.#active || this.#runtime !== runtime) return;
               if (confirmed.started) {
                 this.#pendingStructureLoads.delete(key);
                 this.#structureLoadDeferralStreaks.delete(key);
+                releaseIfRead(confirmed);
               } else if (confirmed.reason === "no-pattern-meta") {
                 const invalidatedAt = this.#lowestMissedInput(
                   runtime,
@@ -6697,6 +6738,7 @@ export class SpaceServer implements TransactionSealDestination {
       if (this.#structureLoadChangedDocs === changedDocs) {
         this.#structureLoadChangedDocs = undefined;
       }
+      if (readStarts.size > 0) this.#releaseReadStarts(runtime, readStarts);
     }
     // The ARRIVAL SEED (scopes.md §2; scoped-cell-instances.md, "A
     // pattern-owned cell narrower than its result starts from its declared
@@ -7122,6 +7164,86 @@ export class SpaceServer implements TransactionSealDestination {
     }
   }
 
+  /**
+   * Helper for `#loadDemandedStructure()`, which says whether a session's
+   * `row` makes its key a root, and why. It is a `"demand"` root when the
+   * row's session watches the instance as a root, or was sent one of a
+   * piece's values, as a piece reached only through a data link is (design
+   * §2.8 flag 4), which starts for the session that demands its values as
+   * one it watches does.
+   *
+   * A `computed:` document a session was sent is a root on that ground only
+   * while it holds no value and no node here writes it: a stopped piece left
+   * it unwritten, and only a run of the piece can answer the read. Such a
+   * root is a `"read"` root: the piece runs until it has written what the
+   * read reached, and is released then (`#releaseReadStarts()`). One that
+   * holds a value is the store's to serve, and one a node here writes is
+   * written once entering the key makes the node demanded, so neither is a
+   * root (serving-loop.md §1, "A computed document a demand names").
+   */
+  #rowRootReason(
+    runtime: Runtime,
+    row: Readonly<DemandedInstanceRow>,
+  ): "demand" | "read" | undefined {
+    if (row.root) return "demand";
+    if (row.piece !== true) return undefined;
+    if (!isComputedId(row.id)) return "demand";
+    if (
+      row.valueless !== true ||
+      runtime.scheduler.hasWriterOf({
+        space: this.#options.space,
+        id: row.id,
+        scope: row.scope,
+      })
+    ) return undefined;
+    return "read";
+  }
+
+  /**
+   * Helper for `#loadDemandedStructure()`, which releases the pieces the
+   * structure loads of a pass started for read roots, `batch`, by key, once
+   * each has settled (`Runtime.settledFor()`): its derivations have run, and
+   * so has the async work its builtins began, a fetch's answer and what it
+   * derives included, which the runtime's idle does not wait for. The store
+   * then holds what the read reached. Each is released only where every start
+   * of it answered a read (`Runner.releaseReadStart()`), so a piece another
+   * root, an event or an enclosing pattern has asked for since keeps running.
+   * Nothing is released for a key that a demand other than a read has made a
+   * root since. The pieces of one batch are released together, once all of
+   * them have settled, so the document release each asks for is one pass, not
+   * one for each piece. A park ends the wait, with the tenure's runtime.
+   */
+  #releaseReadStarts(
+    runtime: Runtime,
+    batch: ReadonlyMap<string, readonly OwningRootAddress[]>,
+  ): void {
+    const signal = this.#structureLoadAbort.signal;
+    const cells = new Map(
+      [...batch].map(([key, roots]) => [
+        key,
+        roots.map((root) => runtime.getCellFromLink({ ...root, path: [] })),
+      ]),
+    );
+    Promise.all(
+      [...cells.values()].flat().map((cell) =>
+        runtime.settledFor(cell, signal)
+      ),
+    ).then(() => {
+      if (signal.aborted || !this.#active || this.#runtime !== runtime) return;
+      for (const [key, pieces] of cells) {
+        if (
+          this.#demandRootAddresses.has(key) && !this.#readRootKeys.has(key)
+        ) continue;
+        for (const piece of pieces) runtime.runner.releaseReadStart(piece);
+      }
+    }).catch((error) => {
+      logger.warn("read-release-failed", () => [
+        "releasing the pieces a demand pass started for reads failed:",
+        error,
+      ]);
+    });
+  }
+
   /** Whether some client session demands `key`, or it is warm demand. */
   #isDemandKey(key: string): boolean {
     return this.#demandMirror.rowsFor(key) !== undefined ||
@@ -7137,6 +7259,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#demandedPairCount -= this.#demandersByKey.get(key)?.size ?? 0;
     this.#demandersByKey.delete(key);
     this.#demandedRoots.delete(key);
+    this.#readRootKeys.delete(key);
     this.#unindexDemandKey(key);
     this.#pieceRootByDemandKey.delete(key);
     this.#pieceRootAddressByDemandKey.delete(key);
@@ -7242,12 +7365,14 @@ export class SpaceServer implements TransactionSealDestination {
    * links that name it is the owning piece's error
    * (`EnsurePieceOptions.sourcesRequired`), so the pass retries, parks and
    * reports it as it does the owning piece's own. The roots the walk finds are
-   * reported through `onSourceRoot`. */
+   * reported through `onSourceRoot`. With `forRead`, each piece the walk
+   * starts is started as a read's start (`EnsurePieceOptions.forRead`). */
   async #attemptStructureLoad(
     runtime: Runtime,
     root: { id: string; scope?: string },
     onOwningRoot: (root: OwningRootAddress) => void,
     onSourceRoot: (root: OwningRootAddress, owner: OwningRootAddress) => void,
+    forRead = false,
   ): Promise<StructureLoadAttempt> {
     const scope = root.scope ?? "space";
     const termini: OwningRootAddress[] = [];
@@ -7264,6 +7389,7 @@ export class SpaceServer implements TransactionSealDestination {
       enclosingSourcesOnly: true,
       sourcesRequired: true,
       onSourceRoot,
+      ...(forRead && { forRead: true }),
     };
     const verdict = await ensurePieceRunningVerdict(runtime, {
       space: this.#options.space,
@@ -7328,6 +7454,7 @@ export class SpaceServer implements TransactionSealDestination {
     attempt: StructureLoadAttempt,
     onOwningRoot: (root: OwningRootAddress) => void,
     onSourceRoot: (root: OwningRootAddress, owner: OwningRootAddress) => void,
+    forRead: boolean,
   ): Promise<StructureLoadAttempt> {
     if (this.#enginePatternIdentityAbsent(runtime, attempt.termini)) {
       this.#options.stats.structureLoadConfirmationsSkipped += 1;
@@ -7338,6 +7465,7 @@ export class SpaceServer implements TransactionSealDestination {
       root,
       onOwningRoot,
       onSourceRoot,
+      forRead,
     );
   }
 
@@ -9598,6 +9726,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#uncommittedDeliveryFailureEpochs.clear();
     if (offerRuntime) this.#leaveDemandedEntities(this.#runtime!);
     this.#demandedRoots.clear();
+    this.#readRootKeys.clear();
     this.#demandersByKey.clear();
     this.#demandedPairCount = 0;
     this.#pieceRootByDemandKey.clear();

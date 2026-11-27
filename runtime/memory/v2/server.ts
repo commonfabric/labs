@@ -1621,6 +1621,16 @@ export type DemandedInstanceRow = {
   piece?: true;
 
   /**
+   * True when the row is marked `piece` and the document the session was
+   * sent for it holds no value: the piece has not written one, or derived
+   * `undefined`. A serving loop starts a stopped piece from such a
+   * `computed:` document until the piece has derived it, where it otherwise
+   * leaves the document to the store (serving-loop.md §1, "A computed
+   * document a demand names").
+   */
+  valueless?: true;
+
+  /**
    * For a row another space carried here (`Server.setCarriedDemand()`),
    * the client session it is carried for and the space that session is
    * of. A serving loop that carries the row's pair on names this origin
@@ -11414,12 +11424,15 @@ export class Server {
     // wake the push loop, but they are not graph execution demand. Rebuild
     // the graph-only provenance from delivered entries plus traversal misses
     // before producing demand rows.
-    const { tracked: graphTrackedIds, pieces: pieceKeys } =
-      trackedAndPieceKeysFromEntries(
-        (session.views.length === 0
-          ? session.entities
-          : session.viewDemandEntities).values(),
-      );
+    const {
+      tracked: graphTrackedIds,
+      pieces: pieceKeys,
+      valueless: valuelessKeys,
+    } = trackedAndPieceKeysFromEntries(
+      (session.views.length === 0
+        ? session.entities
+        : session.viewDemandEntities).values(),
+    );
     this.#addMissedToTrackedIds(
       graphTrackedIds,
       (session.views.length === 0 ? session.graphs : session.viewDemandGraphs)
@@ -11440,6 +11453,7 @@ export class Server {
         root,
       };
       if (pieceKeys.has(dirtyKey)) row.piece = true;
+      if (valuelessKeys.has(dirtyKey)) row.valueless = true;
       rows.set(dirtyKey, row);
     };
     for (const dirtyKey of session.trackedIds) {

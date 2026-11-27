@@ -159,10 +159,14 @@ export const trackedIdsFromEntries = (
  * `entries`: a session that reads past a link into a piece is sent its result
  * document first. The link names the argument's scope, or leaves it to be the
  * result document's own.
+ *
+ * `valueless` holds the keys among `pieces` whose document holds no value: no
+ * run of the piece has written one since its setup made the document, or the
+ * run that did derived `undefined`, which the store holds the same way.
  */
 export const trackedAndPieceKeysFromEntries = (
   entries: Iterable<SessionCacheEntry>,
-): { tracked: Set<string>; pieces: Set<string> } => {
+): { tracked: Set<string>; pieces: Set<string>; valueless: Set<string> } => {
   const tracked = new Set<string>();
   const candidates: Array<{ key: string; entry: SessionCacheEntry }> = [];
   const argumentScopes = new Map<string, Set<string>>();
@@ -178,22 +182,27 @@ export const trackedAndPieceKeysFromEntries = (
     if (carriesPieceMeta(entry)) candidates.push({ key, entry });
   }
   const pieces = new Set<string>();
+  const valueless = new Set<string>();
   for (const { key, entry } of candidates) {
     if (argumentScopes.get(entry.id)?.has(entry.scope) !== true) {
       pieces.add(key);
+      if (!holdsValue(entry)) valueless.add(key);
     }
   }
-  return { tracked, pieces };
+  return { tracked, pieces, valueless };
 };
 
 /**
  * What `entry` contributes to the marks {@link trackedAndPieceKeysFromEntries}
- * gives: whether it is one of a piece's values, and, when it is a piece's
- * result, the argument it names. A held entry whose new snapshot gives another
- * answer can change the marks of its own row and of its argument's.
+ * gives: whether it is one of a piece's values and holds a value, and, when it
+ * is a piece's result, the argument it names. A held entry whose new snapshot
+ * gives another answer can change the marks of its own row and of its
+ * argument's.
  */
 export const pieceMarkInputsOf = (entry: SessionCacheEntry): string => {
-  const value = carriesPieceMeta(entry) ? "value" : "";
+  const value = carriesPieceMeta(entry)
+    ? holdsValue(entry) ? "value" : "valueless"
+    : "";
   const argument = pieceArgumentOf(entry);
   return argument === undefined
     ? value
@@ -204,7 +213,9 @@ export const pieceMarkInputsOf = (entry: SessionCacheEntry): string => {
  * Whether `entry`'s document is one of a piece's values: a document whose
  * `result` link names the piece it belongs to, as each document a piece's
  * setup writes does. A session sent one has demanded a value of that piece,
- * which starts it (`serving-loop.md`, "A piece a handler starts").
+ * which starts it; a `computed:` one starts it only while it holds no value and
+ * the piece is stopped, and only until the piece has derived it
+ * (`serving-loop.md`, "A piece a handler starts").
  *
  * A piece's result document, with its pattern pointer, is not one: it is what a
  * link to the piece names, so a session reading a list of links is sent it
@@ -216,6 +227,12 @@ export const pieceMarkInputsOf = (entry: SessionCacheEntry): string => {
 export const carriesPieceMeta = (entry: SessionCacheEntry): boolean => {
   const result = metaLinkOf(entry, "result");
   return result !== undefined && !result.id.startsWith("receipt:");
+};
+
+/** Whether `entry`'s document holds a `value`. */
+const holdsValue = (entry: SessionCacheEntry): boolean => {
+  const doc = entry.doc;
+  return doc !== null && typeof doc === "object" && "value" in doc;
 };
 
 /**
