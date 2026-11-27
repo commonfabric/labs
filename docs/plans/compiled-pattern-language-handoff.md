@@ -876,7 +876,7 @@ directory: `r38-argument-read/report-3.md` with `review-r38-2/report.md`,
 | `claude/compiled-pattern-scoped-rows` (build) | `c12d442929` | local past `7eb87d6743`; round 39 (setup) on top |
 | `claude/compiled-pattern-body-reads` | `d8a20351b9` | round 38 after three passes; local |
 | `claude/compiled-pattern-derivation-split` | `a9db79ae27` | the design's round 2 after three passes; local |
-| `claude/compiled-pattern-rounds-38-39-merge` | `640de36de0` | the build head with the two branches above merged, gates passing; local |
+| `claude/compiled-pattern-rounds-38-39-merge` | `640de36de0` | the build head with the two branches above merged; local. The full gates passed one commit earlier, at `3d0fa913a1` |
 | `claude/own-write-link-stale` | `e7b3789ae4` | pull request #10283 against `main`; five review comments answered |
 
 Before any compiled branch is pushed, its diff is read for material the
@@ -962,7 +962,9 @@ this line until the owner answers.
 `claude/compiled-pattern-rounds-38-39-merge` is the build head with rounds
 38 and 2 merged, by `git merge`. The author's gates and the coordinator's
 both exit 0 at `3d0fa913a1`; `640de36de0` adds a change to `SPEC-NOTES.md`
-alone. The build branch itself is not moved; it takes
+alone, the renumbering below, checked by the format check, lint, `deno task
+check`, the compare and exec tests, and a search for a note number used
+twice (none); the other gates were not run again on it. The build branch itself is not moved; it takes
 this branch by a fast-forward once the owner agrees to round 2 landing
 before round 4.
 
