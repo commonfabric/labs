@@ -10,9 +10,7 @@ import { isDeno } from "@commonfabric/platform/env";
 import { assets } from "./assets.ts";
 import { generateETag } from "./etag.ts";
 
-const FS_URL = (import.meta.dirname && isDeno())
-  ? toFileUrl(join(import.meta.dirname, "assets"))
-  : undefined;
+const ASSETS_DIR = import.meta.dirname && join(import.meta.dirname, "assets");
 
 /**
  * Represents a cached static asset with its content and ETag.
@@ -49,15 +47,17 @@ export class StaticCache {
 
   /**
    * Constructs an instance reading the assets bundled alongside this module,
-   * which requires the file system and so is available only under Deno.
+   * which requires the file system and so is available only when `scope`
+   * (`globalThis` unless a caller names another) is Deno and this module was
+   * loaded from a local path.
    */
-  static fromFileSystem(): StaticCache {
-    if (!FS_URL) {
+  static fromFileSystem(scope: object = globalThis): StaticCache {
+    if (!ASSETS_DIR || !isDeno(scope)) {
       throw new Error(
         "`StaticCache.fromFileSystem()` is only available in Deno.",
       );
     }
-    return new StaticCache(new URL(FS_URL));
+    return new StaticCache(toFileUrl(ASSETS_DIR));
   }
 
   /** `StaticCache.#cache`, the map of asset names to their requests. */
