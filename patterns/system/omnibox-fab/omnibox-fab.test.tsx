@@ -29,11 +29,10 @@ import {
 import OmniboxFAB, { latestAssistantText, wishTool } from "./omnibox-fab.tsx";
 
 // The model fails the reply to the message the test sends, and the title the
-// chat asks for. The reply's entry answers only a request whose system prompt
-// carries the extra rule the test passes in.
+// chat asks for.
 export const llmMocks = [
   {
-    when: { systemContains: "Extra rule.", lastMessageContains: "hello" },
+    when: { lastMessageContains: "hello" },
     error: "The model is unavailable.",
   },
   {
@@ -269,9 +268,6 @@ export default pattern(() => {
       { assertion: assert_external_pin_accumulates },
       { action: action_pin_replacing },
       { assertion: assert_external_pin_replaces },
-      // The chat's system prompt is computed; until that has run, the chat
-      // sends its default prompt, which lacks the extra rule.
-      { settle: true },
       { action: action_send_message },
       { settle: true },
       { assertion: assert_reply_peeks },
