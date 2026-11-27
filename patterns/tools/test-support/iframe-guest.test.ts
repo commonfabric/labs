@@ -309,6 +309,19 @@ describe("iframe-guest", () => {
       expect(await readAssets(directory)).toEqual({ glaze: GLAZE });
     });
 
+    it("throws the error a symbolic link that cannot be followed raises", async () => {
+      const directory = await directoryOf({
+        "glaze.png": new Uint8Array([1, 2, 3]),
+      });
+      const path = fromFileUrl(directory);
+      await Deno.symlink(join(path, "menu.png"), join(path, "loop.png"));
+      await Deno.symlink(join(path, "loop.png"), join(path, "menu.png"));
+
+      await expect(readAssets(directory)).rejects.toThrow(
+        Deno.errors.FilesystemLoop,
+      );
+    });
+
     it("throws for two files that would be the same asset", async () => {
       const directory = await directoryOf({
         "glaze.png": new Uint8Array([1, 2, 3]),
