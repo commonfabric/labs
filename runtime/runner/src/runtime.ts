@@ -485,6 +485,18 @@ export interface ExperimentalOptions {
   pieceCreatorRecord?: boolean | undefined;
 
   /**
+   * Let the render resolver nominate, as a spec §4.9.3 membership candidate,
+   * a space the rendered label was derived from whose digest a committed
+   * module-policy subject is, and point-query its ACL
+   * (`committedSubjectCandidates` in `cfc/render-ceiling.ts`). A subject the
+   * cross-space representation rule (§4.6.4.1) committed otherwise names no
+   * candidate, so its policy's `HasRole(reader, THIS_POLICY.subject)` rule
+   * fires for no reader. Pending commonfabric/specs#110; defaults to on, and off restores
+   * §4.9.3 as specs#49 states it.
+   */
+  cfcCommittedSubjectCandidates?: boolean | undefined;
+
+  /**
    * Compile a pattern factory call bound to a `const` as a named sub-pattern
    * instance, whose identity is the binding's name rather than its position
    * among its parent's anonymous roots

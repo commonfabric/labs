@@ -5,6 +5,7 @@ import { buildCfcPolicyArtifactManifest } from "../src/cfc/policy.ts";
 import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
 import {
   createRenderConfidentialityResolver,
+  membershipSpacesInConfidentiality,
   RENDER_DISPLAY_SINK_CLASS,
 } from "../src/cfc/render-ceiling.ts";
 import type { SpaceMembershipProvider } from "../src/cfc/space-membership.ts";
@@ -623,6 +624,84 @@ describe("CFC render resolver — the direct-release PolicyOf rule", () => {
       aliceCeiling,
     )).toEqual([committed]);
     expect(consulted).toEqual([]);
+  });
+
+  describe("with committedSubjectCandidates", () => {
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/110
+    const committed = directReleaseRef(
+      commitCfcFieldValue(SPACE_TEAM) as unknown as string,
+    );
+    const resolverFor = (
+      readFrom: readonly string[],
+      readerOfTeam: string | undefined,
+      committedSubjectCandidates = true,
+    ) => {
+      const consulted: string[] = [];
+      const resolve = createRenderConfidentialityResolver({
+        actingPrincipal: ALICE,
+        memberSpaces: [ALICE],
+        committedSubjectCandidates,
+        membershipProvider: {
+          readerRole: (space) => {
+            consulted.push(space);
+            return space === SPACE_TEAM && readerOfTeam === ALICE
+              ? "reader"
+              : null;
+          },
+          load: () => Promise.resolve(),
+          subscribe: () => () => {},
+        },
+        modulePolicyResolver: () => directReleaseManifest,
+      });
+      const outside = atomsOutsideCeiling(
+        resolve({
+          confidentiality: [committed],
+          spaces: () => readFrom,
+        }),
+        aliceCeiling,
+      );
+      return { outside, consulted };
+    };
+
+    it("releases to a reader of a space the render read from that the subject digests", () => {
+      const { outside, consulted } = resolverFor(
+        [SPACE_OTHER, SPACE_TEAM],
+        ALICE,
+      );
+      expect(outside).toEqual([]);
+      expect(consulted).toEqual([SPACE_TEAM]);
+    });
+
+    it("keeps it sealed for someone who does not read that space", () => {
+      const { outside, consulted } = resolverFor([SPACE_TEAM], undefined);
+      expect(outside).toEqual([committed]);
+      expect(consulted).toEqual([SPACE_TEAM]);
+    });
+
+    it("keeps it sealed when the render read only other spaces", () => {
+      const { outside, consulted } = resolverFor([SPACE_OTHER], ALICE);
+      expect(outside).toEqual([committed]);
+      expect(consulted).toEqual([]);
+    });
+
+    it("keeps it sealed with the dial off", () => {
+      const { outside, consulted } = resolverFor([SPACE_TEAM], ALICE, false);
+      expect(outside).toEqual([committed]);
+      expect(consulted).toEqual([]);
+    });
+
+    it("nominates only read-from spaces the subject digests", () => {
+      const conf = [committed];
+      expect(membershipSpacesInConfidentiality(conf)).toEqual([]);
+      expect(membershipSpacesInConfidentiality(conf, () => [SPACE_OTHER]))
+        .toEqual([]);
+      expect(
+        membershipSpacesInConfidentiality(
+          conf,
+          () => [SPACE_OTHER, SPACE_TEAM],
+        ),
+      ).toEqual([SPACE_TEAM]);
+    });
   });
 });
 
