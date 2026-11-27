@@ -11,7 +11,12 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { connect, loopback } from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import { table } from "../v2/sqlite/schema.ts";
