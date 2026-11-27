@@ -19,7 +19,7 @@ export function applyLocalExperimentalDefaults(
   experimental.lazyMaterialization ??= true;
   experimental.agentBuiltin ??= true;
   experimental.localFold ??= false;
-  experimental.cfcCommittedSubjectCandidates ??= false;
+  experimental.cfcCommittedSubjectCandidates ??= true;
   experimental.pieceCreatorRecord ??= false;
   // TODO(danfuzz): Turn this on once every deployment's posture names
   // instances. Until then a runtime with it on is refused each unmarked space

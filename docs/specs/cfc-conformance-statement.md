@@ -431,6 +431,19 @@ dials.
   to proceed ahead of unresolved specs dependencies does not supply a ruling;
   the gap still needs one and a reconciled pin. This entry and
   `cfc-enforcement-matrix.md` §4 record the additional gap.
+- The display's render resolver nominates, as a §4.9.3 membership candidate,
+  each space the render read from whose digest a committed module-policy
+  subject is, and the ACL point query decides as for any candidate
+  (`membershipSpacesInConfidentiality` in
+  `runtime/runner/src/cfc/render-ceiling.ts`). This implements
+  [specs#110](https://github.com/commonfabric/specs/pull/110), open and
+  unruled and stacked on
+  [specs#49](https://github.com/commonfabric/specs/pull/49), whose §4.9.3
+  gives a committed subject no candidate. It admits more at strict: the
+  `cfcCommittedSubjectCandidates` dial defaults to on, and off restores
+  #49's text. This is a nonconforming semantic gap and does not satisfy the
+  correspondence procedure's step 4; it needs #110's ruling and a reconciled
+  pin.
   The new clause is absent on `user` and `session` stores, even when their
   scoped principal is unavailable. No foreign-space clause or unbound
   `User` clause is added. Full derived labels still persist and taint readers;

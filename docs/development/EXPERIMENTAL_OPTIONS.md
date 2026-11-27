@@ -42,7 +42,7 @@ was last checked against the code.
 | [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
 | [`pieceCreatorRecord`](#piececreatorrecord) | `EXPERIMENTAL_PIECE_CREATOR_RECORD` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | off | Bernhard Seefeld (2026-11-01) | graduate once the ruling that binds an update-added owner field to the piece's creator merges, then delete the flag | implemented, off by default |
-| [`cfcCommittedSubjectCandidates`](#cfccommittedsubjectcandidates) | `EXPERIMENTAL_CFC_COMMITTED_SUBJECT_CANDIDATES` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | off | alex-claude (2026-11-26) | graduate once [specs pull request 110](https://github.com/commonfabric/specs/pull/110) merges, then delete the flag | implemented, off by default |
+| [`cfcCommittedSubjectCandidates`](#cfccommittedsubjectcandidates) | `EXPERIMENTAL_CFC_COMMITTED_SUBJECT_CANDIDATES` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | on | alex-claude (2026-11-26) | graduate once [specs pull request 110](https://github.com/commonfabric/specs/pull/110) merges, then delete the flag | implemented, on by default |
 | [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | make it reachable on servers, turn deployments' posture on, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default, with a runtime whose naming mode differs from its space's refused that space; must not turn on before deployments' posture names instances |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`sessionOpenProofs`](#sessionopenproofs) | Memory hello capability; toolshed withholds it under `MEMORY_ACL_DELEGATIONS=false` or `0` | on | Robin McCollum (2026-10-26) | retain as protocol negotiation while deployments may contain servers that admit no chain | implemented end to end and on by default; a profile space owns itself and its owner's runtime presents the chain Home records |
@@ -1124,13 +1124,18 @@ holds the measurements and the conditions for revisiting.
   subject is, and the ACL point query decides as for any other candidate. No
   commitment is opened and nothing is enumerated. The reconciler watches such a
   space's ACL whatever the flag says, which decides nothing.
-- **Current default and planned end state.** Off by default. The rule admits
-  more than spec §4.9.3 does today, so it is a semantic gap under the CFC
-  correspondence procedure; its deciding site carries a `SPEC-PENDING` marker
+- **Current default and planned end state.** On by default; off is the kill
+  switch that restores spec §4.9.3 as specs pull request 49 states it. The
+  rule admits more than §4.9.3 does today, at the strict default, so it is a
+  nonconforming semantic gap recorded in
+  [`cfc-spec-correspondence.md`](cfc-spec-correspondence.md) and the
+  [conformance statement](../specs/cfc-conformance-statement.md) §5. Its
+  deciding site carries a `SPEC-PENDING` marker
   naming [specs pull request 110](https://github.com/commonfabric/specs/pull/110),
   stacked on [specs pull request 49](https://github.com/commonfabric/specs/pull/49).
   Once that ruling merges, the rule is unconditional and the flag is deleted.
-- **Status on 2026-11-26.** Implemented and off. The rule and the switch are
+- **Status on 2026-11-27.** Implemented and on, at Berni's direction to
+  build the simpler rule and revise it once the ruling lands. The rule and the switch are
   covered by `runtime/runner/test/cfc-render-ceiling.test.ts`, and the plumbing
   by `runtime/runner/test/experimental-options.test.ts`.
 - **Path to removal.** Remove the env mapping, the runtime option and its

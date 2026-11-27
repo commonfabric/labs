@@ -491,7 +491,8 @@ export interface ExperimentalOptions {
    * (`committedSubjectCandidates` in `cfc/render-ceiling.ts`). A subject the
    * cross-space representation rule (§4.6.4.1) committed otherwise names no
    * candidate, so its policy's `HasRole(reader, THIS_POLICY.subject)` rule
-   * fires for no reader. Pending commonfabric/specs#110; defaults to off.
+   * fires for no reader. Pending commonfabric/specs#110; defaults to on, and off restores
+   * §4.9.3 as specs#49 states it.
    */
   cfcCommittedSubjectCandidates?: boolean | undefined;
 

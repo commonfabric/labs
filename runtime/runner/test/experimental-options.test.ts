@@ -54,6 +54,7 @@ describe("ExperimentalOptions", () => {
           computedCellIds: false,
           lazyMaterialization: false,
           readerSchemaPrecedence: false,
+          cfcCommittedSubjectCandidates: false,
         },
       });
       expect(runtime.experimental).toEqual({
@@ -91,7 +92,7 @@ describe("ExperimentalOptions", () => {
         agentBuiltin: true,
         localFold: false,
         pieceCreatorRecord: false,
-        cfcCommittedSubjectCandidates: false,
+        cfcCommittedSubjectCandidates: true,
         instanceNames: false,
         contentAddressedSchemas: true,
         commitPreconditions: true,
@@ -119,7 +120,7 @@ describe("ExperimentalOptions", () => {
         agentBuiltin: true,
         localFold: false,
         pieceCreatorRecord: false,
-        cfcCommittedSubjectCandidates: false,
+        cfcCommittedSubjectCandidates: true,
         instanceNames: false,
         contentAddressedSchemas: true,
         commitPreconditions: true,

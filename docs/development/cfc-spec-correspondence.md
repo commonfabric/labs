@@ -348,6 +348,19 @@ that authorization does not establish specification conformance or amend this
 procedure. The conformance statement records the gap until a ruling and a
 reconciled pin address it.
 
+The display's committed-subject membership candidate is a nonconforming
+semantic gap pending
+[specs#110](https://github.com/commonfabric/specs/pull/110), stacked on
+[specs#49](https://github.com/commonfabric/specs/pull/49). A module-policy
+subject held in commitment form nominates each space the render read from
+whose digest it is, which #49's §4.9.3 refuses. It admits more at the strict
+default: its `cfcCommittedSubjectCandidates` dial defaults to on, and off
+restores #49's text. Its deciding site carries a `SPEC-PENDING` marker naming
+#110. This does not satisfy step 4 above. Berni directed building the simpler
+rule ahead of the ruling and revising it after; that direction does not
+supply a ruling. The conformance statement records the gap until #110 merges
+and a reconciled pin addresses it.
+
 An owner release (§8.12.7 route 2c) whose path holds a `*` segment is a
 nonconforming semantic gap pending
 [specs#86](https://github.com/commonfabric/specs/pull/86). The pinned route
