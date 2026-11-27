@@ -55,7 +55,19 @@ path over those three baselines.
 
 ## Disposition of deployed pieces
 
-None on `main`. A rehearsal copy of the team's board that ran the reviewed
-source keeps its stored `adoptTopics` stream as data no handler answers. The
-vintage fixtures are captured from `main`'s tests, so none holds the verb and
-the state-continuity gate needs no entry for it.
+No board deployed from `main` published `adoptTopics`. A rehearsal copy of the
+team's board that ran the reviewed source keeps its stored `adoptTopics` stream
+as data no handler answers.
+
+A board deployed from `main` before #10025 holds its topics as a list. Updated
+in place to this source, it reads a new, empty collection, so it lists no
+topics: its `topics`, `topicCount`, `index` and `mentionable` come back empty.
+Each topic keeps everything it holds at its own address, and the old list stays
+in the board's argument document, where nothing reads it. That is the
+consequence of moving by recreate rather than in place, not a separate loss, so
+the state-continuity gate's entry for the board
+(`tasks/pattern-vintage-accepted-drops.ts`) lists those four roots whole, over
+the Topics vintages captured through 2026-11-16. The team's board on Estuary was
+deployed and updated with `cf piece setsrc`, and its source log shows a create
+and edits, no followed origin, so it does not move to this source when the
+deployment does; it is recreated with `scripts/topics-recreate.ts`.
