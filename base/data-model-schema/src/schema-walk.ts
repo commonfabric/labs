@@ -104,10 +104,15 @@ export const UNUSED_RECORD_SUBSCHEMA_KEYS = [
   "dependentSchemas",
 ] as const;
 
-export type SubschemaKeyword =
+/** The keywords a walk visits when no option widens it. */
+export type DefaultSubschemaKeyword =
   | (typeof SINGLE_SUBSCHEMA_KEYS)[number]
   | (typeof ARRAY_SUBSCHEMA_KEYS)[number]
-  | (typeof RECORD_SUBSCHEMA_KEYS)[number]
+  | (typeof RECORD_SUBSCHEMA_KEYS)[number];
+
+/** Every keyword a walk can visit. */
+export type SubschemaKeyword =
+  | DefaultSubschemaKeyword
   | (typeof DEFS_KEYS)[number]
   | (typeof UNUSED_SINGLE_SUBSCHEMA_KEYS)[number]
   | (typeof UNUSED_RECORD_SUBSCHEMA_KEYS)[number];
@@ -292,9 +297,51 @@ export function forEachSubschema(
   visit: SubschemaVisitor,
   opts: SchemaWalkOptions = {},
 ): boolean {
+  return visitSubschemas(
+    schema,
+    visit,
+    singleKeywordsFor(opts),
+    recordKeywordsFor(opts),
+  );
+}
+
+/**
+ * {@link forEachSubschema} with no options, whose visitor is told the keyword
+ * as one of the default keywords. A visitor that must handle every keyword the
+ * walk visits can then be checked for that by the compiler.
+ */
+export function forEachDefaultSubschema(
+  schema: JSONSchema,
+  visit: (
+    child: JSONSchema,
+    keyword: DefaultSubschemaKeyword,
+    key: string | undefined,
+    index: number | undefined,
+  ) => boolean | void,
+): boolean {
+  return visitSubschemas(
+    schema,
+    visit,
+    SINGLE_SUBSCHEMA_KEYS,
+    RECORD_SUBSCHEMA_KEYS,
+  );
+}
+
+/** The walk of {@link forEachSubschema}, over the keywords it is given. */
+function visitSubschemas<S extends SingleKeyword, R extends RecordKeyword>(
+  schema: JSONSchema,
+  visit: (
+    child: JSONSchema,
+    keyword: S | (typeof ARRAY_SUBSCHEMA_KEYS)[number] | R,
+    key: string | undefined,
+    index: number | undefined,
+  ) => boolean | void,
+  singleKeywords: readonly S[],
+  recordKeywords: readonly R[],
+): boolean {
   if (!isObjectOrArray(schema)) return false;
   const node = schema as JSONSchemaObj;
-  for (const keyword of singleKeywordsFor(opts)) {
+  for (const keyword of singleKeywords) {
     const child = node[keyword];
     if (child === undefined) continue;
     if (!holdsSubschema(child, keyword, undefined, node)) continue;
@@ -310,7 +357,7 @@ export function forEachSubschema(
       if (visit(child, keyword, undefined, index)) return true;
     }
   }
-  for (const keyword of recordKeywordsFor(opts)) {
+  for (const keyword of recordKeywords) {
     const record = node[keyword];
     if (record === undefined) continue;
     if (!holdsSubschemaRecord(record, keyword, node)) continue;
