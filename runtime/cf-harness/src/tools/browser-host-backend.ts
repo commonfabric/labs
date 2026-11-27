@@ -3,8 +3,8 @@
  * operation for the browser host attached to the run, and the host's result
  * into the tool's output.
  *
- * The host executes the operation in the one session it holds for this run and
- * shows it to the owner. What this side decides is what the operation carries
+ * The host executes the operation in the run's unnamed session and shows it to
+ * the owner. What this side decides is what the operation carries
  * and where it may go: a handle's value is resolved here, trusted-side, and
  * marked as a handle value, so the host keeps it out of later observations,
  * and no operation names this device, its network, or an IP literal.
@@ -12,7 +12,7 @@
 
 import {
   BROWSER_HOST_KEYS,
-  type BrowserHostOperation,
+  type BrowserHostPageOperation,
   type BrowserHostRefusal,
   type BrowserHostResult,
   type BrowserHostValue,
@@ -50,6 +50,8 @@ const REFUSAL_CODES: Record<BrowserHostRefusal, BrowserToolErrorCode> = {
   "stale-ref": "stale_ref",
   "owner-only-field": "owner_only_field",
   "session-ended": "session_ended",
+  "off-site": "destination_not_allowed",
+  "wrong-kind": "invalid_input",
   "invalid": "invalid_input",
   "failed": "command_failed",
 };
@@ -195,7 +197,7 @@ const destinationError = (
  * shape of the call, settled before anything is read.
  */
 type PlannedOperation =
-  | { operation: BrowserHostOperation; binding?: undefined }
+  | { operation: BrowserHostPageOperation; binding?: undefined }
   | {
     operation?: undefined;
     binding: {
@@ -204,7 +206,7 @@ type PlannedOperation =
       complete(resolved: {
         text: string;
         description: string;
-      }): BrowserHostOperation | string;
+      }): BrowserHostPageOperation | string;
     };
   };
 
@@ -244,7 +246,7 @@ const planHostOperation = (
   host: HarnessBrowserHost,
   call: BrowserCall,
 ): PlanResult => {
-  const done = (operation: BrowserHostOperation): PlanResult => ({
+  const done = (operation: BrowserHostPageOperation): PlanResult => ({
     plan: { operation },
   });
   const handedOff = sessionOf(host).handedOff;
@@ -309,7 +311,9 @@ const planHostOperation = (
     case "type":
     case "select": {
       const { action, ref, value } = call;
-      const withValue = (value: BrowserHostValue): BrowserHostOperation => ({
+      const withValue = (
+        value: BrowserHostValue,
+      ): BrowserHostPageOperation => ({
         action,
         ref,
         value,
@@ -462,7 +466,7 @@ export const invokeBrowserOnHost = async (
   if (planned.error !== undefined) {
     return errorOutput("invalid_input", planned.error);
   }
-  let operation: BrowserHostOperation;
+  let operation: BrowserHostPageOperation;
   if (planned.plan.binding === undefined) {
     operation = planned.plan.operation;
   } else {
@@ -493,9 +497,9 @@ export const invokeBrowserOnHost = async (
   if (operation.action === "handoff") {
     session.handedOff ??= { origin: session.origin };
   }
-  let result: BrowserHostResult;
+  let result: BrowserHostResult<BrowserHostPageOperation>;
   try {
-    result = await host.perform(operation, context.signal);
+    result = await host.perform({ operation }, context.signal);
   } catch (error) {
     context.signal?.throwIfAborted();
     return errorOutput(

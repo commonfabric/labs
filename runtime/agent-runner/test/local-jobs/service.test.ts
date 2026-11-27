@@ -665,18 +665,22 @@ describe("startLocalJobs()", () => {
           };
           await step("open");
           const opened = await host.perform({
-            action: "open",
-            url: "https://example.com",
+            operation: {
+              action: "open",
+              url: "https://example.com",
+            },
           }, options.signal);
           await step("snapshot");
           const snapshot = await host.perform({
-            action: "snapshot",
-            interactive: true,
+            operation: {
+              action: "snapshot",
+              interactive: true,
+            },
           }, options.signal);
           const abort = new AbortController();
           await step("click");
           const click = host.perform(
-            { action: "click", ref: "@e1" },
+            { operation: { action: "click", ref: "@e1" } },
             abort.signal,
           ).catch((error) => `rejected: ${error.message}`);
           await delivered;
@@ -686,7 +690,7 @@ describe("startLocalJobs()", () => {
           clickAnswer = await click;
           await step("get");
           const title = await host.perform(
-            { action: "get", kind: "title" },
+            { operation: { action: "get", kind: "title" } },
             options.signal,
           );
           return {

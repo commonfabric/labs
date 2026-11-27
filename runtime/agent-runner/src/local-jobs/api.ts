@@ -45,6 +45,10 @@
  *   still owed first (`./browser-host.ts`).
  * - `POST /jobs/<id>/browser/result` — `{id, result}`, the host's answer to
  *   one operation.
+ * - `POST /jobs/<id>/browser/detach` — the host ended the job's browser on
+ *   its own: every operation, outstanding or later, ends `session-ended`. It
+ *   succeeds for a job with no browser host, or one already detached, and
+ *   changes nothing there.
  *
  * A schema-less job answers with its final assistant text. The durable event
  * stream includes whole root assistant `text {turn, text}` messages and
@@ -882,6 +886,10 @@ async (request: Request): Promise<Response> => {
   }
   if (parts.length === 4 && parts[2] === "browser") {
     const host = options.browserHost?.(id);
+    if (parts[3] === "detach" && request.method === "POST") {
+      host?.detach();
+      return json(200, { ok: true });
+    }
     if (host === undefined) {
       return refuse(
         409,

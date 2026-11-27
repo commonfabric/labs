@@ -758,10 +758,11 @@ nothing else about it.
 
 The holder of the token attaches with `POST /api/browser-host/stream`,
 `{"turnId", "token"}`, answered with Server-Sent Events: each operation arrives
-as a `request` event whose data is `{"id", "operation"}`, and a `close` event
-says the turn is over and the stream ends. Operations sent before the host
-attaches wait for it, and the first attach is the only one: a second answers
-409. Each result goes back with `POST /api/browser-host/result`,
+as a `request` event whose data is `{"id", "session", "operation"}`, with
+`session` absent for the turn's unnamed session, and a `close` event says the
+turn is over and the stream ends. Operations sent before the host attaches wait
+for it, and the first attach is the only one: a second answers 409. Each result
+goes back with `POST /api/browser-host/result`,
 `{"turnId", "token", "id", "result"}`; a result that is not one answers 400, an
 id nobody waits on 404, and a body over 32 MiB 413 without the rest being read.
 A request whose token does not match answers 404, as one for a turn with no host
@@ -772,12 +773,17 @@ An operation waits for its result however long it takes, since a hand-off waits
 for the owner. The run can end it early by aborting it. One the host has not
 been sent is simply withdrawn; one it holds is withdrawn with a `withdraw` event
 whose data is `{"id"}`, and the host stops it if it can and answers it as it
-ended. That answer is the acknowledgment: no later operation reaches the host
-until it arrives, so nothing the host does for a withdrawn call overlaps the
-next. A result that is not one settles its operation as failed rather than
-leaving it waiting. When the host's stream ends, every outstanding and later
-operation settles as `session-ended`, and so does every operation when the turn
-ends. The operation and result shapes are `src/contracts/browser-host.ts`.
+ended. That answer is the acknowledgment: no later operation for the same
+session reaches the host until it arrives, so nothing the host does for a
+withdrawn call overlaps the next one in its session, while other sessions carry
+on. A `session-list` concerns no one session, and waits on none. A request with
+a malformed session name, a `session-open` that names no session, and a
+`session-list` that names one are answered `invalid` without reaching the host.
+A result that is not one for its operation settles the operation as failed
+rather than leaving it waiting. When the host's stream ends, every outstanding
+and later operation settles as `session-ended`, and so does every operation when
+the turn ends. The operation and result shapes are
+`src/contracts/browser-host.ts`.
 
 The `/api/` routes answer only the console's own page and clients that are not
 browsers: a request a browser marks as a navigation, or as made by another

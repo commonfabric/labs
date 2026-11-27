@@ -11,25 +11,30 @@
  * name it.
  *
  * The semantics are the console's (`cf-harness/console/browser-host.ts`):
- * the host answers every operation it is sent, one at a time; when the run
+ * each operation arrives with the session it addresses, and the host answers
+ * every operation it is sent, one at a time in each session; when the run
  * withdraws one the host already holds, the stream says so with a
  * `withdraw` event, and the host's answer to it is the acknowledgment — no
- * later operation reaches the host until it arrives. When the job ends the
- * stream says `close`, and anything outstanding settles as `session-ended`.
+ * later operation for that session reaches the host until it arrives, while
+ * other sessions carry on. When the job ends the stream says `close`, and
+ * anything outstanding settles as `session-ended`. A host that ends the
+ * job's browser on its own says so with a detach, which settles everything
+ * the same way, as the console does when its host's stream ends.
  *
  * Unlike the console's, the stream is resumable. The caller is usually a
  * relay (the Common Fabric Service fronting a client device), so a dropped
  * stream is a dropped connection rather than a host that went away: the
- * channel outlives it, and the next attach is sent everything still owed —
- * each delivered operation the host has not answered, each withdrawal it has
- * not acknowledged — before the operations that follow. A second attach
- * replaces the first. The host recognizes an operation it already holds by
- * its id.
+ * channel outlives it, and the next attach is sent everything still owed in
+ * every session — each delivered operation the host has not answered, each
+ * withdrawal it has not acknowledged — before the operations that follow. A
+ * second attach replaces the first. The host recognizes an operation it
+ * already holds by its id.
  *
  * Nothing here waits on a clock. An operation waits until the host answers
  * it, the job ends, or the run aborts it — a hand-off waits for the owner,
  * however long that takes, and a host that never comes back leaves the job
- * waiting until it is cancelled. *
+ * waiting until it is cancelled.
+ *
  * SHORTCUT (2026-10-06): the wire is a server-sent event stream down and a
  * separate POST per result up (`api.ts`), a channel of its own beside the
  * job's `events`. Simplified: no request/response pairing on one
@@ -47,7 +52,12 @@
 
 import {
   type BrowserHostOperation,
+  browserHostQueueOf,
+  type BrowserHostRefusalResult,
+  type BrowserHostRequest,
+  browserHostRequestProblem,
   type BrowserHostResult,
+  type BrowserHostSessionName,
   type HarnessBrowserHost,
   isBrowserHostResult,
 } from "@commonfabric/cf-harness/contracts/browser-host";
@@ -92,24 +102,43 @@ const encoder = new TextEncoder();
 const frame = (event: string, data: unknown): Uint8Array =>
   encoder.encode(sseFrame(event, JSON.stringify(data)));
 
-/** One operation delivered to the host and not yet answered. */
-interface Outstanding {
-  operation: BrowserHostOperation;
+/** The data of the event an operation reaches the host under. */
+interface Delivery {
+  id: string;
 
-  /** Settles the run's call; absent once the run withdrew it. */
-  settle?: (result: BrowserHostResult) => void;
+  /** The session the operation addresses; absent for the unnamed session. */
+  session?: BrowserHostSessionName;
+  operation: BrowserHostOperation;
 }
+
+/** One operation the run sent and the host has not answered. */
+interface Pending {
+  delivery: Delivery;
+
+  /** The queue it is ordered in, as `browserHostQueueOf` names it. */
+  queue: string | undefined;
+
+  /**
+   * Settles the run's call with the host's answer, or with `failed` when the
+   * answer is not a result for the operation, and returns whether it was one.
+   * Absent once the run withdrew the operation.
+   */
+  settle?: (answer: unknown) => boolean;
+}
+
+/** What an answer that is not a result settles its operation as. */
+const NOT_A_RESULT: BrowserHostRefusalResult = {
+  status: "failed",
+  message: "the browser host answered with something that is not a result",
+};
 
 /** One job's channel to its browser host. */
 export class LocalJobBrowserHost implements HarnessBrowserHost {
   /** Operations not yet delivered, in the order the run sent them. */
-  readonly #queued = new Map<
-    string,
-    { operation: BrowserHostOperation; settle: Outstanding["settle"] }
-  >();
+  readonly #queued = new Map<string, Pending>();
 
   /** Operations delivered and not answered, in delivery order. */
-  readonly #outstanding = new Map<string, Outstanding>();
+  readonly #outstanding = new Map<string, Pending>();
 
   /** Operations answered, so a repeated answer reads as one. */
   readonly #answered = new Set<string>();
@@ -119,15 +148,20 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
   #nextId = 0;
 
   /**
-   * Sends `operation` to the host and resolves with its answer. Resolves with
+   * Sends `request` to the host and resolves with its answer. Resolves with
+   * `invalid`, sending nothing, when the request is malformed, and with
    * `session-ended` when the job has ended, or ends while the operation is
    * outstanding. Rejects with the signal's reason when `signal` aborts first,
    * withdrawing the operation.
    */
-  perform(
-    operation: BrowserHostOperation,
+  perform<O extends BrowserHostOperation>(
+    request: BrowserHostRequest<O>,
     signal?: AbortSignal,
-  ): Promise<BrowserHostResult> {
+  ): Promise<BrowserHostResult<O>> {
+    const problem = browserHostRequestProblem(request);
+    if (problem !== undefined) {
+      return Promise.resolve({ status: "invalid", message: problem });
+    }
     if (this.#ended !== undefined) {
       return Promise.resolve({ status: "session-ended", message: this.#ended });
     }
@@ -135,7 +169,7 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
       return Promise.reject(signal.reason);
     }
     const id = String(++this.#nextId);
-    return new Promise<BrowserHostResult>((resolve, reject) => {
+    return new Promise<BrowserHostResult<O>>((resolve, reject) => {
       const onAbort = () => {
         if (this.#queued.delete(id)) {
           reject(signal?.reason);
@@ -150,10 +184,17 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
       };
       signal?.addEventListener("abort", onAbort, { once: true });
       this.#queued.set(id, {
-        operation,
-        settle: (result) => {
+        delivery: {
+          id,
+          session: request.session,
+          operation: request.operation,
+        },
+        queue: browserHostQueueOf(request),
+        settle: (answer) => {
           signal?.removeEventListener("abort", onAbort);
-          resolve(result);
+          const valid = isBrowserHostResult(answer, request);
+          resolve(valid ? answer : NOT_A_RESULT);
+          return valid;
         },
       });
       this.#flush();
@@ -161,9 +202,9 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
   }
 
   /**
-   * The host's stream: everything still owed, then each operation as it is
-   * sent. Replaces a stream already attached, which ends. A closed channel's
-   * stream says `close` and ends.
+   * The host's stream: everything still owed in every session, then each
+   * operation as it is sent. Replaces a stream already attached, which ends.
+   * A closed channel's stream says `close` and ends.
    */
   attach(): ReadableStream<Uint8Array> {
     if (this.#ended !== undefined) {
@@ -183,13 +224,11 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
         const previous = this.#stream;
         this.#stream = controller;
         previous?.close();
-        for (const [id, { operation, settle }] of this.#outstanding) {
-          controller.enqueue(
-            frame(LOCAL_BROWSER_HOST_REQUEST_EVENT, { id, operation }),
-          );
+        for (const { delivery, settle } of this.#outstanding.values()) {
+          controller.enqueue(frame(LOCAL_BROWSER_HOST_REQUEST_EVENT, delivery));
           if (settle === undefined) {
             controller.enqueue(
-              frame(LOCAL_BROWSER_HOST_WITHDRAW_EVENT, { id }),
+              frame(LOCAL_BROWSER_HOST_WITHDRAW_EVENT, { id: delivery.id }),
             );
           }
         }
@@ -204,11 +243,12 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
 
   /**
    * Hands in the host's answer to operation `id`. The answer to a withdrawn
-   * operation acknowledges the withdrawal and lets the next operation reach
-   * the host, whatever it holds. A second answer to an answered operation is
-   * `duplicate`, and the first stands. An answer for an operation the host was never sent is
-   * `unknown`. One that is not a result is `invalid`, and settles the
-   * operation as `failed` rather than leaving it waiting.
+   * operation acknowledges the withdrawal and lets the next operation for its
+   * session reach the host, whatever it holds. A second answer to an answered
+   * operation is `duplicate`, and the first stands. An answer for an
+   * operation the host was never sent is `unknown`. One that is not a result
+   * for the operation is `invalid`, and settles the operation as `failed`
+   * rather than leaving it waiting.
    */
   acceptResult(id: unknown, result: unknown): LocalBrowserHostAcceptance {
     if (typeof id !== "string") return "unknown";
@@ -219,18 +259,7 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
     this.#answered.add(id);
     // A withdrawn operation's answer is the acknowledgment, whatever it
     // holds: nobody reads it, as on the console.
-    if (outstanding.settle === undefined) {
-      this.#flush();
-      return "accepted";
-    }
-    const valid = isBrowserHostResult(result);
-    outstanding.settle?.(
-      valid ? result : {
-        status: "failed",
-        message:
-          "the browser host answered with something that is not a result",
-      },
-    );
+    const valid = outstanding.settle?.(result) ?? true;
     this.#flush();
     return valid ? "accepted" : "invalid";
   }
@@ -240,21 +269,16 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
    * closes, and anything outstanding settles as `session-ended`.
    */
   close(): void {
-    if (this.#ended !== undefined) return;
-    const message = "the job has ended";
-    this.#ended = message;
-    const settles = [
-      ...[...this.#queued.values()].map(({ settle }) => settle),
-      ...[...this.#outstanding.values()].map(({ settle }) => settle),
-    ];
-    this.#queued.clear();
-    this.#outstanding.clear();
-    for (const settle of settles) {
-      settle?.({ status: "session-ended", message });
-    }
-    this.#send(LOCAL_BROWSER_HOST_CLOSE_EVENT, {});
-    this.#stream?.close();
-    this.#stream = undefined;
+    this.#end("the job has ended");
+  }
+
+  /**
+   * Ends the channel because the host ended the job's browser on its own:
+   * like `close()`, except for the reason every operation, outstanding or
+   * later, settles with. Does nothing once the channel has ended.
+   */
+  detach(): void {
+    this.#end("the browser host detached");
   }
 
   /** What the job view shows of this channel. */
@@ -271,18 +295,40 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
   }
 
   /**
-   * Delivers the queued operations, once there is a stream and the host owes
-   * no acknowledgment of a withdrawn operation.
+   * Helper for `close()` and `detach()`, which ends the channel for
+   * `message`: the host is told, its stream closes, and every operation
+   * settles as `session-ended`, now and from then on.
+   */
+  #end(message: string): void {
+    if (this.#ended !== undefined) return;
+    this.#ended = message;
+    const settles = [...this.#queued.values(), ...this.#outstanding.values()]
+      .map(({ settle }) => settle);
+    this.#queued.clear();
+    this.#outstanding.clear();
+    for (const settle of settles) {
+      settle?.({ status: "session-ended", message });
+    }
+    this.#send(LOCAL_BROWSER_HOST_CLOSE_EVENT, {});
+    this.#stream?.close();
+    this.#stream = undefined;
+  }
+
+  /**
+   * Delivers the queued operations, once there is a stream, except those in a
+   * queue where the host owes an acknowledgment of a withdrawn operation.
    */
   #flush(): void {
     if (this.#stream === undefined) return;
-    for (const { settle } of this.#outstanding.values()) {
-      if (settle === undefined) return;
+    const held = new Set<string | undefined>();
+    for (const { queue, settle } of this.#outstanding.values()) {
+      if (settle === undefined) held.add(queue);
     }
-    for (const [id, { operation, settle }] of this.#queued) {
+    for (const [id, pending] of this.#queued) {
+      if (pending.queue !== undefined && held.has(pending.queue)) continue;
       this.#queued.delete(id);
-      this.#outstanding.set(id, { operation, settle });
-      this.#send(LOCAL_BROWSER_HOST_REQUEST_EVENT, { id, operation });
+      this.#outstanding.set(id, pending);
+      this.#send(LOCAL_BROWSER_HOST_REQUEST_EVENT, pending.delivery);
     }
   }
 

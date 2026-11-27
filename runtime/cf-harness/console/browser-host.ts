@@ -10,12 +10,13 @@
  * operation it answers. The token is what binds the stream and the results to
  * that client: a request that names the turn without it is refused.
  *
- * The host answers every operation it is sent, one at a time. When the run
+ * Each operation arrives with the session it addresses, and the host answers
+ * every operation it is sent, one at a time in each session. When the run
  * withdraws one the host already holds, the stream says so with a `withdraw`
  * event; the host stops it if it can, and answers it as it ended, and that
- * answer is the acknowledgment: no later operation reaches the host until it
- * arrives, so nothing the host does for a withdrawn call overlaps what comes
- * next.
+ * answer is the acknowledgment: no later operation for that session reaches
+ * the host until it arrives, so nothing the host does for a withdrawn call
+ * overlaps what comes next in its session. Other sessions carry on.
  *
  * Nothing here waits on a clock. An operation waits until the host answers
  * it, the host's stream ends, the turn ends, or the run aborts it — a
@@ -26,6 +27,10 @@ import { timingSafeEqual } from "@std/crypto/timing-safe-equal";
 
 import {
   type BrowserHostOperation,
+  browserHostQueueOf,
+  type BrowserHostRefusalResult,
+  type BrowserHostRequest,
+  browserHostRequestProblem,
   type BrowserHostResult,
   type HarnessBrowserHost,
   isBrowserHostResult,
@@ -43,10 +48,26 @@ export const BROWSER_HOST_CLOSE_EVENT = "close";
 
 const encoder = new TextEncoder();
 
-/** One operation sent to the host and not yet answered. */
+/** One operation the run is waiting on. */
 interface PendingOperation {
-  settle(result: BrowserHostResult): void;
+  /** The queue it is ordered in, as `browserHostQueueOf` names it. */
+  queue: string | undefined;
+
+  /** Its `request` event, as the stream carries it. */
+  frame: string;
+
+  /**
+   * Settles the run's call with the host's answer, or with `failed` when the
+   * answer is not a result for the operation, and returns whether it was one.
+   */
+  settle(answer: unknown): boolean;
 }
+
+/** What an answer that is not a result settles its operation as. */
+const NOT_A_RESULT: BrowserHostRefusalResult = {
+  status: "failed",
+  message: "the browser host answered with something that is not a result",
+};
 
 /** What {@link ConsoleBrowserHost.acceptResult} made of a posted result. */
 export type BrowserHostResultAcceptance = "accepted" | "unknown" | "invalid";
@@ -58,19 +79,19 @@ export type BrowserHostResultAcceptance = "accepted" | "unknown" | "invalid";
  */
 export class ConsoleBrowserHost implements HarnessBrowserHost {
   readonly #token: Uint8Array;
-  readonly #pending = new Map<string, PendingOperation>();
 
   /**
-   * Operations not yet on the stream, by id: the host has not attached, or
-   * has not yet answered an operation the run withdrew.
+   * Operations not yet on the stream, in the order the run sent them: the
+   * host has not attached, or has not yet answered an operation the run
+   * withdrew in the same queue.
    */
-  readonly #queued = new Map<string, string>();
+  readonly #queued = new Map<string, PendingOperation>();
 
   /** Operations on the stream that the host has not answered. */
-  readonly #delivered = new Set<string>();
+  readonly #delivered = new Map<string, PendingOperation>();
 
-  /** Withdrawn operations the host has not answered. */
-  readonly #withdrawn = new Set<string>();
+  /** Withdrawn operations the host has not answered, and their queues. */
+  readonly #withdrawn = new Map<string, string | undefined>();
 
   #stream: ReadableStreamDefaultController<Uint8Array> | undefined;
 
@@ -97,15 +118,20 @@ export class ConsoleBrowserHost implements HarnessBrowserHost {
   }
 
   /**
-   * Sends `operation` to the host and resolves with its answer. Resolves with
+   * Sends `request` to the host and resolves with its answer. Resolves with
+   * `invalid`, sending nothing, when the request is malformed, and with
    * `session-ended` when the host's stream or the turn has ended, or ends
    * while the operation is outstanding. Rejects with the signal's reason when
    * `signal` aborts first, withdrawing the operation.
    */
-  perform(
-    operation: BrowserHostOperation,
+  perform<O extends BrowserHostOperation>(
+    request: BrowserHostRequest<O>,
     signal?: AbortSignal,
-  ): Promise<BrowserHostResult> {
+  ): Promise<BrowserHostResult<O>> {
+    const problem = browserHostRequestProblem(request);
+    if (problem !== undefined) {
+      return Promise.resolve({ status: "invalid", message: problem });
+    }
     if (this.#ended !== undefined) {
       return Promise.resolve({ status: "session-ended", message: this.#ended });
     }
@@ -113,11 +139,12 @@ export class ConsoleBrowserHost implements HarnessBrowserHost {
       return Promise.reject(signal.reason);
     }
     const id = String(++this.#nextId);
-    return new Promise<BrowserHostResult>((resolve, reject) => {
+    const { session, operation } = request;
+    const queue = browserHostQueueOf(request);
+    return new Promise<BrowserHostResult<O>>((resolve, reject) => {
       const onAbort = () => {
-        this.#pending.delete(id);
         if (!this.#queued.delete(id) && this.#delivered.delete(id)) {
-          this.#withdrawn.add(id);
+          this.#withdrawn.set(id, queue);
           this.#stream?.enqueue(encoder.encode(
             sseFrame(BROWSER_HOST_WITHDRAW_EVENT, JSON.stringify({ id })),
           ));
@@ -125,18 +152,19 @@ export class ConsoleBrowserHost implements HarnessBrowserHost {
         reject(signal?.reason);
       };
       signal?.addEventListener("abort", onAbort, { once: true });
-      this.#pending.set(id, {
-        settle: (result) => {
+      this.#queued.set(id, {
+        queue,
+        frame: sseFrame(
+          BROWSER_HOST_REQUEST_EVENT,
+          JSON.stringify({ id, session, operation }),
+        ),
+        settle: (answer) => {
           signal?.removeEventListener("abort", onAbort);
-          this.#pending.delete(id);
-          this.#delivered.delete(id);
-          resolve(result);
+          const valid = isBrowserHostResult(answer, request);
+          resolve(valid ? answer : NOT_A_RESULT);
+          return valid;
         },
       });
-      this.#queued.set(
-        id,
-        sseFrame(BROWSER_HOST_REQUEST_EVENT, JSON.stringify({ id, operation })),
-      );
       this.#flush();
     });
   }
@@ -166,36 +194,29 @@ export class ConsoleBrowserHost implements HarnessBrowserHost {
 
   /**
    * Hands in the host's answer to operation `id`. The answer to a withdrawn
-   * operation acknowledges the withdrawal, and lets the next operation reach
-   * the host. An answer for an operation nobody is waiting on is `unknown`.
-   * One that is not a result is `invalid`, and settles the operation as
-   * `failed` rather than leaving it waiting: the host answered, and what it
-   * answered is not something the run can read, which is a refusal rather
-   * than an observation.
+   * operation acknowledges the withdrawal, and lets the next operation for
+   * its session reach the host. An answer for an operation nobody is waiting
+   * on is `unknown`. One that is not a result for the operation is `invalid`,
+   * and settles the operation as `failed` rather than leaving it waiting: the
+   * host answered, and what it answered is not something the run can read,
+   * which is a refusal rather than an observation.
    */
   acceptResult(id: unknown, result: unknown): BrowserHostResultAcceptance {
-    if (typeof id === "string" && this.#withdrawn.delete(id)) {
+    if (typeof id !== "string") {
+      return "unknown";
+    }
+    if (this.#withdrawn.delete(id)) {
       this.#flush();
       return "accepted";
     }
     // Only an operation the host was sent can be answered: one still queued
     // has not reached it, and an answer for it is not one.
-    const pending = typeof id === "string" && this.#delivered.has(id)
-      ? this.#pending.get(id)
-      : undefined;
-    if (pending === undefined) {
+    const delivered = this.#delivered.get(id);
+    if (delivered === undefined) {
       return "unknown";
     }
-    if (!isBrowserHostResult(result)) {
-      pending.settle({
-        status: "failed",
-        message:
-          "the browser host answered with something that is not a result",
-      });
-      return "invalid";
-    }
-    pending.settle(result);
-    return "accepted";
+    this.#delivered.delete(id);
+    return delivered.settle(result) ? "accepted" : "invalid";
   }
 
   /** Keeps a quiet stream visibly alive through proxies between the two. */
@@ -221,27 +242,37 @@ export class ConsoleBrowserHost implements HarnessBrowserHost {
   }
 
   /**
-   * Writes the queued operations to the stream, once there is one and the
-   * host owes no answer to a withdrawn operation.
+   * Writes the queued operations to the stream, once there is one, except
+   * those in a queue where the host owes an answer to a withdrawn operation.
    */
   #flush(): void {
-    if (this.#stream === undefined || this.#withdrawn.size > 0) {
+    if (this.#stream === undefined) {
       return;
     }
-    for (const [id, frame] of this.#queued) {
-      this.#stream.enqueue(encoder.encode(frame));
-      this.#delivered.add(id);
+    const held = new Set(this.#withdrawn.values());
+    for (const [id, pending] of this.#queued) {
+      if (pending.queue !== undefined && held.has(pending.queue)) {
+        continue;
+      }
+      this.#queued.delete(id);
+      this.#delivered.set(id, pending);
+      this.#stream.enqueue(encoder.encode(pending.frame));
     }
-    this.#queued.clear();
   }
 
+  /**
+   * Helper for `close()` and the stream's end, which stops the channel and
+   * settles everything outstanding as `session-ended`.
+   */
   #end(reason: string): void {
     this.#ended ??= reason;
-    this.#queued.clear();
-    this.#withdrawn.clear();
     const message = this.#ended;
-    for (const pending of [...this.#pending.values()]) {
-      pending.settle({ status: "session-ended", message });
+    const pending = [...this.#queued.values(), ...this.#delivered.values()];
+    this.#queued.clear();
+    this.#delivered.clear();
+    this.#withdrawn.clear();
+    for (const operation of pending) {
+      operation.settle({ status: "session-ended", message });
     }
   }
 }
